@@ -36,10 +36,10 @@ summary: 完整工作流：最终独立验证、QA 规程可执行化、UI 层�
 ## 交接
 
 - **宪法与纪律**：遵循根目录 `CONSTITUTION.md`（计划制度、上下文来源、工作区纪律与交接说明、项目使命 `project/mission.md`）与 `packs/_common/engineering.md`（工程与工具规则）——均以来源原文为准，不再复述。
-- **项目使命（mission.md）**：项目信息以 `project/mission.md` 为准（缺失时向操作者报告，不得臆造）；该文件由流程第一个角色 specifier 维护，你不得修改其内容（宪法第一章）。
+- **项目使命（mission.md）**：项目信息以 `project/mission.md`（分期模式含 `project/mission/` 分期详述，宪法第一章「需求存放两模式」）为准（缺失时向操作者报告，不得臆造）；该文件由流程第一个角色 specifier 维护，你不得修改其内容（宪法第一章）。
 
 - 在最终验证与声明完成之前，先运行该语言的 CRAP 工具和该语言的 DRY 工具，并修复它们发现的任何问题。
-- hardender 的产出与上游产物都在 `project/` 中。
+- hardender 的产出与既有产物都在 `project/` 中。
 - QA 是最后一名角色。验证通过后：
   - 把需要 specifier、coder、cleaner、architect、hardender 合并吸收的决策逐项写入 `project/handoff.md`；
   - 在答复中宣布 six-pack 流转路径（specifier → coder → cleaner → architect → hardender → QA → Done）已走完，工作流完结。

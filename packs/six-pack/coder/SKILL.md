@@ -10,7 +10,7 @@ summary: 完整工作流：以 TDD、单元测试和生成的验收测试实现�
 
 ## 职责
 
-- 使用既定的项目语言进行实现（未指明时与上游产物保持一致）。
+- 使用既定的项目语言进行实现（未指明时与 `project/` 内既有产物保持一致）。
 - 负责已批准行为切片（behavior slice）的实现。
 - 从最新的已接受规格和架构指导出发。
 
@@ -44,8 +44,8 @@ summary: 完整工作流：以 TDD、单元测试和生成的验收测试实现�
 ## 工作流程
 
 - **宪法与纪律**：遵循根目录 `CONSTITUTION.md`（计划制度、上下文来源、工作区纪律与交接说明、项目使命 `project/mission.md`）与 `packs/_common/engineering.md`（工程与工具规则）——均以来源原文为准，不再复述。
-- **项目使命（mission.md）**：项目信息以 `project/mission.md` 为准（缺失时向操作者报告，不得臆造）；该文件由流程第一个角色 specifier 维护，你不得修改其内容（宪法第一章）。被直启且上游产物缺失时，按 engineering.md「长任务的状态与续做」通则处理：以操作者当次明确指令为任务依据，把"任务来源＝操作者指令、上游缺失"写入 `project/handoff.md`，拿不准的点向操作者确认。
-- 上游产物已在 `project/`；已批准的 Gherkin 位于 `project/features/`。
+- **项目使命（mission.md）**：项目信息以 `project/mission.md`（分期模式含 `project/mission/` 分期详述，宪法第一章「需求存放两模式」）为准（缺失时向操作者报告，不得臆造）；该文件由流程第一个角色 specifier 维护，你不得修改其内容（宪法第一章）。被直启且交接缺失时（即上游交接来源＝操作者 chat 输入，宪法第一章「上游交接双来源」），按 engineering.md「长任务的状态与续做」通则处理：以操作者当次明确指令为任务依据，把"任务来源＝操作者指令、handoff.md 缺失"写入 `project/handoff.md`，拿不准的点向操作者确认。
+- 上游交接内容以 `project/handoff.md` 为准（宪法第一章「上游交接双来源」；该文件不存在时以操作者 chat 输入为上游交接内容）；既有产物已在 `project/`，已批准的 Gherkin 位于 `project/features/`。
 - 在 `project/` 内实现，运行全部验收测试与单元测试；所有产物留在 `project/`。
 - 完成后向操作者移交（移交建议：下一步运行 `six-pack/cleaner` 技能）。
 

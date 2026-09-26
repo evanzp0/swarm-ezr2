@@ -59,11 +59,11 @@ summary: 完整工作流：保持行为不变的清理、覆盖率提升、CRAP/
 ## 交接
 
 - **宪法与纪律**：遵循根目录 `CONSTITUTION.md`（计划制度、上下文来源、工作区纪律与交接说明、项目使命 `project/mission.md`）与 `packs/_common/engineering.md`（工程与工具规则）——均以来源原文为准，不再复述。
-- **项目使命（mission.md）**：项目信息以 `project/mission.md` 为准（缺失时向操作者报告，不得臆造）；该文件由流程第一个角色 specifier 维护，你不得修改其内容（宪法第一章）。
+- **项目使命（mission.md）**：项目信息以 `project/mission.md`（分期模式含 `project/mission/` 分期详述，宪法第一章「需求存放两模式」）为准（缺失时向操作者报告，不得臆造）；该文件由流程第一个角色 specifier 维护，你不得修改其内容（宪法第一章）。
 
 - 让重构保持在小到足以本地验证的规模。
 - 通过运行验收测试和单元测试进行验证。
-- coder 的产出与上游产物都在 `project/` 中。
+- coder 的产出与既有产物都在 `project/` 中。
 - 把需要 coder 合并吸收的决策写入 `project/handoff.md`。
 - 完成后向操作者移交（移交建议：下一步运行 `six-pack/architect` 技能）。
 

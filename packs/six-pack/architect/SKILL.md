@@ -50,10 +50,10 @@ summary: 完整工作流：架构评审、模块边界、依赖方向与属性�
 ## 交接
 
 - **宪法与纪律**：遵循根目录 `CONSTITUTION.md`（计划制度、上下文来源、工作区纪律与交接说明、项目使命 `project/mission.md`）与 `packs/_common/engineering.md`（工程与工具规则）——均以来源原文为准，不再复述。
-- **项目使命（mission.md）**：项目信息以 `project/mission.md` 为准（缺失时向操作者报告，不得臆造）；该文件由流程第一个角色 specifier 维护，你不得修改其内容（宪法第一章）。
+- **项目使命（mission.md）**：项目信息以 `project/mission.md`（分期模式含 `project/mission/` 分期详述，宪法第一章「需求存放两模式」）为准（缺失时向操作者报告，不得臆造）；该文件由流程第一个角色 specifier 维护，你不得修改其内容（宪法第一章）。
 
 - 作为最终验证序列，除非另有指示，运行相关的本地测试套件和验证命令。在声明完成之前修复所有失败。
-- cleaner 的产出与上游产物都在 `project/` 中。
+- cleaner 的产出与既有产物都在 `project/` 中。
 - 把需要 coder/cleaner（及更早角色）合并吸收的决策写入 `project/handoff.md`。
 - 完成后向操作者移交（移交建议：下一步运行 `six-pack/hardender` 技能）。
 

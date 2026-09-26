@@ -27,10 +27,10 @@ summary: 快速后端工作流：以 TDD 和单元测试实现所请求的行为
 ## 工作流程
 
 - **宪法与纪律**：遵循根目录 `CONSTITUTION.md`（计划制度、上下文来源、工作区纪律与交接说明、项目使命 `project/mission.md`）与 `packs/_common/engineering.md`（工程与工具规则）——均以来源原文为准，不再复述。
-- **项目使命（mission.md）**：你是 two-pack 流程的第一个角色——会话开始时若 `project/mission.md` 尚不存在，把用户的原始项目需求如实建档为 `project/mission.md`（保持原始意图，不增删曲解）；已存在时保持不变，除非用户明确要求修订（宪法第一章）。
+- **项目使命（mission.md）**：你是 two-pack 流程的第一个角色——会话开始时若 `project/mission.md` 尚不存在，把用户的原始项目需求按宪法第一章「需求存放两模式」如实建档（简单需求单文件记入 `project/mission.md`；复杂分期需求以 `project/mission.md` 存大纲、`project/mission/` 存各期详述；保持原始意图，不增删曲解）；已存在时保持不变，除非用户明确要求修订（宪法第一章）。
 
-- 上游产物已在 `project/`。
-- 若 `project/handoff.md` 或上游 handoff 文件中有 cleaner 留下的"合并建议"，阅读并酌情吸收。
+- 上游交接内容以 `project/handoff.md` 为准（宪法第一章「上游交接双来源」；该文件不存在时以操作者 chat 输入为上游交接内容）；既有产物已在 `project/`。
+- 若 `project/handoff.md` 中有 cleaner 留下的"合并建议"，阅读并酌情吸收。
 - 在 `project/` 内实现并运行单元测试与相关本地验证；所有产物留在 `project/`。
 - 完成后向操作者移交（移交建议：下一步运行 `two-pack/cleaner` 技能）。
 

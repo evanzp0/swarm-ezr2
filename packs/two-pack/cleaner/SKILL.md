@@ -39,9 +39,9 @@ summary: 快速后端工作流：清理、CRAP/DRY 审查、架构审查、封�
 ## 工作流程
 
 - **宪法与纪律**：遵循根目录 `CONSTITUTION.md`（计划制度、上下文来源、工作区纪律与交接说明、项目使命 `project/mission.md`）与 `packs/_common/engineering.md`（工程与工具规则）——均以来源原文为准，不再复述。
-- **项目使命（mission.md）**：项目信息以 `project/mission.md` 为准（缺失时向操作者报告，不得臆造）；该文件由流程第一个角色 coder 维护，你不得修改其内容（宪法第一章）。
+- **项目使命（mission.md）**：项目信息以 `project/mission.md`（分期模式含 `project/mission/` 分期详述，宪法第一章「需求存放两模式」）为准（缺失时向操作者报告，不得臆造）；该文件由流程第一个角色 coder 维护，你不得修改其内容（宪法第一章）。
 
-- coder 的产出与上游产物都在 `project/` 中。
+- coder 的产出与既有产物都在 `project/` 中。
 - 把需要 coder 合并吸收的清理决策写入 `project/handoff.md`。
 - 在 `project/` 内完成清理与加固并验证；所有产物留在 `project/`。
 - 完成后向操作者移交。two-pack 的流转路径为 coder → cleaner → Done：你的完成即整条卡片入 Done，在答复中说明工作流已完结即可。

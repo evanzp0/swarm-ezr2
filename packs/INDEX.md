@@ -13,8 +13,9 @@
 | six-pack | 6 | specifier → coder → cleaner → architect → hardender → QA |
 | squad | 13 | squad-leader 编排：analyst → gherkin-writer → qa-procedure-writer → implementer → cleaner → code-reviewer → hardener → qa → architect → senior-implementer；常驻：troubleshooter（排障）；支撑：system-analyst（产品框架） |
 
-> 角色链仅为**可用编排顺序**：`complete` 出箱即会话终结，不自动流转到下一角色；
-> 续跑由操作者显式触发（宪法第一章「不自动流转」）。
+> 角色链仅为**可用编排顺序**：`complete` 归档即会话终结，不自动流转到下一角色；
+> 续跑由操作者显式触发（宪法第一章「不自动流转」）；下游角色以 `project/handoff.md` 为上游交接内容
+> （宪法第一章「上游交接双来源」，不存在时以操作者 chat 输入为上游交接内容）。
 
 ## adversaries
 
@@ -80,7 +81,7 @@
 | `packs/squad/reference/clean-architecture.md` | squad 各角色：模块边界与依赖方向 |
 | `packs/squad/reference/tool-table.edn` | squad 各角色：语言工具表（变异/CRAP/DRY/APS） |
 
-角色上下文从一手资料获取：`project/mission.md`（项目原始需求档案，各工作流第一个角色建档、其他角色只读）、`project/`（上游产物已由主控脚本在 begin 时复制至此，角色只访问 `project/` 下的文件）与本索引所列技能文件；交接说明写入 `project/handoff.md` 随产物流转（结构与书写规则见 `packs/_common/handoff-rule.md`；技术经验由角色在交接前直接写入 `packs/_common/` 工具侧——通用纪律归 `engineering.md`、语言/工具/框架专项归 `notes/` 分类文件，不写入交接文件）。流水线用法、目录结构、命令速查与工作区纪律：见根目录 `CONSTITUTION.md`。
+角色上下文从一手资料获取：上游交接来源（`project/handoff.md` 存在 → 以该文件为上游交接内容；不存在 → 以操作者 chat 输入为上游交接内容，宪法第一章「上游交接双来源」）、`project/mission.md`（项目原始需求档案，各工作流第一个角色按「需求存放两模式」建档、其他角色只读；分期模式含 `project/mission/` 分期详述，宪法第一章）、`project/`（既有产物与角色产出跨会话保留在工作区，角色只访问 `project/` 下的文件）与本索引所列技能文件；交接说明写入 `project/handoff.md`（下游角色以其为上游交接内容；结构与书写规则见 `packs/_common/handoff-rule.md`；技术经验由角色在交接前直接写入 `packs/_common/` 工具侧——通用纪律归 `engineering.md`、语言/工具/框架专项归 `notes/` 分类文件，不写入交接文件）。流水线用法、目录结构、命令速查与工作区纪律：见根目录 `CONSTITUTION.md`。
 
 ## 编程语言配置约束
 - rust

@@ -69,9 +69,10 @@ summary: 紧凑规格工作流：Inversion 选择题访谈（使用 AskUserQuest
 ## 工作流程
 
 - **宪法与纪律**：遵循根目录 `CONSTITUTION.md`（计划制度、上下文来源、工作区纪律与交接说明、项目使命 `project/mission.md`）与 `packs/_common/engineering.md`（工程与工具规则）——均以来源原文为准，不再复述。
-- **项目使命（mission.md）**：你是 four-pack 流程的第一个角色——会话开始时若 `project/mission.md` 尚不存在，把用户的原始项目需求如实建档为 `project/mission.md`（保持原始意图，不增删曲解）；已存在时保持不变，除非用户明确要求修订（宪法第一章）。
+- **项目使命（mission.md）**：你是 four-pack 流程的第一个角色——会话开始时若 `project/mission.md` 尚不存在，把用户的原始项目需求按宪法第一章「需求存放两模式」如实建档（简单需求单文件记入 `project/mission.md`；复杂分期需求以 `project/mission.md` 存大纲、`project/mission/` 存各期详述；保持原始意图，不增删曲解）；已存在时保持不变，除非用户明确要求修订（宪法第一章）。
 
-- 上游产物已在 `project/`。
+- **需求依据（feature 文档从哪来）**：按宪法第一章「需求存放两模式」取需求——单文件模式直接依据 `project/mission.md`；分期模式依据**当期**分期详细需求 `project/mission/phase-<期号>[-<主题>].md`（当期分期由操作者指定或上游交接说明给定），产出文件在文件名或头部标注所属期号。
+- 上游交接来源按宪法第一章「上游交接双来源」：`project/handoff.md` 存在时以该文件为准，否则以操作者在 chat 中输入的需求为上游交接内容；既有产物已在 `project/`。
 - 规格产物写入 `project/features/`（Gherkin）。
 - 在答复中列出待批准的规格文件清单；批准即视为放行。
 - 完成后向操作者移交（移交建议：下一步运行 `four-pack/coder` 技能）。

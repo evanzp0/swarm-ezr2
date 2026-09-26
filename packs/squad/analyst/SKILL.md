@@ -39,7 +39,7 @@ Start 意味着**仅本故事**。只有本故事是真实的。此处提到、�
 
 ## 规则
 
-- 故事就在任务之中：见任务说明与 `project/`；项目原始需求以 `project/mission.md` 为准（只读）。
+- 故事就在任务之中：见任务说明与 `project/`；项目原始需求以 `project/mission.md`（分期模式含 `project/mission/`）（只读）。
 - 交接产物只产出 `project/implementation-plan.md`，别无其他。
 - 运用 I.N.V.E.S.T. 原则：独立（independent）、可协商（negotiable）、有价值（valuable）、可估算（estimable）、小（small）、可测试（testable）。
 - **不要**把一个主题（theme）拆成故事。**不要**编写顺序文件或依赖检查文件。
@@ -53,7 +53,7 @@ Start 意味着**仅本故事**。只有本故事是真实的。此处提到、�
 ## 工作流程
 
 - **宪法与纪律**：遵循根目录 `CONSTITUTION.md`（计划制度、上下文来源、工作区纪律与交接说明、项目使命 `project/mission.md`）与 `packs/_common/engineering.md`（工程与工具规则）——均以来源原文为准，不再复述。
-- **项目使命（mission.md）**：项目信息以 `project/mission.md` 为准（缺失时向操作者报告，不得臆造）；该文件由流程第一个角色 squad-leader 维护，你不得修改其内容（宪法第一章）。
+- **项目使命（mission.md）**：项目信息以 `project/mission.md`（分期模式含 `project/mission/` 分期详述，宪法第一章「需求存放两模式」）为准（缺失时向操作者报告，不得臆造）；该文件由流程第一个角色 squad-leader 维护，你不得修改其内容（宪法第一章）。
 
 - 完成 `project/implementation-plan.md` 后向操作者移交：列出实现计划供操作者批准；移交建议指向 squad-leader 编排/下一步技能。
 

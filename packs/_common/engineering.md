@@ -27,7 +27,7 @@
   - Go：`go install` 安装；变异测试 `github.com/unclebob/mutate4go`，CRAP `github.com/unclebob/crap4go`，DRY `github.com/unclebob/dry4go`。
   - Clojure：Clojure CLI/deps.edn 安装；变异测试 `github.com/unclebob/clj-mutate`，CRAP `github.com/unclebob/crap4clj`，DRY `github.com/unclebob/dry4clj`。
   - Java：Maven（`mvn`）安装；变异测试 `github.com/unclebob/mutate4java`，CRAP `github.com/unclebob/crap4java`，DRY `github.com/unclebob/dry4java`。
-- **工具安装位置**：clone/构建后的工具仓库统一放在 `swarm/.tools/<仓库名>/`（工具缓存，跨会话复用；不进产物包、不随会话清除）。会话缓存不随产物流转：每会话先确认所需工具在位，缺则按上文重建，安装位置与选型理由写入 `project/handoff.md`。APS 仓库名为 `Acceptance-Pipeline-Specification`。
+- **工具安装位置**：clone/构建后的工具仓库统一放在 `swarm/.tools/<仓库名>/`（工具缓存，跨会话复用；不进归档包、不随会话清除）。会话缓存不随工作区流转：每会话先确认所需工具在位，缺则按上文重建，安装位置与选型理由写入 `project/handoff.md`。APS 仓库名为 `Acceptance-Pipeline-Specification`。
 - **上游钉死路径的兼容桥接**：上游脚本/文档钉死的工具路径（如对 `.tools/bin/bb` 的
   硬编码）与实际安装位置不一致时，优先在钉死位置补**符号链接**桥接到真实位置，不要改
   上游脚本——上游脚本属字节级基线与验收契约的一部分，改动会破坏 diff 基线与下游复现；
@@ -285,10 +285,11 @@
 - **开工第一个物理动作是落盘计划**：收到任务后先写计划清单（哪怕只有一行），再开始探查、
   阅读与实现——计划文件是最小恢复锚点，任务越早期被打断，越只有已落盘的计划能证明
   "任务存在、进行到哪"；先落盘、随做随勾，中断恢复才有序可循。
-- **中间角色被直启且上游缺失时，以操作者当次指令为任务依据**：非首角色（如 coder）在
-  `project/mission.md` 与上游产物均缺失时被直接启动：不臆造上游意图，也不反向补写
+- **中间角色被直启且交接缺失时，以操作者当次指令为任务依据**：非首角色（如 coder）在
+  `project/handoff.md` 缺失时被直接启动（此时上游交接来源＝操作者 chat 输入，宪法第一章
+  「上游交接双来源」）：不臆造上游意图，也不反向补写
   mission.md（补写是首角色的职责边界）；以操作者当次明确指令为唯一任务依据，把
-  "任务来源＝操作者指令、上游缺失"如实写入 `project/handoff.md` 交接，拿不准的点向操作者
+  "任务来源＝操作者指令、handoff.md 缺失"如实写入 `project/handoff.md` 交接，拿不准的点向操作者
   确认而不是假设。
 - **压缩后的对话记忆不可作为引用来源**：上下文被摘要/压缩后，早期工具输出与文件内容的
   细节可能失真或丢失；凡引用文件原文、此前的命令结果或结论，先重新读取落盘文件核实，

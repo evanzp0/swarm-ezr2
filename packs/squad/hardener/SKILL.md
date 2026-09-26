@@ -60,7 +60,7 @@ summary: 临时加固者：落实 reviewer 建议后按 six-pack 方式加固，
 ## 工作流程
 
 - **宪法与纪律**：遵循根目录 `CONSTITUTION.md`（计划制度、上下文来源、工作区纪律与交接说明、项目使命 `project/mission.md`）与 `packs/_common/engineering.md`（工程与工具规则）——均以来源原文为准，不再复述。
-- **项目使命（mission.md）**：项目信息以 `project/mission.md` 为准（缺失时向操作者报告，不得臆造）；该文件由流程第一个角色 squad-leader 维护，你不得修改其内容（宪法第一章）。
+- **项目使命（mission.md）**：项目信息以 `project/mission.md`（分期模式含 `project/mission/` 分期详述，宪法第一章「需求存放两模式」）为准（缺失时向操作者报告，不得臆造）；该文件由流程第一个角色 squad-leader 维护，你不得修改其内容（宪法第一章）。
 
 - 完成加固与验证后向操作者移交（移交建议指向 squad-leader 编排：下一步通常是 `squad/qa`）。
 
