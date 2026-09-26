@@ -1,0 +1,15 @@
+[package]
+name = "ezr-tui-demo"
+version = "0.1.0"
+edition = "2021"
+description = "EZR Downloader - TUI 界面 Demo（伪造数据，多协议高性能下载器界面原型）"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+[profile.release]
+strip = true
+lto = true
