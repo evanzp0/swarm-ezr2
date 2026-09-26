@@ -1,0 +1,460 @@
+#!/usr/bin/env bash
+# =============================================================================
+# swarm —— 单角色顺序流水线主控脚本
+#
+# 用法:
+#   swarm list                     列出全部可用技能（工作流/角色）
+#   swarm chains                   查看各工作流的角色流转路径
+#   swarm unpack <zip|dir>         收到新上游：先清空 inbox/ 与 outbox/，再解压/复制到 inbox/<name>/
+#   swarm begin <wf>/<role> [--input <name>] [--task <名称>]   开始角色会话（自动把上游产物复制进 project/）
+#   swarm status                   查看当前流水线状态与 plan.md 进度
+#   swarm complete [--force] [--keep]   角色工作结束，打包 project/ 到 outbox/（打包前自动清理构建缓存）
+#   swarm reset                    放弃当前会话（清空 project/ 与会话级状态）
+#   swarm pack                     把工具本体（bin/、packs/、CONSTITUTION.md）打包为 .tar.gz 放在当前目录
+#
+# 目录约定:
+#   project/   工作区：上游产物副本（begin 时自动复制）+ 角色产物；角色只访问 project/
+#   .work/     当前工作流状态（运行时产物）：session、plan.md、tmp/
+# 全局约束: CONSTITUTION.md（总纲、计划制度、工作区纪律、项目使命 mission.md）
+#           packs/INDEX.md（工作流→角色→技能路径总目录，供 LLM 按需读取）
+# =============================================================================
+set -u
+
+SWARM_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+INBOX="$SWARM_HOME/inbox"
+PROJECT="$SWARM_HOME/project"
+OUTBOX="$SWARM_HOME/outbox"
+PACKS="$SWARM_HOME/packs"
+WORK="$SWARM_HOME/.work"          # 当前工作流状态（运行时产物）
+STATE="$WORK/session"             # 当前会话状态
+PLAN="$WORK/plan.md"              # 当前会话工作计划
+TMPD="$WORK/tmp"                  # 临时文件
+
+c_bold=$'\033[1m'; c_dim=$'\033[2m'; c_red=$'\033[31m'; c_grn=$'\033[32m'
+c_ylw=$'\033[33m'; c_blu=$'\033[34m'; c_rst=$'\033[0m'
+
+info() { printf '%s\n' "${c_blu}[swarm]${c_rst} $*"; }
+ok()   { printf '%s\n' "${c_grn}[swarm]${c_rst} $*"; }
+warn() { printf '%s\n' "${c_ylw}[swarm]${c_rst} $*"; }
+err()  { printf '%s\n' "${c_red}[swarm]${c_rst} $*" >&2; }
+die()  { err "$*"; exit 1; }
+
+# ---------------------------------------------------------------------------
+ensure_layout() {
+  mkdir -p "$INBOX" "$PROJECT" "$OUTBOX" "$PACKS" "$WORK" "$TMPD"
+}
+
+clear_session_state() {
+  # 清理会话级运行状态（plan / tmp）
+  rm -f "$PLAN" "$STATE"
+  find "$TMPD" -mindepth 1 -exec rm -rf {} + 2>/dev/null
+}
+
+plan_progress() {
+  # 输出 .work/plan.md 进度描述（无计划时输出“无”）
+  if [ -s "$PLAN" ]; then
+    local total done
+    total="$(grep -cE '^[[:space:]]*(-|[0-9]+\.)[[:space:]]*\[' "$PLAN" 2>/dev/null)"; total="${total:-0}"
+    done="$(grep -cE '^[[:space:]]*(-|[0-9]+\.)[[:space:]]*\[[xX]\]' "$PLAN" 2>/dev/null)"; done="${done:-0}"
+    echo "已生成（$done/$total 步完成，.work/plan.md）"
+  else
+    echo "无（违反 CONSTITUTION.md 第二章：开工前应先生成 .work/plan.md）"
+  fi
+}
+
+session_field() {
+  # session_field <KEY> —— 从 .work/session 读取字段
+  [ -f "$STATE" ] || return 1
+  sed -n "s/^${1}=\"\(.*\)\"$/\1/p" "$STATE" | head -n1
+}
+
+inbox_entries() {
+  # 列出 inbox/ 下的产物（排除隐藏文件与 .gitkeep）
+  find "$INBOX" -mindepth 1 -maxdepth 1 ! -name '.*' ! -name '.gitkeep' | sort
+}
+
+list_skills() {
+  local wf role skill summary
+  for wf_dir in "$PACKS"/*/; do
+    wf="$(basename "$wf_dir")"
+    [ "$wf" = "_common" ] && continue
+    for role_dir in "$wf_dir"*/; do
+      [ -d "$role_dir" ] || continue
+      role="$(basename "$role_dir")"
+      skill="$role_dir/SKILL.md"
+      [ -f "$skill" ] || continue
+      summary="$(sed -n 's/^summary:[[:space:]]*//p' "$skill" | head -n1)"
+      printf '  %-12s %-22s %s\n' "$wf" "$wf/$role" "${c_dim}${summary}${c_rst}"
+    done
+  done
+}
+
+cmd_list() {
+  echo
+  echo "${c_bold}可用技能（工作流 / 角色）${c_rst}"
+  echo "  ${c_dim}──────────────────────────────────────────────────────────${c_rst}"
+  list_skills
+  echo
+  echo "${c_dim}用法: bin/swarm begin <工作流>/<角色>   例: bin/swarm begin six-pack/coder${c_rst}"
+  echo
+}
+
+cmd_chains() {
+  cat <<'EOF'
+
+各工作流的角色流转路径:
+
+  adversaries coder ⇄ reviewer —— 对抗式评审循环，reviewer 满意后入 Done
+  two-pack    coder → cleaner → Done （cleaner 产出合并建议，供 coder 吸收）
+  four-pack   specifier → coder → refactorer → architect → Done （refactorer/architect 产出合并建议）
+  six-pack    specifier → coder → cleaner → architect → hardender → QA → Done （cleaner/architect/QA 产出合并建议）
+  squad       backlog → Start → analyst(实现计划,用户批准) → gherkin-writer + qa-procedure-writer(批准)
+              → implementer → cleaner → code-reviewer(仅建议) → hardener(落实建议+加固)
+              → qa → architect(建议) → senior-implementer(如有建议) → 故事完成
+              （troubleshooter 常驻排障，不参与产品流水线）
+
+技能总目录: packs/INDEX.md —— 工作流 → 角色 → SKILL.md 路径，供 LLM 按需读取
+全局宪法:   CONSTITUTION.md —— 开工前生成 .work/plan.md；执行中完成即勾选，中断凭它续做
+项目使命:   project/mission.md —— 各工作流第一个角色依用户原始需求建档，其他角色只读
+运行时状态: .work/ —— session、plan.md、tmp/
+
+手动链式（可选，默认不流转）：complete 出箱即会话终结，产物包交付操作者；
+仅当操作者显式要求续跑时，才把上一角色的 outbox/<...>.zip 作为上游产物：
+  bin/swarm unpack outbox/<最新zip> && bin/swarm begin <下一角色>
+  （unpack 视为收到新上游：先清空 inbox/ 与 outbox/ 再解压；源包在 outbox/ 内也安全，会先暂存）
+
+EOF
+}
+
+# ---------------------------------------------------------------------------
+cmd_unpack() {
+  local src="${1:-}"
+  [ -n "$src" ] || die "用法: bin/swarm unpack <zip文件|目录>"
+  [ -e "$src" ] || die "不存在: $src"
+  ensure_layout
+
+  # 先把源暂存到临时区：下一步的清空可能波及源文件本身（如链式流转时源在 outbox/ 内）
+  local stage_root stage
+  stage_root="$(mktemp -d)"
+  stage="$stage_root/$(basename "$src")"
+  if [ -d "$src" ]; then
+    cp -R "$src" "$stage"
+  else
+    case "$src" in
+      *.zip|*.ZIP) cp "$src" "$stage" ;;
+      *) rm -rf "$stage_root"; die "不支持的文件类型: $src （仅支持 .zip 或目录）" ;;
+    esac
+  fi
+
+  # 新上游到达：先清空 inbox/ 与 outbox/ 的全部内容（保留 .gitkeep 骨架）
+  local n_in n_out
+  n_in="$(find "$INBOX" -mindepth 1 ! -name '.gitkeep' | wc -l | tr -d ' ')"
+  n_out="$(find "$OUTBOX" -mindepth 1 ! -name '.gitkeep' | wc -l | tr -d ' ')"
+  find "$INBOX" -mindepth 1 ! -name '.gitkeep' -exec rm -rf {} + 2>/dev/null
+  find "$OUTBOX" -mindepth 1 ! -name '.gitkeep' -exec rm -rf {} + 2>/dev/null
+  info "已清空 inbox/（$n_in 项）与 outbox/（$n_out 项）：新上游到达，流水线重置。"
+
+  local base="$(basename "$stage")"
+  base="${base%.*}"                 # 去扩展名
+  base="${base// /_}"               # 空格替换
+  local target="$INBOX/$base"
+  local n=1
+  while [ -e "$target" ]; do target="$INBOX/$base-$n"; n=$((n+1)); done
+
+  if [ -d "$stage" ]; then
+    mv "$stage" "$target"
+    ok "已复制目录 → ${target#$SWARM_HOME/}"
+  else
+    local tmp="$(mktemp -d)"
+    if ! unzip -q -o "$stage" -d "$tmp"; then rm -rf "$tmp" "$stage_root"; die "解压失败: $src"; fi
+    # 若压缩包只有单个顶层目录，则直接采用；否则以包名建目录
+    local top
+    top="$(find "$tmp" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+    if [ "$top" = "1" ]; then
+      mv "$(find "$tmp" -mindepth 1 -maxdepth 1 | head -n1)" "$target"
+    else
+      mkdir -p "$target" && (cd "$tmp" && cp -R . "$target/")
+    fi
+    rm -rf "$tmp"
+    ok "已解压 → ${target#$SWARM_HOME/}"
+  fi
+  rm -rf "$stage_root"
+
+  local files
+  files="$(find "$target" -type f ! -name '.gitkeep' | wc -l | tr -d ' ')"
+  info "输入产物包含 $files 个文件。开始处理: bin/swarm begin <工作流>/<角色>"
+}
+
+# ---------------------------------------------------------------------------
+
+cmd_begin() {
+  local wf_role="${1:-}"; shift || true
+  [ -n "$wf_role" ] || die "用法: bin/swarm begin <工作流>/<角色> [--input <name>] [--task <名称>]"
+  local wf="${wf_role%%/*}" role="${wf_role##*/}"
+  local skill="$PACKS/$wf/$role/SKILL.md"
+  [ -f "$skill" ] || die "技能不存在: $wf_role （用 bin/swarm list 查看可用技能）"
+
+  [ ! -f "$STATE" ] || die "已有进行中的会话（$(session_field SESSION_SKILL)）。先运行 bin/swarm complete 或 bin/swarm reset。"
+
+  ensure_layout
+  # project/ 必须为空
+  local stray
+  stray="$(find "$PROJECT" -mindepth 1 ! -name '.gitkeep' | head -n1)"
+  [ -z "$stray" ] || die "project/ 非空（如 ${stray#$SWARM_HOME/}）。先运行 bin/swarm reset。"
+
+  # 清理上一会话遗留的临时文件
+  find "$TMPD" -mindepth 1 -exec rm -rf {} + 2>/dev/null
+
+  # 解析 --input / --task
+  local input_name="" task=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --input) input_name="${2:-}"; shift 2 ;;
+      --task)  task="${2:-}"; shift 2 ;;
+      *) die "未知参数: $1" ;;
+    esac
+  done
+
+  # 选择输入
+  if [ -z "$input_name" ]; then
+    local entries
+    entries="$(inbox_entries)"
+    [ -n "$entries" ] || die "inbox/ 为空。请先运行 bin/swarm unpack <上游产物zip>。"
+    local count
+    count="$(echo "$entries" | wc -l | tr -d ' ')"
+    if [ "$count" = "1" ]; then
+      input_name="$(basename "$entries")"
+    else
+      warn "inbox/ 下有多个产物，请用 --input 指定其一："
+      echo "$entries" | sed 's/^/  - /'
+      exit 1
+    fi
+  fi
+  local input_path="$INBOX/$input_name"
+  [ -e "$input_path" ] || die "inbox/ 中不存在: $input_name"
+
+  [ -n "$task" ] || task="${wf}-${role}-$(date '+%Y%m%d-%H%M%S')"
+
+  # 记录 packs/_common/ 当前最新 mtime，供 complete 时检测本会话经验沉淀（宪法第三章）
+  local exp_base
+  exp_base="$(find "$PACKS/_common" -type f -printf '%T@\n' 2>/dev/null | sort -n | tail -n1)"
+  [ -n "$exp_base" ] || exp_base="0"
+
+  # 新任务开始：把 inbox/ 下的文件与子目录复制到 project/，角色此后只访问 project/
+  if [ -d "$input_path" ]; then
+    (cd "$input_path" && cp -R . "$PROJECT/") || die "复制上游产物到 project/ 失败"
+  else
+    cp "$input_path" "$PROJECT/" || die "复制上游产物到 project/ 失败"
+  fi
+  ok "已把上游产物从 inbox/$input_name/ 复制到 project/（角色只访问 project/，不访问 inbox/）。"
+
+  # 输入清单直接打印给角色（不生成任务简报文件；项目信息见 project/mission.md，宪法第一章）
+  local manifest
+  manifest="$(find "$PROJECT" -type f ! -name '.gitkeep' -printf '  - %P\n' 2>/dev/null | head -n 60)"
+  info "输入清单（已复制进 project/，最多列出 60 项）："
+  if [ -n "$manifest" ]; then printf '%s\n' "$manifest"; else info "  （空）"; fi
+  if [ -f "$PROJECT/mission.md" ]; then
+    ok "project/mission.md 已存在：项目原始需求档案（流程中其他角色只读，见 CONSTITUTION.md 第一章）。"
+  else
+    warn "project/mission.md 不存在：若本会话是工作流第一个角色，请依用户原始项目需求建档（见 CONSTITUTION.md 第一章）。"
+  fi
+
+  cat > "$STATE" <<EOF
+SESSION_SKILL="$wf/$role"
+SESSION_TASK="$task"
+SESSION_INPUT="$input_name"
+SESSION_STARTED="$(date '+%Y-%m-%d %H:%M:%S')"
+EXPERIENCE_BASE="$exp_base"
+EOF
+
+  ok "会话已开始：$wf/$role （任务: $task）"
+  echo
+  echo "${c_bold}下一步（交给角色智能体执行）：${c_rst}"
+  echo "  1. 阅读 $PACKS/$wf/$role/SKILL.md 并严格遵循；"
+  echo "  2. 阅读 project/mission.md（项目原始需求档案）与 project/ 内上游产物，明确本任务；"
+  echo "  3. 按根目录 CONSTITUTION.md 先生成工作计划 .work/plan.md，再开始操作（步骤完成即时勾选，中断可凭 plan.md 续做）；"
+  echo "  4. 在 project/ 内完成角色工作（上游产物已复制到 project/，只访问 project/ 下的文件，不访问 inbox/；临时文件在 .work/tmp/）；"
+  echo "  5. 交接前把本轮可复用经验写入 packs/_common/：通用纪律归 engineering.md，语言/工具/框架专项归 notes/ 分类文件（无合适文件可新建，宪法第三章）；"
+  echo "  6. 完成后由操作者运行 bin/swarm complete 打包产物。"
+}
+
+# ---------------------------------------------------------------------------
+# 清理 project/ 内编译等产生的构建缓存与临时文件（complete 打包前自动执行）。
+# 只清无可争议的缓存目录：体积大、可重建、不属于产物（engineering.md「交付前清理构建缓存」）。
+# 不含 build/、dist/ 等歧义名——它们可能是合法源码目录，清理责任在角色（见 engineering.md）。
+clean_build_caches() {
+  local hits before after freed
+  hits="$(find "$PROJECT" -type d \( -name target -o -name node_modules -o -name __pycache__ \
+        -o -name .gradle -o -name .next -o -name .mypy_cache -o -name .pytest_cache \
+        -o -name .venv -o -name venv -o -name .tox \) -prune 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$hits" != "0" ] || return 0
+  before="$(du -sk "$PROJECT" 2>/dev/null | cut -f1)"
+  find "$PROJECT" -type d \( -name target -o -name node_modules -o -name __pycache__ \
+      -o -name .gradle -o -name .next -o -name .mypy_cache -o -name .pytest_cache \
+      -o -name .venv -o -name venv -o -name .tox \) -prune -exec rm -rf {} + 2>/dev/null
+  find "$PROJECT" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete 2>/dev/null
+  after="$(du -sk "$PROJECT" 2>/dev/null | cut -f1)"
+  freed=$(( before - after ))
+  if [ "$freed" -ge 1024 ]; then
+    ok "打包前已清理构建缓存：$hits 个缓存目录（含内容），释放约 $((freed / 1024))M。"
+  else
+    ok "打包前已清理构建缓存：$hits 个缓存目录（含内容），释放约 ${freed}K。"
+  fi
+}
+
+cmd_complete() {
+  local force=0 keep=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force) force=1; shift ;;
+      --keep)  keep=1; shift ;;
+      *) die "未知参数: $1" ;;
+    esac
+  done
+  [ -f "$STATE" ] || die "没有进行中的会话。先运行 bin/swarm begin <工作流>/<角色>。"
+
+  local wf role task input_name started
+  wf="$(session_field SESSION_SKILL | cut -d/ -f1)"
+  role="$(session_field SESSION_SKILL | cut -d/ -f2)"
+  task="$(session_field SESSION_TASK)"
+  input_name="$(session_field SESSION_INPUT)"
+  started="$(session_field SESSION_STARTED)"
+
+  # 打包前自动清理构建缓存与编译临时文件（产物只含源码与必要交付物）
+  clean_build_caches
+
+  # 校验宪法计划（plan.md 缺失仅警告，不阻断）
+  if [ ! -s "$PLAN" ]; then
+    warn ".work/plan.md 缺失 —— 本次会话未遵循 CONSTITUTION.md 第二章的计划制度。"
+  fi
+
+  # 宪法第三章经验沉淀检测：对比会话开始时记录的基线 mtime
+  local exp_base exp_now
+  exp_base="$(session_field EXPERIENCE_BASE)"; exp_base="${exp_base:-0}"
+  exp_now="$(find "$PACKS/_common" -type f -printf '%T@\n' 2>/dev/null | sort -n | tail -n1)"; exp_now="${exp_now:-0}"
+  echo
+  if awk "BEGIN{exit !($exp_now > $exp_base)}"; then
+    ok "经验沉淀检测：packs/_common/ 本会话有写入 ✓（宪法第三章）"
+  else
+    warn "经验沉淀检测：packs/_common/ 本会话无写入 —— 若有可复用经验请补写（通用纪律→engineering.md，专项→notes/ 分类文件，宪法第三章）；确无经验可忽略。"
+  fi
+
+  # project/ 中应存在实际产物（上游产物副本 + 角色产出）
+  local produced
+  produced="$(find "$PROJECT" -mindepth 1 -maxdepth 1 ! -name '.gitkeep' | wc -l | tr -d ' ')"
+  if [ "$produced" = "0" ] && [ "$force" != 1 ]; then
+    die "project/ 中没有发现产物。完成工作后再打包；确要打包空结果请加 --force。"
+  fi
+
+  ensure_layout
+  local ts zip_name zip_path
+  ts="$(date '+%Y%m%d-%H%M%S')"
+  zip_name="$ts-$wf-$role.zip"
+  zip_path="$OUTBOX/$zip_name"
+
+  # 产物包 = project/ 全部文件（会话状态 .work/ 不进包）
+  if command -v zip >/dev/null 2>&1; then
+    (cd "$PROJECT" && zip -q -r "$zip_path" . -x '*.gitkeep') || die "打包失败"
+  else
+    (cd "$PROJECT" && tar -czf "${zip_path%.zip}.tar.gz" --exclude='./.gitkeep' .) && zip_path="${zip_path%.zip}.tar.gz"
+  fi
+
+  # 归档已消费的 inbox 输入
+  local consumed_dir="$INBOX/.consumed"
+  mkdir -p "$consumed_dir"
+  [ -e "$INBOX/$input_name" ] && mv "$INBOX/$input_name" "$consumed_dir/$ts-$input_name"
+
+  # 结束会话：清理会话级运行状态
+  rm -f "$STATE"
+  rm -f "$PLAN"
+  find "$TMPD" -mindepth 1 -exec rm -rf {} + 2>/dev/null
+  if [ "$keep" = 1 ]; then
+    info "已按要求保留 project/ 工作区内容。"
+  else
+    find "$PROJECT" -mindepth 1 ! -name '.gitkeep' -exec rm -rf {} + 2>/dev/null
+    ok "project/ 已清空（产物已封存于 zip；如需保留可加 --keep）。"
+  fi
+
+  echo
+  ok "完成 ✓  $wf/$role （任务: $task，开始于 $started）"
+  ok "产物包: ${zip_path#$SWARM_HOME/}  （含 project/ 全部文件）"
+  local size
+  size="$(du -h "$zip_path" | cut -f1)"
+  info "大小: $size"
+  echo
+  echo "${c_bold}本轮任务到此完成：${c_rst}产物包已交付，默认不自动流转到下一角色（宪法第一章）。"
+  echo "${c_dim}如操作者显式要求续跑，可手动链式（可选）：${c_rst}"
+  echo "  bin/swarm unpack outbox/$zip_name"
+  echo "  bin/swarm begin <下一角色>        ${c_dim}# 角色顺序见 bin/swarm chains${c_rst}"
+}
+
+# ---------------------------------------------------------------------------
+cmd_status() {
+  ensure_layout
+  echo
+  echo "${c_bold}swarm 流水线状态${c_rst}"
+  if [ -f "$STATE" ]; then
+    echo "  当前会话: ${c_grn}$(session_field SESSION_SKILL)${c_rst}  任务: $(session_field SESSION_TASK)"
+    echo "  开始时间: $(session_field SESSION_STARTED)   输入: inbox/$(session_field SESSION_INPUT)"
+    echo "  工作计划: $(plan_progress)"
+  else
+    echo "  当前会话: ${c_dim}无${c_rst}"
+  fi
+  local n_in n_out
+  n_in="$(inbox_entries | wc -l | tr -d ' ')"
+  n_out="$(find "$OUTBOX" -maxdepth 1 -name '*.zip' -o -maxdepth 1 -name '*.tar.gz' | wc -l | tr -d ' ')"
+  echo "  inbox/ 待处理产物: $n_in"
+  echo "  outbox/ 产物包:    $n_out"
+  if [ "$n_out" -gt 0 ]; then
+    echo "  最近产物包: $(ls -t "$OUTBOX" | head -n1)"
+  fi
+  echo
+}
+
+cmd_reset() {
+  if [ -f "$STATE" ]; then
+    rm -f "$STATE"
+    warn "已丢弃会话状态。"
+  fi
+  find "$PROJECT" -mindepth 1 ! -name '.gitkeep' -exec rm -rf {} + 2>/dev/null
+  rm -f "$PLAN"
+  find "$TMPD" -mindepth 1 -exec rm -rf {} + 2>/dev/null
+  ok "project/ 已清空，会话级状态（plan/tmp）已清除。"
+}
+
+# ---------------------------------------------------------------------------
+# 打包工具本体（bin/、packs/、CONSTITUTION.md）为 .tar.gz，放在执行命令时的当前目录。
+# 不含 project/、inbox/、outbox/、.work/、.tools/ 等运行时/项目内容。
+cmd_pack() {
+  command -v tar >/dev/null 2>&1 || die "未找到 tar 命令，无法打包"
+  local out_dir="$(pwd)"
+  local top="$(basename "$SWARM_HOME")"
+  local parent="$(dirname "$SWARM_HOME")"
+  local tar_name="${top}-$(date '+%Y%m%d-%H%M%S').tar.gz"
+  local tar_path="$out_dir/$tar_name"
+  (cd "$parent" && tar -czf "$tar_path" \
+      --exclude='__pycache__' --exclude='.DS_Store' --exclude='*.swp' \
+      "$top/bin" "$top/packs" "$top/CONSTITUTION.md") || die "打包失败"
+  ok "已打包工具本体 → $tar_path"
+  info "内容: $top/bin/、$top/packs/、$top/CONSTITUTION.md（不含 project/、inbox/、outbox/、.work/、.tools/）"
+  local size
+  size="$(du -h "$tar_path" | cut -f1)"
+  info "大小: $size"
+}
+
+usage() {
+  sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+}
+
+case "${1:-}" in
+  list)     cmd_list ;;
+  chains)   cmd_chains ;;
+  unpack)   shift; cmd_unpack "$@" ;;
+  begin)    shift; cmd_begin "$@" ;;
+  complete) shift; cmd_complete "$@" ;;
+  status)   cmd_status ;;
+  reset)    cmd_reset ;;
+  pack)     shift; cmd_pack "$@" ;;
+  help|-h|--help|"") usage ;;
+  *)        die "未知命令: $1 （bin/swarm help 查看用法）" ;;
+esac
