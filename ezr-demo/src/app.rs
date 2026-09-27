@@ -189,8 +189,10 @@ pub struct Task {
     pub has_slot: bool,
     verify_started: Option<Instant>,
     pub error: Option<String>,
-    /// SHA-256 校验结果；None = 无校验
-    pub sha_ok: Option<bool>,
+    /// 完整性校验码（None = 未提供，完成后不校验）
+    pub checksum: Option<Checksum>,
+    /// 校验结果；None = 未校验（无校验码或尚未完成）
+    pub verify_ok: Option<bool>,
     pub created: String,
 }
 
@@ -265,6 +267,26 @@ impl Rng {
     }
 }
 
+/// 校验算法表（添加对话框下拉选择）：（显示名，期望十六进制长度）
+pub const CHECKSUM_ALGOS: [(&str, usize); 7] = [
+    ("MD5", 32),
+    ("SHA-1", 40),
+    ("SHA-224", 56),
+    ("SHA-256", 64),
+    ("SHA-384", 96),
+    ("SHA-512", 128),
+    ("Adler-32", 8),
+];
+
+/// 任务的完整性校验码（添加对话框可选填）
+#[derive(Clone, Debug)]
+pub struct Checksum {
+    /// 算法显示名（CHECKSUM_ALGOS 中的名称）
+    pub algo: &'static str,
+    /// 十六进制校验码（确认时统一小写）
+    pub value: String,
+}
+
 // ---------------------------------------------------------------------------
 // 对话框（添加任务 / 删除任务）
 // ---------------------------------------------------------------------------
@@ -283,7 +305,15 @@ pub struct Dialog {
     pub conns: String,
     /// Add: 用户是否手动修改过并发数（未修改时随 URL 类型自动同步默认值）
     pub conns_edited: bool,
-    /// Add:    0=URL  1=保存目录  2=并发数  3=确认  4=取消
+    /// Add: 校验算法在 CHECKSUM_ALGOS 中的下标（默认 SHA-256 = 3）
+    pub ck_type: usize,
+    /// Add: 校验码输入缓冲（十六进制，可留空 = 不校验）
+    pub ck_value: String,
+    /// Add: 校验算法下拉框是否展开
+    pub ck_open: bool,
+    /// Add: 下拉框当前高亮项（↑↓ 导航，实时同步 ck_type）
+    pub ck_sel: usize,
+    /// Add:    0=URL  1=保存目录  2=并发数  3=校验算法  4=校验码  5=确认  6=取消
     /// Delete: 0=仅删除任务  1=删除任务和文件  2=取消
     pub focus: usize,
     /// Delete 用：待删除任务名
@@ -325,6 +355,11 @@ pub struct App {
     pub dialog: Option<Dialog>,
     /// 对话框按钮的可点击区域（由 ui 层每帧回填）
     pub dlg_btn_rects: Vec<(Rect, usize)>,
+    /// 对话框输入行/选择行的可点击区域（由 ui 层每帧回填；点击聚焦，
+    /// 校验算法行再点击可展开下拉框）
+    pub dlg_field_rects: Vec<(Rect, usize)>,
+    /// 校验算法下拉框各选项的可点击区域（由 ui 层每帧回填，仅展开时有效）
+    pub dlg_ck_rects: Vec<(Rect, usize)>,
 }
 
 impl App {
@@ -353,6 +388,8 @@ impl App {
             show_chart: true,
             dialog: None,
             dlg_btn_rects: Vec::new(),
+            dlg_field_rects: Vec::new(),
+            dlg_ck_rects: Vec::new(),
         }
     }
 
@@ -646,29 +683,41 @@ impl App {
                         }
                     }
                     if t.downloaded >= t.total {
-                        t.state = TaskState::Verifying;
                         t.speed = 0.0;
                         t.upload_speed = 0.0;
                         t.running_since = None;
                         t.has_slot = false; // 下载阶段结束，释放下载槽位
-                        t.verify_started = Some(now);
-                        notices.push(format!("✓ 下载完成，开始校验: {}", t.name));
+                        // 有校验码 → 进入「校验中」；无校验码 → 直接完成/后期处理
+                        let algo = t.checksum.as_ref().map(|c| c.algo);
+                        if let Some(algo) = algo {
+                            t.state = TaskState::Verifying;
+                            t.verify_started = Some(now);
+                            notices.push(format!("✓ 下载完成，开始{}校验: {}", algo, t.name));
+                        } else if t.post_process {
+                            t.state = TaskState::PostProcessing;
+                            t.post_started = Some(now);
+                            notices.push(format!("✓ 下载完成，开始后期处理: {}", t.name));
+                        } else {
+                            t.state = TaskState::Completed;
+                            notices.push(format!("✓ 下载完成: {}", t.name));
+                        }
                     }
                 }
                 TaskState::Verifying => {
                     if let Some(s) = t.verify_started {
                         if now.duration_since(s) > Duration::from_millis(2600) {
-                            t.sha_ok = Some(true);
+                            let algo = t.checksum.as_ref().map(|c| c.algo).unwrap_or("SHA-256");
+                            t.verify_ok = Some(true);
                             t.speed = 0.0;
                             t.upload_speed = 0.0;
                             t.verify_started = None;
                             if t.post_process {
                                 t.state = TaskState::PostProcessing;
                                 t.post_started = Some(now);
-                                notices.push(format!("✓ 校验通过，开始后期处理: {}", t.name));
+                                notices.push(format!("✓ {} 校验通过，开始后期处理: {}", algo, t.name));
                             } else {
                                 t.state = TaskState::Completed;
-                                notices.push(format!("✓ SHA-256 校验通过: {}", t.name));
+                                notices.push(format!("✓ {} 校验通过: {}", algo, t.name));
                             }
                         }
                     }
@@ -846,9 +895,52 @@ impl App {
             None => return,
         };
         let nfocus = match kind {
-            DialogKind::Add => 5,
+            DialogKind::Add => 7,
             DialogKind::Delete => 3,
         };
+        // 校验算法下拉框展开时（仅 Add）：↑↓/Home/End 选择（实时同步算法），
+        // Enter/Esc 仅收起下拉框（不关对话框），Tab/BackTab 收起并切焦点
+        if kind == DialogKind::Add && self.dialog.as_ref().is_some_and(|d| d.ck_open) {
+            match code {
+                KeyCode::Up => {
+                    let d = self.dialog.as_mut().unwrap();
+                    d.ck_sel = (d.ck_sel + CHECKSUM_ALGOS.len() - 1) % CHECKSUM_ALGOS.len();
+                    d.ck_type = d.ck_sel;
+                }
+                KeyCode::Down => {
+                    let d = self.dialog.as_mut().unwrap();
+                    d.ck_sel = (d.ck_sel + 1) % CHECKSUM_ALGOS.len();
+                    d.ck_type = d.ck_sel;
+                }
+                KeyCode::Home => {
+                    let d = self.dialog.as_mut().unwrap();
+                    d.ck_sel = 0;
+                    d.ck_type = 0;
+                }
+                KeyCode::End => {
+                    let d = self.dialog.as_mut().unwrap();
+                    d.ck_sel = CHECKSUM_ALGOS.len() - 1;
+                    d.ck_type = d.ck_sel;
+                }
+                KeyCode::Enter | KeyCode::Esc => {
+                    if let Some(d) = self.dialog.as_mut() {
+                        d.ck_open = false;
+                    }
+                }
+                KeyCode::Tab | KeyCode::BackTab => {
+                    let d = self.dialog.as_mut().unwrap();
+                    d.ck_open = false;
+                    d.focus = if code == KeyCode::Tab { 4 } else { 2 };
+                }
+                // 其他按键一律先收起下拉框，不产生其他效果
+                _ => {
+                    if let Some(d) = self.dialog.as_mut() {
+                        d.ck_open = false;
+                    }
+                }
+            }
+            return;
+        }
         match code {
             KeyCode::Esc => self.dialog = None,
             KeyCode::Tab | KeyCode::Down | KeyCode::Right => {
@@ -861,8 +953,23 @@ impl App {
                     d.focus = (d.focus + nfocus - 1) % nfocus;
                 }
             }
+            KeyCode::Enter => match kind {
+                DialogKind::Add => {
+                    if focus == 3 {
+                        // 校验算法行：展开下拉框
+                        let d = self.dialog.as_mut().unwrap();
+                        d.ck_open = true;
+                        d.ck_sel = d.ck_type;
+                    } else if focus == 6 {
+                        self.dialog = None;
+                    } else {
+                        self.dlg_confirm_add();
+                    }
+                }
+                DialogKind::Delete => self.dlg_activate_delete(focus),
+            },
             KeyCode::Backspace => {
-                if kind == DialogKind::Add && focus < 3 {
+                if kind == DialogKind::Add && (focus < 3 || focus == 4) {
                     let d = self.dialog.as_mut().unwrap();
                     match focus {
                         0 => {
@@ -876,23 +983,17 @@ impl App {
                         1 => {
                             d.dir.pop();
                         }
-                        _ => {
+                        2 => {
                             d.conns.pop();
                             d.conns_edited = true;
+                        }
+                        // 校验码
+                        _ => {
+                            d.ck_value.pop();
                         }
                     }
                 }
             }
-            KeyCode::Enter => match kind {
-                DialogKind::Add => {
-                    if focus == 4 {
-                        self.dialog = None;
-                    } else {
-                        self.dlg_confirm_add();
-                    }
-                }
-                DialogKind::Delete => self.dlg_activate_delete(focus),
-            },
             KeyCode::Char(c) => match kind {
                 DialogKind::Add => {
                     if focus < 3 {
@@ -923,6 +1024,19 @@ impl App {
                                 }
                             }
                         }
+                    } else if focus == 3 {
+                        // 校验算法行：Space 同样展开下拉框，其余字符忽略
+                        if c == ' ' {
+                            let d = self.dialog.as_mut().unwrap();
+                            d.ck_open = true;
+                            d.ck_sel = d.ck_type;
+                        }
+                    } else if focus == 4 {
+                        // 校验码：仅接受十六进制字符，最多 128 位（SHA-512）
+                        if c.is_ascii_hexdigit() && self.dialog.as_ref().unwrap().ck_value.chars().count() < 128
+                        {
+                            self.dialog.as_mut().unwrap().ck_value.push(c);
+                        }
                     } else if c == ' ' {
                         self.dlg_activate_add(focus);
                     }
@@ -940,13 +1054,14 @@ impl App {
 
     fn dlg_activate_add(&mut self, btn: usize) {
         match btn {
-            3 => self.dlg_confirm_add(),
-            4 => self.dialog = None,
+            5 => self.dlg_confirm_add(),
+            6 => self.dialog = None,
             _ => {}
         }
     }
 
     fn dlg_confirm_add(&mut self) {
+        // 先取出全部需要的值（避免后续可变借用冲突）
         let Some(d) = self.dialog.as_ref() else { return };
         let url = d.url.trim().to_string();
         if url.is_empty() {
@@ -954,6 +1069,37 @@ impl App {
             return;
         }
         let dir_raw = d.dir.trim().to_string();
+        let conns_raw = d.conns.trim().to_string();
+        let ck_raw = d.ck_value.trim().to_string();
+        let ck_type = d.ck_type;
+
+        // 校验码验证：非空时必须是纯十六进制且长度与算法匹配
+        let checksum = if ck_raw.is_empty() {
+            None
+        } else {
+            let (algo, need) = CHECKSUM_ALGOS[ck_type.min(CHECKSUM_ALGOS.len() - 1)];
+            let v = ck_raw.to_lowercase();
+            if !v.chars().all(|c| c.is_ascii_hexdigit()) {
+                self.set_toast(format!("⚠ {} 校验码只能是十六进制字符（0-9a-f）", algo));
+                if let Some(d) = self.dialog.as_mut() {
+                    d.focus = 4;
+                }
+                return;
+            }
+            let len = v.chars().count();
+            if len != need {
+                self.set_toast(format!(
+                    "⚠ {} 校验码需为 {} 位十六进制（当前 {} 位）",
+                    algo, need, len
+                ));
+                if let Some(d) = self.dialog.as_mut() {
+                    d.focus = 4;
+                }
+                return;
+            }
+            Some(Checksum { algo, value: v })
+        };
+
         let dir = if dir_raw.is_empty() {
             "/srv/downloads".to_string()
         } else {
@@ -962,9 +1108,7 @@ impl App {
 
         let (proto, name) = parse_url_task(&url);
         // 并发数：取对话框输入（钳制 1-64）；留空或非法时用协议默认（HTTP 4 / BT 20）
-        let conns = d
-            .conns
-            .trim()
+        let conns = conns_raw
             .parse::<usize>()
             .map(|v| v.clamp(1, 64))
             .unwrap_or_else(|_| default_conns(proto));
@@ -990,6 +1134,7 @@ impl App {
         t.post_process = is_archive(&name);
         t.queued_since = Some(Instant::now());
         t.start_delay = 2.0;
+        t.checksum = checksum;
         self.tasks.push(t);
         self.dialog = None;
         // 切到「正在下载」页签并选中新任务
@@ -1047,6 +1192,11 @@ impl App {
             dir: "/srv/downloads".to_string(),
             conns: default_conns(proto).to_string(),
             conns_edited: false,
+            // 校验算法默认 SHA-256，校验码留空 = 不校验
+            ck_type: 3,
+            ck_value: String::new(),
+            ck_open: false,
+            ck_sel: 3,
             focus: 0,
             task_name: String::new(),
         });
@@ -1063,6 +1213,10 @@ impl App {
             dir: String::new(),
             conns: String::new(),
             conns_edited: false,
+            ck_type: 0,
+            ck_value: String::new(),
+            ck_open: false,
+            ck_sel: 0,
             focus: 0,
             task_name: t.name.clone(),
         });
@@ -1073,23 +1227,50 @@ impl App {
     // -----------------------------------------------------------------------
 
     pub fn on_mouse(&mut self, m: MouseEvent) {
-        // 对话框优先：仅响应按钮点击
+        // 对话框优先：下拉框展开时只认选项点击（点外部收起）；否则字段行聚焦 / 按钮激活
         if self.dialog.is_some() {
             if let MouseEventKind::Down(MouseButton::Left) = m.kind {
-                let rects = self.dlg_btn_rects.clone();
-                let mut hit: Option<usize> = None;
-                for (r, btn) in rects {
-                    if m.column >= r.x
-                        && m.column < r.x.saturating_add(r.width)
-                        && m.row >= r.y
-                        && m.row < r.y.saturating_add(r.height)
-                    {
-                        hit = Some(btn);
-                        break;
+                let kind = self.dialog.as_ref().map(|d| d.kind);
+                let ck_open = self
+                    .dialog
+                    .as_ref()
+                    .map(|d| d.kind == DialogKind::Add && d.ck_open)
+                    .unwrap_or(false);
+                let hit = |rects: &[(Rect, usize)]| {
+                    rects
+                        .iter()
+                        .find(|(r, _)| {
+                            m.column >= r.x
+                                && m.column < r.x.saturating_add(r.width)
+                                && m.row >= r.y
+                                && m.row < r.y.saturating_add(r.height)
+                        })
+                        .map(|(_, i)| *i)
+                };
+                if ck_open {
+                    let ck_rects = self.dlg_ck_rects.clone();
+                    if let Some(i) = hit(&ck_rects) {
+                        let d = self.dialog.as_mut().unwrap();
+                        d.ck_type = i;
+                        d.ck_sel = i;
+                        d.ck_open = false;
+                    } else if let Some(d) = self.dialog.as_mut() {
+                        // 点击下拉框外部：仅收起下拉框
+                        d.ck_open = false;
                     }
+                    return;
                 }
-                if let Some(btn) = hit {
-                    let kind = self.dialog.as_ref().map(|d| d.kind);
+                let field_rects = self.dlg_field_rects.clone();
+                let btn_rects = self.dlg_btn_rects.clone();
+                if let Some(i) = hit(&field_rects) {
+                    // 点击输入/选择行：聚焦；校验算法行再次点击展开下拉框
+                    let d = self.dialog.as_mut().unwrap();
+                    d.focus = i;
+                    if kind == Some(DialogKind::Add) && i == 3 {
+                        d.ck_open = true;
+                        d.ck_sel = d.ck_type;
+                    }
+                } else if let Some(btn) = hit(&btn_rects) {
                     if let Some(d) = self.dialog.as_mut() {
                         d.focus = btn;
                     }
@@ -1510,7 +1691,8 @@ fn mk(
         has_slot: matches!(state, TaskState::Downloading),
         verify_started: None,
         error: None,
-        sha_ok: None,
+        checksum: None,
+        verify_ok: None,
         created: created.to_string(),
     }
 }
@@ -1728,7 +1910,17 @@ fn demo_tasks() -> Vec<Task> {
     v[2].upload_speed = 1_900_000.0;
     v[2].uploaded = 1_712_000_000;
     v[2].seed_left = 1_800.0;
-    v[2].sha_ok = Some(true);
+    v[2].verify_ok = Some(true);
+    // arch（做种中）：SHA-1 校验通过（展示多算法校验结果）
+    v[2].checksum = Some(Checksum {
+        algo: "SHA-1",
+        value: "a9993e364706816aba3e25717850c26c9cd0d89d".to_string(),
+    });
+    // media（HTTP 不支持续传）：SHA-224，完成后校验
+    v[1].checksum = Some(Checksum {
+        algo: "SHA-224",
+        value: "d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f".to_string(),
+    });
 
     // BT 下载中任务附加信息
     v[13].seeders = 8;
@@ -1745,11 +1937,20 @@ fn demo_tasks() -> Vec<Task> {
     v[9].retry_in = Some(8.0);
     v[9].flaky = true;
 
-    // 校验中任务启动计时
+    // 校验中任务启动计时（带 SHA-256 校验码，完成后展示「SHA-256 校验通过」）
     v[10].verify_started = Some(now);
+    v[10].checksum = Some(Checksum {
+        algo: "SHA-256",
+        value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
+    });
     // 后期处理中任务（进行到一半）
     v[12].post_started = Some(now - Duration::from_millis(1200));
-    v[12].sha_ok = Some(true);
+    v[12].verify_ok = Some(true);
+    v[12].checksum = Some(Checksum {
+        algo: "SHA-512",
+        value: "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce".to_string()
+            + "47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e",
+    });
     v[12].post_process = true;
 
     // 排队任务入队计时（获得空闲槽位后才开始下载，演示槽位队列流转）
@@ -1762,8 +1963,12 @@ fn demo_tasks() -> Vec<Task> {
     v[6].post_process = true;
     v[11].post_process = true;
 
-    // 已完成任务：godot 校验通过；ffmpeg 无校验（sha_ok 保持 None）
-    v[8].sha_ok = Some(true);
+    // 已完成任务：godot MD5 校验通过；ffmpeg 无校验（verify_ok 保持 None）
+    v[8].verify_ok = Some(true);
+    v[8].checksum = Some(Checksum {
+        algo: "MD5",
+        value: "d41d8cd98f00b204e9800998ecf8427e".to_string(),
+    });
 
     v
 }

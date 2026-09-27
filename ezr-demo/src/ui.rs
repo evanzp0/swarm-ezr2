@@ -4,7 +4,7 @@
 //! 每个任务条目 3 行：标题行(名称+协议/状态徽标+百分比)、整体进度条(不分块)、统计行。
 //! 协议徽标 [HTTP/HTTPS/BT] 统一黄色；详情页分块以文字显示 x/y（已完成/总块数）与块大小 N/块。
 //! 分块策略：块大小按协议写死（HTTP 1 MB / BT 256 KB），块数与并发数解耦。
-//! 对话框：添加任务(URL+目录+并发) / 删除任务(仅任务|任务和文件|取消)。
+//! 对话框：添加任务(URL+目录+并发+校验算法下拉+校验码) / 删除任务(仅任务|任务和文件|取消)。
 
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
@@ -15,8 +15,8 @@ use ratatui::{
 };
 
 use crate::app::{
-    chunk_size_label, App, DialogKind, Task, TaskState, FILTERS, ITEM_HEIGHT,
-    MAX_DOWNLOAD_SLOTS,
+    chunk_size_label, App, DialogKind, Task, TaskState, CHECKSUM_ALGOS, FILTERS,
+    ITEM_HEIGHT, MAX_DOWNLOAD_SLOTS,
 };
 
 // ---------------------------------------------------------------------------
@@ -260,8 +260,9 @@ fn task_lines(t: &Task, sel: bool, spinner: char, width: usize, queue_pos: usize
     match t.state {
         TaskState::Verifying => {
             l2.push(Span::raw("  "));
+            let algo = t.checksum.as_ref().map(|c| c.algo).unwrap_or("SHA-256");
             l2.push(Span::styled(
-                format!("SHA-256 分块校验 {}", spinner),
+                format!("{} 分块校验 {}", algo, spinner),
                 Style::default().fg(LIGHT_BLUE),
             ));
         }
@@ -316,11 +317,15 @@ fn task_lines(t: &Task, sel: bool, spinner: char, width: usize, queue_pos: usize
             ));
         }
         TaskState::Completed => {
-            // 校验情况 + 文件大小
-            match t.sha_ok {
-                Some(true) => l3.push(Span::styled(
-                    "SHA-256 校验成功".to_string(),
+            // 校验情况（按算法显示）+ 文件大小
+            match (&t.checksum, t.verify_ok) {
+                (Some(ck), Some(true)) => l3.push(Span::styled(
+                    format!("{} 校验成功", ck.algo),
                     Style::default().fg(GREEN),
+                )),
+                (Some(ck), Some(false)) => l3.push(Span::styled(
+                    format!("{} 校验失败", ck.algo),
+                    Style::default().fg(RED),
                 )),
                 _ => l3.push(Span::styled("无校验".to_string(), Style::default().fg(DIM))),
             }
@@ -716,6 +721,31 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
             val(format!(" · {} 并发 · {}", conn_txt, resume_txt))
         },
     ]));
+    // 校验行（提供了校验码的任务）：算法 · 校验码前缀 + 状态
+    // 前缀取 10 位、状态用短文案，保证 110 列窄面板也能完整显示
+    if let Some(ck) = &t.checksum {
+        let vshort: String = if ck.value.chars().count() > 10 {
+            format!("{}…", ck.value.chars().take(10).collect::<String>())
+        } else {
+            ck.value.clone()
+        };
+        let (st, stc) = match (t.verify_ok, t.state) {
+            (Some(true), _) => ("（已通过）", GREEN),
+            (Some(false), _) => ("（未通过）", RED),
+            (None, TaskState::Verifying) => ("（校验中）", LIGHT_BLUE),
+            _ => ("（待校验）", DIM),
+        };
+        lines.push(Line::from(vec![
+            Span::raw(" "),
+            label("校验"),
+            Span::styled(
+                ck.algo.to_string(),
+                Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!(" · {}", vshort), Style::default().fg(FG)),
+            Span::styled(st, Style::default().fg(stc)),
+        ]));
+    }
     lines.push(Line::from(vec![
         Span::raw(" "),
         label("大小"),
@@ -1034,6 +1064,44 @@ fn dialog_rect(area: Rect, dw: u16, dh: u16) -> Rect {
     }
 }
 
+/// 浮层边界与 CJK 宽字符的切割处理（残影 bug 的根治点）。
+///
+/// 浮层（对话框/下拉）居中后，左/右边界列可能恰好切在底层 CJK 宽字符的
+/// 半格上，使缓冲区进入自相矛盾的状态：
+/// - 左边界外一格是宽字符主格（如「待」），其显示会延伸进浮层区域的右半格，
+///   而浮层又在该半格上写了边框字符——同一显示行上「宽字 + 窄字」重叠；
+/// - 右边界外一格残留孤立的宽字符半格（主格已被浮层改写为边框/空格）。
+/// 两种矛盾下，无论增量 diff 还是清屏全量重绘，终端都可能把宽字渲染在
+/// 浮层边框之上（残影），或使后续字符整体错位一格（宽字打印后游标推进
+/// 两格，与缓冲区期望的格位不再对齐）。
+/// 因此浮层清屏后立刻：把左边界外一格的宽字符主格截断为空格（该字本就
+/// 有一半被浮层盖住，整字不显示是正确视觉），把右边界外一格的孤立半格
+/// 补成空格——保证缓冲区内字符的显示占用永不与浮层内容跨界重叠。
+fn clip_wide_at_edges(f: &mut Frame, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let buf = f.buffer_mut();
+    let x0 = area.x;
+    let xr = area.right() - 1; // 浮层最右列
+    for y in area.y..area.bottom() {
+        if x0 > 0 {
+            let i = buf.index_of(x0 - 1, y);
+            // 宽字符主格（显示占两列、右半侵入浮层）→ 整格截断为空格
+            if w(buf.content[i].symbol()) > 1 {
+                buf.content[i].set_char(' ');
+            }
+        }
+        if xr + 1 < buf.area.width {
+            let i = buf.index_of(xr + 1, y);
+            // 孤立半格（主格在浮层内、已被浮层改写）→ 补成空格
+            if buf.content[i].symbol().is_empty() {
+                buf.content[i].set_char(' ');
+            }
+        }
+    }
+}
+
 fn button_spans(txt: &str, focused: bool) -> Vec<Span<'static>> {
     let label = format!("[ {} ]", txt);
     if focused {
@@ -1063,8 +1131,9 @@ fn draw_dialogs(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_add_dialog(f: &mut Frame, app: &mut App, area: Rect) {
-    let dlg = dialog_rect(area, 74, 9);
+    let dlg = dialog_rect(area, 74, 11);
     f.render_widget(Clear, dlg);
+    clip_wide_at_edges(f, dlg);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -1075,23 +1144,47 @@ fn draw_add_dialog(f: &mut Frame, app: &mut App, area: Rect) {
         ));
     let inner = block.inner(dlg);
     f.render_widget(block, dlg);
-    if inner.width < 24 || inner.height < 7 {
+    if inner.width < 24 || inner.height < 9 {
         return;
     }
 
-    let (focus, url, dir, conns) = {
+    let (focus, url, dir, conns, ck_type, ck_value, ck_open, ck_sel) = {
         let d = app.dialog.as_ref().unwrap();
-        (d.focus, d.url.clone(), d.dir.clone(), d.conns.clone())
+        (
+            d.focus,
+            d.url.clone(),
+            d.dir.clone(),
+            d.conns.clone(),
+            d.ck_type,
+            d.ck_value.clone(),
+            d.ck_open,
+            d.ck_sel,
+        )
     };
+    let (algo_name, algo_need) = CHECKSUM_ALGOS[ck_type.min(CHECKSUM_ALGOS.len() - 1)];
 
-    // 三个输入行（URL / 保存目录 / 并发数）
-    let fields = [
-        ("URL", url.as_str(), "https://example.com/file.zip"),
-        ("保存到", dir.as_str(), "/srv/downloads"),
-        ("并发", conns.as_str(), "4"),
+    // 五个字段行（URL / 保存目录 / 并发数 / 校验算法 / 校验码）
+    // 校验算法为下拉选择行（Enter/Space/点击展开），其余为文本输入行
+    let fields: [(&str, String, String, bool); 5] = [
+        ("URL", url, "https://example.com/file.zip".to_string(), false),
+        ("保存到", dir, "/srv/downloads".to_string(), false),
+        ("并发", conns, "4".to_string(), false),
+        ("校验", algo_name.to_string(), String::new(), true),
+        (
+            "校验码",
+            ck_value,
+            format!("{} 位十六进制（可留空）", algo_need),
+            false,
+        ),
     ];
-    for (i, (lab, val, ph)) in fields.iter().enumerate() {
+    let avail = (inner.width as usize).saturating_sub(12);
+    let mut type_row_y = inner.y + 4;
+    for (i, (lab, val, ph, is_sel)) in fields.iter().enumerate() {
         let focused = focus == i;
+        let row_y = inner.y + 1 + i as u16;
+        if *is_sel {
+            type_row_y = row_y;
+        }
         let mut spans = vec![
             Span::styled(
                 pad_right(lab, 7),
@@ -1099,37 +1192,57 @@ fn draw_add_dialog(f: &mut Frame, app: &mut App, area: Rect) {
             ),
             Span::styled("> ".to_string(), Style::default().fg(DIM2)),
         ];
-        if val.is_empty() {
+        if *is_sel {
+            // 下拉选择行：算法名黄色加粗 + ▾ 指示
             spans.push(Span::styled(
-                truncate(ph, (inner.width as usize).saturating_sub(12)),
+                format!("{} ", algo_name),
+                Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(
+                "▾",
+                Style::default().fg(if focused { YELLOW } else { DIM }),
+            ));
+            if focused {
+                spans.push(Span::styled(
+                    "  Enter 选择算法",
+                    Style::default().fg(DIM2),
+                ));
+            }
+        } else if val.is_empty() {
+            spans.push(Span::styled(
+                truncate(ph, avail),
                 Style::default().fg(DIM2),
             ));
         } else {
-            spans.push(Span::styled(
-                truncate(val, (inner.width as usize).saturating_sub(12)),
-                Style::default().fg(Color::White),
-            ));
+            // 长校验码尾部显示（…+末尾字符），便于核对输入结尾
+            let shown = if w(val) > avail {
+                let keep = avail.saturating_sub(1);
+                format!("…{}", val.chars().skip(val.chars().count() - keep).collect::<String>())
+            } else {
+                val.clone()
+            };
+            spans.push(Span::styled(shown, Style::default().fg(Color::White)));
         }
-        if focused {
+        if focused && !*is_sel {
             spans.push(Span::styled(
                 "▏",
                 Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
             ));
         }
-        f.render_widget(
-            Paragraph::new(Line::from(spans)),
-            Rect {
-                x: inner.x + 1,
-                y: inner.y + 1 + i as u16,
-                width: inner.width.saturating_sub(2),
-                height: 1,
-            },
-        );
+        let rect = Rect {
+            x: inner.x + 1,
+            y: row_y,
+            width: inner.width.saturating_sub(2),
+            height: 1,
+        };
+        f.render_widget(Paragraph::new(Line::from(spans)), rect);
+        // 回填字段行命中区域（鼠标点击聚焦；校验算法行再展开下拉框）
+        app.dlg_field_rects.push((rect, i));
     }
 
     // 按钮行：[ 确认 ] [ 取消 ]
-    let btn_row = inner.y + 5;
-    let labels: [(&str, usize); 2] = [("确认", 3), ("取消", 4)];
+    let btn_row = inner.y + 7;
+    let labels: [(&str, usize); 2] = [("确认", 5), ("取消", 6)];
     let btn_ws: Vec<usize> = labels
         .iter()
         .map(|(txt, _)| w(&format!("[ {} ]", txt)) + 2)
@@ -1150,24 +1263,94 @@ fn draw_add_dialog(f: &mut Frame, app: &mut App, area: Rect) {
         bx += bw + 2;
     }
 
-    // 提示行
+    // 提示行（下拉框展开时切换为列表操作提示）
+    let hint = if ck_open {
+        " ↑↓ 选择算法 · Enter 确认选择 · Esc 关闭列表"
+    } else {
+        " Enter 确认 · Tab/↑↓ 切换 · Esc 取消 · 校验码留空 = 不校验"
+    };
     f.render_widget(
-        Paragraph::new(Span::styled(
-            " Enter 确认 · Tab/↑↓ 切换 · Esc 取消 · 并发 = 最大下载线程数",
-            Style::default().fg(DIM2),
-        )),
+        Paragraph::new(Span::styled(hint, Style::default().fg(DIM2))),
         Rect {
             x: inner.x + 1,
-            y: inner.y + 6,
+            y: inner.y + 8,
             width: inner.width.saturating_sub(2),
             height: 1,
         },
     );
+
+    // 校验算法下拉框（浮层最后绘制，覆盖对话框与下层内容）
+    if ck_open {
+        let items = CHECKSUM_ALGOS;
+        let pw = 24u16;
+        let ph = items.len() as u16 + 2;
+        // 优先展开在校验算法行下方；超出终端底部则改为行上方展开
+        let mut py = type_row_y + 1;
+        if py + ph > area.y + area.height {
+            py = type_row_y.saturating_sub(ph);
+        }
+        let px = (inner.x + 8)
+            .min(area.x + area.width.saturating_sub(pw + 1))
+            .max(area.x + 1);
+        let prect = Rect {
+            x: px,
+            y: py.max(area.y),
+            width: pw,
+            height: ph,
+        };
+        f.render_widget(Clear, prect);
+        clip_wide_at_edges(f, prect);
+        let pblock = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT))
+            .title(Span::styled(
+                " 校验算法 ",
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ));
+        let pinner = pblock.inner(prect);
+        f.render_widget(pblock, prect);
+        for (i, (name, need)) in items.iter().enumerate() {
+            let sel = i == ck_sel;
+            let bg = if sel { Color::DarkGray } else { Color::Reset };
+            let line = Line::from(vec![
+                Span::styled(
+                    format!(" {} ", if sel { "▸" } else { " " }),
+                    Style::default()
+                        .fg(if sel { ACCENT } else { DIM2 })
+                        .bg(bg),
+                ),
+                Span::styled(
+                    pad_right(name, 9),
+                    Style::default()
+                        .fg(if sel { Color::White } else { FG })
+                        .bg(bg)
+                        .add_modifier(if sel { Modifier::BOLD } else { Modifier::empty() }),
+                ),
+                Span::styled(
+                    format!("{} 位", need),
+                    Style::default()
+                        .fg(if sel { ACCENT } else { DIM2 })
+                        .bg(bg),
+                ),
+            ]);
+            let irect = Rect {
+                x: pinner.x,
+                y: pinner.y + i as u16,
+                width: pinner.width,
+                height: 1,
+            };
+            f.render_widget(Paragraph::new(line).style(Style::default().bg(bg)), irect);
+            // 回填下拉选项命中区域（鼠标点击选择）
+            app.dlg_ck_rects.push((irect, i));
+        }
+    }
 }
 
 fn draw_delete_dialog(f: &mut Frame, app: &mut App, area: Rect) {
     let dlg = dialog_rect(area, 66, 7);
     f.render_widget(Clear, dlg);
+    clip_wide_at_edges(f, dlg);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)

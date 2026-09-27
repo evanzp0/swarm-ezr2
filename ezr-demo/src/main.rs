@@ -71,7 +71,34 @@ async fn run(
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(100));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+    // 覆盖层（对话框/下拉浮层）出现或消失的那一帧必须全量重绘。
+    //
+    // 原因：底层列表文本含 CJK 宽字符（一格占两列）。当浮层边框恰好落在
+    // 某个宽字符的右半格上时（如 112 列终端下添加对话框左边框 x=19 正好
+    // 是列表行「排队第 1 位 · 等待空闲下载槽位」中“待”字的右半格），增量
+    // diff 只会输出被改变的单个单元格（MoveTo + 空格/边框字符），部分终端
+    // 无法正确处理“覆盖宽字符半格”的写入，宽字会残留在浮层边框之上
+    // （表现为“等待空闲下…”盖住对话框左侧框线）。更糟糕的是后续帧 diff
+    // 认为该区域无变化、不再重绘，残影被固化。
+    // clear() 先清空终端网格并重置内部前后缓冲，下一帧全量输出：从左到右
+    // 连续打印，宽字符打印后游标自然推进两格，与网格位置严格同步，
+    // 彻底避免半格覆盖问题。
+    fn overlay_sig(app: &App) -> u8 {
+        match app.dialog.as_ref() {
+            None => 0,
+            Some(d) => 1 | ((d.ck_open as u8) << 1),
+        }
+    }
+    let mut last_overlay = overlay_sig(app);
+
     loop {
+        // 浮层翻转（打开/关闭对话框、展开/收起下拉）：先清屏强制全量重绘
+        let sig = overlay_sig(app);
+        if sig != last_overlay {
+            terminal.clear()?;
+            last_overlay = sig;
+        }
+
         terminal.draw(|f| ui::draw(f, app))?;
 
         tokio::select! {

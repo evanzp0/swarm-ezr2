@@ -20,7 +20,8 @@
                       D 删除 → 任务消失。
 场景 D（5s end）：      跳到最后一个任务（BT 下载中）→ [BT] 徽标黄色、
                         分块 x/y · 256 KB/块且 y=15984（4.19GB/256KB）。
-场景 E（5s a）：        添加对话框打开：并发预填 4，且无「最大并发 · HTTP 4 / BT 20」提示。
+场景 E（5s a）：        添加对话框打开：并发预填 4；校验行默认 SHA-256；
+                        校验码占位「64 位十六进制（可留空）」；无『最大并发』提示。
 场景 F（10s space）：   暂停 ubuntu 释放槽位 → 队首 rust 自动获得槽位并从断点
                         继续下载（[下载中]）；imagenet 递补为排队第 1 位；
                         toast「▶ 槽位空闲，开始下载: rust-…」。
@@ -31,8 +32,14 @@
                         toast「已暂停（退出等待队列）」），imagenet 递补第 1 位、
                         tensorflow 第 2 位；再次运行：已暂停 rust 再按 Space（槽位满
                         5/5）→ 回到等待中排队第 1 位，toast「无空闲下载槽位」。
+场景 I（16s 键盘）：    校验算法下拉框键盘流：Tab×3 → Enter 展开 → ↓ 选 SHA-384 →
+                        输入非法校验码 → toast「需为 96 位（当前 4 位）」；切回 MD5、
+                        输入合法 32 位校验码 → 确认建任务，详情出现「校验 MD5 ·…（完成后校验）」。
+场景 J（两轮鼠标）：    先跑一轮探测「SHA-256 ▾」与下拉项坐标；再以 SGR 鼠标点击
+                        校验算法行展开下拉框 → 点击 SHA-512 选项 → 字段变为
+                        「SHA-512 ▾」且下拉框收起。
 
-用法：python3 scripts/verify_ezr.py [场景集合，默认 abcdefh；g 为 78s 长跑可单独运行]
+用法：python3 scripts/verify_ezr.py [场景集合，默认 abcdefhij；g 为 78s 长跑可单独运行]
 """
 
 import fcntl
@@ -67,8 +74,15 @@ def key_bytes(k: str) -> bytes:
         "up": b"\x1b[A", "down": b"\x1b[B", "right": b"\x1b[C", "left": b"\x1b[D",
         "enter": b"\r", "esc": b"\x1b", "tab": b"\t", "space": b" ",
         "pgup": b"\x1b[5~", "pgdn": b"\x1b[6~", "home": b"\x1b[H", "end": b"\x1b[F",
+        "bs": b"\x7f", "backtab": b"\x1b[Z",
     }
-    return named.get(k, k.encode())
+    if k in named:
+        return named[k]
+    # SGR 鼠标事件注入（与 capture.py 同口径，1 基列/行）：mclick:列:行
+    if k.startswith("mclick:"):
+        _, x, y = k.split(":")
+        return f"\x1b[<0;{x};{y}M".encode()
+    return k.encode()
 
 
 def run(cols, lines, duration, keys=None, key_delay_frac=0.45, watch=None):
@@ -314,20 +328,89 @@ def scenario_d():
 
 
 def scenario_e():
-    print("\n== 场景 E：添加对话框——并发预填 4，无『最大并发 · HTTP 4 / BT 20』提示 ==")
+    print("\n== 场景 E：添加对话框——5 字段（含校验算法/校验码），默认 SHA-256 ==")
     samples, _ = run(120, 44, 5.0, keys=["a"], key_delay_frac=0.3)
     # 取按键后的最后几帧（对话框稳定可见）
     final_rows = samples[-1][1]
     final = "\n".join(final_rows)
     check("E1 对话框已打开", "添加下载任务" in final)
     dialog_rows = [r for r in final_rows if any(
-        s in r for s in ("添加下载任务", "URL", "保存到", "并发", "确认", "取消", "Enter 确认"))]
+        s in r for s in ("添加下载任务", "URL", "保存到", "并发", "校验", "确认", "取消", "Enter 确认"))]
     dlg_text = "\n".join(dialog_rows)
     check("E2 无『最大并发』提示文字", "最大并发" not in dlg_text and "最大并发" not in final)
-    check("E3 无『HTTP 4 / BT 20』提示文字", "BT 20" not in final)
-    check("E4 并发字段预填默认值 4", re.search(r"并发\s*>\s*4", dlg_text) is not None,
+    check("E3 校验行默认 SHA-256 下拉指示", re.search(r"校验\s*>\s*SHA-256 ▾", dlg_text) is not None,
+          next((r.strip()[:44] for r in dialog_rows if "▾" in r), ""))
+    check("E4 校验码占位为 64 位十六进制（可留空）", "64 位十六进制（可留空）" in dlg_text)
+    check("E5 并发字段预填默认值 4", re.search(r"并发\s*>\s*4", dlg_text) is not None,
           next((r.strip()[:40] for r in dialog_rows if "并发" in r and ">" in r), ""))
-    check("E5 提示行保留快捷键说明", "Enter 确认" in final and "并发 = 最大下载线程数" in final)
+    check("E6 提示行含校验码留空说明", "Enter 确认" in final and "校验码留空 = 不校验" in final)
+
+
+def find_text_pos(screen, needle: str):
+    """在 pyte 缓冲区（含宽字符占位的列空间）中查找文本，返回 (行, 列)（0 基）；找不到返回 None。"""
+    for y in range(screen.lines):
+        s = "".join(screen.buffer[y][x].data for x in range(screen.columns))
+        i = s.find(needle)
+        if i >= 0:
+            return y, i
+    return None
+
+
+def scenario_i():
+    print("\n== 场景 I：校验算法下拉框键盘流 + 校验码格式验证 + 合法 MD5 确认建任务 ==")
+    keys = (["a", "tab", "tab", "tab", "enter", "down", "enter", "tab"]
+            + ["a", "b", "c", "d", "enter"]          # SHA-384 + 仅 4 位校验码 → 长度报错
+            + ["bs"] * 4                              # 清空校验码
+            + ["backtab", "enter", "home", "enter", "tab"]  # 下拉切回 MD5
+            + list("d41d8cd98f00b204e9800998ecf8427e")       # 合法 32 位
+            + ["enter"])
+    samples, _ = run(120, 44, 17.0, keys=keys, key_delay_frac=0.12)
+    all_text = "\n".join("".join(rows) for _, rows in samples)
+    final_rows = samples[-1][1]
+    final = "\n".join(final_rows)
+
+    # 下拉框曾展开：全部 7 种算法与期望位数出现过
+    for item in ("MD5", "SHA-1", "SHA-224", "SHA-384", "SHA-512", "Adler-32"):
+        check(f"I1 下拉框展示 {item}", item in all_text)
+    check("I2 非法校验码报错（SHA-384 需 96 位，当前 4 位）",
+          "SHA-384 校验码需为 96 位十六进制（当前 4 位）" in all_text)
+    check("I3 对话框已确认关闭", "添加下载任务" not in final)
+    check("I4 toast「已添加任务」出现", "已添加任务 #" in all_text)
+    # 新任务自动选中：详情出现校验行（MD5 · 校验码前缀 · 待校验）
+    ck_rows = [r for r in final_rows if re.search(r"校验\s+MD5 · d41d8cd98f", r)]
+    check("I5 详情出现校验行「MD5 · d41d8cd98f…（待校验）」",
+          ck_rows and "（待校验）" in "\n".join(ck_rows),
+          ck_rows[0].strip()[:60] if ck_rows else "not found")
+
+
+def scenario_j():
+    print("\n== 场景 J：鼠标点击展开校验算法下拉框并选择 SHA-512 ==")
+    # 第一轮：仅打开对话框，探测「SHA-256 ▾」字段与下拉项坐标（布局确定性复用）
+    _, screen1 = run(120, 44, 5.0, keys=["a"], key_delay_frac=0.3)
+    pos_field = find_text_pos(screen1, "SHA-256 ▾")
+    check("J1 第一轮定位校验算法字段", pos_field is not None, str(pos_field))
+    if pos_field is None:
+        return
+    fy, fx = pos_field
+    # 第二轮：a 打开 → 点击字段展开下拉框（保持展开以便定位选项）
+    samples, screen2 = run(120, 44, 6.0,
+                           keys=["a", f"mclick:{fx + 1}:{fy + 1}"],
+                           key_delay_frac=0.25)
+    all_text = "\n".join("".join(rows) for _, rows in samples)
+    # 下拉框曾展开（标题出现）；随后重新定位 SHA-512 选项坐标再点击
+    check("J2 点击字段后下拉框展开（标题「校验算法」出现）", "校验算法" in all_text)
+    pos_item = find_text_pos(screen2, "SHA-512")
+    check("J3 下拉框中定位 SHA-512 选项", pos_item is not None, str(pos_item))
+    if pos_item is None:
+        return
+    iy, ix = pos_item
+    samples3, screen3 = run(120, 44, 7.0,
+                            keys=["a", f"mclick:{fx + 1}:{fy + 1}", f"mclick:{ix + 1}:{iy + 1}"],
+                            key_delay_frac=0.25)
+    final3 = "\n".join(samples3[-1][1])
+    check("J4 点击 SHA-512 后字段变为「SHA-512 ▾」", "SHA-512 ▾" in final3)
+    check("J5 下拉框已收起（标题消失）", "校验算法" not in final3)
+    check("J6 校验码占位同步为 128 位", "128 位十六进制（可留空）" in final3)
 
 
 def scenario_f():
@@ -420,7 +503,7 @@ def scenario_h():
 
 
 if __name__ == "__main__":
-    only = sys.argv[1] if len(sys.argv) > 1 else "abcdefh"
+    only = sys.argv[1] if len(sys.argv) > 1 else "abcdefhij"
     if "a" in only:
         scenario_a()
     if "b" in only:
@@ -437,6 +520,10 @@ if __name__ == "__main__":
         scenario_g()
     if "h" in only:
         scenario_h()
+    if "i" in only:
+        scenario_i()
+    if "j" in only:
+        scenario_j()
     print(f"\n通过 {len(PASS)} 项 / 失败 {len(FAIL)} 项")
     if FAIL:
         print("失败项:")

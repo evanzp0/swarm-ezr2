@@ -1,5 +1,5 @@
 [package]
-name = "ezr-demo"
+name = "ezr-tui-demo"
 version = "0.1.0"
 edition = "2021"
 description = "EZR Downloader - TUI 界面 Demo（伪造数据，多协议高性能下载器界面原型）"
