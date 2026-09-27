@@ -38,7 +38,7 @@
 | architect | `packs/four-pack/architect/SKILL.md` | 紧凑规格工作流：架构评审、依赖方向、变异加固、DRY、软 Gherkin 变异与完成通知 |
 | coder | `packs/four-pack/coder/SKILL.md` | 紧凑规格工作流：以 TDD、单元测试和生成的验收测试实现已批准的行为切片 |
 | refactorer | `packs/four-pack/refactorer/SKILL.md` | 紧凑规格工作流：保持行为不变的清理、覆盖率提升、CRAP/DRY、变异点扫描与属性测试 |
-| specifier | `packs/four-pack/specifier/SKILL.md` | 紧凑规格工作流：Inversion 选择题访谈（使用 AskUserQuestion 方式）收齐意图后，将用户意图转化为精确的 Gherkin 验收规格 |
+| specifier | `packs/four-pack/specifier/SKILL.md` | 紧凑规格工作流：Inversion 选择题访谈（chat 选择题面板提问，不支持时退化为 chat 输入选择题答案；两阶段需求澄清）收齐意图后，将用户意图转化为精确的 Gherkin 验收规格 |
 
 ## six-pack
 
@@ -49,7 +49,7 @@
 | cleaner | `packs/six-pack/cleaner/SKILL.md` | 完整工作流：保持行为不变的清理、覆盖率提升、CRAP/DRY 审查与变异点扫描 |
 | coder | `packs/six-pack/coder/SKILL.md` | 完整工作流：以 TDD、单元测试和生成的验收测试实现已批准的行为切片 |
 | hardender | `packs/six-pack/hardender/SKILL.md` | 完整工作流：变异加固、语言变异、CRAP/DRY 验证与软 Gherkin 变异 |
-| specifier | `packs/six-pack/specifier/SKILL.md` | 完整工作流：Inversion 选择题访谈（使用 AskUserQuestion 方式）收齐意图后，产出已认可的 Gherkin 规格与端到端 QA 套件规格 |
+| specifier | `packs/six-pack/specifier/SKILL.md` | 完整工作流：Inversion 选择题访谈（chat 选择题面板提问，不支持时退化为 chat 输入选择题答案；两阶段需求澄清）收齐意图后，产出已认可的 Gherkin 规格与端到端 QA 套件规格 |
 
 ## squad
 
