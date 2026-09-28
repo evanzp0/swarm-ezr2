@@ -15,7 +15,7 @@ use ratatui::{
 };
 
 use crate::app::{
-    chunk_size_label, App, DialogKind, Task, TaskState, CHECKSUM_ALGOS, FILTERS,
+    chunk_size_label, App, DialogKind, FailKind, Task, TaskState, CHECKSUM_ALGOS, FILTERS,
     ITEM_HEIGHT, MAX_DOWNLOAD_SLOTS,
 };
 
@@ -285,8 +285,12 @@ fn task_lines(t: &Task, sel: bool, spinner: char, width: usize, queue_pos: usize
             let retry = format!("重试 {}/{}", t.retries, t.max_retries);
             let countdown = match t.retry_in {
                 Some(s) => format!("{}s 后重试", s.ceil() as u64),
-                // 无倒计时 = 已达最大重试次数，停止自动重试（等待手动 R）
-                None => "已达上限".to_string(),
+                // 无倒计时：区分「已达上限」与「不自动重试」（语义性 4xx /
+                // 磁盘空间不足 / 校验失败直接停等，FR-M1-43/44/51）
+                None => match t.fail_kind {
+                    Some(FailKind::Fatal) | Some(FailKind::Verify) => "不自动重试".to_string(),
+                    _ => "已达上限".to_string(),
+                },
             };
             l3.push(Span::styled(retry, Style::default().fg(RED)));
             l3.push(Span::styled(" · ", Style::default().fg(RED)));
@@ -474,7 +478,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                 "EZR Downloader",
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
             ),
-            Span::styled("  v0.1.0-demo", Style::default().fg(DIM)),
+            Span::styled("  v0.1.0-m1", Style::default().fg(DIM)),
         ]));
 
     let line = Line::from(vec![

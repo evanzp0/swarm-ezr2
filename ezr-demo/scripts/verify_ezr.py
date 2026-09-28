@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""verify_ezr.py — pty 自动化回归验证（Task 11 口径：5 槽位下载队列）。
+"""verify_ezr.py — pty 自动化回归验证（Task 19 口径：M1 规则失败分类 + 指数退避）。
 
 分块策略：块大小按协议写死——HTTP 1 MB/块 · BT 256 KB/块，
 总块数 = ceil(total/块大小)，与并发数解耦。
 下载槽位：同时可下载任务数写死 5（下载中 + 待自动重试的已失败占用）；
 「等待中」任务按列表顺序（从上往下）依次获得空闲槽位后开始下载。
+失败分类（FR-M1-40/43）：网络错误 / 408·429·5xx / 大小不符 → 指数退避 8→16→32→60s
+封顶自动重试（Retry-After ≤60s 优先）；语义性 4xx / 磁盘空间不足 / SHA-256 校验失败
+→ 不自动重试（停等，仅 R）；校验失败按 R 清除断点从头下载（FR-M1-51）；
+续传一致性失效 → 断点作废、从头重新下载（FR-M1-22）。
 重试计数连续性规则：连续失败（自上次失败后未下载到任何数据）→ 累加；
 非连续失败（重试期间有下载进展）→ 重置为 1；达上限停止自动重试并释放槽位。
-演示任务 win11：首次失败后的重试正常下载一段（有进展→重置），
-之后的重试模拟连接卡死（速度 0、无进展→累加直至 5/5 达上限）。
+演示任务 win11：失败原因按 fail_case 轮换（超时→重置→大小不符→503 RA→一致性失效），
+首次失败后的重试正常下载一段（有进展→重置），之后模拟连接卡死（无进展→累加至 5/5）。
+演示任务 gpt4all：启动 10.6s 后 SHA-256 校验失败（不自动重试），R 后从头重下。
+演示任务 tensorflow：首次获得槽位开始前磁盘空间预检失败（FR-M1-44，场景 L 自动验证）。
 
 场景 A（33s 无按键）：失败任务重试流转 已失败→等待中→下载中；全程无「连接中」；
                       重试计数连续性规则：非连续失败（有进展）toast「重试次数重置为 1/5」、
@@ -25,8 +31,10 @@
 场景 F（10s space）：   暂停 ubuntu 释放槽位 → 队首 rust 自动获得槽位并从断点
                         继续下载（[下载中]）；imagenet 递补为排队第 1 位；
                         toast「▶ 槽位空闲，开始下载: rust-…」。
-场景 G（78s 无按键，长跑）：win11 连续失败（卡死无进展）累加至 5/5 →「重试 5/5 · 已达上限」
-                        停止自动重试并释放槽位 → 队首 rust 自动开始下载；
+场景 G（150s 无按键，长跑）：退避序列 toast 8s/16s、Retry-After 优先 10s、
+                        退避封顶 60s（一致性失效从头重下）+「断点已作废」；
+                        连续失败累加至 5/5 →「重试 5/5 · 已达上限」停止自动重试
+                        并释放槽位 → 队首 rust 自动开始下载；
                         toast「已达最大重试次数」出现。
 场景 H（两次运行，共 ~13s）：等待中任务 rust 按 Space → 已暂停（退出等待队列，
                         toast「已暂停（退出等待队列）」），imagenet 递补第 1 位、
@@ -38,8 +46,18 @@
 场景 J（两轮鼠标）：    先跑一轮探测「SHA-256 ▾」与下拉项坐标；再以 SGR 鼠标点击
                         校验算法行展开下拉框 → 点击 SHA-512 选项 → 字段变为
                         「SHA-512 ▾」且下拉框收起。
+场景 K（16s 键盘）：    gpt4all 启动 10.6s 后 SHA-256 校验失败（不自动重试，
+                        详情「下载内容与校验值不符」）→ 选中后按 R →
+                        toast「已清除断点，从头下载」、回「等待中」、
+                        详情校验行（未通过）。
+场景 L（15s 键盘）：    暂停 ubuntu/media/llama3 释放 3 槽位 → rust/imagenet 递补开始、
+                        tensorflow 获槽开始前磁盘预检失败（FR-M1-44：toast「不自动重试，
+                        按 R 手动重试」、详情「磁盘空间不足」）→ R 重新排队 →
+                        预检通过进入下载中。
+场景 M（50s 键盘）：    46s 处选中 win11 → 详情「失败原因」展示含状态码文案
+                        「HTTP 503 Service Unavailable…」（FR-M1-40）。
 
-用法：python3 scripts/verify_ezr.py [场景集合，默认 abcdefhij；g 为 78s 长跑可单独运行]
+用法：python3 scripts/verify_ezr.py [场景集合，默认 abcdefhjklm；g 为 150s 长跑可单独运行]
 """
 
 import fcntl
@@ -443,24 +461,108 @@ def scenario_f():
 
 
 def scenario_g():
-    print("\n== 场景 G（78s 长跑）：重试计数达上限 → 停止自动重试并释放槽位 → 队首自动开始 ==")
-    samples, _ = run(120, 44, 78.0)
+    print("\n== 场景 G（150s 长跑）：退避序列/Retry-After/一致性失效 → 达上限停等释放槽位 → 队首自动开始 ==")
+    samples, _ = run(120, 44, 150.0)
     all_text = "\n".join("".join(rows) for _, rows in samples)
     final_rows = samples[-1][1]
     final = "\n".join(final_rows)
 
+    # 指数退避序列（FR-M1-42）：fail#2=8s、fail#3=16s；
+    # fail#4=503 Retry-After 优先采用 10s（FR-M1-43，backoff(3)=32s ≠ 10s）；fail#5=一致性失效 60s 从头重下
+    check("G1 退避序列：toast「8s 后自动重试」", "8s 后自动重试" in all_text)
+    check("G2 退避序列：toast「16s 后自动重试」", "16s 后自动重试" in all_text)
+    check("G3 Retry-After 优先：toast「10s 后自动重试」", "10s 后自动重试" in all_text)
+    check("G4 Retry-After 与计数同条 toast（累加至 3/5 · 10s）",
+          any("累加至 3/5" in row and "10s 后自动重试" in row for row in all_text.splitlines()))
+    check("G5 退避封顶：toast「60s 后从头重新下载」", "60s 后从头重新下载" in all_text)
+    check("G6 续传一致性失效：toast「断点已作废」", "断点已作废" in all_text)
+
     w_blk = task_block(final_rows, "win11-24h2")
-    check("G1 win11 终止失败：重试 5/5 · 已达上限",
+    check("G7 win11 终止失败：重试 5/5 · 已达上限",
           w_blk is not None and "重试 5/5" in w_blk and "已达上限" in w_blk,
           w_blk.replace("\n", " | ").strip()[:80] if w_blk else "not found")
-    check("G2 win11 徽标为已失败", w_blk is not None and "[已失败]" in w_blk)
+    check("G8 win11 徽标为已失败", w_blk is not None and "[已失败]" in w_blk)
     r_blk = task_block(final_rows, "rust-toolchain-nightly")
-    check("G3 槽位释放后 rust 自动开始下载", r_blk is not None and "[下载中]" in r_blk,
+    check("G9 槽位释放后 rust 自动开始下载", r_blk is not None and "[下载中]" in r_blk,
           r_blk.replace("\n", " | ").strip()[:80] if r_blk else "not found")
-    check("G4 toast 出现「已达最大重试次数」", "已达最大重试次数" in all_text)
+    check("G10 toast 出现「已达最大重试次数」", "已达最大重试次数" in all_text)
     img_blk = task_block(final_rows, "imagenet-mini-dataset")
-    check("G5 imagenet 递补为排队第 1 位", img_blk is not None and "排队第 1 位" in img_blk)
-    check("G6 头部槽位保持 5/5（rust 递补后）", "下载槽位 5/5" in final)
+    check("G11 imagenet 递补为排队第 1 位", img_blk is not None and "排队第 1 位" in img_blk)
+    check("G12 头部槽位保持 5/5（rust 递补后）", "下载槽位 5/5" in final)
+
+
+def scenario_k():
+    print("\n== 场景 K：SHA-256 校验失败停等（不自动重试）+ R 清除断点从头下载 ==")
+    # gpt4all 位于「正在下载」页签第 9 项（home + down×8）；校验失败在 10.6s 发生，
+    # 按键从 72% 处开始（≈11.5s）保证按 R 时任务已失败
+    samples, _ = run(120, 44, 16.0,
+                     keys=["home"] + ["down"] * 8 + ["r"], key_delay_frac=0.72)
+    all_text = "\n".join("".join(rows) for _, rows in samples)
+    final_rows = samples[-1][1]
+    final = "\n".join(final_rows)
+
+    check("K1 启动校验：toast「SHA-256 校验失败」出现", "SHA-256 校验失败" in all_text)
+    check("K2 校验失败不自动重试（toast/行内「不自动重试」）", "不自动重试" in all_text)
+    check("K3 详情失败原因「内容与校验值不符」", "内容与校验值不符" in all_text)
+    check("K4 R 后 toast「已清除断点，从头下载」", "已清除断点，从头下载" in all_text)
+    g_blk = task_block(final_rows, "gpt4all-models-bundle")
+    check("K5 gpt4all 重试后进入等待中（无连接中）",
+          g_blk is not None and "[等待中]" in g_blk,
+          g_blk.replace("\n", " | ").strip()[:80] if g_blk else "not found")
+    check("K6 详情校验行显示（未通过）", "（未通过）" in final)
+
+
+def scenario_l():
+    print("\n== 场景 L：开始前磁盘空间预检失败（不自动重试）→ R 手动重试预检通过 ==")
+    # 暂停 ubuntu/media/llama3 释放 3 个槽位 → rust/imagenet 递补开始、
+    # tensorflow（排队第 3 位）获得槽位后开始前预检失败（FR-M1-44：不自动重试、释放槽位）；
+    # 随后选中 tensorflow 按 R → 重新排队 → 预检已通过进入下载中。
+    # 导航（「进行中」页签；neovim 启动数秒后完成退页签，列表变 10 项）：
+    # tensorflow = 第 8 项（home+down×7）；预检在 ~4.6s 发生，用未绑定键 x 垫待后按 R。
+    samples, _ = run(120, 44, 15.0,
+                     keys=["home", "space", "down", "space", "down", "down", "down", "space",
+                           "down", "down", "down", "x", "x", "x", "x", "r"],
+                     key_delay_frac=0.20)
+    all_text = "\n".join("".join(rows) for _, rows in samples)
+    final_rows = samples[-1][1]
+    final = "\n".join(final_rows)
+
+    check("L1 预检失败 toast「开始前预检失败」出现", "开始前预检失败" in all_text)
+    check("L2 toast 注明不自动重试、按 R 手动重试",
+          "不自动重试，按 R 手动重试: tensorflow" in all_text)
+    check("L3 详情失败原因含「磁盘空间不足（保存目录」",
+          "磁盘空间不足（保存目录" in all_text)
+    tf_blk = task_block(final_rows, "tensorflow-cuda-12.8")
+    check("L4 tensorflow R 重试后进入下载中（预检通过）",
+          tf_blk is not None and "[下载中]" in tf_blk,
+          tf_blk.replace("\n", " | ").strip()[:80] if tf_blk else "not found")
+    r_blk = task_block(final_rows, "rust-toolchain-nightly")
+    check("L5 rust 递补获得槽位进入下载中",
+          r_blk is not None and "[下载中]" in r_blk,
+          r_blk.replace("\n", " | ").strip()[:80] if r_blk else "not found")
+    img_blk = task_block(final_rows, "imagenet-mini-dataset")
+    check("L6 imagenet 递补获得槽位进入下载中",
+          img_blk is not None and "[下载中]" in img_blk,
+          img_blk.replace("\n", " | ").strip()[:80] if img_blk else "not found")
+
+
+def scenario_m():
+    print("\n== 场景 M：详情「失败原因」展示失败分类文案（FR-M1-40，附状态码）==")
+    # win11 时间线（重试回队列含 3s 启动延迟）：f4（HTTP 503，Retry-After 10s）
+    # 在 ~51-61s 之间停等；52s 处选中 win11（「进行中」页签第 7 项，home+down×6，
+    # neovim 已完成退页签）→ 详情失败原因行应展示含状态码的失败文案。
+    samples, _ = run(120, 44, 58.0,
+                     keys=["home"] + ["down"] * 6, key_delay_frac=0.90)
+    all_text = "\n".join("".join(rows) for _, rows in samples)
+    final_rows = samples[-1][1]
+
+    check("M1 详情失败原因含「HTTP 503 Service Unavailable」（附状态码）",
+          "HTTP 503 Service Unavailable" in all_text)
+    check("M2 失败原因行标签存在（失败原因）", "失败原因" in all_text)
+    w_blk = task_block(final_rows, "win11-24h2-x64")
+    check("M3 win11 处于已失败（停等重试中）",
+          w_blk is not None and "[已失败]" in w_blk,
+          w_blk.replace("\n", " | ").strip()[:80] if w_blk else "not found")
 
 
 def scenario_h():
@@ -503,7 +605,7 @@ def scenario_h():
 
 
 if __name__ == "__main__":
-    only = sys.argv[1] if len(sys.argv) > 1 else "abcdefhij"
+    only = sys.argv[1] if len(sys.argv) > 1 else "abcdefhjklm"
     if "a" in only:
         scenario_a()
     if "b" in only:
@@ -524,6 +626,12 @@ if __name__ == "__main__":
         scenario_i()
     if "j" in only:
         scenario_j()
+    if "k" in only:
+        scenario_k()
+    if "l" in only:
+        scenario_l()
+    if "m" in only:
+        scenario_m()
     print(f"\n通过 {len(PASS)} 项 / 失败 {len(FAIL)} 项")
     if FAIL:
         print("失败项:")

@@ -1,7 +1,7 @@
 //! app.rs — EZR Downloader TUI Demo 的应用状态、任务模型与伪造数据模拟
 //!
 //! Demo 说明：所有下载任务均为伪造数据，速度/进度由本地模拟器驱动，
-//! 用于验证界面布局、状态流转与交互体验。
+//! 用于验证界面布局、状态流转与交互体验（状态切换规则口径对齐 mission/M1.md 第一期需求）。
 //!
 //! 页签口径：正在下载 = 等待/下载/暂停/校验/后期处理/失败；
 //!           已完成   = 已完成 / 做种中。
@@ -10,9 +10,20 @@
 //! 已失败任务重试时先回到「等待中」队列；
 //! 「等待中」任务按 Space 会暂停（退出等待队列，→ 已暂停）。
 //!
+//! 失败与重试规则（FR-M1-40~44 / 51 / 22）：
+//! - 自动重试类（网络错误 / HTTP 408·429·5xx / 文件大小不符）：指数退避
+//!   8s → 16s → 32s → 60s 封顶；响应带 Retry-After（≤60s）时优先采用；
+//! - 不自动重试类（语义性 HTTP 4xx / 磁盘空间不足 / SHA-256 校验失败）：
+//!   直接停等（「已达上限」式），仅可 R 手动重试；
+//!   其中校验失败按 R 时清除断点、从头重新下载（数据损坏时断点无意义）；
+//! - 续传一致性失效（服务器内容已更新）：断点作废、清零进度、从头重新下载；
+//! - 重试计数连续性：连续失败（无进展）→ 累加、有进展 → 重置为 1；
+//!   达上限（默认 5）→ 停止自动重试、释放槽位、显示「已达上限」。
+//!
 //! 下载槽位：同时可下载的任务数写死为 5（MAX_DOWNLOAD_SLOTS）。
 //! 「下载中」与「已失败（未达重试上限、将自动重试）」的任务占用槽位；
 //! 「等待中」任务须等槽位空出，按列表顺序（从上往下）依次获得槽位后开始下载。
+//! 开始/续传前进行磁盘空间预检（演示：tensorflow 首次获得槽位时预检失败一次）。
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -79,6 +90,21 @@ pub enum TaskState {
     Failed,
     /// 做种（BT）
     Seeding,
+}
+
+/// 失败类别（FR-M1-40/43/44/51/22 演示口径）：决定自动重试行为与列表行文案
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FailKind {
+    /// 临时性错误（网络错误 / HTTP 408·429·5xx / 文件大小不符）：
+    /// 按指数退避自动重试，Retry-After（≤60s）优先
+    Transient,
+    /// 语义性错误（HTTP 4xx 除 408/429 / 磁盘空间不足）：
+    /// 不自动重试，直接停等（「已达上限」式），仅可 R 手动重试
+    Fatal,
+    /// 完整性校验失败：不自动重试；按 R 清除断点、从头重新下载
+    Verify,
+    /// 续传一致性失效（服务器内容已更新）：自动重试，但断点已作废、从头下载
+    Invalidated,
 }
 
 impl TaskState {
@@ -176,8 +202,15 @@ pub struct Task {
     pub made_progress: bool,
     /// 距下次自动重试的倒计时（秒）；None = 不再自动重试
     pub retry_in: Option<f64>,
+    /// 最近一次失败的类别（决定「不自动重试/已达上限」行文案与 R 重试语义）
+    pub fail_kind: Option<FailKind>,
     /// 演示用：该任务会周期性下载失败（用于展示失败/重试流转）
     pub flaky: bool,
+    /// 演示用：首次完整性校验失败一次（FR-M1-51 演示；R 后重下校验通过）
+    pub verify_fail_once: bool,
+    /// 演示用：首次获得槽位开始下载前磁盘空间预检失败一次
+    /// （FR-M1-44 演示；不自动重试，R 后预检通过）
+    pub precheck_fail_once: bool,
     running_since: Option<Instant>,
     /// 累计下载用时（秒）
     pub elapsed: f64,
@@ -625,7 +658,7 @@ impl App {
                         t.uploaded = (t.uploaded as f64 + t.upload_speed * dt) as u64;
                         global_ul += t.upload_speed;
                     }
-                    // 演示用：周期性失败（展示失败/倒计时/自动重试流转）；
+                    // 演示用：周期性失败（展示失败分类/退避倒计时/自动重试流转，FR-M1-40~43）；
                     // 卡死重试 2.0s 即失败，正常尝试 6s 后失败
                     if t.flaky {
                         let fail_after = if t.fail_count > 1 { 2.0 } else { 6.0 };
@@ -641,42 +674,71 @@ impl App {
                             t.speed = 0.0;
                             t.upload_speed = 0.0;
                             t.fail_count += 1;
-                            t.error = Some(fail_msg(t.fail_count));
+                            let (msg, kind, retry_after) = fail_case(t.fail_count);
+                            t.error = Some(msg.to_string());
+                            t.fail_kind = Some(kind);
                             // 重试计数规则：连续失败（自上次失败后未下载到任何数据）→ 累加；
-                            // 非连续失败（重试期间有下载进展）→ 重置为 1
+                            // 非连续失败（重试期间有下载进展）→ 重置为 1（FR-M1-41）
                             let reset = t.made_progress;
-                            if reset {
-                                t.retries = 1;
-                            } else {
-                                t.retries += 1;
-                            }
+                            t.retries = if reset { 1 } else { t.retries + 1 };
                             t.made_progress = false;
-                            if t.retries < t.max_retries {
-                                // 未达最大重试次数：倒计时后自动重试，期间继续占用下载槽位
-                                t.retry_in = Some(8.0);
-                                t.has_slot = true;
-                                let rule = if reset {
-                                    format!(
-                                        "非连续失败，重试次数重置为 {}/{}",
-                                        t.retries, t.max_retries
-                                    )
-                                } else {
-                                    format!(
-                                        "连续失败，重试次数累加至 {}/{}",
-                                        t.retries, t.max_retries
-                                    )
-                                };
-                                notices.push(format!(
-                                    "✘ 下载失败（{}），8s 后自动重试: {}",
-                                    rule, t.name
-                                ));
+                            let rule = if reset {
+                                format!(
+                                    "非连续失败，重试次数重置为 {}/{}",
+                                    t.retries, t.max_retries
+                                )
                             } else {
+                                format!(
+                                    "连续失败，重试次数累加至 {}/{}",
+                                    t.retries, t.max_retries
+                                )
+                            };
+                            // 自动重试倒计时：指数退避 8→16→32→60s 封顶；
+                            // 响应带 Retry-After（≤60s）时优先采用（FR-M1-42/43）
+                            let secs = retry_after.unwrap_or_else(|| backoff_secs(t.retries));
+                            let auto_kind =
+                                matches!(kind, FailKind::Transient | FailKind::Invalidated);
+                            if auto_kind && t.retries < t.max_retries {
+                                // 未达最大重试次数：倒计时后自动重试，期间继续占用下载槽位
+                                t.retry_in = Some(secs);
+                                t.has_slot = true;
+                                if kind == FailKind::Invalidated {
+                                    // 续传一致性失效（FR-M1-22）：sidecar 作废、断点清零，
+                                    // 重试时从头重新下载
+                                    let total = t.total;
+                                    let n = t.connections.len().max(1);
+                                    let piece = chunk_size(t.protocol);
+                                    t.downloaded = 0;
+                                    t.chunk_done = 0;
+                                    t.connections = make_chunk_conns(total, 0, n, piece).0;
+                                    notices.push(format!(
+                                        "⚠ 服务器内容已更新，断点已作废，{}s 后从头重新下载: {}",
+                                        secs as u64, t.name
+                                    ));
+                                } else {
+                                    notices.push(format!(
+                                        "✘ 下载失败（{}），{}s 后自动重试: {}",
+                                        rule,
+                                        secs as u64,
+                                        t.name
+                                    ));
+                                }
+                            } else if auto_kind {
                                 // 已达最大重试次数：停止自动重试并释放槽位（按 R 手动重试）
                                 t.retry_in = None;
                                 t.has_slot = false;
                                 notices.push(format!(
                                     "✘ 已达最大重试次数（{}/{}），停止自动重试，按 R 手动重试: {}",
                                     t.retries, t.max_retries, t.name
+                                ));
+                            } else {
+                                // 语义性 4xx / 磁盘空间不足：不自动重试，
+                                // 直接进入「已达上限」式停等，释放槽位（FR-M1-43/44）
+                                t.retry_in = None;
+                                t.has_slot = false;
+                                notices.push(format!(
+                                    "✘ 下载失败（{}）：不自动重试，按 R 手动重试: {}",
+                                    msg, t.name
                                 ));
                             }
                             continue;
@@ -707,17 +769,36 @@ impl App {
                     if let Some(s) = t.verify_started {
                         if now.duration_since(s) > Duration::from_millis(2600) {
                             let algo = t.checksum.as_ref().map(|c| c.algo).unwrap_or("SHA-256");
-                            t.verify_ok = Some(true);
+                            t.verify_started = None;
                             t.speed = 0.0;
                             t.upload_speed = 0.0;
-                            t.verify_started = None;
-                            if t.post_process {
-                                t.state = TaskState::PostProcessing;
-                                t.post_started = Some(now);
-                                notices.push(format!("✓ {} 校验通过，开始后期处理: {}", algo, t.name));
+                            // 校验失败路径（FR-M1-51）：不自动重试；按 R 清除断点从头重新下载
+                            //（演示：gpt4all 首次校验失败，R 重下后校验通过）
+                            if t.verify_fail_once {
+                                t.verify_fail_once = false;
+                                t.verify_ok = Some(false);
+                                t.state = TaskState::Failed;
+                                t.fail_kind = Some(FailKind::Verify);
+                                t.retry_in = None;
+                                t.has_slot = false;
+                                t.error = Some(format!("{} 校验失败：内容与校验值不符", algo));
+                                notices.push(format!(
+                                    "✘ {} 校验失败：不自动重试，按 R 清除断点从头下载: {}",
+                                    algo, t.name
+                                ));
                             } else {
-                                t.state = TaskState::Completed;
-                                notices.push(format!("✓ {} 校验通过: {}", algo, t.name));
+                                t.verify_ok = Some(true);
+                                if t.post_process {
+                                    t.state = TaskState::PostProcessing;
+                                    t.post_started = Some(now);
+                                    notices.push(format!(
+                                        "✓ {} 校验通过，开始后期处理: {}",
+                                        algo, t.name
+                                    ));
+                                } else {
+                                    t.state = TaskState::Completed;
+                                    notices.push(format!("✓ {} 校验通过: {}", algo, t.name));
+                                }
                             }
                         }
                     }
@@ -752,6 +833,25 @@ impl App {
                     if let Some(q) = t.queued_since {
                         if now.duration_since(q) > Duration::from_secs_f64(t.start_delay.max(0.5))
                         {
+                            // 磁盘空间预检（FR-M1-44）：开始/续传前检查保存目录可用空间，
+                            // 小于剩余需下载量 → 失败（不自动重试，R 后预检通过）。
+                            //（演示：tensorflow 首次获得槽位开始前预检失败一次）
+                            if t.precheck_fail_once {
+                                t.precheck_fail_once = false;
+                                t.state = TaskState::Failed;
+                                t.fail_kind = Some(FailKind::Fatal);
+                                t.retry_in = None;
+                                t.has_slot = false; // 预检失败释放槽位
+                                t.queued_since = None;
+                                t.error = Some(
+                                    "磁盘空间不足（保存目录剩余空间小于待下载量）".to_string(),
+                                );
+                                notices.push(format!(
+                                    "✘ 磁盘空间不足：开始前预检失败，不自动重试，按 R 手动重试: {}",
+                                    t.name
+                                ));
+                                continue;
+                            }
                             // 已持有槽位且等待结束：进入下载（无「连接中」状态）；
                             // 不支持断点续传的任务重试/重新排队后只能从头开始
                             if !t.resumable {
@@ -1106,7 +1206,14 @@ impl App {
             dir_raw.trim_end_matches('/').to_string()
         };
 
-        let (proto, name) = parse_url_task(&url);
+        let (proto, mut name) = parse_url_task(&url);
+        // 目标文件重名：自动追加序号 .1 / .2 …（不覆盖既有条目，FR-M1-02）
+        let base = name.clone();
+        let mut seq = 1u32;
+        while self.tasks.iter().any(|t| t.name == name) {
+            name = format!("{}.{}", base, seq);
+            seq += 1;
+        }
         // 并发数：取对话框输入（钳制 1-64）；留空或非法时用协议默认（HTTP 4 / BT 20）
         let conns = conns_raw
             .parse::<usize>()
@@ -1388,14 +1495,9 @@ impl App {
             }
             TaskState::Failed => {
                 // 重新排队 → 已重试次数重置为 1，进入「等待中」队列；
+                // 校验失败的任务断点无意义 → 清除断点从头下载（FR-M1-51）；
                 // 原本持有槽位的（未达重试上限的）失败任务继续占用槽位
-                self.tasks[idx].state = TaskState::Queued;
-                self.tasks[idx].error = None;
-                self.tasks[idx].retry_in = None;
-                self.tasks[idx].retries = 1;
-                self.tasks[idx].queued_since = Some(Instant::now());
-                self.tasks[idx].start_delay = 3.0;
-                self.set_toast(format!("↻ 重新排队（等待中）: {}", name));
+                self.requeue_failed(idx, false);
             }
             TaskState::Seeding => {
                 // 做种中 → 暂停做种，进入「已完成」
@@ -1412,19 +1514,50 @@ impl App {
         let Some(idx) = self.sel_idx() else { return };
         if self.tasks[idx].state == TaskState::Failed {
             // 手动重试 → 已重试次数重置为 1，进入「等待中」队列（无「连接中」状态）；
+            // 校验失败的任务清除断点从头下载（FR-M1-51）；
             // 原本持有槽位的（未达重试上限的）失败任务继续占用槽位，
-            // 已达上限释放槽位的任务重新排队后等待新的空闲槽位
-            self.tasks[idx].state = TaskState::Queued;
-            self.tasks[idx].error = None;
-            self.tasks[idx].retry_in = None;
-            self.tasks[idx].retries = 1;
-            self.tasks[idx].queued_since = Some(Instant::now());
-            self.tasks[idx].start_delay = 3.0;
-            let name = self.tasks[idx].name.clone();
-            self.set_toast(format!("↻ 手动重试（等待中）: {}", name));
+            // 已达上限/停等释放槽位的任务重新排队后等待新的空闲槽位
+            self.requeue_failed(idx, true);
         } else {
             self.set_toast("仅「已失败」的任务可以重试".to_string());
         }
+    }
+
+    /// 失败任务重新排队（R 手动重试 / Space）：重试计数重置为 1、回到等待队列；
+    /// 校验失败（fail_kind = Verify）时断点无意义 → 清除断点从头下载（FR-M1-51）；
+    /// 其余失败沿用断点续传（已下载块的字节保持有效）
+    fn requeue_failed(&mut self, idx: usize, manual: bool) {
+        let from_scratch = self.tasks[idx].fail_kind == Some(FailKind::Verify);
+        if from_scratch {
+            let total = self.tasks[idx].total;
+            let n = self.tasks[idx].connections.len().max(1);
+            let piece = chunk_size(self.tasks[idx].protocol);
+            self.tasks[idx].downloaded = 0;
+            self.tasks[idx].chunk_done = 0;
+            self.tasks[idx].connections = make_chunk_conns(total, 0, n, piece).0;
+        }
+        self.tasks[idx].state = TaskState::Queued;
+        self.tasks[idx].error = None;
+        self.tasks[idx].retry_in = None;
+        self.tasks[idx].fail_kind = None;
+        self.tasks[idx].retries = 1;
+        self.tasks[idx].queued_since = Some(Instant::now());
+        self.tasks[idx].start_delay = 3.0;
+        let name = self.tasks[idx].name.clone();
+        let toast = if from_scratch {
+            format!(
+                "↻ {}（已清除断点，从头下载）: {}",
+                if manual { "手动重试" } else { "重新排队" },
+                name
+            )
+        } else {
+            format!(
+                "↻ {}（等待中）: {}",
+                if manual { "手动重试" } else { "重新排队" },
+                name
+            )
+        };
+        self.set_toast(toast);
     }
 
     pub fn clear_completed(&mut self) {
@@ -1465,8 +1598,16 @@ fn parse_url_task(url: &str) -> (Protocol, String) {
         .unwrap_or("")
         .rsplit('/')
         .find(|s| !s.is_empty())
-        .unwrap_or("download.bin");
-    (proto, seg.to_string())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            // 均无法推导时用 download-<时间戳>（FR-M1-02）
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            format!("download-{}", ts)
+        });
+    (proto, seg)
 }
 
 /// 由文件名哈希推导伪大小（确定性）
@@ -1492,13 +1633,40 @@ fn is_archive(name: &str) -> bool {
         || n.ends_with(".rar")
 }
 
-/// 演示用失败信息轮换
-fn fail_msg(retries: u32) -> String {
-    match retries % 4 {
-        0 => "SHA-256 校验失败（块 17/32 与预期不符）".to_string(),
-        1 => "连接超时 (ETIMEDOUT)".to_string(),
-        2 => "连接被重置 (ECONNRESET)".to_string(),
-        _ => "HTTP 502 Bad Gateway".to_string(),
+/// 指数退避序列（FR-M1-42）：8s → 16s → 32s → 60s 封顶
+fn backoff_secs(retries: u32) -> f64 {
+    match retries {
+        1 => 8.0,
+        2 => 16.0,
+        3 => 32.0,
+        _ => 60.0,
+    }
+}
+
+/// 演示用失败场景轮换（按累计失败次数循环）——覆盖 FR-M1-40 的失败分类：
+/// 网络错误（超时/重置）、HTTP 5xx（附状态码与 Retry-After）、文件大小不符、
+/// 续传一致性失效；语义性 4xx 与磁盘错误经预检路径演示（FR-M1-44）、
+/// SHA-256 校验失败走校验路径（FR-M1-51）。
+/// 返回 (失败原因, 失败类别, Retry-After 秒)
+fn fail_case(n: u32) -> (&'static str, FailKind, Option<f64>) {
+    match n % 5 {
+        1 => ("连接超时 (ETIMEDOUT)", FailKind::Transient, None),
+        2 => ("连接被重置 (ECONNRESET)", FailKind::Transient, None),
+        3 => (
+            "文件大小不符（已接收 3.9 GB ≠ Content-Length 4.2 GB）",
+            FailKind::Transient,
+            None,
+        ),
+        4 => (
+            "HTTP 503 Service Unavailable（Retry-After: 10s）",
+            FailKind::Transient,
+            Some(10.0),
+        ),
+        _ => (
+            "续传一致性失效（ETag 已变化，服务器内容已更新）",
+            FailKind::Invalidated,
+            None,
+        ),
     }
 }
 
@@ -1682,7 +1850,10 @@ fn mk(
         fail_count: 0,
         made_progress: false,
         retry_in: None,
+        fail_kind: None,
         flaky: false,
+        verify_fail_once: false,
+        precheck_fail_once: false,
         running_since: None,
         elapsed,
         state,
@@ -1843,20 +2014,8 @@ fn demo_tasks() -> Vec<Task> {
             640.0,
             "2026-02-10 07:12",
         ),
-        mk(
-            11,
-            "gpt4all-models-bundle.bin",
-            Protocol::Https,
-            "https://gpt4all.example-models.io/models/gpt4all-models-bundle.bin",
-            "/srv/downloads/gpt4all-models-bundle.bin",
-            3_340_000_000,
-            TaskState::Verifying,
-            3_340_000_000,
-            8,
-            0.0,
-            296.0,
-            "2026-02-10 10:18",
-        ),
+        // 排队任务：tensorflow 首次获得槽位开始前磁盘空间预检失败一次
+        //（FR-M1-44 演示；排在 gpt4all 之前保证首屏可见）
         mk(
             12,
             "tensorflow-cuda-12.8.whl",
@@ -1870,6 +2029,20 @@ fn demo_tasks() -> Vec<Task> {
             5_000_000.0,
             0.0,
             "2026-02-10 10:20",
+        ),
+        mk(
+            11,
+            "gpt4all-models-bundle.bin",
+            Protocol::Https,
+            "https://gpt4all.example-models.io/models/gpt4all-models-bundle.bin",
+            "/srv/downloads/gpt4all-models-bundle.bin",
+            3_340_000_000,
+            TaskState::Verifying,
+            3_340_000_000,
+            8,
+            0.0,
+            296.0,
+            "2026-02-10 10:18",
         ),
         mk(
             13,
@@ -1929,20 +2102,30 @@ fn demo_tasks() -> Vec<Task> {
     v[13].uploaded = 96_000_000;
 
     // 失败任务：校验失败 + 倒计时自动重试 + 周期性再失败（演示状态流转）。
-    // 重试计数真实递增：未达上限时自动重试并继续占用槽位；
+    // 失败原因按 fail_case 轮换：网络错误 → 重置 → 大小不符 → 503(Retry-After) →
+    // 续传一致性失效（断点作废从头下载）；
+    // 重试计数真实递增：未达上限时自动重试（指数退避 8→16→32→60s）并继续占用槽位；
     // 达到上限后停止自动重试并释放槽位（按 R 手动重试重置为 1）
-    v[9].error = Some(fail_msg(0));
+    v[9].error = Some(fail_case(1).0.to_string());
     v[9].retries = 1;
     v[9].fail_count = 1;
-    v[9].retry_in = Some(8.0);
+    v[9].retry_in = Some(8.0); // backoff_secs(1)：退避序列第一档
+    v[9].fail_kind = Some(FailKind::Transient);
     v[9].flaky = true;
 
-    // 校验中任务启动计时（带 SHA-256 校验码，完成后展示「SHA-256 校验通过」）
-    v[10].verify_started = Some(now);
-    v[10].checksum = Some(Checksum {
+    // 校验中任务启动计时（带 SHA-256 校验码，完成后展示「SHA-256 校验通过」）；
+    // 演示：首次校验失败（FR-M1-51）——不自动重试，R 清除断点从头下载。
+    // 计时推后 8s：首屏保持「校验中」可见，10.6s 后转「已失败（不自动重试）」
+    //（gpt4all 交换到 v[11]：让 tensorflow 排在前保证首屏可见排队行）
+    v[11].verify_started = Some(now + Duration::from_secs(8));
+    v[11].verify_fail_once = true;
+    v[11].checksum = Some(Checksum {
         algo: "SHA-256",
         value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
     });
+    // 排队任务：tensorflow 首次获得槽位开始前磁盘空间预检失败一次
+    //（FR-M1-44 演示：预检失败释放槽位、不自动重试，R 手动重试后预检通过）
+    v[10].precheck_fail_once = true;
     // 后期处理中任务（进行到一半）
     v[12].post_started = Some(now - Duration::from_millis(1200));
     v[12].verify_ok = Some(true);
@@ -1956,7 +2139,7 @@ fn demo_tasks() -> Vec<Task> {
     // 排队任务入队计时（获得空闲槽位后才开始下载，演示槽位队列流转）
     v[3].queued_since = Some(now);
     v[6].queued_since = Some(now);
-    v[11].queued_since = Some(now);
+    v[10].queued_since = Some(now);
     // 压缩包类任务完成后进入后期处理
     v[2].post_process = true;
     v[3].post_process = true;
