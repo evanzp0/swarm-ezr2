@@ -1,4 +1,4 @@
-# project/mission.md — EZR Downloader（ezr download）需求大纲
+# project/mission.md — EZR Downloader（ezr download）需求大纲 (v1.0)
 
 > **需求存放模式：分期模式**（宪法第一章「需求存放两模式」，操作者明确指定）。
 > 本文件只存放需求大纲：项目目标、范围、约束、验收期望与分期索引；
