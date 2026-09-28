@@ -77,9 +77,9 @@ ezr-tui-demo 的 README 与历次修改记录，本大纲与各期详述保持�
 
 | 期号 | 需求文件 | 一句话主题 |
 |---|---|---|
-| **M1** | `mission/M1.md` | **HTTP/HTTPS 真实下载内核与 TUI 正式版 MVP**——把 demo 界面接到真实下载：Range 分块并发、断点续传（sidecar 元数据）、重试退避、SHA-256 校验、全局限速、代理、会话持久化与崩溃恢复 |
-| M2 | `mission/M2.md`（待补写） | BT/磁力链：DHT / tracker / piece 选择 / 做种，复用 demo 预留的「做种中」UI 与 256 KB 分块模型 |
-| M3 | `mission/M3.md`（待补写） | 效率与集成进阶：每任务限速与限速控件、批量/订阅导入、剪贴板监听、RPC/远程控制、SOCKS5、无 TTY CLI 模式等 |
+| **phase-01** | `mission/phase-01.md` | **HTTP/HTTPS 真实下载内核与 TUI 正式版 MVP**——把 demo 界面接到真实下载：Range 分块并发、断点续传（sidecar 元数据）、重试退避、Checksum 校验、全局限速、HTTP(S)代理、会话持久化与崩溃恢复 |
+| phase-02 | `mission/phase-02.md`（待补写） | BT/磁力链：DHT / tracker / piece 选择 / 做种，复用 demo 预留的「做种中」UI 与 256 KB 分块模型 |
+| phase-03 | `mission/phase-03.md`（待补写） | 效率与集成进阶：全局缓存、每任务限速与限速控件、剪贴板监听、SOCKS5代理 |
 
-> 注 1：分期文件命名按操作者指定采用 `M<期号>` 风格（宪法默认命名 `phase-<期号>[-<主题>].md`）。
-> 注 2：M2/M3 详述尚未建档，由首角色在当期开工前的会话中依操作者输入补写（宪法第一章）。
+> 注 1：分期文件命名按宪法命名 `phase-<期号>[-<主题>].md`。
+> 注 2：phase-02/phase-03 详述尚未建档，由首角色在当期开工前的会话中依操作者输入补写（宪法第一章）。
