@@ -1,0 +1,60 @@
+[package]
+name = "ezr"
+version = "0.1.0"
+edition = "2021"
+description = "EZR Downloader - 终端高性能多协议下载器（01：HTTP/HTTPS 真实下载内核与 TUI 正式版）"
+license = "MIT OR Apache-2.0"
+publish = false
+readme = "README.md"
+keywords = ["tui", "downloader", "http", "terminal"]
+categories = ["command-line-utilities"]
+default-run = "ezr"
+
+[[bin]]
+name = "ezr"
+path = "src/main.rs"
+
+[[bin]]
+name = "ezr-fixture"
+path = "src/bin/ezr-fixture.rs"
+
+[[bin]]
+name = "ezr-proxy"
+path = "src/bin/ezr-proxy.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "net"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "stream"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+md-5 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
+adler = "1"
+url = "2"
+fs2 = "0.4"
+rcgen = { version = "0.13", features = ["pem", "ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+httparse = "1"
+
+[profile.release]
+strip = true
+lto = true
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+too_many_lines = "warn"
+cognitive_complexity = "warn"
+too_many_arguments = "warn"
+cargo = { level = "warn", priority = -1 }

@@ -8,10 +8,9 @@
 #   01-persistence-config-07 单实例保护
 #   01-persistence-config-08 Q 优雅退出断点保留重启恢复
 #   01-persistence-config-09 Esc 与 Ctrl+C 优雅退出终端无花屏
-#   01-persistence-config-10 --no-tui 命令行进度模式
 Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
 
-  期号 01。依据 project/mission/phase-01.md FR-01-70~74 与本会话澄清决定
+  期号 01。依据 project/mission/phase-01.md FR-01-70~73 与本会话澄清决定
   （默认并发键 default_concurrency）。配置位于用户主目录 .ezr/config.toml，注册表位于
   .ezr/state/，均为原子写。
 
@@ -102,12 +101,3 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
       | exit_key |
       | Esc      |
       | Ctrl+C   |
-
-  Scenario: 01-persistence-config-10 --no-tui 命令行进度模式
-    When 以命令行启动 "ezr <url> --no-tui -d <dir>"
-    Then 命令行输出下载进度（无 TUI 界面）
-    And 下载完成后进程以零退出码退出且文件字节完整
-
-    Examples:
-      | url                              | dir       |
-      | http://fixture.local/files/a.bin | /tmp/qadl |

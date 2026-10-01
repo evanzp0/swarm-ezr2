@@ -1,0 +1,6 @@
+cognitive-complexity-threshold = 4
+too-many-arguments-threshold = 4
+type-complexity-threshold = 200
+single-char-binding-names-threshold = 4
+enum-variant-size-threshold = 200
+literal-representation-threshold = 16384

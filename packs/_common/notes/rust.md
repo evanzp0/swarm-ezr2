@@ -106,3 +106,28 @@ group_imports = "StdExternalCrate"
   探测/锁文件、路径换平台惯例目录（用 `dirs` crate 而非手读 `HOME` 环境变量）。
   选型问题在规格期解决（engineering.md「端点语义」通则），实现期换选型 = 返工整套
   伴生机制。
+
+## 6. 网络与异步（Rust 专项沉淀）
+
+- **reqwest 关闭环境变量代理**：`ClientBuilder::proxy(p)` 或 `.no_proxy()` 任一调用都会
+  关闭 `auto_sys_proxy`（不再读 `http_proxy`/`HTTPS_PROXY` 等环境变量）。需求为
+  「代理仅经配置文件」时显式 `.proxy(cfg_proxy)` 即可，无需自行清洗环境变量。
+- **`adler` crate（Adler-32）API 口径**：切片直算用 `adler::adler32_slice(data)`；
+  流式累积用 `Adler32::new()` + `write_slice(&buf[..n])` + `checksum()`——
+  该 crate 没有 `push_slice`/`adler32_by_chunk`，按记忆写 API 名会编译失败。
+- **tokio 并发写同一文件的正确姿势**：每个 worker 独立 `OpenOptions::open` 打开
+  同一路径 + `AsyncSeekExt::seek` 定位写入（不 truncate）。不要 clone `tokio::fs::File`
+  句柄后各自 seek——std/tokio `File::try_clone` 共享游标，并发写会互相错位。
+  预分配用先 `create(true)`（`truncate(false)` 保护续传场景）再 `set_len(total)` 稀疏分配。
+- **令牌桶 acquire(n) 大于桶容量会死循环**： refill 被 `.min(capacity)` 钳制时，
+  `n > capacity` 的请求永远凑不齐令牌。正确做法是分批取走（`remaining.min(tokens)`
+  循环直到取足），而不是等单次凑满。
+- **`Cargo.toml` 的 `[lints]` 表与 `publish = false`**：本地交付项目设 `publish = false`
+  可豁免 clippy cargo 组的 metadata 类警告（license/keywords/categories）；
+  依赖树固有的多版本重复用文件级 `#![allow(clippy::multiple_crate_versions)]` 豁免
+  （入口 bin 顶部），不降低 `[lints]` 模板本身。
+- **`cargo fix` 会误删测试专用导入**：cfg(test) 代码使用的符号在非 test 编译下视为
+  未使用，`cargo fix` 跑完可能删掉 `use` 导致测试编译失败——跑完 fix 必须再跑一次
+  `cargo test` 兜底（fix 的 diff 也要过目）。
+- **rustc 1.87+ 的 `u64::is_multiple_of`** 可替换 `x % m == 0`（clippy manual_is_multiple_of
+  会提示）；`checked_div` 用于除数可能为 0 的展示算术。

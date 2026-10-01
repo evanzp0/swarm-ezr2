@@ -1,0 +1,6 @@
+unstable_features = true
+max_width = 100
+edition = "2024"
+fn_single_line = false
+imports_granularity = "Module"
+group_imports = "StdExternalCrate"
