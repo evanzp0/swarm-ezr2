@@ -50,17 +50,16 @@ Feature: 01-add-task 任务添加（对话框与 CLI）
     When 按 Enter 确认选中
     Then 算法字段显示 "SHA-512"
 
-  Scenario: 01-add-task-03 校验码含非十六进制字符确认报错
+  Scenario: 01-add-task-03 校验码非法字符逐键拒绝（输入即过滤）
     When 按 A 打开「添加下载任务」对话框
-    And 输入合法 URL 并在校验码字段输入 "<bad_checksum>"
-    And 按 Enter 确认
-    Then 出现校验码格式错误的 toast 报错
-    And 焦点回到校验码字段且对话框未关闭
+    And 输入合法 URL 并在校验码字段输入 "<bad_input>"（含非十六进制字符）
+    Then 非十六进制字符被逐键拒绝、不进入校验码字段（纯非法输入则字段保持空）
+    And 按 Enter 确认无格式错误报错（空校验码按「无校验」创建任务）
 
     Examples:
-      | bad_checksum          |
-      | zz649b77fe62fb06d1c48 |
-      | d869db7f-e62f-b06d    |
+      | bad_input  |
+      | zz         |
+      | ---------- |
 
   Scenario: 01-add-task-04 校验码位数与算法不符确认报错
     When 按 A 打开「添加下载任务」对话框

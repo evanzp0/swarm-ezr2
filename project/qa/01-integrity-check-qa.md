@@ -19,12 +19,12 @@
 | QA-IC-03 | 01-integrity-check-03 | 分别预置 7 算法伴随（含 .SHA256 大写行） | 各显示对应「<算法> 校验成功」 |
 | QA-IC-04 | 01-integrity-check-04 | 伴随内容分别为裸 hex / `hex  文件名` | 两种格式均识别并校验成功 |
 | QA-IC-05 | 01-integrity-check-05 | .sha256 内容为 32 位 | toast 无效提醒；忽略校验直接完成显示「无校验」 |
-| QA-IC-06 | 01-integrity-check-06 | 同时预置 .adler32 与 .md5（均正确） | 取 Adler-32 校验成功（算法表声明顺序） |
+| QA-IC-06 | 01-integrity-check-06 | 同时预置 .md5 与 .adler32（均正确） | 取 MD5 校验成功（算法表声明顺序，MD5 在表首） |
 | QA-IC-07 | 01-integrity-check-07 | 正确 SHA-256 任务下载完成 | 校验中占槽→已完成；显示「SHA-256 校验成功」；.downloading 移除；sidecar 删除；槽位释放 |
 | QA-IC-08 | 01-integrity-check-08 | 错误 SHA-256 期望值 | 已失败「SHA-256 校验失败：内容与校验值不符」；「不自动重试」；释放槽位（AC-6） |
 | QA-IC-09 | 01-integrity-check-09 | 失败后 R→修正伴随→R | 首次 R 无 Range 请求且仍失败；修正后 R 显示校验成功转已完成（AC-6） |
 | QA-IC-10 | 01-integrity-check-10 | 无显式值无伴随 | 直接已完成（不经校验中）；显示「无校验」；槽位释放 |
-| QA-IC-11 | 01-integrity-check-11 | fixture Range 短响应 | 失败「文件大小不符」；自动重试续传补齐后完成 |
+| QA-IC-11 | 01-integrity-check-11 | fixture Range 短响应 | 按网络类瞬态失败自动重试；续传补齐缺失字节后完成（块记账不变式下「文件大小不符」终态与可补齐互斥，该文案正常路径不可达） |
 
 ## 通过准则
 

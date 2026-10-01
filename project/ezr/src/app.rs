@@ -121,6 +121,8 @@ pub struct App {
     evt_rx: tokio::sync::mpsc::Receiver<Evt>,
     /// 每任务速度滑窗（1s，FR-01-17）
     windows: HashMap<u32, SpeedWindow>,
+    /// 每连接速度滑窗（(任务 id, 连接 id) → 1s 滑窗；明细表传输中/挂起与并发线程计数依赖，FR-01-81）
+    conn_windows: HashMap<(u32, usize), SpeedWindow>,
     /// 配置
     pub cfg: Config,
     /// 注册表路径
@@ -172,6 +174,7 @@ impl App {
             engine,
             evt_rx,
             windows: HashMap::new(),
+            conn_windows: HashMap::new(),
             cfg,
             registry_path,
             last_save: Instant::now(),
@@ -368,6 +371,7 @@ impl App {
         }
 
         // 4) 失败倒计时推进（自动重试：到点 → 等待中重排，槽位保持占用）
+        let mut expired: Vec<u32> = Vec::new();
         for t in &mut self.tasks {
             if t.state == TaskState::Failed {
                 if let Some(left) = t.retry_in.as_mut() {
@@ -376,16 +380,36 @@ impl App {
                         t.retry_in = None;
                         t.state = TaskState::Queued;
                         t.error = None;
+                        expired.push(t.id);
                     }
                 }
             }
         }
+        // 4a) 到点任务补发 Start（FR-01-41 自动重试）：探针失败型任务
+        //     probed=false，下方 4b 的 probed 过滤会永久漏掉它们——故到点
+        //     即发，覆盖全部失败类型
+        for id in &expired {
+            if let Some(idx) = self.tasks.iter().position(|t| t.id == *id) {
+                let spec = Self::make_spec(&self.tasks[idx]);
+                self.engine.send(Cmd::Start { spec }).await;
+                if let Some(t) = self.tasks.iter_mut().find(|t| t.id == *id) {
+                    // 重试新一轮尝试：清进展标记（连续性判定基准，FR-01-41）
+                    t.made_progress = false;
+                }
+            }
+        }
         // 4b) 已获槽位的等待任务重排后需要（重新）Start——Failed→Queued 的重试
-        //     由上面 retry_in 到点转 Queued（has_slot 保持）；本帧统一补发 Start。
+        //     由上面 retry_in 到点转 Queued（has_slot 保持）且已由 4a 补发；
+        //     本帧仅补发其他来源的 probed 任务（排除 4a 已发者防双开）。
         let retry_starts: Vec<u32> = self
             .tasks
             .iter()
-            .filter(|t| t.state == TaskState::Queued && t.has_slot && t.probed)
+            .filter(|t| {
+                t.state == TaskState::Queued
+                    && t.has_slot
+                    && t.probed
+                    && !expired.contains(&t.id)
+            })
             .map(|t| t.id)
             .collect();
         for id in retry_starts {
@@ -449,9 +473,25 @@ impl App {
     async fn on_evt(&mut self, evt: Evt) {
         match evt {
             Evt::Probed { id, name, final_url, total, resumable, etag, last_modified, cd_name: _ } => {
+                // CD 命名回写需重新去重（Gherkin 01-add-task-10：目标被占时保留
+                // 原推导名，防止下载覆盖既有文件——先算定名再可变借用）
+                let rename_to = {
+                    let cur = self.tasks.iter().find(|t| t.id == id);
+                    match cur {
+                        Some(t0) if t0.name != name && t0.downloaded == 0 => {
+                            let taken = |n: &str| {
+                                self.tasks.iter().any(|x| {
+                                    x.id != id && x.name == n && x.save_dir == t0.save_dir
+                                }) || namegen::exists_on_disk(&t0.save_dir, n)
+                            };
+                            Some(namegen::dedupe(&name, taken))
+                        }
+                        _ => None,
+                    }
+                };
                 if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
-                    if t.name != name && t.downloaded == 0 {
-                        t.name = name;
+                    if let Some(nn) = rename_to {
+                        t.name = nn;
                     }
                     t.final_url = Some(final_url);
                     t.total = total;
@@ -469,6 +509,7 @@ impl App {
                 let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else {
                     // 已删除/未知任务的幽灵进度：不建滑窗、不聚合（删除后引擎停止确认前的兜底）
                     self.windows.remove(&id);
+                    self.conn_windows.retain(|(tid, _), _| *tid != id);
                     return;
                 };
                 if let Some(w) = self.windows.get_mut(&id) {
@@ -481,6 +522,16 @@ impl App {
                 t.downloaded = downloaded;
                 t.chunk_done = chunk_done;
                 t.connections = conns.iter().map(|c| c.to_connection()).collect();
+                // 每连接速度回填：按连接累计字节进 1s 滑窗（与任务速度同口径，FR-01-81）
+                let now = Instant::now();
+                for c in &conns {
+                    let w = self.conn_windows.entry((id, c.id)).or_default();
+                    w.push(now, c.done);
+                    let r = w.rate();
+                    if let Some(tc) = t.connections.iter_mut().find(|x| x.id == c.id) {
+                        tc.speed = r;
+                    }
+                }
                 if downloaded > 0 {
                     t.made_progress = true;
                 }
@@ -502,6 +553,7 @@ impl App {
                     t.chunk_done = x.max(chunk_done);
                 }
                 self.windows.remove(&id);
+        self.conn_windows.retain(|(tid, _), _| *tid != id);
             }
             Evt::Failed { id, kind, reason, retry_after, made_progress, downloaded, blocks, chunk_done } => {
                 self.handle_failure(
@@ -521,6 +573,7 @@ impl App {
                 t.connections.clear();
                 t.speed = 0.0;
                 self.windows.remove(&id);
+        self.conn_windows.retain(|(tid, _), _| *tid != id);
                 if stop_wait {
                     t.state = TaskState::Failed;
                     t.fail_kind = Some(FailKind::Fatal);
@@ -533,6 +586,10 @@ impl App {
                 } else {
                     t.state = TaskState::Queued;
                     t.probed = false;
+                    // 引擎任务已随 Flow::Invalidated 结束：必须释放槽位，
+                    // 调度器才能重新分配并重启（FR-01-22「从头重新下载」；
+                    // slots::allocate 只补 !has_slot 的等待任务，不释放则永久卡等）
+                    t.has_slot = false;
                     self.set_toast(format!(
                         "⚠ 服务器内容已更新，断点已作废，从头重新下载: {name}"
                     ));
@@ -544,6 +601,7 @@ impl App {
                 t.total = total;
                 t.speed = 0.0;
                 self.windows.remove(&id);
+        self.conn_windows.retain(|(tid, _), _| *tid != id);
                 let name = t.name.clone();
                 if has_checksum {
                     let algo = t.checksum.as_ref().map_or("SHA-256", |c| c.algo);
@@ -670,6 +728,7 @@ impl App {
         t.chunk_done = x.max(chunk_done);
         // t（可变借用）在此作用域结束后自然释放
         self.windows.remove(&id);
+        self.conn_windows.retain(|(tid, _), _| *tid != id);
         self.set_toast(toast);
         let _ = blocks;
         self.save_registry();
@@ -983,6 +1042,17 @@ impl App {
         };
 
         let protocol = if url.starts_with("https://") { Protocol::Https } else { Protocol::Http };
+        // 重复任务拒绝（Gherkin 01-add-task-16）：同 URL 同保存目录已在列表 →
+        // toast「任务已存在」，不创建新任务（对话框保持打开，与其他校验失败一致）
+        let dir_check = dir.trim_end_matches('/').to_string();
+        if self
+            .tasks
+            .iter()
+            .any(|t| t.url == url && t.save_dir == dir_check)
+        {
+            self.set_toast("⚠ 任务已存在");
+            return;
+        }
         let base_name = namegen::derive_name(None, None, &url);
         let id = self.next_id;
         // FR-01-26 断点自动接续：既有 sidecar 同 URL 同路径 → 接续原名
@@ -1006,11 +1076,12 @@ impl App {
                     || namegen::exists_on_disk(&dir2, n)
             })
         };
-        // 并发数（FR-01-04）：钳制 1–64；留空/非法 → 配置默认
-        let conns = conns_raw
-            .parse::<usize>()
-            .map(|v| v.clamp(1, 64))
-            .unwrap_or(self.cfg.default_concurrency);
+        // 并发数（FR-01-04）：非 1–64 范围（留空/0/65/非数字）一律回退配置默认
+        // （Gherkin 01-add-task-06：留空/0/65/abc → 均回退默认 4，非钳制）
+        let conns = match conns_raw.parse::<usize>() {
+            Ok(v) if (1..=64).contains(&v) => v,
+            _ => self.cfg.default_concurrency,
+        };
         self.next_id += 1;
         // 校验值来源②（FR-01-50/D14）：未显式提供时查保存目录伴随文件
         let checksum = Self::resolve_checksum(&dir_trim, &name, checksum);
@@ -1111,6 +1182,7 @@ impl App {
         };
         self.tasks.remove(idx);
         self.windows.remove(&id);
+        self.conn_windows.retain(|(tid, _), _| *tid != id);
         if delete_files {
             self.pending_deletes.insert(id, (save_dir, name));
         }
@@ -1299,6 +1371,7 @@ impl App {
                 let spec = Self::make_spec(&self.tasks[idx]);
                 let id = self.tasks[idx].id;
                 self.windows.remove(&id);
+        self.conn_windows.retain(|(tid, _), _| *tid != id);
                 let engine = self.engine.clone();
                 let was_resumable = self.tasks[idx].resumable;
                 tokio::spawn(async move {
@@ -1359,14 +1432,26 @@ impl App {
         self.tasks[idx].fail_kind = None;
         self.tasks[idx].retries = 1;
         self.tasks[idx].made_progress = false;
+        // 失效计数重置（Gherkin 01-resume-sidecar-09「按 R 重置失效计数」：
+        // 手动重试代表操作者已知悉内容变化，重新以最新内容为基准计数）
+        self.tasks[idx].invalidation_streak = 0;
         self.tasks[idx].has_slot = false;
         if verify_fail {
-            // 重新校验（D10）：块全满、无数据重传；期望值重查伴随文件——
-            // 若失败源于期望值写错（AC-6），修正伴随文件后按 R 即可通过
+            // 重新校验（D10）：期望值重查伴随文件——若失败源于期望值写错（AC-6），
+            // 修正伴随文件后按 R 即可通过。伴随文件存在时以伴随现值为准（D10
+            // 重查语义）；伴随缺失时保留原期望值（显式提供场景，D3 显式优先）。
             let (save_dir, name) =
                 (self.tasks[idx].save_dir.clone(), self.tasks[idx].name.clone());
-            self.tasks[idx].checksum =
-                Self::resolve_checksum(&save_dir, &name, self.tasks[idx].checksum.clone());
+            if checksum::find_companion(&save_dir, &name).is_some() {
+                self.tasks[idx].checksum =
+                    Self::resolve_checksum(&save_dir, &name, None);
+            } else {
+                self.tasks[idx].checksum = Self::resolve_checksum(
+                    &save_dir,
+                    &name,
+                    self.tasks[idx].checksum.clone(),
+                );
+            }
             self.tasks[idx].state = TaskState::Verifying;
             self.tasks[idx].has_slot = true;
             let spec = crate::engine::supervisor::VerifySpec {

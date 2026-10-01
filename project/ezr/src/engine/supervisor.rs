@@ -262,11 +262,18 @@ async fn download(
     };
 
     // 文件名定稿（FR-01-02：CD → 最终 URL 末段 → 原始 URL 末段 → 时间戳）；
-    // 断点接续（spec 带 sidecar）沿用既有任务名，避免另存新文件（FR-01-26）
+    // 断点接续（spec 带 sidecar）沿用既有任务名，避免另存新文件（FR-01-26）。
+    // 非接续路径定稿前做盘上去重（Gherkin 01-add-task-10：目标已存在时追加
+    // 序号，防止下载覆盖既有文件；与 App 添加期去重同口径、结果一致）
     let name = if spec.sidecar.is_some() {
         spec.name.clone()
     } else {
-        namegen::derive_name(head.cd_name.as_deref(), Some(resp.url().as_str()), &spec.url)
+        let base = namegen::derive_name(
+            head.cd_name.as_deref(),
+            Some(resp.url().as_str()),
+            &spec.url,
+        );
+        namegen::dedupe(&base, |n| namegen::exists_on_disk(&spec.save_dir, n))
     };
 
     // ---- 续传一致性检查（FR-01-22/D11；sidecar 名与推导名一致才可接续）----
@@ -315,6 +322,9 @@ async fn download(
     }
 
     let dir = PathBuf::from(&spec.save_dir);
+    // 保存目录自动创建（Gherkin 01-add-task-11「目录不存在自动创建」：
+    // 引擎打开目标文件前确保父目录存在，覆盖默认下载目录与用户新输入目录）
+    let _ = tokio::fs::create_dir_all(&dir).await;
     let dl_path = dir.join(format!("{name}.downloading"));
     let final_path = dir.join(&name);
     let sc_path = sidecar_path(&spec.save_dir, &name);
@@ -367,8 +377,9 @@ async fn download(
     let failure = Arc::new(tokio::sync::Mutex::<Option<EngineFailure>>::new(None));
     let conns = Arc::new(tokio::sync::Mutex::<Vec<ConnView>>::new(Vec::new()));
 
-    // worker 池：实际并发 = min(并发数, 未完成块数)（FR-01-11）
-    let n_workers = spec.concurrency.clamp(1, 64).min(y as usize);
+    // worker 池：按设置并发数生成 worker（FR-01-11）；块数不足时多余 worker
+    // 立即转「待命」（明细表可见），活跃传输数仍 = min(并发数, 未完成块数)
+    let n_workers = spec.concurrency.clamp(1, 64);
     let mut handles = Vec::with_capacity(n_workers);
     for wid in 1..=n_workers {
         handles.push(tokio::spawn(block_worker(
@@ -557,6 +568,8 @@ async fn single_stream(
     };
     let mut downloaded: u64 = 0;
     let mut resp = resp;
+    // 单流进度上报节流（FR-01-17/81：不支持续传的任务同样需要真实进度/速度/连接数）
+    let mut last_emit = std::time::Instant::now();
     loop {
         tokio::select! {
             cmd = cmd_rx.recv() => match cmd {
@@ -577,6 +590,23 @@ async fn single_stream(
                         return Flow::Failed(EngineFailure::fatal("磁盘写入失败"), downloaded > 0, None);
                     }
                     downloaded += bytes.len() as u64;
+                    // 单流连接视图：仅 1 个活跃连接（FR-01-12），周期上报进度
+                    if last_emit.elapsed() >= std::time::Duration::from_millis(200) {
+                        last_emit = std::time::Instant::now();
+                        let conns = vec![ConnView {
+                            id: 1,
+                            block: 0,
+                            start: 0,
+                            end: blocks.total,
+                            done: downloaded,
+                        }];
+                        let _ = emit(evt_tx, Evt::Progress {
+                            id: spec.id,
+                            downloaded,
+                            conns,
+                            chunk_done: 0,
+                        }).await;
+                    }
                 }
                 Ok(None) => {
                     // 完成：大小校验（FR-01-52；total 未知时以实际为准）
@@ -701,8 +731,12 @@ async fn block_worker(
             })
         };
         let Some((idx, start, end, written)) = lease else {
-            // 队列已空：连接转待命（FR-01-11）
-            conns.lock().await.retain(|c| c.id != wid);
+            // 队列已空：连接转待命（FR-01-11）——保留空连接条目（cap=0）供
+            // 明细表「待命」展示；块队列单调递减，worker 不会复活，条目存活至任务收尾
+            let mut g = conns.lock().await;
+            g.retain(|c| c.id != wid);
+            g.push(ConnView { id: wid, block: 0, start: 0, end: 0, done: 0 });
+            drop(g);
             return;
         };
         conns.lock().await.retain(|c| c.id != wid);
@@ -746,6 +780,11 @@ async fn block_worker(
                             } else {
                                 done_here += bytes.len() as u64;
                                 total_written.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                                // 连接视图即时回填（FR-01-81）：每连接进度/速度滑窗依赖
+                                // ConnView.done 在传输中持续增长，否则明细表恒显「挂起」
+                                if let Some(cv) = conns.lock().await.iter_mut().find(|c| c.id == wid) {
+                                    cv.done = done_here;
+                                }
                             }
                         }
                         Ok(None) => break,

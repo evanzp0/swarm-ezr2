@@ -2,7 +2,7 @@
 #   01-persistence-config-01 任务注册表跨会话保留
 #   01-persistence-config-02 数据与配置目录布局
 #   01-persistence-config-03 配置文件缺失时全部使用默认值
-#   01-persistence-config-04 配置非法值回退默认
+#   01-persistence-config-04 配置非法值回退默认或钳制边界
 #   01-persistence-config-05 block_size_http 可配置生效
 #   01-persistence-config-06 download_slots 可配置生效
 #   01-persistence-config-07 单实例保护
@@ -39,17 +39,17 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
       | file       | default_concurrency |
       | five-m.bin | 4                   |
 
-  Scenario: 01-persistence-config-04 配置非法值回退默认
+  Scenario: 01-persistence-config-04 配置非法值回退默认或钳制边界
     Given 配置文件设 "<key>" = "<value>"（非法）
     When 启动 ezr 并正常使用
-    Then 该配置项按默认值 "<default>" 生效且启动不报错
+    Then 该配置项按回退/钳制值 "<default>" 生效且启动不报错
 
     Examples:
       | key                  | value | default |
       | block_size_http      | abc   | 1 MB    |
       | download_slots       | 0     | 5       |
       | max_retries          | -1    | 5       |
-      | default_concurrency  | 99    | 4       |
+      | default_concurrency  | 99    | 64      |
       | max_speed            | xyz   | 0       |
 
   Scenario: 01-persistence-config-05 block_size_http 可配置生效

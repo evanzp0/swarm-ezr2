@@ -92,10 +92,15 @@ fn parse_cli(args: &[String]) -> Result<Cli, String> {
             "-c" | "--concurrency" => {
                 i += 1;
                 let v = args.get(i).ok_or("-c 需要并发数参数")?;
-                cli.conns = Some(
-                    v.parse::<usize>()
-                        .map_err(|_| format!("-c 并发数非法（{v}）：应为 1–64 的整数"))?,
-                );
+                let parsed = v
+                    .parse::<usize>()
+                    .map_err(|_| format!("-c 并发数非法（{v}）：应为 1–64 的整数"))?;
+                // 范围校验（Gherkin 01-add-task-14：0/65 等 1–64 之外一律
+                // 启动报错退出，与 abc 同语义，不静默钳制）
+                if !(1..=64).contains(&parsed) {
+                    return Err(format!("-c 并发数非法（{v}）：应为 1–64 的整数"));
+                }
+                cli.conns = Some(parsed);
             }
             "-x" | "--checksum" => {
                 i += 1;
@@ -114,6 +119,11 @@ fn parse_cli(args: &[String]) -> Result<Cli, String> {
             other => {
                 if other.starts_with('-') {
                     return Err(format!("未知参数（{other}），--help 查看用法"));
+                }
+                // URL 参数校验（Gherkin 01-add-task-15：多 URL 部分非法
+                // 全部拒绝——任一 URL 非 http(s) 即启动报错退出）
+                if !(other.starts_with("http://") || other.starts_with("https://")) {
+                    return Err(format!("URL 非法（仅支持 http/https）：{other}"));
                 }
                 cli.urls.push(other.to_string());
             }

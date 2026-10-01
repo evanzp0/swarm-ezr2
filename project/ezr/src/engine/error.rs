@@ -83,6 +83,18 @@ pub fn classify_reqwest(err: &reqwest::Error) -> EngineFailure {
     if let Some(status) = err.status() {
         return EngineFailure::http(status.as_u16(), parse_retry_after_header(None));
     }
+    // 重定向跟随失败：超过次数上限（Policy::limited(10)，FR-01-14）→ 停等（FR-01-43 语义不可恢复）
+    if err.is_redirect() {
+        return EngineFailure::fatal("重定向次数超限".to_string());
+    }
+    // 重定向至非 http(s) 协议（reqwest 以 builder error 呈现，消息含目标 URL）→ 停等
+    if err.is_builder() {
+        if let Some(scheme) = redirect_target_scheme(&msg_chain) {
+            if scheme != "http" && scheme != "https" {
+                return EngineFailure::fatal("不支持的重定向协议".to_string());
+            }
+        }
+    }
     let reason = if err.is_timeout() {
         "连接超时".to_string()
     } else if err.is_connect() {
@@ -93,6 +105,22 @@ pub fn classify_reqwest(err: &reqwest::Error) -> EngineFailure {
         format!("网络错误（{msg_chain}）")
     };
     EngineFailure::network(reason)
+}
+
+/// 从错误消息链中提取重定向目标 URL 的 scheme（形如 `url (ftp://…）`；无则 None）
+fn redirect_target_scheme(msg_chain: &str) -> Option<String> {
+    let idx = msg_chain.find("url (")? + "url (".len();
+    let rest = &msg_chain[idx..];
+    let end = rest.find([':', ')'])?;
+    let scheme = rest[..end].trim();
+    if scheme.is_empty()
+        || !scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+    {
+        return None;
+    }
+    Some(scheme.to_ascii_lowercase())
 }
 
 /// 解析 `Retry-After` 头（秒数形式；HTTP-date 形式不支持→None。R2：无 60s 上限）

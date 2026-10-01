@@ -335,11 +335,15 @@ fn handle(mut stream: TcpStream, root: Arc<PathBuf>, log: Arc<AccessLog>) {
     let no_length = file_name.starts_with("streamy");
 
     // Range 判定（norange=1 → 忽略 Range 返回 200 全量，AC-4）
+    // streamy.bin（无 Content-Length 形态）对 Range 请求同样返回 200 全量 chunked：
+    // 隐藏 Content-Length 的服务端不应在 206 中携带 Content-Length/Content-Range，
+    // 否则探测（Range: bytes=0-）会误判为支持续传（FR-01-12，QA-DE-02）
     let range = req
         .range
         .as_deref()
         .and_then(parse_range)
-        .filter(|_| qget(&kv, "norange").is_none());
+        .filter(|_| qget(&kv, "norange").is_none())
+        .filter(|_| !no_length);
     match range {
         Some((start, end)) if start < total => {
             let end = end.min(total - 1);

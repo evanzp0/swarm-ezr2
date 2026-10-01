@@ -13,7 +13,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss, clippy::cast_possible_wrap)]
 
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
@@ -53,23 +53,22 @@ impl ProxyLog {
     }
 }
 
-/// 请求行 + 头列表
-type ReqHead = (String, Vec<(String, String)>);
-
-/// 读取并解析请求头块
-fn read_head(stream: &mut BufReader<TcpStream>) -> std::io::Result<Option<ReqHead>> {
-    let mut line = String::new();
-    if stream.read_line(&mut line)? == 0 {
-        return Ok(None);
-    }
-    let request_line = line.trim().to_string();
+/// 处理普通 http 请求（绝对 URI）：解析已读头部 → 连接目标 → 原样转发头 → 双向拷贝
+///
+/// `head_bytes` = accept 分发线程已从流中消费的完整请求头
+/// （请求行 + 头部 + 空行）；分发线程需先读首行判定 CONNECT 与否，
+/// 故头部必须自此传入，严禁再从流上重复读取（重复读取将永久阻塞）。
+fn handle_http(mut client: TcpStream, log: Arc<ProxyLog>, head_bytes: Vec<u8>) {
+    let head = String::from_utf8_lossy(&head_bytes).into_owned();
+    let mut lines = head.lines();
+    let Some(request_line) =
+        lines.next().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string)
+    else {
+        return;
+    };
     let mut headers = Vec::new();
-    loop {
-        let mut h = String::new();
-        if stream.read_line(&mut h)? == 0 {
-            break;
-        }
-        let t = h.trim();
+    for l in lines {
+        let t = l.trim();
         if t.is_empty() {
             break;
         }
@@ -77,13 +76,6 @@ fn read_head(stream: &mut BufReader<TcpStream>) -> std::io::Result<Option<ReqHea
             headers.push((k.trim().to_lowercase(), v.trim().to_string()));
         }
     }
-    Ok(Some((request_line, headers)))
-}
-
-/// 处理普通 http 请求（绝对 URI）：读完整头 → 连接目标 → 原样转发头 → 双向拷贝
-fn handle_http(mut client: TcpStream, log: Arc<ProxyLog>, header_extra: Vec<u8>) {
-    let mut reader = BufReader::new(client.try_clone().expect("clone 失败"));
-    let Ok(Some((request_line, headers))) = read_head(&mut reader) else { return };
     // 请求行第二段 = 绝对 URI
     let Some(target) = request_line.split_whitespace().nth(1).map(str::to_string) else { return };
     log.log("http", &target);
@@ -112,28 +104,26 @@ fn handle_http(mut client: TcpStream, log: Arc<ProxyLog>, header_extra: Vec<u8>)
     if upstream.write_all(fwd.as_bytes()).is_err() {
         return;
     }
-    // 客户端可能已发的 body 片段（fixture 场景基本为 GET，忽略）
-    let _ = header_extra;
-    // 双向拷贝至一方关闭
+    // 双向拷贝至一方关闭（头部已被分发线程消费，客户端侧直接用原始流拷贝）
+    let mut cl2 = client.try_clone().expect("clone 失败");
     let mut up2 = upstream.try_clone().expect("clone 失败");
     let a = std::thread::spawn(move || {
         let mut up = upstream;
         let _ = std::io::copy(&mut up, &mut client);
     });
     let b = std::thread::spawn(move || {
-        let _ = std::io::copy(&mut reader, &mut up2);
+        let _ = std::io::copy(&mut cl2, &mut up2);
     });
     let _ = a.join();
     let _ = b.join();
 }
 
-/// 处理 CONNECT 隧道（HTTPS）
+/// 处理 CONNECT 隧道（HTTPS）：`target` = 请求行第二段（host:port）
 fn handle_connect(mut client: TcpStream, target: String, log: Arc<ProxyLog>) {
     log.log("connect", &target);
-    let Some((hostport, _)) = target.split_once(char::is_whitespace) else { return };
-    let (hostname, port) = match hostport.split_once(':') {
+    let (hostname, port) = match target.split_once(':') {
         Some((h, p)) => (h.to_string(), p.parse::<u16>().unwrap_or(443)),
-        None => (hostport.to_string(), 443),
+        None => (target.to_string(), 443),
     };
     let Ok(upstream) = TcpStream::connect((hostname.as_str(), port)) else {
         let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
@@ -198,30 +188,32 @@ fn main() {
                     }
                     let upper = line.to_uppercase();
                     if upper.starts_with("CONNECT") {
-                        let target = line.trim().to_string();
+                        // 取请求行第二段（host:port）作为隧道目标
+                        let Some(target) =
+                            line.split_whitespace().nth(1).map(str::to_string)
+                        else {
+                            return;
+                        };
                         drop(reader);
                         handle_connect(s, target, log);
                     } else {
-                        // 普通 http：把已读的首行与后续头一起处理
-                        let mut rest = Vec::new();
-                        // 读到头结束
-                        let mut buf = [0u8; 1];
+                        // 普通 http：首行已读（判定非 CONNECT），续读头部到空行，
+                        // 组装完整头交 handle_http 解析（不得从流上重复读取）
+                        let mut full = line.clone().into_bytes();
                         loop {
-                            match reader.read(&mut buf) {
+                            let mut h = String::new();
+                            match reader.read_line(&mut h) {
                                 Ok(0) | Err(_) => break,
                                 Ok(_) => {
-                                    rest.push(buf[0]);
-                                    if rest.ends_with(b"\r\n\r\n") || rest.ends_with(b"\n\n") {
+                                    full.extend_from_slice(h.as_bytes());
+                                    if h.trim().is_empty() {
                                         break;
                                     }
                                 }
                             }
                         }
                         drop(reader);
-                        let mut full = line.clone().into_bytes();
-                        full.extend_from_slice(&rest);
-                        let _ = full;
-                        handle_http(s, log, Vec::new());
+                        handle_http(s, log, full);
                     }
                 });
             }

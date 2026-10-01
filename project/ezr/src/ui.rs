@@ -22,6 +22,7 @@ use ratatui::{
 
 use crate::app::{App, DialogKind, CHECKSUM_ALGOS, FILTERS, ITEM_HEIGHT};
 use crate::model::chunk::fmt_block_size;
+use crate::VERSION;
 use crate::model::{FailKind, Task, TaskState};
 
 // ---------------------------------------------------------------------------
@@ -133,6 +134,7 @@ fn fmt_size(bytes: u64) -> String {
 
 fn fmt_speed(bps: f64) -> String {
     const MB: f64 = 1_000_000.0;
+    let bps = if bps == 0.0 { 0.0 } else { bps }; // 归一化负零（-0.0 == 0.0），避免「-0 B/s」显示
     if bps >= MB {
         format!("{:.1} MB/s", bps / MB)
     } else if bps >= 1000.0 {
@@ -291,10 +293,15 @@ fn task_lines(t: &Task, sel: bool, spinner: char, width: usize, queue_pos: usize
             let countdown = match t.retry_in {
                 Some(s) => format!("{}s 后重试", s.ceil() as u64),
                 // 无倒计时：区分「已达上限」与「不自动重试」（语义性 4xx /
-                // 磁盘空间不足 / 校验失败直接停等，FR-M1-43/44/51）
+                // 磁盘空间不足 / 校验失败直接停等，FR-M1-43/44/51）。
+                // 瞬态失败未达上限却停等 = auto_retry=false 配置（Gherkin
+                // 01-retry-backoff-10：显示「不自动重试」而非「已达上限」）
                 None => match t.fail_kind {
-                    Some(FailKind::Fatal) | Some(FailKind::Verify) => "不自动重试".to_string(),
-                    _ => "已达上限".to_string(),
+                    Some(FailKind::Fatal) | Some(FailKind::Verify) => {
+                        "不自动重试".to_string()
+                    }
+                    _ if t.retries >= t.max_retries => "已达上限".to_string(),
+                    _ => "不自动重试".to_string(),
                 },
             };
             l3.push(Span::styled(retry, Style::default().fg(RED)));
@@ -320,10 +327,15 @@ fn task_lines(t: &Task, sel: bool, spinner: char, width: usize, queue_pos: usize
                 ));
             }
             l3.push(Span::styled(" · ", Style::default().fg(DIM)));
-            l3.push(Span::styled(
-                format!("{}/{}", fmt_size(t.downloaded), fmt_size(t.total)),
-                Style::default().fg(FG),
-            ));
+            if t.total == 0 {
+                // 等待任务不预取（规格 01-download-engine-15）：探测前大小显示「未知」
+                l3.push(Span::styled("未知".to_string(), Style::default().fg(DIM)));
+            } else {
+                l3.push(Span::styled(
+                    format!("{}/{}", fmt_size(t.downloaded), fmt_size(t.total)),
+                    Style::default().fg(FG),
+                ));
+            }
         }
         TaskState::Completed => {
             // 校验情况（按算法显示）+ 文件大小
@@ -483,7 +495,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                 "EZR Downloader",
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
             ),
-            Span::styled("  v0.1.0-m1", Style::default().fg(DIM)),
+            Span::styled(format!("  v{VERSION}"), Style::default().fg(DIM)),
         ]));
 
     let line = Line::from(vec![
@@ -588,7 +600,8 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
     if rows == 0 || idxs.is_empty() {
         let msg = if idxs.is_empty() {
-            "（此页签下没有任务）"
+            // 空态提示（Gherkin 01-tui-display-13：显示「按 A 添加下载任务」）
+            "（此页签下没有任务，按 A 添加下载任务）"
         } else {
             "（区域过小）"
         };
@@ -845,7 +858,8 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
         Span::raw(" "),
         label("URL"),
         val(truncate(
-            &t.url,
+            // 重定向后展示最终 URL（FR-01-14 / 规格 01-download-engine-08「详情 URL 显示最终 URL」）
+            t.final_url.as_deref().unwrap_or(&t.url),
             (inner.width as usize).saturating_sub(12),
         )),
     ]));

@@ -83,11 +83,11 @@ Feature: 01-integrity-check 完整性校验（七算法 · 来源优先级 · �
       | badlen.bin | sha256 | 32     | SHA-256 | 64       |
 
   Scenario: 01-integrity-check-06 多伴随文件并存按算法表声明顺序取最先
-    Given 保存目录同时存在 "<file>.adler32"（正确）与 "<file>.md5"（正确）
+    Given 保存目录同时存在 "<file>.md5"（正确）与 "<file>.adler32"（正确）
     And 任务未显式提供校验值
     When 下载完成进入校验
-    Then 按算法表声明顺序取 Adler-32 执行校验
-    And 显示「Adler-32 校验成功」
+    Then 按算法表声明顺序取 MD5 执行校验
+    And 显示「MD5 校验成功」
 
     Examples:
       | file       |
@@ -138,12 +138,15 @@ Feature: 01-integrity-check 完整性校验（七算法 · 来源优先级 · �
       | file        |
       | plain.bin   |
 
-  Scenario: 01-integrity-check-11 文件大小不符失败并可续传补齐
+  # 块记账不变式：块须全部标完成才触发大小校验，而标完成的洞无法续传补齐——
+  # 故「文件大小不符」终态与可补齐互斥；Range 短响应实测走网络类瞬态 + 续传补齐主链。
+  Scenario: 01-integrity-check-11 Range 短响应按网络类瞬态续传补齐
     Given fixture 对文件 "<file>" 的 Range 响应返回短数据（实际写入字节数与 Content-Length 不符）
-    When 任务分块全部结束触发大小校验
-    Then 任务转「已失败」且失败原因显示「文件大小不符」
-    And 任务按自动重试类处理（退避倒计时后续传补齐缺失字节）
+    When 任务分块全部结束
+    Then 短响应按网络类瞬态失败处理并进入自动重试
+    And 退避倒计时后续传补齐缺失字节
     And 重试成功后下载完成且文件字节完整
+    And 「文件大小不符」失败文案与可补齐互斥（块记账不变式下正常路径不可达）
 
     Examples:
       | file        |

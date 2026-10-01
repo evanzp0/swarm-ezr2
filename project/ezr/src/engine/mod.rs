@@ -255,8 +255,19 @@ async fn main_loop(
                 }
             }
             Cmd::Cancel { id } => {
-                if let Some(h) = tasks.remove(&id) {
-                    let _ = h.send(TaskCmd::Cancel).await;
+                match tasks.remove(&id) {
+                    Some(h) => {
+                        if h.send(TaskCmd::Cancel).await.is_err() {
+                            // 句柄已死（任务早已结束：完成/暂停/失败后 supervisor
+                            // 退出但 map 条目保留）：直接回报停止确认，让 App 的
+                            // 「删除任务和文件」延迟删除得以执行（FR-01-25）
+                            let _ = evt_tx.send(Evt::Cancelled { id }).await;
+                        }
+                    }
+                    None => {
+                        // 未知 id（未在运行）：同上，直接回报停止确认
+                        let _ = evt_tx.send(Evt::Cancelled { id }).await;
+                    }
                 }
             }
             Cmd::Verify { spec } => {
