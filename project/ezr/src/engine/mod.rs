@@ -83,6 +83,12 @@ pub enum Evt {
         /// 已完成块数
         chunk_done: u32,
     },
+    /// 任务已停止运行（取消：删除任务/排队取消/引擎关闭；不写 sidecar）。
+    /// App 收到后执行已登记的延迟文件删除；未知 id 直接忽略。
+    Cancelled {
+        /// 任务 ID
+        id: u32,
+    },
     /// 下载失败
     Failed {
         /// 任务 ID

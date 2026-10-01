@@ -143,6 +143,8 @@ pub struct App {
     pub dlg_field_rects: Vec<(Rect, usize)>,
     /// 校验算法下拉框选项可点击区域（ui 层每帧回填）
     pub dlg_ck_rects: Vec<(Rect, usize)>,
+    /// 待延迟文件删除（引擎 Cancelled 确认后执行）：id → (保存目录, 文件名)
+    pending_deletes: HashMap<u32, (String, String)>,
 }
 
 impl App {
@@ -181,6 +183,7 @@ impl App {
             dlg_btn_rects: Vec::new(),
             dlg_field_rects: Vec::new(),
             dlg_ck_rects: Vec::new(),
+            pending_deletes: HashMap::new(),
         }
     }
 
@@ -463,6 +466,11 @@ impl App {
                 }
             }
             Evt::Progress { id, downloaded, conns, chunk_done } => {
+                let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else {
+                    // 已删除/未知任务的幽灵进度：不建滑窗、不聚合（删除后引擎停止确认前的兜底）
+                    self.windows.remove(&id);
+                    return;
+                };
                 if let Some(w) = self.windows.get_mut(&id) {
                     w.push(Instant::now(), downloaded);
                 } else {
@@ -470,13 +478,11 @@ impl App {
                     w.push(Instant::now(), downloaded);
                     self.windows.insert(id, w);
                 }
-                if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
-                    t.downloaded = downloaded;
-                    t.chunk_done = chunk_done;
-                    t.connections = conns.iter().map(|c| c.to_connection()).collect();
-                    if downloaded > 0 {
-                        t.made_progress = true;
-                    }
+                t.downloaded = downloaded;
+                t.chunk_done = chunk_done;
+                t.connections = conns.iter().map(|c| c.to_connection()).collect();
+                if downloaded > 0 {
+                    t.made_progress = true;
                 }
             }
             Evt::PausedDone { id, downloaded, chunk_done } => {
@@ -590,6 +596,12 @@ impl App {
                     ));
                 }
                 self.save_registry();
+            }
+            Evt::Cancelled { id } => {
+                // 引擎已确认停止：执行延迟文件删除（「删除任务和文件」），未知 id 忽略
+                if let Some((dir, name)) = self.pending_deletes.remove(&id) {
+                    Self::delete_task_files(&dir, &name);
+                }
             }
             Evt::Toast(msg) => self.set_toast(msg),
         }
@@ -1061,26 +1073,22 @@ impl App {
             self.dialog = None;
             return;
         };
-        let (id, name, save_dir) = {
+        let (id, name) = {
             let t = &self.tasks[idx];
-            (t.id, t.name.clone(), t.save_dir.clone())
+            (t.id, t.name.clone())
         };
         match btn {
             0 => {
-                // 仅删除任务：文件与 sidecar 保留（FR-01-25）
+                // 仅删除任务：文件与 sidecar 保留（FR-01-25）；引擎任务取消（停写 sidecar）
                 self.remove_task(idx, id, false);
                 self.set_toast(format!("🗑 已删除任务（保留文件）: {name}"));
+                self.dialog = None; // 操作完成即关闭对话框
             }
             1 => {
-                // 删除任务和文件：目标文件、sidecar、记录全部删除
-                let dl = format!("{}/{}.downloading", save_dir.trim_end_matches('/'), name);
-                let sc = format!("{}/{}.ezr", save_dir.trim_end_matches('/'), name);
-                let target = format!("{}/{}", save_dir.trim_end_matches('/'), name);
-                let _ = std::fs::remove_file(&dl);
-                let _ = std::fs::remove_file(&sc);
-                let _ = std::fs::remove_file(&target);
+                // 删除任务和文件：记录即时删除；文件在引擎 Cancelled 确认后删除（防重建竞态）
                 self.remove_task(idx, id, true);
-                self.set_toast(format!("🗑 已删除任务及本地文件: {name}"));
+                self.set_toast(format!("🗑 已删除任务，正在停止引擎并清理本地文件: {name}"));
+                self.dialog = None; // 操作完成即关闭对话框
             }
             _ => {
                 self.dialog = None;
@@ -1092,11 +1100,37 @@ impl App {
         }
     }
 
-    /// 从任务表移除（含引擎取消）；`cancel_engine` 时不再等 PausedDone
-    fn remove_task(&mut self, idx: usize, id: u32, _delete_files: bool) {
+    /// 从任务表移除并取消引擎任务（删除对话框两路共用）。
+    /// `delete_files` = true 时登记延迟删除：引擎回报 [`Evt::Cancelled`]（supervisor
+    /// 已完全退出、不再写盘）后再删目标文件/.downloading/.ezr，避免与引擎在途
+    /// 写入竞态导致 sidecar/文件被重新创建。
+    fn remove_task(&mut self, idx: usize, id: u32, delete_files: bool) {
+        let (save_dir, name) = {
+            let t = &self.tasks[idx];
+            (t.save_dir.clone(), t.name.clone())
+        };
         self.tasks.remove(idx);
         self.windows.remove(&id);
+        if delete_files {
+            self.pending_deletes.insert(id, (save_dir, name));
+        }
+        let engine = self.engine.clone();
+        tokio::spawn(async move {
+            engine.send(Cmd::Cancel { id }).await;
+        });
         self.save_registry();
+    }
+
+    /// 删除任务的三类本地文件：目标文件、.downloading、.ezr sidecar（FR-01-25「删除任务和文件」）
+    fn delete_task_files(save_dir: &str, name: &str) {
+        let base = save_dir.trim_end_matches('/');
+        for path in [
+            format!("{base}/{name}"),
+            format!("{base}/{name}.downloading"),
+            format!("{base}/{name}.ezr"),
+        ] {
+            let _ = std::fs::remove_file(&path);
+        }
     }
 
     /// 打开添加对话框（空预填；URL/目录留空由用户输入）
@@ -1386,6 +1420,10 @@ impl App {
         }
         // 给引擎 sidecar 落盘留出窗口（最多 2s 周期 + 暂停即时落盘）
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        // 引擎已全量取消（Shutdown → TaskCmd::Cancel）：补做未确认的延迟文件删除
+        for (_, (dir, name)) in self.pending_deletes.drain() {
+            Self::delete_task_files(&dir, &name);
+        }
         self.save_registry();
         self.engine.send(Cmd::Shutdown).await;
     }

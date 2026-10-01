@@ -7,8 +7,8 @@
 #   swarm chains                   查看各工作流的角色流转路径
 #   swarm begin <wf>/<role> [--task <名称>]   开始角色会话（begin 时提示上游交接来源）
 #   swarm status                   查看当前会话、工作区、产物归档与 plan.md 进度
-#   swarm complete [--force]       结束会话：清理构建临时文件，把 CONSTITUTION.md、packs、bin、
-#                                  project 打成 .tar.gz 放在用户主目录
+#   swarm complete [--force]       结束会话：清理构建临时文件，把工作区整体打成 .tar.gz 放在用户主目录
+#                                  （排除 .git/ 与 .gitignore 匹配内容，其余目录全部打包）
 #   swarm reset                    作废当前会话：清除会话状态（session/plan/tmp）；project/ 工作区保留
 #   swarm pack                     把工具本体（bin/、packs/、CONSTITUTION.md）打包为 .tar.gz 放在当前目录
 #
@@ -283,12 +283,22 @@ cmd_complete() {
     die "project/ 中没有发现产物。完成工作后再归档；确要归档空工作区请加 --force。"
   fi
 
-  # 归档包 = CONSTITUTION.md + packs/ + bin/ + project/（宪法第四章；会话状态 .work/ 与工具缓存 .tools/ 不进包）
+  # 归档包 = 工作区整体（CONSTITUTION.md、packs/、bin/、project/ 及其他目录与文件），
+  # 排除 .git/ 目录与 .gitignore 匹配内容（.work/、.tools/、target/ 等随 .gitignore 排除；操作者定案）
   local ts tar_name tar_path
   ts="$(date '+%Y%m%d-%H%M%S')"
   tar_name="swarm-$ts-$wf-$role.tar.gz"
   tar_path="$ARCHIVE_DIR/$tar_name"
-  tar -czf "$tar_path" -C "$SWARM_HOME" CONSTITUTION.md packs bin project || die "打包失败"
+  if command -v git >/dev/null 2>&1 && git -C "$SWARM_HOME" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    # 有 git 仓库：按 .gitignore 语义取文件清单（已跟踪 + 未被忽略的未跟踪；.git/ 天然不在列）
+    git -C "$SWARM_HOME" ls-files -z --cached --others --exclude-standard \
+      | tar -czf "$tar_path" -C "$SWARM_HOME" --null -T - || die "打包失败"
+  else
+    # 无 git 环境：整树打包，仅排除 VCS 目录与会话状态/工具缓存目录
+    tar -czf "$tar_path" -C "$SWARM_HOME" \
+      --exclude='./.git' --exclude='./.work' --exclude='./.tools' \
+      . || die "打包失败"
+  fi
 
   # 结束会话：清除会话级运行状态；project/ 工作区保留，供下一角色续跑与操作者审阅
   rm -f "$STATE" "$PLAN"
@@ -296,7 +306,7 @@ cmd_complete() {
 
   echo
   ok "完成 ✓  $wf/$role （任务: $task，开始于 $started）"
-  ok "产物归档: $tar_path  （含 CONSTITUTION.md、packs/、bin/、project/）"
+  ok "产物归档: $tar_path  （工作区整体打包，排除 .git/ 与 .gitignore 匹配项）"
   local size
   size="$(du -h "$tar_path" | cut -f1)"
   info "大小: $size"

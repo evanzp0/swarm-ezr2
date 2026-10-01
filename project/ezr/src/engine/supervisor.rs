@@ -114,7 +114,10 @@ pub(crate) async fn run(
                 })
                 .await;
         }
-        Flow::Cancelled => {}
+        Flow::Cancelled => {
+            // 回报停止确认：App 据此执行延迟文件删除（删除任务和文件）
+            let _ = evt_tx.send(Evt::Cancelled { id: spec.id }).await;
+        }
         Flow::Failed(f, made_progress, sidecar) => {
             if let Some((sc, sc_path)) = &sidecar {
                 let _ = Sidecar::save(sc, sc_path);
@@ -908,6 +911,52 @@ mod tests {
         assert_eq!(data, expect, "文件内容应逐字节一致");
         // sidecar 已删（完成收尾）
         assert!(!dir.join("f.bin.ezr").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn cancel_emits_cancelled_and_no_ghost_progress() {
+        let dir = std::env::temp_dir().join(format!("ezr-e2e-cancel-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let total: u64 = 3 * 4096 + 1111;
+        let url = mock_server(total, vec![]);
+        let (tx, mut rx) = mpsc::channel::<Evt>(64);
+        let shared = throttle_free();
+        let (cmd_tx, cmd_rx) = mpsc::channel::<TaskCmd>(4);
+        let spec = spec_for(9, &url, dir.to_str().unwrap(), 4096, 4, None);
+        // 取消命令先于 run 入队：探测后首个 select 轮询即命中取消
+        //（当前线程 runtime 下 worker 尚未被轮询，杜绝完成/进度竞态）
+        cmd_tx.send(TaskCmd::Cancel).await.unwrap();
+        tokio::spawn(run(spec, shared, cmd_rx, tx));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut probed = false;
+        let mut cancelled = false;
+        let mut ghost = false;
+        let mut done = false;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::Probed { resumable: true, .. })) => probed = true,
+                Ok(Some(Evt::Cancelled { .. })) => {
+                    cancelled = true;
+                    break;
+                }
+                Ok(Some(Evt::Progress { .. })) => ghost = true,
+                Ok(Some(Evt::DownloadDone { .. })) => {
+                    done = true;
+                    break;
+                }
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("下载失败: {reason}"),
+                Ok(Some(_)) => {}
+                _ => {}
+            }
+        }
+        assert!(!done, "取消后不应完成下载");
+        assert!(!ghost, "取消后不应再有进度事件");
+        assert!(probed, "未收到探测事件");
+        assert!(cancelled, "未收到取消确认事件（Evt::Cancelled）");
+        // Flow::Cancelled 路径不 finalize、不写 sidecar：最终文件与 .ezr 都不应出现
+        assert!(!dir.join("f.bin").exists(), "取消不应产出最终文件");
+        assert!(!dir.join("f.bin.ezr").exists(), "取消路径不应写 sidecar");
         std::fs::remove_dir_all(&dir).ok();
     }
 

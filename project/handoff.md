@@ -17,7 +17,7 @@
 |---|---|---|---|
 | specifier R1/R2 | `features/` 9 份 Gherkin 规格（115 场景）+ `qa/` 9 份端到端套件 | 已交付，R2 修订已三层一致落地 | gherkin-parser 9/9、APS 复跑 9/9 通过 |
 | coder（本会话） | `project/ezr/` 正式版项目：下载内核 + TUI + CLI + fixture 基建 | 已交付（P0 全量，P1 全量，P2 未做） | cargo build/clippy 零警告；单测 83 + 引擎端到端冒烟 6 = 89 全通过；fixture/单实例锁冒烟通过 |
-| coder 后置增量（操作者指令，归档后） | FR-01-06 bracketed paste 实现（crossterm Enable/Disable + Event::Paste → on_paste 字段路由，10 单测）；FR-01-74 从需求删除（v1.2，场景 01-persistence-config-10 与 QA-PC-10 同步移除，场景总数 115→114） | 已交付（P0 全量 + P1 全量，无未做项） | cargo build/clippy 零警告；cargo test 99 全通过（89+10） |
+| coder 后置增量（操作者指令，归档后） | FR-01-06 bracketed paste 实现（crossterm Enable/Disable + Event::Paste → on_paste 字段路由，10 单测）；FR-01-74 从需求删除（v1.2，场景 01-persistence-config-10 与 QA-PC-10 同步移除，场景总数 115→114）；FR-01-25 删除语义缺陷修复（引擎取消确认 + 延迟文件删除 + 幽灵进度防护 + 取消冒烟测试） | 已交付（P0 全量 + P1 全量，无未做项） | cargo build/clippy 零警告；cargo test 100 全通过（89+10+1） |
 
 - 本会话产物构成：model 层 11 模块（chunk/retry/sidecar/consistency/checksum/config/
   namegen/slots/speed/registry/mod）、engine 层 4 模块（mod/supervisor/error/throttle）、
@@ -40,7 +40,13 @@
   `EnableBracketedPaste`、退出时 `DisableBracketedPaste`，`Event::Paste` →
   `App::on_paste` 按焦点路由到 Add 对话框文本字段（过滤规则与逐键输入一致，
   app.rs 纯函数 + 10 单测）；② FR-01-74（`--no-tui`）已从需求删除
-  （phase-01.md v1.2），feature 场景与 QA 用例同步移除，README 同步修订。
+  （phase-01.md v1.2），feature 场景与 QA 用例同步移除，README 同步修订；
+  ③ FR-01-25 删除语义缺陷修复——原 `remove_task` 只删列表记录未取消引擎
+  （`Cmd::Cancel` 从未下发），导致删除后引擎继续下载、周期性重建 `.ezr`、
+  幽灵速度刷新。修复：删除即下发 `Cmd::Cancel`；引擎新增 `Evt::Cancelled`
+  停止确认回报（Flow::Cancelled 路径统一发出）；「删除任务和文件」的文件清理
+  改为确认后延迟执行（防在途写入竞态）；`Evt::Progress` 对未知 id 防御性忽略；
+  新增取消冒烟测试 `cancel_emits_cancelled_and_no_ghost_progress`。
 - clippy 豁免面：ui.rs/app.rs/main.rs/bin/（交互层）整层豁免 pedantic/nursery 与
   复杂度类 lint（demo 基线复用层）；model/engine 逻辑层保留检查，仅豁免 cast 类
   （字节算术固有）。cleaner 收敛时可审查豁免清单。
