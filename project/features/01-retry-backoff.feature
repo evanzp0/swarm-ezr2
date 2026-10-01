@@ -3,8 +3,8 @@
 #   01-retry-backoff-02 有下载进展的失败计数重置为 1
 #   01-retry-backoff-03 无进展失败计数累加至达上限
 #   01-retry-backoff-04 指数退避 8s 到 16s 到 32s 到 60s 封顶
-#   01-retry-backoff-05 Retry-After 不超过 60s 时优先采用
-#   01-retry-backoff-06 Retry-After 超过 60s 时回退指数退避
+#   01-retry-backoff-05 Retry-After 存在时优先采用（含超过 60s）
+#   01-retry-backoff-06 Retry-After 超过 60s 时仍采用其值
 #   01-retry-backoff-07 语义性 4xx 停等不自动重试
 #   01-retry-backoff-08 408/429/5xx 与网络错误按退避自动重试
 #   01-retry-backoff-09 磁盘空间预检不足停等
@@ -12,7 +12,7 @@
 Feature: 01-retry-backoff 失败分类 · 重试计数与退避
 
   期号 01。依据 project/mission/phase-01.md FR-01-40~44 与 D7 定案。计数连续性规则：
-  有进展重置为 1、无进展累加；退避 8→16→32→60s 封顶；Retry-After ≤60s 优先。
+  有进展重置为 1、无进展累加；退避 8→16→32→60s 封顶；Retry-After 存在即优先采用（无 60s 上限）。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
@@ -62,23 +62,24 @@ Feature: 01-retry-backoff 失败分类 · 重试计数与退避
       | file         | seq              |
       | backoff1.bin | 8, 16, 32, 60, 60 |
 
-  Scenario: 01-retry-backoff-05 Retry-After 不超过 60s 时优先采用
+  Scenario: 01-retry-backoff-05 Retry-After 存在时优先采用（含超过 60s）
     Given fixture 以 503 与响应头 "Retry-After: <retry_after>" 应答文件 "<file>"
     When 任务失败进入自动重试
     Then 列表行倒计时显示 <retry_after> 秒（优先于指数退避）
 
     Examples:
-      | file         | retry_after |
+      | file          | retry_after |
       | polite503.bin | 10          |
       | polite503.bin | 60          |
+      | polite503.bin | 90          |
 
-  Scenario: 01-retry-backoff-06 Retry-After 超过 60s 时回退指数退避
+  Scenario: 01-retry-backoff-06 Retry-After 超过 60s 时仍采用其值
     Given fixture 以 503 与响应头 "Retry-After: <retry_after>" 应答文件 "<file>"
     When 任务失败进入自动重试
-    Then 倒计时按指数退避序列进行（不采用 120 秒）
+    Then 列表行倒计时显示 <retry_after> 秒（不回退指数退避）
 
     Examples:
-      | file          | retry_after |
+      | file           | retry_after |
       | distant503.bin | 120         |
 
   Scenario: 01-retry-backoff-07 语义性 4xx 停等不自动重试

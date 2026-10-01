@@ -13,12 +13,12 @@
 #   01-download-engine-12 HTTPS 正常下载成功
 #   01-download-engine-13 分块请求禁用内容压缩
 #   01-download-engine-14 速度按 1 秒滑动窗口驱动显示
-#   01-download-engine-15 等待任务添加即预取大小（失败显示未知）
+#   01-download-engine-15 等待下载槽位的任务不预取文件大小
 #   01-download-engine-16 默认配置下载 100 MB 文件端到端（AC-1）
 Feature: 01-download-engine HTTP 下载内核（探测 · 分块 · 重定向 · HTTPS · 速度）
 
   期号 01。依据 project/mission/phase-01.md FR-01-10~17、FR-01-82 与本会话澄清决定
-  （等待任务添加即预取、重定向边界停等）。块大小默认 1 MB（可配置），AIR2 分块队列模型。
+  （等待任务不预取、重定向边界停等）。块大小默认 1 MB（可配置），AIR2 分块队列模型。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
@@ -161,16 +161,16 @@ Feature: 01-download-engine HTTP 下载内核（探测 · 分块 · 重定向 ·
     Then 列表行速度、头部全局 ↓ 速度与 Sparkline 面板随下载持续每秒更新且数值来自真实传输
     And 下载完成后列表与详情速度归零或显示完成态
 
-  Scenario: 01-download-engine-15 等待任务添加即预取大小（失败显示未知）
+  Scenario: 01-download-engine-15 等待下载槽位的任务不预取文件大小
     Given 下载槽位已被其他任务占满
     When 添加 fixture 文件 "<file>" 的下载任务
-    Then 任务处于「等待中」且列表等待行显示总大小 <display_size>（未开始下载即预取）
-    When 添加一个探测必然失败的下载项 "<bad_file>"
-    Then 其等待行大小显示「未知」且不阻塞等待队列
+    Then 任务处于「等待中」且等待行大小显示「未知」（未发送探测请求）
+    When 该任务获得空闲槽位开始下载
+    Then 详情显示大小 <display_size>（探测完成后显示）
 
     Examples:
-      | file       | display_size | bad_file     |
-      | five-m.bin | 0 B/5.0 MB   | ghost-404.bin |
+      | file       | display_size |
+      | five-m.bin | 5.0 MB       |
 
   Scenario: 01-download-engine-16 默认配置下载 100 MB 文件端到端（AC-1）
     Given fixture 文件 "big-100m.bin" 大小 100 MB（稀疏构造）且支持 Range 请求

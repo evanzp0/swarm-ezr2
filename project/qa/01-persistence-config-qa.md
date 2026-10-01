@@ -16,7 +16,7 @@
 |---|---|---|---|
 | QA-PC-01 | 01-persistence-config-01 | 预置各状态任务→优雅退出→重启 | 任务/历史/顺序完整还原；续传点与状态一致 |
 | QA-PC-02 | 01-persistence-config-02 | 添加任务后检查主目录 | 存在 `.ezr/state/`（注册表）；`.ezr/config.toml` 缺失或合法；sidecar 随目标文件 |
-| QA-PC-03 | 01-persistence-config-03 | 删除 config.toml 后下载 | 默认并发 4/槽位 5/块 1MB/重试 5/auto_retry 开/不限速/download_dir=当前目录 |
+| QA-PC-03 | 01-persistence-config-03 | 删除 config.toml 后下载 | 默认并发 4/槽位 5/块 1MB/重试 5/auto_retry 开/不限速/download_dir=用户主目录下载目录（Linux ~/Downloads） |
 | QA-PC-04 | 01-persistence-config-04 | 分别写入非法值：block_size_http=abc、download_slots=0、max_retries=-1、default_concurrency=99、max_speed=xyz | 启动不报错；各按默认 1MB/5/5/4/0 生效 |
 | QA-PC-05 | 01-persistence-config-05 | block_size_http=256KB / 2MB 下载 5MB | 分块行 `x/20 · 256 KB/块` / `x/3 · 2 MB/块` |
 | QA-PC-06 | 01-persistence-config-06 | download_slots=2 后添加 4 任务 | 前 2 下载；队列栏「下载槽位 n/2」；其余排队 |

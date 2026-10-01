@@ -28,7 +28,7 @@
 | QA-DE-12 | 01-download-engine-12 | 受信证书 HTTPS URL | 下载完成字节完整；类型 HTTPS |
 | QA-DE-13 | 01-download-engine-13 | 下载 5MB（请求头记录） | 全部分块请求 `Accept-Encoding: identity` |
 | QA-DE-14 | 01-download-engine-14 | 下载中观察列表/头部/Sparkline | 三处速度每秒真实更新；完成后归零/完成态 |
-| QA-DE-15 | 01-download-engine-15 | 槽位占满时添加 5MB（预取）+ 探测必失败项 | 等待行分别显示 `0 B/5.0 MB` 与「未知」 |
+| QA-DE-15 | 01-download-engine-15 | 槽位占满时添加 5MB 观察等待行（fixture 请求日志无探测）；获槽开始后再观察详情 | 等待行显示「未知」；获槽后详情显示 5.0 MB |
 | QA-DE-16 | 01-download-engine-16 | 默认并发 4 下载 big-100m.bin（含 .sha256） | 分块行 x/100 · 1 MB/块；活跃连接 4；乱序完成；「SHA-256 校验成功」；字节数 104857600（AC-1） |
 
 ## 通过准则

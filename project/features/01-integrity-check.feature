@@ -1,5 +1,5 @@
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
-#   01-integrity-check-01 CLI -x 按位数自动匹配七种算法
+#   01-integrity-check-01 CLI -x <算法>=<校验码> 显式覆盖七种算法
 #   01-integrity-check-02 显式校验值优先于伴随文件
 #   01-integrity-check-03 伴随文件按算法后缀识别（大小写不敏感）
 #   01-integrity-check-04 伴随文件接受裸 hex 与 hex 文件名两种格式
@@ -12,7 +12,8 @@
 #   01-integrity-check-11 文件大小不符失败并可续传补齐
 Feature: 01-integrity-check 完整性校验（七算法 · 来源优先级 · 校验行为）
 
-  期号 01。依据 project/mission/phase-01.md FR-01-50~52 与 D14/D15 定案。算法表：
+  期号 01。依据 project/mission/phase-01.md FR-01-50~52、D14 定案与 D15 R2 修订
+  （CLI -x 以 <算法>=<校验码> 显式提供算法，不按位数匹配）。算法表：
   Adler-32=8、MD5=32、SHA-1=40、SHA-224=56、SHA-256=64、SHA-384=96、SHA-512=128 位。
 
   Background:
@@ -20,19 +21,19 @@ Feature: 01-integrity-check 完整性校验（七算法 · 来源优先级 · �
     And 本地 fixture 服务器已启动且根目录含测试文件
     And 保存目录为 <save_dir>
 
-  Scenario: 01-integrity-check-01 CLI -x 按位数自动匹配七种算法
-    When 以命令行启动 "ezr <url> -x <checksum>"
+  Scenario: 01-integrity-check-01 CLI -x <算法>=<校验码> 显式覆盖七种算法
+    When 以命令行启动 "ezr <url> -x <x_arg>"
     Then 启动成功且详情校验行显示算法 "<algo>"
 
     Examples:
-      | url                                | checksum                                                             | algo     |
-      | http://fixture.local/files/a0.bin  | d869db7f                                                             | Adler-32 |
-      | http://fixture.local/files/a1.bin  | d869db7fe62fb06d1c488a04d5e68e93                                     | MD5      |
-      | http://fixture.local/files/a2.bin  | d869db7fe62fb06d1c488a04d5e68e93cb4d5f2a                              | SHA-1    |
-      | http://fixture.local/files/a3.bin  | d869db7fe62fb06d1c488a04d5e68e93cb4d5f2a3e4f5a6b                      | SHA-224  |
-      | http://fixture.local/files/a4.bin  | d869db7fe62fb06d1c488a04d5e68e93a4f0c0e0e0c0a1b2c3d4e5f60718293a      | SHA-256  |
-      | http://fixture.local/files/a5.bin  | d869db7fe62fb06d1c488a04d5e68e93a4f0c0e0e0c0a1b2c3d4e5f60718293a0b1c2d3e | SHA-384 |
-      | http://fixture.local/files/a6.bin  | d869db7fe62fb06d1c488a04d5e68e93a4f0c0e0e0c0a1b2c3d4e5f60718293a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e | SHA-512 |
+      | url                                | x_arg                                                                                    | algo     |
+      | http://fixture.local/files/a0.bin  | adler32=d869db7f                                                                          | Adler-32 |
+      | http://fixture.local/files/a1.bin  | md5=d869db7fe62fb06d1c488a04d5e68e93                                                      | MD5      |
+      | http://fixture.local/files/a2.bin  | sha1=d869db7fe62fb06d1c488a04d5e68e93cb4d5f2a                                              | SHA-1    |
+      | http://fixture.local/files/a3.bin  | sha224=d869db7fe62fb06d1c488a04d5e68e93cb4d5f2a3e4f5a6b                                    | SHA-224  |
+      | http://fixture.local/files/a4.bin  | sha256=d869db7fe62fb06d1c488a04d5e68e93a4f0c0e0e0c0a1b2c3d4e5f60718293a                    | SHA-256  |
+      | http://fixture.local/files/a5.bin  | sha384=d869db7fe62fb06d1c488a04d5e68e93a4f0c0e0e0c0a1b2c3d4e5f60718293a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e | SHA-384 |
+      | http://fixture.local/files/a6.bin  | sha512=d869db7fe62fb06d1c488a04d5e68e93a4f0c0e0e0c0a1b2c3d4e5f60718293a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6a7b8c9d | SHA-512 |
 
   Scenario: 01-integrity-check-02 显式校验值优先于伴随文件
     Given 保存目录已存在内容正确 "<algo>" 摘要的伴随文件 "<file>.<ext>"

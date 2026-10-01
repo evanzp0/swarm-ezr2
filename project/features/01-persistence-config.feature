@@ -34,7 +34,7 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
     Given 用户主目录不存在 .ezr/config.toml
     When 按默认配置下载文件 "<file>"
     Then 行为与默认值一致：并发默认 <default_concurrency>、槽位 5、块大小 1 MB、
-      max_retries 5、auto_retry 开启、max_speed 不限、download_dir 为当前工作目录
+      max_retries 5、auto_retry 开启、max_speed 不限、download_dir 为用户主目录下的下载目录
 
     Examples:
       | file       | default_concurrency |

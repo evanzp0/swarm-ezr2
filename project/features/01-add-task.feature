@@ -10,8 +10,8 @@
 #   01-add-task-09 文件名无法推导回退 download-<时间戳>
 #   01-add-task-10 目标文件已存在自动追加序号
 #   01-add-task-11 保存目录缺省链与自动创建
-#   01-add-task-12 CLI 参数创建任务且 -x 位数自动匹配算法
-#   01-add-task-13 CLI -x 位数无法匹配启动报错退出
+#   01-add-task-12 CLI 参数创建任务且 -x <算法>=<校验码> 显式指定算法
+#   01-add-task-13 CLI -x 非法（缺前缀/算法无法识别/位数不符）启动报错退出
 #   01-add-task-14 CLI -c 非法值启动报错退出
 #   01-add-task-15 CLI 多 URL 部分非法全部拒绝
 #   01-add-task-16 重复任务拒绝并提示
@@ -144,29 +144,30 @@ Feature: 01-add-task 任务添加（对话框与 CLI）
     Examples:
       | config_dir      | input_dir   | resolved_dir    |
       | /tmp/qadl-home  | （留空）    | /tmp/qadl-home  |
-      | （配置缺失）    | （留空）    | （当前工作目录）|
+      | （配置缺失）    | （留空）    | （用户主目录下载目录）|
       | /tmp/qadl-home  | /tmp/qadl-new | /tmp/qadl-new |
 
-  Scenario: 01-add-task-12 CLI 参数创建任务且 -x 位数自动匹配算法
-    When 以命令行启动 "ezr <url> -d <dir> -c <concurrency> -x <checksum>"
+  Scenario: 01-add-task-12 CLI 参数创建任务且 -x <算法>=<校验码> 显式指定算法
+    When 以命令行启动 "ezr <url> -d <dir> -c <concurrency> -x <x_arg>"
     Then 启动成功且任务列表出现对应任务
     And 详情显示校验算法 "<algo>"
 
     Examples:
-      | url                                  | dir       | concurrency | checksum                                                         | algo     |
-      | http://fixture.local/files/a.bin     | /tmp/qadl | 4           | d869db7fe62fb06d1c488a04d5e68e93a4f0c0e0e0c0a1b2c3d4e5f60718293a | SHA-256  |
-      | http://fixture.local/files/b.bin     | /tmp/qadl | 2           | d869db7fe62fb06d1c488a04d5e68e93                                 | MD5      |
-      | http://fixture.local/files/c.bin     | /tmp/qadl | 8           | d869db7f                                                         | Adler-32 |
+      | url                                  | dir       | concurrency | x_arg                                                                  | algo     |
+      | http://fixture.local/files/a.bin     | /tmp/qadl | 4           | sha256=d869db7fe62fb06d1c488a04d5e68e93a4f0c0e0e0c0a1b2c3d4e5f60718293a | SHA-256  |
+      | http://fixture.local/files/b.bin     | /tmp/qadl | 2           | MD5=d869db7fe62fb06d1c488a04d5e68e93                                   | MD5      |
+      | http://fixture.local/files/c.bin     | /tmp/qadl | 8           | adler32=d869db7f                                                       | Adler-32 |
 
-  Scenario: 01-add-task-13 CLI -x 位数无法匹配启动报错退出
-    When 以命令行启动 "ezr <url> -x <checksum>"
-    Then 进程以非零退出码退出并提示校验码位数无法匹配任何算法
+  Scenario: 01-add-task-13 CLI -x 非法（缺前缀/算法无法识别/位数不符）启动报错退出
+    When 以命令行启动 "ezr <url> -x <x_arg>"
+    Then 进程以非零退出码退出并提示 "-x" 校验参数非法（须为 <算法>=<校验码> 形式）
     And 未创建任何任务
 
     Examples:
-      | url                              | checksum                           |
-      | http://fixture.local/files/a.bin | d869db7fe62fb06d1c488a04d5e68e93a  |
-      | http://fixture.local/files/a.bin | d8                                 |
+      | url                              | x_arg                                                                  |
+      | http://fixture.local/files/a.bin | d869db7fe62fb06d1c488a04d5e68e93a4f0c0e0e0c0a1b2c3d4e5f60718293a       |
+      | http://fixture.local/files/a.bin | sha3=d869db7f                                                          |
+      | http://fixture.local/files/a.bin | md5=d869db7fe62fb06d1c488a04d5e68e93a4f0c0e0e0c0a1b2c3d4e5f60718293a   |
 
   Scenario: 01-add-task-14 CLI -c 非法值启动报错退出
     When 以命令行启动 "ezr <url> -c <concurrency>"

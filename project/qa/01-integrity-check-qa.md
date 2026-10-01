@@ -14,7 +14,7 @@
 
 | 用例 | 场景 | 操作 | 通过判据 |
 |---|---|---|---|
-| QA-IC-01 | 01-integrity-check-01 | CLI `-x` 分别给 8/32/40/56/64/96/128 位码 | 详情算法依次 Adler-32/MD5/SHA-1/SHA-224/SHA-256/SHA-384/SHA-512 |
+| QA-IC-01 | 01-integrity-check-01 | CLI `-x` 分别给 adler32=/md5=/sha1=/sha224=/sha256=/sha384=/sha512= 前缀码（8/32/40/56/64/96/128 位） | 详情算法依次 Adler-32/MD5/SHA-1/SHA-224/SHA-256/SHA-384/SHA-512 |
 | QA-IC-02 | 01-integrity-check-02 | 预置正确 .sha256 + 显式提供正确 MD5 值 | 显示「MD5 校验成功」（显式优先，未用伴随） |
 | QA-IC-03 | 01-integrity-check-03 | 分别预置 7 算法伴随（含 .SHA256 大写行） | 各显示对应「<算法> 校验成功」 |
 | QA-IC-04 | 01-integrity-check-04 | 伴随内容分别为裸 hex / `hex  文件名` | 两种格式均识别并校验成功 |
