@@ -168,3 +168,50 @@ group_imports = "StdExternalCrate"
   与全量测试确认"纯移动"；再做 `fn 表驱动`/`特征结构体决策核`/`行构造器` 抽取。切分脚本
   对 doc 注释/属性边界的 off-by-one 高发——每刀后先 `cargo build` 再继续，孤儿 doc 与
   双重 impl 头都是必踩点。
+
+## 8. 架构边界与适配器方向（architect 沉淀）
+
+- **低层模块不得构造高层模块的展示类型（适配方向：high→low）**：engine 层的内部数据
+  视图（如 `ConnView`）应暴露纯数据字段，由消费侧的高层（app）适配为 model 的展示类型
+  （如 `Connection`）。错误形态：engine 的 `ConnView::to_connection(&self) -> model::Connection`
+  ——低层反向依赖高层的结构体，依赖方向倒置。正确形态：app 的 `on_evt` 内联
+  `Connection { id: cv.id, start: cv.start, ... }` 构造。判定法：画依赖箭头时，
+  `engine → model::Connection` 的箭头是否与既有分层方向（model←engine←app）相反——
+  相反即违规。自动化检查：`grep -rnE "model::Connection[[:space:]]*\{" src/engine/`
+  应无命中（跳过 `///` 注释行）。
+
+- **入口（main.rs）不扩展 App 的 impl**：`impl App { fn add_cli_task }` 写在 main.rs
+  会让 main 与 app 互相 reach-in（main 调 app、又在 main 里实现 app 的方法），模块边界
+  模糊。正确形态：CLI 添加逻辑属于 app 层职责，放 `app/cli.rs`；main.rs 只 `app.add_cli_task(...)`
+  调用。自动化检查：`grep -nE '^impl App \{' src/main.rs` 应无命中。这条规则在 Rust 项目
+  里尤其高发——Rust 的 `impl` 块可分散在多个文件，但不代表"应"分散到非自身模块。
+
+- **FR 修订移除展示需求后，死字段会跨边界流动**：UI 删除某段展示（如 FR-01-81 修订二
+  移除"并发分块明细表"）后，底层事件若仍携带原展示专用的字段（如 `ConnView.block`），
+  该字段在适配器（`to_connection`）里被丢弃，成为跨边界流动的死数据。删除展示时
+  穷举其底层数据的全部读取点（含适配器）一并清理，否则规格已删而代码残留成僵尸——
+  与 cleaner 沉淀「撤销展示需求时先做唯一消费者核查」同源，architect 在依赖方向
+  维度复用该纪律。
+
+- **`proptest` 作为 Rust 属性测试框架（dev-dependency）**：SKILL 要求 architect 负责
+  属性测试支持；Rust 生态标准为 `proptest` crate，作为 `[dev-dependencies]` 引入
+  （不进发布物）。属性测试与常规单测**分开**纪律（engineering.md「设计与可测试性」）：
+  独立模块 `src/property_tests.rs`（`#[cfg(test)] mod property_tests`），独立运行
+  `cargo test property_tests::`；全量 `cargo test` 也跑，但失败不与基线对账
+  （对账只计既有单测）。覆盖目标：纯逻辑模块的不变量、守恒性、往返、幂等性——
+  chunk（块数上下界/区间守恒）、retry（退避封顶/状态机决策）、speed（滑窗守恒/EMA 收敛）、
+  namegen（去重幂等/序号单调）、checksum（算法表位数互斥/CLI 解析往返）、
+  consistency（自反/保守）、sidecar（JSON 往返）。`proptest!` 宏内的 `format_args!`
+  不能隐式捕获外层变量——断言消息里的变量必须用 `format!("{}", var)` 显式传参，
+  或用 `"msg (var={})"` + `var` 的位置参数形式。
+
+- **`proptest::sample::select` 需要借用或 `Cow<'static, [T]>`**：`select([a, b])`
+  会因数组不是 `Cow` 而编译失败；正确形态 `select(&[a, b])`（借用切片）或
+  `select(vec![a, b])`（`Vec` 实现 `Into<Cow>`）。`FailKind` 等自定义枚举需 `Clone + Debug + 'static`。
+
+- **轻量架构检查脚本用 grep 即可覆盖大多数分层规则**：Rust 的 `use crate::xxx` 语句
+  是依赖方向的显式标记，`grep -rnE "^[[:space:]]*use[[:space:]]+crate::(engine|app|ui)"`
+  按"低层目录内不得出现高层 use"过滤即可。跳过 `///` 注释行（文档可提及类型名，代码不得
+  构造）。脚本放在 `project/<crate>/scripts/arch_check.sh`，CI 集成为 `&&` 链的一环；
+  比起 `cargo-deny`/`cargo-modules` 等重量级工具，grep 脚本零依赖、可读、易维护，
+  适合"分层依赖方向"这类规则简单的检查（复杂规则如 trait impl 方向才需重量级工具）。
