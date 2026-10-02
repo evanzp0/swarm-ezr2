@@ -131,7 +131,7 @@ mod ui_tests {
     use super::*;
     use crate::app::CHECKSUM_ALGOS;
     use crate::model::config::Config;
-    use crate::model::{Checksum, Protocol, Task};
+    use crate::model::{Checksum, Connection, Protocol, Task};
 
     fn make_app(tag: &str) -> App {
         let dir = std::env::temp_dir().join(format!("ezr-ui-{tag}-{}", std::process::id()));
@@ -209,6 +209,38 @@ mod ui_tests {
             s.contains("不自动重试") || s.contains("后重试"),
             "失败统计行"
         );
+        app.shutdown().await;
+    }
+
+    /// 缺陷修复（表头重复）：明细表表头由 `conn_table` 自带（唯一表头源），
+    /// `draw_detail` 不得再推同一表头——否则面板内出现两行重复表头
+    /// （操作者报告的"表头显示重复的 2 行"）。
+    #[tokio::test]
+    async fn draw_conn_table_header_renders_once() {
+        let mut app = make_app("conn-table");
+        let mut t = task(1, "detail.bin", TaskState::Downloading);
+        t.connections = (1..=4usize)
+            .map(|i| Connection {
+                id: i,
+                start: (i as u64 - 1) * 750,
+                end: i as u64 * 750,
+                done: 100 * i as u64,
+                speed: 0.0,
+            })
+            .collect();
+        app.tasks.push(t);
+        app.show_chart = true;
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| draw(f, &mut app)).unwrap();
+        let s = term.backend().to_string();
+        assert_eq!(
+            s.matches("当前分块").count(),
+            1,
+            "明细表表头只渲染一次: {}",
+            s
+        );
+        assert_eq!(s.matches("并发分块明细").count(), 1, "分节标题只渲染一次");
+        assert!(s.contains("#1") && s.contains("#4"), "连接行可见");
         app.shutdown().await;
     }
 

@@ -326,6 +326,15 @@ impl App {
                 t.downloaded = downloaded;
                 t.chunk_done = chunk_done;
                 t.connections = conns.iter().map(|c| c.to_connection()).collect();
+                // 展示值回填：重建的连接视图速度默认 0（ConnView 无速度字段），若不回填，
+                // 节拍间隔内（~10Hz 事件流）明细表速度列与状态列会被清零、与 1Hz 节拍写出的
+                // 平滑值高频交替（缺陷：明细表"一闪一闪"）。回填后 c.speed 始终持平滑值，
+                // 展示面唯一数据源口径不变（FR-01-81）；新连接无平滑器条目时保持 0，下拍起写。
+                for c in &mut t.connections {
+                    if let Some(d) = self.conn_speed_display.get(&(id, c.id)) {
+                        c.speed = d.value();
+                    }
+                }
                 // 每连接数据面：按连接累计字节进 1s 滑窗（速率基准，FR-01-81）。
                 // 展示值不再在此裸写——统一由 tick 第 5 步按 1s 节拍经 EMA 写出
                 // （FR-01-17 修订：连接级与任务级同拍平滑、状态列同源）。
@@ -838,6 +847,63 @@ mod tick_tests {
             "恢复后从 0 平滑爬升（首拍 α 份额）：{} vs raw {raw1}",
             c1.speed
         );
+        app.shutdown().await;
+    }
+
+    /// 缺陷修复（明细表闪烁）：`Evt::Progress` 每次事件都会整表重建连接视图
+    /// （`ConnView::to_connection` 速度默认 0），重建不得清掉 1Hz 节拍写出的
+    /// 平滑展示值——否则节拍间隔内（~10Hz 事件流）明细表速度列与状态列在
+    /// 「数值/传输中」与「—/挂起」之间高频交替（操作者报告的"一闪一闪"）。
+    #[tokio::test]
+    async fn progress_rebuild_keeps_smoothed_connection_speeds() {
+        use crate::engine::ConnView;
+        let mut app = make_app("conn-rebuild");
+        app.tasks.push(dl_task_with_conns());
+        feed_window(app.windows.entry(7).or_default(), 100_000);
+        feed_window(app.conn_windows.entry((7, 1)).or_default(), 60_000);
+        feed_window(app.conn_windows.entry((7, 2)).or_default(), 40_000);
+        arm_speed_tick(&mut app);
+        app.tick().await;
+        let speeds = |a: &App| {
+            let t = &a.tasks[0];
+            (
+                t.connections.iter().find(|c| c.id == 1).unwrap().speed,
+                t.connections.iter().find(|c| c.id == 2).unwrap().speed,
+            )
+        };
+        let (v1, v2) = speeds(&app);
+        assert!(v1 > 0.0 && v2 > 0.0, "前置：节拍已写出连接平滑值");
+        // 节拍间隔内到达的 Progress（重建连接视图，速度默认 0）不得清掉展示值
+        app.on_evt(Evt::Progress {
+            id: 7,
+            downloaded: 400_001,
+            conns: vec![
+                ConnView {
+                    id: 1,
+                    block: 0,
+                    start: 0,
+                    end: 1_000_000,
+                    done: 250_001,
+                },
+                ConnView {
+                    id: 2,
+                    block: 1,
+                    start: 1_000_000,
+                    end: 2_000_000,
+                    done: 150_001,
+                },
+            ],
+            chunk_done: 0,
+        })
+        .await;
+        let (w1, w2) = speeds(&app);
+        assert_eq!(w1, v1, "Progress 重建后连接 1 展示值保持平滑值（不被清零）");
+        assert_eq!(w2, v2, "Progress 重建后连接 2 展示值保持平滑值（不被清零）");
+        // 下一节拍从既有平滑值继续推进（EMA 收敛，而非清零重启）
+        arm_speed_tick(&mut app);
+        app.tick().await;
+        let (n1, _) = speeds(&app);
+        assert!(n1 >= v1, "下一节拍延续既有平滑值爬升：{n1} ≥ {v1}");
         app.shutdown().await;
     }
 }

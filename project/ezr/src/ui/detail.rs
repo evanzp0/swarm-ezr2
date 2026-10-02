@@ -363,18 +363,8 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
             " ────────── 并发分块明细 ──────────",
             Style::default().fg(DIM2),
         )));
-        // 表头（紧凑列宽，适配窄面板；CJK 按显示宽度填充）
-        lines.push(Line::from(vec![Span::styled(
-            format!(
-                "{}{}{}{}  {}",
-                pad_right("#", 4),
-                pad_right("当前分块", 14),
-                pad_left("进度", 7),
-                pad_left("速度", 11),
-                "状态"
-            ),
-            Style::default().fg(DIM),
-        )]));
+        // 行数预算：+1 为 conn_table 自带的表头行预留（表头唯一来源在 conn_table，
+        // 此处不得再推同一表头——缺陷：表头重复渲染 2 行）。
         let rows_avail = (inner.height as usize).saturating_sub(lines.len() + 1);
         lines.extend(conn_table(t, rows_avail));
     }
