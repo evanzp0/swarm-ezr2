@@ -1,66 +1,27 @@
-//! chunk — AIR2 分块模型（块大小与并发数解耦，phase-01 FR-01-11/D13）
-//!
-//! 定案口径：HTTP 默认 1 MB/块（可配置 `block_size_http`）；总块数
-//! y = ⌈文件大小 / 块大小⌉（末块不足整块吸收余数）；各连接从块队列动态领块、
-//! 乱序完成；实际并发 = min(设置并发, 剩余未完成块数)；队列临近结束时多余
-//! 连接转「待命」（start = end = 0）。
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss, clippy::cast_possible_wrap)]
+//! blocks — 运行时分块状态与租约快照（Blocks 队列、连接分配）
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
 // 字节/速度/时间算术在 u64-f64 间转换是下载器领域固有；边界由调用方保证
 #![allow(clippy::missing_const_for_fn)] // nursery 误报为主（含 trait impl 场景）
 #![allow(clippy::doc_markdown, clippy::doc_lazy_continuation)] // 中文文档中英文术语不强制反引号
 #![allow(clippy::float_cmp)] // 速度/时间为 0 的语义判断使用精确比较
-#![allow(clippy::map_unwrap_or, clippy::option_if_let_else, clippy::unnested_or_patterns)]
+#![allow(
+    clippy::map_unwrap_or,
+    clippy::option_if_let_else,
+    clippy::unnested_or_patterns
+)]
 #![allow(clippy::cognitive_complexity, clippy::too_many_lines)] // 分块计算/状态机逻辑固有复杂度
 
-
-use super::Connection;
-
-/// demo 定稿的 HTTP 默认块大小（1 MB，D13 默认值）
-pub const HTTP_CHUNK_SIZE: u64 = 1024 * 1024;
-
-/// demo 定稿的 BT 块大小（256 KB；02 期启用，01 保留常量）
-#[allow(dead_code)]
-pub const BT_CHUNK_SIZE: u64 = 256 * 1024;
+#[cfg(test)]
+use super::lease::{lease_snapshot, spread_bytes};
 
 /// 总块数 y = ⌈total / piece⌉；空文件或零块大小无分块
-#[must_use]
-pub fn chunk_total(total: u64, piece: u64) -> u32 {
-    if total == 0 || piece == 0 {
-        0
-    } else {
-        u32::try_from(total.div_ceil(piece)).unwrap_or(u32::MAX)
-    }
-}
-
-/// 第 `i` 块（0 基）的字节区间 `[start, end)`；`i` 越界返回 `None`
-#[must_use]
-pub fn block_range(total: u64, piece: u64, i: u32) -> Option<(u64, u64)> {
-    let y = chunk_total(total, piece);
-    if i >= y {
-        return None;
-    }
-    let start = u64::from(i) * piece;
-    let end = if u64::from(i + 1) == u64::from(y) { total } else { start + piece };
-    Some((start, end))
-}
-
-/// 块大小展示文字（固定口径直出，保证显示恰为 `1 MB` / `256 KB` 等形式）
-#[must_use]
-pub fn fmt_block_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = 1024 * 1024;
-    if bytes == MB {
-        "1 MB".to_string()
-    } else if bytes == BT_CHUNK_SIZE {
-        "256 KB".to_string()
-    } else if bytes >= MB && bytes.is_multiple_of(MB) {
-        format!("{} MB", bytes / MB)
-    } else if bytes >= KB && bytes.is_multiple_of(KB) {
-        format!("{} KB", bytes / KB)
-    } else {
-        format!("{bytes} B")
-    }
-}
+use super::plan::{block_range, chunk_total};
 
 /// 分块运行时状态表：每块 Done（全部完成）或 Partial（块内已写 `done` 字节）。
 /// 下载中断后已写盘字节保持有效（FR-01-13），续传从 `start + done` 继续 Range。
@@ -79,7 +40,11 @@ impl Blocks {
     #[must_use]
     pub fn new(total: u64, piece: u64) -> Self {
         let y = chunk_total(total, piece);
-        Blocks { total, piece, written: vec![0; y as usize] }
+        Blocks {
+            total,
+            piece,
+            written: vec![0; y as usize],
+        }
     }
 
     /// 总块数
@@ -95,8 +60,7 @@ impl Blocks {
             .iter()
             .enumerate()
             .filter(|(i, w)| {
-                block_range(self.total, self.piece, *i as u32)
-                    .is_some_and(|(s, e)| **w >= e - s)
+                block_range(self.total, self.piece, *i as u32).is_some_and(|(s, e)| **w >= e - s)
             })
             .count() as u32
     }
@@ -107,19 +71,22 @@ impl Blocks {
         self.written
             .iter()
             .enumerate()
-            .map(|(i, w)| {
-                match block_range(self.total, self.piece, i as u32) {
+            .map(
+                |(i, w)| match block_range(self.total, self.piece, i as u32) {
                     Some((s, e)) => (*w).min(e - s),
                     None => 0,
-                }
-            })
+                },
+            )
             .sum()
     }
 
     /// 第 `i` 块是否已完成
     #[must_use]
     pub fn is_done_block(&self, i: u32) -> bool {
-        match (block_range(self.total, self.piece, i), self.written.get(i as usize)) {
+        match (
+            block_range(self.total, self.piece, i),
+            self.written.get(i as usize),
+        ) {
             (Some((s, e)), Some(w)) => *w >= e - s,
             _ => false,
         }
@@ -150,82 +117,11 @@ impl Blocks {
 ///
 /// 仅用于 UI 快照与恢复基线；下载中的真实连接视图由引擎逐连接上报。
 /// 返回 (连接列表, 已完成块数 x)。
-#[must_use]
-pub fn lease_snapshot(total: u64, done_bytes: u64, n: usize, piece: u64) -> (Vec<Connection>, u32) {
-    let y = chunk_total(total, piece);
-    if y == 0 {
-        return (Vec::new(), 0);
-    }
-    let y64 = u64::from(y);
-    let piece_end = |i: u64| if i + 1 == y64 { total } else { (i + 1) * piece };
-    let done = done_bytes.min(total);
-    let (x, lease_from, active, rem) = if done >= total {
-        let a = (n.max(1) as u64).min(y64);
-        (y64, y64 - a, a, 0u64)
-    } else {
-        let x = done / piece;
-        let a = (n.max(1) as u64).min(y64 - x);
-        (x, x, a, done - x * piece)
-    };
-    let partials = spread_bytes(rem, active as usize, piece);
-    let conns = (0..active as usize)
-        .map(|i| {
-            let idx = lease_from + i as u64;
-            let start = idx * piece;
-            let end = piece_end(idx);
-            Connection {
-                id: i + 1,
-                start,
-                end,
-                done: if done >= total { end - start } else { partials[i].min(end - start) },
-                speed: 0.0,
-            }
-        })
-        .collect();
-    (conns, x as u32)
-}
-
-/// demo 同构的连接进度散布权重（快照展示用：非均匀进度观感）
-const CONN_WEIGHTS: [f64; 16] = [
-    0.95, 0.45, 0.10, 0.00, 0.75, 0.40, 0.85, 0.15, 0.55, 0.20, 0.55, 0.00, 0.70, 0.25, 0.80, 0.35,
-];
-
-/// 按权重把 `amount` 字节拆成 `n` 份（钳制到 `[0, cap_i]`，差额回补，总和精确）
-#[must_use]
-fn spread_bytes(amount: u64, n: usize, cap: u64) -> Vec<u64> {
-    let mut v = vec![0u64; n];
-    if amount == 0 || n == 0 {
-        return v;
-    }
-    let wsum: f64 = (0..n).map(|i| CONN_WEIGHTS[i % 16]).sum();
-    let mut assigned = 0u64;
-    for (i, item) in v.iter_mut().enumerate() {
-        let raw = (amount as f64 * (CONN_WEIGHTS[i % 16] / wsum)).round() as u64;
-        let d = raw.min(cap);
-        *item = d;
-        assigned += d;
-    }
-    let mut diff = amount as i64 - assigned as i64;
-    let mut k = 0;
-    while diff != 0 && k < 8 * n {
-        let i = k % n;
-        if diff > 0 && v[i] < cap {
-            let add = (diff as u64).min(cap - v[i]);
-            v[i] += add;
-            diff -= add as i64;
-        } else if diff < 0 && v[i] > 0 {
-            let sub = ((-diff) as u64).min(v[i]);
-            v[i] -= sub;
-            diff += sub as i64;
-        }
-        k += 1;
-    }
-    v
-}
-
+#[cfg(test)]
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::chunk::plan::{fmt_block_size, BT_CHUNK_SIZE};
 
     const MB: u64 = 1_048_576;
 

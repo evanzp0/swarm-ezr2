@@ -8,14 +8,22 @@
 //! ② 保存目录下伴随文件 `<目标文件>.<算法后缀>`（算法由后缀确定，大小写不敏感；
 //! 内容为十六进制摘要或 `hex  文件名` 格式；位数不符视为无效、忽略校验；
 //! 多个并存按算法表声明顺序取最先存在者）。
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss, clippy::cast_possible_wrap)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
 // 字节/速度/时间算术在 u64-f64 间转换是下载器领域固有；边界由调用方保证
 #![allow(clippy::missing_const_for_fn)] // nursery 误报为主（含 trait impl 场景）
 #![allow(clippy::doc_markdown, clippy::doc_lazy_continuation)] // 中文文档中英文术语不强制反引号
 #![allow(clippy::float_cmp)] // 速度/时间为 0 的语义判断使用精确比较
-#![allow(clippy::map_unwrap_or, clippy::option_if_let_else, clippy::unnested_or_patterns)]
+#![allow(
+    clippy::map_unwrap_or,
+    clippy::option_if_let_else,
+    clippy::unnested_or_patterns
+)]
 #![allow(clippy::cognitive_complexity, clippy::too_many_lines)] // 分块计算/状态机逻辑固有复杂度
-
 
 use std::path::Path;
 
@@ -68,7 +76,10 @@ pub fn validate_value(algo_idx: usize, raw: &str) -> Result<String, ChecksumErro
     }
     let len = v.chars().count();
     if len != need {
-        return Err(ChecksumError::BadLength { expected: need, got: len });
+        return Err(ChecksumError::BadLength {
+            expected: need,
+            got: len,
+        });
     }
     let _ = algo;
     Ok(v)
@@ -81,10 +92,15 @@ pub fn validate_value(algo_idx: usize, raw: &str) -> Result<String, ChecksumErro
 /// 三类非法输入分别返回相应消息（字符串含面向用户的中文描述）。
 pub fn parse_cli_x(arg: &str) -> Result<(usize, String), String> {
     let Some((algo_raw, value_raw)) = arg.split_once('=') else {
-        return Err(format!("-x 参数非法：应为 <算法>=<校验码> 形式（如 sha256=…），得到「{arg}」"));
+        return Err(format!(
+            "-x 参数非法：应为 <算法>=<校验码> 形式（如 sha256=…），得到「{arg}」"
+        ));
     };
     let algo_name = algo_raw.trim().to_lowercase();
-    let Some(idx) = CHECKSUM_ALGOS.iter().position(|(_, _, suffix)| *suffix == algo_name) else {
+    let Some(idx) = CHECKSUM_ALGOS
+        .iter()
+        .position(|(_, _, suffix)| *suffix == algo_name)
+    else {
         return Err(format!(
             "-x 参数非法：无法识别的校验算法「{algo_raw}」（支持：md5/sha1/sha224/sha256/sha384/sha512/adler32）"
         ));
@@ -103,33 +119,48 @@ pub fn algo_index_by_name(name: &str) -> Option<usize> {
         .position(|(disp, _, _)| disp.to_lowercase().replace('-', "") == n)
 }
 
+/// 六种 Digest 算法的流式文件哈希函数表（下标即算法表下标 0..=5）；
+/// 越界下标一律走 Adler-32 流式分支（与既有 `_ =>` 口径一致）
+type FileStreamHash =
+    fn(&mut std::io::BufReader<std::fs::File>, &mut [u8]) -> Result<String, String>;
+
+const FILE_STREAM_HASHES: [FileStreamHash; 6] = [
+    hash_stream::<Md5, std::io::BufReader<std::fs::File>>,
+    hash_stream::<Sha1, std::io::BufReader<std::fs::File>>,
+    hash_stream::<Sha224, std::io::BufReader<std::fs::File>>,
+    hash_stream::<Sha256, std::io::BufReader<std::fs::File>>,
+    hash_stream::<Sha384, std::io::BufReader<std::fs::File>>,
+    hash_stream::<Sha512, std::io::BufReader<std::fs::File>>,
+];
+
+/// Adler-32 流式摘要（与 Digest 分支同口径：256 KiB 缓冲循环读）
+fn adler_stream(
+    reader: &mut std::io::BufReader<std::fs::File>,
+    buf: &mut [u8],
+) -> Result<String, String> {
+    use std::io::Read;
+    let mut a = adler::Adler32::new();
+    loop {
+        let n = reader.read(buf).map_err(|e| format!("读取失败（{e}）"))?;
+        if n == 0 {
+            break;
+        }
+        a.write_slice(&buf[..n]);
+    }
+    Ok(format!("{:08x}", a.checksum()))
+}
+
 /// 计算文件摘要并输出十六进制小写（流式，不整载内存；校验中/伴随文件预置用）
 ///
 /// # Errors
 /// 文件不可读或读取失败时返回错误消息。
 pub fn digest_file(path: &str, algo_idx: usize) -> Result<String, String> {
-    use std::io::Read;
     let f = std::fs::File::open(path).map_err(|e| format!("无法读取文件（{e}）"))?;
     let mut reader = std::io::BufReader::with_capacity(256 * 1024, f);
     let mut buf = vec![0u8; 256 * 1024];
-    match algo_idx {
-        0 => hash_stream::<Md5, _>(&mut reader, &mut buf),
-        1 => hash_stream::<Sha1, _>(&mut reader, &mut buf),
-        2 => hash_stream::<Sha224, _>(&mut reader, &mut buf),
-        3 => hash_stream::<Sha256, _>(&mut reader, &mut buf),
-        4 => hash_stream::<Sha384, _>(&mut reader, &mut buf),
-        5 => hash_stream::<Sha512, _>(&mut reader, &mut buf),
-        _ => {
-            let mut a = adler::Adler32::new();
-            loop {
-                let n = reader.read(&mut buf).map_err(|e| format!("读取失败（{e}）"))?;
-                if n == 0 {
-                    break;
-                }
-                a.write_slice(&buf[..n]);
-            }
-            Ok(format!("{:08x}", a.checksum()))
-        }
+    match FILE_STREAM_HASHES.get(algo_idx) {
+        Some(hash) => hash(&mut reader, &mut buf),
+        None => adler_stream(&mut reader, &mut buf),
     }
 }
 
@@ -236,8 +267,15 @@ mod tests {
     #[test]
     fn algo_table_lengths_match_d15() {
         // FR-01-50 算法表：Adler-32=8、MD5=32、SHA-1=40、SHA-224=56、SHA-256=64、SHA-384=96、SHA-512=128
-        let expect = [("MD5", 32), ("SHA-1", 40), ("SHA-224", 56), ("SHA-256", 64),
-            ("SHA-384", 96), ("SHA-512", 128), ("Adler-32", 8)];
+        let expect = [
+            ("MD5", 32),
+            ("SHA-1", 40),
+            ("SHA-224", 56),
+            ("SHA-256", 64),
+            ("SHA-384", 96),
+            ("SHA-512", 128),
+            ("Adler-32", 8),
+        ];
         for (i, (name, len)) in expect.iter().enumerate() {
             assert_eq!(CHECKSUM_ALGOS[i].0, *name);
             assert_eq!(CHECKSUM_ALGOS[i].1, *len);
@@ -255,7 +293,10 @@ mod tests {
         assert_eq!(validate_value(0, "xyz"), Err(ChecksumError::NotHex));
         assert_eq!(
             validate_value(0, "abcd"),
-            Err(ChecksumError::BadLength { expected: 32, got: 4 })
+            Err(ChecksumError::BadLength {
+                expected: 32,
+                got: 4
+            })
         );
     }
 
@@ -285,12 +326,18 @@ mod tests {
         // 空串/abc 标准向量
         assert_eq!(digest_bytes(b"", 0), "d41d8cd98f00b204e9800998ecf8427e");
         assert_eq!(digest_bytes(b"abc", 0), "900150983cd24fb0d6963f7d28e17f72");
-        assert_eq!(digest_bytes(b"abc", 1), "a9993e364706816aba3e25717850c26c9cd0d89d");
+        assert_eq!(
+            digest_bytes(b"abc", 1),
+            "a9993e364706816aba3e25717850c26c9cd0d89d"
+        );
         assert_eq!(
             digest_bytes(b"abc", 3),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
-        assert_eq!(digest_bytes(b"abc", 2), "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7");
+        assert_eq!(
+            digest_bytes(b"abc", 2),
+            "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7"
+        );
         assert_eq!(
             digest_bytes(b"abc", 4),
             "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7"
@@ -331,7 +378,11 @@ mod tests {
         let sc = find_companion(dir.to_str().unwrap(), "f.bin").unwrap();
         assert_eq!(sc.algo_idx, 0);
         // 大写后缀文件（SHA1 大写）也要能找到
-        std::fs::write(dir.join("f.bin.SHA1"), "a9993e364706816aba3e25717850c26c9cd0d89d").unwrap();
+        std::fs::write(
+            dir.join("f.bin.SHA1"),
+            "a9993e364706816aba3e25717850c26c9cd0d89d",
+        )
+        .unwrap();
         std::fs::remove_file(dir.join("f.bin.md5")).unwrap();
         let sc = find_companion(dir.to_str().unwrap(), "f.bin").unwrap();
         assert_eq!(sc.algo_idx, 1);
@@ -356,5 +407,38 @@ mod tests {
     #[test]
     fn digest_file_missing_is_error() {
         assert!(digest_file("/nonexistent/f.bin", 3).is_err());
+    }
+
+    #[test]
+    fn digest_file_all_algos_roundtrip_crossing_buffer() {
+        let dir = std::env::temp_dir().join(format!("ezr-ck3-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("big.bin");
+        // 300_000 字节 > 256 KiB 缓冲：强制多次 read 循环（覆盖函数表全部分支）
+        let data: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&p, &data).unwrap();
+        for algo in 0..7 {
+            let h = digest_file(p.to_str().unwrap(), algo).unwrap();
+            assert_eq!(h, digest_bytes(&data, algo), "algo idx {algo}");
+        }
+        // 越界下标沿用既有口径：走 Adler-32 分支（等价 idx 6）
+        let h = digest_file(p.to_str().unwrap(), 42).unwrap();
+        assert_eq!(h, digest_bytes(&data, 6));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn digest_file_empty_file_all_algos() {
+        let dir = std::env::temp_dir().join(format!("ezr-ck4-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("empty.bin");
+        std::fs::write(&p, b"").unwrap();
+        for algo in 0..7 {
+            assert_eq!(
+                digest_file(p.to_str().unwrap(), algo).unwrap(),
+                digest_bytes(b"", algo)
+            );
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

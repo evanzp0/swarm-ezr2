@@ -17,14 +17,22 @@
 //! 停止信号用 `tokio::sync::watch`；worker 在流读取 select 中响应，无忙轮询。
 //! sidecar 周期落盘（2s）+ 暂停/失败即时落盘（NFR-2：kill -9 不损坏、最多丢
 //! 一个窗口的进度）。
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss, clippy::cast_possible_wrap)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
 // 字节/速度/时间算术在 u64-f64 间转换是下载器领域固有；边界由调用方保证
 #![allow(clippy::missing_const_for_fn)] // nursery 误报为主（含 trait impl 场景）
 #![allow(clippy::doc_markdown, clippy::doc_lazy_continuation)] // 中文文档中英文术语不强制反引号
 #![allow(clippy::float_cmp)] // 速度/时间为 0 的语义判断使用精确比较
-#![allow(clippy::map_unwrap_or, clippy::option_if_let_else, clippy::unnested_or_patterns)]
+#![allow(
+    clippy::map_unwrap_or,
+    clippy::option_if_let_else,
+    clippy::unnested_or_patterns
+)]
 #![allow(clippy::cognitive_complexity, clippy::too_many_lines)] // 分块计算/状态机逻辑固有复杂度
-
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -34,9 +42,9 @@ use std::time::Duration;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::{mpsc, watch};
 
-use crate::model::chunk::{block_range, chunk_total, Blocks};
 use crate::model::checksum;
 use crate::model::checksum::CHECKSUM_ALGOS;
+use crate::model::chunk::{block_range, chunk_total, Blocks};
 use crate::model::consistency::{self, Consistency, ServerStamp};
 use crate::model::namegen;
 use crate::model::sidecar::{Sidecar, SidecarTask};
@@ -153,9 +161,7 @@ fn completed_of(sc: &Sidecar) -> u32 {
     sc.blocks
         .iter()
         .zip(0u32..)
-        .filter(|(w, i)| {
-            block_range(sc.size, sc.block_size, *i).is_some_and(|(s, e)| **w >= e - s)
-        })
+        .filter(|(w, i)| block_range(sc.size, sc.block_size, *i).is_some_and(|(s, e)| **w >= e - s))
         .count() as u32
 }
 
@@ -227,8 +233,14 @@ fn probe_head(r: &reqwest::Response) -> ProbeHead {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.trim().parse::<u64>().ok())
             .unwrap_or(0),
-        etag: h.get("etag").and_then(|v| v.to_str().ok()).map(str::to_string),
-        last_modified: h.get("last-modified").and_then(|v| v.to_str().ok()).map(str::to_string),
+        etag: h
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string),
+        last_modified: h
+            .get("last-modified")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string),
         cd_name: h
             .get("content-disposition")
             .and_then(|v| v.to_str().ok())
@@ -258,13 +270,20 @@ async fn download(
     evt_tx: &mpsc::Sender<Evt>,
 ) -> Flow {
     // ---- 探测（FR-01-10）----
-    let resp = match req_with_identity(shared, &spec.url, Some("bytes=0-".into())).send().await {
+    let resp = match req_with_identity(shared, &spec.url, Some("bytes=0-".into()))
+        .send()
+        .await
+    {
         Ok(r) => r,
         Err(e) => return Flow::Failed(classify_reqwest(&e), false, None),
     };
     let head = probe_head(&resp);
     if !(200..=299).contains(&head.status) {
-        return Flow::Failed(EngineFailure::http(head.status, head.retry_after), false, None);
+        return Flow::Failed(
+            EngineFailure::http(head.status, head.retry_after),
+            false,
+            None,
+        );
     }
     let probed_stamp = ServerStamp {
         final_url: Some(resp.url().as_str().to_string()),
@@ -289,10 +308,9 @@ async fn download(
     };
 
     // ---- 续传一致性检查（FR-01-22/D11；sidecar 名与推导名一致才可接续）----
-    let sc = spec
-        .sidecar
-        .clone()
-        .filter(|_| name == spec.name || spec.sidecar.as_ref().is_some_and(|s| s.task.id == spec.id));
+    let sc = spec.sidecar.clone().filter(|_| {
+        name == spec.name || spec.sidecar.as_ref().is_some_and(|s| s.task.id == spec.id)
+    });
     let blocks = if let Some(sidecar) = &sc {
         match consistency::check(&sidecar.stamp(), &probed_stamp) {
             Consistency::Valid => {
@@ -318,16 +336,19 @@ async fn download(
     let total_blocks = blocks.count();
     let multi_ok = head.status == 206 && head.total > 0;
     // 探测完成（App 更新 final_url/total/resumable/probed 与大小显示）
-    if !emit(evt_tx, Evt::Probed {
-        id: spec.id,
-        name: name.clone(),
-        final_url: resp.url().as_str().to_string(),
-        total: head.total,
-        resumable: multi_ok,
-        etag: head.etag.clone(),
-        last_modified: head.last_modified.clone(),
-        cd_name: head.cd_name.clone(),
-    })
+    if !emit(
+        evt_tx,
+        Evt::Probed {
+            id: spec.id,
+            name: name.clone(),
+            final_url: resp.url().as_str().to_string(),
+            total: head.total,
+            resumable: multi_ok,
+            etag: head.etag.clone(),
+            last_modified: head.last_modified.clone(),
+            cd_name: head.cd_name.clone(),
+        },
+    )
     .await
     {
         return Flow::Cancelled;
@@ -361,7 +382,13 @@ async fn download(
 
     // ---- 分块下载（FR-01-11/13）----
     // 预分配稀疏文件（续传时文件可能已存在：open 不截断，set_len 保持内容）
-    match tokio::fs::OpenOptions::new().write(true).create(true).truncate(false).open(&dl_path).await {
+    match tokio::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&dl_path)
+        .await
+    {
         Ok(f) => {
             if let Err(e) = f.set_len(head.total).await {
                 return Flow::Failed(
@@ -516,7 +543,10 @@ fn build_sidecar(
         .expected_algo
         .as_ref()
         .zip(spec.expected_value.as_ref())
-        .map(|(a, v)| Checksum { algo: a, value: v.clone() });
+        .map(|(a, v)| Checksum {
+            algo: a,
+            value: v.clone(),
+        });
     Sidecar::build(
         &spec.url,
         stamp,
@@ -550,7 +580,11 @@ async fn single_stream(
     cmd_rx: &mut mpsc::Receiver<TaskCmd>,
     evt_tx: &mpsc::Sender<Evt>,
 ) -> Flow {
-    let _ = emit(evt_tx, Evt::Toast(format!("⚠ 服务器不支持断点续传，单线程下载: {name}"))).await;
+    let _ = emit(
+        evt_tx,
+        Evt::Toast(format!("⚠ 服务器不支持断点续传，单线程下载: {name}")),
+    )
+    .await;
     let mut file = match tokio::fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -559,7 +593,13 @@ async fn single_stream(
         .await
     {
         Ok(f) => f,
-        Err(e) => return Flow::Failed(EngineFailure::fatal(format!("无法创建目标文件（{e}）")), false, None),
+        Err(e) => {
+            return Flow::Failed(
+                EngineFailure::fatal(format!("无法创建目标文件（{e}）")),
+                false,
+                None,
+            )
+        }
     };
     let mut downloaded: u64 = 0;
     // 单流进度上报节流（FR-01-17/81：不支持续传的任务同样需要真实进度/速度/连接数）
@@ -640,16 +680,14 @@ async fn single_stream(
 }
 
 /// 校验（App 转校验中后下发；流式哈希不整载内存，FR-01-51）
-pub(crate) async fn verify(
-    spec: VerifySpec,
-    evt_tx: mpsc::Sender<Evt>,
-) {
+pub(crate) async fn verify(spec: VerifySpec, evt_tx: mpsc::Sender<Evt>) {
     let path = spec.path.clone();
     let algo_idx = CHECKSUM_ALGOS
         .iter()
         .position(|(disp, _, _)| *disp == spec.algo)
         .unwrap_or(3);
-    let computed = tokio::task::spawn_blocking(move || checksum::digest_file(&path, algo_idx)).await
+    let computed = tokio::task::spawn_blocking(move || checksum::digest_file(&path, algo_idx))
+        .await
         .unwrap_or_else(|e| Err(format!("校验任务失败（{e}）")));
     match computed {
         Ok(hex) => {
@@ -671,7 +709,12 @@ pub(crate) async fn verify(
         Err(e) => {
             // 文件不可读（被外部删除等）：按校验失败停等
             let _ = evt_tx
-                .send(Evt::VerifyDone { id: spec.id, ok: false, computed: e, expected: spec.expected })
+                .send(Evt::VerifyDone {
+                    id: spec.id,
+                    ok: false,
+                    computed: e,
+                    expected: spec.expected,
+                })
                 .await;
         }
     }
@@ -691,7 +734,11 @@ async fn block_worker(
     failure: Arc<tokio::sync::Mutex<Option<EngineFailure>>>,
     conns: Arc<tokio::sync::Mutex<Vec<ConnView>>>,
 ) {
-    let mut file = match tokio::fs::OpenOptions::new().write(true).open(&file_path).await {
+    let mut file = match tokio::fs::OpenOptions::new()
+        .write(true)
+        .open(&file_path)
+        .await
+    {
         Ok(f) => f,
         Err(_) => {
             *failure.lock().await = Some(EngineFailure::fatal("无法写入目标文件"));
@@ -728,12 +775,24 @@ async fn block_worker(
             // 明细表「待命」展示；块队列单调递减，worker 不会复活，条目存活至任务收尾
             let mut g = conns.lock().await;
             g.retain(|c| c.id != wid);
-            g.push(ConnView { id: wid, block: 0, start: 0, end: 0, done: 0 });
+            g.push(ConnView {
+                id: wid,
+                block: 0,
+                start: 0,
+                end: 0,
+                done: 0,
+            });
             drop(g);
             return;
         };
         conns.lock().await.retain(|c| c.id != wid);
-        conns.lock().await.push(ConnView { id: wid, block: idx, start, end, done: written });
+        conns.lock().await.push(ConnView {
+            id: wid,
+            block: idx,
+            start,
+            end,
+            done: written,
+        });
         let range = format!("bytes={}-{}", start + written, end - 1);
         let resp = req_with_identity(&shared, &url, Some(range)).send().await;
         let mut resp = match resp {
@@ -801,7 +860,6 @@ async fn block_worker(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -849,11 +907,18 @@ mod tests {
                     continue;
                 }
                 let norange = opts.iter().any(|(k, _)| k == "norange");
-                let (start, end, status) = match range_header.as_deref().and_then(|v| v.strip_prefix("bytes=")) {
+                let (start, end, status) = match range_header
+                    .as_deref()
+                    .and_then(|v| v.strip_prefix("bytes="))
+                {
                     Some(rv) if !norange => {
                         let (a, b) = rv.split_once('-').unwrap();
                         let s = a.parse::<u64>().unwrap_or(0);
-                        let e = if b.is_empty() { total - 1 } else { b.parse::<u64>().unwrap_or(total - 1).min(total - 1) };
+                        let e = if b.is_empty() {
+                            total - 1
+                        } else {
+                            b.parse::<u64>().unwrap_or(total - 1).min(total - 1)
+                        };
                         (s, e, 206)
                     }
                     _ => (0, total - 1, 200),
@@ -878,7 +943,14 @@ mod tests {
         format!("http://{addr}/f.bin")
     }
 
-    fn spec_for(id: u32, url: &str, dir: &str, block: u64, conc: usize, expected: Option<(&'static str, String)>) -> TaskSpec {
+    fn spec_for(
+        id: u32,
+        url: &str,
+        dir: &str,
+        block: u64,
+        conc: usize,
+        expected: Option<(&'static str, String)>,
+    ) -> TaskSpec {
         TaskSpec {
             id,
             url: url.to_string(),
@@ -916,7 +988,11 @@ mod tests {
     #[allow(clippy::type_complexity)]
     fn launch_spec(
         spec: TaskSpec,
-    ) -> (mpsc::Sender<TaskCmd>, mpsc::Receiver<Evt>, std::time::Instant) {
+    ) -> (
+        mpsc::Sender<TaskCmd>,
+        mpsc::Receiver<Evt>,
+        std::time::Instant,
+    ) {
         let (tx, rx) = mpsc::channel::<Evt>(64);
         let (cmd_tx, cmd_rx) = mpsc::channel::<TaskCmd>(4);
         tokio::spawn(run(spec, throttle_free(), cmd_rx, tx));
@@ -939,12 +1015,20 @@ mod tests {
         let mut probed = false;
         while std::time::Instant::now() < deadline {
             match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
-                Ok(Some(Evt::DownloadDone { total: t, has_checksum: false, .. })) => {
+                Ok(Some(Evt::DownloadDone {
+                    total: t,
+                    has_checksum: false,
+                    ..
+                })) => {
                     assert_eq!(t, total);
                     done = true;
                     break;
                 }
-                Ok(Some(Evt::Probed { total: t, resumable: true, .. })) => {
+                Ok(Some(Evt::Probed {
+                    total: t,
+                    resumable: true,
+                    ..
+                })) => {
                     assert_eq!(t, total);
                     probed = true;
                 }
@@ -988,7 +1072,9 @@ mod tests {
         let mut done = false;
         while std::time::Instant::now() < deadline {
             match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
-                Ok(Some(Evt::Probed { resumable: true, .. })) => probed = true,
+                Ok(Some(Evt::Probed {
+                    resumable: true, ..
+                })) => probed = true,
                 Ok(Some(Evt::Cancelled { .. })) => {
                     cancelled = true;
                     break;
@@ -1103,7 +1189,9 @@ mod tests {
         let (tx2, mut rx2) = mpsc::channel::<Evt>(8);
         verify(vspec, tx2).await;
         match rx2.recv().await {
-            Some(Evt::VerifyDone { ok: true, computed, .. }) => assert_eq!(computed, digest),
+            Some(Evt::VerifyDone {
+                ok: true, computed, ..
+            }) => assert_eq!(computed, digest),
             other => panic!("校验应通过: {other:?}"),
         }
         assert!(final_path.exists(), "通过后应 rename 到最终名");
@@ -1136,7 +1224,13 @@ mod tests {
             &[4096, 1904, 0, 0],
             false,
             None,
-            SidecarTask { id: 5, added_at: 0, save_dir: dir.to_str().unwrap().to_string(), concurrency: 2, protocol: Protocol::Http },
+            SidecarTask {
+                id: 5,
+                added_at: 0,
+                save_dir: dir.to_str().unwrap().to_string(),
+                concurrency: 2,
+                protocol: Protocol::Http,
+            },
         );
         sc.save(dir.join("f.bin.ezr").to_str().unwrap()).unwrap();
         let (_cmd_tx, mut rx, deadline) = launch_spec(sidecar_spec(5, &url, &dir, 2));
@@ -1160,7 +1254,10 @@ mod tests {
             }
         }
         // 续传起点应 ≥ sidecar 已写字节（6000），证明从断点续传（未从头）
-        assert!(resumed_progress.unwrap_or(0) >= 6000, "应从断点续传: {resumed_progress:?}");
+        assert!(
+            resumed_progress.unwrap_or(0) >= 6000,
+            "应从断点续传: {resumed_progress:?}"
+        );
         let data = std::fs::read(dir.join("f.bin")).unwrap();
         let mut expect = vec![0u8; total as usize];
         fill(&mut expect, 0);
@@ -1189,7 +1286,13 @@ mod tests {
             &[4096, 0],
             false,
             None,
-            SidecarTask { id: 6, added_at: 0, save_dir: dir.to_str().unwrap().to_string(), concurrency: 1, protocol: Protocol::Http },
+            SidecarTask {
+                id: 6,
+                added_at: 0,
+                save_dir: dir.to_str().unwrap().to_string(),
+                concurrency: 1,
+                protocol: Protocol::Http,
+            },
         );
         sc.save(dir.join("f.bin.ezr").to_str().unwrap()).unwrap();
         let (_cmd_tx, mut rx, deadline) = launch_spec(sidecar_spec(6, &url, &dir, 1));

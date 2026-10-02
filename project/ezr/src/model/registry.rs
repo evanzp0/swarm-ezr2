@@ -2,14 +2,22 @@
 //!
 //! 全部任务（含已完成/已失败历史）跨会话保留；启动时恢复任务列表与历史，
 //! 「下载中」任务重启后回到「等待中」按序排队（FR-01-23）。
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss, clippy::cast_possible_wrap)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
 // 字节/速度/时间算术在 u64-f64 间转换是下载器领域固有；边界由调用方保证
 #![allow(clippy::missing_const_for_fn)] // nursery 误报为主（含 trait impl 场景）
 #![allow(clippy::doc_markdown, clippy::doc_lazy_continuation)] // 中文文档中英文术语不强制反引号
 #![allow(clippy::float_cmp)] // 速度/时间为 0 的语义判断使用精确比较
-#![allow(clippy::map_unwrap_or, clippy::option_if_let_else, clippy::unnested_or_patterns)]
+#![allow(
+    clippy::map_unwrap_or,
+    clippy::option_if_let_else,
+    clippy::unnested_or_patterns
+)]
 #![allow(clippy::cognitive_complexity, clippy::too_many_lines)] // 分块计算/状态机逻辑固有复杂度
-
 
 use serde::{Deserialize, Serialize};
 
@@ -137,7 +145,10 @@ impl From<&TaskSnapshot> for Task {
             fail_kind: s.error.as_deref().map(|_| FailKind::Fatal),
             error: s.error.clone(),
             invalidation_streak: s.invalidation_streak,
-            checksum: s.checksum.as_ref().and_then(|c| TryInto::<Checksum>::try_into(c).ok()),
+            checksum: s
+                .checksum
+                .as_ref()
+                .and_then(|c| TryInto::<Checksum>::try_into(c).ok()),
             verify_ok: s.verify_ok,
             etag: s.etag.clone(),
             last_modified: s.last_modified.clone(),
@@ -158,7 +169,11 @@ impl Registry {
     /// 空注册表
     #[must_use]
     pub fn new() -> Registry {
-        Registry { version: REGISTRY_VERSION, next_id: 1, tasks: Vec::new() }
+        Registry {
+            version: REGISTRY_VERSION,
+            next_id: 1,
+            tasks: Vec::new(),
+        }
     }
 
     /// 从运行时任务列表构建（`next_id` 取最大 id + 1）
@@ -232,7 +247,10 @@ mod tests {
         let mut t = sample_task();
         t.id = 5;
         t.state = TaskState::Completed;
-        t.checksum = Some(Checksum { algo: "MD5", value: "d".repeat(32) });
+        t.checksum = Some(Checksum {
+            algo: "MD5",
+            value: "d".repeat(32),
+        });
         let reg = Registry::from_tasks(&[t.clone()], 6);
         let dir = std::env::temp_dir().join(format!("ezr-reg-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

@@ -355,3 +355,16 @@
 ### DRY 工具在测试套件中的应用
 - 跨套件共享操作（添加对话框、详情读取、页签遍历）上提到 harness.py，套件只写
   差异逻辑；PMD CPD 70-token 阈值下产品代码 0 重复块。
+
+## 清理会话沉淀（six-pack/cleaner，二次复盘）
+
+- **管道下游消费器（head/grep -q）会 SIGPIPE 杀掉上游工具**：`cargo fmt 2>&1 | head -5`
+  会在 fmt 中途杀死进程且 exit 码显示的是 head 的 0——长命令一律 `> log 2>&1` 纯落盘，
+  事后 tail。此为「验证」节管道禁令在交互会话中的高频复发形态。
+- **交互式安装器的首次运行提示是长验证挂死的隐形根因**：`cargo llvm-cov` 首跑会交互询问
+  是否安装 `llvm-tools-preview`，非交互会话表现为"600s 超时零产出"。装工具阶段先
+  `rustup component add llvm-tools-preview`，或统一 `< /dev/null` 暴露错误。
+- **覆盖率/CRAP 收敛的杠杆顺序**：先给"cov=0 的纯函数"补测试（CRAP 从 comp²+comp 塌缩到
+  comp），再对"comp 高的调度器"做保持行为拆分（每函数 comp ≤6）。表驱动 match、
+  决策核特征结构体（如 FailureFeatures）、逐状态行构造器三种手法覆盖绝大多数形态；
+  分派器残余 comp=分派臂数，登记口径而非硬凑。

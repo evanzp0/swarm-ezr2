@@ -5,14 +5,22 @@
 //! 进度、完成、失败与暂停。任务上下文（URL/路径/并发等）由 App 在
 //! `Cmd::Start` 时以 [`supervisor::TaskSpec`] 一次性携带，引擎不持有任务模型，
 //! 避免跨线程锁竞争。
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss, clippy::cast_possible_wrap)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
 // 字节/速度/时间算术在 u64-f64 间转换是下载器领域固有；边界由调用方保证
 #![allow(clippy::missing_const_for_fn)] // nursery 误报为主（含 trait impl 场景）
 #![allow(clippy::doc_markdown, clippy::doc_lazy_continuation)] // 中文文档中英文术语不强制反引号
 #![allow(clippy::float_cmp)] // 速度/时间为 0 的语义判断使用精确比较
-#![allow(clippy::map_unwrap_or, clippy::option_if_let_else, clippy::unnested_or_patterns)]
+#![allow(
+    clippy::map_unwrap_or,
+    clippy::option_if_let_else,
+    clippy::unnested_or_patterns
+)]
 #![allow(clippy::cognitive_complexity, clippy::too_many_lines)] // 分块计算/状态机逻辑固有复杂度
-
 
 pub mod error;
 pub mod supervisor;
@@ -232,7 +240,7 @@ impl EngineHandle {
     }
 }
 
-/// 引擎主循环：接收 Cmd、管理 supervisor 生命周期
+/// 引擎主循环：接收 Cmd、管理 supervisor 生命周期（逐命令决策见 [`handle_cmd`]）
 async fn main_loop(
     shared: Arc<EngineShared>,
     mut cmd_rx: mpsc::Receiver<Cmd>,
@@ -240,45 +248,221 @@ async fn main_loop(
 ) {
     let mut tasks: HashMap<u32, mpsc::Sender<TaskCmd>> = HashMap::new();
     while let Some(cmd) = cmd_rx.recv().await {
-        match cmd {
-            Cmd::Start { spec } => {
-                let (tx, rx) = mpsc::channel::<TaskCmd>(8);
-                tasks.insert(spec.id, tx.clone());
-                tokio::spawn(supervisor::run(spec, shared.clone(), rx, evt_tx.clone()));
-            }
-            Cmd::Pause { id } => {
-                if let Some(h) = tasks.get(&id) {
-                    let _ = h.send(TaskCmd::Pause).await;
-                }
-            }
-            Cmd::Cancel { id } => {
-                match tasks.remove(&id) {
-                    Some(h) => {
-                        if h.send(TaskCmd::Cancel).await.is_err() {
-                            // 句柄已死（任务早已结束：完成/暂停/失败后 supervisor
-                            // 退出但 map 条目保留）：直接回报停止确认，让 App 的
-                            // 「删除任务和文件」延迟删除得以执行（FR-01-25）
-                            let _ = evt_tx.send(Evt::Cancelled { id }).await;
-                        }
-                    }
-                    None => {
-                        // 未知 id（未在运行）：同上，直接回报停止确认
-                        let _ = evt_tx.send(Evt::Cancelled { id }).await;
-                    }
-                }
-            }
-            Cmd::Verify { spec } => {
-                let tx = evt_tx.clone();
-                tokio::spawn(async move {
-                    supervisor::verify(spec, tx).await;
-                });
-            }
-            Cmd::Shutdown => {
-                for (_, h) in tasks.drain() {
-                    let _ = h.send(TaskCmd::Cancel).await;
-                }
-                break;
+        if handle_cmd(&mut tasks, cmd, &shared, &evt_tx).await {
+            break;
+        }
+    }
+}
+
+/// 处理单条命令（main_loop 的逐命令决策核；返回 `true` 表示 Shutdown 退出）
+async fn handle_cmd(
+    tasks: &mut HashMap<u32, mpsc::Sender<TaskCmd>>,
+    cmd: Cmd,
+    shared: &Arc<EngineShared>,
+    evt_tx: &mpsc::Sender<Evt>,
+) -> bool {
+    match cmd {
+        Cmd::Start { spec } => {
+            start_task(tasks, spec, shared, evt_tx);
+            false
+        }
+        Cmd::Pause { id } => {
+            pause_task(tasks, id).await;
+            false
+        }
+        Cmd::Cancel { id } => {
+            cancel_task(tasks, id, evt_tx).await;
+            false
+        }
+        Cmd::Verify { spec } => {
+            spawn_verify(spec, evt_tx);
+            false
+        }
+        Cmd::Shutdown => {
+            shutdown_all(tasks).await;
+            true
+        }
+    }
+}
+
+/// Start：为任务建命令通道并孵化 supervisor
+fn start_task(
+    tasks: &mut HashMap<u32, mpsc::Sender<TaskCmd>>,
+    spec: supervisor::TaskSpec,
+    shared: &Arc<EngineShared>,
+    evt_tx: &mpsc::Sender<Evt>,
+) {
+    let (tx, rx) = mpsc::channel::<TaskCmd>(8);
+    tasks.insert(spec.id, tx.clone());
+    tokio::spawn(supervisor::run(spec, shared.clone(), rx, evt_tx.clone()));
+}
+
+/// Pause：向存活任务句柄转发暂停命令（未知/已亡句柄静默忽略）
+async fn pause_task(tasks: &HashMap<u32, mpsc::Sender<TaskCmd>>, id: u32) {
+    if let Some(h) = tasks.get(&id) {
+        let _ = h.send(TaskCmd::Pause).await;
+    }
+}
+
+/// Cancel：移除句柄并转发取消；句柄已死（任务早已结束：完成/暂停/失败后
+/// supervisor 退出但 map 条目保留）或未知 id（未在运行）→ 直接回报停止确认，
+/// 让 App 的「删除任务和文件」延迟删除得以执行（FR-01-25）
+async fn cancel_task(
+    tasks: &mut HashMap<u32, mpsc::Sender<TaskCmd>>,
+    id: u32,
+    evt_tx: &mpsc::Sender<Evt>,
+) {
+    match tasks.remove(&id) {
+        Some(h) => {
+            if h.send(TaskCmd::Cancel).await.is_err() {
+                let _ = evt_tx.send(Evt::Cancelled { id }).await;
             }
         }
+        None => {
+            let _ = evt_tx.send(Evt::Cancelled { id }).await;
+        }
+    }
+}
+
+/// Verify：孵化一次性校验流程
+fn spawn_verify(spec: supervisor::VerifySpec, evt_tx: &mpsc::Sender<Evt>) {
+    let tx = evt_tx.clone();
+    tokio::spawn(async move {
+        supervisor::verify(spec, tx).await;
+    });
+}
+
+/// Shutdown：向全部存活任务广播取消后退出主循环
+async fn shutdown_all(tasks: &mut HashMap<u32, mpsc::Sender<TaskCmd>>) {
+    for (_, h) in tasks.drain() {
+        let _ = h.send(TaskCmd::Cancel).await;
+    }
+}
+
+#[cfg(test)]
+mod main_loop_tests {
+    use super::*;
+
+    /// 与 supervisor 测试同口径：无限速 + 关闭环境代理解析
+    fn shared_free() -> EngineShared {
+        EngineShared {
+            client: reqwest::Client::builder().no_proxy().build().unwrap(),
+            throttle: Arc::new(throttle::Throttle::new(0)),
+        }
+    }
+
+    fn spec_bogus(id: u32) -> supervisor::TaskSpec {
+        supervisor::TaskSpec {
+            id,
+            url: "http://127.0.0.1:1/ezr-ml.bin".to_string(),
+            save_dir: std::env::temp_dir()
+                .join("ezr-ml")
+                .to_string_lossy()
+                .into_owned(),
+            name: format!("ezr-ml-{id}.bin"),
+            concurrency: 2,
+            block_size: 1024 * 1024,
+            protocol: crate::model::Protocol::Http,
+            expected_algo: None,
+            expected_value: None,
+            sidecar: None,
+            sidecar_path: None,
+            added_at: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn cancel_unknown_id_reports_cancelled() {
+        let (evt_tx, mut evt_rx) = mpsc::channel::<Evt>(8);
+        let mut tasks = HashMap::new();
+        cancel_task(&mut tasks, 7, &evt_tx).await;
+        assert!(matches!(evt_rx.recv().await, Some(Evt::Cancelled { id }) if id == 7));
+        assert!(tasks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancel_dead_handle_reports_cancelled() {
+        let (evt_tx, mut evt_rx) = mpsc::channel::<Evt>(8);
+        let mut tasks = HashMap::new();
+        let (h, rx) = mpsc::channel::<TaskCmd>(1);
+        tasks.insert(3u32, h);
+        drop(rx); // supervisor 已退出 → 句柄发送必失败
+        cancel_task(&mut tasks, 3, &evt_tx).await;
+        assert!(matches!(evt_rx.recv().await, Some(Evt::Cancelled { id }) if id == 3));
+    }
+
+    #[tokio::test]
+    async fn cancel_live_handle_forwards_without_event() {
+        let (evt_tx, mut evt_rx) = mpsc::channel::<Evt>(8);
+        let mut tasks = HashMap::new();
+        let (h, mut rx) = mpsc::channel::<TaskCmd>(1);
+        tasks.insert(5u32, h);
+        cancel_task(&mut tasks, 5, &evt_tx).await;
+        assert_eq!(rx.recv().await, Some(TaskCmd::Cancel));
+        assert!(evt_rx.try_recv().is_err()); // 存活句柄不补发确认
+        assert!(tasks.is_empty()); // 句柄已移除
+    }
+
+    #[tokio::test]
+    async fn pause_forwards_only_to_live_handle() {
+        let mut tasks = HashMap::new();
+        let (h, mut rx) = mpsc::channel::<TaskCmd>(1);
+        tasks.insert(9u32, h);
+        pause_task(&tasks, 9).await;
+        assert_eq!(rx.recv().await, Some(TaskCmd::Pause));
+        pause_task(&tasks, 404).await; // 未知 id：静默
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn shutdown_all_drains_and_broadcasts_cancel() {
+        let mut tasks = HashMap::new();
+        let (h1, mut r1) = mpsc::channel::<TaskCmd>(1);
+        let (h2, mut r2) = mpsc::channel::<TaskCmd>(1);
+        tasks.insert(1u32, h1);
+        tasks.insert(2u32, h2);
+        shutdown_all(&mut tasks).await;
+        assert_eq!(r1.recv().await, Some(TaskCmd::Cancel));
+        assert_eq!(r2.recv().await, Some(TaskCmd::Cancel));
+        assert!(tasks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn handle_cmd_dispatches_and_shutdown_reports_exit() {
+        let shared = Arc::new(shared_free());
+        let (evt_tx, mut evt_rx) = mpsc::channel::<Evt>(64);
+        let mut tasks = HashMap::new();
+
+        // Start：孵化 supervisor（bogus URL 异步失败，事件被丢弃不阻塞）
+        assert!(
+            !handle_cmd(
+                &mut tasks,
+                Cmd::Start {
+                    spec: spec_bogus(11)
+                },
+                &shared,
+                &evt_tx
+            )
+            .await
+        );
+        assert!(tasks.contains_key(&11));
+
+        // Pause / Cancel(未知) / Verify：均不退出
+        assert!(!handle_cmd(&mut tasks, Cmd::Pause { id: 11 }, &shared, &evt_tx).await);
+        assert!(!handle_cmd(&mut tasks, Cmd::Cancel { id: 999 }, &shared, &evt_tx).await);
+        assert!(matches!(evt_rx.recv().await, Some(Evt::Cancelled { id }) if id == 999));
+        let vspec = supervisor::VerifySpec {
+            id: 11,
+            path: "/nonexistent/a.downloading".to_string(),
+            final_path: "/nonexistent/a.bin".to_string(),
+            sidecar_path: "/nonexistent/a.sidecar".to_string(),
+            algo: "MD5",
+            expected: "d41d8cd98f00b204e9800998ecf8427e".to_string(),
+        };
+        assert!(!handle_cmd(&mut tasks, Cmd::Verify { spec: vspec }, &shared, &evt_tx).await);
+
+        // Shutdown：广播取消并报告退出
+        assert!(handle_cmd(&mut tasks, Cmd::Shutdown, &shared, &evt_tx).await);
+        assert!(tasks.is_empty());
     }
 }

@@ -7,14 +7,22 @@
 //!   （R2 修订：即使 >60s 也采用）；
 //! - 可重试性：408/429/5xx/网络错误/文件大小不符 → 自动重试；
 //!   4xx（除 408/429）/完整性校验失败/磁盘空间不足/内容持续变化 → 停等。
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss, clippy::cast_possible_wrap)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
 // 字节/速度/时间算术在 u64-f64 间转换是下载器领域固有；边界由调用方保证
 #![allow(clippy::missing_const_for_fn)] // nursery 误报为主（含 trait impl 场景）
 #![allow(clippy::doc_markdown, clippy::doc_lazy_continuation)] // 中文文档中英文术语不强制反引号
 #![allow(clippy::float_cmp)] // 速度/时间为 0 的语义判断使用精确比较
-#![allow(clippy::map_unwrap_or, clippy::option_if_let_else, clippy::unnested_or_patterns)]
+#![allow(
+    clippy::map_unwrap_or,
+    clippy::option_if_let_else,
+    clippy::unnested_or_patterns
+)]
 #![allow(clippy::cognitive_complexity, clippy::too_many_lines)] // 分块计算/状态机逻辑固有复杂度
-
 
 use super::FailKind;
 
@@ -76,20 +84,35 @@ pub fn decide(
             if new_retries >= max_retries {
                 (
                     new_retries,
-                    RetryDecision { kind, auto: false, delay_secs: 0.0, at_limit: true },
+                    RetryDecision {
+                        kind,
+                        auto: false,
+                        delay_secs: 0.0,
+                        at_limit: true,
+                    },
                 )
             } else {
                 let secs = retry_after.unwrap_or_else(|| backoff_secs(new_retries));
                 (
                     new_retries,
-                    RetryDecision { kind, auto: auto_retry, delay_secs: secs, at_limit: false },
+                    RetryDecision {
+                        kind,
+                        auto: auto_retry,
+                        delay_secs: secs,
+                        at_limit: false,
+                    },
                 )
             }
         }
         // 4xx / 校验失败 / 磁盘不足 / 内容持续变化：不自动重试，停等（可 R）
         FailKind::Fatal | FailKind::Verify => (
             new_retries,
-            RetryDecision { kind, auto: false, delay_secs: 0.0, at_limit: false },
+            RetryDecision {
+                kind,
+                auto: false,
+                delay_secs: 0.0,
+                at_limit: false,
+            },
         ),
     }
 }

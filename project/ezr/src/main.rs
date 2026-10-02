@@ -10,9 +10,17 @@
 #![allow(clippy::multiple_crate_versions)] // 依赖树固有重复（rcgen/reqwest 链条），无法单侧消除
 #![allow(clippy::pedantic)] // 交互层字节/速度展示算术与 demo 基线风格豁免
 #![allow(clippy::nursery)] // 同上
-#![allow(clippy::cognitive_complexity, clippy::too_many_lines, clippy::too_many_arguments)]
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss, clippy::cast_possible_wrap)]
-
+#![allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_lines,
+    clippy::too_many_arguments
+)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
 
 mod app;
 mod engine;
@@ -35,7 +43,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 
 use crate::app::App;
 use crate::model::config::{config_path, state_dir, Config};
-use crate::model::{checksum, Checksum, Protocol, Task, unix_now};
+use crate::model::{checksum, unix_now, Checksum, Protocol, Task};
 
 /// 版本号随期号递进（FR-01-83）
 pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "-01");
@@ -59,6 +67,7 @@ fn setup_panic_hook() {
 }
 
 /// CLI 参数形态
+#[derive(Default)]
 struct Cli {
     /// 位置参数 URL 列表（FR-01-01：启动参数添加任务）
     urls: Vec<String>,
@@ -76,59 +85,69 @@ struct Cli {
     version: bool,
 }
 
-/// 手写 CLI 解析（参数集小，不引入 clap）
+/// `-c` 并发数解析：缺失/非数字/超出 1–64 均报错（不静默钳制）
+fn opt_conns(v: Option<&String>) -> Result<usize, String> {
+    let v = v.ok_or("-c 需要并发数参数")?;
+    let parsed = v
+        .parse::<usize>()
+        .map_err(|_| format!("-c 并发数非法（{v}）：应为 1–64 的整数"))?;
+    // 范围校验（Gherkin 01-add-task-14：0/65 等 1–64 之外一律
+    // 启动报错退出，与 abc 同语义，不静默钳制）
+    if !(1..=64).contains(&parsed) {
+        return Err(format!("-c 并发数非法（{v}）：应为 1–64 的整数"));
+    }
+    Ok(parsed)
+}
+
+/// `--max-speed` 速度解析：`parse_speed` 得 0 且原词非 0 开头 → 非法
+fn opt_speed(v: Option<&String>) -> Result<u64, String> {
+    let v = v.ok_or("--max-speed 需要速度参数（如 2 MB/s）")?;
+    let s = crate::model::config::parse_speed(v);
+    if s == 0 && !v.trim().starts_with('0') {
+        return Err(format!(
+            "--max-speed 速度非法（{v}）：示例 2 MB/s / 500 KB/s"
+        ));
+    }
+    Ok(s)
+}
+
+/// 位置参数校验：未知旗标与非 http(s) URL 均启动报错（Gherkin 01-add-task-15：
+/// 多 URL 部分非法全部拒绝）
+fn pos_url(s: &str) -> Result<String, String> {
+    if s.starts_with('-') {
+        return Err(format!("未知参数（{s}），--help 查看用法"));
+    }
+    if !(s.starts_with("http://") || s.starts_with("https://")) {
+        return Err(format!("URL 非法（仅支持 http/https）：{s}"));
+    }
+    Ok(s.to_string())
+}
+
+/// 手写 CLI 解析（参数集小，不引入 clap）；单选项解析见 [`opt_conns`]/[`opt_speed`]/[`pos_url`]
 fn parse_cli(args: &[String]) -> Result<Cli, String> {
-    let mut cli = Cli { urls: Vec::new(), dir: None, conns: None, x: None, max_speed: None, help: false, version: false };
-    let mut i = 0;
-    while i < args.len() {
-        let a = &args[i];
+    let mut cli = Cli::default();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
         match a.as_str() {
             "-h" | "--help" => cli.help = true,
             "-V" | "--version" => cli.version = true,
             "-d" | "--dir" => {
-                i += 1;
-                cli.dir = Some(args.get(i).ok_or("-d 需要目录参数")?.clone());
+                cli.dir = Some(it.next().ok_or("-d 需要目录参数")?.clone());
             }
             "-c" | "--concurrency" => {
-                i += 1;
-                let v = args.get(i).ok_or("-c 需要并发数参数")?;
-                let parsed = v
-                    .parse::<usize>()
-                    .map_err(|_| format!("-c 并发数非法（{v}）：应为 1–64 的整数"))?;
-                // 范围校验（Gherkin 01-add-task-14：0/65 等 1–64 之外一律
-                // 启动报错退出，与 abc 同语义，不静默钳制）
-                if !(1..=64).contains(&parsed) {
-                    return Err(format!("-c 并发数非法（{v}）：应为 1–64 的整数"));
-                }
-                cli.conns = Some(parsed);
+                cli.conns = Some(opt_conns(it.next())?);
             }
             "-x" | "--checksum" => {
-                i += 1;
-                let v = args.get(i).ok_or("-x 需要 <算法>=<校验码> 参数")?;
+                let v = it.next().ok_or("-x 需要 <算法>=<校验码> 参数")?;
                 cli.x = Some(checksum::parse_cli_x(v)?);
             }
             "--max-speed" => {
-                i += 1;
-                let v = args.get(i).ok_or("--max-speed 需要速度参数（如 2 MB/s）")?;
-                let s = crate::model::config::parse_speed(v);
-                if s == 0 && !v.trim().starts_with('0') {
-                    return Err(format!("--max-speed 速度非法（{v}）：示例 2 MB/s / 500 KB/s"));
-                }
-                cli.max_speed = Some(s);
+                cli.max_speed = Some(opt_speed(it.next())?);
             }
             other => {
-                if other.starts_with('-') {
-                    return Err(format!("未知参数（{other}），--help 查看用法"));
-                }
-                // URL 参数校验（Gherkin 01-add-task-15：多 URL 部分非法
-                // 全部拒绝——任一 URL 非 http(s) 即启动报错退出）
-                if !(other.starts_with("http://") || other.starts_with("https://")) {
-                    return Err(format!("URL 非法（仅支持 http/https）：{other}"));
-                }
-                cli.urls.push(other.to_string());
+                cli.urls.push(pos_url(other)?);
             }
         }
-        i += 1;
     }
     Ok(cli)
 }
@@ -153,20 +172,30 @@ fn print_help() {
     );
 }
 
-/// 单实例文件锁（FR-01-72：`~/.ezr/state/ezr.lock`，flock 独占）。
-/// 锁文件句柄保持打开直至进程退出；`Ok(None)` = 已有实例在运行。
-fn acquire_instance_lock() -> std::io::Result<Option<std::fs::File>> {
-    let Some(dir) = state_dir() else {
-        return Ok(Some(std::fs::File::create(std::env::temp_dir().join("ezr.lock"))?));
-    };
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join("ezr.lock");
-    let f = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(path)?;
+/// 对指定锁文件尝试 flock 独占锁定（打开失败向上传播；已锁 → Ok(None)）
+fn try_lock_path(path: &std::path::Path) -> std::io::Result<Option<std::fs::File>> {
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)?;
     use fs2::FileExt;
     match f.try_lock_exclusive() {
         Ok(()) => Ok(Some(f)),
         Err(_) => Ok(None),
     }
+}
+
+/// 单实例文件锁（FR-01-72：`~/.ezr/state/ezr.lock`，flock 独占）。
+/// 锁文件句柄保持打开直至进程退出；`Ok(None)` = 已有实例在运行。
+fn acquire_instance_lock() -> std::io::Result<Option<std::fs::File>> {
+    let Some(dir) = state_dir() else {
+        return Ok(Some(std::fs::File::create(
+            std::env::temp_dir().join("ezr.lock"),
+        )?));
+    };
+    std::fs::create_dir_all(&dir)?;
+    try_lock_path(&dir.join("ezr.lock"))
 }
 
 #[tokio::main]
@@ -249,6 +278,14 @@ async fn main() -> std::io::Result<()> {
     result
 }
 
+/// 覆盖层翻转检测（沿用 demo：对话框/下拉浮层出现或消失那一帧全量重绘）
+fn overlay_sig(app: &App) -> u8 {
+    match app.dialog.as_ref() {
+        None => 0,
+        Some(d) => 1 | ((d.ck_open as u8) << 1),
+    }
+}
+
 async fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
@@ -257,13 +294,6 @@ async fn run(
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(100));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    // 覆盖层翻转检测（沿用 demo：对话框/下拉浮层出现或消失那一帧全量重绘）
-    fn overlay_sig(app: &App) -> u8 {
-        match app.dialog.as_ref() {
-            None => 0,
-            Some(d) => 1 | ((d.ck_open as u8) << 1),
-        }
-    }
     let mut last_overlay = overlay_sig(app);
 
     loop {
@@ -346,7 +376,11 @@ impl App {
                     || crate::model::namegen::exists_on_disk(&dir, n)
             })
         };
-        let protocol = if url.starts_with("https://") { Protocol::Https } else { Protocol::Http };
+        let protocol = if url.starts_with("https://") {
+            Protocol::Https
+        } else {
+            Protocol::Http
+        };
         let ts = unix_now();
         let id = self.next_id;
         let t = Task::new_queued(
@@ -364,7 +398,9 @@ impl App {
         self.next_id += 1;
         self.tasks.push(t);
         if resumed {
-            self.set_toast(format!("✓ 已添加任务 #{id}: {name}（发现有效断点，将自动接续）"));
+            self.set_toast(format!(
+                "✓ 已添加任务 #{id}: {name}（发现有效断点，将自动接续）"
+            ));
         } else {
             self.set_toast(format!("✓ 已添加任务 #{id}: {name}"));
         }
@@ -379,8 +415,7 @@ mod cli_add_tests {
 
     #[tokio::test]
     async fn cli_add_dedupes_duplicate_names() {
-        let dir =
-            std::env::temp_dir().join(format!("ezr-cli-add-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ezr-cli-add-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let reg = dir.join("registry.json").to_string_lossy().to_string();
         let mut app = App::new(Config::default(), reg);
@@ -393,6 +428,168 @@ mod cli_add_tests {
         // 同目录同名：第二个任务经 namegen::dedupe（任务表+盘上口径）追加序号
         assert_eq!(app.tasks[1].name, "f.bin.1");
         assert_eq!(app.next_id, 3);
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod cli_parse_tests {
+    use super::*;
+
+    fn args(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn parse_cli_empty_defaults() {
+        let c = parse_cli(&args(&[])).unwrap();
+        assert!(c.urls.is_empty() && c.dir.is_none() && c.conns.is_none());
+        assert!(c.x.is_none() && c.max_speed.is_none());
+        assert!(!c.help && !c.version);
+    }
+
+    #[test]
+    fn parse_cli_urls_collected_in_order() {
+        let c = parse_cli(&args(&["http://a.com/1.bin", "https://b.com/2.bin"])).unwrap();
+        assert_eq!(
+            c.urls,
+            vec![
+                "http://a.com/1.bin".to_string(),
+                "https://b.com/2.bin".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_cli_all_flags() {
+        let c = parse_cli(&args(&[
+            "-d",
+            "/tmp/dl",
+            "-c",
+            "8",
+            "--max-speed",
+            "2 MB/s",
+            "http://h/f.bin",
+            "-h",
+            "-V",
+        ]))
+        .unwrap();
+        assert_eq!(c.dir.as_deref(), Some("/tmp/dl"));
+        assert_eq!(c.conns, Some(8));
+        assert_eq!(c.max_speed, Some(2_000_000));
+        assert_eq!(c.urls, vec!["http://h/f.bin".to_string()]);
+        assert!(c.help && c.version);
+    }
+
+    #[test]
+    fn parse_cli_long_forms_equivalent() {
+        let a = parse_cli(&args(&[
+            "--dir",
+            "x",
+            "--concurrency",
+            "3",
+            "--help",
+            "--version",
+        ]))
+        .unwrap();
+        assert_eq!(a.dir.as_deref(), Some("x"));
+        assert_eq!(a.conns, Some(3));
+        assert!(a.help && a.version);
+    }
+
+    #[test]
+    fn parse_cli_conns_bounds_and_errors() {
+        assert_eq!(parse_cli(&args(&["-c", "1"])).unwrap().conns, Some(1));
+        assert_eq!(parse_cli(&args(&["-c", "64"])).unwrap().conns, Some(64));
+        for bad in ["0", "65", "abc"] {
+            assert!(parse_cli(&args(&["-c", bad])).is_err(), "conns {bad}");
+        }
+        assert!(parse_cli(&args(&["-c"])).is_err()); // 缺值
+    }
+
+    #[test]
+    fn parse_cli_max_speed_zero_and_invalid() {
+        assert_eq!(
+            parse_cli(&args(&["--max-speed", "0"])).unwrap().max_speed,
+            Some(0)
+        );
+        assert!(parse_cli(&args(&["--max-speed", "nonsense"])).is_err());
+        assert!(parse_cli(&args(&["--max-speed"])).is_err()); // 缺值
+    }
+
+    #[test]
+    fn parse_cli_checksum_flag() {
+        let c = parse_cli(&args(&[
+            "-x",
+            "sha256=0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd",
+        ]))
+        .unwrap();
+        let (idx, v) = c.x.expect("x parsed");
+        assert_eq!(checksum::CHECKSUM_ALGOS[idx].0, "SHA-256");
+        assert_eq!(
+            v,
+            "0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd"
+        );
+        assert!(parse_cli(&args(&["-x", "bad-format"])).is_err());
+        assert!(parse_cli(&args(&["-x"])).is_err()); // 缺值
+    }
+
+    #[test]
+    fn parse_cli_rejects_unknown_flag_and_bad_url() {
+        assert!(parse_cli(&args(&["-z"])).is_err());
+        assert!(parse_cli(&args(&["--bogus"])).is_err());
+        assert!(parse_cli(&args(&["ftp://h/f.bin"])).is_err());
+        assert!(parse_cli(&args(&["plain-name.bin"])).is_err());
+    }
+
+    #[test]
+    fn pos_url_and_opt_helpers_direct() {
+        assert!(pos_url("-d").is_err()); // 旗标形状先于 URL 校验
+        assert!(opt_conns(None).is_err());
+        assert!(opt_speed(None).is_err());
+    }
+
+    #[test]
+    fn instance_lock_excludes_second_holder_then_releases() {
+        let first = acquire_instance_lock().unwrap();
+        assert!(first.is_some());
+        let second = acquire_instance_lock().unwrap();
+        assert!(second.is_none(), "同进程第二个打开描述符应锁冲突");
+        drop(first); // 释放 → 可再次获取
+        let third = acquire_instance_lock().unwrap();
+        assert!(third.is_some());
+    }
+
+    #[test]
+    fn try_lock_path_exclusive_on_fresh_file() {
+        let dir = std::env::temp_dir().join(format!("ezr-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("probe.lock");
+        let a = try_lock_path(&p).unwrap();
+        assert!(a.is_some());
+        let b = try_lock_path(&p).unwrap();
+        assert!(b.is_none());
+        drop(a);
+        let c = try_lock_path(&p).unwrap();
+        assert!(c.is_some());
+        drop(c);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn overlay_sig_tracks_dialog_and_dropdown() {
+        let dir = std::env::temp_dir().join(format!("ezr-ov-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let reg = dir.join("registry.json").to_string_lossy().to_string();
+        let mut app = App::new(Config::default(), reg);
+        assert_eq!(overlay_sig(&app), 0);
+        app.open_add_dialog();
+        assert_eq!(overlay_sig(&app), 1);
+        if let Some(d) = app.dialog.as_mut() {
+            d.ck_open = true;
+        }
+        assert_eq!(overlay_sig(&app), 3);
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }

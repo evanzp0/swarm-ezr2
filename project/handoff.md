@@ -1,6 +1,6 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/cleaner（二次清理）　会话：cleaner-20261002（QA 修复后回归清理）
+> 流程：six-pack　当前节点：six-pack/cleaner（三次清理·遗留问题攻坚）　会话：cleaner-20261003
 
 ## 一、产物历史完成情况
 
@@ -15,84 +15,87 @@
 |---|---|---|---|
 | specifier | `features/` 9 份 Gherkin（114 场景）+ `qa/` 9 份规程 | 已交付 | 三层一致 |
 | coder | `project/ezr/` 下载内核+TUI+CLI+fixture | 已交付（P0+P1 全量） | 100 单测、clippy 0 警告 |
-| cleaner/architect/hardender（首轮） | 清理/架构/加固 | 已交付 | 归档在案（CRAP 阈值 30 口径 46/200 超、UI 交互层豁免） |
-| QA | `project/qa/runners/` 9 套可执行套件（114 用例）+ 产品缺陷修复 10 处 + QA 基建修复 2 处 | 已交付 | 最终 110 P + 4 S / 0 F；单测 100 P 基线 |
-| cleaner（本会话，二次清理） | QA 修复后全量回归清理：行为不变重构 11 文件 + 覆盖率/CRAP/DRY/变异点四类度量复跑 | 已交付 | 单测 112 P / 0 F、clippy 0 警告、CPD 产品代码 0 重复块（详见下） |
+| cleaner/architect/hardender（首轮） | 清理/架构/加固 | 已交付 | 归档在案 |
+| QA | `project/qa/runners/` 9 套可执行套件（114 用例）+ 缺陷修复 12 处 | 已交付 | 110 P + 4 S / 0 F |
+| cleaner（二次） | QA 修复后回归清理：11 文件行为不变重构 + 单源化 | 已交付 | 112 P / 0 F、覆盖率 49.0% |
+| cleaner（三次，本会话） | 遗留 4 项攻坚：rustfmt 整树、CRAP 收敛、>100 变异点文件全拆分、fixture 流式化 | 已交付 | 202 测全绿、覆盖率 83.4%、见下表 |
 
 ### 遗留受限项（当前有效）
 
-- **CRAP ≤6 未全域达成**：60/203 函数超 6（阈值 30 口径下较首轮 46/200 改善）。剩余 >30
-  集中于 TUI 交互层（on_dialog_key/draw_*/tick 等）与 QA 基建二进制（ezr-fixture/ezr-proxy）：
-  该层可测性依赖伪终端 e2e（QA 套件域，cleaner 按 SKILL 不运行）；压到 comp≤6 属架构级
-  拆分。沿用首轮豁免口径，交 architect/操作者裁决。
-- **rustfmt 基线非整洁**：`cargo fmt --check` 全仓 170 处差异（首轮以来即如此，非本会话引入）；
-  本会话仅修复真实缩进破损 4 处，未整树重排（避免污染 QA 评审基线）。是否整树格式化待
-  操作者/architect 决策。
-- **变异点 >100 的文件待拆分裁决**：见当前节变异点扫描。
-- **QA 基建注记（phase-02 建议）**：ezr-fixture 对每请求整文件读入内存（64 并发 × big-100m.bin
-  ≈ 6.4GB OOM 实证）；改为按 Range 流式读盘可根除。
+- **CRAP >6 残余 46/268 函数**：其中 comp≤6 的均已 100% 覆盖（CRAP=comp）；残余 comp>6
+  的集中在异步/事件编排入口（`on_key`/`on_mouse`/`on_evt`/`tick`/`on_dialog_key`/
+  `toggle_pause`/`main`，comp 12–25）——分派臂数即 comp，纯逻辑已尽数抽为可测纯函数
+  并锁定；压到 comp≤6 属进一步碎片化，**建议 architect 裁决是否接受登记口径**。
+  >30 的函数由二次清理时 24 个降至 8 个。
+- **QA 套件（9 套 runner）本轮未运行**（cleaner 职责边界，SKILL 禁止）：fixture 与 proxy
+  的行为保持由字节级单测锁定（fixture 30 测/proxy 11 测覆盖 200/206/416/404/ghost/
+  streamy/swapsize/disconnect/etag/redirect/隧道/转发），**建议 QA 节点回归**。
+- **rustfmt unstable 选项**（imports_granularity 等）在 stable 通道不生效：配置模板原样
+  保留（notes/rust.md 口径），未切 nightly。
+- **下游角色开工先读** `packs/_common/notes/rust.md`（PATH 注入、工具位置）与
+  `packs/_common/engineering.md` 新增「清理会话沉淀」节。
 
 ### 实现定义值登记
 
-- 沿用前轮全部登记（toast 文案、证书错误文案、v0.1.0-01、多伴随校验择序 = 算法表声明序
-  （MD5 在前）、default_concurrency 非法值钳制 1–64）。本会话未新增契约值。
+- 沿用前轮全部登记（toast 文案、证书错误文案、v0.1.0-01、多伴随校验择序 = 算法表声明序、
+  default_concurrency 钳制 1–64、ETag 规范化 `/?&=` → `_`、Last-Modified 固定串、
+  fixture 字节模式 `i%251`）。本会话未新增契约值。
 
 ## 二、当前产出情况
 
 ### 本会话产物清单（全部行为不变，`git diff` 可复核）
 
-- `src/model/mod.rs`：新增 `Task::new_queued`（添加路径初值单源）与 `Task::apply_chunk_snapshot`
-  （断点视图快照单源）；新增 `save_json_atomic`（JSON 原子写单源）；删除 tests 内与模块级
-  重复的 `sample_task`（40 行 ×2 归一）；新增构造器单测。
-- `src/app.rs`：dlg_confirm_add 目录尾斜杠归一（单点化，删 dir_check/dir_trim 三重 trim）；
-  两处快照逻辑改用 `apply_chunk_snapshot`；toggle_pause 永假 or-模式守卫简化；handle_failure
-  绑定遮蔽清理；缩进破损 3 处修复；新增对话框确认流单测（锚定目录归一行为）。
-- `src/main.rs`：CLI 添加手写去重循环改用 `namegen::dedupe`（与对话框/引擎同口径）；Task
-  字面量改用 `Task::new_queued`；新增 CLI 添加去重单测。
-- `src/engine/mod.rs`：删除 `Evt::Failed.blocks` 死字段（app 层 `let _ = blocks;` 显式丢弃，
-  过期 allow 同步移除）。
-- `src/engine/supervisor.rs`：worker 停止序列 ×4 提取 `stop_workers`；删除 build_sidecar 死参数
-  `_name`（5 调用点同步）；`y` 改名 `total_blocks`/`expected_blocks`；e2e 测试夹具提取
-  `launch_spec`/`sidecar_spec`（cmd_tx 作为 keep-alive 句柄返回调用方）。
-- `src/ui.rs`：按钮行渲染 ×2 提取 `draw_button_row`；新增纯文本工具测试模块（w/truncate/
-  pad/fmt_size/fmt_speed/fmt_dur/fmt_size_pair/plain_bar 共 8 测）。
-- `src/model/namegen.rs`：percent_decode 重复谓词与边界冗余归一（行为等价）；新增残缺转义
-  尾巴边界测试。
-- `src/model/{sidecar,registry,chunk,slots}.rs`：save 委托 `save_json_atomic`；`let _ = s;`
-  死语句删除；slots 测试夹具改用共享 `sample_task`。
+- **rustfmt 整树**：`cargo fmt` 全仓一次过，`fmt --check` 清零（171→0，19 文件重排）。
+- **模块拆分（全部 ≤100 变异点，最高 91；上游最高 376）**：
+  - `src/app.rs`(1765 行/376 点) → `app/`{mod,engine,keys,dialog_keys,dialogs,paste,mouse,tasks}
+  - `src/ui.rs`(1602 行/311 点) → `ui/`{mod,text,task_lines,list,header,detail,dialog,btn,delete}
+  - `src/model/chunk.rs` → `chunk/`{mod,plan,blocks,lease}；`src/model/mod.rs` → 抽出 `model/task.rs`+`model/timefmt.rs`
+  - `src/bin/ezr-fixture.rs` → 目录式 bin `ezr-fixture/`{main,query,request,files,range,respond,handle}（Cargo.toml bin 路径同步更新）
+- **CRAP 收敛（>30 函数 24→8）**：checksum `digest_file` 函数表化；error `status_text` 表驱动 +
+  `classify_reqwest` 抽 `FailureFeatures` 决策核；engine `main_loop` 拆 5 单命令处理器 +
+  `handle_cmd`；main `parse_cli` 拆 opt_conns/opt_speed/pos_url + `try_lock_path`；
+  ui `state_color` 表驱动、`task_lines` 拆 10 个行构造器、`draw_detail` 拆 9 个纯生成器、
+  dialog 抽 `field_display`/`dropdown_rect`。
+- **ezr-fixture Range 流式化**：body 输出从每请求整文件读入改为按需 seek + 64 KiB 分块流式
+  读盘（每请求内存恒定，根除 64 并发 × big-100m.bin ≈ 6.4GB OOM）；`?swapsize=N` 例外保留
+  物化（QA 约定仅小文件使用）；越界 Range、反向 Range 的 panic 口径原样保留。
+- **测试 +90（112→202）**：ui 渲染 6（TestBackend 全状态/对话框/窄布局）、状态行 8、
+  对话框键 3、tick 集成 2（bogus-URL 失败路径 + 桩服务器完成路径，真实驱动
+  tick/on_evt/handle_failure/make_spec）、fixture 字节级 30、proxy 环回 11。
+- **经验沉淀 5 条** → `packs/_common/notes/rust.md` + `packs/_common/engineering.md`
+  （TestBackend 显示口径、ANSI 吞字、双向拷贝测试关写侧、拆分两步法、llvm-cov 首跑交互提示）。
 
 ### 验证证据
 
 | 验证项 | 结果 | 命令（project/ezr 下可复现） |
 |---|---|---|
-| 单元测试 | 112 P / 0 F | `cargo test` |
+| 单元测试 | 202 P / 0 F（161+30+11） | `cargo test` |
 | clippy 全目标 | 0 警告 | `cargo clippy --all-targets` |
-| 覆盖率（llvm-cov 0.9.1） | 总行覆盖 43.9%→49.0%；app.rs 8.8%→27.6%、main.rs 0%→26.6%、ui.rs 13.5%（纯函数已测，交互层 e2e 覆盖） | `cargo llvm-cov --lcov --output-path <lcov>` |
-| CRAP（cargo-crap 0.6.1，LCOV 输入，阈值 6） | 60/203 超；阈值 30 口径较首轮 46/200 改善；dlg_confirm_add 306→25.1、add_cli_task 6.0 | `cargo crap --lcov <lcov> --path src --threshold 6` |
-| DRY（PMD 7.28.0 CPD，70-token，`-l rust`） | 产品逻辑代码 0 重复块；余 2 类豁免（#![allow] 强制模板头 ×15 文件、ui.rs BT/HTTP 预留并行版式） | `pmd cpd -d src -l rust --minimum-tokens 70` |
-| 变异点扫描（cargo-mutants 27.1.0 --list，全仓 1545 点） | app.rs 376 / ui.rs 311 / chunk.rs 143 / model/mod.rs 138 / supervisor.rs 55 / namegen.rs 65 / main.rs 43 / ezr-fixture.rs 126（未在本会话更改）/ 其余 ≤50 | `cargo mutants --list` |
+| rustfmt | 0 差异（上游 171） | `cargo fmt --check` |
+| 覆盖率（llvm-cov 0.9.1） | 总行 83.4%（49.0%→）；渲染层/交互层经 TestBackend 与桩服务器路径覆盖 | `cargo llvm-cov --lcov --output-path <lcov>` |
+| CRAP（cargo-crap 0.6.1，阈值 6） | 46/268 超（60/204→）；>30 由 24→8，残余为事件编排入口（登记待裁决） | `cargo crap --lcov <lcov> --path src --threshold 6` |
+| DRY（PMD 7.28.0 CPD，70-token） | 产品逻辑代码 0 重复块；余 3 处 `#![allow]` 模板头（豁免类） | `pmd cpd -d src -l rust --minimum-tokens 70` |
+| 变异点（cargo-mutants 27.1.0 --list） | 全文件 ≤100（最高 app/engine.rs 91；上游最高 app.rs 376） | `cargo mutants --list` |
 
-### 对账口径（与 QA 会话总账）
+### 对账口径（与二次清理总账）
 
-- 单测 100 P → 112 P（+12：ui 8、model 1、namegen 1、流级 2；全部纯追加，既有 100 测未改动）。
-- QA 的 10 处产品缺陷修复逻辑全部保留（本会话仅重构单源化，未触碰判定分支与文案）；
-  clippy 0 警告与"QA 修复后 100 P"基线在本会话开头复现成立。
+- 单测 112 P → 202 P（+90：ui 渲染与状态行 14、对话框键 3、tick 集成 2、fixture 30、
+  proxy 11、error 8、checksum 2、engine 命令 6、cli 解析/锁/overlay 12、misc 2）；既有
+  112 测未改动（fmt 重排除外）。
+- QA 会话与二次清理的全部产品修复逻辑保留（仅行为不变重构与文件重组）。
 
 ### 待办与待批
 
-1. **变异点 >100 文件的拆分裁决（移交 architect）**：app.rs 376 / ui.rs 311 / chunk.rs 143 /
-   model/mod.rs 138 / ezr-fixture.rs 126。app/ui 的对话框、粘贴、渲染、事件四类职责可拆但
-   属模块边界决策，且验证依赖 QA e2e 套件——建议 architect 在 hardender 全量变异测试前
-   定模块边界（hardender 可用 `--file` 按文件分块）。
-2. **CRAP 阈值口径确认**：SKILL 目标 ≤6 与交互层现实（comp 20+ 的状态机函数、e2e 覆盖）
-   差距需操作者/architect 表态：接受首轮豁免口径延续，或专项拆分。
-3. rustfmt 整树格式化与否（遗留受限项）。
-4. ezr-fixture Range 流式化（phase-02 基建优化，非阻塞）。
+1. **CRAP >6 残余登记口径**：46/268 中 comp>6 的全部为异步/事件编排入口（见遗留受限项）；
+   请操作者/architect 表态「接受登记」或「专项拆分」（拆分边际收益递减，覆盖率已 83.4%）。
+2. **QA 套件回归**：fixture/proxy 重构后建议运行 9 套 runner 确认端到端（单测已字节级锁定）。
+3. ezr-fixture `?swapsize` 大文件物化（>64MB 级）如需支持 → 转流式拼接（02 期基建）。
 
 ### 移交建议
 
-- six-pack 流转路径：specifier → coder → **cleaner（本轮，已收尾）** → **architect（建议下一棒）**
-  → hardender → QA。
-- architect 评审时请携带本会话变异点计数与 CRAP 分布（见验证证据表），就模块边界与
-  app.rs/ui.rs 拆分一并裁决；hardender 变异测试请在裁决后进行。
+- six-pack 流转路径：specifier → coder → cleaner×3 → **architect（建议下一棒）** →
+  hardender → QA。
+- architect 评审请携带：模块树现状（app/9 文件、ui/11 文件、model/13 文件）、变异点分布
+  （`cargo mutants --list`）、CRAP 残余清单（`.work` 已清，重跑命令见上表）；hardender
+  可用 `--file` 按文件分块。
 - 收尾：`./bin/swarm complete`（构建缓存 target/ 由 complete 自动清理）。

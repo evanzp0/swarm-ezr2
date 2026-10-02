@@ -1,12 +1,20 @@
 //! config — 配置文件（FR-01-71：`~/.ezr/config.toml`，缺省回退、非法值回退）
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss, clippy::cast_possible_wrap)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
 // 字节/速度/时间算术在 u64-f64 间转换是下载器领域固有；边界由调用方保证
 #![allow(clippy::missing_const_for_fn)] // nursery 误报为主（含 trait impl 场景）
 #![allow(clippy::doc_markdown, clippy::doc_lazy_continuation)] // 中文文档中英文术语不强制反引号
 #![allow(clippy::float_cmp)] // 速度/时间为 0 的语义判断使用精确比较
-#![allow(clippy::map_unwrap_or, clippy::option_if_let_else, clippy::unnested_or_patterns)]
+#![allow(
+    clippy::map_unwrap_or,
+    clippy::option_if_let_else,
+    clippy::unnested_or_patterns
+)]
 #![allow(clippy::cognitive_complexity, clippy::too_many_lines)] // 分块计算/状态机逻辑固有复杂度
-
 
 use std::path::{Path, PathBuf};
 
@@ -99,7 +107,10 @@ impl Config {
         let d = Config::default();
         Config {
             download_dir: raw.download_dir.filter(|s| !s.trim().is_empty()),
-            block_size_http: raw.block_size_http.filter(|v| *v > 0).unwrap_or(d.block_size_http),
+            block_size_http: raw
+                .block_size_http
+                .filter(|v| *v > 0)
+                .unwrap_or(d.block_size_http),
             download_slots: raw
                 .download_slots
                 .filter(|v| *v > 0)

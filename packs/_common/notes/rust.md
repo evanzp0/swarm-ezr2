@@ -142,3 +142,24 @@ group_imports = "StdExternalCrate"
   SKILL 的「>100 变异点做保持行为拆分」在模块边界上依赖 architect 裁决、验证依赖 e2e 套件
   （cleaner 不运行）时，不要强行拆——把每文件计数登记 handoff 移交，hardender 全量变异前
   由 architect 先收模块边界（`--file` 可按文件分块跑变异，拆分收益在 hardender 兑现）。
+
+- **交互层覆盖率可以在单测内打开（TestBackend + 桩服务器），不必依赖 PTY e2e**：draw_*
+  系函数用 `ratatui::backend::TestBackend`（0.29 无 feature 门控）直接渲染 App 全状态并断言
+  缓冲文本；App::tick/on_evt 用「add_cli_task(bogus URL) → pump_until(Failed)」与「桩 HTTP
+  服务器 → pump_until(Completed)」两条真实事件流覆盖（pump_until 带谓词提前收束，勿跑满
+  deadline）。注意 TestBackend 的 `Display` 会把宽字符半格单元隐藏并附 `Hidden by
+  multi-width symbols` 注记——断言锚定不被 CJK 截断的稳定文本（如列表项 ASCII 名、
+  `▸ SHA-256` 选中行），不要断言与 CJK 相邻的边框/标题。
+- **输出管道会吞 `#[m` 形态字符**：日志采集/展示层按 CSI 转义清洗 `[m` 等序列时，
+  源码中的 `#[must_use]` 会显示成 `#ust_use]`（可复现、可误导"文件损坏"判断）。
+  审计源码一律以 `od -c`/`xxd` 字节为准，不信显示层。
+- **双向拷贝代理（io::copy 两线程对拷）的单测必须显式关闭客户端写侧**：`shutdown(Write)`
+  后代理的 client→upstream 拷贝得到 EOF、两个 copy 线程才能收尾、socket 才会 drop；
+  否则 read_to_end 与 copy 线程互等，测试永久挂起（真实下载器天然关写侧，故线上不显）。
+  桩上游的"读一次→回一包"契约要与被测流量方向对齐（CONNECT 隧道：客户端先发一笔
+  再读回包），否则双向互等死锁。
+- **拆大文件（>100 变异点/行）时先机械分模块再提纯函数，两步各自全绿**：先按职责把
+  impl 块切到子模块（同 crate 多 impl 合法、子模块可见父私有项），用 `git diff --stat`
+  与全量测试确认"纯移动"；再做 `fn 表驱动`/`特征结构体决策核`/`行构造器` 抽取。切分脚本
+  对 doc 注释/属性边界的 off-by-one 高发——每刀后先 `cargo build` 再继续，孤儿 doc 与
+  双重 impl 头都是必踩点。
