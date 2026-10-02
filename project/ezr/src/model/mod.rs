@@ -228,16 +228,27 @@ mod tests {
         assert!(!TaskState::PostProcessing.is_done());
     }
 
+    /// FR-01-81 修订二：并发线程数（活跃连接数）数据面口径——
+    /// 下载中 = 持有未完成块的连接数（cap>0 且 done<cap）；其余态 = 有效连接数（cap>0）。
     #[test]
-    fn connection_frac_zero_cap_is_full() {
-        let c = Connection {
-            id: 1,
-            start: 0,
-            end: 0,
-            done: 0,
-            speed: 0.0,
+    fn thread_counts_active_conns_by_data_plane() {
+        let mut t = sample_task();
+        let conn = |id: usize, start: u64, end: u64, done: u64| Connection {
+            id,
+            start,
+            end,
+            done,
         };
-        assert!((c.frac() - 1.0).abs() < 1e-9);
+        t.connections = vec![
+            conn(1, 0, 1_000, 400),       // 传输中：计入
+            conn(2, 1_000, 1_000, 0),     // 待命空连接：不计入
+            conn(3, 1_000, 2_000, 1_000), // 已完成当前块：不计入
+            conn(4, 2_000, 3_000, 100),   // 传输中：计入
+        ];
+        t.state = TaskState::Downloading;
+        assert_eq!(t.thread_count(), 2, "下载中 = 持有未完成块的连接数");
+        t.state = TaskState::Paused;
+        assert_eq!(t.thread_count(), 3, "非下载态 = 有效连接数（cap>0）");
     }
 
     #[test]

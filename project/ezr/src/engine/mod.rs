@@ -158,7 +158,7 @@ pub struct ConnView {
 }
 
 impl ConnView {
-    /// 转 UI 连接模型（速度字段由 App 滑窗回填）
+    /// 转 UI 连接模型（进度视图；速度展示随 FR-01-81 修订二移除）
     #[must_use]
     pub fn to_connection(&self) -> crate::model::Connection {
         crate::model::Connection {
@@ -166,7 +166,6 @@ impl ConnView {
             start: self.start,
             end: self.end,
             done: self.done,
-            speed: 0.0,
         }
     }
 }

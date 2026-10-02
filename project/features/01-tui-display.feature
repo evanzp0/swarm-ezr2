@@ -2,7 +2,7 @@
 #   01-tui-display-01 三区布局与结构完整
 #   01-tui-display-02 列表行三行结构与信息行文案
 #   01-tui-display-03 任务详情字段全集
-#   01-tui-display-04 并发分块明细表与待命态
+#   （04 已随 FR-01-81 修订二移除：并发分块明细表删除，序号留空不重排）
 #   01-tui-display-05 状态配色与协议徽标
 #   01-tui-display-06 导航快捷键
 #   01-tui-display-07 功能快捷键与页签
@@ -14,7 +14,7 @@
 #   01-tui-display-13 模拟器移除与空态引导
 #   01-tui-display-14 标题栏版本号随期号递进
 #   01-tui-display-15 速度展示平滑节奏与归零
-#   01-tui-display-16 连接级速度平滑节奏与归零
+#   （16 已随 FR-01-81 修订二移除：并发分块明细表删除，序号留空不重排）
 Feature: 01-tui-display TUI 展示与交互（基线沿用 + 真实数据）
 
   期号 01。依据 project/mission/phase-01.md FR-01-80~83。布局、状态机、配色、快捷键、
@@ -53,15 +53,6 @@ Feature: 01-tui-display TUI 展示与交互（基线沿用 + 真实数据）
     Examples:
       | file       |
       | detail.bin |
-
-  Scenario: 01-tui-display-04 并发分块明细表与待命态
-    Given 任务 "<file>" 以并发 4 下载中（文件共 2 块时场景成立）
-    Then 分块明细表逐连接显示当前持有块号（块 k/y）与状态
-    And 状态含传输中与「待命」（临近结束时多余连接显示待命）
-
-    Examples:
-      | file       |
-      | chunky.bin |
 
   Scenario: 01-tui-display-05 状态配色与协议徽标
     Given 状态为 "<state>" 的任务 "<file>"（协议 <scheme>）
@@ -158,16 +149,3 @@ Feature: 01-tui-display TUI 展示与交互（基线沿用 + 真实数据）
     Examples:
       | file        |
       | three-m.bin |
-
-  Scenario: 01-tui-display-16 连接级速度平滑节奏与归零
-    Given 一个下载中的任务 "<file>"（并发 "<concurrency>"，fixture 慢速门控维持下载观察窗）
-    When 连续采样并发明细表各行速度 10 秒
-    Then 传输中各行速度数值每秒最多变化一次
-    And 各行速度与任务速度同拍更新（同一 1 秒节拍，无独立变拍）
-    When 暂停该任务（Space）
-    Then 明细表各行速度立即归零（无平滑拖尾，状态列不再显示传输中）
-    And 恢复下载后各行速度经平滑爬升而非瞬时跳至峰值
-
-    Examples:
-      | file         | concurrency |
-      | twelve-m.bin | 4           |

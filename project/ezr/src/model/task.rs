@@ -13,8 +13,6 @@ pub struct Connection {
     pub end: u64,
     /// 已下载字节
     pub done: u64,
-    /// 当前速度 B/s（UI 层由滑窗计算回填）
-    pub speed: f64,
 }
 
 impl Connection {
@@ -22,17 +20,6 @@ impl Connection {
     #[must_use]
     pub fn cap(&self) -> u64 {
         self.end.saturating_sub(self.start)
-    }
-
-    /// 块内完成比例
-    #[must_use]
-    pub fn frac(&self) -> f64 {
-        let c = self.cap();
-        if c == 0 {
-            1.0
-        } else {
-            f64::from(self.done as u32) / f64::from(c as u32)
-        }
     }
 }
 
@@ -195,14 +182,14 @@ impl Task {
         Some((remain / self.speed) as u64)
     }
 
-    /// 并发线程数（展示用）：下载中 = 活跃连接数（有速度且未下载完的分块），
-    /// 其余状态 = 有效连接数（排除已待命的空连接）
+    /// 并发线程数（展示用）：下载中 = 活跃连接数（数据面口径，FR-01-81 修订二：
+    /// 持有未完成块的连接），其余状态 = 有效连接数（排除已待命的空连接）
     #[must_use]
     pub fn thread_count(&self) -> usize {
         if self.state == TaskState::Downloading {
             self.connections
                 .iter()
-                .filter(|c| c.speed > 0.0 && c.done < c.cap())
+                .filter(|c| c.cap() > 0 && c.done < c.cap())
                 .count()
         } else {
             self.connections.iter().filter(|c| c.cap() > 0).count()

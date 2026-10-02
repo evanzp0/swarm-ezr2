@@ -53,16 +53,6 @@ pub(super) fn pad_right(s: &str, width: usize) -> String {
     }
 }
 
-/// 按终端显示宽度左填充空格
-pub(super) fn pad_left(s: &str, width: usize) -> String {
-    let cur = w(s);
-    if cur >= width {
-        s.to_string()
-    } else {
-        format!("{}{}", " ".repeat(width - cur), s)
-    }
-}
-
 pub(super) fn fmt_size(bytes: u64) -> String {
     const MB: f64 = 1_000_000.0;
     const GB: f64 = 1_000_000_000.0;
@@ -185,7 +175,6 @@ mod tests {
     #[test]
     fn pad_respects_display_width() {
         assert_eq!(pad_right("ab", 5), "ab   ");
-        assert_eq!(pad_left("ab", 5), "   ab");
         assert_eq!(pad_right("下载", 5), "下载 ");
         assert_eq!(pad_right("abc", 2), "abc"); // 超宽不截断
     }

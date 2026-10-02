@@ -180,8 +180,6 @@ impl App {
         };
         self.tasks.remove(idx);
         self.windows.remove(&id);
-        self.conn_windows.retain(|(tid, _), _| *tid != id);
-        self.conn_speed_display.retain(|(tid, _), _| *tid != id);
         if delete_files {
             self.pending_deletes.insert(id, (save_dir, name));
         }

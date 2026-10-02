@@ -37,7 +37,6 @@ pub fn lease_snapshot(total: u64, done_bytes: u64, n: usize, piece: u64) -> (Vec
                 } else {
                     partials[i].min(end - start)
                 },
-                speed: 0.0,
             }
         })
         .collect();

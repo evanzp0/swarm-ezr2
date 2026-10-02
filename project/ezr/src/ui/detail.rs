@@ -6,8 +6,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Sparkline};
 use ratatui::Frame;
 
-use super::text::{fmt_dur, fmt_eta, fmt_size, fmt_speed, pad_left, pad_right, truncate};
-use super::{state_color, ACCENT, BORDER, DIM, DIM2, FG, GREEN, LIGHT_BLUE, MAGENTA, RED, YELLOW};
+use super::text::{fmt_dur, fmt_eta, fmt_size, fmt_speed, pad_right, truncate};
+use super::{state_color, ACCENT, BORDER, DIM, FG, GREEN, LIGHT_BLUE, MAGENTA, RED, YELLOW};
 use crate::app::App;
 use crate::model::chunk::fmt_block_size;
 use crate::model::{Task, TaskState};
@@ -119,99 +119,6 @@ fn chunk_row(t: &Task) -> Vec<Span<'static>> {
         ));
     }
     l
-}
-
-/// 连接明细状态列（待命/完成/传输中/挂起）
-fn conn_status(idle: bool, done: bool, speed: f64) -> Span<'static> {
-    if idle {
-        Span::styled("待命", Style::default().fg(DIM2))
-    } else if done {
-        Span::styled("完成", Style::default().fg(GREEN))
-    } else if speed > 0.0 {
-        Span::styled("传输中", Style::default().fg(ACCENT))
-    } else {
-        Span::styled("挂起", Style::default().fg(DIM))
-    }
-}
-
-/// 分块列文案：块号「块 k/y」（分块队列按块大小顺序领块），待命显示 —
-fn chunk_col_text(idle: bool, start: u64, nn: u64, yy: u64) -> String {
-    if idle {
-        "—".to_string()
-    } else if nn != 0 {
-        format!("块 {}/{}", start.checked_div(nn).unwrap_or(0) + 1, yy)
-    } else {
-        "—".to_string()
-    }
-}
-
-/// 单连接明细行（# / 分块 / 进度 / 速度 / 状态）
-fn conn_row(i: usize, t: &Task) -> Line<'static> {
-    let c = &t.connections[i];
-    let idle = c.cap() == 0;
-    let frac = if idle { 0.0 } else { c.frac() };
-    let done = !idle && frac >= 1.0;
-    let st = conn_status(idle, done, c.speed);
-    let (_, yy, nn) = t.chunk_info();
-    let col = chunk_col_text(idle, c.start, nn, yy);
-    Line::from(vec![
-        Span::styled(pad_right(&format!("#{}", c.id), 4), Style::default().fg(FG)),
-        Span::styled(
-            pad_right(&col, 14),
-            Style::default().fg(if idle { DIM2 } else { FG }),
-        ),
-        Span::styled(
-            if idle {
-                pad_left("—", 7)
-            } else {
-                pad_left(&format!("{:.1}%", frac * 100.0), 7)
-            },
-            Style::default().fg(if done {
-                GREEN
-            } else if idle {
-                DIM2
-            } else {
-                FG
-            }),
-        ),
-        Span::styled(
-            format!(
-                "{}  ",
-                pad_left(
-                    &if c.speed > 0.0 {
-                        fmt_speed(c.speed)
-                    } else {
-                        "—".to_string()
-                    },
-                    11
-                )
-            ),
-            Style::default().fg(if done { DIM } else { ACCENT }),
-        ),
-        st,
-    ])
-}
-
-/// 并发分块明细表（表头 + 至多 rows_avail 行）
-fn conn_table(t: &Task, rows_avail: usize) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from(vec![Span::styled(
-        format!(
-            "{}{}{}{}  {}",
-            pad_right("#", 4),
-            pad_right("当前分块", 14),
-            pad_left("进度", 7),
-            pad_left("速度", 11),
-            "状态"
-        ),
-        Style::default().fg(DIM),
-    )])];
-    for (i, _) in t.connections.iter().enumerate() {
-        if i >= rows_avail.max(1) {
-            break;
-        }
-        lines.push(conn_row(i, t));
-    }
-    lines
 }
 
 pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
@@ -358,16 +265,7 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
     // 分块：文字显示 x/y 与块大小「N/块」（块大小按协议写死）
     lines.push(Line::from(chunk_row(t)));
 
-    if inner.height as usize > lines.len() + 2 {
-        lines.push(Line::from(Span::styled(
-            " ────────── 并发分块明细 ──────────",
-            Style::default().fg(DIM2),
-        )));
-        // 行数预算：+1 为 conn_table 自带的表头行预留（表头唯一来源在 conn_table，
-        // 此处不得再推同一表头——缺陷：表头重复渲染 2 行）。
-        let rows_avail = (inner.height as usize).saturating_sub(lines.len() + 1);
-        lines.extend(conn_table(t, rows_avail));
-    }
+    // （FR-01-81 修订二）并发分块明细表已整体移除：详情面板止于任务级字段行。
 
     f.render_widget(Paragraph::new(lines), inner);
 }

@@ -131,7 +131,7 @@ mod ui_tests {
     use super::*;
     use crate::app::CHECKSUM_ALGOS;
     use crate::model::config::Config;
-    use crate::model::{Checksum, Connection, Protocol, Task};
+    use crate::model::{Checksum, Protocol, Task};
 
     fn make_app(tag: &str) -> App {
         let dir = std::env::temp_dir().join(format!("ezr-ui-{tag}-{}", std::process::id()));
@@ -212,20 +212,18 @@ mod ui_tests {
         app.shutdown().await;
     }
 
-    /// 缺陷修复（表头重复）：明细表表头由 `conn_table` 自带（唯一表头源），
-    /// `draw_detail` 不得再推同一表头——否则面板内出现两行重复表头
-    /// （操作者报告的"表头显示重复的 2 行"）。
+    /// FR-01-81 修订二：并发分块明细表整体移除——下载中含活跃连接时，
+    /// 详情面板不得再出现「并发分块明细」段落；任务级「分块」字段行保留。
     #[tokio::test]
-    async fn draw_conn_table_header_renders_once() {
-        let mut app = make_app("conn-table");
+    async fn draw_detail_omits_conn_table() {
+        let mut app = make_app("no-conn-table");
         let mut t = task(1, "detail.bin", TaskState::Downloading);
         t.connections = (1..=4usize)
-            .map(|i| Connection {
+            .map(|i| crate::model::Connection {
                 id: i,
                 start: (i as u64 - 1) * 750,
                 end: i as u64 * 750,
                 done: 100 * i as u64,
-                speed: 0.0,
             })
             .collect();
         app.tasks.push(t);
@@ -233,14 +231,8 @@ mod ui_tests {
         let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
         term.draw(|f| draw(f, &mut app)).unwrap();
         let s = term.backend().to_string();
-        assert_eq!(
-            s.matches("当前分块").count(),
-            1,
-            "明细表表头只渲染一次: {}",
-            s
-        );
-        assert_eq!(s.matches("并发分块明细").count(), 1, "分节标题只渲染一次");
-        assert!(s.contains("#1") && s.contains("#4"), "连接行可见");
+        assert!(!s.contains("并发分块明细"), "明细表段落已移除: {s}");
+        assert!(s.contains("分块"), "任务级分块字段行保留");
         app.shutdown().await;
     }
 
