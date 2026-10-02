@@ -141,6 +141,8 @@ pub struct App {
     conn_windows: HashMap<(u32, usize), SpeedWindow>,
     /// 展示面平滑值（FR-01-17 修订：1s 节拍采样 + EMA；生命周期与 windows 一致）
     speed_display: HashMap<u32, SmoothedSpeed>,
+    /// 连接级展示面平滑值（FR-01-17 修订/FR-01-81：与任务级同拍同口径；生命周期与 conn_windows 一致）
+    conn_speed_display: HashMap<(u32, usize), SmoothedSpeed>,
     /// 展示面上次采样时刻（数值每秒最多变化一次）
     last_speed_tick: Instant,
     /// 配置
@@ -201,6 +203,7 @@ impl App {
             last_tick: Instant::now(),
             last_speed_tick: Instant::now(),
             speed_display: HashMap::new(),
+            conn_speed_display: HashMap::new(),
             visible_rows: 6,
             list_area: None,
             show_chart: true,

@@ -49,6 +49,7 @@ impl App {
                 let id = self.tasks[idx].id;
                 self.windows.remove(&id);
                 self.conn_windows.retain(|(tid, _), _| *tid != id);
+                self.conn_speed_display.retain(|(tid, _), _| *tid != id);
                 let engine = self.engine.clone();
                 let was_resumable = self.tasks[idx].resumable;
                 tokio::spawn(async move {

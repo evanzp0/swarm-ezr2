@@ -14,6 +14,7 @@
 #   01-tui-display-13 模拟器移除与空态引导
 #   01-tui-display-14 标题栏版本号随期号递进
 #   01-tui-display-15 速度展示平滑节奏与归零
+#   01-tui-display-16 连接级速度平滑节奏与归零
 Feature: 01-tui-display TUI 展示与交互（基线沿用 + 真实数据）
 
   期号 01。依据 project/mission/phase-01.md FR-01-80~83。布局、状态机、配色、快捷键、
@@ -156,4 +157,17 @@ Feature: 01-tui-display TUI 展示与交互（基线沿用 + 真实数据）
 
     Examples:
       | file        |
-      | smoothy.bin |
+      | three-m.bin |
+
+  Scenario: 01-tui-display-16 连接级速度平滑节奏与归零
+    Given 一个下载中的任务 "<file>"（并发 "<concurrency>"，fixture 慢速门控维持下载观察窗）
+    When 连续采样并发明细表各行速度 10 秒
+    Then 传输中各行速度数值每秒最多变化一次
+    And 各行速度与任务速度同拍更新（同一 1 秒节拍，无独立变拍）
+    When 暂停该任务（Space）
+    Then 明细表各行速度立即归零（无平滑拖尾，状态列不再显示传输中）
+    And 恢复下载后各行速度经平滑爬升而非瞬时跳至峰值
+
+    Examples:
+      | file         | concurrency |
+      | twelve-m.bin | 4           |

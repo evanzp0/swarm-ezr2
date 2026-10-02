@@ -173,12 +173,23 @@ impl App {
         // 5) 速度展示（FR-01-17 修订）：数据面窗口不变；展示面 1s 节拍采样 + EMA 平滑。
         //    非下载态每 tick 立即归零（零值速断，无衰减拖尾，全局同步扣除）；
         //    下载态每秒采样一次窗口速率推入 EMA，数值每秒最多变化一次。
+        //    连接级与任务级同拍同口径（FR-01-81 增补）：非下载态连接行立即归零；
+        //    下载态同一节拍内采样各连接窗口速率推入各自的 EMA，明细表速度列
+        //    与「传输中/挂起」状态判定同源（均取平滑值）。
         for t in self.tasks.iter_mut() {
             if t.state != TaskState::Downloading {
                 if let Some(d) = self.speed_display.get_mut(&t.id) {
                     d.zero();
                 }
                 t.speed = 0.0;
+                for c in &mut t.connections {
+                    c.speed = 0.0;
+                }
+                for ((tid, _), d) in self.conn_speed_display.iter_mut() {
+                    if *tid == t.id {
+                        d.zero();
+                    }
+                }
             }
         }
         let speed_due = now.duration_since(self.last_speed_tick) >= SPEED_TICK;
@@ -192,6 +203,17 @@ impl App {
                 let d = self.speed_display.entry(t.id).or_default();
                 d.push(sample);
                 t.speed = d.value();
+                for c in &mut t.connections {
+                    let key = (t.id, c.id);
+                    let raw = self
+                        .conn_windows
+                        .get_mut(&key)
+                        .map(|w| w.rate())
+                        .unwrap_or(0.0);
+                    let cd = self.conn_speed_display.entry(key).or_default();
+                    cd.push(raw);
+                    c.speed = cd.value();
+                }
             }
         }
         let global_dl: f64 = self.tasks.iter().map(|t| t.speed).sum();
@@ -290,6 +312,7 @@ impl App {
                     // 已删除/未知任务的幽灵进度：不建滑窗、不聚合（删除后引擎停止确认前的兜底）
                     self.windows.remove(&id);
                     self.conn_windows.retain(|(tid, _), _| *tid != id);
+                    self.conn_speed_display.retain(|(tid, _), _| *tid != id);
                     self.speed_display.remove(&id);
                     return;
                 };
@@ -303,15 +326,15 @@ impl App {
                 t.downloaded = downloaded;
                 t.chunk_done = chunk_done;
                 t.connections = conns.iter().map(|c| c.to_connection()).collect();
-                // 每连接速度回填：按连接累计字节进 1s 滑窗（与任务速度同口径，FR-01-81）
+                // 每连接数据面：按连接累计字节进 1s 滑窗（速率基准，FR-01-81）。
+                // 展示值不再在此裸写——统一由 tick 第 5 步按 1s 节拍经 EMA 写出
+                // （FR-01-17 修订：连接级与任务级同拍平滑、状态列同源）。
                 let now = Instant::now();
                 for c in &conns {
-                    let w = self.conn_windows.entry((id, c.id)).or_default();
-                    w.push(now, c.done);
-                    let r = w.rate();
-                    if let Some(tc) = t.connections.iter_mut().find(|x| x.id == c.id) {
-                        tc.speed = r;
-                    }
+                    self.conn_windows
+                        .entry((id, c.id))
+                        .or_default()
+                        .push(now, c.done);
                 }
                 if downloaded > 0 {
                     t.made_progress = true;
@@ -331,6 +354,7 @@ impl App {
                 }
                 self.windows.remove(&id);
                 self.conn_windows.retain(|(tid, _), _| *tid != id);
+                self.conn_speed_display.retain(|(tid, _), _| *tid != id);
             }
             Evt::Failed {
                 id,
@@ -368,6 +392,7 @@ impl App {
                 t.speed = 0.0;
                 self.windows.remove(&id);
                 self.conn_windows.retain(|(tid, _), _| *tid != id);
+                self.conn_speed_display.retain(|(tid, _), _| *tid != id);
                 if stop_wait {
                     t.state = TaskState::Failed;
                     t.fail_kind = Some(FailKind::Fatal);
@@ -402,6 +427,7 @@ impl App {
                 t.speed = 0.0;
                 self.windows.remove(&id);
                 self.conn_windows.retain(|(tid, _), _| *tid != id);
+                self.conn_speed_display.retain(|(tid, _), _| *tid != id);
                 let name = t.name.clone();
                 if has_checksum {
                     let algo = t.checksum.as_ref().map_or("SHA-256", |c| c.algo);
@@ -542,6 +568,7 @@ impl App {
         // t（可变借用）在此作用域结束后自然释放
         self.windows.remove(&id);
         self.conn_windows.retain(|(tid, _), _| *tid != id);
+        self.conn_speed_display.retain(|(tid, _), _| *tid != id);
         self.set_toast(toast);
         self.save_registry();
     }
@@ -586,6 +613,47 @@ impl App {
 mod tick_tests {
     use super::*;
     use crate::model::config::Config;
+    use crate::model::{sample_task, Connection};
+
+    /// 下载态任务夹具：两连接各持一块（明细表两行传输中）
+    fn dl_task_with_conns() -> Task {
+        let mut t = sample_task();
+        t.id = 7;
+        t.state = TaskState::Downloading;
+        t.probed = true;
+        t.has_slot = true;
+        t.total = 2_000_000;
+        t.downloaded = 400_000;
+        t.connections = vec![
+            Connection {
+                id: 1,
+                start: 0,
+                end: 1_000_000,
+                done: 250_000,
+                speed: 0.0,
+            },
+            Connection {
+                id: 2,
+                start: 1_000_000,
+                end: 2_000_000,
+                done: 150_000,
+                speed: 0.0,
+            },
+        ];
+        t
+    }
+
+    /// 数据面窗口预置：1 秒间距两个累计读数 → rate ≈ bytes B/s
+    fn feed_window(w: &mut SpeedWindow, bytes: u64) {
+        let t0 = Instant::now();
+        w.push(t0 - Duration::from_secs(1), 0);
+        w.push(t0, bytes);
+    }
+
+    /// 强制下一 tick 触发 1s 展示节拍
+    fn arm_speed_tick(app: &mut App) {
+        app.last_speed_tick = Instant::now() - Duration::from_secs(2);
+    }
 
     fn make_app(tag: &str) -> App {
         let dir = std::env::temp_dir().join(format!("ezr-tick-{tag}-{}", std::process::id()));
@@ -671,5 +739,105 @@ mod tick_tests {
         assert_eq!(std::fs::metadata(&out).unwrap().len(), 128_000);
         app.shutdown().await;
         std::fs::remove_dir_all(&save).ok();
+    }
+
+    /// FR-01-17（修订）/FR-01-81：连接级展示值与任务级同拍平滑——同一 1s 节拍内，
+    /// 任务速度与各连接速度都从数据面窗口经 EMA 写出（首拍 = α 份额，非裸差分直传）。
+    #[tokio::test]
+    async fn tick_smooths_connection_speeds_on_same_beat() {
+        let mut app = make_app("conn-smooth");
+        app.tasks.push(dl_task_with_conns());
+        feed_window(app.windows.entry(7).or_default(), 100_000);
+        feed_window(app.conn_windows.entry((7, 1)).or_default(), 60_000);
+        feed_window(app.conn_windows.entry((7, 2)).or_default(), 40_000);
+        arm_speed_tick(&mut app);
+        app.tick().await;
+        let t = &app.tasks[0];
+        assert!(t.speed > 0.0, "任务速度随节拍写出");
+        let raw1 = app
+            .conn_windows
+            .get_mut(&(7, 1))
+            .map(|w| w.rate())
+            .unwrap_or(0.0);
+        let c1 = t.connections.iter().find(|c| c.id == 1).unwrap();
+        let c2 = t.connections.iter().find(|c| c.id == 2).unwrap();
+        assert!(c1.speed > 0.0 && c2.speed > 0.0, "连接速度随同一节拍写出");
+        assert!(
+            c1.speed < raw1 * 0.9,
+            "连接展示值是 EMA 份额（首拍 α=1/5），不是裸差分直传：{} vs raw {raw1}",
+            c1.speed
+        );
+        // 同拍门控：1s 内再次 tick 不产生新数值
+        let (s_t, s_c1) = (t.speed, c1.speed);
+        app.tick().await;
+        let t = &app.tasks[0];
+        assert_eq!(t.speed, s_t, "节拍未到任务数值不变");
+        assert_eq!(
+            t.connections.iter().find(|c| c.id == 1).unwrap().speed,
+            s_c1,
+            "节拍未到连接数值不变（同拍，无独立变拍）"
+        );
+        app.shutdown().await;
+    }
+
+    /// 零值速断（FR-01-17 修订）：任务进入非下载态，连接行展示值立即归零，
+    /// 状态列（传输中/挂起）与数字同源，不再残留传输中。
+    #[tokio::test]
+    async fn tick_zeroes_connection_displays_when_not_downloading() {
+        let mut app = make_app("conn-zero");
+        app.tasks.push(dl_task_with_conns());
+        feed_window(app.windows.entry(7).or_default(), 100_000);
+        feed_window(app.conn_windows.entry((7, 1)).or_default(), 60_000);
+        feed_window(app.conn_windows.entry((7, 2)).or_default(), 40_000);
+        arm_speed_tick(&mut app);
+        app.tick().await;
+        assert!(
+            app.tasks[0].connections.iter().all(|c| c.speed > 0.0),
+            "前置：连接展示值已平滑写出"
+        );
+        app.tasks[0].state = TaskState::Paused;
+        app.tick().await;
+        let t = &app.tasks[0];
+        assert_eq!(t.speed, 0.0, "任务速度立即归零");
+        assert!(
+            t.connections.iter().all(|c| c.speed == 0.0),
+            "连接行速度立即归零（无 EMA 拖尾）"
+        );
+        app.shutdown().await;
+    }
+
+    /// 归零后恢复下载：EMA 从 0 重新爬升（首拍仍为 α 份额），证明归零清除了
+    /// 平滑器状态而非冻结旧值——对应场景 16「恢复后各行平滑爬升」。
+    #[tokio::test]
+    async fn tick_restarts_connection_climb_after_zero_cut() {
+        let mut app = make_app("conn-resume");
+        app.tasks.push(dl_task_with_conns());
+        feed_window(app.windows.entry(7).or_default(), 100_000);
+        feed_window(app.conn_windows.entry((7, 1)).or_default(), 60_000);
+        feed_window(app.conn_windows.entry((7, 2)).or_default(), 40_000);
+        arm_speed_tick(&mut app);
+        app.tick().await;
+        app.tasks[0].state = TaskState::Paused;
+        app.tick().await;
+        // 恢复下载：续传 Start 清旧窗（tasks.rs 重启路径），新窗从 0 重新累积
+        app.tasks[0].state = TaskState::Downloading;
+        app.windows.remove(&7);
+        app.conn_windows.retain(|(tid, _), _| *tid != 7);
+        feed_window(app.windows.entry(7).or_default(), 100_000);
+        feed_window(app.conn_windows.entry((7, 1)).or_default(), 60_000);
+        arm_speed_tick(&mut app);
+        app.tick().await;
+        let raw1 = app
+            .conn_windows
+            .get_mut(&(7, 1))
+            .map(|w| w.rate())
+            .unwrap_or(0.0);
+        let c1 = app.tasks[0].connections.iter().find(|c| c.id == 1).unwrap();
+        assert!(
+            c1.speed > 0.0 && c1.speed < raw1 * 0.9,
+            "恢复后从 0 平滑爬升（首拍 α 份额）：{} vs raw {raw1}",
+            c1.speed
+        );
+        app.shutdown().await;
     }
 }
