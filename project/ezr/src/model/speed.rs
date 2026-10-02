@@ -64,6 +64,33 @@ impl SpeedWindow {
     }
 }
 
+/// 展示面平滑器（FR-01-17 修订）：指数滑动平均，α=1/5（等效约 5 秒窗口）。
+/// 数值每秒经 `push` 推进一次采样；`zero` 供非下载态立即归零（不走衰减、无拖尾）。
+#[derive(Debug, Default)]
+pub struct SmoothedSpeed {
+    value: f64,
+}
+
+impl SmoothedSpeed {
+    /// 平滑系数 α = 1/5（libtorrent second_tick 同款口径）
+    const ALPHA: f64 = 1.0 / 5.0;
+
+    /// 推进一次本秒采样（B/s），展示值向采样值收敛 1/5
+    pub fn push(&mut self, sample: f64) {
+        self.value += Self::ALPHA * (sample - self.value);
+    }
+
+    /// 立即归零（零值速断：任务进入非下载态时调用，EMA 不拖尾）
+    pub fn zero(&mut self) {
+        self.value = 0.0;
+    }
+
+    /// 当前展示值（B/s）
+    pub fn value(&self) -> f64 {
+        self.value
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,5 +122,36 @@ mod tests {
         // 旧端点出窗后差值为 0（5s 前的 0 已被驱逐，窗口只剩最新段）
         w.push(t0 + Duration::from_secs(5), 5000);
         assert!(w.rate() >= 0.0);
+    }
+
+    // ---- FR-01-17 修订：展示面 EMA 平滑（α=1/5，等效约 5 秒窗口）----
+
+    #[test]
+    fn ema_first_sample_is_fraction_of_input() {
+        // 首个采样只推入 α 份额（从 0 爬升，非瞬时跳变）——对恒等直传的错误实现失败
+        let mut s = SmoothedSpeed::default();
+        s.push(1000.0);
+        assert!((s.value() - 200.0).abs() < 1e-6, "value={}", s.value());
+    }
+
+    #[test]
+    fn ema_converges_to_steady_input() {
+        // 恒定采样 40 步（0.8^40≈0.01%）应收敛到 ±2% 内——对固定偏置/遗忘的错误实现失败
+        let mut s = SmoothedSpeed::default();
+        for _ in 0..40 {
+            s.push(1000.0);
+        }
+        assert!((s.value() - 1000.0).abs() < 20.0, "value={}", s.value());
+    }
+
+    #[test]
+    fn zero_method_snaps_immediately() {
+        // 零值速断：zero() 后必须精确为 0，无衰减拖尾——对依赖自然衰减的错误实现失败
+        let mut s = SmoothedSpeed::default();
+        for _ in 0..20 {
+            s.push(1000.0);
+        }
+        s.zero();
+        assert_eq!(s.value(), 0.0);
     }
 }

@@ -1,6 +1,6 @@
 //! engine — 主循环 tick：消费引擎事件 → 槽位调度 → 启动/重试推进 → 统计
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::App;
 use crate::engine::{Cmd, Evt};
@@ -8,6 +8,9 @@ use crate::model::registry::Registry;
 use crate::model::sidecar::Sidecar;
 use crate::model::speed::SpeedWindow;
 use crate::model::{checksum, namegen, slots, Checksum, FailKind, Task, TaskState};
+
+/// 展示面采样节拍（FR-01-17 修订：数值每秒最多变化一次）
+const SPEED_TICK: Duration = Duration::from_secs(1);
 
 impl App {
     /// 校验期望解析（FR-01-50/D3）：显式提供优先；否则查保存目录伴随文件
@@ -167,17 +170,35 @@ impl App {
             }
         }
 
-        // 5) 速度窗口 → 任务速度 + 全局统计
-        let mut global_dl = 0.0f64;
-        for (id, w) in self.windows.iter_mut() {
-            let r = w.rate();
-            if let Some(t) = self.tasks.iter_mut().find(|t| t.id == *id) {
-                t.speed = r;
+        // 5) 速度展示（FR-01-17 修订）：数据面窗口不变；展示面 1s 节拍采样 + EMA 平滑。
+        //    非下载态每 tick 立即归零（零值速断，无衰减拖尾，全局同步扣除）；
+        //    下载态每秒采样一次窗口速率推入 EMA，数值每秒最多变化一次。
+        for t in self.tasks.iter_mut() {
+            if t.state != TaskState::Downloading {
+                if let Some(d) = self.speed_display.get_mut(&t.id) {
+                    d.zero();
+                }
+                t.speed = 0.0;
             }
-            global_dl += r;
         }
+        let speed_due = now.duration_since(self.last_speed_tick) >= SPEED_TICK;
+        if speed_due {
+            self.last_speed_tick = now;
+            for t in self.tasks.iter_mut() {
+                if t.state != TaskState::Downloading {
+                    continue;
+                }
+                let sample = self.windows.get_mut(&t.id).map(|w| w.rate()).unwrap_or(0.0);
+                let d = self.speed_display.entry(t.id).or_default();
+                d.push(sample);
+                t.speed = d.value();
+            }
+        }
+        let global_dl: f64 = self.tasks.iter().map(|t| t.speed).sum();
         self.session_bytes += (global_dl * dt) as u64;
-        self.push_hist(global_dl, 0.0);
+        if speed_due {
+            self.push_hist(global_dl, 0.0);
+        }
 
         // 6) toast 过期
         if let Some(u) = self.toast_until {
@@ -269,6 +290,7 @@ impl App {
                     // 已删除/未知任务的幽灵进度：不建滑窗、不聚合（删除后引擎停止确认前的兜底）
                     self.windows.remove(&id);
                     self.conn_windows.retain(|(tid, _), _| *tid != id);
+                    self.speed_display.remove(&id);
                     return;
                 };
                 if let Some(w) = self.windows.get_mut(&id) {

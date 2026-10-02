@@ -13,6 +13,7 @@
 #   01-tui-display-12 头部统计真实语义
 #   01-tui-display-13 模拟器移除与空态引导
 #   01-tui-display-14 标题栏版本号随期号递进
+#   01-tui-display-15 速度展示平滑节奏与归零
 Feature: 01-tui-display TUI 展示与交互（基线沿用 + 真实数据）
 
   期号 01。依据 project/mission/phase-01.md FR-01-80~83。布局、状态机、配色、快捷键、
@@ -142,3 +143,17 @@ Feature: 01-tui-display TUI 展示与交互（基线沿用 + 真实数据）
   Scenario: 01-tui-display-14 标题栏版本号随期号递进
     When 观察标题栏
     Then 版本号显示 "v0.1.0-01"（期号 01）
+
+  Scenario: 01-tui-display-15 速度展示平滑节奏与归零
+    Given 一个下载中的任务 "<file>"（fixture 慢速门控维持下载观察窗）
+    When 连续采样任务信息行速度与头部全局速度 10 秒
+    Then 速度数值每秒最多变化一次
+    And Sparkline 速度图新增采样点 ≤ 10（每秒至多一个）
+    When 暂停该任务（Space）
+    Then 该任务展示速度立即归零（信息行进入暂停态文案，无平滑拖尾）
+    And 头部全局速度同步扣除该任务份额
+    And 恢复下载后速度经平滑爬升而非瞬时跳至峰值
+
+    Examples:
+      | file        |
+      | smoothy.bin |

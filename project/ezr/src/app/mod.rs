@@ -37,7 +37,7 @@ use crate::model::config::Config;
 use crate::model::registry::Registry;
 use crate::model::sidecar::Sidecar;
 use crate::model::slots;
-use crate::model::speed::SpeedWindow;
+use crate::model::speed::{SmoothedSpeed, SpeedWindow};
 pub use crate::model::Task;
 
 mod dialog_keys;
@@ -139,6 +139,10 @@ pub struct App {
     windows: HashMap<u32, SpeedWindow>,
     /// 每连接速度滑窗（(任务 id, 连接 id) → 1s 滑窗；明细表传输中/挂起与并发线程计数依赖，FR-01-81）
     conn_windows: HashMap<(u32, usize), SpeedWindow>,
+    /// 展示面平滑值（FR-01-17 修订：1s 节拍采样 + EMA；生命周期与 windows 一致）
+    speed_display: HashMap<u32, SmoothedSpeed>,
+    /// 展示面上次采样时刻（数值每秒最多变化一次）
+    last_speed_tick: Instant,
     /// 配置
     pub cfg: Config,
     /// 注册表路径
@@ -195,6 +199,8 @@ impl App {
             registry_path,
             last_save: Instant::now(),
             last_tick: Instant::now(),
+            last_speed_tick: Instant::now(),
+            speed_display: HashMap::new(),
             visible_rows: 6,
             list_area: None,
             show_chart: true,
