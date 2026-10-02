@@ -105,17 +105,17 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() + 1 && i + 2 < b.len() + 1 {
-            let hex_ok = i + 2 < b.len()
-                && b[i + 1].is_ascii_hexdigit()
-                && b[i + 2].is_ascii_hexdigit();
-            if hex_ok {
-                let hi = (b[i + 1] as char).to_digit(16).unwrap_or(0) as u16;
-                let lo = (b[i + 2] as char).to_digit(16).unwrap_or(0) as u16;
-                out.push((hi * 16 + lo) as u8);
-                i += 3;
-                continue;
-            }
+        // 完整 %XX（两位十六进制）才解码；不足三位（含尾部 %2）保留原文逐字节
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && b[i + 1].is_ascii_hexdigit()
+            && b[i + 2].is_ascii_hexdigit()
+        {
+            let hi = (b[i + 1] as char).to_digit(16).unwrap_or(0) as u16;
+            let lo = (b[i + 2] as char).to_digit(16).unwrap_or(0) as u16;
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+            continue;
         }
         out.push(b[i]);
         i += 1;
@@ -176,6 +176,14 @@ mod tests {
         assert_eq!(from_url_path("http://x/a/b/f.zip?q=1"), Some("f.zip".to_string()));
         assert_eq!(from_url_path("http://x/"), None);
         assert_eq!(from_url_path("http://x/a%20b.bin"), Some("a b.bin".to_string()));
+    }
+
+    #[test]
+    fn url_partial_escape_tail_kept_verbatim() {
+        // 尾部残缺 %2（不足 %XX 三位）不误读，保留原文（percent_decode 边界）
+        assert_eq!(from_url_path("http://x/a%2.bin"), Some("a%2.bin".to_string()));
+        assert_eq!(from_url_path("http://x/a%.bin"), Some("a%.bin".to_string()));
+        assert_eq!(from_url_path("http://x/50%25.bin"), Some("50%.bin".to_string()));
     }
 
     #[test]

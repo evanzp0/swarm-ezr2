@@ -195,17 +195,12 @@ impl Registry {
             .collect()
     }
 
-    /// 原子写（temp + rename）
+    /// 原子写（temp + rename，FR-01-20；实现见 `save_json_atomic`）
     ///
     /// # Errors
     /// 写临时文件或 rename 失败时返回 IO 错误。
     pub fn save(&self, path: &str) -> std::io::Result<()> {
-        let tmp = format!("{path}.tmp");
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(&tmp, json)?;
-        std::fs::rename(&tmp, path)?;
-        Ok(())
+        super::save_json_atomic(self, path)
     }
 
     /// 读取（文件缺失/损坏/版本不符 → None，按全新注册表处理）

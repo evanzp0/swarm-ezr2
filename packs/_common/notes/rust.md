@@ -87,6 +87,9 @@ group_imports = "StdExternalCrate"
 
 ## 4. 编码实践
 
+- **`let _ = x;` 是通配符丢弃、不移动值**：`_` 模式不绑定所有权，`let _ = s;`（String）后
+  `s` 仍可用。它贴在"下方实际在用"的变量上时是无操作死语句（多为历史未用抑制器残留），
+  直接删除即可——不要因 E0382 直觉误判而不敢删；真正的未用抑制要用 `_var` 或改签名。
 - **bencode/二进制协议手工编码一律走 builder 辅助，不手拼长度前缀**：手写字节串长度
   前缀极易出错，且报错位置远离笔误点。统一用"编码辅助函数 + 解析 round-trip 断言"
   （编码→解析→比对原文），笔误当场现形。
@@ -131,3 +134,11 @@ group_imports = "StdExternalCrate"
   `cargo test` 兜底（fix 的 diff 也要过目）。
 - **rustc 1.87+ 的 `u64::is_multiple_of`** 可替换 `x % m == 0`（clippy manual_is_multiple_of
   会提示）；`checked_div` 用于除数可能为 0 的展示算术。
+
+## 7. 测试与变异度量
+
+- **cargo-mutants 的每文件变异点数与文件行数近似线性（约 0.2 点/行）**：千行级交互层
+  文件单文件即可产出 300+ 变异点（scan 模式 `cargo mutants --list` 直接统计，无需跑变异）。
+  SKILL 的「>100 变异点做保持行为拆分」在模块边界上依赖 architect 裁决、验证依赖 e2e 套件
+  （cleaner 不运行）时，不要强行拆——把每文件计数登记 handoff 移交，hardender 全量变异前
+  由 architect 先收模块边界（`--file` 可按文件分块跑变异，拆分收益在 hardender 兑现）。

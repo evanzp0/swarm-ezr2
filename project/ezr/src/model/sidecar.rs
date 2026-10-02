@@ -146,12 +146,7 @@ impl Sidecar {
     /// # Errors
     /// 临时文件写入或 rename 失败时返回 IO 错误。
     pub fn save(&self, path: &str) -> std::io::Result<()> {
-        let tmp = format!("{path}.tmp");
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(&tmp, json)?;
-        std::fs::rename(&tmp, path)?;
-        Ok(())
+        super::save_json_atomic(self, path)
     }
 
     /// 读取并解析（损坏/版本不符返回 None：按无断点处理，从头下载）

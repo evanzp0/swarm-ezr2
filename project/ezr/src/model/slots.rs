@@ -80,47 +80,16 @@ pub fn queue_pos(tasks: &[Task], task_id: u32) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Protocol, TaskState};
+    use crate::model::sample_task;
+    use crate::model::TaskState;
 
+    /// 夹具：共享 sample_task（model 层单一来源），按用例覆盖 id/名称/状态
     fn mk(id: u32, state: TaskState) -> Task {
-        Task {
-            id,
-            name: format!("t{id}"),
-            protocol: Protocol::Http,
-            url: String::new(),
-            final_url: None,
-            save_dir: String::new(),
-            total: 0,
-            downloaded: 0,
-            speed: 0.0,
-            state,
-            resumable: true,
-            probed: false,
-            connections: vec![],
-            chunk_done: 0,
-            block_size: 1_048_576,
-            concurrency: 4,
-            retries: 0,
-            max_retries: 5,
-            made_progress: false,
-            retry_in: None,
-            fail_kind: None,
-            error: None,
-            invalidation_streak: 0,
-            checksum: None,
-            verify_ok: None,
-            etag: None,
-            last_modified: None,
-            has_slot: false,
-            upload_speed: 0.0,
-            uploaded: 0,
-            seeders: 0,
-            peers: 0,
-            seed_left: 0.0,
-            elapsed: 0.0,
-            created: String::new(),
-            added_at: 0,
-        }
+        let mut t = sample_task();
+        t.id = id;
+        t.name = format!("t{id}");
+        t.state = state;
+        t
     }
 
     #[test]

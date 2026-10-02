@@ -122,9 +122,9 @@ pub(crate) async fn run(
             if let Some((sc, sc_path)) = &sidecar {
                 let _ = Sidecar::save(sc, sc_path);
             }
-            let (downloaded, blocks, chunk_done) = match &sidecar {
-                Some((sc, _)) => (sc.downloaded, sc.blocks.clone(), completed_of(sc)),
-                None => (0, vec![], 0),
+            let (downloaded, chunk_done) = match &sidecar {
+                Some((sc, _)) => (sc.downloaded, completed_of(sc)),
+                None => (0, 0),
             };
             let _ = evt_tx
                 .send(Evt::Failed {
@@ -134,7 +134,6 @@ pub(crate) async fn run(
                     retry_after: f.retry_after,
                     made_progress,
                     downloaded,
-                    blocks,
                     chunk_done,
                 })
                 .await;
@@ -238,6 +237,19 @@ fn probe_head(r: &reqwest::Response) -> ProbeHead {
     }
 }
 
+/// 停止全部 worker（stop 标志 + watch 广播 + 收割句柄）；监督循环各退出路径共用
+async fn stop_workers(
+    stop: &std::sync::atomic::AtomicBool,
+    stop_tx: &watch::Sender<bool>,
+    handles: &mut Vec<tokio::task::JoinHandle<()>>,
+) {
+    stop.store(true, Ordering::Relaxed);
+    let _ = stop_tx.send(true);
+    for h in handles.drain(..) {
+        let _ = h.await;
+    }
+}
+
 /// 下载主流程
 async fn download(
     spec: &TaskSpec,
@@ -284,8 +296,8 @@ async fn download(
     let blocks = if let Some(sidecar) = &sc {
         match consistency::check(&sidecar.stamp(), &probed_stamp) {
             Consistency::Valid => {
-                let y = chunk_total(sidecar.size, sidecar.block_size);
-                if y == sidecar.block_count && sidecar.size == head.total {
+                let expected_blocks = chunk_total(sidecar.size, sidecar.block_size);
+                if expected_blocks == sidecar.block_count && sidecar.size == head.total {
                     Blocks {
                         total: sidecar.size,
                         piece: sidecar.block_size,
@@ -303,7 +315,7 @@ async fn download(
         Blocks::new(head.total, spec.block_size)
     };
 
-    let y = blocks.count();
+    let total_blocks = blocks.count();
     let multi_ok = head.status == 206 && head.total > 0;
     // 探测完成（App 更新 final_url/total/resumable/probed 与大小显示）
     if !emit(evt_tx, Evt::Probed {
@@ -329,8 +341,8 @@ async fn download(
     let final_path = dir.join(&name);
     let sc_path = sidecar_path(&spec.save_dir, &name);
 
-    // 单流路径：不支持 Range（200）或单块（y <= 1）
-    if !multi_ok || y <= 1 {
+    // 单流路径：不支持 Range（200）或单块（total_blocks <= 1）
+    if !multi_ok || total_blocks <= 1 {
         return single_stream(
             spec,
             shared,
@@ -403,17 +415,13 @@ async fn download(
             cmd = cmd_rx.recv() => match cmd {
                 Some(TaskCmd::Pause) | Some(TaskCmd::Cancel) => {
                     let cancelled = cmd == Some(TaskCmd::Cancel);
-                    stop.store(true, Ordering::Relaxed);
-                    let _ = stop_tx.send(true);
-                    for h in handles.drain(..) {
-                        let _ = h.await;
-                    }
+                    stop_workers(&stop, &stop_tx, &mut handles).await;
                     let blocks = blocks_shared.lock().await.clone();
                     if cancelled {
                         return Flow::Cancelled;
                     }
                     let sidecar =
-                        build_sidecar(spec, &name, &probed_stamp, &blocks, false);
+                        build_sidecar(spec, &probed_stamp, &blocks, false);
                     return Flow::Paused(PausedState {
                         blocks,
                         sidecar,
@@ -424,16 +432,12 @@ async fn download(
             },
             _ = tokio::time::sleep(PROGRESS_TICK) => {
                 if failure.lock().await.is_some() {
-                    stop.store(true, Ordering::Relaxed);
-                    let _ = stop_tx.send(true);
-                    for h in handles.drain(..) {
-                        let _ = h.await;
-                    }
+                    stop_workers(&stop, &stop_tx, &mut handles).await;
                     let f = failure.lock().await.clone().unwrap_or_else(|| {
                         EngineFailure::network("传输中断")
                     });
                     let blocks = blocks_shared.lock().await.clone();
-                    let sidecar = build_sidecar(spec, &name, &probed_stamp, &blocks, false);
+                    let sidecar = build_sidecar(spec, &probed_stamp, &blocks, false);
                     return Flow::Failed(
                         f,
                         total_written.load(Ordering::Relaxed) > 0,
@@ -453,7 +457,7 @@ async fn download(
                 }).await {
                     return Flow::Cancelled;
                 }
-                if chunk_done == y && y > 0 {
+                if chunk_done == total_blocks && total_blocks > 0 {
                     // 全块完成 → 大小校验（FR-01-52）
                     if downloaded != total {
                         let f = EngineFailure {
@@ -463,24 +467,16 @@ async fn download(
                             ),
                             retry_after: None,
                         };
-                        stop.store(true, Ordering::Relaxed);
-                        let _ = stop_tx.send(true);
-                        for h in handles.drain(..) {
-                            let _ = h.await;
-                        }
+                        stop_workers(&stop, &stop_tx, &mut handles).await;
                         let blocks = blocks_shared.lock().await.clone();
-                        let sidecar = build_sidecar(spec, &name, &probed_stamp, &blocks, false);
+                        let sidecar = build_sidecar(spec, &probed_stamp, &blocks, false);
                         return Flow::Failed(
                             f,
                             total_written.load(Ordering::Relaxed) > 0,
                             Some((sidecar, sc_path.clone())),
                         );
                     }
-                    stop.store(true, Ordering::Relaxed);
-                    let _ = stop_tx.send(true);
-                    for h in handles.drain(..) {
-                        let _ = h.await;
-                    }
+                    stop_workers(&stop, &stop_tx, &mut handles).await;
                     let has_checksum = spec.expected_algo.is_some();
                     if !has_checksum {
                         // 无校验值直接完成：此处收尾——去 `.downloading` 扩展名 +
@@ -499,7 +495,7 @@ async fn download(
                 if tokio::time::Instant::now() >= flush_deadline {
                     flush_deadline = tokio::time::Instant::now() + SIDECAR_FLUSH;
                     let b2 = blocks_shared.lock().await;
-                    let sidecar = build_sidecar(spec, &name, &probed_stamp, &b2, false);
+                    let sidecar = build_sidecar(spec, &probed_stamp, &b2, false);
                     drop(b2);
                     let _ = Sidecar::save(&sidecar, &sc_path);
                 }
@@ -512,7 +508,6 @@ async fn download(
 #[allow(clippy::needless_pass_by_value)]
 fn build_sidecar(
     spec: &TaskSpec,
-    _name: &str,
     stamp: &ServerStamp,
     blocks: &Blocks,
     non_resumable: bool,
@@ -545,7 +540,7 @@ fn build_sidecar(
 async fn single_stream(
     spec: &TaskSpec,
     shared: &Arc<super::EngineShared>,
-    resp: reqwest::Response,
+    mut resp: reqwest::Response,
     blocks: Blocks,
     dl_path: &Path,
     final_path: &Path,
@@ -567,14 +562,13 @@ async fn single_stream(
         Err(e) => return Flow::Failed(EngineFailure::fatal(format!("无法创建目标文件（{e}）")), false, None),
     };
     let mut downloaded: u64 = 0;
-    let mut resp = resp;
     // 单流进度上报节流（FR-01-17/81：不支持续传的任务同样需要真实进度/速度/连接数）
     let mut last_emit = std::time::Instant::now();
     loop {
         tokio::select! {
             cmd = cmd_rx.recv() => match cmd {
                 Some(TaskCmd::Pause) => {
-                    let sidecar = build_sidecar(spec, name, stamp, &blocks, true);
+                    let sidecar = build_sidecar(spec, stamp, &blocks, true);
                     return Flow::Paused(PausedState {
                         blocks,
                         sidecar,
@@ -697,14 +691,13 @@ async fn block_worker(
     failure: Arc<tokio::sync::Mutex<Option<EngineFailure>>>,
     conns: Arc<tokio::sync::Mutex<Vec<ConnView>>>,
 ) {
-    let file = match tokio::fs::OpenOptions::new().write(true).open(&file_path).await {
+    let mut file = match tokio::fs::OpenOptions::new().write(true).open(&file_path).await {
         Ok(f) => f,
         Err(_) => {
             *failure.lock().await = Some(EngineFailure::fatal("无法写入目标文件"));
             return;
         }
     };
-    let mut file = file;
     let mut stop_rx = stop_rx;
     loop {
         if *stop_rx.borrow() {
@@ -909,20 +902,41 @@ mod tests {
         })
     }
 
+    /// 构建 sidecar 接续 spec（断点测试夹具共用）
+    fn sidecar_spec(id: u32, url: &str, dir: &std::path::Path, conc: usize) -> TaskSpec {
+        let mut spec = spec_for(id, url, dir.to_str().unwrap(), 4096, conc, None);
+        spec.sidecar = Some(Sidecar::load(dir.join("f.bin.ezr").to_str().unwrap()).unwrap());
+        spec.sidecar_path = Some(dir.join("f.bin.ezr").to_str().unwrap().to_string());
+        spec
+    }
+
+    /// 启动一次 run()：返回 (命令句柄 keep-alive，事件接收端，10s 超时截止)。
+    /// cmd_tx 必须由调用方持有到断言结束：所有 sender drop 会让 supervisor 的
+    /// cmd_rx.recv() 立即得到 None → Flow::Cancelled，下载永远完不成。
+    #[allow(clippy::type_complexity)]
+    fn launch_spec(
+        spec: TaskSpec,
+    ) -> (mpsc::Sender<TaskCmd>, mpsc::Receiver<Evt>, std::time::Instant) {
+        let (tx, rx) = mpsc::channel::<Evt>(64);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<TaskCmd>(4);
+        tokio::spawn(run(spec, throttle_free(), cmd_rx, tx));
+        (
+            cmd_tx,
+            rx,
+            std::time::Instant::now() + std::time::Duration::from_secs(10),
+        )
+    }
+
     #[tokio::test]
     async fn end_to_end_resumable_download_completes() {
         let dir = std::env::temp_dir().join(format!("ezr-e2e-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let total: u64 = 3 * 4096 + 1111; // 4 块（块 4KB），末块吸收余数
         let url = mock_server(total, vec![]);
-        let (tx, mut rx) = mpsc::channel::<Evt>(64);
-        let shared = throttle_free();
-        let (_cmd_tx, cmd_rx) = mpsc::channel::<TaskCmd>(4);
-        let spec = spec_for(1, &url, dir.to_str().unwrap(), 4096, 4, None);
-        tokio::spawn(run(spec, shared, cmd_rx, tx));
+        let (_cmd_tx, mut rx, deadline) =
+            launch_spec(spec_for(1, &url, dir.to_str().unwrap(), 4096, 4, None));
         let mut done = false;
         let mut probed = false;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while std::time::Instant::now() < deadline {
             match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
                 Ok(Some(Evt::DownloadDone { total: t, has_checksum: false, .. })) => {
@@ -1005,14 +1019,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let total: u64 = 9000;
         let url = mock_server(total, vec![("norange".to_string(), "1".to_string())]);
-        let (tx, mut rx) = mpsc::channel::<Evt>(64);
-        let shared = throttle_free();
-        let (_cmd_tx, cmd_rx) = mpsc::channel::<TaskCmd>(4);
-        let spec = spec_for(2, &url, dir.to_str().unwrap(), 4096, 4, None);
-        tokio::spawn(run(spec, shared, cmd_rx, tx));
+        let (_cmd_tx, mut rx, deadline) =
+            launch_spec(spec_for(2, &url, dir.to_str().unwrap(), 4096, 4, None));
         let mut done = false;
         let mut non_resumable = false;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while std::time::Instant::now() < deadline {
             match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
                 Ok(Some(Evt::DownloadDone { total: t, .. })) => {
@@ -1041,12 +1051,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ezr-e2e3-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let url = mock_server(1000, vec![("status".to_string(), "503".to_string())]);
-        let (tx, mut rx) = mpsc::channel::<Evt>(64);
-        let shared = throttle_free();
-        let (_cmd_tx, cmd_rx) = mpsc::channel::<TaskCmd>(4);
-        let spec = spec_for(3, &url, dir.to_str().unwrap(), 4096, 2, None);
-        tokio::spawn(run(spec, shared, cmd_rx, tx));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let (_cmd_tx, mut rx, deadline) =
+            launch_spec(spec_for(3, &url, dir.to_str().unwrap(), 4096, 2, None));
         while std::time::Instant::now() < deadline {
             match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
                 Ok(Some(Evt::Failed { kind, reason, .. })) => {
@@ -1068,12 +1074,8 @@ mod tests {
         let total: u64 = 2 * 4096;
         let url = mock_server(total, vec![]);
         // 先下载（无校验值）生成文件
-        let (tx, mut rx) = mpsc::channel::<Evt>(64);
-        let shared = throttle_free();
-        let (_cmd_tx, cmd_rx) = mpsc::channel::<TaskCmd>(4);
-        let spec = spec_for(4, &url, dir.to_str().unwrap(), 4096, 2, None);
-        tokio::spawn(run(spec, shared, cmd_rx, tx));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let (_cmd_tx, mut rx, deadline) =
+            launch_spec(spec_for(4, &url, dir.to_str().unwrap(), 4096, 2, None));
         loop {
             match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
                 Ok(Some(Evt::DownloadDone { .. })) => break,
@@ -1137,14 +1139,7 @@ mod tests {
             SidecarTask { id: 5, added_at: 0, save_dir: dir.to_str().unwrap().to_string(), concurrency: 2, protocol: Protocol::Http },
         );
         sc.save(dir.join("f.bin.ezr").to_str().unwrap()).unwrap();
-        let (tx, mut rx) = mpsc::channel::<Evt>(64);
-        let shared = throttle_free();
-        let (_cmd_tx, cmd_rx) = mpsc::channel::<TaskCmd>(4);
-        let mut spec = spec_for(5, &url, dir.to_str().unwrap(), 4096, 2, None);
-        spec.sidecar = Some(Sidecar::load(dir.join("f.bin.ezr").to_str().unwrap()).unwrap());
-        spec.sidecar_path = Some(dir.join("f.bin.ezr").to_str().unwrap().to_string());
-        tokio::spawn(run(spec, shared, cmd_rx, tx));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let (_cmd_tx, mut rx, deadline) = launch_spec(sidecar_spec(5, &url, &dir, 2));
         let mut resumed_progress = None;
         loop {
             match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
@@ -1197,14 +1192,7 @@ mod tests {
             SidecarTask { id: 6, added_at: 0, save_dir: dir.to_str().unwrap().to_string(), concurrency: 1, protocol: Protocol::Http },
         );
         sc.save(dir.join("f.bin.ezr").to_str().unwrap()).unwrap();
-        let (tx, mut rx) = mpsc::channel::<Evt>(64);
-        let shared = throttle_free();
-        let (_cmd_tx, cmd_rx) = mpsc::channel::<TaskCmd>(4);
-        let mut spec = spec_for(6, &url, dir.to_str().unwrap(), 4096, 1, None);
-        spec.sidecar = Some(Sidecar::load(dir.join("f.bin.ezr").to_str().unwrap()).unwrap());
-        spec.sidecar_path = Some(dir.join("f.bin.ezr").to_str().unwrap().to_string());
-        tokio::spawn(run(spec, shared, cmd_rx, tx));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let (_cmd_tx, mut rx, deadline) = launch_spec(sidecar_spec(6, &url, &dir, 1));
         while std::time::Instant::now() < deadline {
             match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
                 Ok(Some(Evt::Invalidated { .. })) => return,

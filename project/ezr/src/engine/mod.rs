@@ -41,7 +41,6 @@ pub enum Cmd {
 
 /// 引擎事件（引擎 → App，App 每 tick 消费）
 #[derive(Debug)]
-#[allow(clippy::large_enum_variant)] // Failed 携带断点快照（块表）属业务必需
 pub enum Evt {
     /// 探测完成（获槽后；等待中任务此时才获得大小显示）
     Probed {
@@ -103,8 +102,6 @@ pub enum Evt {
         made_progress: bool,
         /// 已下载字节（失败时点）
         downloaded: u64,
-        /// 块表快照
-        blocks: Vec<u64>,
         /// 已完成块数
         chunk_done: u32,
     },

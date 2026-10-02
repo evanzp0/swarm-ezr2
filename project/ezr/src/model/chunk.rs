@@ -140,7 +140,6 @@ impl Blocks {
             if let Some(w) = self.written.get_mut(i as usize) {
                 *w = done.min(e - s);
             }
-            let _ = s;
         }
     }
 }

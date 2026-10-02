@@ -27,9 +27,7 @@ use crate::model::namegen;
 use crate::model::registry::Registry;
 use crate::model::sidecar::Sidecar;
 use crate::model::speed::SpeedWindow;
-use crate::model::{
-    checksum, slots, Checksum, Protocol, fmt_created, unix_now,
-};
+use crate::model::{checksum, slots, Checksum, Protocol, unix_now};
 pub use crate::model::{FailKind, Task, TaskState};
 
 /// 每个任务在列表中占用的行高（3 行内容 + 1 行空行分隔）
@@ -539,25 +537,17 @@ impl App {
             Evt::PausedDone { id, downloaded, chunk_done } => {
                 if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
                     t.downloaded = downloaded.max(t.downloaded);
-                    t.chunk_done = chunk_done;
                     t.speed = 0.0;
                     t.has_slot = false;
-                    // 断点视图快照（详情页分块表）
-                    let (conns, x) = crate::model::chunk::lease_snapshot(
-                        t.total,
-                        downloaded,
-                        t.concurrency,
-                        t.block_size,
-                    );
-                    t.connections = conns;
-                    t.chunk_done = x.max(chunk_done);
+                    // 断点视图快照（详情页分块表）；含被覆盖的 t.chunk_done 中间写
+                    t.apply_chunk_snapshot(downloaded, chunk_done);
                 }
                 self.windows.remove(&id);
-        self.conn_windows.retain(|(tid, _), _| *tid != id);
+                self.conn_windows.retain(|(tid, _), _| *tid != id);
             }
-            Evt::Failed { id, kind, reason, retry_after, made_progress, downloaded, blocks, chunk_done } => {
+            Evt::Failed { id, kind, reason, retry_after, made_progress, downloaded, chunk_done } => {
                 self.handle_failure(
-                    id, kind, reason, retry_after, made_progress, downloaded, blocks, chunk_done,
+                    id, kind, reason, retry_after, made_progress, downloaded, chunk_done,
                 );
             }
             Evt::Invalidated { id } => {
@@ -573,7 +563,7 @@ impl App {
                 t.connections.clear();
                 t.speed = 0.0;
                 self.windows.remove(&id);
-        self.conn_windows.retain(|(tid, _), _| *tid != id);
+                self.conn_windows.retain(|(tid, _), _| *tid != id);
                 if stop_wait {
                     t.state = TaskState::Failed;
                     t.fail_kind = Some(FailKind::Fatal);
@@ -601,7 +591,7 @@ impl App {
                 t.total = total;
                 t.speed = 0.0;
                 self.windows.remove(&id);
-        self.conn_windows.retain(|(tid, _), _| *tid != id);
+                self.conn_windows.retain(|(tid, _), _| *tid != id);
                 let name = t.name.clone();
                 if has_checksum {
                     let algo = t.checksum.as_ref().map_or("SHA-256", |c| c.algo);
@@ -633,7 +623,6 @@ impl App {
                 let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else { return };
                 let algo = t.checksum.as_ref().map_or("SHA-256", |c| c.algo);
                 let name = t.name.clone();
-                let _ = expected;
                 t.speed = 0.0;
                 if ok {
                     t.verify_ok = Some(true);
@@ -675,14 +664,12 @@ impl App {
         retry_after: Option<f64>,
         made_progress: bool,
         downloaded: u64,
-        blocks: Vec<u64>,
         chunk_done: u32,
     ) {
         let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else { return };
         if downloaded > 0 {
             t.downloaded = downloaded.max(t.downloaded);
         }
-        t.chunk_done = chunk_done;
         t.speed = 0.0;
         // 重试决策（FR-01-41/42/43）：连续性规则 + 退避/Retry-After + 分类，
         // 策略唯一来源在 model::retry（DRY）
@@ -696,7 +683,8 @@ impl App {
         t.fail_kind = Some(kind);
         t.error = Some(reason.clone());
         let name = t.name.clone();
-        let (retries, max_retries) = (t.retries, t.max_retries);
+        // max_retries 已在决策前读定（处理中不变），此处仅取更新后的计数供文案
+        let retries = t.retries;
         let toast = match decision {
             crate::model::retry::RetryDecision { auto: true, delay_secs, .. } => {
                 t.retry_in = Some(delay_secs);
@@ -719,18 +707,11 @@ impl App {
             }
         };
         // 断点视图快照
-        let total = t.total;
-        let conc = t.concurrency;
-        let piece = t.block_size;
-        let dl = t.downloaded;
-        let (conns, x) = crate::model::chunk::lease_snapshot(total, dl, conc, piece);
-        t.connections = conns;
-        t.chunk_done = x.max(chunk_done);
+        t.apply_chunk_snapshot(t.downloaded, chunk_done);
         // t（可变借用）在此作用域结束后自然释放
         self.windows.remove(&id);
         self.conn_windows.retain(|(tid, _), _| *tid != id);
         self.set_toast(toast);
-        let _ = blocks;
         self.save_registry();
     }
 
@@ -1031,24 +1012,25 @@ impl App {
             }
         };
 
-        // 保存目录（FR-01-03）：留空 = 配置 download_dir；缺省 = ~/Downloads
+        // 保存目录（FR-01-03）：留空 = 配置 download_dir；缺省 = ~/Downloads；
+        // 统一去尾斜杠（trim 幂等，归一一次全函数共用）
         let dir = if dir_raw.is_empty() {
             self.cfg
                 .download_dir
                 .clone()
                 .unwrap_or_else(crate::model::config::default_download_dir)
         } else {
-            dir_raw.trim_end_matches('/').to_string()
+            dir_raw
         };
+        let dir = dir.trim_end_matches('/').to_string();
 
         let protocol = if url.starts_with("https://") { Protocol::Https } else { Protocol::Http };
         // 重复任务拒绝（Gherkin 01-add-task-16）：同 URL 同保存目录已在列表 →
         // toast「任务已存在」，不创建新任务（对话框保持打开，与其他校验失败一致）
-        let dir_check = dir.trim_end_matches('/').to_string();
         if self
             .tasks
             .iter()
-            .any(|t| t.url == url && t.save_dir == dir_check)
+            .any(|t| t.url == url && t.save_dir == dir)
         {
             self.set_toast("⚠ 任务已存在");
             return;
@@ -1056,12 +1038,11 @@ impl App {
         let base_name = namegen::derive_name(None, None, &url);
         let id = self.next_id;
         // FR-01-26 断点自动接续：既有 sidecar 同 URL 同路径 → 接续原名
-        let dir_trim = dir.trim_end_matches('/').to_string();
-        let resumed = Sidecar::load(&format!("{dir_trim}/{base_name}.ezr"))
+        let resumed = Sidecar::load(&format!("{dir}/{base_name}.ezr"))
             .is_some_and(|sc| sc.url == url)
             || self.tasks.iter().any(|t| {
                 t.url == url
-                    && t.save_dir == dir_trim
+                    && t.save_dir == dir
                     && t.name == base_name
                     && t.state != TaskState::Completed
             });
@@ -1070,10 +1051,9 @@ impl App {
         } else {
             // 重名检测：任务表 + 盘上（文件/.downloading/sidecar）→ 自动追加序号
             let tasks = &self.tasks;
-            let dir2 = dir_trim.clone();
             namegen::dedupe(&base_name, |n| {
-                tasks.iter().any(|t| t.name == n && t.save_dir == dir2)
-                    || namegen::exists_on_disk(&dir2, n)
+                tasks.iter().any(|t| t.name == n && t.save_dir == dir)
+                    || namegen::exists_on_disk(&dir, n)
             })
         };
         // 并发数（FR-01-04）：非 1–64 范围（留空/0/65/非数字）一律回退配置默认
@@ -1084,46 +1064,20 @@ impl App {
         };
         self.next_id += 1;
         // 校验值来源②（FR-01-50/D14）：未显式提供时查保存目录伴随文件
-        let checksum = Self::resolve_checksum(&dir_trim, &name, checksum);
+        let checksum = Self::resolve_checksum(&dir, &name, checksum);
         let ts = unix_now();
-        let t = Task {
+        let t = Task::new_queued(
             id,
-            name: name.clone(),
+            name.clone(),
             protocol,
-            url: url.clone(),
-            final_url: None,
-            save_dir: dir.trim_end_matches('/').to_string(),
-            total: 0,
-            downloaded: 0,
-            speed: 0.0,
-            state: TaskState::Queued,
-            resumable: true,
-            probed: false,
-            connections: vec![],
-            chunk_done: 0,
-            block_size: self.cfg.block_size_http,
-            concurrency: conns,
-            retries: 0,
-            max_retries: self.cfg.max_retries,
-            made_progress: false,
-            retry_in: None,
-            fail_kind: None,
-            error: None,
-            invalidation_streak: 0,
+            url.clone(),
+            dir,
+            self.cfg.block_size_http,
+            conns,
+            self.cfg.max_retries,
             checksum,
-            verify_ok: None,
-            etag: None,
-            last_modified: None,
-            has_slot: false,
-            upload_speed: 0.0,
-            uploaded: 0,
-            seeders: 0,
-            peers: 0,
-            seed_left: 0.0,
-            elapsed: 0.0,
-            created: fmt_created(ts),
-            added_at: ts,
-        };
+            ts,
+        );
         self.tasks.push(t);
         self.dialog = None;
         self.filter = 0;
@@ -1336,8 +1290,9 @@ impl App {
         let Some(idx) = self.sel_idx() else { return };
         let name = self.tasks[idx].name.clone();
         match self.tasks[idx].state {
-            TaskState::Downloading | TaskState::Verifying if self.tasks[idx].state == TaskState::Downloading => {
-                // 下载中 → 暂停（引擎停传写 sidecar；UI 即时转已暂停）
+            TaskState::Downloading => {
+                // 下载中 → 暂停（引擎停传写 sidecar；UI 即时转已暂停）。
+                // 校验中不可暂停：落至下方兜底臂提示（与原「两变体+永假守卫」行为一致）
                 self.tasks[idx].state = TaskState::Paused;
                 self.tasks[idx].speed = 0.0;
                 self.tasks[idx].has_slot = false;
@@ -1371,7 +1326,7 @@ impl App {
                 let spec = Self::make_spec(&self.tasks[idx]);
                 let id = self.tasks[idx].id;
                 self.windows.remove(&id);
-        self.conn_windows.retain(|(tid, _), _| *tid != id);
+                self.conn_windows.retain(|(tid, _), _| *tid != id);
                 let engine = self.engine.clone();
                 let was_resumable = self.tasks[idx].resumable;
                 tokio::spawn(async move {
@@ -1670,5 +1625,47 @@ mod paste_tests {
         assert_eq!(s, "下载器");
         assert!(!push_capped(&mut s, "x", 3));
         assert_eq!(s, "下载器");
+    }
+}
+
+#[cfg(test)]
+mod add_dialog_flow_tests {
+    use super::*;
+    use crate::model::config::Config;
+
+    /// 添加对话框全流程：输入 URL/目录 → Enter 确认 → 任务入列；
+    /// 保存目录尾斜杠归一（FR-01-03，目录归一单点化的行为锚定）
+    #[tokio::test]
+    async fn add_dialog_confirm_creates_task_with_normalized_dir() {
+        let dir =
+            std::env::temp_dir().join(format!("ezr-app-dlg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let reg = dir.join("registry.json").to_string_lossy().to_string();
+        let mut app = App::new(Config::default(), reg);
+
+        // A 打开添加对话框
+        app.on_key(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert!(app.dialog.is_some());
+        // 输入 URL（focus 0）
+        for c in "http://example.com/f.bin".chars() {
+            app.on_key(KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        // Tab 到目录字段，输入带尾斜杠的目录
+        app.on_key(KeyCode::Tab, KeyModifiers::NONE);
+        for c in format!("{}/", dir.to_string_lossy()).chars() {
+            app.on_key(KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        // Enter（非算法/取消焦点）= 确认添加
+        app.on_key(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(app.dialog.is_none());
+        assert_eq!(app.tasks.len(), 1);
+        let t = &app.tasks[0];
+        assert_eq!(t.name, "f.bin");
+        assert_eq!(t.save_dir, dir.to_string_lossy());
+        assert_eq!(t.state, TaskState::Queued);
+        assert_eq!(t.concurrency, crate::model::config::DEFAULT_CONCURRENCY);
+        assert!(app.toast.as_deref().is_some_and(|m| m.contains("已添加任务")));
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

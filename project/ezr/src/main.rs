@@ -35,7 +35,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 
 use crate::app::App;
 use crate::model::config::{config_path, state_dir, Config};
-use crate::model::{checksum, Checksum, Protocol, Task, fmt_created, unix_now};
+use crate::model::{checksum, Checksum, Protocol, Task, unix_now};
 
 /// 版本号随期号递进（FR-01-83）
 pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "-01");
@@ -332,63 +332,35 @@ impl App {
             .trim_end_matches('/')
             .to_string();
         let base_name = crate::model::namegen::derive_name(None, None, &url);
-        // 断点自动接续（FR-01-26）：同 URL 同路径的既有 sidecar → 沿用原名
-        let mut name = base_name.clone();
-        let sc = crate::model::sidecar::Sidecar::load(&format!("{dir}/{base_name}.ezr"));
-        let resumed = sc.as_ref().is_some_and(|s| s.url == url);
-        if !resumed {
-            let mut seq = 1u32;
-            let dir2 = dir.clone();
-            let taken = |n: &str, tasks: &[Task], dir: &str| -> bool {
+        // 断点自动接续（FR-01-26）：同 URL 同路径的既有 sidecar → 沿用原名；
+        // 否则重名检测（任务表 + 盘上）自动追加序号（与对话框添加同用
+        // namegen::dedupe，口径一致）
+        let resumed = crate::model::sidecar::Sidecar::load(&format!("{dir}/{base_name}.ezr"))
+            .is_some_and(|s| s.url == url);
+        let name = if resumed {
+            base_name.clone()
+        } else {
+            let tasks = &self.tasks;
+            crate::model::namegen::dedupe(&base_name, |n| {
                 tasks.iter().any(|t| t.name == n && t.save_dir == dir)
-                    || crate::model::namegen::exists_on_disk(dir, n)
-            };
-            while taken(&name, &self.tasks, &dir2) {
-                name = format!("{base_name}.{seq}");
-                seq += 1;
-            }
-        }
+                    || crate::model::namegen::exists_on_disk(&dir, n)
+            })
+        };
         let protocol = if url.starts_with("https://") { Protocol::Https } else { Protocol::Http };
         let ts = unix_now();
         let id = self.next_id;
-        let t = Task {
+        let t = Task::new_queued(
             id,
-            name: name.clone(),
+            name.clone(),
             protocol,
-            url: url.clone(),
-            final_url: None,
-            save_dir: dir,
-            total: 0,
-            downloaded: 0,
-            speed: 0.0,
-            state: crate::model::TaskState::Queued,
-            resumable: true,
-            probed: false,
-            connections: vec![],
-            chunk_done: 0,
-            block_size: self.cfg.block_size_http,
-            concurrency: conns.unwrap_or(self.cfg.default_concurrency).clamp(1, 64),
-            retries: 0,
-            max_retries: self.cfg.max_retries,
-            made_progress: false,
-            retry_in: None,
-            fail_kind: None,
-            error: None,
-            invalidation_streak: 0,
+            url,
+            dir,
+            self.cfg.block_size_http,
+            conns.unwrap_or(self.cfg.default_concurrency).clamp(1, 64),
+            self.cfg.max_retries,
             checksum,
-            verify_ok: None,
-            etag: None,
-            last_modified: None,
-            has_slot: false,
-            upload_speed: 0.0,
-            uploaded: 0,
-            seeders: 0,
-            peers: 0,
-            seed_left: 0.0,
-            elapsed: 0.0,
-            created: fmt_created(ts),
-            added_at: ts,
-        };
+            ts,
+        );
         self.next_id += 1;
         self.tasks.push(t);
         if resumed {
@@ -397,5 +369,31 @@ impl App {
             self.set_toast(format!("✓ 已添加任务 #{id}: {name}"));
         }
         self.save_registry();
+    }
+}
+
+#[cfg(test)]
+mod cli_add_tests {
+    use super::*;
+    use crate::model::config::Config;
+
+    #[tokio::test]
+    async fn cli_add_dedupes_duplicate_names() {
+        let dir =
+            std::env::temp_dir().join(format!("ezr-cli-add-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let reg = dir.join("registry.json").to_string_lossy().to_string();
+        let mut app = App::new(Config::default(), reg);
+        let url = "http://example.com/f.bin".to_string();
+        let save = dir.to_string_lossy().to_string();
+        app.add_cli_task(url.clone(), Some(save.clone()), None, None);
+        app.add_cli_task(url, Some(save), None, None);
+        assert_eq!(app.tasks.len(), 2);
+        assert_eq!(app.tasks[0].name, "f.bin");
+        // 同目录同名：第二个任务经 namegen::dedupe（任务表+盘上口径）追加序号
+        assert_eq!(app.tasks[1].name, "f.bin.1");
+        assert_eq!(app.next_id, 3);
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

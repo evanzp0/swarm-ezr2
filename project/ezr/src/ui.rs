@@ -1142,6 +1142,36 @@ fn button_spans(txt: &str, focused: bool) -> Vec<Span<'static>> {
     }
 }
 
+/// 居中绘制对话框按钮行并回填命中区域（添加/删除对话框共用）
+fn draw_button_row(
+    f: &mut Frame,
+    app: &mut App,
+    inner: Rect,
+    btn_row: u16,
+    labels: &[(&str, usize)],
+    focus: usize,
+) {
+    let btn_ws: Vec<usize> = labels
+        .iter()
+        .map(|(txt, _)| w(&format!("[ {} ]", txt)) + 2)
+        .collect();
+    let total_w: usize = btn_ws.iter().sum::<usize>() + 2 * (labels.len() - 1);
+    let mut bx = inner.x as usize + ((inner.width as usize).saturating_sub(total_w)) / 2;
+    for ((txt, idx), bw) in labels.iter().zip(btn_ws.iter()) {
+        let focused = focus == *idx;
+        let line = Line::from(button_spans(txt, focused));
+        let rect = Rect {
+            x: bx as u16,
+            y: btn_row,
+            width: *bw as u16,
+            height: 1,
+        };
+        f.render_widget(Paragraph::new(line), rect);
+        app.dlg_btn_rects.push((rect, *idx));
+        bx += bw + 2;
+    }
+}
+
 fn draw_dialogs(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(d) = app.dialog.as_ref() else { return };
     app.dlg_btn_rects.clear();
@@ -1262,27 +1292,7 @@ fn draw_add_dialog(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     // 按钮行：[ 确认 ] [ 取消 ]
-    let btn_row = inner.y + 7;
-    let labels: [(&str, usize); 2] = [("确认", 5), ("取消", 6)];
-    let btn_ws: Vec<usize> = labels
-        .iter()
-        .map(|(txt, _)| w(&format!("[ {} ]", txt)) + 2)
-        .collect();
-    let total_w: usize = btn_ws.iter().sum::<usize>() + 2 * (labels.len() - 1);
-    let mut bx = inner.x as usize + ((inner.width as usize).saturating_sub(total_w)) / 2;
-    for ((txt, idx), bw) in labels.iter().zip(btn_ws.iter()) {
-        let focused = focus == *idx;
-        let line = Line::from(button_spans(txt, focused));
-        let rect = Rect {
-            x: bx as u16,
-            y: btn_row,
-            width: *bw as u16,
-            height: 1,
-        };
-        f.render_widget(Paragraph::new(line), rect);
-        app.dlg_btn_rects.push((rect, *idx));
-        bx += bw + 2;
-    }
+    draw_button_row(f, app, inner, inner.y + 7, &[("确认", 5), ("取消", 6)], focus);
 
     // 提示行（下拉框展开时切换为列表操作提示）
     let hint = if ck_open {
@@ -1410,27 +1420,14 @@ fn draw_delete_dialog(f: &mut Frame, app: &mut App, area: Rect) {
     );
 
     // 按钮行：[ 仅删除任务 ] [ 删除任务和文件 ] [ 取消 ]
-    let btn_row = inner.y + 3;
-    let labels: [(&str, usize); 3] = [("仅删除任务", 0), ("删除任务和文件", 1), ("取消", 2)];
-    let btn_ws: Vec<usize> = labels
-        .iter()
-        .map(|(txt, _)| w(&format!("[ {} ]", txt)) + 2)
-        .collect();
-    let total_w: usize = btn_ws.iter().sum::<usize>() + 2 * (labels.len() - 1);
-    let mut bx = inner.x as usize + ((inner.width as usize).saturating_sub(total_w)) / 2;
-    for ((txt, idx), bw) in labels.iter().zip(btn_ws.iter()) {
-        let focused = focus == *idx;
-        let line = Line::from(button_spans(txt, focused));
-        let rect = Rect {
-            x: bx as u16,
-            y: btn_row,
-            width: *bw as u16,
-            height: 1,
-        };
-        f.render_widget(Paragraph::new(line), rect);
-        app.dlg_btn_rects.push((rect, *idx));
-        bx += bw + 2;
-    }
+    draw_button_row(
+        f,
+        app,
+        inner,
+        inner.y + 3,
+        &[("仅删除任务", 0), ("删除任务和文件", 1), ("取消", 2)],
+        focus,
+    );
 
     // 提示行
     f.render_widget(
@@ -1485,5 +1482,79 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // 对话框最后绘制（覆盖层）
     if app.dialog.is_some() {
         draw_dialogs(f, app, area);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn width_counts_cjk_as_two() {
+        assert_eq!(w("abc"), 3);
+        assert_eq!(w("下载"), 4);
+        assert_eq!(w("a 下载 b"), 8);
+        assert_eq!(w(""), 0);
+    }
+
+    #[test]
+    fn truncate_adds_ellipsis_and_respects_width() {
+        assert_eq!(truncate("short", 10), "short");
+        let t = truncate("very-long-name.bin", 8);
+        assert_eq!(w(&t), 8);
+        assert!(t.ends_with('…'));
+        // CJK 不会被切成半格
+        let t = truncate("下载任务名称很长", 6);
+        assert!(w(&t) <= 6);
+    }
+
+    #[test]
+    fn pad_respects_display_width() {
+        assert_eq!(pad_right("ab", 5), "ab   ");
+        assert_eq!(pad_left("ab", 5), "   ab");
+        assert_eq!(pad_right("下载", 5), "下载 ");
+        assert_eq!(pad_right("abc", 2), "abc"); // 超宽不截断
+    }
+
+    #[test]
+    fn fmt_size_thresholds() {
+        assert_eq!(fmt_size(999), "999 B");
+        assert_eq!(fmt_size(1000), "1 KB");
+        assert_eq!(fmt_size(1_500_000), "1.5 MB");
+        assert_eq!(fmt_size(2_500_000_000), "2.50 GB");
+    }
+
+    #[test]
+    fn fmt_speed_normalizes_negative_zero() {
+        assert_eq!(fmt_speed(-0.0), "0 B/s");
+        assert_eq!(fmt_speed(0.0), "0 B/s");
+        assert_eq!(fmt_speed(1500.0), "2 KB/s");
+        assert_eq!(fmt_speed(2_000_000.0), "2.0 MB/s");
+    }
+
+    #[test]
+    fn fmt_dur_and_eta() {
+        assert_eq!(fmt_dur(65), "01:05");
+        assert_eq!(fmt_dur(3_725), "1:02:05");
+        assert_eq!(fmt_eta(None), "--:--");
+        assert_eq!(fmt_eta(Some(65)), "01:05");
+    }
+
+    #[test]
+    fn fmt_size_pair_same_unit() {
+        assert_eq!(fmt_size_pair(1_720_000_000, 4_320_000_000), "1.72/4.32 GB");
+        assert_eq!(fmt_size_pair(500, 900), "500/900 B");
+    }
+
+    #[test]
+    fn plain_bar_fills_and_pads() {
+        let spans = plain_bar(10, 0.5, GREEN);
+        let total: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        assert_eq!(total, 10);
+        assert_eq!(spans[0].content, "█".repeat(5));
+        // 空进度仍产出整条空槽
+        let spans = plain_bar(4, 0.0, GREEN);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content, "░".repeat(4));
     }
 }

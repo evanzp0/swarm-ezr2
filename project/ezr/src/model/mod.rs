@@ -245,6 +245,62 @@ pub struct Task {
 }
 
 impl Task {
+    /// 新建排队中的下载任务（添加对话框与 CLI 添加共用初值口径，FR-01-01/03/04）：
+    /// 进度/连接/重试等运行时字段全部取初值，`created` 由 `added_at` 换算。
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_queued(
+        id: u32,
+        name: String,
+        protocol: Protocol,
+        url: String,
+        save_dir: String,
+        block_size: u64,
+        concurrency: usize,
+        max_retries: u32,
+        checksum: Option<Checksum>,
+        added_at: u64,
+    ) -> Task {
+        Task {
+            id,
+            name,
+            protocol,
+            url,
+            final_url: None,
+            save_dir,
+            total: 0,
+            downloaded: 0,
+            speed: 0.0,
+            state: TaskState::Queued,
+            resumable: true,
+            probed: false,
+            connections: vec![],
+            chunk_done: 0,
+            block_size,
+            concurrency,
+            retries: 0,
+            max_retries,
+            made_progress: false,
+            retry_in: None,
+            fail_kind: None,
+            error: None,
+            invalidation_streak: 0,
+            checksum,
+            verify_ok: None,
+            etag: None,
+            last_modified: None,
+            has_slot: false,
+            upload_speed: 0.0,
+            uploaded: 0,
+            seeders: 0,
+            peers: 0,
+            seed_left: 0.0,
+            elapsed: 0.0,
+            created: fmt_created(added_at),
+            added_at,
+        }
+    }
+
     /// 进度比例 0.0–1.0
     #[must_use]
     pub fn progress(&self) -> f64 {
@@ -304,6 +360,15 @@ impl Task {
         format!("{}.ezr", self.target_path())
     }
 
+    /// 暂停/失败收尾的断点视图快照（详情页分块表）：按 total/downloaded/
+    /// concurrency/block_size 推导连接视图，`chunk_done` 取快照与事件口径较大值。
+    /// `downloaded` 由调用方显式传入（暂停/失败事件对「已下载」口径不同）。
+    pub fn apply_chunk_snapshot(&mut self, downloaded: u64, chunk_done: u32) {
+        let (conns, snap) =
+            chunk::lease_snapshot(self.total, downloaded, self.concurrency, self.block_size);
+        self.connections = conns;
+        self.chunk_done = snap.max(chunk_done);
+    }
 }
 
 /// 当前时刻的 Unix 秒（注册表/文件名时间戳兜底用）
@@ -313,6 +378,20 @@ pub fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// JSON 原子写（先写 `<path>.tmp` 再 rename；任意时刻断电不损坏，FR-01-20）。
+/// 注册表与 sidecar 持久化共用（DRY 单源）。
+///
+/// # Errors
+/// 序列化或临时文件写入/rename 失败时返回 IO 错误。
+pub(crate) fn save_json_atomic<T: serde::Serialize>(value: &T, path: &str) -> std::io::Result<()> {
+    let tmp = format!("{path}.tmp");
+    let json = serde_json::to_string_pretty(value)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 /// 当前时刻的 `%Y-%m-%d %H:%M` 本地时间字符串（任务 `created` 列显示）。
@@ -470,44 +549,28 @@ mod tests {
         assert_eq!(fmt_created(1_767_225_600), "2026-01-01 08:00");
     }
 
-    fn sample_task() -> Task {
-        Task {
-            id: 1,
-            name: "f.bin".to_string(),
-            protocol: Protocol::Http,
-            url: "http://x/f.bin".to_string(),
-            final_url: None,
-            save_dir: "/dl".to_string(),
-            total: 0,
-            downloaded: 0,
-            speed: 0.0,
-            state: TaskState::Queued,
-            resumable: true,
-            probed: false,
-            connections: vec![],
-            chunk_done: 0,
-            block_size: 1_048_576,
-            concurrency: 4,
-            retries: 0,
-            max_retries: 5,
-            made_progress: false,
-            retry_in: None,
-            fail_kind: None,
-            error: None,
-            invalidation_streak: 0,
-            checksum: None,
-            verify_ok: None,
-            etag: None,
-            last_modified: None,
-            has_slot: false,
-            upload_speed: 0.0,
-            uploaded: 0,
-            seeders: 0,
-            peers: 0,
-            seed_left: 0.0,
-            elapsed: 0.0,
-            created: "2026-02-10 10:00".to_string(),
-            added_at: 0,
-        }
+    #[test]
+    fn new_queued_initial_state() {
+        let t = Task::new_queued(
+            7,
+            "f.bin".to_string(),
+            Protocol::Http,
+            "http://x/f.bin".to_string(),
+            "/dl".to_string(),
+            1_000_000,
+            8,
+            3,
+            None,
+            1_767_225_600,
+        );
+        assert_eq!(t.id, 7);
+        assert_eq!(t.state, TaskState::Queued);
+        assert_eq!((t.total, t.downloaded, t.chunk_done, t.retries), (0, 0, 0, 0));
+        assert!(t.resumable && !t.probed && !t.has_slot && !t.made_progress);
+        assert!(t.connections.is_empty());
+        assert_eq!((t.concurrency, t.block_size, t.max_retries), (8, 1_000_000, 3));
+        assert!(t.checksum.is_none() && t.verify_ok.is_none() && t.error.is_none());
+        assert_eq!(t.created, "2026-01-01 08:00");
+        assert_eq!(t.added_at, 1_767_225_600);
     }
 }
