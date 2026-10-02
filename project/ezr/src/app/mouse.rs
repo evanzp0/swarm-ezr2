@@ -1,7 +1,6 @@
 //! mouse — 鼠标事件：点击选中/滚轮/对话框按钮命中
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-
 use ratatui::layout::Rect;
 
 use super::{App, DialogKind, ITEM_HEIGHT};

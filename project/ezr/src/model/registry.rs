@@ -239,8 +239,7 @@ impl Default for Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::sample_task;
-    use crate::model::unix_now;
+    use crate::model::{sample_task, unix_now};
 
     #[test]
     fn roundtrip_and_next_id() {

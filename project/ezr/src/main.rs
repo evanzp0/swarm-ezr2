@@ -7,7 +7,7 @@
 //! 覆盖层（对话框/下拉浮层）出现或消失的那一帧必须全量重绘（CJK 宽字符
 //! 半格覆盖问题，沿用 demo 定稿注释与方案）。
 #![allow(missing_docs)] // 交互层：demo 定稿基线复用，接口文档见 model/engine 层
-#![allow(clippy::multiple_crate_versions)] // 依赖树固有重复（rcgen/reqwest 链条），无法单侧消除
+#![allow(clippy::multiple_crate_versions)] // 依赖树固有重复（reqwest/rustls 链条），无法单侧消除
 #![allow(clippy::pedantic)] // 交互层字节/速度展示算术与 demo 基线风格豁免
 #![allow(clippy::nursery)] // 同上
 #![allow(
@@ -30,16 +30,17 @@ mod ui;
 use std::io;
 use std::path::PathBuf;
 
-use crossterm::{
-    event::{
-        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, EventStream, KeyEventKind,
-    },
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
+    EventStream, KeyEventKind,
+};
+use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use futures::StreamExt;
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 
 use crate::app::App;
 use crate::model::config::{config_path, state_dir, Config};

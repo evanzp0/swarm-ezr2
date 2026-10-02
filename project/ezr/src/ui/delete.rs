@@ -6,11 +6,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::app::App;
-
 use super::btn::{clip_wide_at_edges, dialog_rect, draw_button_row};
 use super::text::truncate;
 use super::{DIM, DIM2, RED};
+use crate::app::App;
 
 pub(super) fn draw_delete_dialog(f: &mut Frame, app: &mut App, area: Rect) {
     let dlg = dialog_rect(area, 66, 7);

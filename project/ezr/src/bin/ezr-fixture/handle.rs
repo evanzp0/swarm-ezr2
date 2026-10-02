@@ -51,9 +51,10 @@ pub fn handle(mut stream: TcpStream, root: Arc<PathBuf>, log: Arc<AccessLog>) {
 
 #[cfg(test)]
 mod handle_tests {
-    use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+
+    use super::*;
 
     /// 起一个临时 root 的 fixture，返回 (端口, root 路径)
     fn spawn_fixture() -> (u16, PathBuf) {

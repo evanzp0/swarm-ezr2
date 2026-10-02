@@ -2,9 +2,8 @@
 
 use crossterm::event::KeyCode;
 
-use crate::app::CHECKSUM_ALGOS;
-
 use super::{Dialog, DialogKind};
+use crate::app::CHECKSUM_ALGOS;
 
 impl super::App {
     pub(super) fn on_dialog_key(&mut self, code: KeyCode) {

@@ -88,8 +88,7 @@ pub fn queue_pos(tasks: &[Task], task_id: u32) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::sample_task;
-    use crate::model::TaskState;
+    use crate::model::{sample_task, TaskState};
 
     /// 夹具：共享 sample_task（model 层单一来源），按用例覆盖 id/名称/状态
     fn mk(id: u32, state: TaskState) -> Task {

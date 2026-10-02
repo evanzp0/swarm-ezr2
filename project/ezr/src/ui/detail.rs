@@ -6,13 +6,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Sparkline};
 use ratatui::Frame;
 
+use super::text::{fmt_dur, fmt_eta, fmt_size, fmt_speed, pad_left, pad_right, truncate};
+use super::{state_color, ACCENT, BORDER, DIM, DIM2, FG, GREEN, LIGHT_BLUE, MAGENTA, RED, YELLOW};
 use crate::app::App;
 use crate::model::chunk::fmt_block_size;
 use crate::model::{Task, TaskState};
-
-use super::state_color;
-use super::text::{fmt_dur, fmt_eta, fmt_size, fmt_speed, pad_left, pad_right, truncate};
-use super::{ACCENT, BORDER, DIM, DIM2, FG, GREEN, LIGHT_BLUE, MAGENTA, RED, YELLOW};
 
 /// 排队详情文案（紧凑：保证「Space 暂停」提示在窄面板不被截断）
 fn queued_value(p: Option<usize>, used: usize, max: usize) -> String {

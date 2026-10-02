@@ -6,12 +6,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Tabs};
 use ratatui::Frame;
 
+use super::text::{fmt_size, fmt_speed};
+use super::{ACCENT, BORDER, DIM, DIM2, FG, MAGENTA, YELLOW};
 use crate::app::{App, FILTERS};
 use crate::model::TaskState;
 use crate::VERSION;
-
-use super::text::{fmt_size, fmt_speed};
-use super::{ACCENT, BORDER, DIM, DIM2, FG, MAGENTA, YELLOW};
 
 pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let dl: f64 = app

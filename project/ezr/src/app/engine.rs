@@ -2,14 +2,12 @@
 
 use std::time::Instant;
 
+use super::App;
 use crate::engine::{Cmd, Evt};
 use crate::model::registry::Registry;
 use crate::model::sidecar::Sidecar;
 use crate::model::speed::SpeedWindow;
-use crate::model::{checksum, namegen, slots};
-use crate::model::{Checksum, FailKind, Task, TaskState};
-
-use super::App;
+use crate::model::{checksum, namegen, slots, Checksum, FailKind, Task, TaskState};
 
 impl App {
     /// 校验期望解析（FR-01-50/D3）：显式提供优先；否则查保存目录伴随文件

@@ -1,9 +1,8 @@
 //! tasks — 任务操作：暂停/继续、重试、重排、清理
 
+use super::App;
 use crate::engine::Cmd;
 use crate::model::{checksum, slots, FailKind, TaskState};
-
-use super::App;
 
 impl App {
     /// Space：暂停/继续（FR-01-33）

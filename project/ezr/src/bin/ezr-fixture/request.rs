@@ -107,8 +107,9 @@ impl AccessLog {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Cursor;
+
+    use super::*;
 
     fn parse_all(input: &'static [u8]) -> std::io::Result<Option<Request>> {
         let mut r = BufReader::new(Cursor::new(input));

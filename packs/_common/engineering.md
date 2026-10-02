@@ -368,3 +368,13 @@
   comp），再对"comp 高的调度器"做保持行为拆分（每函数 comp ≤6）。表驱动 match、
   决策核特征结构体（如 FailureFeatures）、逐状态行构造器三种手法覆盖绝大多数形态；
   分派器残余 comp=分派臂数，登记口径而非硬凑。
+
+- **`bin/swarm complete` 的打包清单来自 `git ls-files --cached`**：会话内删除/新建的文件若
+  未同步进 git 索引（rm 未 git rm、新文件未 add），tar 会因清单路径不存在而失败。
+  会话内做过文件重组的角色，收尾前先 `git add -A` 刷新索引再 complete。
+- **交付 tarball 覆盖解压到既有树会留"过期文件"**：tar 无删除语义——上游做过
+  `a.rs → a/` 目录式重组时，下游在旧 clone 上覆盖解压会得到 `a.rs` 与 `a/mod.rs`
+  并存，编译报 E0761 模块歧义（且冲突不止编译器点名的那几个，凡"origin 有、包内
+  无"的路径全是雷）。正确姿势：解压前 diff 双方文件清单
+  （`tar -tzf pkg.tar.gz | sort` vs `git ls-files | sort`），把清单差集里的过期文件
+  先 `git rm` 再解压；或干脆 fresh clone 后整树替换。

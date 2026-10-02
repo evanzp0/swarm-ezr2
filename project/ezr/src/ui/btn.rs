@@ -6,10 +6,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-use crate::app::App;
-
 use super::text::w;
 use super::{ACCENT, FG};
+use crate::app::App;
 
 pub(super) fn dialog_rect(area: Rect, dw: u16, dh: u16) -> Rect {
     let dw = dw.min(area.width);

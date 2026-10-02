@@ -188,9 +188,10 @@ impl Sidecar {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
     use crate::model::Protocol;
-    use std::path::Path;
 
     fn tmp_dir() -> String {
         let d = std::env::temp_dir().join(format!("ezr-side-{}-{}", std::process::id(), unix_ms()));

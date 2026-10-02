@@ -67,9 +67,14 @@ imports_granularity = "Module"
 group_imports = "StdExternalCrate"
 ```
 
-- **stable 工具链忽略部分 rustfmt unstable 选项**（`imports_granularity` /
+- **rustfmt unstable 选项必须配 nightly 工具链钉**（`imports_granularity` /
   `group_imports` / `fn_single_line` 仅 nightly 全量生效，stable 下警告提示但忽略）：
-  配置文件仍按模板原样保留，不为此改模板或切 nightly。
+  项目根放 `rust-toolchain.toml`（`channel = "nightly"` +
+  `components = ["rustfmt", "clippy"]`）使全项目 cargo 命令统一走 nightly，下游角色
+  无需手工 `+nightly`；rustfmt/clippy 模板文件仍逐字保留。切换后必须整树回归：
+  nightly rustc/clippy 可能引入新 lint（如 nightly 默认 `cargo::unused_dependencies =
+  warn` 会揪出死依赖），按警告清零纪律处置；nightly 为移动目标，行为差异以测试
+  全绿为准。
 
 ## 3. 编译、lint 与磁盘
 

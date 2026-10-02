@@ -6,11 +6,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, ITEM_HEIGHT};
-use crate::model::{Task, TaskState};
-
 use super::task_lines::task_lines;
 use super::{ACCENT, BORDER, DIM, DIM2, SEL_BG};
+use crate::app::{App, ITEM_HEIGHT};
+use crate::model::{Task, TaskState};
 
 pub(super) fn render_task(
     f: &mut Frame,

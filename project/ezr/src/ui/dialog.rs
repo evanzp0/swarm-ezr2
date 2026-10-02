@@ -6,13 +6,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, DialogKind, CHECKSUM_ALGOS};
-
-use super::text::{pad_right, truncate, w};
-use super::{ACCENT, DIM, DIM2, FG, YELLOW};
-
 use super::btn::{clip_wide_at_edges, dialog_rect, draw_button_row};
 use super::delete::draw_delete_dialog;
+use super::text::{pad_right, truncate, w};
+use super::{ACCENT, DIM, DIM2, FG, YELLOW};
+use crate::app::{App, DialogKind, CHECKSUM_ALGOS};
 
 /// 字段行显示值：空值显示占位提示；超宽显示尾部（…+末尾字符，便于核对校验码结尾）
 fn field_display(val: &str, ph: &str, avail: usize) -> String {

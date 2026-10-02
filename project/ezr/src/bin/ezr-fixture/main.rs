@@ -149,8 +149,9 @@ fn main() {
 
 #[cfg(test)]
 mod main_tests {
-    use super::*;
     use std::io::{Read as _, Write as _};
+
+    use super::*;
 
     fn args(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()

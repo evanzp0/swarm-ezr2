@@ -1,12 +1,9 @@
 //! dialogs — 对话框确认流（添加/删除按钮激活、任务创建、文件删除）
 
-use crate::engine::Cmd;
-use crate::model::namegen;
-use crate::model::sidecar::Sidecar;
-use crate::model::unix_now;
-use crate::model::{checksum, Checksum, Protocol, Task, TaskState};
-
 use super::{App, Dialog, DialogKind, CHECKSUM_ALGOS};
+use crate::engine::Cmd;
+use crate::model::sidecar::Sidecar;
+use crate::model::{checksum, namegen, unix_now, Checksum, Protocol, Task, TaskState};
 
 impl App {
     pub(super) fn dlg_activate_add(&mut self, btn: usize) {
@@ -251,9 +248,10 @@ impl App {
 
 #[cfg(test)]
 mod add_dialog_flow_tests {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
     use super::*;
     use crate::model::config::Config;
-    use crossterm::event::{KeyCode, KeyModifiers};
 
     /// 添加对话框全流程：输入 URL/目录 → Enter 确认 → 任务入列；
     /// 保存目录尾斜杠归一（FR-01-03，目录归一单点化的行为锚定）

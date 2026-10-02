@@ -125,12 +125,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
 #[cfg(test)]
 mod ui_tests {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
     use super::*;
     use crate::app::CHECKSUM_ALGOS;
     use crate::model::config::Config;
     use crate::model::{Checksum, Protocol, Task};
-    use ratatui::backend::TestBackend;
-    use ratatui::Terminal;
 
     fn make_app(tag: &str) -> App {
         let dir = std::env::temp_dir().join(format!("ezr-ui-{tag}-{}", std::process::id()));

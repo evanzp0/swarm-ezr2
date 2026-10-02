@@ -297,8 +297,9 @@ fn main() {
 
 #[cfg(test)]
 mod proxy_tests {
-    use super::*;
     use std::io::{Read, Write};
+
+    use super::*;
 
     fn log_quiet() -> Arc<ProxyLog> {
         Arc::new(ProxyLog::open(None, "t"))

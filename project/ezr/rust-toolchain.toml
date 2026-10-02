@@ -1,0 +1,7 @@
+# 工具链钉 nightly：rustfmt.toml 的 unstable 选项（imports_granularity /
+# group_imports）仅 nightly rustfmt 全量生效；本文件使全项目 cargo 命令
+# （build/test/fmt/clippy）统一走 nightly，下游角色无需手工 +nightly。
+# 决策记录：四次清理会话（six-pack/cleaner），口径见 packs/_common/notes/rust.md。
+[toolchain]
+channel = "nightly"
+components = ["rustfmt", "clippy"]

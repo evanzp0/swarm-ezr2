@@ -42,16 +42,13 @@ use std::time::Duration;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::{mpsc, watch};
 
-use crate::model::checksum;
+use super::error::{classify_reqwest, parse_retry_after_header, EngineFailure};
+use super::{ConnView, Evt, TaskCmd};
 use crate::model::checksum::CHECKSUM_ALGOS;
 use crate::model::chunk::{block_range, chunk_total, Blocks};
 use crate::model::consistency::{self, Consistency, ServerStamp};
-use crate::model::namegen;
 use crate::model::sidecar::{Sidecar, SidecarTask};
-use crate::model::{Checksum, FailKind, Protocol};
-
-use super::error::{classify_reqwest, parse_retry_after_header, EngineFailure};
-use super::{ConnView, Evt, TaskCmd};
+use crate::model::{checksum, namegen, Checksum, FailKind, Protocol};
 
 /// 进度事件聚合间隔（与 UI tick 同频）
 const PROGRESS_TICK: Duration = Duration::from_millis(100);
@@ -862,9 +859,10 @@ async fn block_worker(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
+
+    use super::*;
 
     /// 确定性内容（与 fixture 同模式）
     fn fill(buf: &mut [u8], start: u64) {

@@ -6,11 +6,9 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::model::{FailKind, Task, TaskState};
-
-use super::state_color;
 use super::text::{fmt_dur, fmt_eta, fmt_size, fmt_size_pair, fmt_speed, plain_bar, truncate, w};
-use super::{ACCENT, DIM, FG, GREEN, LIGHT_BLUE, MAGENTA, RED, YELLOW};
+use super::{state_color, ACCENT, DIM, FG, GREEN, LIGHT_BLUE, MAGENTA, RED, YELLOW};
+use crate::model::{FailKind, Task, TaskState};
 
 pub(super) fn task_lines(
     t: &Task,
