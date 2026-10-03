@@ -20,6 +20,10 @@
   ~/.local/bin/ld.lld`（gcc 按 PATH 找 `ld.lld`），不改基线配置；该符号链接目录必须
   在 PATH 中，且零改动的增量构建会静默跳过链接阶段掩盖其缺失，验证见
   engineering.md「环境不跨会话持久」的强制重做条款。
+- **交互式安装器的首次运行提示是长验证挂死的隐形根因**：`cargo llvm-cov` 首跑会交互
+  询问是否安装 `llvm-tools-preview`，非交互会话表现为"600s 超时零产出"。装工具阶段先
+  `rustup component add llvm-tools-preview`，或统一 `< /dev/null` 暴露错误
+  （engineering.md「失败先归因」的挂起类形态）。
 
 ## 2. 强制配置模板
 
@@ -115,7 +119,7 @@ group_imports = "StdExternalCrate"
   选型问题在规格期解决（engineering.md「端点语义」通则），实现期换选型 = 返工整套
   伴生机制。
 
-## 6. 网络与异步（Rust 专项沉淀）
+## 6. 网络与异步
 
 - **reqwest 关闭环境变量代理**：`ClientBuilder::proxy(p)` 或 `.no_proxy()` 任一调用都会
   关闭 `auto_sys_proxy`（不再读 `http_proxy`/`HTTPS_PROXY` 等环境变量）。需求为
@@ -148,24 +152,23 @@ group_imports = "StdExternalCrate"
   （cleaner 不运行）时，不要强行拆——把每文件计数登记 handoff 移交，hardender 全量变异前
   由 architect 先收模块边界（`--file` 可按文件分块跑变异，拆分收益在 hardender 兑现）。
 
-- **交互层覆盖率可以在单测内打开（TestBackend + 桩服务器），不必依赖 PTY e2e**：draw_*
-  系函数用 `ratatui::backend::TestBackend`（0.29 无 feature 门控）直接渲染 App 全状态并断言
-  缓冲文本；App::tick/on_evt 用「add_cli_task(bogus URL) → pump_until(Failed)」与「桩 HTTP
-  服务器 → pump_until(Completed)」两条真实事件流覆盖（pump_until 带谓词提前收束，勿跑满
-  deadline）。注意 TestBackend 的 `Display` 会把宽字符半格单元隐藏并附 `Hidden by
-  multi-width symbols` 注记——断言锚定不被 CJK 截断的稳定文本（如列表项 ASCII 名、
-  `▸ SHA-256` 选中行），不要断言与 CJK 相邻的边框/标题。
+- **交互层覆盖率可以在单测内打开（TestBackend + 桩服务器），不必依赖 PTY e2e**：ratatui 的
+  draw_* 系函数用 `ratatui::backend::TestBackend`（0.29 无 feature 门控）直接渲染应用全状态
+  并断言缓冲文本；事件处理用「非法输入 → 事件泵至错误终态」与「桩服务器 → 事件泵至成功
+  终态」两条真实事件流覆盖（事件泵循环带谓词提前收束，勿跑满 deadline）。注意 TestBackend
+  的 `Display` 会把宽字符半格单元隐藏并附 `Hidden by multi-width symbols` 注记——断言锚定
+  不被 CJK 截断的稳定文本（如 ASCII 名称、选中行标记），不要断言与 CJK 相邻的边框/标题。
 - **输出管道会吞 `#[m` 形态字符**：日志采集/展示层按 CSI 转义清洗 `[m` 等序列时，
   源码中的 `#[must_use]` 会显示成 `#ust_use]`（可复现、可误导"文件损坏"判断）。
   审计源码一律以 `od -c`/`xxd` 字节为准，不信显示层。
 - **双向拷贝代理（io::copy 两线程对拷）的单测必须显式关闭客户端写侧**：`shutdown(Write)`
   后代理的 client→upstream 拷贝得到 EOF、两个 copy 线程才能收尾、socket 才会 drop；
-  否则 read_to_end 与 copy 线程互等，测试永久挂起（真实下载器天然关写侧，故线上不显）。
+  否则 read_to_end 与 copy 线程互等，测试永久挂起（真实客户端通常天然关写侧，故线上不显）。
   桩上游的"读一次→回一包"契约要与被测流量方向对齐（CONNECT 隧道：客户端先发一笔
   再读回包），否则双向互等死锁。
 - **拆大文件（>100 变异点/行）时先机械分模块再提纯函数，两步各自全绿**：先按职责把
   impl 块切到子模块（同 crate 多 impl 合法、子模块可见父私有项），用 `git diff --stat`
-  与全量测试确认"纯移动"；再做 `fn 表驱动`/`特征结构体决策核`/`行构造器` 抽取。切分脚本
+  与全量测试确认"纯移动"；再做表驱动等数据化的纯函数抽取。切分脚本
   对 doc 注释/属性边界的 off-by-one 高发——每刀后先 `cargo build` 再继续，孤儿 doc 与
   双重 impl 头都是必踩点。
 - **`cargo llvm-cov --lcov` 的 FNDA 行只有两字段（命中数, 符号名），不含行号**：做函数级
@@ -176,49 +179,45 @@ group_imports = "StdExternalCrate"
   否则分派器类函数的复杂度被重复放大（engineering.md「符号级输出不可直接精确匹配」的
   lcov 维度延伸）。
 
-## 8. 架构边界与适配器方向（architect 沉淀）
+## 8. 架构边界与适配器方向
 
-- **低层模块不得构造高层模块的展示类型（适配方向：high→low）**：engine 层的内部数据
-  视图（如 `ConnView`）应暴露纯数据字段，由消费侧的高层（app）适配为 model 的展示类型
-  （如 `Connection`）。错误形态：engine 的 `ConnView::to_connection(&self) -> model::Connection`
-  ——低层反向依赖高层的结构体，依赖方向倒置。正确形态：app 的 `on_evt` 内联
-  `Connection { id: cv.id, start: cv.start, ... }` 构造。判定法：画依赖箭头时，
-  `engine → model::Connection` 的箭头是否与既有分层方向（model←engine←app）相反——
-  相反即违规。自动化检查：`grep -rnE "model::Connection[[:space:]]*\{" src/engine/`
-  应无命中（跳过 `///` 注释行）。
+- **低层模块不得构造高层模块的展示类型（适配方向：high→low）**：低层的内部数据视图应
+  暴露纯数据字段，由消费侧的高层适配为展示类型。错误形态：低层提供
+  `LowView::to_high(&self) -> high::High` 之类的构造方法——低层反向依赖高层的结构体，
+  依赖方向倒置。正确形态：高层在消费侧内联 `High { field: lv.field, ... }` 构造。
+  判定法：画依赖箭头时，`低层 → 高层展示类型` 的箭头是否与既有分层方向（高层→低层
+  单向依赖）相反——相反即违规。自动化检查：grep 高层类型的字面构造模式于低层目录
+  应无命中（跳过 `///` 注释行；类型与目录名按项目替换）。
 
-- **入口（main.rs）不扩展 App 的 impl**：`impl App { fn add_cli_task }` 写在 main.rs
-  会让 main 与 app 互相 reach-in（main 调 app、又在 main 里实现 app 的方法），模块边界
-  模糊。正确形态：CLI 添加逻辑属于 app 层职责，放 `app/cli.rs`；main.rs 只 `app.add_cli_task(...)`
-  调用。自动化检查：`grep -nE '^impl App \{' src/main.rs` 应无命中。这条规则在 Rust 项目
-  里尤其高发——Rust 的 `impl` 块可分散在多个文件，但不代表"应"分散到非自身模块。
+- **入口（main.rs）不扩展应用主类型的 impl**：`impl App { fn add_task_from_cli }` 写在
+  main.rs 会让 main 与应用层互相 reach-in（main 调 app、又在 main 里实现 app 的方法），
+  模块边界模糊。正确形态：入口特有逻辑属于应用层职责，放应用层模块（如 `app/cli.rs`）；
+  main.rs 只 `app.add_task_from_cli(...)` 调用。自动化检查：
+  `grep -nE '^impl App \{' src/main.rs` 应无命中（`App` 换成项目应用主类型名）。这条规则
+  在 Rust 项目里尤其高发——Rust 的 `impl` 块可分散在多个文件，但不代表"应"分散到非自身
+  模块。
 
-- **FR 修订移除展示需求后，死字段会跨边界流动**：UI 删除某段展示（如 FR-01-81 修订二
-  移除"并发分块明细表"）后，底层事件若仍携带原展示专用的字段（如 `ConnView.block`），
-  该字段在适配器（`to_connection`）里被丢弃，成为跨边界流动的死数据。删除展示时
-  穷举其底层数据的全部读取点（含适配器）一并清理，否则规格已删而代码残留成僵尸——
-  与 cleaner 沉淀「撤销展示需求时先做唯一消费者核查」同源，architect 在依赖方向
-  维度复用该纪律。
+- **需求修订移除展示后，死字段会跨边界流动**：UI 删除某段展示后，底层事件若仍携带
+  原展示专用的字段，该字段在适配器里被丢弃，成为跨边界流动的死数据。删除展示时
+  穷举其底层数据的全部读取点（含适配器）一并清理，否则规格已删而代码残留成僵尸。
 
 - **`proptest` 作为 Rust 属性测试框架（dev-dependency）**：SKILL 要求 architect 负责
   属性测试支持；Rust 生态标准为 `proptest` crate，作为 `[dev-dependencies]` 引入
   （不进发布物）。属性测试与常规单测**分开**纪律（engineering.md「设计与可测试性」）：
   独立模块 `src/property_tests.rs`（`#[cfg(test)] mod property_tests`），独立运行
   `cargo test property_tests::`；全量 `cargo test` 也跑，但失败不与基线对账
-  （对账只计既有单测）。覆盖目标：纯逻辑模块的不变量、守恒性、往返、幂等性——
-  chunk（块数上下界/区间守恒）、retry（退避封顶/状态机决策）、speed（滑窗守恒/EMA 收敛）、
-  namegen（去重幂等/序号单调）、checksum（算法表位数互斥/CLI 解析往返）、
-  consistency（自反/保守）、sidecar（JSON 往返）。`proptest!` 宏内的 `format_args!`
+  （对账只计既有单测）。覆盖目标：纯逻辑模块的不变量、守恒性、往返、幂等性、排序、
+  解析/格式化稳定性等（按项目自身的纯函数清单选取）。`proptest!` 宏内的 `format_args!`
   不能隐式捕获外层变量——断言消息里的变量必须用 `format!("{}", var)` 显式传参，
   或用 `"msg (var={})"` + `var` 的位置参数形式。
 
 - **`proptest::sample::select` 需要借用或 `Cow<'static, [T]>`**：`select([a, b])`
   会因数组不是 `Cow` 而编译失败；正确形态 `select(&[a, b])`（借用切片）或
-  `select(vec![a, b])`（`Vec` 实现 `Into<Cow>`）。`FailKind` 等自定义枚举需 `Clone + Debug + 'static`。
+  `select(vec![a, b])`（`Vec` 实现 `Into<Cow>`）。自定义枚举类型需 `Clone + Debug + 'static`。
 
 - **轻量架构检查脚本用 grep 即可覆盖大多数分层规则**：Rust 的 `use crate::xxx` 语句
-  是依赖方向的显式标记，`grep -rnE "^[[:space:]]*use[[:space:]]+crate::(engine|app|ui)"`
-  按"低层目录内不得出现高层 use"过滤即可。跳过 `///` 注释行（文档可提及类型名，代码不得
-  构造）。脚本放在 `project/<crate>/scripts/arch_check.sh`，CI 集成为 `&&` 链的一环；
+  是依赖方向的显式标记，`grep -rnE "^[[:space:]]*use[[:space:]]+crate::(<高层模块名枚举>)"`
+  按"低层目录内不得出现高层 use"过滤即可（模块枚举替换为项目自身的顶层分层名）。跳过
+  `///` 注释行（文档可提及类型名，代码不得构造）。脚本放在 `project/<crate>/scripts/arch_check.sh`，CI 集成为 `&&` 链的一环；
   比起 `cargo-deny`/`cargo-modules` 等重量级工具，grep 脚本零依赖、可读、易维护，
   适合"分层依赖方向"这类规则简单的检查（复杂规则如 trait impl 方向才需重量级工具）。
