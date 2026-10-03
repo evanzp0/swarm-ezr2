@@ -57,3 +57,6 @@ too_many_lines = "warn"
 cognitive_complexity = "warn"
 too_many_arguments = "warn"
 cargo = { level = "warn", priority = -1 }
+
+[dev-dependencies]
+proptest = "1"

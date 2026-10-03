@@ -48,9 +48,11 @@ const CONN_WEIGHTS: [f64; 16] = [
     0.95, 0.45, 0.10, 0.00, 0.75, 0.40, 0.85, 0.15, 0.55, 0.20, 0.55, 0.00, 0.70, 0.25, 0.80, 0.35,
 ];
 
-/// 按权重把 `amount` 字节拆成 `n` 份（钳制到 `[0, cap_i]`，差额回补，总和精确）
+/// 按权重把 `amount` 字节拆成 `n` 份（钳制到 `[0, cap_i]`，差额回补，总和精确）。
+/// `pub` 仅为父模块 re-export（`pub(crate) use`，供 crate 内属性测试守恒验证）；
+/// `lease` 模块私有，不进对外 API。
 #[must_use]
-pub(super) fn spread_bytes(amount: u64, n: usize, cap: u64) -> Vec<u64> {
+pub fn spread_bytes(amount: u64, n: usize, cap: u64) -> Vec<u64> {
     let mut v = vec![0u64; n];
     if amount == 0 || n == 0 {
         return v;

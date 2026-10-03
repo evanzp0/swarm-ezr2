@@ -11,6 +11,11 @@
   `export PATH="$HOME/.cargo/bin:$PATH"` 补注入，再 `cargo --version` 复核在位。
   若项目构建同时依赖本地符号链接目录（见下条 ld.lld 桥接），PATH 还需含
   `~/.local/bin`。工具链的安装位置与版本写入 `project/handoff.md` 交接。
+- **nightly 工具链漂移会在新会话引入新 lint 警告**：上轮 clippy 0 的代码，本轮
+  nightly 可能新增 lint（如 `bool_assert_comparison` 收紧到 `clippy::all`）——
+  接手会话开工先跑一次 `cargo clippy --all-targets` 复核 0 警告基线再动工；
+  警告属测试断言写法类时机械修正（如 `assert_eq!(x, false)` → `assert!(!x)`）
+  属基线恢复，不计行为改动面，但改动要计入本轮产物清单。
 - **区分「丢注入」与「本体丢失」**：环境核验先探针安装目录（如 `ls ~/.cargo/bin`）——
   目录在位是丢 PATH 注入（export 即恢复）；目录不存在是全新沙箱/本体丢失，需完整重装
   （rustup minimal profile + clippy + rustfmt），交接记录的安装位置只对同机有效。
@@ -210,6 +215,16 @@ group_imports = "StdExternalCrate"
   解析/格式化稳定性等（按项目自身的纯函数清单选取）。`proptest!` 宏内的 `format_args!`
   不能隐式捕获外层变量——断言消息里的变量必须用 `format!("{}", var)` 显式传参，
   或用 `"msg (var={})"` + `var` 的位置参数形式。
+
+- **`prop_assert_eq!` 按值接参（非 Copy 类型会移动）**：断言后的变量即被 move，
+  后续再断言报 E0382——对 String/Vec 等类型要么传 `.clone()`，要么先取引用
+  断言再消费；一个属性里对同一值断言多次时首选绑定引用。
+
+- **私有子模块工具函数的测试可达性用「门面 re-export」而非改调用方**：内部
+  纯函数需跨模块供属性测试时，在定义处升为 `pub`（私有模块内，不外泄）+ 父模块
+  `#[cfg(test)] pub(crate) use`；直接对 `pub(super)` 项做 `pub(crate) use`
+  会报 E0364（re-export 不可超越项自身可见性），以及非测试构建报 unused import——
+  `#[cfg(test)]` 门控一并解决。零外部 API 面增量的测试基建手法。
 
 - **`proptest::sample::select` 需要借用或 `Cow<'static, [T]>`**：`select([a, b])`
   会因数组不是 `Cow` 而编译失败；正确形态 `select(&[a, b])`（借用切片）或

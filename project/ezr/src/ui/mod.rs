@@ -418,7 +418,7 @@ mod ui_tests {
         app.tasks.push(task(3, "p3.bin", TaskState::Completed));
         app.clear_completed();
         assert_eq!(app.tasks.len(), 2, "仅清理完成任务");
-        assert_eq!(app.tasks.iter().any(|t| t.name == "p3.bin"), false);
+        assert!(!app.tasks.iter().any(|t| t.name == "p3.bin"));
 
         // 非操作态兜底臂：校验中 Space 提示不可操作
         app.selected = 0;

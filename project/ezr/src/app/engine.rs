@@ -12,6 +12,19 @@ use crate::model::{checksum, namegen, slots, Checksum, FailKind, Task, TaskState
 /// 展示面采样节拍（FR-01-17 修订：数值每秒最多变化一次）
 const SPEED_TICK: Duration = Duration::from_secs(1);
 
+/// ConnView → Connection 消费侧适配（FR-01-81 修订二：进度视图字段直传，
+/// 块号不进 UI 模型）。原为低层 `ConnView::to_connection` 构造方法；架构评审
+/// 依 notes/rust.md「低层不得构造高层展示类型」移到消费侧（低层暴露纯数据，
+/// 高层在消费侧内联构造）。
+fn conn_from_view(c: &crate::engine::ConnView) -> crate::model::Connection {
+    crate::model::Connection {
+        id: c.id,
+        start: c.start,
+        end: c.end,
+        done: c.done,
+    }
+}
+
 impl App {
     /// 校验期望解析（FR-01-50/D3）：显式提供优先；否则查保存目录伴随文件
     /// `<目标文件>.<算法后缀>`（算法表顺序取先，位数不符视为无效并提示）。
@@ -245,7 +258,6 @@ impl App {
                 resumable,
                 etag,
                 last_modified,
-                cd_name: _,
             } => {
                 // CD 命名回写需重新去重（Gherkin 01-add-task-10：目标被占时保留
                 // 原推导名，防止下载覆盖既有文件——先算定名再可变借用）
@@ -301,7 +313,7 @@ impl App {
                 }
                 t.downloaded = downloaded;
                 t.chunk_done = chunk_done;
-                t.connections = conns.iter().map(|c| c.to_connection()).collect();
+                t.connections = conns.iter().map(conn_from_view).collect();
                 if downloaded > 0 {
                     t.made_progress = true;
                 }
@@ -738,5 +750,23 @@ mod tick_tests {
         app.tick().await;
         assert!(app.toast.is_none(), "过期 toast 清除");
         app.shutdown().await;
+    }
+
+    /// ConnView → Connection 消费侧映射锁定（FR-01-81 修订二：进度视图字段
+    /// 直传，块号不进 UI 模型；原锁定测试随适配面自 engine 层同步迁入）
+    #[test]
+    fn conn_view_maps_progress_fields() {
+        let cv = crate::engine::ConnView {
+            id: 3,
+            block: 1,
+            start: 100,
+            end: 1100,
+            done: 400,
+        };
+        let c = conn_from_view(&cv);
+        assert_eq!(c.id, 3);
+        assert_eq!(c.start, 100);
+        assert_eq!(c.end, 1100);
+        assert_eq!(c.done, 400);
     }
 }

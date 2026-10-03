@@ -343,7 +343,6 @@ async fn download(
             resumable: multi_ok,
             etag: head.etag.clone(),
             last_modified: head.last_modified.clone(),
-            cd_name: head.cd_name.clone(),
         },
     )
     .await

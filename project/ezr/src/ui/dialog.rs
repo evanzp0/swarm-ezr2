@@ -87,7 +87,7 @@ pub(super) fn draw_add_dialog(f: &mut Frame, app: &mut App, area: Rect) {
             d.ck_sel,
         )
     };
-    let (algo_name, algo_need) = CHECKSUM_ALGOS[ck_type.min(CHECKSUM_ALGOS.len() - 1)];
+    let (algo_name, algo_need, _) = CHECKSUM_ALGOS[ck_type.min(CHECKSUM_ALGOS.len() - 1)];
 
     // 五个字段行（URL / 保存目录 / 并发数 / 校验算法 / 校验码）
     // 校验算法为下拉选择行（Enter/Space/点击展开），其余为文本输入行
@@ -203,7 +203,7 @@ pub(super) fn draw_add_dialog(f: &mut Frame, app: &mut App, area: Rect) {
             ));
         let pinner = pblock.inner(prect);
         f.render_widget(pblock, prect);
-        for (i, (name, need)) in items.iter().enumerate() {
+        for (i, (name, need, _)) in items.iter().enumerate() {
             let sel = i == ck_sel;
             let bg = if sel { Color::DarkGray } else { Color::Reset };
             let line = Line::from(vec![

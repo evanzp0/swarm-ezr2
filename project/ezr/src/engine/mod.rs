@@ -66,9 +66,6 @@ pub enum Evt {
         etag: Option<String>,
         /// Last-Modified
         last_modified: Option<String>,
-        /// Content-Disposition 文件名（FR-01-02 首优先级；引擎内消费，App 以 name 同步）
-        #[allow(dead_code)]
-        cd_name: Option<String>,
     },
     /// 进度快照（每 tick 聚合；App 据此更新 downloaded/连接视图/块数）
     Progress {
@@ -142,7 +139,8 @@ pub enum Evt {
     Toast(String),
 }
 
-/// 连接视图快照（事件上报给 App 的展示形态）
+/// 连接视图快照（事件上报给 App 的展示形态；纯数据字段——消费侧适配为
+/// 领域连接模型，低层不构造高层类型）
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConnView {
     /// 连接序号（1 基）
@@ -155,19 +153,6 @@ pub struct ConnView {
     pub end: u64,
     /// 已写字节
     pub done: u64,
-}
-
-impl ConnView {
-    /// 转 UI 连接模型（进度视图；速度展示随 FR-01-81 修订二移除）
-    #[must_use]
-    pub fn to_connection(&self) -> crate::model::Connection {
-        crate::model::Connection {
-            id: self.id,
-            start: self.start,
-            end: self.end,
-            done: self.done,
-        }
-    }
 }
 
 /// 任务运行控制信号（supervisor 内部）
@@ -463,23 +448,5 @@ mod main_loop_tests {
         // Shutdown：广播取消并报告退出
         assert!(handle_cmd(&mut tasks, Cmd::Shutdown, &shared, &evt_tx).await);
         assert!(tasks.is_empty());
-    }
-
-    /// ConnView → Connection 映射（FR-01-81 修订二：进度视图字段直传，
-    /// 块号不进 UI 模型）
-    #[test]
-    fn to_connection_maps_progress_fields() {
-        let cv = ConnView {
-            id: 3,
-            block: 1,
-            start: 100,
-            end: 1100,
-            done: 400,
-        };
-        let c = cv.to_connection();
-        assert_eq!(c.id, 3);
-        assert_eq!(c.start, 100);
-        assert_eq!(c.end, 1100);
-        assert_eq!(c.done, 400);
     }
 }

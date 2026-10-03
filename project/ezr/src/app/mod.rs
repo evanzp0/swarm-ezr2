@@ -9,9 +9,9 @@
 //! 交互基线沿用 demo 定稿：对话框（添加五字段/删除三选）、快捷键全集、
 //! 鼠标（点击选中/滚轮/对话框按钮）、toast 反馈。
 
-//! 模块划分：`engine`（tick 事件消费/槽位调度/失败处理）/ `keys`（键盘输入）/
-//! `mouse`（鼠标输入）/ `dialogs`（对话框确认流）/ `paste`（bracketed paste）/
-//! `tasks`（暂停·重试·清理操作）。App 结构体与构造在此。
+//! 模块划分：`cli`（CLI 启动参数添加任务）/ `engine`（tick 事件消费/槽位调度/
+//! 失败处理）/ `keys`（键盘输入）/ `mouse`（鼠标输入）/ `dialogs`（对话框确认流）/
+//! `paste`（bracketed paste）/ `tasks`（暂停·重试·清理操作）。App 结构体与构造在此。
 #![allow(missing_docs)] // 交互层：demo 定稿基线复用，接口文档见 model/engine 层
 #![allow(clippy::pedantic)] // 交互层字节/速度展示算术与 demo 基线风格豁免
 #![allow(clippy::nursery)] // 同上
@@ -40,6 +40,7 @@ use crate::model::slots;
 use crate::model::speed::{SmoothedSpeed, SpeedWindow};
 pub use crate::model::Task;
 
+mod cli;
 mod dialog_keys;
 mod dialogs;
 mod engine;
@@ -57,16 +58,11 @@ pub const FILTERS: [&str; 2] = ["正在下载", "已完成"];
 /// braille 转轮字符（校验中/后期处理等动态效果）
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
-/// 校验算法表（添加对话框下拉选择）：（显示名，期望十六进制长度）
-pub const CHECKSUM_ALGOS: [(&str, usize); 7] = [
-    ("MD5", 32),
-    ("SHA-1", 40),
-    ("SHA-224", 56),
-    ("SHA-256", 64),
-    ("SHA-384", 96),
-    ("SHA-512", 128),
-    ("Adler-32", 8),
-];
+/// 校验算法表（单源于 `model::checksum::CHECKSUM_ALGOS`：显示名，期望十六进制
+/// 长度，伴随文件后缀）。架构评审（cleaner 批次后）收口：原 app 层另有一份
+/// 2 元组同名表，双源存在漂移风险（对话框下拉与 CLI `-x`/伴随文件解析口径
+/// 可能分岐），改统一 re-export，各消费点按需取字段。
+pub use crate::model::checksum::CHECKSUM_ALGOS;
 
 /// 对话框种类
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
