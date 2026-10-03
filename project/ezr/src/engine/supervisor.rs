@@ -1303,4 +1303,33 @@ mod tests {
         }
         panic!("应回报一致性失效");
     }
+
+    /// sidecar 已完成块数：部分写与零块不计入（Failed 事件汇总口径）
+    #[test]
+    fn completed_of_counts_full_blocks_only() {
+        let url = "http://127.0.0.1:1/x.bin".to_string();
+        let stamp = ServerStamp {
+            final_url: Some(url.clone()),
+            etag: None,
+            last_modified: None,
+            size: Some(4 * 4096),
+        };
+        let sc = Sidecar::build(
+            &url,
+            &stamp,
+            4 * 4096,
+            4096,
+            &[4096, 4096, 1904, 0],
+            false,
+            None,
+            SidecarTask {
+                id: 1,
+                added_at: 0,
+                save_dir: std::env::temp_dir().to_string_lossy().into_owned(),
+                concurrency: 2,
+                protocol: Protocol::Http,
+            },
+        );
+        assert_eq!(completed_of(&sc), 2, "部分写块与零块不计入完成");
+    }
 }

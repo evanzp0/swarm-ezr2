@@ -247,6 +247,19 @@ mod tests {
         assert!(c.proxy.is_none());
     }
 
+    /// 空白目录与非法数值逐键回退（filter 分支：空白/非正/非有限一律弃用）
+    #[test]
+    fn empty_dir_and_invalid_numbers_fall_back() {
+        let c = Config::from_toml(
+            "download_dir = \"   \"\nmax_speed = \"garbage\"\nbackoff_initial = -1.0\nbackoff_cap = 0.0\nproxy = \"  \"\n",
+        );
+        assert!(c.download_dir.is_none(), "空白目录弃用");
+        assert_eq!(c.max_speed, 0, "不可解析限速弃用");
+        assert_eq!(c.backoff_initial, Config::default().backoff_initial);
+        assert_eq!(c.backoff_cap, Config::default().backoff_cap);
+        assert!(c.proxy.is_none(), "空白代理弃用");
+    }
+
     #[test]
     fn default_download_dir_is_home_downloads() {
         let dir = default_download_dir();

@@ -180,6 +180,15 @@ fn text_char(d: &mut Dialog, focus: usize, c: char) -> bool {
 mod dialog_key_tests {
     use super::*;
     use crate::app::{Dialog, DialogKind};
+    use crate::model::config::Config;
+    use crate::model::Protocol;
+
+    fn make_app(tag: &str) -> crate::app::App {
+        let dir = std::env::temp_dir().join(format!("ezr-dlgkey-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        let reg = dir.join("registry.json").to_string_lossy().into_owned();
+        crate::app::App::new(Config::default(), reg)
+    }
 
     fn add_dlg() -> Dialog {
         let mut d = Dialog {
@@ -197,6 +206,22 @@ mod dialog_key_tests {
         };
         d.ck_sel = 3;
         d
+    }
+
+    fn del_dlg(name: &str) -> Dialog {
+        Dialog {
+            kind: DialogKind::Delete,
+            url: String::new(),
+            dir: String::new(),
+            conns: String::new(),
+            conns_edited: false,
+            ck_type: 0,
+            ck_value: String::new(),
+            ck_open: false,
+            ck_sel: 0,
+            focus: 0,
+            task_name: name.to_string(),
+        }
     }
 
     #[test]
@@ -269,5 +294,138 @@ mod dialog_key_tests {
         text_char(&mut d, 2, '7'); // 第 3 位拒绝
         assert_eq!(d.conns, "56");
         assert!(d.conns_edited);
+    }
+
+    /// 确认添加主链路（FR-01-01/03/04/05/16）：空 URL/非法协议/校验码位数不符
+    /// 逐一拒绝并保持对话框；合法输入建任务并关闭；重复任务拒绝；取消按钮直接关闭
+    #[tokio::test]
+    async fn confirm_add_validates_then_creates() {
+        let mut app = make_app("confirm");
+        app.dialog = Some(add_dlg());
+
+        // 空 URL → 拒绝
+        app.dlg_confirm_add();
+        assert!(app.dialog.is_some(), "空 URL 拒绝，对话框保持");
+        // 非 http(s) → 拒绝
+        app.dialog.as_mut().unwrap().url = "ftp://x/f.bin".to_string();
+        app.dlg_confirm_add();
+        assert!(app.dialog.is_some(), "非法协议拒绝");
+        assert!(app.tasks.is_empty());
+        // 校验码位数不符 → 聚焦回校验码字段（focus 4）
+        let d = app.dialog.as_mut().unwrap();
+        d.url = "http://example.com/a.bin".to_string();
+        d.ck_value = "abc".to_string();
+        app.dlg_confirm_add();
+        assert!(app.dialog.is_some(), "校验码位数不符拒绝");
+        assert_eq!(app.dialog.as_ref().unwrap().focus, 4, "聚焦回校验码");
+        assert!(app.tasks.is_empty());
+        // 合法完整输入（并发显式 9）→ 建任务、关闭对话框、页签回下载视图
+        let d = app.dialog.as_mut().unwrap();
+        d.ck_value.clear();
+        d.conns = "9".to_string();
+        app.dlg_confirm_add();
+        assert!(app.dialog.is_none(), "确认后关闭对话框");
+        assert_eq!(app.tasks.len(), 1);
+        assert_eq!(app.tasks[0].name, "a.bin");
+        assert_eq!(app.tasks[0].concurrency, 9);
+        // 重复任务（同 URL 同目录）→ 拒绝并保持对话框
+        app.dialog = Some(add_dlg());
+        app.dialog.as_mut().unwrap().url = "http://example.com/a.bin".to_string();
+        app.dlg_confirm_add();
+        assert!(app.dialog.is_some(), "重复任务拒绝");
+        assert_eq!(app.tasks.len(), 1);
+        // 取消按钮（btn 6）→ 直接关闭
+        app.dlg_activate_add(6);
+        assert!(app.dialog.is_none(), "取消按钮关闭对话框");
+        app.shutdown().await;
+    }
+
+    /// 断点自动接续（FR-01-26）：保存目录存在同 URL 的 sidecar → 沿用推导原名，
+    /// toast 提示接续（不再追加去重序号）
+    #[tokio::test]
+    async fn confirm_add_resumes_from_existing_sidecar() {
+        let dir = std::env::temp_dir().join(format!("ezr-dlgkey-resume-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        let mut app = make_app("resume");
+        app.dialog = Some(add_dlg());
+        let d = app.dialog.as_mut().unwrap();
+        d.url = "http://example.com/r.bin".to_string();
+        d.dir = dir.to_string_lossy().into_owned();
+        // 预置同 URL sidecar（断点视图：模拟既有下载残留）
+        let sc = crate::model::sidecar::Sidecar::build(
+            "http://example.com/r.bin",
+            &crate::model::consistency::ServerStamp {
+                final_url: None,
+                etag: None,
+                last_modified: None,
+                size: Some(1000),
+            },
+            1000,
+            1024 * 1024,
+            &[0],
+            false,
+            None,
+            crate::model::sidecar::SidecarTask {
+                id: 99,
+                added_at: 0,
+                save_dir: dir.to_string_lossy().into_owned(),
+                concurrency: 4,
+                protocol: Protocol::Http,
+            },
+        );
+        sc.save(&dir.join("r.bin.ezr").to_string_lossy()).ok();
+        app.dlg_confirm_add();
+        assert!(app.dialog.is_none(), "确认后关闭");
+        assert_eq!(app.tasks.len(), 1);
+        assert_eq!(app.tasks[0].name, "r.bin", "断点接续沿用原名");
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 对话框键盘导航与 Delete 对话框激活：焦点环绕、Esc 关闭、
+    /// 数字 1/3 触发删除/取消（FR-01-25 删除三选）
+    #[tokio::test]
+    async fn dialog_key_navigates_and_activates_delete() {
+        let mut app = make_app("dnav");
+        app.dialog = Some(add_dlg());
+
+        // 焦点前进/后退与环绕（Add nfocus=7）
+        app.on_dialog_key(KeyCode::Down); // 1
+        app.on_dialog_key(KeyCode::Right); // 2
+        app.on_dialog_key(KeyCode::Tab); // 3
+        app.on_dialog_key(KeyCode::Up); // 2
+        app.on_dialog_key(KeyCode::Left); // 1
+        app.on_dialog_key(KeyCode::BackTab); // 0
+        app.on_dialog_key(KeyCode::Up); // 环绕到 6
+        assert_eq!(app.dialog.as_ref().unwrap().focus, 6, "Up 环绕到末位");
+
+        // Esc 关闭
+        app.on_dialog_key(KeyCode::Esc);
+        assert!(app.dialog.is_none(), "Esc 关闭对话框");
+
+        // Delete 对话框：数字 3 = 取消按钮 → 关闭且任务保留
+        app.tasks.push(crate::model::Task::new_queued(
+            7,
+            "del.bin".to_string(),
+            Protocol::Http,
+            "http://example.com/del.bin".to_string(),
+            "/tmp".to_string(),
+            1024 * 1024,
+            4,
+            3,
+            None,
+            0,
+        ));
+        app.dialog = Some(del_dlg("del.bin"));
+        app.on_dialog_key(KeyCode::Char('3'));
+        assert!(app.dialog.is_none(), "取消按钮关闭");
+        assert_eq!(app.tasks.len(), 1, "取消不删任务");
+
+        // 数字 1 = 仅删除任务：任务移除
+        app.dialog = Some(del_dlg("del.bin"));
+        app.on_dialog_key(KeyCode::Char('1'));
+        assert!(app.dialog.is_none(), "删除后关闭");
+        assert!(app.tasks.is_empty(), "任务已移除");
+        app.shutdown().await;
     }
 }

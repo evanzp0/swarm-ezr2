@@ -464,4 +464,22 @@ mod main_loop_tests {
         assert!(handle_cmd(&mut tasks, Cmd::Shutdown, &shared, &evt_tx).await);
         assert!(tasks.is_empty());
     }
+
+    /// ConnView → Connection 映射（FR-01-81 修订二：进度视图字段直传，
+    /// 块号不进 UI 模型）
+    #[test]
+    fn to_connection_maps_progress_fields() {
+        let cv = ConnView {
+            id: 3,
+            block: 1,
+            start: 100,
+            end: 1100,
+            done: 400,
+        };
+        let c = cv.to_connection();
+        assert_eq!(c.id, 3);
+        assert_eq!(c.start, 100);
+        assert_eq!(c.end, 1100);
+        assert_eq!(c.done, 400);
+    }
 }

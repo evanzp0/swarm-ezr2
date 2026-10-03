@@ -12,6 +12,11 @@ use crate::app::App;
 use crate::model::chunk::fmt_block_size;
 use crate::model::{Task, TaskState};
 
+/// 详情面板字段行标签 Span（pad_right 9 列 + DIM 前景色；各字段行共用）
+fn dim_label(s: &str) -> Span<'static> {
+    Span::styled(pad_right(s, 9), Style::default().fg(DIM))
+}
+
 /// 排队详情文案（紧凑：保证「Space 暂停」提示在窄面板不被截断）
 fn queued_value(p: Option<usize>, used: usize, max: usize) -> String {
     match p {
@@ -41,12 +46,11 @@ fn verify_status(verify_ok: Option<bool>, state: TaskState) -> (&'static str, Co
 
 /// 速度行（无平均值；缺失用 -；BT 双向、做种、完成态各有版式）
 fn speed_row(t: &Task) -> Vec<Span<'static>> {
-    let label = |s: &str| Span::styled(pad_right(s, 9), Style::default().fg(DIM));
     match t.state {
         TaskState::Downloading => {
             let mut v = vec![
                 Span::raw(" "),
-                label("速度"),
+                dim_label("速度"),
                 Span::styled(
                     format!("↓ {}", fmt_speed(t.speed)),
                     Style::default().fg(ACCENT),
@@ -66,7 +70,7 @@ fn speed_row(t: &Task) -> Vec<Span<'static>> {
         }
         TaskState::Seeding => vec![
             Span::raw(" "),
-            label("速度"),
+            dim_label("速度"),
             Span::styled(
                 format!("↑ {}", fmt_speed(t.upload_speed)),
                 Style::default().fg(MAGENTA),
@@ -78,14 +82,14 @@ fn speed_row(t: &Task) -> Vec<Span<'static>> {
         ],
         TaskState::Completed => vec![
             Span::raw(" "),
-            label("速度"),
+            dim_label("速度"),
             Span::styled(
                 format!("—  总用时 {}", fmt_dur(t.elapsed as u64)),
                 Style::default().fg(DIM),
             ),
         ],
         _ => {
-            let mut v = vec![Span::raw(" "), label("速度"), Span::raw("↓ ")];
+            let mut v = vec![Span::raw(" "), dim_label("速度"), Span::raw("↓ ")];
             v.push(Span::styled("-", Style::default().fg(DIM)));
             if t.protocol.is_bt() {
                 v.push(Span::raw("  ↑ "));
@@ -102,10 +106,7 @@ fn speed_row(t: &Task) -> Vec<Span<'static>> {
 fn chunk_row(t: &Task) -> Vec<Span<'static>> {
     let state_c = state_color(t.state);
     let (x, y, _) = t.chunk_info();
-    let mut l = vec![
-        Span::raw(" "),
-        Span::styled(pad_right("分块", 9), Style::default().fg(DIM)),
-    ];
+    let mut l = vec![Span::raw(" "), dim_label("分块")];
     if t.total == 0 || y == 0 {
         l.push(Span::styled("-".to_string(), Style::default().fg(DIM)));
     } else {
@@ -139,7 +140,6 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
         return;
     };
 
-    let label = |s: &str| Span::styled(pad_right(s, 9), Style::default().fg(DIM));
     let val = |s: String| Span::styled(s, Style::default().fg(FG));
     let state_c = state_color(t.state);
 
@@ -155,7 +155,7 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
     ]));
     lines.push(Line::from(vec![
         Span::raw(" "),
-        label("状态"),
+        dim_label("状态"),
         Span::styled(
             format!("[{}] {:.1}%", t.state.label(), t.progress() * 100.0),
             Style::default().fg(state_c).add_modifier(Modifier::BOLD),
@@ -166,7 +166,7 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
         let vtxt = queued_value(app.queue_pos_of(t.id), app.used_slots(), app.max_slots);
         lines.push(Line::from(vec![
             Span::raw(" "),
-            label("排队"),
+            dim_label("排队"),
             Span::styled(
                 truncate(&vtxt, (inner.width as usize).saturating_sub(12)),
                 Style::default().fg(YELLOW),
@@ -175,7 +175,7 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
     }
     lines.push(Line::from(vec![
         Span::raw(" "),
-        label("ID"),
+        dim_label("ID"),
         Span::styled(
             format!("{id} · 添加于 {created}", id = t.id, created = t.created),
             Style::default().fg(DIM),
@@ -183,7 +183,7 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
     ]));
     lines.push(Line::from(vec![
         Span::raw(" "),
-        label("类型"),
+        dim_label("类型"),
         Span::styled(
             t.protocol.label().to_string(),
             Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
@@ -209,7 +209,7 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
         let (st, stc) = verify_status(t.verify_ok, t.state);
         lines.push(Line::from(vec![
             Span::raw(" "),
-            label("校验"),
+            dim_label("校验"),
             Span::styled(
                 ck.algo.to_string(),
                 Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
@@ -220,7 +220,7 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
     }
     lines.push(Line::from(vec![
         Span::raw(" "),
-        label("大小"),
+        dim_label("大小"),
         val(format!(
             "{} / {}（剩余 {}）",
             fmt_size(t.downloaded),
@@ -232,7 +232,7 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
     if t.state == TaskState::Failed {
         lines.push(Line::from(vec![
             Span::raw(" "),
-            label("失败原因"),
+            dim_label("失败原因"),
             Span::styled(
                 truncate(
                     t.error.as_deref().unwrap_or("未知错误"),
@@ -246,7 +246,7 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
     lines.push(Line::from(speed_row(t)));
     lines.push(Line::from(vec![
         Span::raw(" "),
-        label("保存"),
+        dim_label("保存"),
         val(truncate(
             &t.target_path(),
             (inner.width as usize).saturating_sub(12),
@@ -254,7 +254,7 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
     ]));
     lines.push(Line::from(vec![
         Span::raw(" "),
-        label("URL"),
+        dim_label("URL"),
         val(truncate(
             // 重定向后展示最终 URL（FR-01-14 / 规格 01-download-engine-08「详情 URL 显示最终 URL」）
             t.final_url.as_deref().unwrap_or(&t.url),

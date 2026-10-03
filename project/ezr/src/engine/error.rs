@@ -338,4 +338,17 @@ mod tests {
         assert_eq!(redirect_target_scheme("url (has space)"), None);
         assert_eq!(redirect_target_scheme("nothing"), None);
     }
+
+    /// network / fatal 构造器：类别与 Retry-After 语义（无服务器指示时恒 None）
+    #[test]
+    fn network_and_fatal_constructors() {
+        let f = EngineFailure::network("连接被拒绝");
+        assert_eq!(f.kind, FailKind::Transient);
+        assert_eq!(f.reason, "连接被拒绝");
+        assert_eq!(f.retry_after, None);
+        let f = EngineFailure::fatal("证书校验失败");
+        assert_eq!(f.kind, FailKind::Fatal);
+        assert_eq!(f.reason, "证书校验失败");
+        assert_eq!(f.retry_after, None);
+    }
 }

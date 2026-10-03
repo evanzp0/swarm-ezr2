@@ -139,14 +139,7 @@ impl App {
         //     probed=false，下方 4b 的 probed 过滤会永久漏掉它们——故到点
         //     即发，覆盖全部失败类型
         for id in &expired {
-            if let Some(idx) = self.tasks.iter().position(|t| t.id == *id) {
-                let spec = Self::make_spec(&self.tasks[idx]);
-                self.engine.send(Cmd::Start { spec }).await;
-                if let Some(t) = self.tasks.iter_mut().find(|t| t.id == *id) {
-                    // 重试新一轮尝试：清进展标记（连续性判定基准，FR-01-41）
-                    t.made_progress = false;
-                }
-            }
+            self.send_retry_start(*id).await;
         }
         // 4b) 已获槽位的等待任务重排后需要（重新）Start——Failed→Queued 的重试
         //     由上面 retry_in 到点转 Queued（has_slot 保持）且已由 4a 补发；
@@ -160,14 +153,7 @@ impl App {
             .map(|t| t.id)
             .collect();
         for id in retry_starts {
-            if let Some(idx) = self.tasks.iter().position(|t| t.id == id) {
-                let spec = Self::make_spec(&self.tasks[idx]);
-                self.engine.send(Cmd::Start { spec }).await;
-                if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
-                    // 重试新一轮尝试：清进展标记（连续性判定基准，FR-01-41）
-                    t.made_progress = false;
-                }
-            }
+            self.send_retry_start(id).await;
         }
 
         // 5) 速度展示（FR-01-17 修订）：数据面窗口不变；展示面 1s 节拍采样 + EMA 平滑。
@@ -232,6 +218,19 @@ impl App {
             }
             let max_scroll = flen.saturating_sub(vis);
             self.scroll = self.scroll.min(max_scroll);
+        }
+    }
+
+    /// 重试补发 Start 并清进展标记（FR-01-41：新一轮尝试的连续性判定从零起算；
+    /// 4a 到点重试与 4b 重排补发共用，未知 id 静默跳过）
+    async fn send_retry_start(&mut self, id: u32) {
+        let Some(idx) = self.tasks.iter().position(|t| t.id == id) else {
+            return;
+        };
+        let spec = Self::make_spec(&self.tasks[idx]);
+        self.engine.send(Cmd::Start { spec }).await;
+        if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
+            t.made_progress = false;
         }
     }
 
@@ -608,12 +607,12 @@ mod tick_tests {
         app.shutdown().await;
     }
 
-    #[tokio::test]
-    async fn tick_completes_download_from_stub_server() {
-        // 桩服务器：固定响应头 + 确定性内容（i%251）
-        let data: Vec<u8> = (0..128_000u32).map(|i| (i % 251) as u8).collect();
+    /// 桩 HTTP 服务器：固定响应头 + 确定性内容（i%251）；返回监听地址。
+    /// 线程 detach（engineering.md：无退出条件的测试线程一律 detach）。
+    fn stub_server(len: u64) -> std::net::SocketAddr {
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = listener.local_addr().unwrap().port();
+        let addr = listener.local_addr().unwrap();
+        let data: Vec<u8> = (0..len as u32).map(|i| (i % 251) as u8).collect();
         std::thread::spawn(move || {
             for conn in listener.incoming().flatten() {
                 let data = data.clone();
@@ -638,24 +637,106 @@ mod tick_tests {
                 });
             }
         });
+        addr
+    }
+
+    /// 泵到完成态并断言（stub 全流程下载类测试共用）
+    async fn pump_to_completed(app: &mut App, deadline: std::time::Instant) {
+        pump_until(app, deadline, |a| a.tasks[0].state == TaskState::Completed).await;
+        assert_eq!(app.tasks[0].state, TaskState::Completed, "stub 下载应完成");
+    }
+
+    #[tokio::test]
+    async fn tick_completes_download_from_stub_server() {
+        // 桩服务器：固定响应头 + 确定性内容（i%251）
+        let addr = stub_server(128_000);
         let mut app = make_app("done");
         let save = std::env::temp_dir().join(format!("ezr-tick-save-{}", std::process::id()));
         std::fs::create_dir_all(&save).ok();
         app.add_cli_task(
-            format!("http://127.0.0.1:{port}/stub.bin"),
+            format!("http://{addr}/stub.bin"),
             Some(save.to_string_lossy().into_owned()),
             Some(2),
             None,
         );
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-        pump_until(&mut app, deadline, |a| {
-            a.tasks[0].state == TaskState::Completed
-        })
-        .await;
-        assert_eq!(app.tasks[0].state, TaskState::Completed, "stub 下载应完成");
+        pump_to_completed(&mut app, deadline).await;
         let out = save.join("stub.bin");
         assert_eq!(std::fs::metadata(&out).unwrap().len(), 128_000);
         app.shutdown().await;
         std::fs::remove_dir_all(&save).ok();
+    }
+
+    /// 退避到点自动重试（tick 4a → send_retry_start）：retry_in 到点转等待中、
+    /// 补发 Start 并清进展标记，重试一轮后计数递增（FR-01-41）
+    #[tokio::test]
+    async fn retry_expiry_resends_start_and_counts_round() {
+        let mut app = make_app("retry4a");
+        app.add_cli_task(
+            "http://127.0.0.1:1/none.bin".to_string(),
+            None,
+            Some(1),
+            None,
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        pump_until(&mut app, deadline, |a| {
+            a.tasks[0].state == TaskState::Failed
+        })
+        .await;
+        let retries_first = app.tasks[0].retries;
+        // 退避压进观察窗：到点 → Queued → 4a 补发 Start（清进展标记）→ 探测再失败
+        app.tasks[0].retry_in = Some(0.05);
+        app.tasks[0].made_progress = true;
+        pump_until(&mut app, deadline, |a| a.tasks[0].retries > retries_first).await;
+        assert!(
+            app.tasks[0].retries > retries_first,
+            "退避到点后自动重试新一轮（Start 补发）"
+        );
+        assert_eq!(app.tasks[0].state, TaskState::Failed, "重试后再次失败");
+        assert!(!app.tasks[0].made_progress, "新一轮尝试进展标记已清");
+        app.shutdown().await;
+    }
+
+    /// 重排后的已获槽+已探测任务重发 Start（tick 4b → send_retry_start）：
+    /// 若 4b 未补发，任务永远停在等待中；补发后走完探测→下载→完成全流程
+    #[tokio::test]
+    async fn requeued_probed_task_gets_restart_from_slot() {
+        let addr = stub_server(64_000);
+        let mut app = make_app("retry4b");
+        let save = std::env::temp_dir().join(format!("ezr-tick-save4b-{}", std::process::id()));
+        std::fs::create_dir_all(&save).ok();
+        app.add_cli_task(
+            format!("http://{addr}/stub4b.bin"),
+            Some(save.to_string_lossy().into_owned()),
+            Some(2),
+            None,
+        );
+        // 置于 4b 过滤态：等待中 + 已获槽 + 已探测（重排后待重发的口径）
+        app.tasks[0].state = TaskState::Queued;
+        app.tasks[0].has_slot = true;
+        app.tasks[0].probed = true;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        pump_to_completed(&mut app, deadline).await;
+        app.shutdown().await;
+        std::fs::remove_dir_all(&save).ok();
+    }
+
+    /// 全局速度历史窗口上限（180 点、KB/s 采样）与 toast 过期清理
+    #[tokio::test]
+    async fn push_hist_caps_length_and_toast_expires() {
+        let mut app = make_app("hist-toast");
+        app.push_hist(1024.0, 0.0);
+        assert_eq!(app.speed_hist.last(), Some(&1), "KB/s 采样换算");
+        for _ in 0..300 {
+            app.push_hist(0.0, 0.0);
+        }
+        assert_eq!(app.speed_hist.len(), 180, "历史窗口上限 180 点");
+        assert_eq!(app.up_hist.len(), 180);
+        app.set_toast("测试提示");
+        assert!(app.toast.is_some());
+        app.toast_until = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        app.tick().await;
+        assert!(app.toast.is_none(), "过期 toast 清除");
+        app.shutdown().await;
     }
 }
