@@ -2,7 +2,8 @@
 # arch_check.sh — EZR 自动化架构边界检查（six-pack/architect 交付）
 #
 # 依据 packs/_common/notes/rust.md「架构边界与适配器方向」条款的 grep 级方案：
-# 零依赖、可读、易维护，覆盖本项目六条分层规则；CI 可作为 && 链一环集成。
+# 零依赖、可读、易维护，覆盖本项目八条分层规则；CI 可作为 && 链一环集成。
+# （v1.3 后复核批次，architect 第二轮：新增规则 7/8，见 POSITIVE-CONTROL 尾注）
 #
 # 分层基线（依赖方向：低层指向高层，model 为最内层纯逻辑）：
 #   main.rs → app → engine → model；ui → app + model；model → ∅
@@ -70,14 +71,41 @@ else
   echo "[ OK ] CHECKSUM_ALGOS 单源 model/checksum.rs"
 fi
 
+# 规则 7【适配器边界】sentinel 终端适配器只允许入口引用：app/ui/engine/model
+# 不得依赖 crate::sentinel（哨兵是入口特使的 IO 外壳，业务层触达即分层泄漏；
+# architect 第二轮新增——v1.3 新增面 sentinel.rs 的边界规则化）
+hit=$(grep -rnE 'crate::sentinel|sentinel::' src/app/ src/ui/ src/engine/ src/model/ \
+      --include='*.rs' | grep -vE ':[0-9]+:[[:space:]]*//' || true)
+if [ -n "$hit" ]; then
+  echo "[FAIL] sentinel 适配器被业务层引用（只允许入口 main.rs）:"; echo "$hit"; fails=$((fails+1))
+else
+  echo "[ OK ] sentinel 仅入口可见（业务层零依赖）"
+fi
+
+# 规则 8【环境变量收口】业务/机制层不直读环境变量：env 读取收口于适配缝
+# （model/config.rs 路径重定位、sentinel.rs、入口 main.rs）；app/ui/engine 及
+# model 其余模块出现 std::env::var(_os) 即违规（architect 第二轮新增）
+hit=$(grep -rnE 'std::env::var(_os)?[[:space:]]*\(' src/app/ src/ui/ src/engine/ src/model/ \
+      --include='*.rs' | grep -v 'src/model/config.rs' | grep -vE ':[0-9]+:[[:space:]]*//' || true)
+if [ -n "$hit" ]; then
+  echo "[FAIL] 业务/机制层直读环境变量（应收口 config/sentinel/入口）:"; echo "$hit"; fails=$((fails+1))
+else
+  echo "[ OK ] 环境变量读取收口适配缝（config/sentinel/入口）"
+fi
+
 if [ "$fails" -gt 0 ]; then
   echo "arch_check: ${fails} 条规则未过"; exit 1
 fi
 echo "arch_check: 全部边界规则通过"
 
 # ---- POSITIVE-CONTROL（一次性验证记录，非运行时步骤）------------------
-# 交付时已做阳性对照：向 src/engine/mod.rs 临时插入
+# 首轮交付时已做阳性对照：向 src/engine/mod.rs 临时插入
 #   `fn _probe() -> crate::model::Connection { crate::model::Connection { id: 0, start: 0, end: 0, done: 0 } }`
 # 规则 5 即非零退出并命中该行；向 src/main.rs 临时插入 `impl App {}` 规则 4 命中；
 # 向 src/ui/mod.rs 临时插入 `use crate::engine::EngineHandle;` 规则 3 命中；
 # 对照后均已移除。零发现结论以阳性对照生效为前提（engineering.md）。
+# architect 第二轮新增规则 7/8 阳性对照（本轮会话实测）：
+#   向 src/app/mod.rs 临时插入 `use crate::sentinel::TerminalSentinel;`
+#   → 规则 7 命中并非零退出；
+#   向 src/engine/mod.rs 临时插入 `fn _probe_env() -> String { std::env::var("X").unwrap_or_default() }`
+#   → 规则 8 命中并非零退出；对照后均已移除。

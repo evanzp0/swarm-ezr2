@@ -91,7 +91,7 @@ default_concurrency = 4            # 对话框留空时的默认并发
 断点续传/一致性失效/状态码分类）：
 
 ```sh
-cargo test                        # 全部测试（246 个：单测 + 属性测试）
+cargo test                        # 全部测试（258 个：单测 + 属性测试）
 cargo clippy --all-targets        # 零警告门槛
 bash scripts/arch_check.sh        # 架构边界检查（6 规则）
 ```
