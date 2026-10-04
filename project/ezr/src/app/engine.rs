@@ -208,7 +208,8 @@ impl App {
             }
         }
 
-        // 7) 注册表周期保存（5s 兜底；关键状态转换即时保存）
+        // 7) 注册表周期保存（5s 兜底；关键状态转换即时保存；底层原子写对
+        //    内容未变化的空闲期短路跳过——零写放大）
         if self.last_save.elapsed().as_secs() >= 5 {
             self.save_registry();
         }
@@ -768,5 +769,48 @@ mod tick_tests {
         assert_eq!(c.start, 100);
         assert_eq!(c.end, 1100);
         assert_eq!(c.done, 400);
+    }
+
+    /// make_app 变体：同时返回注册表落盘路径（空闲期零写放大测试用）
+    fn make_app_with_reg(tag: &str) -> (App, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("ezr-tick-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        let reg = dir.join("registry.json").to_string_lossy().into_owned();
+        (App::new(Config::default(), reg), dir.join("registry.json"))
+    }
+
+    /// 空闲期注册表零写放大（tick 第 7 步周期兜底）：全任务终态（无传输、无
+    /// 进度推进）时，越过 5s 窗口的周期保存不得重写内容未变的注册表文件
+    /// （mtime 不变为证）；状态漂移（进度推进）后下一个周期窗口必须落盘。
+    #[tokio::test]
+    async fn idle_tick_skips_registry_rewrite_until_state_drifts() {
+        let (mut app, reg_path) = make_app_with_reg("idlesave");
+        // 种子：终态任务（已完成，无引擎交互 = 空闲形态；避开会被后台自动化
+        // 推进的等待/下载态，engineering.md「种子状态避开后台自动化」）
+        let mut t = crate::model::sample_task();
+        t.id = 1;
+        t.state = TaskState::Completed;
+        t.total = 200;
+        t.downloaded = 100;
+        app.tasks.push(t);
+        app.next_id = 2;
+        // 第一帧：越过 5s 窗口 → 周期保存落盘（基线）
+        app.last_save = std::time::Instant::now() - std::time::Duration::from_secs(10);
+        app.tick().await;
+        let m1 = std::fs::metadata(&reg_path).unwrap().modified().unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // 第二帧：仍空闲、内容未变 → 越过 5s 窗口但不得重写
+        app.last_save = std::time::Instant::now() - std::time::Duration::from_secs(10);
+        app.tick().await;
+        let m2 = std::fs::metadata(&reg_path).unwrap().modified().unwrap();
+        assert_eq!(m1, m2, "空闲期周期保存不得重写内容未变的注册表（零写放大）");
+        // 第三帧：持久化字段漂移（进度推进模拟）→ 下一个周期窗口必须落盘
+        app.tasks[0].downloaded = 150;
+        app.last_save = std::time::Instant::now() - std::time::Duration::from_secs(10);
+        app.tick().await;
+        let reg = Registry::load(reg_path.to_str().unwrap()).expect("注册表应可加载");
+        assert_eq!(reg.tasks[0].downloaded, 150, "内容漂移后周期保存必须落盘");
+        app.shutdown().await;
+        std::fs::remove_dir_all(reg_path.parent().unwrap()).ok();
     }
 }

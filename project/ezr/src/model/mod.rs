@@ -145,13 +145,20 @@ pub use timefmt::unix_now;
 
 /// JSON 原子写（先写 `<path>.tmp` 再 rename；任意时刻断电不损坏，FR-01-20）。
 /// 注册表与 sidecar 持久化共用（DRY 单源）。
+/// 内容幂等短路：序列化结果与盘上现有文件字节一致时跳过写盘——周期兜底保存
+/// （如注册表 5s 兜底）在无变更的空闲期不再产生写放大（无谓 temp+rename 与
+/// mtime 抖动）；内容有差异（含文件缺失/损坏）时照常原子落盘。
 ///
 /// # Errors
 /// 序列化或临时文件写入/rename 失败时返回 IO 错误。
 pub(crate) fn save_json_atomic<T: serde::Serialize>(value: &T, path: &str) -> std::io::Result<()> {
-    let tmp = format!("{path}.tmp");
     let json = serde_json::to_string_pretty(value)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    // 盘上现有内容与本次序列化结果字节一致 → 跳过写盘（读失败视为不一致照常写）
+    if std::fs::read_to_string(path).is_ok_and(|old| old == json) {
+        return Ok(());
+    }
+    let tmp = format!("{path}.tmp");
     std::fs::write(&tmp, json)?;
     std::fs::rename(&tmp, path)?;
     Ok(())

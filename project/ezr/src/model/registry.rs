@@ -210,7 +210,8 @@ impl Registry {
             .collect()
     }
 
-    /// 原子写（temp + rename，FR-01-20；实现见 `save_json_atomic`）
+    /// 原子写（temp + rename，FR-01-20；实现见 `save_json_atomic`）；
+    /// 内容与盘上一致时跳过写盘（幂等，空闲期周期保存零写放大）
     ///
     /// # Errors
     /// 写临时文件或 rename 失败时返回 IO 错误。
@@ -301,6 +302,53 @@ mod tests {
         let p = dir.join("registry.json");
         reg.save(p.to_str().unwrap()).unwrap();
         assert!(!dir.join("registry.json.tmp").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// 内容未变化时保存不重写文件（空闲期零写放大）：周期兜底保存反复触发时，
+    /// 字节一致的序列化结果必须短路跳过 temp+rename（mtime 不变为证）
+    #[test]
+    fn save_skips_rewrite_when_content_unchanged() {
+        let mut t = sample_task();
+        t.id = 1;
+        t.state = TaskState::Completed;
+        t.total = 100;
+        t.downloaded = 100;
+        let reg = Registry::from_tasks(&[t], 2);
+        let dir = std::env::temp_dir().join(format!("ezr-reg4-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("registry.json");
+        reg.save(p.to_str().unwrap()).unwrap();
+        let m1 = std::fs::metadata(&p).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        reg.save(p.to_str().unwrap()).unwrap();
+        let m2 = std::fs::metadata(&p).unwrap().modified().unwrap();
+        assert_eq!(
+            m1, m2,
+            "内容未变化时保存不得重写文件（空闲期周期保存零写放大）"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// 内容变化时保存仍须写盘（防过度跳过）：跳过短路只对字节一致内容生效
+    #[test]
+    fn save_writes_when_content_changes() {
+        let mut t = sample_task();
+        t.id = 1;
+        t.total = 200;
+        t.downloaded = 100;
+        let dir = std::env::temp_dir().join(format!("ezr-reg5-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("registry.json");
+        Registry::from_tasks(&[t.clone()], 2)
+            .save(p.to_str().unwrap())
+            .unwrap();
+        t.downloaded = 150;
+        Registry::from_tasks(&[t], 2)
+            .save(p.to_str().unwrap())
+            .unwrap();
+        let loaded = Registry::load(p.to_str().unwrap()).expect("注册表应可加载");
+        assert_eq!(loaded.tasks[0].downloaded, 150, "内容漂移后保存必须落盘");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
