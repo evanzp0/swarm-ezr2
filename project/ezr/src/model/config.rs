@@ -88,12 +88,8 @@ struct ConfigRaw {
 }
 
 impl Config {
-    /// 加载配置：文件可缺失（全默认）；解析失败 = 全部非法 → 默认。
-    /// 单键非法值回退默认（`sanitize`）。
-    ///
-    /// # Errors
-    /// 仅返回读文件产生的 IO 错误以外的解析错误场景不使用（解析失败静默回退）。
-    /// 实际实现里所有失败都回退默认，故总是返回 `Ok`；保留 Result 以便将来扩展。
+    /// 加载配置：文件可缺失（全默认）；解析失败 = 全部非法 → 默认；
+    /// 单键非法值回退默认（见 [`Config::from_toml`]）。
     pub fn load(path: &Path) -> Self {
         match std::fs::read_to_string(path) {
             Ok(text) => Config::from_toml(&text),
@@ -136,6 +132,10 @@ impl Config {
     }
 }
 
+/// 限速单位后缀表（十进制口径：1 MB = 1_000_000 B/s，与 UI 显示一致）。
+/// 匹配顺序即原 else-if 链顺序：mb → kb → b。
+const SPEED_UNITS: [(&str, f64); 3] = [("mb", 1_000_000.0), ("kb", 1_000.0), ("b", 1.0)];
+
 /// 限速字符串解析：`"2 MB/s"` / `"500 KB/s"` / `"1048576"`（B/s）。
 /// 无法解析 → 0（不限）。十进制口径（1 MB = 1_000_000 B/s，与 UI 显示一致）。
 #[must_use]
@@ -145,15 +145,10 @@ pub fn parse_speed(s: &str) -> u64 {
     if let Ok(v) = t.parse::<u64>() {
         return v;
     }
-    let (num_part, mult) = if let Some(n) = t.strip_suffix("mb") {
-        (n.trim(), 1_000_000.0f64)
-    } else if let Some(n) = t.strip_suffix("kb") {
-        (n.trim(), 1_000.0f64)
-    } else if let Some(n) = t.strip_suffix('b') {
-        (n.trim(), 1.0f64)
-    } else {
-        (t, 1.0f64)
-    };
+    let (num_part, mult) = SPEED_UNITS
+        .iter()
+        .find_map(|(suffix, m)| t.strip_suffix(suffix).map(|n| (n.trim(), *m)))
+        .unwrap_or((t, 1.0));
     num_part
         .trim()
         .parse::<f64>()

@@ -214,7 +214,6 @@ pub fn run_child() -> ! {
         r
     });
     trace("child: outcome", &format!("{outcome:?}"));
-    let _ = outcome;
     std::process::exit(0);
 }
 
@@ -422,5 +421,129 @@ mod tests {
                 seq_written: false
             }
         );
+    }
+
+    // ===== IO 外壳的单元可达分支（纯追加补测；真实子进程与 /dev/tty 路径
+    // 仍由 pty 端到端兜底，见上方模块注释）=====
+
+    #[test]
+    fn wait_ready_handshake_byte_then_eof() {
+        // 成功路径：握手字节先写后关（字节先到，EOF 不覆盖）→ true
+        let (rx, mut tx) = pipe().unwrap();
+        tx.write_all(READY_BYTE).unwrap();
+        drop(tx);
+        assert!(wait_ready(rx), "握手字节 → 武装成功");
+
+        // 失败路径：写端即弃即关 → EOF → false（子进程死亡）
+        let (rx2, tx2) = pipe().unwrap();
+        drop(tx2);
+        assert!(!wait_ready(rx2), "写端关闭（EOF）→ 武装失败");
+    }
+
+    #[test]
+    fn restore_tty_none_tty_is_noop() {
+        // 无 tty 句柄：无论是否保存过 termios 都不做任何还原
+        assert_eq!(restore_tty(None, None), (false, false));
+        assert_eq!(restore_tty(None, Some("4:600:5:bf")), (false, false));
+    }
+
+    #[test]
+    fn restore_tty_non_tty_file_writes_sequence_but_no_termios() {
+        // 非 tty 的常规可写文件：复原序列可写入（seq_written=true），
+        // termios 经 stty 还原必然失败（stty 只作用于终端）→ false
+        let dir = std::env::temp_dir().join(format!("ezr-sentinel-restore-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(dir.join("tty-probe"))
+            .unwrap();
+        assert_eq!(
+            restore_tty(Some(&f), None),
+            (false, true),
+            "未保存 termios → 只写序列"
+        );
+        assert_eq!(
+            restore_tty(Some(&f), Some("not-a-real-stty-code")),
+            (false, true),
+            "stty 失败不阻断序列写入"
+        );
+        drop(f);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn stty_save_and_restore_fail_without_tty() {
+        // 非 tty 输入：`stty -g` 捕获失败 → None；`stty <saved>` 还原失败 → false
+        // （失败容错契约：返回 None/false 而非 panic）
+        let dir = std::env::temp_dir().join(format!("ezr-sentinel-stty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .read(true)
+            .open(dir.join("tty-probe"))
+            .unwrap();
+        assert_eq!(stty_save(&f), None, "非 tty 的 stty -g 必失败");
+        assert!(!stty_restore(&f, "4:600:5:bf"), "非 tty 的 stty 还原必失败");
+        drop(f);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn sentinel_handle_release_and_drop_send_wake_byte() {
+        // 句柄通知语义（child=None 由测试直接构造私有字段，不涉真实子进程）：
+        // release 与 Drop 都向 wake 管道写通知字节——哨兵收到字节即静默退场，
+        // 异常收尾路径经 Drop 兜底同样不误判父死亡
+        let (mut rx, tx) = pipe().unwrap();
+        let handle = TerminalSentinel {
+            wake_tx: Some(tx),
+            child: None,
+        };
+        handle.release();
+        let mut b = [0u8; 1];
+        rx.read_exact(&mut b).unwrap();
+        assert_eq!(&b, READY_BYTE, "release 通知哨兵正常收尾");
+
+        let (mut rx2, tx2) = pipe().unwrap();
+        let handle2 = TerminalSentinel {
+            wake_tx: Some(tx2),
+            child: None,
+        };
+        drop(handle2);
+        let mut b2 = [0u8; 1];
+        rx2.read_exact(&mut b2).unwrap();
+        assert_eq!(&b2, READY_BYTE, "Drop 兜底同样通知");
+    }
+
+    #[test]
+    fn trace_env_gated_full_and_silent_paths() {
+        // 追踪契约（顺序执行，避免与并行测试在该 env 键上竞态——仅本测试触碰）：
+        // 设 EZR_SENTINEL_TRACE=1 → 逐事件追加 /tmp/ezr-sentinel-trace.log；
+        // 未设 → 早退零输出零副作用
+        let log = std::path::Path::new("/tmp/ezr-sentinel-trace.log");
+        std::env::set_var("EZR_SENTINEL_TRACE", "1");
+        trace("test: full", "written");
+        assert!(log.exists(), "env 设置时写出追踪日志");
+        let size_after_first = std::fs::metadata(log).map(|m| m.len()).unwrap_or(0);
+        trace("test: second", "appended");
+        let size_after_second = std::fs::metadata(log).map(|m| m.len()).unwrap_or(0);
+        assert!(
+            size_after_second > size_after_first,
+            "第二次调用追加而非截断（append 语义）"
+        );
+
+        std::env::remove_var("EZR_SENTINEL_TRACE");
+        let size_before_silent = std::fs::metadata(log).map(|m| m.len()).unwrap_or(0);
+        trace("test: silent", "no side effect expected");
+        let size_after_silent = std::fs::metadata(log).map(|m| m.len()).unwrap_or(0);
+        assert_eq!(
+            size_before_silent, size_after_silent,
+            "未设 env 时零输出零副作用"
+        );
+        // 清理本测试的追踪残留（日志路径固定，不能留垃圾给后续会话）
+        std::fs::remove_file(log).ok();
     }
 }

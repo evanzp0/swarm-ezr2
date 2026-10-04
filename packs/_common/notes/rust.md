@@ -183,6 +183,20 @@ group_imports = "StdExternalCrate"
   外层函数与闭包，函数级 CRAP 口径要把闭包记录与外层视为同一逻辑函数（取极值）再计算，
   否则分派器类函数的复杂度被重复放大（engineering.md「符号级输出不可直接精确匹配」的
   lcov 维度延伸）。
+- **`cargo llvm-cov --lcov` 默认不输出 BRDA（分支数据整条缺失）**：需要分支计数口径的
+  受限近似（如 CRAP 的 comp 代入）必须加 `--branch` 重新生成 lcov；"零发现"前先对已知
+  多分支低覆盖函数做阳性对照（BRDA>0 才算数据在位），否则全 crate 函数 comp 都会
+  塌缩成 1、CRAP 全绿假象。
+- **BRDA 分支计数做 comp 近似的两个偏差方向**：① `?` 操作符不产生 BRDA——早退密集的
+  入口胶水（main/run_tui 类）comp 被低估、CRAP 假性达标，登记偏差方向留 hardender 以
+  变异为准；② 测试代码 `assert!` 宏展开为每个断言生成分支记录——测试函数 comp 虚增，
+  CRAP 门禁按 mangled 名含 `testss_` 排除测试模块（带前缀的 `cli_parse_tests` 等测试
+  模块同样命中，勿只匹配 `mod tests`）。
+- **PMD 7.x 的获取与调用**：Maven Central 上 `pmd-dist` 只有 maven jar（无 bin zip），
+  bin 发行包在 GitHub releases（tag 形如 `pmd_releases/<版本>`，资产
+  `pmd-dist-<版本>-bin.zip`）；GitHub API 限流时按已知 tag 拼直链下载，勿据 404 误判
+  "未发布"。CPD 无独立启动器，用 `pmd cpd` 子命令（`-l rust` 必带，见 engineering.md
+  「静默空输出」条）。
 
 ## 8. 架构边界与适配器方向
 
