@@ -2,7 +2,8 @@
 //!
 //! 职责：CLI 参数解析（FR-01-01）、单实例文件锁（FR-01-72）、配置加载、
 //! 终端初始化（raw mode + alternate screen + bracketed paste FR-01-06 + 鼠标捕获）、
-//! tokio 事件循环（键盘/鼠标/粘贴事件流 + 100ms tick）、优雅退出（恢复终端 + 保存状态，FR-01-73）。
+//! tokio 事件循环（键盘/鼠标/粘贴事件流 + 100ms tick）、优雅退出（恢复终端 + 保存状态，FR-01-73）、
+//! 终端哨兵武装与退场（FR-01-84：异常死亡后终端自恢复，机制见 sentinel.rs）。
 //!
 //! 覆盖层（对话框/下拉浮层）出现或消失的那一帧必须全量重绘（CJK 宽字符
 //! 半格覆盖问题，沿用 demo 定稿注释与方案）。
@@ -25,6 +26,7 @@
 mod app;
 mod engine;
 mod model;
+mod sentinel;
 mod ui;
 
 #[cfg(test)]
@@ -190,7 +192,8 @@ fn try_lock_path(path: &std::path::Path) -> std::io::Result<Option<std::fs::File
     }
 }
 
-/// 单实例文件锁（FR-01-72：`~/.ezr/state/ezr.lock`，flock 独占）。
+/// 单实例文件锁（FR-01-72：`<.ezr>/state/ezr.lock`，flock 独占；`.ezr` 根目录
+/// 经 `EZR_HOME` 重定位，v1.3/D16——不同 EZR_HOME 的实例互不冲突）。
 /// 锁文件句柄保持打开直至进程退出；`Ok(None)` = 已有实例在运行。
 fn acquire_instance_lock() -> std::io::Result<Option<std::fs::File>> {
     let Some(dir) = state_dir() else {
@@ -202,8 +205,19 @@ fn acquire_instance_lock() -> std::io::Result<Option<std::fs::File>> {
     try_lock_path(&dir.join("ezr.lock"))
 }
 
-#[tokio::main]
-async fn main() -> std::io::Result<()> {
+fn main() -> std::io::Result<()> {
+    // 哨兵子进程模式（FR-01-84 内部协议）：短路与 TUI 主流程完全隔离——
+    // 不装 panic hook、不碰单实例锁/配置/注册表，只守护终端状态
+    if std::env::var_os(sentinel::ENV_SENTINEL).is_some() {
+        sentinel::run_child();
+    }
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(ezr_main())
+}
+
+async fn ezr_main() -> std::io::Result<()> {
     setup_panic_hook();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cli = match parse_cli(&args) {
@@ -259,26 +273,54 @@ async fn main() -> std::io::Result<()> {
         app.add_cli_task(url.clone(), cli.dir.clone(), cli.conns, checksum);
     }
 
+    // 终端哨兵（FR-01-84）：TUI 前武装——父进程异常死亡（含 kill -9）时由哨兵
+    // 还原 termios 并写终端复原序列；武装失败（非 unix/无 stty 等）仅失去保护，
+    // 不阻塞 TUI。哨兵子进程经 ready 握手后才允许 enable_raw_mode（防竞态）。
+    let sentinel = sentinel::arm();
+
+    let result = run_tui(&mut app).await;
+
+    // 哨兵退场：终端已在 run_tui 内全路径复原 → 通知静默退出（收到字节才退，
+    // EOF 才还原）；此后异常死亡也仅是冗余还原，无副作用。
+    // Option<..> 保有内部 Drop：panic unwind 经 Drop 同样通知，哨兵不会误判。
+    if let Some(s) = sentinel {
+        s.release();
+    }
+    // 优雅退出收尾（FR-01-73）：停传保留断点 → 保存注册表
+    app.shutdown().await;
+    result
+}
+
+/// TUI 会话：终端初始化（raw mode + 备用屏幕 + 鼠标 + bracketed paste）、
+/// 事件循环、全路径终端复原（正常/错误/panic hook 之外的错误分支也复原）。
+async fn run_tui(app: &mut App) -> std::io::Result<()> {
     // 本 Demo 的界面语义完全依赖配色（状态色/协议徽标/分块图示），
     // 无视 NO_COLOR 环境变量强制输出颜色（沿用 demo 定稿决定）
     crossterm::style::force_color_output(true);
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(
+    if let Err(e) = execute!(
         stdout,
         EnterAlternateScreen,
         EnableMouseCapture,
         EnableBracketedPaste
-    )?;
+    ) {
+        restore_terminal();
+        return Err(e);
+    }
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let mut terminal = match Terminal::new(backend) {
+        Ok(t) => t,
+        Err(e) => {
+            restore_terminal();
+            return Err(e);
+        }
+    };
 
-    let result = run(&mut terminal, &mut app).await;
+    let result = run(&mut terminal, app).await;
 
     restore_terminal();
-    // 优雅退出收尾（FR-01-73）：停传保留断点 → 保存注册表
-    app.shutdown().await;
     result
 }
 

@@ -236,3 +236,32 @@ group_imports = "StdExternalCrate"
   `///` 注释行（文档可提及类型名，代码不得构造）。脚本放在 `project/<crate>/scripts/arch_check.sh`，CI 集成为 `&&` 链的一环；
   比起 `cargo-deny`/`cargo-modules` 等重量级工具，grep 脚本零依赖、可读、易维护，
   适合"分层依赖方向"这类规则简单的检查（复杂规则如 trait impl 方向才需重量级工具）。
+
+## 9. 终端与 TTY（TUI）
+
+- **TUI 异常终止后的终端自恢复 = 存活哨兵子进程模式**：SIGKILL 进程内无法捕获
+  （raw mode 关 ISIG → CTRL+C 失效；鼠标捕获未复位 → 终端持续上报 SGR 鼠标事件
+  被 shell 回显成 `32;64;10M` 形态残影；备用屏幕未离开）。方案：TUI 启动前 spawn
+  同一二进制的哨兵子进程——①ready 握手防竞态（子进程先捕获 cooked termios、写
+  ready 字节后，父进程才 enable_raw_mode）；②子进程阻塞等 wake 管道：读到数据 =
+  父进程正常收尾（静默退出），EOF = 父进程死亡（SIGKILL/崩溃/exit 皆触发）→
+  还原 termios + 写终端复原序列后退出。零 unsafe 实现口径：termios 还原用
+  `stty -g` 可移植编码往返（Linux/macOS 皆内置），管道用 `std::io::pipe` +
+  `PipeReader/PipeWriter: Into<Stdio>` 安全转换，无需裸 fd 与 libc。
+- **哨兵必须独立进程组（`Command::process_group(0)`）**：会话首死亡时内核向
+  **前台进程组**广播 SIGHUP——留在父进程组的哨兵会被同波及死，还原代码无机会执行
+  （表象：哨兵已武装、kill -9 后无任何还原、无残留进程）。独立成组后哨兵凭管道
+  EOF 而非信号感知死亡，正是设计语义；该坑在带 pty 的端到端验证前完全不可见，
+  单测全绿照常通过。
+- **`/dev/tty` 必须读写打开（`OpenOptions::new().read(true).write(true)`）**：
+  `File::open` 只读，只读 fd 上 `write()` 返回 EBADF，而 `tcsetattr` 类 ioctl
+  （如 `stty <saved>`）在只读 fd 上照样成功——"termios 已还原但复原序列写入失败"
+  的假象即由此而来。诊断线索：持有中的 fd 突发 EBADF，先怀疑打开权限位而非"fd 被
+  谁关了"。
+- **pty 测试 harness 的会话首假象**：测试脚本里对被测 TUI 直接 setsid+TIOCSCTTY
+  使其自任会话首时，kill 它会触发内核 tty hangup（后续写 /dev/tty 得 EIO）——真实
+  场景会话首是操作者 shell（始终存活），不会有 hangup。harness 应用 bash 作会话首、
+  被测 TUI 作前台作业（`bash -c "<tui>; echo done"`，尾缀真实命令防止 bash exec
+  优化改变进程树形态）。进程识别用「exe 路径 + ppid 拓扑」（同二进制的哨兵与主进程
+  exe 相同，按"父是否 ezr 进程"区分；跨轮次 pid 复用会以单 pid 断言制造假失败，
+  套件启动先清理上一轮孤儿进程）。

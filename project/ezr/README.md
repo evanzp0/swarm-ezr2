@@ -32,8 +32,13 @@
   并发 / 校验码字段整体接收剪贴板粘贴，过滤规则与逐键输入一致（长 URL 粘贴
   无需担心截断或换行混入）。
 - **持久化**：任务注册表 `~/.ezr/state/registry.json`（含已完成/已失败历史，
-  原子写）；配置 `~/.ezr/config.toml`（键见下）；崩溃恢复：下载中任务重启后
-  回「等待中」按序排队，sidecar 断点自动合并。
+  原子写）；配置 `~/.ezr/config.toml`（键见下）；`.ezr` 根目录可经环境变量
+  `EZR_HOME` 重定位（未设置/空 → `~/.ezr`；不同 EZR_HOME 实例隔离，各自锁与数据）；
+  崩溃恢复：下载中任务重启后回「等待中」按序排队，sidecar 断点自动合并。
+- **终端哨兵**：TUI 启动前武装存活哨兵子进程（同二进制、独立进程组）——任意原因
+  终止（含 `kill -9`）后，运行 ezr 的终端自恢复：raw mode 复位（CTRL+C 立即可用）、
+  鼠标捕获/bracketed paste 关闭（无转义字符残影）、备用屏幕离开；优雅退出路径不受
+  影响（哨兵收到通知即静默退场）。
 - **其他**：单实例文件锁保护；`Q`/`Esc`/`Ctrl+C` 优雅退出（停传保留断点 →
   保存注册表 → 恢复终端；panic hook 兜底）。
 
@@ -67,7 +72,7 @@ md5/sha1/sha224/sha256/sha384/sha512/adler32，大小写不敏感；位数不符
 | `G` | 显示/隐藏速度图 | `Tab` | 切换页签（正在下载 / 已完成） |
 | `↑↓ PgUp PgDn Home End` | 选择 | `Q` / `Esc` / `Ctrl+C` | 退出 |
 
-### 配置（~/.ezr/config.toml，可缺失，非法值回退默认）
+### 配置（~/.ezr/config.toml，可缺失，非法值回退默认；`.ezr` 根目录可经环境变量 `EZR_HOME` 重定位）
 
 ```toml
 download_dir = "/data/downloads"   # 对话框留空时的默认目录（缺省 ~/Downloads）
@@ -86,8 +91,9 @@ default_concurrency = 4            # 对话框留空时的默认并发
 断点续传/一致性失效/状态码分类）：
 
 ```sh
-cargo test                        # 全部测试（89 个）
+cargo test                        # 全部测试（240 个：单测 + 属性测试）
 cargo clippy --all-targets        # 零警告门槛
+bash scripts/arch_check.sh        # 架构边界检查（6 规则）
 ```
 
 本地 fixture 服务器（QA 基建，能力对应 qa/ 各套件环境前置节）：
@@ -119,3 +125,5 @@ fixture 控制参数（叠加在文件 URL 上）：`?norange=1`（关闭 Range�
 
 BT / 磁力链（02 期）、每任务限速与 SOCKS5（03 期）。
 `--no-tui` 无终端模式已从需求中移除（原 FR-01-74，v1.2 操作者定案删除）。
+v1.3 修订：`.ezr` 目录支持 `EZR_HOME` 重定位（D16）；新增终端哨兵（FR-01-84，
+任意原因终止后终端自恢复）。

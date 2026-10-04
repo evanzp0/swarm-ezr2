@@ -8,11 +8,13 @@
 #   01-persistence-config-07 单实例保护
 #   01-persistence-config-08 Q 优雅退出断点保留重启恢复
 #   01-persistence-config-09 Esc 与 Ctrl+C 优雅退出终端无花屏
+#   01-persistence-config-10 EZR_HOME 环境变量重定位 .ezr 目录（v1.3/D16）
+#   01-persistence-config-11 kill -9 异常终止终端自恢复（v1.3/FR-01-84）
 Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
 
-  期号 01。依据 project/mission/phase-01.md FR-01-70~73 与本会话澄清决定
-  （默认并发键 default_concurrency）。配置位于用户主目录 .ezr/config.toml，注册表位于
-  .ezr/state/，均为原子写。
+  期号 01。依据 project/mission/phase-01.md FR-01-70~73、FR-01-84 与本会话澄清决定
+  （默认并发键 default_concurrency；v1.3：EZR_HOME 重定位 D16）。配置位于用户主目录
+  .ezr/config.toml（或 $EZR_HOME/config.toml），注册表位于 .ezr/state/，均为原子写。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
@@ -101,3 +103,20 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
       | exit_key |
       | Esc      |
       | Ctrl+C   |
+
+  Scenario: 01-persistence-config-10 EZR_HOME 环境变量重定位 .ezr 目录
+    Given 环境变量 EZR_HOME 指向一个空目录
+    When 运行 ezr 并添加任务（触发配置读取与注册表写入）
+    Then 配置文件读取自 $EZR_HOME/config.toml 且任务注册表写入 $EZR_HOME/state/registry.json
+    And 单实例锁文件位于 $EZR_HOME/state/ezr.lock
+    And 用户主目录下不存在 .ezr/（默认路径未被创建）
+    And EZR_HOME 为空串或未设置时回退缺省 ~/.ezr（D16 缺省口径）
+    And 不同 EZR_HOME 的两组实例各自持有各自的锁与注册表（隔离语义，互不冲突）
+
+  Scenario: 01-persistence-config-11 kill -9 异常终止终端自恢复
+    Given ezr TUI 运行中（raw mode、鼠标捕获、bracketed paste 与备用屏幕已启用）
+    When 从另一终端以 SIGKILL（kill -9）终止 ezr 进程
+    Then 运行 ezr 的终端立即自恢复：不再出现 "32;64;10M" 形态的鼠标事件转义字符残影输出
+    And 终端回到正常（cooked）模式：按键回显生效、CTRL+C 可正常产生 SIGINT 中断
+    And 鼠标捕获、bracketed paste 与备用屏幕均已复位，光标与配色正常
+    And 哨兵子进程随之退出，不留残留进程

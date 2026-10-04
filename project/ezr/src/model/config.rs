@@ -1,4 +1,5 @@
-//! config — 配置文件（FR-01-71：`~/.ezr/config.toml`，缺省回退、非法值回退）
+//! config — 配置文件（FR-01-71：`~/.ezr/config.toml`，缺省回退、非法值回退；
+//! v1.3/D16：`.ezr` 根目录可经环境变量 `EZR_HOME` 重定位）
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -170,16 +171,29 @@ pub fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// 配置文件路径：`<主目录>/.ezr/config.toml`（FR-01-71）
+/// `.ezr` 根目录（v1.3/D16，FR-01-70/71 修订）：环境变量 `EZR_HOME` 非空 → `$EZR_HOME`；
+/// 未设置或空串 → 用户主目录下 `.ezr`（缺省口径不变）。单实例锁随 `state/` 迁移，
+/// 不同 `EZR_HOME` 的实例互不冲突（隔离沙箱语义）。
 #[must_use]
-pub fn config_path() -> Option<PathBuf> {
-    home_dir().map(|h| h.join(".ezr").join("config.toml"))
+pub fn ezr_dir() -> Option<PathBuf> {
+    if let Some(v) = std::env::var_os("EZR_HOME") {
+        if !v.is_empty() {
+            return Some(PathBuf::from(v));
+        }
+    }
+    home_dir().map(|h| h.join(".ezr"))
 }
 
-/// 任务注册表目录：`<主目录>/.ezr/state/`（FR-01-70）
+/// 配置文件路径：`<.ezr>/config.toml`（FR-01-71；`.ezr` 根目录见 [`ezr_dir`]）
+#[must_use]
+pub fn config_path() -> Option<PathBuf> {
+    ezr_dir().map(|d| d.join("config.toml"))
+}
+
+/// 任务注册表目录：`<.ezr>/state/`（FR-01-70；`.ezr` 根目录见 [`ezr_dir`]）
 #[must_use]
 pub fn state_dir() -> Option<PathBuf> {
-    home_dir().map(|h| h.join(".ezr").join("state"))
+    ezr_dir().map(|d| d.join("state"))
 }
 
 /// 用户主目录下的下载目录（FR-01-03：Linux/macOS `~/Downloads`；Windows
@@ -264,5 +278,39 @@ mod tests {
     fn default_download_dir_is_home_downloads() {
         let dir = default_download_dir();
         assert!(dir.ends_with("Downloads"), "dir={dir}");
+    }
+
+    // ===== EZR_HOME 重定位（v1.3/D16，FR-01-70/71 修订）=====
+    // 注：env 读写仅限本组测试触碰 EZR_HOME（其余测试不读该键，无并行竞态）；
+    //     no-HOME 场景不入单测（临时改 HOME 会与并行读 HOME 的测试竞态），
+    //     由 pty 端到端验证兜底。
+
+    #[test]
+    fn ezr_home_env_relocates_config_and_state() {
+        let dir = std::env::temp_dir().join(format!("ezr-home-env-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("EZR_HOME", &dir);
+        assert_eq!(ezr_dir(), Some(dir.clone()), "EZR_HOME 非空 → 直接采用");
+        assert_eq!(config_path(), Some(dir.join("config.toml")));
+        assert_eq!(state_dir(), Some(dir.join("state")));
+        std::env::remove_var("EZR_HOME");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ezr_home_empty_or_unset_falls_back_to_dot_ezr() {
+        let expect_dir = home_dir().map(|h| h.join(".ezr"));
+        let expect_cfg = expect_dir.clone().map(|d| d.join("config.toml"));
+        let expect_state = expect_dir.clone().map(|d| d.join("state"));
+        std::env::set_var("EZR_HOME", "");
+        assert_eq!(ezr_dir(), expect_dir, "空串视同未设置 → ~/.ezr");
+        assert_eq!(config_path(), expect_cfg, "config_path 随 ezr_dir 重定位");
+        assert_eq!(state_dir(), expect_state, "state_dir 随 ezr_dir 重定位");
+        std::env::remove_var("EZR_HOME");
+        assert_eq!(
+            ezr_dir(),
+            expect_dir,
+            "未设置 → ~/.ezr（FR-01-70/71 缺省口径）"
+        );
     }
 }
