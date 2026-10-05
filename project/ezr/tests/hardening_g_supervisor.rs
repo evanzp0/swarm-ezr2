@@ -3,7 +3,28 @@
 //! `{save_dir}/{name}.ezr`；stop_workers 255:5（no-op）——暂停后传输必须停止。
 //! 其余 download/block_worker 存活体按会话偏差登记（见 .work/tmp/step7/EQUIVALENCE.md
 //! 与 project/handoff.md 的未处置清单及补测指引）。
+// lint 姿态与产品 bin（src/main.rs crate 级 allow）对齐：#[path] 收编的产品源
+// 在本测试 crate 内沿用产品面的豁免口径（产品面 clippy 0 的同一合同）。
 #![allow(missing_docs)]
+#![allow(clippy::multiple_crate_versions)]
+#![allow(clippy::pedantic)]
+#![allow(clippy::nursery)]
+#![allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_lines,
+    clippy::too_many_arguments
+)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+// 测试挂载机制固有豁免：产品源经 #[path] 部分收编进独立测试 crate，部分产物项
+// 在本 crate 上下文无消费者或被重复挂载（产品全量编译下均非死代码）。
+#![allow(dead_code)]
+#![allow(clippy::duplicate_mod)]
+#![allow(unused_imports)]
 
 #[path = "../src/engine/mod.rs"]
 mod engine;
@@ -11,7 +32,6 @@ mod engine;
 mod model;
 
 use crossterm::event::{KeyCode, KeyModifiers};
-
 use model::config::Config;
 use model::TaskState;
 
@@ -72,7 +92,11 @@ async fn pause_stops_transfer_and_writes_sidecar() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    assert_eq!(a.tasks[0].state, TaskState::Downloading, "滴流下载应进入下载中");
+    assert_eq!(
+        a.tasks[0].state,
+        TaskState::Downloading,
+        "滴流下载应进入下载中"
+    );
     a.on_key(KeyCode::Char(' '), KeyModifiers::empty()); // Space → 暂停
     let sc = dir.join("f.bin.ezr");
     while std::time::Instant::now() < deadline {
@@ -83,13 +107,16 @@ async fn pause_stops_transfer_and_writes_sidecar() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     assert!(!a.tasks[0].has_slot || true, "占位"); // has_slot 在本地即时置位，不作判据
-    assert!(sc.exists(), "暂停必须把 sidecar 写到标准路径 {}（恒串变异体写去 xyzzy/空路径）", sc.display());
+    assert!(
+        sc.exists(),
+        "暂停必须把 sidecar 写到标准路径 {}（恒串变异体写去 xyzzy/空路径）",
+        sc.display()
+    );
     let frozen = a.tasks[0].downloaded;
     tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
     a.tick().await;
     assert_eq!(
-        a.tasks[0].downloaded,
-        frozen,
+        a.tasks[0].downloaded, frozen,
         "暂停后下载不得继续增长（stop_workers no-op 变异体仍在收数据）"
     );
     a.shutdown().await;

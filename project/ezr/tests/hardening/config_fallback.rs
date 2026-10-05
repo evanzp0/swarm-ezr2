@@ -17,8 +17,9 @@ mod chunk;
 #[path = "../../src/model/config.rs"]
 mod config;
 
-use config::{home_dir, Config};
 use std::path::PathBuf;
+
+use config::{home_dir, Config};
 
 /// 靶 `94:9`：`load` 必须真实读取文件内容（mutant 恒默认 → backoff_initial=8.0）。
 #[test]

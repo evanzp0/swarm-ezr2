@@ -13,8 +13,9 @@
 #[path = "../../src/model/speed.rs"]
 mod speed;
 
-use speed::{SpeedWindow, WINDOW};
 use std::time::{Duration, Instant};
+
+use speed::{SpeedWindow, WINDOW};
 
 /// 未来基准：保证 `rate()` 的真实时钟剪枝为无操作（duration_since 饱和为 0）
 fn future_base() -> Instant {
@@ -72,7 +73,10 @@ fn boundary_sample_exactly_one_window_old_is_retained() {
     w.push(at(base, 2000), 1000);
     w.push(at(base, 3000), 5000);
     let r = w.rate();
-    assert!(close(r, 2000.0), "rate={r}（>= 变体=4000；==/< 变体≈1666.7）");
+    assert!(
+        close(r, 2000.0),
+        "rate={r}（>= 变体=4000；==/< 变体≈1666.7）"
+    );
 }
 
 /// 靶 `61:79 > → <`：比较方向反转时会驱逐"年轻"内部样本，速率塌缩为 0/末段差值。
@@ -84,7 +88,10 @@ fn young_interior_samples_are_not_evicted() {
     w.push(at(base, 250), 1000);
     w.push(at(base, 500), 1500);
     let r = w.rate();
-    assert!(close(r, 3000.0), "rate={r}（< 变体驱逐年轻样本 → 2000 或 0）");
+    assert!(
+        close(r, 3000.0),
+        "rate={r}（< 变体驱逐年轻样本 → 2000 或 0）"
+    );
 }
 
 /// 靶 `61:34 > → >=`：仅两样本且均过期时，正确语义保留旧端点作差值基准（速率 1000），

@@ -24,7 +24,10 @@ fn cd_filename_with_slash_rejected() {
 /// 靶 `52:69`：仅含 `\0`（不含 `/`、`\\`）必须拒绝；mutant `&&` 放行。
 #[test]
 fn cd_filename_with_nul_rejected() {
-    assert_eq!(from_content_disposition("attachment; filename=a\u{0}b"), None);
+    assert_eq!(
+        from_content_disposition("attachment; filename=a\u{0}b"),
+        None
+    );
 }
 
 /// 合法名直通（防过度拒绝的对照）。

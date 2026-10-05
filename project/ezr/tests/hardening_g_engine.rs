@@ -5,7 +5,28 @@
 //! 188:28（展示面私有态）、205:20（时刻恰等边界）、326:70（暂停竞态权威字节）、
 //! 317:31 `>=`（0 字节 Progress 不可稳定激发）、490:23×3（Progress 镜像使合并守卫不可分）、
 //! 565:33（引擎侧确认事件仅真实会话可观测）、78:18 `<=`（可用空间恰等需注入）。
+// lint 姿态与产品 bin（src/main.rs crate 级 allow）对齐：#[path] 收编的产品源
+// 在本测试 crate 内沿用产品面的豁免口径（产品面 clippy 0 的同一合同）。
 #![allow(missing_docs)]
+#![allow(clippy::multiple_crate_versions)]
+#![allow(clippy::pedantic)]
+#![allow(clippy::nursery)]
+#![allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_lines,
+    clippy::too_many_arguments
+)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+// 测试挂载机制固有豁免：产品源经 #[path] 部分收编进独立测试 crate，部分产物项
+// 在本 crate 上下文无消费者或被重复挂载（产品全量编译下均非死代码）。
+#![allow(dead_code)]
+#![allow(clippy::duplicate_mod)]
+#![allow(unused_imports)]
 
 #[path = "../src/app/mod.rs"]
 mod app;
@@ -18,8 +39,7 @@ use app::App;
 use crossterm::event::{KeyCode, KeyModifiers};
 use model::config::Config;
 use model::sidecar::{Sidecar, SidecarTask, SIDECAR_VERSION};
-use model::unix_now;
-use model::{Checksum, FailKind, Protocol, Task, TaskState};
+use model::{unix_now, Checksum, FailKind, Protocol, Task, TaskState};
 
 fn mkapp(tag: &str) -> App {
     let reg = std::env::temp_dir().join(format!("ezr-hard-eng-{}-{tag}.json", std::process::id()));
@@ -121,33 +141,6 @@ fn stub_trickle() -> std::net::SocketAddr {
     });
     addr
 }
-fn stub_die(body: usize) -> std::net::SocketAddr {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let addr = listener.local_addr().unwrap();
-    std::thread::spawn(move || {
-        for conn in listener.incoming().flatten() {
-            std::thread::spawn(move || {
-                use std::io::{BufRead, BufReader, Write};
-                let mut c = conn;
-                let mut r = BufReader::new(c.try_clone().unwrap());
-                let mut line = String::new();
-                while r.read_line(&mut line).unwrap_or(0) > 0 {
-                    if line == "\r\n" {
-                        break;
-                    }
-                    line.clear();
-                }
-                let head = format!("HTTP/1.1 200 OK\r\nContent-Length: 1000000000\r\n\r\n");
-                let _ = c.write_all(head.as_bytes());
-                let _ = c.write_all(&vec![7u8; body]);
-                let _ = c.flush();
-                drop(c); // 关闭 → body 读取失败
-            });
-        }
-    });
-    addr
-}
-
 fn data_pattern(len: u64) -> Vec<u8> {
     (0..len as u32).map(|i| (i % 251) as u8).collect()
 }
@@ -165,8 +158,15 @@ async fn disk_precheck_fails_when_insufficient() {
     t.total = u64::MAX / 2; // need 远大于实际可用
     a.tasks.push(t);
     a.tick().await;
-    assert_eq!(a.tasks[0].state, TaskState::Failed, "空间不足必须 Failed（恒 true / skip / `>`、`==` 变异体放行）");
-    assert!(a.tasks[0].error.as_deref().is_some_and(|e| e.contains("磁盘空间不足")));
+    assert_eq!(
+        a.tasks[0].state,
+        TaskState::Failed,
+        "空间不足必须 Failed（恒 true / skip / `>`、`==` 变异体放行）"
+    );
+    assert!(a.tasks[0]
+        .error
+        .as_deref()
+        .is_some_and(|e| e.contains("磁盘空间不足")));
     a.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -201,7 +201,11 @@ async fn retry_countdown_expires_to_queued() {
     t.has_slot = true;
     a.tasks.push(t);
     pump(&mut a, 5, |x| x.tasks[0].state == TaskState::Queued).await;
-    assert_eq!(a.tasks[0].state, TaskState::Queued, "到点必须转 Queued（`>` 变异体永不到期）");
+    assert_eq!(
+        a.tasks[0].state,
+        TaskState::Queued,
+        "到点必须转 Queued（`>` 变异体永不到期）"
+    );
     a.shutdown().await;
 }
 
@@ -222,7 +226,10 @@ async fn retry_start_clears_only_expired_target() {
     a.tasks.push(t1);
     a.tasks.push(t2);
     pump(&mut a, 5, |x| !x.tasks[0].made_progress).await;
-    assert!(!a.tasks[0].made_progress, "目标任务标记必须被清（`==→!=` 变异体清错对象）");
+    assert!(
+        !a.tasks[0].made_progress,
+        "目标任务标记必须被清（`==→!=` 变异体清错对象）"
+    );
     assert!(a.tasks[1].made_progress, "非目标任务不得被动");
     a.shutdown().await;
 }
@@ -267,7 +274,10 @@ async fn non_downloading_speed_zeroed() {
     t.speed = 5.0;
     a.tasks.push(t);
     a.tick().await;
-    assert_eq!(a.tasks[0].speed, 0.0, "非下载态速度必须归零（== 变异体只清下载态）");
+    assert_eq!(
+        a.tasks[0].speed, 0.0,
+        "非下载态速度必须归零（== 变异体只清下载态）"
+    );
     a.shutdown().await;
 }
 
@@ -277,7 +287,11 @@ async fn speed_hist_samples_after_interval() {
     let mut a = mkapp("hist-tick");
     tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
     a.tick().await;
-    assert_eq!(a.speed_hist.len(), 91, "初始 90 点 + 1 次采样（`<` 变异体永不采样）");
+    assert_eq!(
+        a.speed_hist.len(),
+        91,
+        "初始 90 点 + 1 次采样（`<` 变异体永不采样）"
+    );
     a.shutdown().await;
 }
 
@@ -285,9 +299,15 @@ async fn speed_hist_samples_after_interval() {
 #[tokio::test]
 async fn registry_periodic_save_not_immediate() {
     let mut a = mkapp("save-tick");
-    let path = std::env::temp_dir().join(format!("ezr-hard-eng-{}-save-tick.json", std::process::id()));
+    let path = std::env::temp_dir().join(format!(
+        "ezr-hard-eng-{}-save-tick.json",
+        std::process::id()
+    ));
     a.tick().await;
-    assert!(!path.exists(), "5s 兜底未到不得写注册表（`<` 变异体首帧即写）");
+    assert!(
+        !path.exists(),
+        "5s 兜底未到不得写注册表（`<` 变异体首帧即写）"
+    );
     a.shutdown().await;
     let _ = std::fs::remove_file(&path);
 }
@@ -318,7 +338,10 @@ async fn session_bytes_accumulates() {
     a.tick().await;
     let sb = a.session_bytes;
     assert!(sb > 100, "必须累加（-= 变异体递减）");
-    assert!(sb < 2000, "增量 = 2000×dt ≤ 2000×0.5，+ / 变异体越界（got {sb}）");
+    assert!(
+        sb < 2000,
+        "增量 = 2000×dt ≤ 2000×0.5，+ / 变异体越界（got {sb}）"
+    );
     a.shutdown().await;
 }
 
@@ -331,7 +354,10 @@ async fn tick_clamps_selection() {
     }
     a.selected = 5;
     a.tick().await;
-    assert_eq!(a.selected, 1, "selected 必须钳到 flen-1（`<` 变异体不钳、`+`/`/` 变异体越界）");
+    assert_eq!(
+        a.selected, 1,
+        "selected 必须钳到 flen-1（`<` 变异体不钳、`+`/`/` 变异体越界）"
+    );
     a.shutdown().await;
 }
 
@@ -346,7 +372,10 @@ async fn tick_clamps_scroll_lower_bound() {
     a.selected = 1;
     a.scroll = 3;
     a.tick().await;
-    assert_eq!(a.scroll, 1, "scroll 须收敛到 selected（`<`/`==` 变异体不动）");
+    assert_eq!(
+        a.scroll, 1,
+        "scroll 须收敛到 selected（`<`/`==` 变异体不动）"
+    );
     a.shutdown().await;
 }
 
@@ -361,7 +390,10 @@ async fn tick_clamps_scroll_upper_bound() {
     a.selected = 8;
     a.scroll = 2;
     a.tick().await;
-    assert_eq!(a.scroll, 3, "selected 8 出窗（≥ 2+6）→ scroll = 8+1-6 = 3（`+`/`-`/`*` 变异体不成立）");
+    assert_eq!(
+        a.scroll, 3,
+        "selected 8 出窗（≥ 2+6）→ scroll = 8+1-6 = 3（`+`/`-`/`*` 变异体不成立）"
+    );
     a.shutdown().await;
 }
 
@@ -371,11 +403,20 @@ async fn tick_clamps_scroll_upper_bound() {
 /// Probed 基础流 —— CD 改名、probed 置位、Queued→Downloading
 #[tokio::test]
 async fn probed_renames_and_transitions() {
-    let addr = stub_with("Content-Disposition: attachment; filename=\"b.bin\"\r\n", 8_000_000, true);
+    let addr = stub_with(
+        "Content-Disposition: attachment; filename=\"b.bin\"\r\n",
+        8_000_000,
+        true,
+    );
     let mut a = mkapp("probed-basic");
     let dir = std::env::temp_dir().join(format!("ezr-hard-pb-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    a.add_cli_task(format!("http://{addr}/f.bin"), Some(dir.to_string_lossy().into_owned()), Some(2), None);
+    a.add_cli_task(
+        format!("http://{addr}/f.bin"),
+        Some(dir.to_string_lossy().into_owned()),
+        Some(2),
+        None,
+    );
     pump(&mut a, 20, |x| x.tasks[0].probed).await;
     assert!(a.tasks[0].probed, "必须完成探测");
     assert!(
@@ -383,7 +424,11 @@ async fn probed_renames_and_transitions() {
         "CD 名必须回写（find/守卫/`&&→||`/apply 变异体保持 f.bin）: {}",
         a.tasks[0].name
     );
-    assert_eq!(a.tasks[0].state, TaskState::Downloading, "探测后必须转下载中（`==→!=` 变异体不转）");
+    assert_eq!(
+        a.tasks[0].state,
+        TaskState::Downloading,
+        "探测后必须转下载中（`==→!=` 变异体不转）"
+    );
     a.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -391,15 +436,27 @@ async fn probed_renames_and_transitions() {
 /// 靶 267:37→true / 267:53（`&&→||`）：已有下载量不得改名
 #[tokio::test]
 async fn probed_no_rename_when_downloaded() {
-    let addr = stub_with("Content-Disposition: attachment; filename=\"b.bin\"\r\n", 64_000, false);
+    let addr = stub_with(
+        "Content-Disposition: attachment; filename=\"b.bin\"\r\n",
+        64_000,
+        false,
+    );
     let mut a = mkapp("probed-keep");
     let dir = std::env::temp_dir().join(format!("ezr-hard-pk-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    a.add_cli_task(format!("http://{addr}/f.bin"), Some(dir.to_string_lossy().into_owned()), Some(2), None);
+    a.add_cli_task(
+        format!("http://{addr}/f.bin"),
+        Some(dir.to_string_lossy().into_owned()),
+        Some(2),
+        None,
+    );
     a.tasks[0].downloaded = 100;
     pump(&mut a, 20, |x| x.tasks[0].probed).await;
     assert!(a.tasks[0].probed);
-    assert_eq!(a.tasks[0].name, "f.bin", "downloaded>0 时必须保留原名（guard→true / || 变异体会改名）");
+    assert_eq!(
+        a.tasks[0].name, "f.bin",
+        "downloaded>0 时必须保留原名（guard→true / || 变异体会改名）"
+    );
     a.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -407,18 +464,26 @@ async fn probed_no_rename_when_downloaded() {
 /// 靶 271:51/271:67/271:86（taken 闭包各比较符）：任务表重名冲突 → 去重改名
 #[tokio::test]
 async fn probed_rename_dedupes_task_conflict() {
-    let addr = stub_with("Content-Disposition: attachment; filename=\"b.bin\"\r\n", 64_000, false);
+    let addr = stub_with(
+        "Content-Disposition: attachment; filename=\"b.bin\"\r\n",
+        64_000,
+        false,
+    );
     let mut a = mkapp("probed-conflict");
     let dir = std::env::temp_dir().join(format!("ezr-hard-pc-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    a.add_cli_task(format!("http://{addr}/f.bin"), Some(dir.to_string_lossy().into_owned()), Some(2), None);
+    a.add_cli_task(
+        format!("http://{addr}/f.bin"),
+        Some(dir.to_string_lossy().into_owned()),
+        Some(2),
+        None,
+    );
     let mut t2 = queued(2, "b.bin", &dir.to_string_lossy());
     t2.state = TaskState::Paused; // 不参与槽位竞争
     a.tasks.push(t2);
     pump(&mut a, 20, |x| x.tasks[0].probed).await;
-    assert_eq!(
+    assert!(
         a.tasks[0].name.starts_with("b.bin.1"),
-        true,
         "任务表已占用 b.bin → 去重为 b.bin.1 系（taken 闭包比较符变异体保持 b.bin/f.bin）"
     );
     a.shutdown().await;
@@ -428,12 +493,21 @@ async fn probed_rename_dedupes_task_conflict() {
 /// 靶 272:37（`||→&&`）：盘上重名冲突亦去重
 #[tokio::test]
 async fn probed_rename_dedupes_disk_conflict() {
-    let addr = stub_with("Content-Disposition: attachment; filename=\"b.bin\"\r\n", 64_000, false);
+    let addr = stub_with(
+        "Content-Disposition: attachment; filename=\"b.bin\"\r\n",
+        64_000,
+        false,
+    );
     let mut a = mkapp("probed-disk");
     let dir = std::env::temp_dir().join(format!("ezr-hard-pd-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("b.bin"), b"occupied").unwrap();
-    a.add_cli_task(format!("http://{addr}/f.bin"), Some(dir.to_string_lossy().into_owned()), Some(2), None);
+    a.add_cli_task(
+        format!("http://{addr}/f.bin"),
+        Some(dir.to_string_lossy().into_owned()),
+        Some(2),
+        None,
+    );
     pump(&mut a, 20, |x| x.tasks[0].probed).await;
     assert!(
         a.tasks[0].name.starts_with("b.bin.1"),
@@ -451,10 +525,24 @@ async fn progress_updates_bytes_and_progress_flag() {
     let mut a = mkapp("progress");
     let dir = std::env::temp_dir().join(format!("ezr-hard-pg-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    a.add_cli_task(format!("http://{addr}/f.bin"), Some(dir.to_string_lossy().into_owned()), Some(1), None);
-    pump(&mut a, 20, |x| x.tasks[0].downloaded > 0 && x.tasks[0].made_progress).await;
-    assert!(a.tasks[0].downloaded > 0, "Progress 必须更新已下载字节（find `==→!=` 变异体不更新）");
-    assert!(a.tasks[0].made_progress, "downloaded>0 必须置进展标记（`<`/`==` 变异体不置）");
+    a.add_cli_task(
+        format!("http://{addr}/f.bin"),
+        Some(dir.to_string_lossy().into_owned()),
+        Some(1),
+        None,
+    );
+    pump(&mut a, 20, |x| {
+        x.tasks[0].downloaded > 0 && x.tasks[0].made_progress
+    })
+    .await;
+    assert!(
+        a.tasks[0].downloaded > 0,
+        "Progress 必须更新已下载字节（find `==→!=` 变异体不更新）"
+    );
+    assert!(
+        a.tasks[0].made_progress,
+        "downloaded>0 必须置进展标记（`<`/`==` 变异体不置）"
+    );
     a.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -489,14 +577,23 @@ async fn invalidated_resets_and_toasts() {
     }
     .save(&dir.join("f.bin.ezr").to_string_lossy())
     .unwrap();
-    a.add_cli_task(format!("http://{addr}/f.bin"), Some(dir.to_string_lossy().into_owned()), Some(2), None);
+    a.add_cli_task(
+        format!("http://{addr}/f.bin"),
+        Some(dir.to_string_lossy().into_owned()),
+        Some(2),
+        None,
+    );
     a.tasks[0].downloaded = 500;
     pump(&mut a, 20, |x| {
-        x.toast.as_deref().is_some_and(|t| t.contains("作废") || t.contains("从头"))
+        x.toast
+            .as_deref()
+            .is_some_and(|t| t.contains("作废") || t.contains("从头"))
     })
     .await;
     assert!(
-        a.toast.as_deref().is_some_and(|t| t.contains("作废") || t.contains("从头")),
+        a.toast
+            .as_deref()
+            .is_some_and(|t| t.contains("作废") || t.contains("从头")),
         "一致性失效必须提示（find `==→!=` 变异体静默跳过）"
     );
     a.shutdown().await;
@@ -517,10 +614,17 @@ async fn verify_done_completes_task() {
         format!("http://{addr}/f.bin"),
         Some(dir.to_string_lossy().into_owned()),
         Some(2),
-        Some(Checksum { algo: "SHA-256", value: good }),
+        Some(Checksum {
+            algo: "SHA-256",
+            value: good,
+        }),
     );
     pump(&mut a, 30, |x| x.tasks[0].state == TaskState::Completed).await;
-    assert_eq!(a.tasks[0].state, TaskState::Completed, "校验通过必须完成（find `==→!=` 变异体停在校验中）");
+    assert_eq!(
+        a.tasks[0].state,
+        TaskState::Completed,
+        "校验通过必须完成（find `==→!=` 变异体停在校验中）"
+    );
     assert_eq!(a.tasks[0].verify_ok, Some(true));
     a.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);
@@ -533,9 +637,16 @@ async fn transient_failure_auto_retries() {
     a.add_cli_task("http://127.0.0.1:1/none.bin".into(), None, Some(1), None);
     pump(&mut a, 15, |x| x.tasks[0].state == TaskState::Failed).await;
     assert_eq!(a.tasks[0].state, TaskState::Failed);
-    assert!(a.tasks[0].retry_in.is_some(), "瞬时失败必须有自动重试倒计时（delete-arm 变异体落入停等臂）");
+    assert!(
+        a.tasks[0].retry_in.is_some(),
+        "瞬时失败必须有自动重试倒计时（delete-arm 变异体落入停等臂）"
+    );
     assert!(a.tasks[0].has_slot, "待自动重试必须继续占槽");
-    assert!(a.toast.as_deref().is_some_and(|t| t.contains("自动重试")), "toast={:?}", a.toast);
+    assert!(
+        a.toast.as_deref().is_some_and(|t| t.contains("自动重试")),
+        "toast={:?}",
+        a.toast
+    );
     a.shutdown().await;
 }
 
@@ -545,8 +656,14 @@ async fn add_task_persists_registry() {
     let mut a = mkapp("persist");
     let dir = std::env::temp_dir().join(format!("ezr-hard-ps-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    a.add_cli_task("http://example.com/p.bin".into(), Some(dir.to_string_lossy().into_owned()), None, None);
-    let reg = std::env::temp_dir().join(format!("ezr-hard-eng-{}-persist.json", std::process::id()));
+    a.add_cli_task(
+        "http://example.com/p.bin".into(),
+        Some(dir.to_string_lossy().into_owned()),
+        None,
+        None,
+    );
+    let reg =
+        std::env::temp_dir().join(format!("ezr-hard-eng-{}-persist.json", std::process::id()));
     assert!(reg.exists(), "添加任务后注册表必须落盘（no-op 变异体不写）");
     a.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);
@@ -567,14 +684,20 @@ async fn reverify_reads_companion_checksum() {
         format!("http://{addr}/f.bin"),
         Some(dir.to_string_lossy().into_owned()),
         Some(2),
-        Some(Checksum { algo: "SHA-256", value: "0".repeat(64) }),
+        Some(Checksum {
+            algo: "SHA-256",
+            value: "0".repeat(64),
+        }),
     );
     pump(&mut a, 30, |x| {
-        x.tasks[0].state == TaskState::Failed
-            && x.tasks[0].fail_kind == Some(FailKind::Verify)
+        x.tasks[0].state == TaskState::Failed && x.tasks[0].fail_kind == Some(FailKind::Verify)
     })
     .await;
-    assert_eq!(a.tasks[0].fail_kind, Some(FailKind::Verify), "错误期望值必须以校验失败收场");
+    assert_eq!(
+        a.tasks[0].fail_kind,
+        Some(FailKind::Verify),
+        "错误期望值必须以校验失败收场"
+    );
     // 伴随文件给出正确校验值 → R 重新校验通过
     std::fs::write(dir.join("f.bin.sha256"), &good).unwrap();
     a.on_key(KeyCode::Char('r'), KeyModifiers::empty());

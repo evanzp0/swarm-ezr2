@@ -9,10 +9,32 @@
 //! 自带单测未覆盖的补充靶点：
 //! - main 286:5（`replace main with ()`）：serve 模式必须真实拉起监听进程；
 //! - main 288:14（`!=→==`）：分支反转 → serve 入参走 usage+exit(2)。
+//!
 //! 等价/超时型（论证见 .work/tmp/step7/EQUIVALENCE.md）：
 //! - dispatch_conn 194:45 `||→&&` 等价（首读错误 ⇒ 行必空）；
 //! - parse_proxy_args 265:11 `+=→*=` 超时型（循环不推进，任何直测挂起）。
+// lint 姿态与产品 bin（src/main.rs crate 级 allow）对齐：#[path] 收编的产品源
+// 在本测试 crate 内沿用产品面的豁免口径（产品面 clippy 0 的同一合同）。
 #![allow(missing_docs)]
+#![allow(clippy::multiple_crate_versions)]
+#![allow(clippy::pedantic)]
+#![allow(clippy::nursery)]
+#![allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_lines,
+    clippy::too_many_arguments
+)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+// 测试挂载机制固有豁免：产品源经 #[path] 部分收编进独立测试 crate，部分产物项
+// 在本 crate 上下文无消费者或被重复挂载（产品全量编译下均非死代码）。
+#![allow(dead_code)]
+#![allow(clippy::duplicate_mod)]
+#![allow(unused_imports)]
 
 #[path = "../src/bin/ezr-proxy.rs"]
 mod sut;
@@ -42,7 +64,10 @@ fn proxy_serve_mode_starts_listener_process() {
 
     std::thread::sleep(std::time::Duration::from_millis(600));
     let alive = child.try_wait().expect("try_wait").is_none();
-    assert!(alive, "serve 模式 600ms 后进程必须仍存活（空转/usage 退出即变异）");
+    assert!(
+        alive,
+        "serve 模式 600ms 后进程必须仍存活（空转/usage 退出即变异）"
+    );
     let conn = std::net::TcpStream::connect(("127.0.0.1", port));
     assert!(conn.is_ok(), "监听端口必须可连接");
     let _ = child.kill();

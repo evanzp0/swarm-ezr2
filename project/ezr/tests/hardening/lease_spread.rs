@@ -6,16 +6,17 @@
 //! - `72:21 / 76:24 / 76:36 / 77:25 / 78:18 / 79:18` 回补减法支路算术与守卫（需负 diff 场景，
 //!   n=3 时 amount=9 即出现 raw 舍入和 > amount）；
 //! - `32:23` `lease_from + i` → `*`；`38:41` `end - start` → `+`。
+//!
 //! 等价幸存体（57:20 哨兵早退、70:30 循环预算边界空转、72:17/72:29/76:24/76:36 守卫
 //! 边界空转）不在本套件，等价论证记 handoff。
 
 #![allow(missing_docs)]
 // lease.rs 依赖 super::plan::chunk_total 与 crate::model::Connection：
 // plan 挂为本模块下供 super::plan 解析；crate::model 由 hardening.rs 根提供。
-#[path = "../../src/model/chunk/plan.rs"]
-mod plan;
 #[path = "../../src/model/chunk/lease.rs"]
 mod lease;
+#[path = "../../src/model/chunk/plan.rs"]
+mod plan;
 
 use lease::{lease_snapshot, spread_bytes};
 
@@ -33,7 +34,11 @@ fn spread_shape_exact_weights() {
 #[test]
 fn spread_topup_fires_on_rounding_deficit() {
     let v = spread_bytes(7, 3, u64::MAX);
-    assert_eq!(v.iter().sum::<u64>(), 7, "舍入亏空必须回补（mutant == 0 不回补）");
+    assert_eq!(
+        v.iter().sum::<u64>(),
+        7,
+        "舍入亏空必须回补（mutant == 0 不回补）"
+    );
 }
 
 /// 靶 `72:21 / 76:24(<→==) / 76:36(>→==,>→<) / 77:25 / 78:18(×2) / 79:18(×2)`：
@@ -49,13 +54,23 @@ fn spread_conservation_scan_covers_negative_diff_branch() {
         // 独立统计负 diff 输入确实存在（raw 舍入和 > amount）
         let wsum = 7.05f64;
         let raws: u64 = (0..16)
-            .map(|i| (a as f64 * ([0.95,0.45,0.10,0.00,0.75,0.40,0.85,0.15,0.55,0.20,0.55,0.00,0.70,0.25,0.80,0.35][i] / wsum)).round() as u64)
+            .map(|i| {
+                (a as f64
+                    * ([
+                        0.95, 0.45, 0.10, 0.00, 0.75, 0.40, 0.85, 0.15, 0.55, 0.20, 0.55, 0.00,
+                        0.70, 0.25, 0.80, 0.35,
+                    ][i] / wsum))
+                    .round() as u64
+            })
             .sum();
         if raws > a {
             neg_diff_seen += 1;
         }
     }
-    assert!(neg_diff_seen > 0, "扫描区间必须含负 diff 输入，否则该测试失去杀灭力");
+    assert!(
+        neg_diff_seen > 0,
+        "扫描区间必须含负 diff 输入，否则该测试失去杀灭力"
+    );
 }
 
 /// 负 diff 支路的分布锚（靶 `77:25 delete -` 与 `81:11 +=→*=`）：

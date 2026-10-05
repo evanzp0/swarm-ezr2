@@ -7,13 +7,35 @@
 //! - error 189:5 恒串变异：连接失败 reason 必须内嵌真实错误链文本；
 //! - error 195:18 `>→<`/`>→==`：链文本 >160 必须截断；
 //! - engine/mod 313:5 `spawn_verify→()`：Cmd::Verify 必须产出 VerifyDone。
+//!
 //! 等价体（不写测试，论证见 .work/tmp/step7/EQUIVALENCE.md）：
 //! throttle 70:25、81:21(`>=`)、81:21(`==`)、error 195:18(`>=`)；
 //! 超时型：throttle 81:21(`<`)（不 yield 变异体在单线程执行器下饿死计时器）。
 //!
 //! 布局：ezr 为 bin-only crate，#[path] 挂载 engine/mod.rs 与 model/mod.rs
 //! （内部相对 mod 声明自动解析到真实源树；产品自身 #[cfg(test)] 单测随挂载一并运行）。
+// lint 姿态与产品 bin（src/main.rs crate 级 allow）对齐：#[path] 收编的产品源
+// 在本测试 crate 内沿用产品面的豁免口径（产品面 clippy 0 的同一合同）。
 #![allow(missing_docs)]
+#![allow(clippy::multiple_crate_versions)]
+#![allow(clippy::pedantic)]
+#![allow(clippy::nursery)]
+#![allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_lines,
+    clippy::too_many_arguments
+)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+// 测试挂载机制固有豁免：产品源经 #[path] 部分收编进独立测试 crate，部分产物项
+// 在本 crate 上下文无消费者或被重复挂载（产品全量编译下均非死代码）。
+#![allow(dead_code)]
+#![allow(clippy::duplicate_mod)]
+#![allow(unused_imports)]
 
 #[path = "../src/engine/mod.rs"]
 mod engine;
@@ -33,7 +55,10 @@ async fn throttle_burst_cap_is_rate_times_half_second() {
     let t = Throttle::new(10_000_000);
     tokio::time::sleep(Duration::from_millis(600)).await;
     let r = tokio::time::timeout(Duration::from_millis(50), t.acquire(6_000_000)).await;
-    assert!(r.is_err(), "6MB > 5MB 桶容量应等待；立即完成说明 cap 被放大");
+    assert!(
+        r.is_err(),
+        "6MB > 5MB 桶容量应等待；立即完成说明 cap 被放大"
+    );
 }
 
 /// 靶 throttle `71:29 / 74:30 / 78:30 / 78:37`：耗尽边界。
@@ -46,7 +71,10 @@ async fn throttle_drain_exits_immediately_at_zero_remaining() {
     let r = tokio::time::timeout(Duration::from_secs(2), t.acquire(10_000)).await;
     assert!(r.is_ok(), "预取 10KB 必须立即完成");
     let r = tokio::time::timeout(Duration::from_millis(80), t.acquire(40_000)).await;
-    assert!(r.is_ok(), "40KB ≤ 剩余 40KB 必须立即完成（变异体在剩余 0 处死循环）");
+    assert!(
+        r.is_ok(),
+        "40KB ≤ 剩余 40KB 必须立即完成（变异体在剩余 0 处死循环）"
+    );
 }
 
 /// 靶 error `159:42`：`is_body() || is_decode()` —— body 读取失败（is_body=true、
@@ -68,7 +96,10 @@ async fn body_read_failure_classifies_as_transfer_interrupted() {
         std::thread::sleep(Duration::from_millis(300));
         drop(s);
     });
-    let client = reqwest::Client::builder().no_proxy().build().expect("client");
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("client");
     let err = client
         .get(format!("http://{addr}/x"))
         .send()
@@ -125,7 +156,11 @@ async fn chain_text_truncated_at_160() {
         .expect_err("端口 1 必拒连");
     let f = engine::error::classify_reqwest(&err);
     assert!(f.reason.contains("连接失败（"), "reason={}", f.reason);
-    assert!(!f.reason.contains(tail), "链文本须在 160 截断: {}", f.reason);
+    assert!(
+        !f.reason.contains(tail),
+        "链文本须在 160 截断: {}",
+        f.reason
+    );
 }
 
 /// 靶 engine/mod `313:5`（`spawn_verify→()`）：Cmd::Verify 必须孵化校验任务并
@@ -162,7 +197,9 @@ async fn verify_command_spawns_verify_task() {
         .expect("5s 内必须收到校验事件")
         .expect("通道未关闭");
     match evt {
-        engine::Evt::VerifyDone { id, ok, computed, .. } => {
+        engine::Evt::VerifyDone {
+            id, ok, computed, ..
+        } => {
             assert_eq!(id, 7);
             assert!(ok, "摘要应匹配 computed={computed}");
         }

@@ -5,7 +5,28 @@
 //! 无参数路径在本环境（无控制终端）下 enable_raw_mode 失败 → 主进程非零退出
 //! （恒 Ok 变异体退出 0）。终端态类靶点（restore_terminal/setup_panic_hook/run
 //! 事件循环）仅在真实 TTY 可观测 → 环境条件型论证，见 EQUIVALENCE.md。
+// lint 姿态与产品 bin（src/main.rs crate 级 allow）对齐：#[path] 收编的产品源
+// 在本测试 crate 内沿用产品面的豁免口径（产品面 clippy 0 的同一合同）。
 #![allow(missing_docs)]
+#![allow(clippy::multiple_crate_versions)]
+#![allow(clippy::pedantic)]
+#![allow(clippy::nursery)]
+#![allow(
+    clippy::cognitive_complexity,
+    clippy::too_many_lines,
+    clippy::too_many_arguments
+)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+// 测试挂载机制固有豁免：产品源经 #[path] 部分收编进独立测试 crate，部分产物项
+// 在本 crate 上下文无消费者或被重复挂载（产品全量编译下均非死代码）。
+#![allow(dead_code)]
+#![allow(clippy::duplicate_mod)]
+#![allow(unused_imports)]
 
 use std::process::{Command, Stdio};
 
@@ -31,8 +52,14 @@ fn help_prints_usage_and_exits_zero() {
     let out = ezr("help").arg("--help").output().expect("spawn ezr");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "help 应 0 退出，got {:?}", out.status);
-    assert!(stdout.contains("用法: ezr"), "stdout 应含用法文本: {stdout}");
-    assert!(stdout.contains("EZR Downloader"), "stdout 应含产品名: {stdout}");
+    assert!(
+        stdout.contains("用法: ezr"),
+        "stdout 应含用法文本: {stdout}"
+    );
+    assert!(
+        stdout.contains("EZR Downloader"),
+        "stdout 应含产品名: {stdout}"
+    );
 }
 
 /// 靶 run_tui 299:5：无终端环境启动 TUI 必须失败（非零退出）；

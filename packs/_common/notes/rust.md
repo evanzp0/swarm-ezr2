@@ -29,6 +29,11 @@
   询问是否安装 `llvm-tools-preview`，非交互会话表现为"600s 超时零产出"。装工具阶段先
   `rustup component add llvm-tools-preview`，或统一 `< /dev/null` 暴露错误
   （engineering.md「失败先归因」的挂起类形态）。
+- **`rust-toolchain.toml` 钉 `channel = "nightly"` 时无法用日期版工具链做别名桥接**：
+  `rustup toolchain link nightly <已装目录>` 被拒绝（`nightly` 是保留通道名），装好
+  `nightly-<日期>` 后项目内 cargo 命令仍会按 toolchain 文件自动安装 floating
+  `nightly`（最新版）。收敛工具链漂移时直接以「当前沙箱解析到的 nightly」为收敛目标
+  逐项归零警告/偏差并记录确切版本（`rustc --version`），不在别名桥接上花功夫。
 
 ## 2. 强制配置模板
 
@@ -86,6 +91,15 @@ group_imports = "StdExternalCrate"
   全绿为准。
 
 ## 3. 编译、lint 与磁盘
+
+- **`#[path]` 收编产品源的测试 crate 必须镜像产品 bin 的 crate 级 lint 姿态**：产品入口
+  （main.rs）的 crate 级 allow（pedantic/nursery/cast 系等）不随 `#[path]` 模块收编进入
+  测试 crate，同一份产品源在测试编译下会重燃产品面本已为 0 的警告；挂载机制还固有产生
+  三类告警：`dead_code`（部分收编的产物项在该测试 crate 无消费者）、`duplicate_mod`
+  （挂载壳与直挂同文件）、`unused_imports`（产品跨模块 re-export 在部分挂载下无消费者）。
+  三分法处置：① 机制固有告警在测试 crate 根部 allow 并注明依据（产品源零改动）；
+  ② 测试文件自身写法类警告机械修正；③ 测试文件真实死代码以编译器警告为证据删除。
+  盲目 `clippy --fix` 或放任告警都会破坏「产品面 0 + 测试面 0」双口径。
 
 - **生成代码要自带 lint allow，否则警告噪音淹没真实信号**：生成的测试/代码若函数名
   不符 `snake_case` 等约定，会一次产生大量 lint 警告。入口生成器必须在生成文件头部加
@@ -152,7 +166,9 @@ group_imports = "StdExternalCrate"
 ## 7. 测试与变异度量
 
 - **cargo-mutants 的每文件变异点数与文件行数近似线性（约 0.2 点/行）**：千行级交互层
-  文件单文件即可产出 300+ 变异点（scan 模式 `cargo mutants --list` 直接统计，无需跑变异）。
+  文件单文件即可产出 300+ 变异点（scan 模式 `cargo mutants --list` 直接统计，无需跑变异；
+  27.x 起 `--list` 输出 `文件:行:列: 变异描述` 文本清单，需附 `--line-col=true`，旧
+  `--line-counts` 已移除，按行首文件名聚合即得每文件计数）。
   SKILL 的「>100 变异点做保持行为拆分」在模块边界上依赖 architect 裁决、验证依赖 e2e 套件
   （cleaner 不运行）时，不要强行拆——把每文件计数登记 handoff 移交，hardender 全量变异前
   由 architect 先收模块边界（`--file` 可按文件分块跑变异，拆分收益在 hardender 兑现）。
@@ -196,7 +212,8 @@ group_imports = "StdExternalCrate"
   bin 发行包在 GitHub releases（tag 形如 `pmd_releases/<版本>`，资产
   `pmd-dist-<版本>-bin.zip`）；GitHub API 限流时按已知 tag 拼直链下载，勿据 404 误判
   "未发布"。CPD 无独立启动器，用 `pmd cpd` 子命令（`-l rust` 必带，见 engineering.md
-  「静默空输出」条）。
+  「静默空输出」条）；输入用位置参数（7.28 无 `--files` 选项），发现重复时 exit 4 属
+  正常语义（非调用失败）。
 - **proptest 多参数的长度必须耦合**：一个属性同时生成「数量 n」与「逐项数据 vec」时，
   两个独立策略（`n in 0..N` + `vec(..., 0..N)`）长度各随机，测试体内按 `[i]` 索引必
   越界 panic（表现为属性随机红，缩小到 `n > vec.len()` 才现形）。正确形态：定长 vec
