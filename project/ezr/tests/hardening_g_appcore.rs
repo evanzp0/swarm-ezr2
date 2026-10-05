@@ -60,6 +60,7 @@ fn push_tasks(a: &mut App, n: u32) {
             4,
             3,
             None,
+            crate::model::config::ProxyChoice::Direct,
             unix_now(),
         );
         a.tasks.push(t);
@@ -421,18 +422,30 @@ async fn clear_completed_none_toasts_hint() {
     shutdown(b).await;
 }
 
-/// 靶 tasks 82:13：Failed 任务按空格重新排队
+/// 靶 tasks 82:13（v1.6/FR-01-92 行为变更登记）：Failed 任务按空格 = 暂停
+/// 挂起（转「已暂停（失败）」、清倒计时）；再按空格 = 恢复重新排队（原
+/// 「重新排队」口径由恢复动作承接，变异体仍落到兜底提示臂）
 #[tokio::test]
-async fn toggle_pause_on_failed_requeues() {
+async fn toggle_pause_on_failed_suspends_then_resume_requeues() {
     let mut a = mkapp("pause-failed");
     push_tasks(&mut a, 1);
     a.tasks[0].state = TaskState::Failed;
+    a.tasks[0].retry_in = Some(8.0);
     a.selected = 0;
     tap(&mut a, KeyCode::Char(' '));
     assert_eq!(
         a.tasks[0].state,
+        TaskState::FailedPaused,
+        "Failed + 空格 → 已暂停（失败）（FR-01-92）"
+    );
+    assert!(a.tasks[0].retry_in.is_none(), "自动重试倒计时清除");
+    assert!(!a.tasks[0].has_slot, "挂起不占槽位");
+    // 再按空格 = 恢复 → 重新排队（原 requeue 口径）
+    tap(&mut a, KeyCode::Char(' '));
+    assert_eq!(
+        a.tasks[0].state,
         TaskState::Queued,
-        "Failed + 空格 → 重新排队（delete-arm 变异体落到兜底提示）"
+        "恢复 + 空格 → 重新排队（delete-arm 变异体落到兜底提示）"
     );
     shutdown(a).await;
 }
@@ -467,8 +480,11 @@ fn add_dialog(focus: usize, ck_open: bool) -> Dialog {
         ck_value: String::new(),
         ck_open,
         ck_sel: 3,
+        proxy_sel: 0,
+        proxy_open: false,
         focus,
         task_name: String::new(),
+        task_id: None,
     }
 }
 

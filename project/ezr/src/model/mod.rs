@@ -68,6 +68,9 @@ pub enum TaskState {
     Completed,
     /// 已失败
     Failed,
+    /// 已暂停（失败）——失败任务按空格挂起自动重试（v1.6/FR-01-92/D25）；
+    /// 错误信息与失败类型保留可见，不占下载槽位；空格/R 恢复 = 重新排队
+    FailedPaused,
     /// 做种（BT，02+ 预留，01 无触发路径）
     #[allow(dead_code)]
     Seeding,
@@ -85,6 +88,7 @@ impl TaskState {
             TaskState::PostProcessing => "后期处理中",
             TaskState::Completed => "已完成",
             TaskState::Failed => "已失败",
+            TaskState::FailedPaused => "已暂停（失败）",
             TaskState::Seeding => "做种中",
         }
     }
@@ -122,6 +126,8 @@ pub struct Checksum {
 mod task;
 mod timefmt;
 
+#[allow(unused_imports)] // ProxyConfig 为 v1.5 对外 API 面（配置项类型）
+pub use config::{ProxyChoice, ProxyConfig, ProxyEndpoint};
 pub use task::{Connection, Task};
 #[allow(unused_imports)] // 对外保留（01 期已暴露）
 pub use timefmt::fmt_created;
@@ -168,6 +174,7 @@ pub(crate) fn sample_task() -> Task {
         chunk_done: 0,
         block_size: 1_048_576,
         concurrency: 4,
+        proxy: config::ProxyChoice::Direct,
         retries: 0,
         max_retries: 5,
         made_progress: false,
@@ -304,6 +311,7 @@ mod tests {
             8,
             3,
             None,
+            ProxyChoice::Direct,
             1_767_225_600,
         );
         assert_eq!(t.id, 7);

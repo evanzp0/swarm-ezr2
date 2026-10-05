@@ -57,6 +57,8 @@ pub enum DialogKind {
     Add,
     /// 删除任务
     Delete,
+    /// 修改任务（v1.5/FR-01-87：并发/校验算法/校验码/代理，确定立即生效）
+    Modify,
 }
 
 /// 对话框状态（结构沿用 demo 定稿）
@@ -79,11 +81,18 @@ pub struct Dialog {
     pub ck_open: bool,
     /// Add: 下拉框当前高亮项
     pub ck_sel: usize,
-    /// Add: 0=URL 1=目录 2=并发 3=算法 4=校验码 5=确认 6=取消
+    /// Add/Modify: 代理下拉在 [`App::proxy_options`] 中的下标（v1.5/FR-01-86）
+    pub proxy_sel: usize,
+    /// Add/Modify: 代理下拉框是否展开
+    pub proxy_open: bool,
+    /// Add: 0=URL 1=目录 2=并发 3=算法 4=校验码 5=代理 6=确认 7=取消
+    /// Modify: 0=并发 1=算法 2=校验码 3=代理 4=确认 5=取消
     /// Delete: 0=仅删除任务 1=删除任务和文件 2=取消
     pub focus: usize,
     /// Delete 用：待删除任务名
     pub task_name: String,
+    /// Modify 用：待修改任务 id（None = Add/Delete）
+    pub task_id: Option<u32>,
 }
 
 /// 应用状态（UI 权威；引擎经事件驱动更新）
@@ -125,6 +134,13 @@ pub struct App {
     speed_display: HashMap<u32, SmoothedSpeed>,
     /// 展示面上次采样时刻（数值每秒最多变化一次）
     last_speed_tick: Instant,
+    /// 代理选项表（v1.5/FR-01-86；v1.6/D18 两态：直连 + 命名条目）；
+    /// 添加/修改对话框下拉的选项源与 proxy_sel 下标依据
+    pub proxy_options: Vec<crate::model::ProxyChoice>,
+    /// 代理选项显示名（与 proxy_options 一一对应；命名条目含类型标注，不含认证信息）
+    pub proxy_labels: Vec<String>,
+    /// 添加对话框代理默认选中下标（v1.6：恒直连 = 0）
+    pub default_proxy_sel: usize,
     /// 配置
     pub cfg: Config,
     /// 注册表路径
@@ -147,6 +163,8 @@ pub struct App {
     pub dlg_field_rects: Vec<(Rect, usize)>,
     /// 校验算法下拉框选项可点击区域（ui 层每帧回填）
     pub dlg_ck_rects: Vec<(Rect, usize)>,
+    /// 代理下拉选项命中区域（v1.5/FR-01-86；鼠标点击选择）
+    pub dlg_proxy_rects: Vec<(Rect, usize)>,
     /// 待延迟文件删除（引擎 Cancelled 确认后执行）：id → (保存目录, 文件名)
     pending_deletes: HashMap<u32, (String, String)>,
 }
@@ -157,9 +175,18 @@ impl App {
     pub fn new(cfg: Config, registry_path: String) -> App {
         let (evt_tx, evt_rx) = tokio::sync::mpsc::channel::<Evt>(256);
         let engine = EngineHandle::start(&cfg, evt_tx);
+        // 代理选项表（v1.5/FR-01-86；v1.6/FR-01-90 两态）：直连恒在 +
+        // 按配置顺序列出全部命名条目（显示名带类型标注）；默认选中 = 直连
+        let mut proxy_options = vec![crate::model::ProxyChoice::Direct];
+        let mut proxy_labels = vec!["直连".to_string()];
+        for p in &cfg.proxies {
+            proxy_options.push(crate::model::ProxyChoice::Named(p.name.clone()));
+            proxy_labels.push(format!("{}（{}）", p.name, p.kind.label()));
+        }
+        let default_proxy_sel = 0;
         // 崩溃恢复：注册表 → 任务列表；逐任务合并 sidecar 断点（FR-01-23）
         let (tasks, next_id) = Self::restore(&registry_path);
-        App {
+        let mut app = App {
             tasks,
             selected: 0,
             scroll: 0,
@@ -190,8 +217,19 @@ impl App {
             dlg_btn_rects: Vec::new(),
             dlg_field_rects: Vec::new(),
             dlg_ck_rects: Vec::new(),
+            dlg_proxy_rects: Vec::new(),
+            proxy_options,
+            proxy_labels,
+            default_proxy_sel,
             pending_deletes: HashMap::new(),
+        };
+        // 配置加载警告（v1.5/FR-01-86：非法代理条目）→ 启动 toast 提醒一次；
+        // 多条合并为一条（toast 槽位单一，逐条会被后发覆盖）
+        if !app.cfg.warnings.is_empty() {
+            let msg = app.cfg.warnings.join("；");
+            app.set_toast(format!("⚠ {msg}"));
         }
+        app
     }
 
     /// 从注册表与 sidecar 恢复任务（FR-01-23：下载中→等待中排队、断点合并）

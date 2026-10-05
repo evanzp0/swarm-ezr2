@@ -57,6 +57,7 @@ fn queued(id: u32, name: &str, dir: &str) -> Task {
         2,
         3,
         None,
+        crate::model::config::ProxyChoice::Direct,
         unix_now(),
     )
 }

@@ -15,7 +15,8 @@
 Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
 
   期号 01。依据 project/mission/phase-01.md FR-01-70~73、FR-01-84 与本会话澄清决定
-  （默认并发键 default_concurrency；v1.3：EZR_HOME 重定位 D16）。配置位于用户主目录
+  （默认并发键 http_concurrency，v1.5 自 default_concurrency 改名，FR-01-88；v1.3：EZR_HOME
+  重定位 D16）。配置位于用户主目录
   .ezr/config.toml（或 $EZR_HOME/config.toml），注册表位于 .ezr/state/，均为原子写。
 
   Background:
@@ -37,11 +38,11 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
   Scenario: 01-persistence-config-03 配置文件缺失时全部使用默认值
     Given 用户主目录不存在 .ezr/config.toml
     When 按默认配置下载文件 "<file>"
-    Then 行为与默认值一致：并发默认 <default_concurrency>、槽位 5、块大小 1 MB、
+    Then 行为与默认值一致：并发默认 <http_concurrency>、槽位 5、块大小 1 MB、
       max_retries 5、auto_retry 开启、max_speed 不限、download_dir 为用户主目录下的下载目录
 
     Examples:
-      | file       | default_concurrency |
+      | file       | http_concurrency |
       | five-m.bin | 4                   |
 
   Scenario: 01-persistence-config-04 配置非法值回退默认或钳制边界
@@ -54,7 +55,7 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
       | block_size_http      | abc   | 1 MB    |
       | download_slots       | 0     | 5       |
       | max_retries          | -1    | 5       |
-      | default_concurrency  | 99    | 64      |
+      | http_concurrency     | 99    | 64      |
       | max_speed            | xyz   | 0       |
 
   Scenario: 01-persistence-config-05 block_size_http 可配置生效

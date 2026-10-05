@@ -16,6 +16,70 @@
 > 按默认值生成全部行被注释的配置模板（每个参数注明用途与取值范围）；已存在文件不重写（含损坏
 > 文件），生成失败不阻塞启动（D17）。规格 `features/01-config-template.feature`，QA 套件
 > `qa/01-config-template-qa.md`。
+> **v1.5 修订（操作者 20261005 第二批指令）**：新增 FR-01-86 命名 HTTP(S) 代理（可命名/认证/多个，
+> 任务级选择，添加对话框可选，D18 兼容旧全局键）；FR-01-87 任务修改对话框（列表按 `m`，改并发/
+> 校验算法/校验码/代理，确定立即生效，D19 口径、D20 适用范围待复核）；FR-01-88 `default_concurrency`
+> 改名 `http_concurrency`（配置键与代码标识符，旧键不设别名）。规格 `features/02-named-proxy.feature`、
+> `features/03-modify-task.feature`，QA 套件 `qa/02-named-proxy-qa.md`、`qa/03-modify-task-qa.md`。
+> **v1.6 修订（操作者 20261005 第三批指令）**：旧全局 `proxy` 配置键退役（FR-01-90，相关 feature/
+> qa/源码同步删除，D18 三态收窄两态并补记改判）；代理新增 `type` 类型键 http/https/socks5
+> （FR-01-89，D24 校验口径）；配置模板给出**多个代理**配置示例（双示例块，含 type）；删除三处
+> UI 说明文字（FR-01-91：列表表头鼠标提示/修改对话框标题尾注/代理下拉 Enter 提示）；修复 bug：
+> 失败任务按空格可暂停（FR-01-92，挂起自动重试新状态）。规格与 QA 套件同步修订（02-named-proxy
+> 重排场景并增 type 三景；01-throttle-proxy 删代理四景；01-slots-queue 增两景；01-config-template
+> 模板键集改 9 键 + 双代理示例块）。
+> **v1.7 修订（操作者 20261005 第四批指令）**：D24 改判——代理 type 收为两值 `http`（= http(s)
+> HTTP 代理，同时服务 http 与 https 下载目标）与 `socks5`（同样服务两类目标），旧 `type="https"`
+> 收编为 http（零迁移）；url scheme 为唯一事实来源（`http://`/`https://`→http 型、`socks5://`→socks5
+> 型，缺省自动推断）；type 降为展示性标注，显式 type 与 url 前缀矛盾或取值未知 → **不再整条作废**，
+> 以 url 为准 + 启动警告；url 无协议前缀仍作废。依据：AIR2（aria2）手册实证——`--https-proxy` 取值
+> 亦为 `[http://][USER:PASSWORD@]HOST[:PORT]`（scheme 表「与代理握手的协议」，与下载目标协议正交，
+> https 目标走 CONNECT 隧道）；ezr 引擎 `reqwest::Proxy::all` 同口径，socks5 代理下载 http(s) 目标
+> 从未被禁止。D20 落账：操作者裁决维持「非『已完成』任务均可按 m」。规格 `features/02-named-proxy.feature`
+> 场景 08–10 重写，QA 套件 NP-08..10 同步。
+> **v1.8 修订（操作者 20261005 第五批指令）**：新增 FR-01-93 代理凭证规则（按类型）+ socks5
+> 认证引擎语义——**socks5 型代理 `username`/`password` 必填**（trim 后均非空；缺任一 → 条目
+> 作废 + 警告，口径同重名/空名：忽略该条目、不阻塞启动、警告文案不回显凭证值）；语义依据：
+> SOCKS5 认证为 RFC 1929 user/pass 握手，ezr 不支持匿名 socks5。**http 型代理凭证可选**——
+> 都缺省 = 匿名代理（正常加载无警告）；成对出现 = HTTP basic auth（现状不变）；只填其一 →
+> 条目作废 + 警告（成对原则；半填作废为操作者指令的边界落地口径，已报备可推翻）。
+> **socks5 认证引擎语义修复条款**（内建于 FR-01-93，coder 轮实现）：SOCKS5 凭证必须经代理
+> url userinfo 传递（`socks5://user:pass@host:port`，reqwest percent-decode 后走 RFC 1929
+> 握手）；reqwest 0.12.28 源码实证 `Proxy::basic_auth` 仅产生 HTTP Proxy-Authorization 头、
+> 对 socks 代理无效——v1.5 以来 socks5 凭证静默失效，本轮一并修复；`basic_auth` 仅用于
+> http 型。凭证保密沿 FR-01-86 既有约束；`ProxyEndpoint.url` 保持无凭证形态（toast 展示
+> 安全），认证 url 仅在引擎构建 client 时内部构造。配置模板同步（FR-01-85）：proxies 段
+> 凭证规则注释行 + socks5 示例块补凭证行 + http 示例注明可选语义。规格
+> `features/02-named-proxy.feature` 新增场景 11–15，QA 套件 `qa/02-named-proxy-qa.md`
+> 新增 QA-NP-11..15。
+> **v1.9 修订（操作者 20261005 第六批指令）**：`[[proxies]]` 条目字段重构——每项字段为
+> `name`（非空且唯一）/ `type`（必填，三值 `http` / `https` / `socks5`）/ `ip`（非空；允许
+> IP 字面量或主机名）/ `port`（整数 1..=65535）/ 可选 `username` / `password`（凭证规则见
+> FR-01-93）；**`url` 键退役**——不再读取，按未知键忽略（FR-01-71 口径，零警告、零迁移）。
+> **type 成为唯一事实来源**（取代 v1.7「url scheme 唯一事实来源、type 展示性标注」口径——
+> url 字段不存在后该问题域消失，非推翻 aria2 实证结论：代理协议与下载目标协议正交的结论
+> 继续有效，见 D24 注记）：内部代理 url 由 `type + ip + port` 构造——http → `http://{ip}:{port}`、
+> https → `https://{ip}:{port}`（代理自身走 TLS，reqwest `Proxy::all` 原生支持；basic auth 在
+> TLS 会话内照常生效）、socks5 → `socks5://{ip}:{port}`；三类型均同时服务 http 与 https 下载
+> 目标（http/https 型经 CONNECT 隧道、socks5 型经 SOCKS 隧道）。非法条目清单更新（作废 +
+> 启动警告一次，口径同既有家族，文案不回显凭证值）：空名 / 重名 / type 缺失或未知 / ip 缺失
+> 或空白 / port 缺失、非整数或越界（非 1..=65535）/ 凭证违规——原「url 为空」「url 缺少协议
+> 前缀」「type 与 url 前缀矛盾」「type 未知按 url 处理」等 url 相关校验与警告全部退役。
+> 凭证规则扩展（FR-01-93 增补）：https 型与 http 型同级——成对 = basic auth、都缺省 = 匿名、
+> 只填其一 = 作废 + 警告；socks5 必填不变，认证经 url userinfo（RFC 1929）语义不变。UI 添加/
+> 修改对话框代理下拉类型标注三值——「名（http）」「名（https）」「名（socks5）」。IPv6 字面量
+> ip 的内部 url 构造加方括号（FR-01-89，可观察行为 = IPv6 字面量可作为 ip 配置且代理可用）。
+> 规格 `features/02-named-proxy.feature`（场景 08–10 重写、13–15 增 https 相位、新增 16–18、
+> 01–07 字段形态机械同步），QA 套件 `qa/02-named-proxy-qa.md`（QA-NP-01..18）。
+> **v1.10 修订（操作者 20261005 第七批指令）**：配置模板最小化——操作者钦定模板文本成为
+> `default_template()` 输出的**唯一权威**（逐字节一致，EOF 以一个换行符收尾；coder 不得增删改
+> 任何字符/空行）：9 键保留「用途 + 取值范围 + 示例行」三行式；proxies 段收敛为「一句头注释 +
+> 双示例块」——三类型语义、凭证规则、IPv6、type/url 语义说明等**解释性注释全部不再写入模板**
+> （这些语义由运行期校验警告与 README/规格承载，不进配置文件）。FR-01-93⑤ 凭证规则注释行
+> 条款**废止**（凭证规则运行期语义不变——校验链/警告照旧）；v1.6 起的「模板契约锚点为键集与
+> 形态、空格/顺序可调」口径同时废止（钦定文本逐字节锁定取代之）。钦定文本示例值与 DEFAULT_*
+> 常量已逐一比对（9/9 一致，无冲突，specifier v1.10 登记）。规格 `features/01-config-template.feature`
+> 与 QA 套件 `qa/01-config-template-qa.md` 按钦定文本重写。
 
 ---
 
@@ -127,10 +191,18 @@
 | 编号 | 优先级 | 需求 |
 |---|---|---|
 | FR-01-70 | P0 | 任务注册表持久化：全部任务（含已完成 / 已失败历史）跨会话保留；位置：用户主目录下 `.ezr/state/`（Linux `~/.ezr/state/`；macOS / Windows 同为用户主目录下 `.ezr/state/`；v1.3 修订：`.ezr` 根目录可经 `EZR_HOME` 重定位，见 D16）；原子写。sidecar 随目标文件存放（FR-01-20）。 |
-| FR-01-71 | P0 | 配置文件：用户主目录下 `.ezr/config.toml`（Linux `~/.ezr/config.toml`；macOS / Windows 同为用户主目录下 `.ezr/config.toml`；v1.3 修订：`.ezr` 根目录可经 `EZR_HOME` 重定位，见 D16），TOML 格式，键：`download_dir`、`block_size_http`（默认 1 MB，D13）、`download_slots`（默认 5，D13）、`max_speed`、`max_retries`（默认 5）、`auto_retry`（默认 true）、退避参数、`proxy`、默认并发数。文件可缺失（全部用默认值），非法值回退默认。 |
+| FR-01-71 | P0 | 配置文件：用户主目录下 `.ezr/config.toml`（Linux `~/.ezr/config.toml`；macOS / Windows 同为用户主目录下 `.ezr/config.toml`；v1.3 修订：`.ezr` 根目录可经 `EZR_HOME` 重定位，见 D16），TOML 格式，键：`download_dir`、`block_size_http`（默认 1 MB，D13）、`download_slots`（默认 5，D13）、`max_speed`、`max_retries`（默认 5）、`auto_retry`（默认 true）、退避参数、默认并发数（v1.5 起键名 `http_concurrency`，FR-01-88；v1.6 起 `proxy` 键退役，FR-01-90；命名代理经 `[[proxies]]` 数组，FR-01-86/89）。文件可缺失（全部用默认值），非法值回退默认。 |
 | FR-01-72 | P0 | 单实例保护（D5）：以文件锁保证同一时刻仅有一个 ezr downloader 进程运行；二次启动检测到已有实例后，在命令行提示「ezr 已在运行」并自动退出（非零退出码）（AC-11）。v1.4 修订注记：state 目录不可得（无主目录环境）的回退锁 `<系统临时目录>/ezr.lock` 与正常分支同走「打开 + flock」（coder-20261005 裁决落地，回退路径不再缺锁）。 |
 | FR-01-73 | P0 | 退出语义：`Q` / `Esc` / `Ctrl+C` 均为优雅退出——停止全部传输（保留断点）→ 保存任务注册表 → 恢复终端；panic hook 恢复终端（沿用 demo），异常退出不留花屏终端。 |
-| FR-01-85 | P1 | **配置模板自动生成（☘ v1.4 新增，操作者指令）**：启动时若配置文件位置（FR-01-71 语义，含 `EZR_HOME` 重定位）不存在 `config.toml`，按当前默认值生成配置模板文件：文件内每条非空行均为注释——每个配置键以注释形式给出 `键 = 默认值` 示例行，并在其前部以注释说明该键的**用途**与**取值范围**（覆盖 FR-01-71 全部 10 键：download_dir / block_size_http / download_slots / max_speed / max_retries / auto_retry / backoff_initial / backoff_cap / proxy / default_concurrency）；模板全注释 ⇒ 解析结果与文件缺失完全一致（FR-01-71 默认/回退语义不变，模板本身不改变行为）。`config.toml` 已存在时**不重新生成、不覆写**（字节级不变，含损坏/非法文件）；生成失败（目录不可写等）**静默跳过不阻塞启动**，配置按文件缺失口径加载（D17）。 |
+| FR-01-85 | P1 | **配置模板自动生成（☘ v1.4 新增，操作者指令）**：启动时若配置文件位置（FR-01-71 语义，含 `EZR_HOME` 重定位）不存在 `config.toml`，按当前默认值生成配置模板文件：文件内每条非空行均为注释——每个配置键以注释形式给出 `键 = 默认值` 示例行，并在其前部以注释说明该键的**用途**与**取值范围**（覆盖 FR-01-71 全部 9 键：download_dir / block_size_http / download_slots / max_speed / max_retries / auto_retry / backoff_initial / backoff_cap / http_concurrency（FR-01-88 改名；v1.6 起 proxy 键退役不再输出，FR-01-90））；模板全注释 ⇒ 解析结果与文件缺失完全一致（FR-01-71 默认/回退语义不变，模板本身不改变行为）。`config.toml` 已存在时**不重新生成、不覆写**（字节级不变，含损坏/非法文件）；生成失败（目录不可写等）**静默跳过不阻塞启动**，配置按文件缺失口径加载（D17）。**v1.5 修订**：模板同步收录 `[[proxies]]` 命名代理注释示例块（FR-01-86），键名按 FR-01-88 更新。**v1.6 修订**：键集 9 键（`proxy` 键随 FR-01-90 退役不再输出）+ `[[proxies]]` **双示例**注释块（展示多代理配置与 `type` 类型标注，FR-01-89）。**v1.8 修订**：proxies 段注释新增凭证规则行（socks5 必填 / http 可选成对缺省匿名 / 半填作废），socks5 示例块补 `username`/`password` 示例行，http 示例块注明凭证可选语义（FR-01-93 ⑤）。**v1.9 修订**：proxies 段注释更新为 ip/port/type 字段说明 + 三类型语义（https = 代理自身走 TLS）+ 凭证规则行（socks5 必填 / http 与 https 同级可选）；双示例块改为 ip/port 形态——http 块含可选凭证注释、socks5 块含必填凭证，不再含 url 行（url 键退役，FR-01-86/89）。**v1.10 修订（操作者第七批指令，模板最小化）**：模板内容以**操作者钦定文本为唯一权威**——`default_template()` 输出与钦定文本**逐字节一致**（钦定原文 54 行：标题行 + 9 键×3 行 + proxies 一句头注释 + 双示例块各 7 行，11 个空行分隔，EOF 以一个换行符收尾；钦定原文行集见 `features/01-config-template.feature` v1.10 内嵌原文，coder 不得增删改任何字符/空行）。最小注释集：9 键保留「用途 + 取值范围 + 示例行」三行式——本条 v1.4 确立的「每键用途/取值范围」双注释契约对 9 键**仍然成立**；proxies 段**豁免解释性注释**——收敛为一句头注释（`# proxies：命名代理列表（可配置多个）`）+ 双示例块（各 `# [[proxies]]` + name/type/ip/port/username/password 6 键行），三类型语义、凭证规则、IPv6、type/url 语义说明等解释性注释不再写入模板（语义由运行期校验警告与 README/规格承载；FR-01-93⑤ 同步废止）；v1.6 的「契约锚点为键集与形态，空格/顺序可调」口径**废止**。钦定文本示例值与 DEFAULT_*/`Config::default()` 逐一比对 **9/9 一致（无冲突**，specifier v1.10 登记；后续如有常量变更须回到操作者钦定文本对齐）。 |
+| FR-01-86 | P1 | **命名代理，任务级选择（☘ v1.5 新增；v1.6 两态收窄；v1.9 字段重构）**：配置文件支持 `[[proxies]]` 命名代理数组，每项含 `name`（非空且唯一）、`type`（必填，三值 `http` / `https` / `socks5`，FR-01-89）、`ip`（非空；允许 IP 字面量或主机名）、`port`（整数 1..=65535）、可选 `username`/`password`（代理认证；规则按代理类型分级——socks5 型必填 / http 与 https 型同级可选，见 FR-01-93）；可配置多个。**`url` 键退役**（v1.9）：配置中不再读取 `url` 键，按未知键忽略（FR-01-71 口径，零警告、零迁移）。任务持有**任务级**代理选择（两态，D18 v1.6）：`直连` / `命名引用`（`[[proxies]]` 条目名）。添加/修改任务对话框「代理」下拉：选项 = 直连 + 全部命名代理（按配置顺序；各代理按「名（type）」显示类型标注，三值形态见 FR-01-89）。命名条目非法（**v1.9 清单**：空名 / 重名 / type 缺失或未知 / ip 缺失或空白 / port 缺失、非整数或越界（非 1..=65535）/ 凭证违规（FR-01-93））→ 该条目忽略并启动 toast 提醒一次（文案不回显凭证值；v1.7 的「type 与 url 前缀矛盾保留按 url 处理」「url 无 scheme 作废」随 url 键退役全部废止）；任务引用的命名代理被删除（配置不再含该名）→ 该任务连接按直连并 toast 提醒一次；代理地址无效（运行期客户端构建失败，如 ip 形态无法与 port 构成合法代理地址）→ toast + 该连接直连。认证信息仅用于代理认证，不写入界面可见文案与日志。注册表持久化任务代理选择；旧注册表无该字段或为旧 "global" 值 → 按「直连」加载（v1.6，FR-01-90 兼容口径）。**v1.5 原口径（已被 v1.6 改判取代）**：三态（直连/默认/命名）+ 旧全局 `proxy` 键保留。**v1.9 前字段口径（已被本轮取代）**：每项含 `url`（非空带 scheme 完整形态），非法清单含空 url/url 无 scheme，v1.7 起 url scheme 唯一事实来源、type 展示性标注。 |
+| FR-01-87 | P1 | **任务修改对话框（☘ v1.5 新增，操作者指令）**：任务列表选中任务按 `m` 弹出「修改任务」对话框，四字段：并发（数字输入，空 = 保持当前，非法/越界按 1–64 钳制，口径同 QA-PC-04 裁决）、校验算法（下拉，同添加对话框算法表）、校验码（hex，可空 = 清除校验）、代理（下拉，同添加对话框选项，预选当前值）。四字段预填任务当前值；「确定」后**立即生效**（D19：并发 = 下一调度周期，上调新 worker 立即加入、下调多余 worker 完成当前块后退出；代理 = 之后新发起的连接，在途请求按旧代理完成；校验 = 任务完成校验时采用最新算法与校验码）+ toast 反馈 + 注册表立即落盘（重启后保留）；「取消」/`Esc` 无变更。校验码合法性校验与添加对话框同口径（算法匹配 hex 长度），非法时确定不生效、聚焦非法字段并提示。适用范围（D20，操作者 20261005 裁决维持）：非「已完成」任务均可按 m（下载中/暂停/排队/等待/失败——失败任务改参后 R 重试按新参数执行）；已完成任务按 m 无效（toast 提示）。 |
+| FR-01-88 | P1 | **并发默认键改名（☘ v1.5 新增，操作者指令）**：配置键 `default_concurrency` 与代码标识符（Config/RawConfig 字段、常量 `DEFAULT_CONCURRENCY`、局部变量）统一改名 `http_concurrency` / `DEFAULT_HTTP_CONCURRENCY`；语义不变（添加对话框并发留空时的默认并发，1–64 钳制）。旧键名不设别名：既有配置中的 `default_concurrency` 按未知键忽略（FR-01-71 口径），并发取默认值 4；配置模板自动生成（FR-01-85）写新键名。文档与测试同步：README 配置节、property_tests、cli/dialogs 单测、`qa/runners/suite_persistence_config.py`（机械键名同步）、features/qa 规格文档（specifier 本轮完成）。 |
+| FR-01-89 | P1 | **代理类型 type 键（☘ v1.6 新增；v1.7 D24 改判；v1.9 字段模型重构重写）**：`[[proxies]]` 每项含 `type` 键，**必填**，取值 `http` / `https` / `socks5` **三值**（v1.9 恢复三值——`url` 键退役后 `https` 不再与 url scheme 混淆，转为「代理自身走 TLS」的独立类型）。**type 为唯一事实来源**（v1.9 起取代 v1.7「url scheme 唯一事实来源、type 展示性标注」口径：url 字段不存在后无 scheme 可言，该问题域消失；aria2 实证结论本身不推翻——代理协议与下载目标协议正交，见 D24 注记）：type 缺失或取值未知（三值之外）→ 条目**作废 + 启动警告一次**（v1.6 曾整条作废、v1.7 改「保留按 url 处理」、v1.9 因「按 url 处理」失去对象而回归作废口径）。**内部代理 url 由 type + ip + port 构造**（引擎侧，不落盘不展示）：`http` → `http://{ip}:{port}`、`https` → `https://{ip}:{port}`（代理自身走 TLS——reqwest `Proxy::all` 原生支持 https 代理 url，basic auth 在 TLS 会话内照常生效）、`socks5` → `socks5://{ip}:{port}`；三类型均同时服务 http 与 https 下载目标（http/https 型经 CONNECT 隧道、socks5 型经 SOCKS 隧道——目标协议正交结论不变）。**IPv6 边界**：`ip` 为 IPv6 字面量（含 `:`）时内部 url 构造须加方括号 `[...]`（如 `http://[::1]:8080`；实现要点交 coder），可观察行为 = IPv6 字面量可作为 ip 配置且代理可用。**`url` 键退役**：配置不再读取 `url`（FR-01-71 未知键口径，零警告、零迁移）。UI：添加/修改对话框代理下拉类型标注三值——「名（http）」「名（https）」「名（socks5）」。凭证（username/password）按代理类型分级——socks5 型必填、http 与 https 型同级可选（缺省匿名），见 FR-01-93；socks5 型凭证经内部认证 url 的 userinfo 走 RFC 1929 user/pass 握手（`Proxy::basic_auth` 对 socks 代理无效，v1.8/FR-01-93 修复；v1.9 起认证 url 由 type+ip+port 构造的内部 url 追加 userinfo）。配置模板双示例块含 type/ip/port 行（FR-01-85；v1.10 钦定文本最小化后 **type 行仍在双示例块内**——proxies 段收敛为一句头注释 + 双示例块，type 三值语义/内部 url 构造/IPv6 等解释性注释不再进模板，语义由运行期校验警告与 README/规格承载）。规格 `features/02-named-proxy.feature`（场景 08–10；凭证景 11–15 见 FR-01-93；ip/port 校验景 16–17、IPv6 景 18），QA 套件 `qa/02-named-proxy-qa.md`（QA-NP-08–18）。 |
+| FR-01-90 | P1 | **旧全局 `proxy` 配置键退役（☘ v1.6 新增，操作者指令）**：有了任务级 `[[proxies]]`，原全局 `proxy` 配置项及其相关 feature、QA、源码全部删除——配置解析不再识别 `proxy` 键（按未知键忽略，FR-01-71 口径）；`ProxyChoice::Global` 变体与「默认代理」下拉项删除（三态收窄两态，FR-01-86 v1.6）；配置模板不再输出 proxy 键行；注册表兼容：已持久化的 "global" 选择值加载时映射为「直连」（零迁移，向后可读）；README 配置节同步。相关 feature/qa 修订：`01-throttle-proxy` 删代理场景 08–11（限速场景保留，QA-TP-08–11 删）；`02-named-proxy` 删「默认选中随全局」场景并重排序号。 |
+| FR-01-91 | P1 | **UI 说明文字清理（☘ v1.6 新增，操作者指令）**：删除三处界面提示文字——①下载任务列表表头的「（鼠标: 点击选中 / 滚轮滚动）」；②修改任务对话框标题的「（确定后立即生效）」尾注（标题仅「修改任务」）；③添加/修改任务对话框代理下拉字段的「Enter 选择代理」提示。其余界面文案不变。 |
+| FR-01-92 | P0 | **失败任务空格暂停（☘ v1.6 新增，操作者 bug 报告）**：失败任务按空格 = **暂停**（现状 bug：按空格等于立即重新排队，自动重试循环无法停止）。定型（D25 技术定型）：新增任务状态「已暂停（失败）」（FailedPaused）——失败态任务按空格转入该状态：自动重试倒计时清除、不再到点重发；错误信息保留可见；不占下载槽位；注册表持久化（重启后保持）；再次按空格（或按 R）→ 重新排队（计数重置、断点续传口径同 R，校验失败型仍走重新校验路径）；`m` 修改对话框适用（沿 D20 两态口径）。规格 `features/01-slots-queue.feature` 场景 14/15，QA 套件 `qa/01-slots-queue-qa.md`（QA-SQ-14/15）。 |
+| FR-01-93 | P1 | **代理凭证规则（按类型）+ socks5 认证引擎语义（☘ v1.8 新增，操作者第五批指令；v1.9 增补——https 同级 + 内部 url 构造表述，操作者第六批指令）**：`[[proxies]]` 条目的 `username`/`password` 按代理类型分级——① **socks5 型：必填**（trim 后均非空）：缺任一 → 条目**作废 + 启动警告一次**（口径同重名/空名：忽略该条目、不阻塞启动；警告文案不回显凭证值）。语义依据：SOCKS5 认证为 RFC 1929 user/pass 握手，ezr 不支持匿名 socks5。② **http 型与 https 型同级：可选**（v1.9 增补——https 型凭证规则与 http 型完全一致）：都缺省 → **匿名代理**（条目正常加载，无警告）；成对出现 → HTTP basic auth（https 型在 TLS 会话内生效，现状不变）；**只填其一 → 条目作废 + 启动警告一次**（成对原则；警告文案体现「username 与 password 需成对配置」，不回显凭证值；半填作废为操作者指令的边界落地口径，已向操作者报备、可推翻）。③ **socks5 认证引擎语义（本条内建，coder 轮实现）**：SOCKS5 凭证必须经代理 url userinfo 传递——`ProxyEndpoint` 保持无凭证 url（见 ④），引擎构建 client 时对 socks5 型且凭证齐备的端点内部构造认证 url `socks5://user:pass@ip:port`（v1.9 起 ip:port 即由 type+ip+port 构造的内部代理 url——三类型统一构造见 FR-01-89；IPv6 字面量 ip 加方括号；reqwest 对 socks url 的 userinfo percent-decode 后走 RFC 1929 user/pass 握手）；`Proxy::basic_auth` 仅产生 HTTP `Proxy-Authorization` 头，对 socks 代理**无效**（reqwest 0.12.28 源码实证）——**缺陷登记：v1.5 起 socks5 条目凭证经 `basic_auth` 传递而静默失效，v1.8 轮一并修复**；`basic_auth` 仅用于 http 与 https 型（成对凭证 → HTTP 407 代理认证；https 型认证在 TLS 会话内生效）。④ **凭证保密（延续 FR-01-86 既有约束）**：凭证不进日志/toast/界面文案；`ProxyEndpoint.url` 保持**无凭证**形态（下拉与 toast 展示安全），认证 url 仅在引擎构建 client 时内部构造，不落盘、不显示。⑤ **配置模板同步（v1.10 废止改写，操作者第七批指令）**：v1.8/v1.9 的「模板携带凭证规则注释行 + 示例块凭证语义注记」条款**废止**——模板不再携带凭证规则注释行（proxies 段收敛为一句头注释 + 双示例块，见 FR-01-85 v1.10 修订；双示例块内的 username/password 示例行保留，但不再附「必填/可选」语义注记）。**凭证规则运行期语义不变**：①②③④ 的校验链/警告/认证语义照旧（socks5 必填、http 与 https 同级可选、成对 = basic auth、缺省 = 匿名、半填作废），凭证语义由运行期校验警告与 README/规格承载，不进配置文件。验收要点：socks5 缺 username → 作废 + 警告；socks5 缺 password → 作废 + 警告；http 与 https 无凭证 → 匿名正常加载无警告（两相位）；http 与 https 只填其一 → 作废 + 警告（成对文案，各两相位）；socks5 带凭证 → 条目保留且经 RFC 1929 认证可用于下载、https 带凭证 → TLS 会话内 basic auth 认证可用（socks5+认证与 https 代理监听形态依赖 ezr-proxy 扩展，沿遗留受限项口径）。规格 `features/02-named-proxy.feature`（凭证景 11–15），QA 套件 `qa/02-named-proxy-qa.md`（QA-NP-11..15；v1.9 起 NP-01..18 连续编号）。 |
 
 ### 3.9 TUI 展示与交互（基线沿用 + 真实数据）
 
@@ -164,7 +236,7 @@
 | AC-5 | 同时添加 7 个任务：槽位显示 5/5，第 6 / 7 个显示排队位次；暂停队首下载任务 → 队首等待任务递补；`U`/`J` 调整后递补顺序随之改变；「等待中」任务按 `Space` 暂停并退出队列。 |
 | AC-6 | 校验（以 SHA-256 伴随文件为例，其余 6 种算法同理、位数按 FR-01-50 算法表）：预置内容正确的 `<file>.sha256` → 完成后显示「SHA-256 校验成功」；预置错误摘要 → 「已失败（SHA-256 校验失败：内容与校验值不符）」且不自动重试；按 `R` 重新校验（无块重传）仍失败；将 `.sha256` 修正为正确摘要后再按 `R` → 「SHA-256 校验成功」转「已完成」。 |
 | AC-7 | 限速 `max_speed = 1 MB/s`：全局速度稳定在约 1 MB/s（±10%）。 |
-| AC-8 | 代理：经本地 HTTP 代理 fixture 下载成功（配置文件途径验证）。 |
+| AC-8 | 代理：经本地代理 fixture 下载成功（v1.6：任务级命名代理途径验证，含 http/socks5 经手与 https CONNECT 隧道；规格 02-named-proxy，QA-NP 套件）。 |
 | AC-9 | `Q` 优雅退出 → 重启任务与历史完整；`kill -9` → 重启无元数据损坏；`Ctrl+C` 退出后终端无花屏；`kill -9` 后运行 ezr 的终端自恢复（无鼠标转义字符残影输出，CTRL+C 立即可用，FR-01-84）。 |
 | AC-10 | 质量门槛：`cargo build` / clippy 零警告；单元测试全通过；附带本地 fixture 服务器（可模拟：支持/不支持 Range、随机断连、5xx、慢速、`Content-Disposition`、ETag 变化、代理），QA 套件基于它自动化复跑 AC-1~9，不依赖外网。 |
 | AC-11 | 先后运行两个 ezr 程序：进程中始终只有第一个启动的 ezr 在运行；后运行的 ezr 检测到已有实例后自动退出，并在命令行提示用户已有 ezr 在运行（非零退出码）。 |
@@ -192,3 +264,8 @@
 | D15 | CLI `-x` 以 `<算法>=<校验码>` 形式显式提供算法（算法名同伴随文件后缀集 md5/sha1/sha224/sha256/sha384/sha512/adler32，大小写不敏感）；缺少前缀、算法无法识别或位数与算法不符时启动即报错退出；对话框内算法仍由下拉显式选择（demo 定稿） | R2 修订操作者定案（原「按位数自动匹配」取消） |
 | D16 | `.ezr` 根目录（config.toml 与 state/）可经环境变量 `EZR_HOME` 重定位：`EZR_HOME` 非空 → `$EZR_HOME`，未设置或空 → `~/.ezr`（FR-01-70/71 缺省口径不变）；单实例锁随 state/ 迁移（不同 EZR_HOME 的实例互不冲突，即隔离沙箱语义）；FR-01-84 终端哨兵采用存活子进程机制 | v1.3 修订操作者定案：多实例隔离/自定义存放位置需要；kill -9 终端残影 bug 修复 |
 | D17 | 配置模板生成（FR-01-85）两条边界：①「存在即不覆写」——已存在的 config.toml（含损坏/非法文件）一律不重写，避免覆盖操作者手工修改；②「生成失败静默不阻塞启动」——目录不可写等原因导致生成失败时静默跳过，配置按文件缺失口径加载。理由：缺失/损坏的容错语义已由 FR-01-71（全默认回退）承载，模板生成是便利性增强而非正确性依赖；因便利性增强阻塞启动（或弹错）属风险倒挂 | v1.4 操作者指令 + specifier 保守定型；**操作者 20261005 裁决维持**（A：①存在即不覆写 ②生成失败静默不阻塞，零代码改动，coder-20261005-r17 落账） |
+| D18 | 任务级代理选择模型：**v1.6 改判（操作者 20261005 第三批指令，FR-01-90）**——旧全局 `proxy` 键退役，三态收窄**两态**：任务代理选择 = `直连` / `命名引用`（`[[proxies]]` 条目）；旧注册表 "global" 值加载映射直连（零迁移）；添加对话框下拉 = 直连 + 全部命名代理（无「默认代理」项）。理由：有了任务级命名代理，全局单代理键冗余；操作者明示删除。**v1.5 原口径（已改判）**：三态 + 全局键收窄为「默认代理」保留 | v1.5 specifier 定型 → **v1.6 操作者指令改判收窄两态**（specifier 本轮补记） |
+| D19 | 修改任务「立即生效」口径：并发 = 下一调度周期生效（上调新 worker 立即加入；下调多余 worker 完成当前块后退出，不打断在途块——块默认 1 MB 过渡秒级）；代理 = 之后新发起的连接生效，在途请求按旧代理完成（reqwest 代理为 client 级，采用 client 缓存池按连接解析）；校验 = 完成校验时采用最新值。理由：不中断在途传输、无进度损失，语义可观测可测 | v1.5 specifier 技术定型（引擎 worker 世代模型支撑；操作者如要求「代理切换即断开重连」可改判，代价为在途块进度重取） |
+| D20 | `m` 修改对话框适用范围 = **非「已完成」任务**（下载中/暂停/排队/等待/**失败**——失败任务改代理/校验后 R 重试按新参数执行）；已完成任务按 m 无效（toast 提示）。操作者原话「正在下载列表中的任务」，从宽收录非终态任务以覆盖改参重试场景 | v1.5 specifier 定型；**操作者 20261005 裁决维持**（销待批） |
+| D24 | 代理 `type` 与 `url` scheme 校验口径（FR-01-89，**v1.7 操作者改判**）：type 取值收为 **http / socks5 两值**（http = http(s) HTTP 代理，同时服务 http 与 https 下载目标；socks5 同样服务两类目标——代理协议与下载目标协议**正交**，aria2 `--https-proxy` 取值亦为 `[http://]HOST[:PORT]`，https 目标走 CONNECT 隧道）；**缺省从 url scheme 推断**；旧 `type="https"` 收编为 http 零迁移；**type 为展示性标注、url scheme 唯一事实来源**——显式 type 与前缀矛盾或取值未知 → 条目**保留**，按 url 前缀处理 + 启动警告（v1.6 曾整条作废，改判取消）；url 不带 scheme → 仍作废 + 警告。行为佐证：ezr 引擎 `reqwest::Proxy::all(url)`，socks5 代理下载 http(s) 目标从未被禁止。**v1.9 注记（操作者第六批指令）**：url 字段退役后 **type 即唯一事实来源**（恢复三值 http/https/socks5，https = 代理自身走 TLS）——v1.7 的「url scheme 唯一事实来源、type 展示性标注」口径随之废止，属**问题域消失**（url 字段不存在，无 scheme 可言），**非推翻本条 aria2 实证结论**：代理协议与下载目标协议正交的结论继续有效（三类型均服务 http 与 https 下载目标） | v1.6 specifier 定型（待复核）；**操作者 20261005 质疑 + AIR2 实证后改判 v2，本轮落账**；v1.9 字段重构后口径由 FR-01-89 承接 |
+| D25 | 失败任务空格暂停定型（FR-01-92）：新增任务状态「已暂停（失败）」（FailedPaused）而非在 Failed 上加挂起标志——状态机正交扩展（状态列/过滤/槽位/注册表均按状态驱动）；空格 = 失败↔暂停切换（暂停后空格或 R = 重新排队，校验失败型走重新校验路径）；不占下载槽位；注册表持久化新变体（serde 字符串新值，旧快照零迁移）。理由：操作者语义「把它暂停」要求自动重试可挂起且可恢复；现实现按空格=立即重排队导致重试循环无法停止（bug 根源） | v1.6 specifier 技术定型（状态列显示文案「已暂停（失败）」属 UI 自由度；如操作者要求挂起态显示原错误样式可改判，改动面仅 task_lines 一处） |

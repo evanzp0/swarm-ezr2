@@ -20,7 +20,8 @@ Feature: 01-add-task 任务添加（对话框与 CLI）
 
   期号 01。依据 project/mission/phase-01.md FR-01-01~06 与本会话澄清决定（重复任务拒绝、
   无协议前缀拒绝、CLI -c 非法报错退出、CLI 多 URL 部分非法全部拒绝、默认并发键
-  default_concurrency）。UI 交互基线沿用 ezr-tui-demo 定稿。
+  http_concurrency，v1.5 自 default_concurrency 改名，FR-01-88）。UI 交互基线沿用
+  ezr-tui-demo 定稿。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）

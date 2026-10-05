@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
 use super::task_lines::task_lines;
-use super::{ACCENT, BORDER, DIM, DIM2, SEL_BG};
+use super::{ACCENT, BORDER, DIM, SEL_BG};
 use crate::app::{App, ITEM_HEIGHT};
 use crate::model::{Task, TaskState};
 
@@ -37,10 +37,10 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(BORDER))
-        .title(Line::from(vec![
-            Span::styled(" 下载任务 ", Style::default().fg(ACCENT)),
-            Span::styled("（鼠标: 点击选中 / 滚轮滚动） ", Style::default().fg(DIM2)),
-        ]))
+        .title(Line::from(vec![Span::styled(
+            " 下载任务 ",
+            Style::default().fg(ACCENT),
+        )]))
         .title(
             Line::from(Span::styled(
                 format!(" {}/{} 项 ", app.selected + 1, app.filtered().len()),

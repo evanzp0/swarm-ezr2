@@ -12,6 +12,8 @@
 #   01-slots-queue-11 Space 暂停等待中任务退出队列
 #   01-slots-queue-12 R 手动重试失败任务计数重置并续传
 #   01-slots-queue-13 R 对已达上限与停等任务重新排队
+#   01-slots-queue-14 Space 暂停失败任务挂起自动重试（v1.6/FR-01-92）
+#   01-slots-queue-15 Space 恢复已暂停失败任务重新排队（v1.6/FR-01-92）
 Feature: 01-slots-queue 状态机 · 下载槽位与排队调度
 
   期号 01。依据 project/mission/phase-01.md FR-01-30~34 与 D12 定案（校验中占槽）。
@@ -140,3 +142,24 @@ Feature: 01-slots-queue 状态机 · 下载槽位与排队调度
     When 分别按 R
     Then 两个任务均重新回到等待中排队
     And 获得槽位后从断点续传（不停留在失败态）
+
+  Scenario: 01-slots-queue-14 Space 暂停失败任务挂起自动重试（v1.6/FR-01-92）
+    Given 任务 "<file>" 处于失败态且倒计时进行中（自动重试待发）
+    When 按空格
+    Then 任务转为「已暂停（失败）」：自动重试倒计时清除，不再到点重发
+    And 错误信息保留可见（详情/列表错误行不因暂停丢失）
+    And 任务不占用下载槽位，重启后仍保持该状态
+
+    Examples:
+      | file       |
+      | retry1.bin |
+
+  Scenario: 01-slots-queue-15 Space 恢复已暂停失败任务重新排队（v1.6/FR-01-92）
+    Given 任务 "<file>" 处于「已暂停（失败）」态（01-slots-queue-14 之后）
+    When 按空格（或按 R）
+    Then 任务重新排队（计数重置、断点续传口径同 01-slots-queue-12）
+    And 获得槽位后从断点续传
+
+    Examples:
+      | file       |
+      | retry1.bin |

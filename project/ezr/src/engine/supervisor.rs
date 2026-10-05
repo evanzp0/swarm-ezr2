@@ -30,6 +30,7 @@ use super::error::{classify_reqwest, parse_retry_after_header, EngineFailure};
 use super::{ConnView, Evt, TaskCmd};
 use crate::model::checksum::CHECKSUM_ALGOS;
 use crate::model::chunk::{block_range, chunk_total, Blocks};
+use crate::model::config::ProxyEndpoint;
 use crate::model::consistency::{self, Consistency, ServerStamp};
 use crate::model::sidecar::{Sidecar, SidecarTask};
 use crate::model::{checksum, namegen, Checksum, FailKind, Protocol};
@@ -70,6 +71,9 @@ pub struct TaskSpec {
     pub keep_name: bool,
     /// 任务添加时间（Unix 秒）
     pub added_at: u64,
+    /// 任务级代理端点（v1.5/FR-01-86/D18；None = 直连。App 已解析三态选择；
+    /// url 合法性由引擎在 start_task 时校验，非法回退直连 + toast）
+    pub proxy_endpoint: Option<ProxyEndpoint>,
 }
 
 /// 校验请求上下文（App 在 `Cmd::Verify` 时构建携带）
@@ -182,14 +186,14 @@ async fn emit(evt: &mpsc::Sender<Evt>, e: Evt) -> bool {
     evt.send(e).await.is_ok()
 }
 
-/// 下载请求构建（公共头：禁用内容压缩，FR-01-16）
+/// 下载请求构建（公共头：禁用内容压缩，FR-01-16）。client 由调用方按当前
+/// 任务代理端点解析（v1.5/FR-01-86：client 缓存池按端点查池）。
 fn req_with_identity(
-    shared: &super::EngineShared,
+    client: &reqwest::Client,
     url: &str,
     range: Option<String>,
 ) -> reqwest::RequestBuilder {
-    let mut rb = shared
-        .client
+    let mut rb = client
         .get(url)
         .header("Accept-Encoding", "identity")
         .header("User-Agent", concat!("ezr/", env!("CARGO_PKG_VERSION")));
@@ -239,13 +243,19 @@ fn probe_head(r: &reqwest::Response) -> ProbeHead {
 async fn stop_workers(
     stop: &std::sync::atomic::AtomicBool,
     stop_tx: &watch::Sender<bool>,
-    handles: &mut Vec<tokio::task::JoinHandle<()>>,
+    handles: &mut Vec<(usize, tokio::task::JoinHandle<()>)>,
 ) {
     stop.store(true, Ordering::Relaxed);
     let _ = stop_tx.send(true);
-    for h in handles.drain(..) {
+    for (_, h) in handles.drain(..) {
         let _ = h.await;
     }
+}
+
+/// 收割已结束 worker 句柄（待命退出/配额下调退出；监督循环 tick 与
+/// Reconfigure 时调用，保持存活集合与槽位号准确）
+fn prune_finished(handles: &mut Vec<(usize, tokio::task::JoinHandle<()>)>) {
+    handles.retain(|(_, h)| !h.is_finished());
 }
 
 /// 下载主流程
@@ -255,8 +265,9 @@ async fn download(
     cmd_rx: &mut mpsc::Receiver<TaskCmd>,
     evt_tx: &mpsc::Sender<Evt>,
 ) -> Flow {
-    // ---- 探测（FR-01-10）----
-    let resp = match req_with_identity(shared, &spec.url, Some("bytes=0-".into()))
+    // ---- 探测（FR-01-10；探测与下载同走任务级代理端点，FR-01-86）----
+    let probe_client = shared.client_for(spec.proxy_endpoint.as_ref());
+    let resp = match req_with_identity(&probe_client, &spec.url, Some("bytes=0-".into()))
         .send()
         .await
     {
@@ -366,6 +377,11 @@ async fn download(
     }
 
     // ---- 分块下载（FR-01-11/13）----
+    // 探测响应体（bytes=0- = 整文件流）在多块路径不再需要：取定最终 URL 后
+    // 立即释放探测连接——否则未读响应体钉死该连接（服务端阻塞在写体/连接
+    // 闲置），与 worker 的新建连接争用。单流路径（上方）仍移交 resp 续读。
+    let worker_url = resp.url().as_str().to_string();
+    drop(resp);
     // 预分配稀疏文件（续传时文件可能已存在：open 不截断，set_len 保持内容）
     match tokio::fs::OpenOptions::new()
         .write(true)
@@ -395,6 +411,12 @@ async fn download(
     let total = head.total;
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (stop_tx, stop_rx) = watch::channel(false);
+    // 任务级代理 + 并发热调通道（v1.5/FR-01-86/87，D19）：
+    // quota = 目标 worker 数（下调时多余 worker 完成当前块后自行退出）；
+    // endpoint = 当前任务代理端点（worker 每次领块解析 client——切换后
+    // 新连接即新代理，在途请求按旧 client 完成，不中断传输）
+    let (quota_tx, quota_rx) = watch::channel(spec.concurrency.clamp(1, 64));
+    let (ep_tx, ep_rx) = watch::channel(Arc::new(spec.proxy_endpoint.clone()));
     let blocks_shared = Arc::new(tokio::sync::Mutex::new(blocks.clone()));
     let lease_next = Arc::new(AtomicU32::new(0));
     let total_written = Arc::new(AtomicU64::new(0));
@@ -404,20 +426,25 @@ async fn download(
     // worker 池：按设置并发数生成 worker（FR-01-11）；块数不足时多余 worker
     // 立即转「待命」（明细表可见），活跃传输数仍 = min(并发数, 未完成块数)
     let n_workers = spec.concurrency.clamp(1, 64);
-    let mut handles = Vec::with_capacity(n_workers);
+    let mut handles: Vec<(usize, tokio::task::JoinHandle<()>)> = Vec::with_capacity(n_workers);
     for wid in 1..=n_workers {
-        handles.push(tokio::spawn(block_worker(
+        handles.push((
             wid,
-            Arc::clone(shared),
-            resp.url().as_str().to_string(),
-            dl_path.clone(),
-            blocks_shared.clone(),
-            lease_next.clone(),
-            stop_rx.clone(),
-            total_written.clone(),
-            failure.clone(),
-            conns.clone(),
-        )));
+            tokio::spawn(block_worker(
+                wid,
+                Arc::clone(shared),
+                worker_url.clone(),
+                dl_path.clone(),
+                blocks_shared.clone(),
+                lease_next.clone(),
+                stop_rx.clone(),
+                quota_rx.clone(),
+                ep_rx.clone(),
+                total_written.clone(),
+                failure.clone(),
+                conns.clone(),
+            )),
+        ));
     }
 
     // 监督循环：进度事件 + sidecar 周期落盘 + 完成/暂停/取消判定
@@ -425,6 +452,40 @@ async fn download(
     loop {
         tokio::select! {
             cmd = cmd_rx.recv() => match cmd {
+                Some(TaskCmd::Reconfigure { concurrency, endpoint }) => {
+                    // v1.5/FR-01-87（D19 立即生效）：并发与代理热调
+                    let q = concurrency.clamp(1, 64);
+                    let _ = ep_tx.send(Arc::new(endpoint));
+                    let _ = quota_tx.send(q);
+                    prune_finished(&mut handles);
+                    let mut live: std::collections::HashSet<usize> =
+                        handles.iter().map(|(s, _)| *s).collect();
+                    let mut next = 1usize;
+                    while handles.len() < q {
+                        while live.contains(&next) {
+                            next += 1;
+                        }
+                        handles.push((
+                            next,
+                            tokio::spawn(block_worker(
+                                next,
+                                Arc::clone(shared),
+                                worker_url.clone(),
+                                dl_path.clone(),
+                                blocks_shared.clone(),
+                                lease_next.clone(),
+                                stop_rx.clone(),
+                                quota_rx.clone(),
+                                ep_rx.clone(),
+                                total_written.clone(),
+                                failure.clone(),
+                                conns.clone(),
+                            )),
+                        ));
+                        live.insert(next);
+                        next += 1;
+                    }
+                }
                 Some(TaskCmd::Pause) | Some(TaskCmd::Cancel) => {
                     let cancelled = cmd == Some(TaskCmd::Cancel);
                     stop_workers(&stop, &stop_tx, &mut handles).await;
@@ -443,6 +504,7 @@ async fn download(
                 _ => return Flow::Cancelled,
             },
             _ = tokio::time::sleep(PROGRESS_TICK) => {
+                prune_finished(&mut handles);
                 if failure.lock().await.is_some() {
                     stop_workers(&stop, &stop_tx, &mut handles).await;
                     let f = failure.lock().await.clone().unwrap_or_else(|| {
@@ -601,6 +663,9 @@ async fn single_stream(
                     });
                 }
                 Some(TaskCmd::Cancel) | None => return Flow::Cancelled,
+                // 单流降级路径不支持热调（在途响应绑定探测连接）；修改在
+                // 下次重试/续传生效（spec 由任务当前值构建）
+                Some(TaskCmd::Reconfigure { .. }) => {}
             },
             chunk = resp.chunk() => match chunk {
                 Ok(Some(bytes)) => {
@@ -715,6 +780,8 @@ async fn block_worker(
     blocks: Arc<tokio::sync::Mutex<Blocks>>,
     lease_next: Arc<AtomicU32>,
     stop_rx: watch::Receiver<bool>,
+    quota_rx: watch::Receiver<usize>,
+    ep_rx: watch::Receiver<Arc<Option<ProxyEndpoint>>>,
     total_written: Arc<AtomicU64>,
     failure: Arc<tokio::sync::Mutex<Option<EngineFailure>>>,
     conns: Arc<tokio::sync::Mutex<Vec<ConnView>>>,
@@ -731,8 +798,16 @@ async fn block_worker(
         }
     };
     let mut stop_rx = stop_rx;
+    let mut quota_rx = quota_rx;
+    let mut ep_rx = ep_rx;
     loop {
         if *stop_rx.borrow() {
+            return;
+        }
+        // 并发下调（v1.5/FR-01-87，D19）：超出目标配额的 worker 在完成当前块
+        // 后于本边界退出（不打断在途传输，无进度损失）；槽位 freed 后由
+        // Reconfigure 在扩容时复用
+        if wid > *quota_rx.borrow_and_update() {
             return;
         }
         // 领块：从 lease_next 顺序扫描第一个未完成块
@@ -779,7 +854,11 @@ async fn block_worker(
             done: written,
         });
         let range = format!("bytes={}-{}", start + written, end - 1);
-        let resp = req_with_identity(&shared, &url, Some(range)).send().await;
+        // 任务级代理（v1.5/FR-01-86，D19）：每次领块按当前端点解析 client——
+        // 代理切换后新连接即新代理；在途请求持旧 client 自然完成
+        let ep = ep_rx.borrow_and_update().clone();
+        let client = shared.client_for((*ep).as_ref());
+        let resp = req_with_identity(&client, &url, Some(range)).send().await;
         let mut resp = match resp {
             Ok(r) if r.status().is_success() => r,
             Ok(r) => {
@@ -951,12 +1030,14 @@ mod tests {
             sidecar_path: None,
             keep_name: false,
             added_at: 0,
+            proxy_endpoint: None,
         }
     }
 
     fn throttle_free() -> Arc<super::super::EngineShared> {
         Arc::new(super::super::EngineShared {
             client: reqwest::Client::builder().no_proxy().build().unwrap(),
+            clients: std::sync::Mutex::new(std::collections::HashMap::new()),
             throttle: Arc::new(super::super::throttle::Throttle::new(0)),
         })
     }
@@ -1004,6 +1085,52 @@ mod tests {
             }
         }
         false
+    }
+
+    /// v1.5/FR-01-87（D19）：Reconfigure 并发热调——1→4 上调后新 worker 加入
+    /// （活跃连接数峰值 ≥2），任务完成且无失败（代理热调同通道，None=直连）
+    #[tokio::test]
+    async fn reconfigure_hot_adjusts_concurrency_and_completes() {
+        let dir = std::env::temp_dir().join(format!("ezr-hot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let total: u64 = 256 * 4096; // 256 块，足够维持多 worker 在途窗口
+        let url = mock_server(total, vec![]);
+        let spec = spec_for(1, &url, dir.to_str().unwrap(), 4096, 1, None);
+        let (cmd_tx, mut rx, deadline) = launch_spec(spec);
+        let mut hot = false;
+        let mut max_conns = 0usize;
+        let mut done = false;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::Probed { .. })) => {
+                    // 探测完成即上调并发：1 → 4（直连）
+                    cmd_tx
+                        .send(TaskCmd::Reconfigure {
+                            concurrency: 4,
+                            endpoint: None,
+                        })
+                        .await
+                        .unwrap();
+                    hot = true;
+                }
+                Ok(Some(Evt::Progress { conns, .. })) => {
+                    max_conns = max_conns.max(conns.len());
+                }
+                Ok(Some(Evt::DownloadDone { .. })) => {
+                    done = true;
+                    break;
+                }
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("下载失败: {reason}"),
+                _ => {}
+            }
+        }
+        assert!(hot, "Reconfigure 应在探测完成后发出");
+        assert!(done, "热调后任务应完成");
+        assert!(max_conns >= 2, "上调后活跃连接数应上升（峰值 {max_conns}）");
+        let f = dir.join("f.bin");
+        let meta = std::fs::metadata(&f).expect("目标文件在位");
+        assert_eq!(meta.len(), total);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]

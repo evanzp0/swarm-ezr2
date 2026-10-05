@@ -145,6 +145,7 @@ mod ui_tests {
             4,
             3,
             None,
+            crate::model::config::ProxyChoice::Direct,
             0,
         );
         t.state = state;
@@ -425,6 +426,58 @@ mod ui_tests {
         app.shutdown().await;
     }
 
+    /// v1.6/FR-01-92/D25：失败任务 Space 暂停（挂起自动重试）↔ 恢复重新排队；
+    /// R 对「已暂停（失败）」同样有效（= 恢复）
+    #[tokio::test]
+    async fn failed_pause_resume_flow() {
+        let mut app = make_app("fpause");
+        app.max_slots = 1;
+
+        // 失败（倒计时进行中）→ Space = 暂停：转 FailedPaused、清倒计时、释放槽位
+        app.tasks.push(task(1, "f1.bin", TaskState::Failed));
+        app.tasks[0].retries = 2;
+        app.tasks[0].retry_in = Some(5.0);
+        app.tasks[0].has_slot = true;
+        app.tasks[0].fail_kind = None;
+        app.tasks[0].error = Some("连接被重置".to_string());
+        app.selected = 0;
+        app.toggle_pause();
+        assert_eq!(
+            app.tasks[0].state,
+            TaskState::FailedPaused,
+            "失败按空格 = 暂停"
+        );
+        assert!(app.tasks[0].retry_in.is_none(), "倒计时清除，不再自动重试");
+        assert!(!app.tasks[0].has_slot, "不占下载槽位");
+        assert_eq!(
+            app.tasks[0].error.as_deref(),
+            Some("连接被重置"),
+            "错误信息保留可见"
+        );
+        assert!(app.toast.as_deref().is_some_and(|m| m.contains("已暂停")));
+
+        // tick 不推进挂起任务（FailedPaused 不参与 retry_in 到点重排）
+        assert!(
+            !app.tasks.iter().any(|t| t.state == TaskState::Queued),
+            "挂起任务不重新排队"
+        );
+
+        // 已暂停（失败）→ Space = 恢复：重新排队（计数重置、错误清空）
+        app.toggle_pause();
+        assert_eq!(app.tasks[0].state, TaskState::Queued, "恢复 = 重新排队");
+        assert_eq!(app.tasks[0].retries, 1, "重新排队计数重置");
+        assert!(app.tasks[0].error.is_none());
+
+        // R 对 FailedPaused 同样有效
+        app.tasks[0].state = TaskState::FailedPaused;
+        app.tasks[0].retries = 4;
+        app.tasks[0].error = Some("超时".to_string());
+        app.retry();
+        assert_eq!(app.tasks[0].state, TaskState::Queued, "R 恢复挂起任务");
+        assert_eq!(app.tasks[0].retries, 1);
+        app.shutdown().await;
+    }
+
     /// 全局键盘路由（FR-01-80）：退出/页签/选择/跳转/图表开关/添加入口，
     /// 对话框打开时整键交给 on_dialog_key（Esc 关闭）
     #[tokio::test]
@@ -537,8 +590,11 @@ mod ui_tests {
             ck_value: String::new(),
             ck_open: true,
             ck_sel: 0,
+            proxy_sel: 0,
+            proxy_open: false,
             focus: 0,
             task_name: String::new(),
+            task_id: None,
         });
         app.dlg_ck_rects = vec![(Rect::new(2, 3, 20, 1), 4)];
         app.on_mouse(mk(MouseEventKind::Down(MouseButton::Left), 5, 3));

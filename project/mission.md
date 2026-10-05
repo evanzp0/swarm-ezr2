@@ -12,6 +12,44 @@
 > 不存在时，启动按默认值生成全部行被注释的配置模板（每个参数注明用途与取值范围）；已存在文件
 > 不重写（含损坏文件），生成失败不阻塞启动（D17）。规格见 `features/01-config-template.feature`，
 > QA 套件见 `qa/01-config-template-qa.md`。
+> v1.5（操作者 20261005 第二批指令，与 phase-01 v1.5 同步）：新增 FR-01-86 命名 HTTP(S) 代理
+> （`[[proxies]]` 可命名/认证/多个，任务级选择，添加对话框可选，D18）；FR-01-87 任务修改对话框
+> （按 `m` 改并发/校验算法/校验码/代理，确定立即生效，D19/D20）；FR-01-88 `default_concurrency`
+> 改名 `http_concurrency`。规格见 `features/02-named-proxy.feature`、`features/03-modify-task.feature`，
+> QA 套件见 `qa/02-named-proxy-qa.md`、`qa/03-modify-task-qa.md`。
+> v1.6（操作者 20261005 第三批指令，与 phase-01 v1.6 同步）：旧全局 `proxy` 配置键退役
+> （FR-01-90，相关 feature/qa/源码同步删除，D18 改判收窄两态）；代理新增 `type` 类型键
+> http/https/socks5（FR-01-89，D24）；配置模板给出多个代理配置示例（双示例块含 type）；
+> 删除三处 UI 说明文字（FR-01-91）；修复 bug：失败任务按空格可暂停（FR-01-92，D25）。
+> v1.7（操作者 20261005 第四批指令，与 phase-01 v1.7 同步）：D24 改判——type 收为两值
+> `http` / `socks5`（http = http(s) 代理，与 socks5 代理均同时服务 http 与 https 下载目标；
+> 旧 https 值收编为 http），url scheme 唯一事实来源、type 为展示性标注（矛盾/未知不再作废，
+> 以 url 为准 + 警告）；D20 操作者裁决维持（非「已完成」任务均可按 m）。AIR2（aria2）手册实证
+> 佐证：代理协议与下载目标协议正交（`--https-proxy` 取值亦为 `[http://]HOST[:PORT]`）。
+> v1.8（操作者 20261005 第五批指令，与 phase-01 v1.8 同步）：新增 FR-01-93 代理凭证规则（按类型）+
+> socks5 认证引擎语义——socks5 型代理 `username`/`password` **必填**（缺任一 → 条目作废 + 警告，
+> 不阻塞启动）；http 型**可选**（成对 = basic auth，都缺省 = 匿名代理，只填其一 → 条目作废 +
+> 警告——半填作废为报备口径可推翻）；socks5 凭证必须经代理 url userinfo 走 RFC 1929 握手
+> （reqwest `Proxy::basic_auth` 对 socks 代理无效，v1.5 起 socks5 凭证静默失效，一并修复）。
+> 规格 `features/02-named-proxy.feature`（场景 11–15）、`features/01-config-template.feature`，
+> QA 套件 `qa/02-named-proxy-qa.md`（QA-NP-11..15）。
+> v1.9（操作者 20261005 第六批指令，与 phase-01 v1.9 同步）：`[[proxies]]` 条目字段重构为
+> name/type/ip/port/username/password——`type` 必填三值 `http`/`https`/`socks5` 且为唯一事实
+> 来源（取代 v1.7「url scheme 唯一事实来源、type 展示性标注」口径——`url` 键退役（按未知键
+> 忽略，零迁移）后问题域消失，aria2 正交实证结论不推翻）；内部代理 url 由 type+ip+port 构造
+> （https = 代理自身走 TLS，basic auth 在 TLS 会话内生效；三类型均同时服务 http 与 https 下载
+> 目标；IPv6 字面量 ip 加方括号）；非法条目清单更新（空名/重名/type 缺失或未知/ip 缺失或空白/
+> port 缺失、非整数或越界/凭证违规），url 相关校验与警告全部退役；凭证规则 https 与 http 同级
+> （成对 = basic auth、都缺省 = 匿名、半填作废；socks5 必填不变）；UI 下拉标注「名（type）」。
+> 规格 `features/02-named-proxy.feature`（18 场景）、`features/01-config-template.feature`，
+> QA 套件 `qa/02-named-proxy-qa.md`（QA-NP-01..18）。
+> v1.10（操作者 20261005 第七批指令，与 phase-01 v1.10 同步）：配置模板最小化——操作者钦定
+> 模板文本成为 `default_template()` 输出的唯一权威（逐字节一致，EOF 以一个换行符收尾）；
+> 9 键保留「用途 + 取值范围 + 示例行」三行式；proxies 段收敛为「一句头注释 + 双示例块」，
+> 三类型语义、凭证规则、IPv6 等解释性注释不再写入模板（语义由运行期校验警告与 README/规格
+> 承载）；FR-01-93⑤ 凭证注释行条款废止（运行期凭证语义不变）。钦定文本示例值与 DEFAULT_*
+> 常量比对 9/9 一致（无冲突）。规格 `features/01-config-template.feature`、QA 套件
+> `qa/01-config-template-qa.md` 按钦定文本重写。
 
 ---
 

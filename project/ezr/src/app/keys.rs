@@ -35,6 +35,7 @@ impl App {
             KeyCode::Char(' ') => self.toggle_pause(),
             KeyCode::Char('r') | KeyCode::Char('R') => self.retry(),
             KeyCode::Char('a') | KeyCode::Char('A') => self.open_add_dialog(),
+            KeyCode::Char('m') | KeyCode::Char('M') => self.open_modify_dialog(),
             KeyCode::Char('d') | KeyCode::Char('D') => self.open_delete_dialog(),
             KeyCode::Char('c') | KeyCode::Char('C') => self.clear_completed(),
             KeyCode::Char('g') | KeyCode::Char('G') => self.show_chart = !self.show_chart,

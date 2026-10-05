@@ -26,7 +26,7 @@ path = "src/bin/ezr-proxy.rs"
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "net"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "stream", "socks"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

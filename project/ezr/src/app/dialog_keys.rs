@@ -12,13 +12,21 @@ impl super::App {
             None => return,
         };
         let nfocus = match kind {
-            DialogKind::Add => 7,
+            DialogKind::Add => 8,
+            DialogKind::Modify => 6,
             DialogKind::Delete => 3,
         };
-        // 校验算法下拉框展开时（仅 Add）：整块交给下拉键处理
-        if kind == DialogKind::Add && self.dialog.as_ref().is_some_and(|d| d.ck_open) {
+        // 校验算法 / 代理下拉框展开时：整块交给下拉键处理（消费所有键）
+        if self.dialog.as_ref().is_some_and(|d| d.ck_open) {
             if let Some(d) = self.dialog.as_mut() {
                 dropdown_open_key(d, code);
+            }
+            return;
+        }
+        if self.dialog.as_ref().is_some_and(|d| d.proxy_open) {
+            let n = self.proxy_options.len().max(1);
+            if let Some(d) = self.dialog.as_mut() {
+                proxy_dropdown_open_key(d, n, code);
             }
             return;
         }
@@ -36,17 +44,17 @@ impl super::App {
             }
             KeyCode::Enter => match kind {
                 DialogKind::Add => self.add_dialog_enter(focus),
+                DialogKind::Modify => self.modify_dialog_enter(focus),
                 DialogKind::Delete => self.dlg_activate_delete(focus),
             },
             KeyCode::Backspace => {
-                if kind == DialogKind::Add {
-                    if let Some(d) = self.dialog.as_mut() {
-                        text_backspace(d, focus);
-                    }
+                if let Some(d) = self.dialog.as_mut() {
+                    text_backspace(kind, d, focus);
                 }
             }
             KeyCode::Char(c) => match kind {
                 DialogKind::Add => self.add_dialog_char(focus, c),
+                DialogKind::Modify => self.modify_dialog_char(focus, c),
                 DialogKind::Delete => match c {
                     '1' => self.dlg_activate_delete(0),
                     '2' => self.dlg_activate_delete(1),
@@ -58,25 +66,46 @@ impl super::App {
         }
     }
 
-    /// Add 对话框 Enter：算法行展开下拉、取消按钮关闭、其余确认
+    /// Add 对话框 Enter：算法/代理行展开下拉、取消按钮关闭、其余确认
     fn add_dialog_enter(&mut self, focus: usize) {
         if focus == 3 {
             let d = self.dialog.as_mut().unwrap();
             d.ck_open = true;
             d.ck_sel = d.ck_type;
-        } else if focus == 6 {
+        } else if focus == 5 {
+            let d = self.dialog.as_mut().unwrap();
+            d.proxy_open = true;
+        } else if focus == 7 {
             self.dialog = None;
         } else {
             self.dlg_confirm_add();
         }
     }
 
-    /// Add 对话框字符输入：0-2 文本字段、3 空格展开下拉、4 校验码、5/6 空格激活按钮
+    /// Modify 对话框 Enter（v1.5/FR-01-87）：0=并发 1=算法 2=校验码 3=代理
+    /// 4=确认 5=取消
+    fn modify_dialog_enter(&mut self, focus: usize) {
+        if focus == 1 {
+            let d = self.dialog.as_mut().unwrap();
+            d.ck_open = true;
+            d.ck_sel = d.ck_type;
+        } else if focus == 3 {
+            let d = self.dialog.as_mut().unwrap();
+            d.proxy_open = true;
+        } else if focus == 5 {
+            self.dialog = None;
+        } else {
+            self.dlg_confirm_modify();
+        }
+    }
+
+    /// Add 对话框字符输入：0-2 文本字段、3 空格展开算法下拉、4 校验码、
+    /// 5 空格展开代理下拉、6/7 空格激活按钮
     fn add_dialog_char(&mut self, focus: usize, c: char) {
         if focus < 3 {
             if !c.is_control() {
                 if let Some(d) = self.dialog.as_mut() {
-                    text_char(d, focus, c);
+                    text_char(kind_add(), d, focus, c);
                 }
             }
         } else if focus == 3 {
@@ -92,9 +121,50 @@ impl super::App {
                 self.dialog.as_mut().unwrap().ck_value.push(c);
             }
         } else if c == ' ' {
-            self.dlg_activate_add(focus);
+            if focus == 5 {
+                let d = self.dialog.as_mut().unwrap();
+                d.proxy_open = true;
+            } else {
+                self.dlg_activate_add(focus);
+            }
         }
     }
+
+    /// Modify 对话框字符输入（v1.5/FR-01-87）：0 并发数字、1 空格展开算法
+    /// 下拉、2 校验码、3 空格展开代理下拉、4/5 空格激活按钮
+    fn modify_dialog_char(&mut self, focus: usize, c: char) {
+        if focus == 0 {
+            if c.is_ascii_digit() && self.dialog.as_ref().unwrap().conns.chars().count() < 2 {
+                let d = self.dialog.as_mut().unwrap();
+                d.conns.push(c);
+                d.conns_edited = true;
+            }
+        } else if focus == 1 {
+            if c == ' ' {
+                let d = self.dialog.as_mut().unwrap();
+                d.ck_open = true;
+                d.ck_sel = d.ck_type;
+            }
+        } else if focus == 2 {
+            if c.is_ascii_hexdigit() && self.dialog.as_ref().unwrap().ck_value.chars().count() < 128
+            {
+                self.dialog.as_mut().unwrap().ck_value.push(c);
+            }
+        } else if c == ' ' {
+            if focus == 3 {
+                let d = self.dialog.as_mut().unwrap();
+                d.proxy_open = true;
+            } else {
+                self.dlg_activate_modify(focus);
+            }
+        }
+    }
+}
+
+/// Add 布局标记（text_char 复用：Add 与 Modify 共用文本字段语义，焦点映射
+/// 由 kind 区分）
+const fn kind_add() -> DialogKind {
+    DialogKind::Add
 }
 
 /// 下拉框展开态逐键处理（Up/Down/Home/End 选择，Enter/Esc 关闭，
@@ -126,23 +196,50 @@ fn dropdown_open_key(d: &mut Dialog, code: KeyCode) {
     }
 }
 
-/// 文本字段退格（focus 0=URL 1=目录 2=并发 4=校验码；其余字段 false = 未消费）
-fn text_backspace(d: &mut Dialog, focus: usize) -> bool {
-    match focus {
-        0 => {
+/// 代理下拉框展开态逐键处理（v1.5/FR-01-86；Up/Down/Home/End 选择，
+/// Enter/Esc 关闭，Tab/BackTab 关闭并跳转焦点，其余键关闭）。消费所有按键。
+fn proxy_dropdown_open_key(d: &mut Dialog, n: usize, code: KeyCode) {
+    let n = n.max(1);
+    match code {
+        KeyCode::Up => {
+            d.proxy_sel = (d.proxy_sel + n - 1) % n;
+        }
+        KeyCode::Down => {
+            d.proxy_sel = (d.proxy_sel + 1) % n;
+        }
+        KeyCode::Home => d.proxy_sel = 0,
+        KeyCode::End => d.proxy_sel = n - 1,
+        KeyCode::Enter | KeyCode::Esc => d.proxy_open = false,
+        KeyCode::Tab => {
+            d.proxy_open = false;
+            d.focus = if d.kind == DialogKind::Add { 6 } else { 4 };
+        }
+        KeyCode::BackTab => {
+            d.proxy_open = false;
+            d.focus = if d.kind == DialogKind::Add { 4 } else { 2 };
+        }
+        _ => d.proxy_open = false,
+    }
+}
+
+/// 文本字段退格（kind 感知焦点映射：Add 0=URL 1=目录 2=并发 4=校验码；
+/// Modify 0=并发 2=校验码）
+fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> bool {
+    match (kind, focus) {
+        (DialogKind::Add, 0) => {
             d.url.pop();
             true
         }
-        1 => {
+        (DialogKind::Add, 1) => {
             d.dir.pop();
             true
         }
-        2 => {
+        (DialogKind::Add, 2) | (DialogKind::Modify, 0) => {
             d.conns.pop();
             d.conns_edited = true;
             true
         }
-        4 => {
+        (DialogKind::Add, 4) | (DialogKind::Modify, 2) => {
             d.ck_value.pop();
             true
         }
@@ -150,22 +247,23 @@ fn text_backspace(d: &mut Dialog, focus: usize) -> bool {
     }
 }
 
-/// 文本字段字符输入（URL/目录 ≤300 字符；并发仅 2 位数字；其余字段 false = 未消费）
-fn text_char(d: &mut Dialog, focus: usize, c: char) -> bool {
-    match focus {
-        0 => {
+/// 文本字段字符输入（kind 感知：Add 0=URL 1=目录 2=并发；Modify 0=并发。
+/// URL/目录 ≤300 字符；并发仅 2 位数字）
+fn text_char(kind: DialogKind, d: &mut Dialog, focus: usize, c: char) -> bool {
+    match (kind, focus) {
+        (DialogKind::Add, 0) => {
             if d.url.chars().count() < 300 {
                 d.url.push(c);
             }
             true
         }
-        1 => {
+        (DialogKind::Add, 1) => {
             if d.dir.chars().count() < 300 {
                 d.dir.push(c);
             }
             true
         }
-        2 => {
+        (DialogKind::Add, 2) | (DialogKind::Modify, 0) => {
             if c.is_ascii_digit() && d.conns.chars().count() < 2 {
                 d.conns.push(c);
                 d.conns_edited = true;
@@ -201,8 +299,11 @@ mod dialog_key_tests {
             ck_value: String::new(),
             ck_open: false,
             ck_sel: 3,
+            proxy_sel: 0,
+            proxy_open: false,
             focus: 0,
             task_name: String::new(),
+            task_id: None,
         };
         d.ck_sel = 3;
         d
@@ -219,8 +320,11 @@ mod dialog_key_tests {
             ck_value: String::new(),
             ck_open: false,
             ck_sel: 0,
+            proxy_sel: 0,
+            proxy_open: false,
             focus: 0,
             task_name: name.to_string(),
+            task_id: None,
         }
     }
 
@@ -258,40 +362,40 @@ mod dialog_key_tests {
     fn text_backspace_fields_and_gates() {
         let mut d = add_dlg();
         d.url.push_str("abc");
-        assert!(text_backspace(&mut d, 0));
+        assert!(text_backspace(DialogKind::Add, &mut d, 0));
         assert_eq!(d.url, "ab");
         d.dir.push_str("xy");
-        assert!(text_backspace(&mut d, 1));
+        assert!(text_backspace(DialogKind::Add, &mut d, 1));
         assert_eq!(d.dir, "x");
         d.conns.push_str("12");
-        assert!(text_backspace(&mut d, 2));
+        assert!(text_backspace(DialogKind::Add, &mut d, 2));
         assert_eq!(d.conns, "1");
         assert!(d.conns_edited);
         d.ck_value.push_str("ff");
-        assert!(text_backspace(&mut d, 4));
+        assert!(text_backspace(DialogKind::Add, &mut d, 4));
         assert_eq!(d.ck_value, "f");
         // 焦点 3（算法下拉）/5/6（按钮）不消费
-        assert!(!text_backspace(&mut d, 3));
-        assert!(!text_backspace(&mut d, 5));
+        assert!(!text_backspace(DialogKind::Add, &mut d, 3));
+        assert!(!text_backspace(DialogKind::Add, &mut d, 5));
     }
 
     #[test]
     fn text_char_caps_and_filters() {
         let mut d = add_dlg();
         for c in "abcdefghij".chars() {
-            text_char(&mut d, 0, c);
+            text_char(DialogKind::Add, &mut d, 0, c);
         }
         assert_eq!(d.url.chars().count(), 10);
         // 300 上限
         for c in ('a'..='z').cycle().take(400) {
-            text_char(&mut d, 0, c);
+            text_char(DialogKind::Add, &mut d, 0, c);
         }
         assert_eq!(d.url.chars().count(), 300);
         // 并发：仅数字、2 位
-        text_char(&mut d, 2, '5');
-        text_char(&mut d, 2, 'x'); // 非数字拒绝
-        text_char(&mut d, 2, '6');
-        text_char(&mut d, 2, '7'); // 第 3 位拒绝
+        text_char(DialogKind::Add, &mut d, 2, '5');
+        text_char(DialogKind::Add, &mut d, 2, 'x'); // 非数字拒绝
+        text_char(DialogKind::Add, &mut d, 2, '6');
+        text_char(DialogKind::Add, &mut d, 2, '7'); // 第 3 位拒绝
         assert_eq!(d.conns, "56");
         assert!(d.conns_edited);
     }
@@ -334,8 +438,8 @@ mod dialog_key_tests {
         app.dlg_confirm_add();
         assert!(app.dialog.is_some(), "重复任务拒绝");
         assert_eq!(app.tasks.len(), 1);
-        // 取消按钮（btn 6）→ 直接关闭
-        app.dlg_activate_add(6);
+        // 取消按钮（btn 7）→ 直接关闭
+        app.dlg_activate_add(7);
         assert!(app.dialog.is_none(), "取消按钮关闭对话框");
         app.shutdown().await;
     }
@@ -389,15 +493,15 @@ mod dialog_key_tests {
         let mut app = make_app("dnav");
         app.dialog = Some(add_dlg());
 
-        // 焦点前进/后退与环绕（Add nfocus=7）
+        // 焦点前进/后退与环绕（Add nfocus=8：v1.5 增代理行）
         app.on_dialog_key(KeyCode::Down); // 1
         app.on_dialog_key(KeyCode::Right); // 2
         app.on_dialog_key(KeyCode::Tab); // 3
         app.on_dialog_key(KeyCode::Up); // 2
         app.on_dialog_key(KeyCode::Left); // 1
         app.on_dialog_key(KeyCode::BackTab); // 0
-        app.on_dialog_key(KeyCode::Up); // 环绕到 6
-        assert_eq!(app.dialog.as_ref().unwrap().focus, 6, "Up 环绕到末位");
+        app.on_dialog_key(KeyCode::Up); // 环绕到 7
+        assert_eq!(app.dialog.as_ref().unwrap().focus, 7, "Up 环绕到末位");
 
         // Esc 关闭
         app.on_dialog_key(KeyCode::Esc);
@@ -414,6 +518,7 @@ mod dialog_key_tests {
             4,
             3,
             None,
+            crate::model::config::ProxyChoice::Direct,
             0,
         ));
         app.dialog = Some(del_dlg("del.bin"));

@@ -11,10 +11,8 @@ impl App {
         if self.dialog.is_some() {
             if let MouseEventKind::Down(MouseButton::Left) = m.kind {
                 let kind = self.dialog.as_ref().map(|d| d.kind);
-                let ck_open = self
-                    .dialog
-                    .as_ref()
-                    .is_some_and(|d| d.kind == DialogKind::Add && d.ck_open);
+                let ck_open = self.dialog.as_ref().is_some_and(|d| d.ck_open);
+                let proxy_open = self.dialog.as_ref().is_some_and(|d| d.proxy_open);
                 let hit = |rects: &[(Rect, usize)]| {
                     rects
                         .iter()
@@ -38,14 +36,32 @@ impl App {
                     }
                     return;
                 }
+                // 代理下拉（v1.5/FR-01-86）：点击选项选择；点外关闭
+                if proxy_open {
+                    let proxy_rects = self.dlg_proxy_rects.clone();
+                    if let Some(i) = hit(&proxy_rects) {
+                        let d = self.dialog.as_mut().unwrap();
+                        d.proxy_sel = i;
+                        d.proxy_open = false;
+                    } else if let Some(d) = self.dialog.as_mut() {
+                        d.proxy_open = false;
+                    }
+                    return;
+                }
                 let field_rects = self.dlg_field_rects.clone();
                 let btn_rects = self.dlg_btn_rects.clone();
                 if let Some(i) = hit(&field_rects) {
+                    // 下拉行下标：Add 校验=3 / Modify 校验=1；代理行恒为末二
+                    //（Add 5 / Modify 3）
+                    let ck_i = if kind == Some(DialogKind::Add) { 3 } else { 1 };
+                    let proxy_i = if kind == Some(DialogKind::Add) { 5 } else { 3 };
                     let d = self.dialog.as_mut().unwrap();
                     d.focus = i;
-                    if kind == Some(DialogKind::Add) && i == 3 {
+                    if i == ck_i {
                         d.ck_open = true;
                         d.ck_sel = d.ck_type;
+                    } else if i == proxy_i {
+                        d.proxy_open = true;
                     }
                 } else if let Some(btn) = hit(&btn_rects) {
                     if let Some(d) = self.dialog.as_mut() {
@@ -53,6 +69,7 @@ impl App {
                     }
                     match kind {
                         Some(DialogKind::Add) => self.dlg_activate_add(btn),
+                        Some(DialogKind::Modify) => self.dlg_activate_modify(btn),
                         Some(DialogKind::Delete) => self.dlg_activate_delete(btn),
                         None => {}
                     }

@@ -45,7 +45,9 @@ impl App {
                 self.tasks[idx].state = TaskState::Downloading;
                 self.tasks[idx].has_slot = true;
                 self.tasks[idx].made_progress = false;
-                let spec = Self::make_spec(&self.tasks[idx]);
+                let choice = self.tasks[idx].proxy.clone();
+                let endpoint = self.resolve_endpoint(&choice);
+                let spec = self.make_spec(&self.tasks[idx], endpoint);
                 let id = self.tasks[idx].id;
                 self.windows.remove(&id);
                 let engine = self.engine.clone();
@@ -80,6 +82,25 @@ impl App {
                 self.set_toast(toast);
             }
             TaskState::Failed => {
+                // v1.6/FR-01-92/D25：失败任务按空格 = 暂停（挂起自动重试）——
+                // 清倒计时、转「已暂停（失败）」；错误信息与失败类型保留可见
+                let id = self.tasks[idx].id;
+                self.tasks[idx].state = TaskState::FailedPaused;
+                self.tasks[idx].retry_in = None;
+                self.tasks[idx].has_slot = false;
+                let engine = self.engine.clone();
+                tokio::spawn(async move {
+                    // 引擎侧如有已排队重试任务（retry 到点前），一并取消
+                    engine.send(Cmd::Cancel { id }).await;
+                });
+                let name = self.tasks[idx].name.clone();
+                self.set_toast(format!(
+                    "⏸ 已暂停（失败），不再自动重试；按空格或 R 恢复: {name}"
+                ));
+            }
+            TaskState::FailedPaused => {
+                // 已暂停（失败）→ 恢复 = 重新排队（计数重置、断点续传口径同 R；
+                // 校验失败型仍走重新校验路径）
                 self.requeue_failed(idx, false);
             }
             TaskState::Completed => self.set_toast("该任务已完成，无需操作"),
@@ -87,10 +108,14 @@ impl App {
         }
     }
 
-    /// R：失败任务手动重试（FR-01-34/D10：计数重置 1、断点续传、重新排队）
+    /// R：失败任务手动重试（FR-01-34/D10：计数重置 1、断点续传、重新排队）；
+    /// v1.6/FR-01-92：「已暂停（失败）」同样可 R（= 恢复重新排队）
     pub fn retry(&mut self) {
         let Some(idx) = self.sel_idx() else { return };
-        if self.tasks[idx].state == TaskState::Failed {
+        if matches!(
+            self.tasks[idx].state,
+            TaskState::Failed | TaskState::FailedPaused
+        ) {
             self.requeue_failed(idx, true);
         } else {
             self.set_toast("仅「已失败」的任务可以重试");

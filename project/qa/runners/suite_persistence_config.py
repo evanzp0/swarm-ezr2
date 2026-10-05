@@ -5,7 +5,7 @@
 端到端 UI 层验证：CLI 启动/退出操作 + ~/.ezr 磁盘产物观察 + TUI 状态断言 + 双实例进程操作。
 只经用户可达入口，不进入项目内部 API。
 
-口径注记（QA-PC-04，已裁决）：default_concurrency 非法值原 Gherkin（99→4 回退）与
+口径注记（QA-PC-04，已裁决）：http_concurrency 非法值原 Gherkin（99→4 回退）与
 单元测试（999→64 钳制）矛盾；操作者裁决改规格随实现（钳制 1–64 上限），Gherkin 场景 04
 与规程均已同步为回退/钳制语义，本套件断言与两者一致。
 """
@@ -199,10 +199,10 @@ class PersistenceConfigSuite(Suite):
             except Exception:
                 app.graceful_quit()
                 raise
-            # ④ default_concurrency = 99 → 钳制 64（规格已随实现，Gherkin/规程已同步）
+            # ④ http_concurrency = 99 → 钳制 64（规格已随实现，Gherkin/规程已同步）
             # 口径：详情并发为「活跃连接数」随限速/块完成波动，不等于配置值；
             # 确定性口径 = sidecar 落盘的任务 concurrency（spec 钳制后值）。
-            env.write_config('default_concurrency = 99\nmax_speed = "2 MB/s"\n')
+            env.write_config('http_concurrency = 99\nmax_speed = "2 MB/s"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(app, env, env.fixture.url("ten-m.bin"))

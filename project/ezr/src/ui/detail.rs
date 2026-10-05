@@ -228,8 +228,8 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
             fmt_size(t.total.saturating_sub(t.downloaded))
         )),
     ]));
-    // 失败原因（仅已失败）
-    if t.state == TaskState::Failed {
+    // 失败原因（已失败与已暂停（失败）均保留可见，v1.6/FR-01-92）
+    if matches!(t.state, TaskState::Failed | TaskState::FailedPaused) {
         lines.push(Line::from(vec![
             Span::raw(" "),
             dim_label("失败原因"),

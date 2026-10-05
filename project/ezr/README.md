@@ -4,7 +4,7 @@
 
 界面与交互沿用 `ezr-tui-demo` 定稿基线（布局 / 状态机 / 配色 / 快捷键 / 对话框 /
 中文文案），下载内核为真实实现：多并发分块（AIR2）、断点续传（sidecar 元数据）、
-自动重试与指数退避、完整性校验（7 种算法）、全局限速、HTTP(S) 代理、会话持久化
+自动重试与指数退避、完整性校验（7 种算法）、全局限速、命名代理（http/https/socks5，任务级）、会话持久化
 与崩溃恢复。
 
 ## 功能特性（01）
@@ -67,7 +67,9 @@ md5/sha1/sha224/sha256/sha384/sha512/adler32，大小写不敏感；位数不符
 | 键 | 功能 | 键 | 功能 |
 |---|---|---|---|
 | `A` | 添加任务 | `Space` | 暂停 / 继续（等待中 = 退出队列） |
-| `R` | 重试失败任务（断点续传 / 校验失败 = 重新校验） | `D` | 删除任务（三选） |
+| `M` | 修改任务（并发/校验/代理，确定后立即生效，v1.5） | `D` | 删除任务（三选） |
+| `Space`（失败任务） | 暂停失败任务（挂起自动重试，v1.6；再按恢复） | | |
+| `R` | 重试失败任务（断点续传 / 校验失败 = 重新校验） | |
 | `U` / `J` | 上移 / 下移（调整排队优先级） | `C` | 清理已完成 |
 | `G` | 显示/隐藏速度图 | `Tab` | 切换页签（正在下载 / 已完成） |
 | `↑↓ PgUp PgDn Home End` | 选择 | `Q` / `Esc` / `Ctrl+C` | 退出 |
@@ -85,8 +87,29 @@ download_slots = 5                 # 全局下载槽位（默认 5）
 max_speed = "2 MB/s"               # 全局限速（0 = 不限）
 max_retries = 5                    # 自动重试上限
 auto_retry = true                  # 是否自动重试
-proxy = "http://127.0.0.1:8118"    # HTTP(S) 代理（仅配置文件，不读环境变量）
-default_concurrency = 4            # 对话框留空时的默认并发
+http_concurrency = 4               # 对话框留空时的默认并发（v1.5 自 default_concurrency 改名）
+
+# 命名代理（v1.5/FR-01-86；v1.9 字段重构 FR-01-86/89：条目字段 = name/type/ip/port/
+# username/password，url 键退役按未知键忽略；type 必填三值 http/https/socks5 且为唯一
+# 事实来源——内部代理 url 由 type+ip+port 构造，https = 代理自身走 TLS，IPv6 字面量
+# ip 自动加方括号；v1.8/FR-01-93：凭证按类型分级——socks5 型必填、http 与 https 型
+# 同级可选，凭证不写入界面与日志）：
+# 可配置多个；添加/修改对话框按名选用（任务级）；三类型均同时服务 http 与 https 下载
+[[proxies]]
+name = "office"
+type = "http"                      # 代理类型：http / https / socks5（必填；缺失或未知 → 条目作废 + 警告）
+ip = "proxy.corp"                  # 代理地址：IP 字面量或主机名（非空；缺失或空白 → 作废 + 警告）
+port = 8080                        # 端口：1..=65535 整数（缺失、非整数或越界 → 作废 + 警告）
+username = ""                      # 可选：代理认证用户名（成对填写 = basic auth；都缺省 = 匿名代理）
+password = ""                      # 可选：代理认证密码（不写入界面与日志；只填其一 → 条目作废 + 警告）
+
+[[proxies]]
+name = "home-socks5"
+type = "socks5"
+ip = "127.0.0.1"
+port = 1080
+username = "ezr"                   # 必填：socks5 型凭证（经 RFC 1929 user/pass 握手）
+password = "secret"                # 必填：socks5 型缺任一凭证 → 条目作废 + 警告
 ```
 
 ## 自动化验证
@@ -95,7 +118,7 @@ default_concurrency = 4            # 对话框留空时的默认并发
 断点续传/一致性失效/状态码分类）：
 
 ```sh
-cargo test                        # 全部测试（1105 个：单测 + 引擎端到端冒烟 + 属性测试）
+cargo test                        # 全部测试（1305：单测 + 引擎端到端冒烟 + 属性测试）
 cargo clippy --all-targets        # 零警告门槛
 bash scripts/arch_check.sh        # 架构边界检查（10 规则）
 ```

@@ -42,9 +42,14 @@ impl App {
         })
     }
 
-    /// 构建任务启动规格（Start 前置：读 sidecar 断点、磁盘预检在获槽时）
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn make_spec(t: &Task) -> crate::engine::TaskSpec {
+    /// 构建任务启动规格（Start 前置：读 sidecar 断点、磁盘预检在获槽时）。
+    /// 任务级代理端点由调用方先经 [`App::resolve_endpoint`] 解析传入
+    /// （v1.5/FR-01-86/D18：三态选择 → 端点；失效引用 → 直连 + toast 一次）
+    pub(super) fn make_spec(
+        &self,
+        t: &Task,
+        proxy_endpoint: Option<crate::model::ProxyEndpoint>,
+    ) -> crate::engine::TaskSpec {
         let sidecar = Sidecar::load(&t.sidecar_path());
         let sc_path = (sidecar.is_some()).then(|| t.sidecar_path());
         crate::engine::TaskSpec {
@@ -66,7 +71,23 @@ impl App {
             // （FR-01-22 违例），故必须钉住。
             keep_name: t.final_url.is_some(),
             added_at: t.added_at,
+            proxy_endpoint,
         }
+    }
+
+    /// 任务级代理选择 → 端点（v1.5/FR-01-86/D18）。命名引用失效 → 直连 +
+    /// toast 一次（Probed 前发出，用户可见；Global 未配置全局 = 直连不提示）
+    pub(super) fn resolve_endpoint(
+        &mut self,
+        choice: &crate::model::ProxyChoice,
+    ) -> Option<crate::model::ProxyEndpoint> {
+        let (endpoint, missing) = self.cfg.resolve_proxy(choice);
+        if missing {
+            if let crate::model::ProxyChoice::Named(name) = choice {
+                self.set_toast(format!("⚠ 引用的代理「{name}」不存在，已按直连"));
+            }
+        }
+        endpoint
     }
 
     /// 磁盘空间预检（FR-01-44）：可用空间 < 剩余需下载量 → 失败停等
@@ -135,7 +156,9 @@ impl App {
                 continue;
             }
             self.tasks[idx].probed = false;
-            let spec = Self::make_spec(&self.tasks[idx]);
+            let choice = self.tasks[idx].proxy.clone();
+            let endpoint = self.resolve_endpoint(&choice);
+            let spec = self.make_spec(&self.tasks[idx], endpoint);
             self.engine.send(Cmd::Start { spec }).await;
         }
 
@@ -264,7 +287,9 @@ impl App {
         let Some(idx) = self.tasks.iter().position(|t| t.id == id) else {
             return;
         };
-        let spec = Self::make_spec(&self.tasks[idx]);
+        let choice = self.tasks[idx].proxy.clone();
+        let endpoint = self.resolve_endpoint(&choice);
+        let spec = self.make_spec(&self.tasks[idx], endpoint);
         self.engine.send(Cmd::Start { spec }).await;
         if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
             t.made_progress = false;
@@ -523,6 +548,12 @@ impl App {
         // 重试决策（FR-01-41/42/43）：连续性规则 + 退避/Retry-After + 分类，
         // 策略唯一来源在 model::retry（DRY）
         let (auto_retry, max_retries) = (self.cfg.auto_retry, t.max_retries);
+        // v1.6/FR-01-92：用户已手动挂起（FailedPaused）→ 迟到失败事件仅更新
+        // 错误信息，不得转回失败态或恢复自动重试（否则挂起语义被竞态覆盖）
+        if t.state == TaskState::FailedPaused {
+            t.error = Some(reason.clone());
+            return;
+        }
         let (new_retries, decision) = crate::model::retry::decide(
             kind,
             made_progress,

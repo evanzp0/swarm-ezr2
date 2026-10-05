@@ -429,7 +429,7 @@ proptest! {
     /// 「垃圾输入」面，不进逐键透传断言）
     #[test]
     fn prop_config_from_toml_domain_invariants(
-        key in prop::sample::select(&["block_size_http", "download_slots", "default_concurrency", "max_retries"]),
+        key in prop::sample::select(&["block_size_http", "download_slots", "http_concurrency", "max_retries"]),
         v in 0u64..(1u64 << 32),
         garbage in prop::bool::ANY,
     ) {
@@ -442,7 +442,7 @@ proptest! {
         let c = Config::from_toml(&text);
         prop_assert!(c.block_size_http > 0, "块大小恒正");
         prop_assert!(c.download_slots > 0, "槽位恒正");
-        prop_assert!((1..=64).contains(&c.default_concurrency), "并发钳制 [1,64]");
+        prop_assert!((1..=64).contains(&c.http_concurrency), "并发钳制 [1,64]");
         prop_assert!(c.max_retries >= 1, "重试上限恒 ≥ 1");
         if garbage {
             prop_assert_eq!(c, Config::default(), "垃圾 TOML 全默认");
@@ -463,7 +463,7 @@ proptest! {
             }
             _ => {
                 let clamped = (v as usize).clamp(1, 64);
-                prop_assert_eq!(c.default_concurrency, clamped, "并发 clamp 语义");
+                prop_assert_eq!(c.http_concurrency, clamped, "并发 clamp 语义");
             }
         }
     }

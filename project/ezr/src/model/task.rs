@@ -1,5 +1,6 @@
 //! task — 任务实体与单连接状态（模型层核心类型）
 
+use super::config::ProxyChoice;
 use super::timefmt::fmt_created;
 use super::{chunk, namegen, Checksum, FailKind, Protocol, TaskState};
 
@@ -58,6 +59,8 @@ pub struct Task {
     pub block_size: u64,
     /// 并发数（1–64）
     pub concurrency: usize,
+    /// 任务级代理选择（v1.5/FR-01-86，D18 三态；旧注册表缺省 = Global）
+    pub proxy: ProxyChoice,
     /// 已自动重试次数（连续失败时累加；有进展重置为 1；R 手动重试重置为 1）
     pub retries: u32,
     /// 自动重试上限（配置 `max_retries`，默认 5）
@@ -120,6 +123,7 @@ impl Task {
         concurrency: usize,
         max_retries: u32,
         checksum: Option<Checksum>,
+        proxy: ProxyChoice,
         added_at: u64,
     ) -> Task {
         Task {
@@ -139,6 +143,7 @@ impl Task {
             chunk_done: 0,
             block_size,
             concurrency,
+            proxy,
             retries: 0,
             max_retries,
             made_progress: false,

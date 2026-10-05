@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""suite_throttle_proxy.py — QA 套件 · 01-throttle-proxy 全局限速与代理（期号 01）。
+"""suite_throttle_proxy.py — QA 套件 · 01-throttle-proxy 全局限速（期号 01）。
 
-对应规程：project/qa/01-throttle-proxy-qa.md（11 用例）。
-端到端 UI 层验证：TUI 速度读数断言 + 配置文件/CLI 参数 + 环境变量（仅负向验证）
-+ fixture 代理日志。速度断言口径：门控下稳定窗采样，十进制 1 MB=1000 KB。
+对应规程：project/qa/01-throttle-proxy-qa.md（7 用例）。
+端到端 UI 层验证：TUI 速度读数断言 + 配置文件/CLI 参数。
+速度断言口径：门控下稳定窗采样，十进制 1 MB=1000 KB。
+v1.6：原 QA-TP-08~11 代理用例随旧全局 proxy 键退役删除（FR-01-90），
+代理语义由 02-named-proxy / QA-NP 套件承载。
 """
 
 from __future__ import annotations
@@ -126,7 +128,7 @@ class ThrottleProxySuite(Suite):
     # -- 用例 -----------------------------------------------------------------
 
     def run(self) -> list[CaseResult]:
-        for i in range(1, 12):
+        for i in range(1, 8):
             getattr(self, f"_case_{i:02d}")()
         return self.results
 
@@ -270,128 +272,6 @@ class ThrottleProxySuite(Suite):
                 assert_in("全局速度", text, "速度图区块不变")
             finally:
                 app.graceful_quit()
-
-    def _case_08(self):
-        """QA-TP-08 配置 proxy-a + 环境变量 proxy-b：请求经 proxy-a（AC-8）。"""
-        @self.case("QA-TP-08")
-        def go(env: Env):
-            pa = self._start_proxy(env, "proxy-a", 41394)
-            pb = self._start_proxy(env, "proxy-b", 41395)
-            try:
-                env.write_config(f'proxy = "http://127.0.0.1:{pa["port"]}"\n')
-                app = EzrApp(env.home, save_dir=env.save_dir, env_extra={
-                    "HTTP_PROXY": f"http://127.0.0.1:{pb['port']}",
-                    "HTTPS_PROXY": f"http://127.0.0.1:{pb['port']}",
-                    "ALL_PROXY": f"http://127.0.0.1:{pb['port']}",
-                })
-                try:
-                    add_task_via_dialog(
-                        app, env, env.fixture.url("small.bin?swapsize=2048"))
-                    assert app.wait_for("（无校验）", 30), "配置代理路径应完成下载"
-                    assert os.path.exists(
-                        os.path.join(env.save_dir, "small.bin")), "文件应落盘"
-                    reqs_a = self._proxy_reqs(pa)
-                    assert any("small.bin" in r["target"] for r in reqs_a), \
-                        f"请求应经配置的 proxy-a: {reqs_a[:1]}"
-                    reqs_b = self._proxy_reqs(pb)
-                    assert not reqs_b, \
-                        f"环境变量代理 proxy-b 不应被读取（FR-01-61）: {reqs_b[:1]}"
-                finally:
-                    app.graceful_quit()
-            finally:
-                self._stop_proxy(pa)
-                self._stop_proxy(pb)
-
-    def _case_09(self):
-        """QA-TP-09 仅设 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY：均直连（不读环境变量）。"""
-        @self.case("QA-TP-09")
-        def go(env: Env):
-            px = self._start_proxy(env, "proxy-env", 41392)
-            try:
-                env_vars = {
-                    "HTTP_PROXY": f"http://127.0.0.1:{px['port']}",
-                    "HTTPS_PROXY": f"http://127.0.0.1:{px['port']}",
-                    "ALL_PROXY": f"http://127.0.0.1:{px['port']}",
-                }
-                for seq, (key, val) in enumerate(env_vars.items()):
-                    app = EzrApp(env.home, save_dir=env.save_dir,
-                                 env_extra={key: val})
-                    try:
-                        add_task_via_dialog(
-                            app, env,
-                            env.fixture.url(f"small.bin?swapsize={1024 + seq}"))
-                        assert app.wait_for("（无校验）", 30), \
-                            f"{key} 设定下应直连完成"
-                        reqs = self._proxy_reqs(px)
-                        assert not reqs, \
-                            f"{key} 不应被读取（代理日志空）: {reqs[:1]}"
-                        app.graceful_quit()
-                    except Exception:
-                        app.graceful_quit()
-                        raise
-            finally:
-                self._stop_proxy(px)
-
-    def _case_10(self):
-        """QA-TP-10 配置代理下载 https URL：CONNECT 隧道记录；下载完整（AC-8）。"""
-        @self.case("QA-TP-10")
-        def go(env: Env):
-            from suite_download_engine import _HttpsServer
-            px = self._start_proxy(env, "proxy-tls", 41396)
-            try:
-                env.write_config(f'proxy = "http://127.0.0.1:{px["port"]}"\n')
-                with _HttpsServer(41397, trusted=True) as srv:
-                    # 受信 CA 经 SSL_CERT_FILE 注入（同 QA-DE-12 口径）
-                    app = EzrApp(env.home, save_dir=env.save_dir,
-                                 env_extra={"SSL_CERT_FILE": srv.ca_file})
-                    try:
-                        add_task_via_dialog(
-                            app, env, "https://127.0.0.1:41397/three-m.bin")
-                        target = os.path.join(env.save_dir, "three-m.bin")
-                        wait_file_size(
-                            target, QA_FILE_SIZES["three-m.bin"], 60, app=app)
-                        assert_file_content(
-                            target, QA_FILE_SIZES["three-m.bin"])
-                        reqs = self._proxy_reqs(px)
-                        assert any(
-                            r["kind"] == "connect" and "41397" in r["target"]
-                            for r in reqs), f"应记录 CONNECT 隧道: {reqs[:1]}"
-                    finally:
-                        app.graceful_quit()
-            finally:
-                self._stop_proxy(px)
-
-    def _case_11(self):
-        """QA-TP-11 proxy 含凭据 qa:s3cret-pw@：界面/toast/日志无密码泄露。"""
-        @self.case("QA-TP-11")
-        def go(env: Env):
-            px = self._start_proxy(env, "proxy-cred", 41398)
-            try:
-                env.write_config(
-                    f'proxy = "http://qa:s3cret-pw@127.0.0.1:{px["port"]}"\n')
-                app = EzrApp(env.home, save_dir=env.save_dir)
-                try:
-                    add_task_via_dialog(
-                        app, env, env.fixture.url("small.bin?swapsize=4096"))
-                    assert app.wait_for("（无校验）", 30), "带凭据代理应完成下载"
-                    assert_not_in("s3cret-pw", app.text(), "界面/toast 无密码泄露")
-                    # 磁盘产物（注册表/边车）不含凭据（config.toml 为用户自写，除外）
-                    for path, what in (
-                            (os.path.join(env.home, ".ezr", "state",
-                                          "registry.json"), "注册表"),
-                            (os.path.join(env.save_dir, "small.bin.ezr"), "边车")):
-                        raw = read_file(path)
-                        if raw is not None:
-                            assert "s3cret-pw" not in raw.decode("utf-8", "replace"), \
-                                f"{what} 不应含代理密码"
-                    reqs = self._proxy_reqs(px)
-                    assert reqs, "请求应经带凭据代理（代理日志非空）"
-                    assert all("s3cret-pw" not in r["target"] for r in reqs), \
-                        "代理日志目标不应含凭据"
-                finally:
-                    app.graceful_quit()
-            finally:
-                self._stop_proxy(px)
 
 if __name__ == "__main__":
     suite = ThrottleProxySuite()

@@ -5,11 +5,47 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::config::ProxyChoice;
 use super::sidecar::ChecksumCompat;
 use super::{Checksum, FailKind, Protocol, Task, TaskState};
 
 /// 注册表文件格式版本
 pub const REGISTRY_VERSION: u32 = 1;
+
+/// 任务级代理选择的注册表持久化形态（v1.5/FR-01-86；v1.6 两态）。
+/// 字符串编码：`direct` / `named:<name>`（写入）；读取兼容旧 `global` 值映射
+/// `direct`（FR-01-90，零迁移）；反序列化遇未知形态一律回退 `direct`
+/// （容错口径同注册表其余字段）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProxyChoiceCompat(pub String);
+
+impl Default for ProxyChoiceCompat {
+    fn default() -> Self {
+        Self("direct".to_string())
+    }
+}
+
+impl From<&ProxyChoice> for ProxyChoiceCompat {
+    fn from(c: &ProxyChoice) -> Self {
+        match c {
+            ProxyChoice::Direct => Self("direct".to_string()),
+            ProxyChoice::Named(n) => Self(format!("named:{n}")),
+        }
+    }
+}
+
+impl From<ProxyChoiceCompat> for ProxyChoice {
+    fn from(c: ProxyChoiceCompat) -> Self {
+        match c.0.as_str() {
+            // v1.6/FR-01-90：旧 "global" 值（全局键已退役）映射直连（零迁移）
+            "direct" | "global" => ProxyChoice::Direct,
+            s => s
+                .strip_prefix("named:")
+                .map(|n| ProxyChoice::Named(n.to_string()))
+                .unwrap_or(ProxyChoice::Direct),
+        }
+    }
+}
 
 /// 注册表（JSON 持久化；原子写同 sidecar）
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -59,6 +95,10 @@ pub struct TaskSnapshot {
     pub invalidation_streak: u32,
     /// 校验期望
     pub checksum: Option<ChecksumCompat>,
+    /// 任务级代理选择（v1.5/FR-01-86；旧注册表缺该字段 → 反序列化默认 = Global，
+    /// v1.6 两态（direct/named:<name>；旧 "global" 值加载映射 direct，FR-01-90））
+    #[serde(default)]
+    pub proxy: ProxyChoiceCompat,
     /// 校验结果
     pub verify_ok: Option<bool>,
     /// ETag
@@ -93,6 +133,7 @@ impl From<&Task> for TaskSnapshot {
             max_retries: t.max_retries,
             invalidation_streak: t.invalidation_streak,
             checksum: t.checksum.as_ref().map(ChecksumCompat::from),
+            proxy: ProxyChoiceCompat::from(&t.proxy),
             verify_ok: t.verify_ok,
             etag: t.etag.clone(),
             last_modified: t.last_modified.clone(),
@@ -133,6 +174,7 @@ impl From<&TaskSnapshot> for Task {
                 .checksum
                 .as_ref()
                 .and_then(|c| TryInto::<Checksum>::try_into(c).ok()),
+            proxy: s.proxy.clone().into(),
             verify_ok: s.verify_ok,
             etag: s.etag.clone(),
             last_modified: s.last_modified.clone(),
@@ -247,6 +289,49 @@ mod tests {
         assert_eq!(back[0].name, t.name);
         assert_eq!(back[0].state, TaskState::Completed);
         assert_eq!(back[0].checksum.as_ref().map(|c| c.algo), Some("MD5"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// v1.6/FR-01-92：FailedPaused 状态往返保留（重启后仍挂起，不被重排）
+    #[test]
+    fn failed_paused_state_roundtrip_preserved() {
+        let mut t = sample_task();
+        t.state = TaskState::FailedPaused;
+        t.retries = 3;
+        t.error = Some("连接被重置".to_string());
+        t.retry_in = None;
+        let reg = Registry::from_tasks(&[t], 2);
+        let back = reg.restore_tasks();
+        assert_eq!(back[0].state, TaskState::FailedPaused, "挂起态跨会话保留");
+        assert_eq!(back[0].error.as_deref(), Some("连接被重置"));
+        assert_eq!(back[0].retries, 3);
+    }
+
+    /// v1.6/FR-01-90：旧注册表 "global" 代理值加载映射直连（零迁移）。
+    /// 构造方式：现行快照序列化文本中把 proxy 值替换回旧 "global"（模拟 v1.5
+    /// 产物注册表，字段集随版本演进不漂移）
+    #[test]
+    fn legacy_global_proxy_value_maps_to_direct() {
+        let mut t = sample_task();
+        t.proxy = ProxyChoice::Direct;
+        let reg = Registry::from_tasks(&[t], 2);
+        let raw = serde_json::to_string(&reg).unwrap();
+        assert!(
+            raw.contains("\"proxy\":\"direct\""),
+            "现行编码为 direct: {raw}"
+        );
+        let legacy = raw.replace("\"proxy\":\"direct\"", "\"proxy\":\"global\"");
+        let dir = std::env::temp_dir().join(format!("ezr-reg-global-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("registry.json");
+        std::fs::write(&p, legacy).unwrap();
+        let loaded = Registry::load(p.to_str().unwrap()).unwrap();
+        let back = loaded.restore_tasks();
+        assert_eq!(
+            back[0].proxy,
+            ProxyChoice::Direct,
+            "旧 global 值 → 直连（FR-01-90）"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

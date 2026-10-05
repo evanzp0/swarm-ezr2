@@ -140,6 +140,7 @@ fn remaining_tail(t: &Task, downloading: bool) -> Vec<Span<'static>> {
 fn stat_row(t: &Task, queue_pos: usize) -> Vec<Span<'static>> {
     match t.state {
         TaskState::Failed => stat_failed(t),
+        TaskState::FailedPaused => stat_failed_paused(t),
         TaskState::Queued => stat_queued(t, queue_pos),
         TaskState::Completed => stat_completed(t),
         TaskState::Seeding => stat_seeding(t),
@@ -179,6 +180,25 @@ fn stat_failed(t: &Task) -> Vec<Span<'static>> {
         Style::default().fg(RED),
     ));
     l3
+}
+
+/// 已暂停（失败）（v1.6/FR-01-92/D25）：重试计数 · 已暂停（倒计时清除，
+/// 不再自动重试）· 已下载/需要下载；错误信息保留于详情页失败原因
+fn stat_failed_paused(t: &Task) -> Vec<Span<'static>> {
+    vec![
+        Span::raw("  "),
+        Span::styled(
+            format!("重试 {}/{}", t.retries, t.max_retries),
+            Style::default().fg(RED),
+        ),
+        Span::styled(" · ", Style::default().fg(RED)),
+        Span::styled("已暂停（不再自动重试）", Style::default().fg(RED)),
+        Span::styled(" · ", Style::default().fg(RED)),
+        Span::styled(
+            format!("{}/{}", fmt_size(t.downloaded), fmt_size(t.total)),
+            Style::default().fg(RED),
+        ),
+    ]
 }
 
 /// 等待中：槽位排队信息 + 大小（未探测显示未知）
@@ -310,6 +330,7 @@ mod tests {
             4,
             3,
             None,
+            crate::model::config::ProxyChoice::Direct,
             0,
         );
         t.state = state;
@@ -350,6 +371,20 @@ mod tests {
         let t = mk(TaskState::Downloading, false);
         let row = progress_row(&t, 60, state_color(t.state), '⠋');
         assert!(!text_of(&row).contains("校验"));
+    }
+
+    /// v1.6/FR-01-92：已暂停（失败）行——重试计数 · 已暂停（不再自动重试）·
+    /// 大小；无倒计时片段（倒计时已清除）
+    #[test]
+    fn stat_failed_paused_shows_suspended_without_countdown() {
+        let mut x = mk(TaskState::FailedPaused, false);
+        x.retries = 2;
+        x.retry_in = Some(3.0); // 挂起路径会清；此处验证渲染不读倒计时
+        let s = text_of(&stat_failed_paused(&x));
+        assert!(s.contains("重试 2/3"), "{s}");
+        assert!(s.contains("已暂停"), "{s}");
+        assert!(!s.contains("后重试"), "不显示倒计时: {s}");
+        assert!(s.contains("/"), "保留已下载/需要下载大小");
     }
 
     #[test]

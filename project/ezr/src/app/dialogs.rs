@@ -8,10 +8,98 @@ use crate::model::{checksum, namegen, unix_now, Checksum, Protocol, Task, TaskSt
 impl App {
     pub(super) fn dlg_activate_add(&mut self, btn: usize) {
         match btn {
-            5 => self.dlg_confirm_add(),
-            6 => self.dialog = None,
+            6 => self.dlg_confirm_add(),
+            7 => self.dialog = None,
             _ => {}
         }
+    }
+
+    /// 修改任务按钮激活（v1.5/FR-01-87：4=确认 5=取消）
+    pub(super) fn dlg_activate_modify(&mut self, btn: usize) {
+        match btn {
+            4 => self.dlg_confirm_modify(),
+            5 => self.dialog = None,
+            _ => {}
+        }
+    }
+
+    /// 确认修改（v1.5/FR-01-87，D19/D20）：并发（空=保持，非法钳制 1–64）、
+    /// 校验（空=清除，非法聚焦提示不生效）、代理（下拉选择）；立即生效
+    /// = 引擎 Reconfigure（运行中）+ 任务字段更新 + 注册表落盘 + toast
+    pub(super) fn dlg_confirm_modify(&mut self) {
+        let Some(d) = self.dialog.as_ref() else {
+            return;
+        };
+        let Some(id) = d.task_id else {
+            return;
+        };
+        let Some(idx) = self.tasks.iter().position(|t| t.id == id) else {
+            self.dialog = None;
+            return;
+        };
+        let conns_raw = d.conns.trim().to_string();
+        let ck_raw = d.ck_value.trim().to_string();
+        let ck_type = d.ck_type;
+        let proxy_sel = d.proxy_sel.min(self.proxy_options.len().saturating_sub(1));
+        let proxy = self.proxy_options[proxy_sel].clone();
+
+        // 并发：空 = 保持当前；非空按 1–64 钳制（口径同 QA-PC-04 裁决）
+        let concurrency = if conns_raw.is_empty() {
+            self.tasks[idx].concurrency
+        } else {
+            conns_raw.parse::<usize>().unwrap_or(0).clamp(1, 64)
+        };
+
+        // 校验：空 = 清除（03-modify-task-05）；非空同添加对话框合法性口径，
+        // 非法 → 不生效 + 聚焦校验码字段（03-modify-task-06）
+        let checksum = if ck_raw.is_empty() {
+            None
+        } else {
+            match checksum::validate_value(ck_type, &ck_raw) {
+                Ok(v) => Some(Checksum {
+                    algo: CHECKSUM_ALGOS[ck_type].0,
+                    value: v,
+                }),
+                Err(e) => {
+                    let algo = CHECKSUM_ALGOS[ck_type].0;
+                    self.set_toast(format!("⚠ {algo} {e}"));
+                    if let Some(d) = self.dialog.as_mut() {
+                        d.focus = 2;
+                    }
+                    return;
+                }
+            }
+        };
+
+        let (endpoint, missing) = self.cfg.resolve_proxy(&proxy);
+        if missing {
+            if let crate::model::ProxyChoice::Named(name) = &proxy {
+                self.set_toast(format!("⚠ 引用的代理「{name}」不存在，已按直连"));
+            }
+        }
+
+        // 应用任务字段（DownloadDone 前更新 ⇒ 完成校验用最新值，D19）
+        {
+            let t = &mut self.tasks[idx];
+            t.concurrency = concurrency;
+            t.checksum = checksum;
+            t.proxy = proxy;
+        }
+        self.dialog = None;
+        // 运行中任务热调（未知/已停句柄引擎侧静默忽略；排队/暂停任务在
+        // 下次 Start 经 make_spec 按新值生效）
+        let engine = self.engine.clone();
+        tokio::spawn(async move {
+            engine
+                .send(Cmd::Reconfigure {
+                    id,
+                    concurrency,
+                    endpoint,
+                })
+                .await;
+        });
+        self.set_toast("✓ 任务参数已更新，立即生效");
+        self.save_registry();
     }
 
     /// 确认添加（FR-01-01/03/04/05/26：URL 校验、目录默认、并发钳制、校验码校验、断点接续）
@@ -102,12 +190,13 @@ impl App {
         // （Gherkin 01-add-task-06：留空/0/65/abc → 均回退默认 4，非钳制）
         let conns = match conns_raw.parse::<usize>() {
             Ok(v) if (1..=64).contains(&v) => v,
-            _ => self.cfg.default_concurrency,
+            _ => self.cfg.http_concurrency,
         };
         self.next_id += 1;
         // 校验值来源②（FR-01-50/D14）：未显式提供时查保存目录伴随文件
         let checksum = Self::resolve_checksum(&dir, &name, checksum);
         let ts = unix_now();
+        let proxy = self.proxy_options[d.proxy_sel.min(self.proxy_options.len() - 1)].clone();
         let t = Task::new_queued(
             id,
             name.clone(),
@@ -118,6 +207,7 @@ impl App {
             conns,
             self.cfg.max_retries,
             checksum,
+            proxy,
             ts,
         );
         self.tasks.push(t);
@@ -214,8 +304,64 @@ impl App {
             ck_value: String::new(),
             ck_open: false,
             ck_sel: 3,
+            proxy_sel: self.default_proxy_sel,
+            proxy_open: false,
             focus: 0,
             task_name: String::new(),
+            task_id: None,
+        });
+    }
+
+    /// 打开修改任务对话框（v1.5/FR-01-87）：四字段预填当前值；
+    /// 已完成任务拒绝（D20，toast 提示）；无选中任务 toast 提示
+    pub fn open_modify_dialog(&mut self) {
+        // 先取选中任务的 owned 快照（借用期只读任务表；选项表追加在快照后）
+        let Some(t) = self.sel_task() else {
+            self.set_toast("没有选中的任务");
+            return;
+        };
+        if t.state == TaskState::Completed {
+            self.set_toast("⚠ 已完成任务不可修改");
+            return;
+        }
+        let (id, name, concurrency, checksum, proxy) = (
+            t.id,
+            t.name.clone(),
+            t.concurrency,
+            t.checksum.clone(),
+            t.proxy.clone(),
+        );
+        let ck_type = CHECKSUM_ALGOS
+            .iter()
+            .position(|(n, _, _)| checksum.as_ref().is_some_and(|c| c.algo == *n))
+            .unwrap_or(3);
+        // 选项表未收录时追加兜底项保证回显一致（命名代理被从配置删除的
+        // 存量任务；正常流都在表内）
+        let proxy_sel = match self.proxy_options.iter().position(|o| o == &proxy) {
+            Some(i) => i,
+            None => {
+                self.proxy_options.push(proxy.clone());
+                if let crate::model::ProxyChoice::Named(n) = &proxy {
+                    self.proxy_labels.push(n.clone());
+                }
+                self.proxy_options.len() - 1
+            }
+        };
+        self.dialog = Some(Dialog {
+            kind: DialogKind::Modify,
+            url: String::new(),
+            dir: String::new(),
+            conns: concurrency.to_string(),
+            conns_edited: false,
+            ck_type,
+            ck_value: checksum.map(|c| c.value).unwrap_or_default(),
+            ck_open: false,
+            ck_sel: ck_type,
+            proxy_sel,
+            proxy_open: false,
+            focus: 0,
+            task_name: name,
+            task_id: Some(id),
         });
     }
 
@@ -235,8 +381,11 @@ impl App {
             ck_value: String::new(),
             ck_open: false,
             ck_sel: 0,
+            proxy_sel: 0,
+            proxy_open: false,
             focus: 0,
             task_name: t.name.clone(),
+            task_id: None,
         });
     }
 
@@ -281,12 +430,154 @@ mod add_dialog_flow_tests {
         assert_eq!(t.name, "f.bin");
         assert_eq!(t.save_dir, dir.to_string_lossy());
         assert_eq!(t.state, TaskState::Queued);
-        assert_eq!(t.concurrency, crate::model::config::DEFAULT_CONCURRENCY);
+        assert_eq!(
+            t.concurrency,
+            crate::model::config::DEFAULT_HTTP_CONCURRENCY
+        );
         assert!(app
             .toast
             .as_deref()
             .is_some_and(|m| m.contains("已添加任务")));
         app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// v1.6/FR-01-86/90（D18 两态）：添加对话框代理下拉 = 直连 + 命名条目
+    ///（含类型标注，v1.9 三值 http/https/socks5），默认选中恒直连；确认后写入任务
+    #[tokio::test]
+    async fn add_dialog_proxy_options_two_states() {
+        let dir = std::env::temp_dir().join(format!("ezr-dlg-pdef-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let reg = dir.join("registry.json").to_string_lossy().to_string();
+        let mut cfg = Config::from_toml(
+            // v1.9/FR-01-86/89：夹具按 ip/port/type 字段形态（url 键退役）；
+            // v1.8/FR-01-93：socks5 型凭证必填，夹具补齐 username/password 保持
+            // 「合法条目」意图（a/b/c 显示为带类型标注的命名代理）
+            "[[proxies]]\nname = \"a\"\ntype = \"socks5\"\nip = \"a\"\nport = 2\nusername = \"u\"\npassword = \"p\"\n[[proxies]]\nname = \"b\"\ntype = \"http\"\nip = \"b\"\nport = 3\n[[proxies]]\nname = \"c\"\ntype = \"https\"\nip = \"c\"\nport = 4\n",
+        );
+        cfg.warnings.clear();
+        let mut app = App::new(cfg, reg);
+        assert_eq!(
+            app.proxy_options.len(),
+            4,
+            "直连 + 命名 a + 命名 b + 命名 c"
+        );
+        assert_eq!(app.proxy_labels[0], "直连");
+        assert_eq!(
+            app.proxy_labels[1], "a（socks5）",
+            "命名条目显示名带类型标注（FR-01-89）"
+        );
+        assert_eq!(app.proxy_labels[2], "b（http）");
+        assert_eq!(
+            app.proxy_labels[3], "c（https）",
+            "https 类型标注（v1.9 三值）"
+        );
+        app.open_add_dialog();
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.proxy_sel, 0, "默认选中恒「直连」（v1.6 两态）");
+        app.dialog.as_mut().unwrap().url = "http://example.com/p.bin".to_string();
+        app.dlg_confirm_add();
+        assert_eq!(app.tasks.len(), 1);
+        assert_eq!(
+            app.tasks[0].proxy,
+            crate::model::ProxyChoice::Direct,
+            "默认直连写入任务"
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+
+        // 空配置 → 下拉仅「直连」
+        let reg2 = dir.join("registry2.json").to_string_lossy().to_string();
+        let mut app2 = App::new(Config::default(), reg2);
+        app2.open_add_dialog();
+        assert_eq!(app2.proxy_options.len(), 1, "仅直连");
+        assert_eq!(app2.dialog.as_ref().unwrap().proxy_sel, 0);
+        app2.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// v1.5/FR-01-87：m 修改对话框——预填当前值、确定后立即生效（并发/
+    /// 校验/代理写入任务）+ toast + 注册表落盘；已完成任务拒绝（D20）
+    #[tokio::test]
+    async fn modify_dialog_prefills_applies_and_rejects_completed() {
+        let dir = std::env::temp_dir().join(format!("ezr-dlg-mod-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let reg = dir.join("registry.json").to_string_lossy().to_string();
+        let mut cfg = Config::from_toml(
+            // v1.9/FR-01-86/89：夹具按 ip/port/type 字段形态（url 键退役）
+            "[[proxies]]\nname = \"a\"\ntype = \"http\"\nip = \"a\"\nport = 2\n[[proxies]]\nname = \"b\"\ntype = \"http\"\nip = \"b\"\nport = 3\n",
+        );
+        cfg.warnings.clear();
+        let mut app = App::new(cfg, reg);
+        app.tasks.push(crate::model::Task::new_queued(
+            1,
+            "m.bin".to_string(),
+            Protocol::Http,
+            "http://example.com/m.bin".to_string(),
+            "/tmp".to_string(),
+            1024 * 1024,
+            2,
+            5,
+            Some(Checksum {
+                algo: "SHA-256",
+                value: "a".repeat(64),
+            }),
+            crate::model::ProxyChoice::Direct,
+            0,
+        ));
+        app.selected = 0;
+        // 按 m 打开：预填并发 2 / SHA-256 / 校验码 / 直连
+        app.on_key(KeyCode::Char('m'), KeyModifiers::NONE);
+        let d = app.dialog.as_ref().expect("m 打开修改对话框");
+        assert_eq!(d.kind, DialogKind::Modify);
+        assert_eq!(d.conns, "2");
+        assert_eq!(d.ck_type, 3, "SHA-256 下标");
+        assert_eq!(d.ck_value, "a".repeat(64));
+        assert_eq!(d.proxy_sel, 0, "任务为 Direct → 预选直连");
+        // 改并发 6 + 清空校验码 + 代理切命名 a → 确定
+        let d = app.dialog.as_mut().unwrap();
+        d.conns = "6".to_string();
+        d.ck_value.clear();
+        d.proxy_sel = 1;
+        app.dlg_confirm_modify();
+        assert!(app.dialog.is_none());
+        let t = &app.tasks[0];
+        assert_eq!(t.concurrency, 6, "并发立即生效");
+        assert!(t.checksum.is_none(), "清空校验码 = 清除校验");
+        assert_eq!(t.proxy, crate::model::ProxyChoice::Named("a".into()));
+        assert!(app
+            .toast
+            .as_deref()
+            .is_some_and(|m| m.contains("任务参数已更新")));
+        assert!(dir.join("registry.json").exists(), "注册表已落盘");
+        app.shutdown().await;
+
+        // 已完成任务按 m 拒绝（D20）
+        let reg2 = dir.join("registry2.json").to_string_lossy().to_string();
+        let mut app2 = App::new(Config::default(), reg2);
+        app2.tasks.push(crate::model::Task::new_queued(
+            1,
+            "c.bin".to_string(),
+            Protocol::Http,
+            "http://example.com/c.bin".to_string(),
+            "/tmp".to_string(),
+            1024 * 1024,
+            4,
+            5,
+            None,
+            crate::model::ProxyChoice::Direct,
+            0,
+        ));
+        app2.tasks[0].state = TaskState::Completed;
+        app2.selected = 0;
+        app2.filter = 1; // 「已完成」页签（D20：已完成任务按 m 拒绝的场景入口）
+        app2.on_key(KeyCode::Char('m'), KeyModifiers::NONE);
+        assert!(app2.dialog.is_none(), "已完成任务不弹对话框");
+        assert!(app2
+            .toast
+            .as_deref()
+            .is_some_and(|m| m.contains("不可修改")));
+        app2.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }
 }

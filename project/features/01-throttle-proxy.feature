@@ -6,19 +6,16 @@
 #   01-throttle-proxy-05 限速值接受十进制单位格式
 #   01-throttle-proxy-06 限速对不支持续传的任务同样生效
 #   01-throttle-proxy-07 TUI 不新增限速控件
-#   01-throttle-proxy-08 仅配置文件代理生效（环境变量不读取）
-#   01-throttle-proxy-09 环境变量代理不被读取（不生效）
-#   01-throttle-proxy-10 HTTPS 经代理 CONNECT 隧道下载
-#   01-throttle-proxy-11 代理认证信息不写入界面与日志
-Feature: 01-throttle-proxy 全局限速与代理
+# （v1.6：原 08–11 代理场景随旧全局 proxy 键退役删除（FR-01-90），代理语义由
+#   features/02-named-proxy.feature 承载；文件名保留不改，限速场景序号不变。）
+Feature: 01-throttle-proxy 全局限速
 
-  期号 01。依据 project/mission/phase-01.md FR-01-60~61、NFR-3 与本会话澄清决定
-  （十进制单位口径、接受 B/s~GB/s；代理仅配置文件，不读取环境变量）。SOCKS5 与每任务限速为分期 03 范围外。
+  期号 01。依据 project/mission/phase-01.md FR-01-60、NFR-3 与本会话澄清决定
+  （十进制单位口径、接受 B/s~GB/s）。每任务限速为分期 03 范围外。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
     And 本地 fixture 服务器已启动且根目录含测试文件
-    And 本地 fixture 代理（可区分记录经手请求）已启动
 
   Scenario: 01-throttle-proxy-01 配置全局限速生效于合计速度
     Given 配置文件设 max_speed = "<speed>"
@@ -85,41 +82,3 @@ Feature: 01-throttle-proxy 全局限速与代理
     Then 不存在限速设置控件（头部统计与图表布局不变）
     And 限速仅经配置文件与启动参数设置
 
-  Scenario: 01-throttle-proxy-08 仅配置文件代理生效（环境变量不读取）
-    Given 配置文件设 proxy = "<config_proxy>"
-    And 环境变量 HTTP_PROXY/HTTPS_PROXY 设为 "<env_proxy>"
-    When 下载文件 "<file>"
-    Then fixture 代理日志显示请求经 <config_proxy> 进入（环境变量不参与，未经 <env_proxy>）
-
-    Examples:
-      | config_proxy            | env_proxy               | file       |
-      | http://proxy-a.fixture:8888 | http://proxy-b.fixture:9999 | five-m.bin |
-
-  Scenario: 01-throttle-proxy-09 环境变量代理不被读取（不生效）
-    Given 配置文件未设置 proxy 且环境变量仅设置 "<env_setting>"
-    When 下载 "<url>"
-    Then 请求直连 fixture 服务器（fixture 代理日志无该请求）且下载完成
-
-    Examples:
-      | env_setting                                | url                                     |
-      | HTTP_PROXY=http://proxy-c.fixture:8888     | http://fixture.local/files/a.bin        |
-      | HTTPS_PROXY=http://proxy-c.fixture:8888    | https://fixture.local/files/t.bin       |
-      | ALL_PROXY=http://proxy-c.fixture:8888      | http://fixture.local/files/a.bin        |
-
-  Scenario: 01-throttle-proxy-10 HTTPS 经代理 CONNECT 隧道下载
-    Given 配置文件设 proxy 指向 fixture 代理
-    When 下载 "<url>"
-    Then 代理日志记录 CONNECT 隧道建立且下载完成且文件字节完整
-
-    Examples:
-      | url                                |
-      | https://fixture.local/files/t.bin  |
-
-  Scenario: 01-throttle-proxy-11 代理认证信息不写入界面与日志
-    Given 配置文件设 proxy = "http://<user>:<secret>@proxy-a.fixture:8888"
-    When 下载文件 "<file>" 并观察全部 toast、界面文本与运行日志
-    Then 任何位置均不出现 "<secret>"（含日志中的代理地址展示形态）
-
-    Examples:
-      | user | secret     | file       |
-      | qa   | s3cret-pw  | five-m.bin |

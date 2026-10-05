@@ -340,3 +340,36 @@ group_imports = "StdExternalCrate"
   优化改变进程树形态）。进程识别用「exe 路径 + ppid 拓扑」（同二进制的哨兵与主进程
   exe 相同，按"父是否 ezr 进程"区分；跨轮次 pid 复用会以单 pid 断言制造假失败，
   套件启动先清理上一轮孤儿进程）。
+
+- **reqwest 代理是 client 级、请求不可逐个指派**：`reqwest::Proxy` 只能在
+  `ClientBuilder` 上设置，`RequestBuilder` 无 per-request 代理 API。「任务/会话级
+  代理」的标准实现 = client 缓存池：`Arc<Mutex<HashMap<ProxyKey, Client>>>`（key =
+  代理 url + 账号三元组；None key = 直连 client），按请求前查池 get_or_build；
+  切换代理 ⇒ 下一次查池即新 client，在途请求持旧 client 自然完成（无中断语义免费
+  获得）。注意 `Client` 构建成本不低且池无淘汰，key 必须把账号算进指纹，否则同
+  url 不同密码会撞池；构建失败回退直连 + toast 与既有全局代理口径一致。
+- **socks 代理的认证只能走 url userinfo，`Proxy::basic_auth` 对 socks 代理静默无效**：
+  `Proxy::basic_auth(user, pass)` 仅在 HTTP 代理场景注入 `Proxy-Authorization: Basic`
+  头；socks 代理不经过 HTTP 头协商，该调用对 `socks5://` 代理不产生任何认证效果
+  （reqwest 0.12 源码实证）——表象是「socks5 配了账号密码却认证被拒/静默失效」，且无
+  警告可循。正确形态：把凭证编码进代理 url 的 userinfo（`socks5://user:pass@host:port`），
+  reqwest 解析 socks url 时对 userinfo percent-decode 后走 RFC 1929 user/pass 子协商。
+  配置层若将凭证与 url 分字段存放（无凭证 url 用于展示/落盘，避免凭证明文进界面与日志），
+  必须在引擎构建 client 时对 socks 型内部拼装认证 url，不要把无凭证 url 直接喂给
+  `Proxy::all` 了事；`basic_auth` 只留给 http 型代理。
+- **https 型代理 = TLS 包裹的 HTTP 代理；IPv6 字面量进 url 必须加方括号**：代理 url 取
+  `https://host:port` 形态时 reqwest `Proxy::all` 原生支持——客户端与代理之间整体走 TLS，
+  HTTP 代理语义（CONNECT 隧道、`Proxy::basic_auth` 产生 Proxy-Authorization）在 TLS 会话内
+  照常生效，无需按 scheme 写分支或特殊处理。ip 与 url 分字段存放、由 type+ip+port 拼装代理
+  url 的配置模型中，ip 为 IPv6 字面量（含 `:`）时必须拼成 `scheme://[::1]:port`（带 userinfo
+  同理 `scheme://user:pass@[::1]:port`），否则 url 解析失败或主机歧义——方括号收口在单一
+  url 构造函数即可三类型（http/https/socks5）全覆盖。
+
+- **HTTP 探测响应体不读会钉死串行服务端**：`GET Range: bytes=0-` 探测只读头部，
+  响应体（= 整文件流）若不释放，reqwest Response 存活期间连接一直挂着——串行
+  accept 的服务端（测试 fixture 常见形态）会阻塞在写体上，后续连接全部排队；
+  小文件（KB 级，未塞满 socket 缓冲）完全无感，MB 级测试文件才暴露。修法：
+  捕获最终 URL 后立即 `drop(resp)`（reqwest drop → 关闭连接 → 服务端写失败
+  脱阻塞）。单流降级路径例外：探测响应体本身就是下载流，必须移交续读。
+  推广纪律：凡是"读头部拿元数据、body 另起连接取"的下载器模式，探测响应
+  必须显式释放，且 e2e 至少留一个 MB 级用例兜底。

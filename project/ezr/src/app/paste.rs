@@ -73,8 +73,11 @@ mod paste_tests {
             ck_value: String::new(),
             ck_open: false,
             ck_sel: 3,
+            proxy_sel: 0,
+            proxy_open: false,
             focus,
             task_name: String::new(),
+            task_id: None,
         }
     }
 

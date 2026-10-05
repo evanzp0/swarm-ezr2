@@ -56,9 +56,10 @@ impl App {
             url,
             dir,
             self.cfg.block_size_http,
-            conns.unwrap_or(self.cfg.default_concurrency).clamp(1, 64),
+            conns.unwrap_or(self.cfg.http_concurrency).clamp(1, 64),
             self.cfg.max_retries,
             checksum,
+            crate::model::config::ProxyChoice::Direct,
             ts,
         );
         self.next_id += 1;
