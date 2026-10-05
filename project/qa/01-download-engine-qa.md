@@ -18,8 +18,8 @@
 | QA-DE-02 | 01-download-engine-02 | 添加无 Content-Length 下载项 | 详情「不支持断点续传」；仅 1 活跃连接；最终字节完整 |
 | QA-DE-03 | 01-download-engine-03 | Range 关闭文件下到 30%→Space 暂停→Space 继续 | fixture 新请求为从头全量（无 Range）；详情「不支持断点续传」；最终完整（AC-4） |
 | QA-DE-04 | 01-download-engine-04 | 分别添加 2.5MB/1MB/512KB/10MB | 分块行 `0/3`·`0/1`·`0/1`·`0/10` · 1 MB/块 |
-| QA-DE-05 | 01-download-engine-05 | 12MB 并发 4 / 3MB 并发 8 下载 | 明细表同持块连接数 ≤设置值；乱序完成；完成行 `12/12`·`3/3` |
-| QA-DE-06 | 01-download-engine-06 | 2MB（2 块）并发 4 | 明细表 2 传输 + 2「待命」；最终完成 |
+| QA-DE-05 | 01-download-engine-05 | 12MB 并发 4 / 3MB 并发 8 下载 | 完成分块行 `12/12`·`3/3` · 1 MB/块；请求日志多路不同起始 Range（动态领块、乱序完成） |
+| QA-DE-06 | 01-download-engine-06 | 2MB（2 块）并发 4 | 任务级分块行 2/2 · 1 MB/块；详情无连接级明细、画面无「待命」（FR-01-81 修订二：明细表整体移除）；最终完成 |
 | QA-DE-07 | 01-download-engine-07 | 8MB 下到 40% 暂停→继续（区间日志） | 续传请求区间与已完成块零交集；最终字节完整 |
 | QA-DE-08 | 01-download-engine-08 | 添加 2 跳重定向 URL | 经重定向完成；详情 URL 为最终 URL |
 | QA-DE-09 | 01-download-engine-09 | 添加 11 跳重定向 URL | 失败「重定向次数超限」；「不自动重试」；不占槽 |

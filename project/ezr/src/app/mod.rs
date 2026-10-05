@@ -102,6 +102,8 @@ pub struct App {
     pub up_hist: Vec<u64>,
     /// 本次会话累计下载字节（FR-01-81 头部统计）
     pub session_bytes: u64,
+    /// 各任务上次观察到的已下载字节（会话累计账本，增量式计数用）
+    session_seen: HashMap<u32, u64>,
     /// 帧计数（转轮动画）
     pub frame: u64,
     /// 退出标志
@@ -165,6 +167,7 @@ impl App {
             speed_hist: vec![0; 90],
             up_hist: vec![0; 90],
             session_bytes: 0,
+            session_seen: HashMap::new(),
             frame: 0,
             quit: false,
             toast: Some("EZR Downloader 就绪".to_string()),

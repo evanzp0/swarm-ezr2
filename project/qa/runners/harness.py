@@ -33,6 +33,57 @@ import traceback
 from dataclasses import dataclass, field
 
 import pyte
+import wcwidth
+
+
+def _safe_display_rows(screen: "pyte.Screen") -> list[str]:
+    """pyte Screen.display 的防御版渲染（逐格，不改变常规帧输出）。
+
+    pyte 0.8.2 的 display 在特定帧（宽字符落在行末等边缘形态）会遇
+    data=="" 的单元格并抛 IndexError（screens.py render: char[0]），
+    令任意断言随机崩掉（实测 IC-02 中签）。断言只需文本内容：空数据格
+    按空格渲染保持列对齐，宽字符 stub 跳过语义与 pyte 一致。
+    """
+    cols = screen.columns
+    rows: list[str] = []
+    for y in range(screen.lines):
+        line = screen.buffer[y]
+        parts: list[str] = []
+        skip = False
+        for x in range(cols):
+            if skip:
+                skip = False
+                continue
+            data = line[x].data
+            if not data:
+                parts.append(" ")
+                continue
+            if wcwidth.wcwidth(data[0]) == 2:
+                skip = True
+            parts.append(data)
+        rows.append("".join(parts))
+    return rows
+
+
+class _ScreenProxy:
+    """pyte Screen 薄代理：display 渲染失败时退化为 _safe_display_rows。
+
+    所有经 app.screen.display / app.screen.buffer 的访问点（text/
+    display_rows/find_row/detail_text/配色与柱条断言）统一获得防御。
+    """
+
+    def __init__(self, screen: "pyte.Screen"):
+        self._screen = screen
+
+    @property
+    def display(self) -> list[str]:
+        try:
+            return self._screen.display
+        except Exception:
+            return _safe_display_rows(self._screen)
+
+    def __getattr__(self, name: str):
+        return getattr(self._screen, name)
 
 # ---------------------------------------------------------------------------
 # 路径常量（绝对路径：engineering.md「路径与工作目录确定性」）
@@ -230,8 +281,9 @@ class EzrApp:
                 os._exit(127)
         self.pid, self.fd = pid, fd
         fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-        self.screen = pyte.Screen(cols, rows)
-        self.stream = pyte.ByteStream(self.screen)
+        self._raw_screen = pyte.Screen(cols, rows)
+        self.screen = _ScreenProxy(self._raw_screen)
+        self.stream = pyte.ByteStream(self._raw_screen)
         self.exit_code: int | None = None
         self._pump(0.3)  # 首帧渲染等待
 

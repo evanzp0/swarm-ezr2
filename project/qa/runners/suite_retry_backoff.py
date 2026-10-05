@@ -161,9 +161,14 @@ class RetryBackoffSuite(Suite):
         """QA-RB-07 403/404：不自动重试；无倒计时；不占槽；R 可重试。"""
         @self.case("QA-RB-07")
         def go(env: Env):
-            for url in (env.fixture.url("five-m.bin?status=403"),
-                        env.fixture.url("ghost-404.bin")):
-                app = EzrApp(env.home, save_dir=env.save_dir)
+            # 每个示例行独立现场（SKILL.md：Scenario Outline 各行是独立场景，
+            # 不得串同一实体跑）——独立 HOME 使注册表互不继承，重试计数锚点
+            # 才无歧义（共用 home 时前一轮遗留任务行会污染后一轮断言）。
+            for i, url in enumerate((env.fixture.url("five-m.bin?status=403"),
+                                     env.fixture.url("ghost-404.bin"))):
+                home = os.path.join(env.home, f"iter{i}")
+                os.makedirs(home, exist_ok=True)
+                app = EzrApp(home, save_dir=env.save_dir)
                 try:
                     add_task_via_dialog(app, env, url)
                     assert app.wait_for("不自动重试", 12), f"{url} 应不自动重试"
@@ -171,8 +176,16 @@ class RetryBackoffSuite(Suite):
                     assert_not_in("s 后重试", text, "不应有倒计时")
                     assert_in("下载槽位 0/5", text, "停等应不占槽")
                     app.send("r")
-                    assert app.wait_for("等待中", 8) or app.wait_for("下载中", 10), \
-                        "R 应可重试"
+                    # R 重试锚定持久证据：重试计数 1/5→2/5。探针秒败型失败
+                    # （403/404 即答）的重试循环一帧内走完，「等待中/下载中」
+                    # 瞬时态不可稳定观察——断言锚最终态常驻文本（SKILL.md
+                    # 纪律）。慢路径放行窗：重试仍在排队/进行时先见等待中/
+                    # 下载中，继续等其落停等并计数+1。
+                    ok = app.wait_for("重试 2/5", 12)
+                    if not ok and (app.wait_for("等待中", 3)
+                                   or app.wait_for("下载中", 3)):
+                        ok = app.wait_for("重试 2/5", 15)
+                    assert ok, "R 应可重试"
                     app.graceful_quit()
                 except Exception:
                     app.graceful_quit()

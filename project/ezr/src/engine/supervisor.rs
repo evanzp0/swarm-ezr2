@@ -63,6 +63,11 @@ pub struct TaskSpec {
     pub sidecar: Option<Sidecar>,
     /// sidecar 盘上路径（作废断点时删除用；sidecar 存在时必填）
     pub sidecar_path: Option<String>,
+    /// 沿用既有任务名（探测后的重启：失效重下/续传）；false = 首次启动，
+    /// 按规则推导并盘上去重（FR-01-02）。失效重启若重新去重，会因残留的
+    /// `.downloading` 文件漂移到新名（m.bin → m.bin.1…），导致 sidecar 落盘
+    /// 名与任务名错位、下轮续传一致性检查被跳过（FR-01-22 违例），故必须钉住。
+    pub keep_name: bool,
     /// 任务添加时间（Unix 秒）
     pub added_at: u64,
 }
@@ -277,7 +282,7 @@ async fn download(
     // 断点接续（spec 带 sidecar）沿用既有任务名，避免另存新文件（FR-01-26）。
     // 非接续路径定稿前做盘上去重（Gherkin 01-add-task-10：目标已存在时追加
     // 序号，防止下载覆盖既有文件；与 App 添加期去重同口径、结果一致）
-    let name = if spec.sidecar.is_some() {
+    let name = if spec.sidecar.is_some() || spec.keep_name {
         spec.name.clone()
     } else {
         let base = namegen::derive_name(
@@ -944,6 +949,7 @@ mod tests {
             expected_value: expected.as_ref().map(|(_, v)| v.clone()),
             sidecar: None,
             sidecar_path: None,
+            keep_name: false,
             added_at: 0,
         }
     }
@@ -982,6 +988,22 @@ mod tests {
             rx,
             std::time::Instant::now() + std::time::Duration::from_secs(10),
         )
+    }
+
+    /// 泵事件至 DownloadDone（返回 true）或 deadline（返回 false）；
+    /// Failed 即 panic（两个 keep_name 重启用例共用的事件泵）。
+    async fn wait_download_done(
+        rx: &mut mpsc::Receiver<Evt>,
+        deadline: std::time::Instant,
+    ) -> bool {
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::DownloadDone { .. })) => return true,
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("下载失败: {reason}"),
+                _ => {}
+            }
+        }
+        false
     }
 
     #[tokio::test]
@@ -1111,6 +1133,50 @@ mod tests {
         let data = std::fs::read(dir.join("f.bin")).unwrap();
         assert_eq!(data.len() as u64, total);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 失效重启（keep_name=true）必须沿用既有任务名：残留 `.downloading` 文件
+    /// 不得触发去重改名（否则 sidecar 落盘名与任务名错位，FR-01-22 一致性
+    /// 检查在下轮续传被跳过）；keep_name=false（首次启动）仍按规则去重。
+    #[tokio::test]
+    async fn keep_name_restart_skips_dedupe() {
+        let dir = std::env::temp_dir().join(format!("ezr-e2e4-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let total: u64 = 9000;
+        let url = mock_server(total, vec![]);
+        // 残留的部分下载文件（失效重启现场）：f.bin.downloading + 旧 sidecar 名
+        std::fs::write(dir.join("f.bin.downloading"), b"stale").unwrap();
+
+        // keep_name=true：沿用 f.bin（写入 f.bin.downloading，不漂移新名）
+        let mut spec = spec_for(4, &url, dir.to_str().unwrap(), 4096, 2, None);
+        spec.keep_name = true;
+        let (cmd_tx, mut rx, deadline) = launch_spec(spec);
+        let done = wait_download_done(&mut rx, deadline).await;
+        assert!(done, "keep_name 重启应完成");
+        assert!(
+            dir.join("f.bin").exists(),
+            "keep_name 重启应写回原名目标文件"
+        );
+        assert!(
+            !dir.join("f.bin.1").exists() && !dir.join("f.bin.1.downloading").exists(),
+            "keep_name 重启不得去重改名"
+        );
+        drop(cmd_tx);
+        std::fs::remove_dir_all(&dir).ok();
+
+        // keep_name=false（首次启动）：残留文件存在时按规则去重
+        let dir2 = std::env::temp_dir().join(format!("ezr-e2e7-{}", std::process::id()));
+        std::fs::create_dir_all(&dir2).unwrap();
+        std::fs::write(dir2.join("f.bin.downloading"), b"stale").unwrap();
+        let (_cmd_tx, mut rx, deadline) =
+            launch_spec(spec_for(5, &url, dir2.to_str().unwrap(), 4096, 2, None));
+        let done = wait_download_done(&mut rx, deadline).await;
+        assert!(done, "首次启动应完成");
+        assert!(
+            dir2.join("f.bin.1").exists(),
+            "首次启动遇残留文件应去重到 f.bin.1"
+        );
+        std::fs::remove_dir_all(&dir2).ok();
     }
 
     #[tokio::test]

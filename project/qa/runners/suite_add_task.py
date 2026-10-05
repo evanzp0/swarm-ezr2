@@ -319,7 +319,7 @@ class AddTaskSuite(Suite):
 
     def _case_10(self):
         """QA-01-10 预置同名文件后添加同名任务：新目标 report.pdf.1，原文件未变。"""
-        @self.case("QA-10" if False else "QA-01-10")
+        @self.case("QA-01-10")
         def go(env: Env):
             original = b"ORIGINAL-CONTENT-MUST-NOT-CHANGE"
             with open(os.path.join(env.fixture_root, "cd1.bin"), "wb") as f:

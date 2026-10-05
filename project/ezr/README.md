@@ -91,9 +91,19 @@ default_concurrency = 4            # 对话框留空时的默认并发
 断点续传/一致性失效/状态码分类）：
 
 ```sh
-cargo test                        # 全部测试（258 个：单测 + 属性测试）
+cargo test                        # 全部测试（966 个：单测 + 引擎端到端冒烟 + 属性测试）
 cargo clippy --all-targets        # 零警告门槛
-bash scripts/arch_check.sh        # 架构边界检查（6 规则）
+bash scripts/arch_check.sh        # 架构边界检查（10 规则）
+```
+
+PTY 端到端 QA 套件（9 套 100+ 用例，真实伪终端驱动 TUI：按键/鼠标注入、画面断言、
+fixture 故障注入；对应 `../qa/01-*-qa.md` 规程，依赖 `pip install pyte wcwidth`
+与 debug 构建的 `ezr` / `ezr-fixture` 二进制）：
+
+```sh
+cargo build                       # 套件驱动 target/debug 下的二进制
+cd ../qa/runners
+python3 suite_add_task.py         # 逐套运行（suite_*.py 共 9 套，退出码非 0 即有用例失败）
 ```
 
 本地 fixture 服务器（QA 基建，能力对应 qa/ 各套件环境前置节）：

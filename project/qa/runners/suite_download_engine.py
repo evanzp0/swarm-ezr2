@@ -104,8 +104,23 @@ class DownloadEngineSuite(Suite):
                 url = env.fixture.url("three-m.bin?norange=1&speed=300000")
                 self._add_via_dialog(app, env, url)
                 assert app.wait_for("不支持断点续传", 8)
-                # 单流进度行（FR-01-17）：等列表行 downloaded/total ≥ 30%（1.0/3.0 MB）
-                assert app.wait_for("1.0 MB/3.0 MB", 30), "未在窗口内到达 ≥30% 进度"
+                # 单流进度行（FR-01-17 展示面 1s 节拍 + 十进制口径）：以显示读数
+                # 字节值判定 ≥30%。精确锚定「1.0 MB」不可靠——300KB/s 下读数每秒
+                # 前进 ~300KB，而「1.0 MB」的显示窗仅 ~50KB 宽（0.995–1.05MB），
+                # 1s 节拍采样可能整段跳过（瞬时值陷阱，engineering.md 断言锚定
+                # 最终态条款的同源推论）。改解析任意已显示 progress 读数判定。
+                deadline = time.time() + 30
+                reached = False
+                while time.time() < deadline:
+                    app.pump(0.2)
+                    m = re.search(r"([\d.]+) (KB|MB)/3\.0 MB", app.text())
+                    if m:
+                        b = float(m.group(1)) * (
+                            1000.0 if m.group(2) == "KB" else 1_000_000.0)
+                        if b >= 900_000:  # 30% 阈值（显示量化 ±半格在容差内）
+                            reached = True
+                            break
+                assert reached, "未在窗口内到达 ≥30% 进度（显示读数口径）"
                 ts_pause = time.time()
                 app.send("space")
                 assert app.wait_for("已暂停", 5), "Space 后应转已暂停"
@@ -180,17 +195,23 @@ class DownloadEngineSuite(Suite):
                 app.graceful_quit()
 
     def _case_06(self):
-        """QA-DE-06 2MB（2 块）并发 4：明细表 2 传输 + 2「待命」；最终完成。"""
+        """QA-DE-06 2MB（2 块）并发 4：任务级分块行 2/2；无连接级明细（FR-01-81 修订二）。
+
+        规程原判据「明细表 2 传输 + 2 待命」随 FR-01-81 修订二「并发分块明细表
+        整体移除」撤销（phase-01 + 实现一致；feature 01-download-engine-06 的
+        THEN 未同步，待操作者裁决，见 handoff 待批）。用例按实现口径改断言。
+        """
         @self.case("QA-DE-06")
         def go(env: Env):
-            # 高终端（46 行）：120×34 下明细表可用行数仅 1，无法展示 4 行连接
-            app = EzrApp(env.home, save_dir=env.save_dir, rows=46)
+            app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 self._add_via_dialog(app, env,
-                                     env.fixture.url("two-m.bin?speed=120000"),
+                                     env.fixture.url("two-m.bin?speed=300000"),
                                      conns="4")
-                assert app.wait_for("待命", 15), "2 块 4 连接应出现「待命」连接"
-                assert app.wait_for("传输中", 10), "活跃连接应显示「传输中」"
+                assert app.wait_for("下载中", 15), "任务应开始下载"
+                assert_not_in("并发分块明细", detail_text(app),
+                              "连接级明细应已移除（FR-01-81 修订二）")
+                assert_not_in("待命", app.text(), "连接级状态列应已移除")
                 target = os.path.join(env.save_dir, "two-m.bin")
                 wait_file_size(target, QA_FILE_SIZES["two-m.bin"], 60, app=app)
                 found = self._select_completed(app, ["2/2 · 1 MB/块"])
@@ -437,8 +458,14 @@ class DownloadEngineSuite(Suite):
                                          "-d", env.save_dir,
                                          "-x", f"sha256={hexval}"])
             try:
-                assert app.wait_for("下载中", 10), "CLI 任务应自动开始"
-                assert app.wait_for("· 1 MB/块", 8), "分块行应显示 1 MB/块"
+                # CLI 任务应自动开始并推进。100MB 回环传输亚秒级完成，「下载中」
+                # 「校验中」均为亚帧瞬态（engineering.md 瞬时值陷阱：断言锚定
+                # 最终态常驻文本）；页签计数「已完成 (1)」为持久终态证据。
+                # 分块行断言由 _select_completed 后的详情断言（100/100 · 1 MB/块）覆盖。
+                assert app.wait_for("任务 1", 10), "CLI 任务应自动创建"
+                assert app.wait_for("已完成 (1)", 8) \
+                    or app.wait_for("校验中", 5) \
+                    or app.wait_for("下载中", 5), "CLI 任务应自动开始并推进"
                 # 活跃连接 = 4：下载全程内日志必出现 2s 窗口 ≥4 路并发 Range
                 # （避免“首帧早于 worker 请求落盘”的时序竞速：轮询至完成再断言）
                 target = os.path.join(env.save_dir, "big-100m.bin")

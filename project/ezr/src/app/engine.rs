@@ -59,6 +59,12 @@ impl App {
             expected_value: t.checksum.as_ref().map(|c| c.value.clone()),
             sidecar,
             sidecar_path: sc_path,
+            // 任务名已随首次探测定稿（final_url 已知 → 命名规则已走完）：
+            // 之后的一切重启（失效重下/续传/重试）沿用既有名。失效重启若重新
+            // 去重，会因残留 .downloading 文件漂移新名（m.bin → m.bin.1…），
+            // 使 sidecar 落盘名与任务名错位、下轮续传一致性检查被跳过
+            // （FR-01-22 违例），故必须钉住。
+            keep_name: t.final_url.is_some(),
             added_at: t.added_at,
         }
     }
@@ -195,7 +201,24 @@ impl App {
             }
         }
         let global_dl: f64 = self.tasks.iter().map(|t| t.speed).sum();
-        self.session_bytes += (global_dl * dt) as u64;
+        // 会话已下载（FR-01-81「本次运行累计下载字节」）：按各任务真实已下载
+        // 字节的运行内增量累计（首次观察到任务时以其当前进度为基线，sidecar
+        // 恢复的既有进度不计入）。不积分展示面 EMA 速度——EMA 爬升期的少计
+        // 会随任务结束固化（3 MB 短任务实测少计约一半）。
+        let mut gained: u64 = 0;
+        for t in self.tasks.iter() {
+            match self.session_seen.get(&t.id).copied() {
+                None => {
+                    self.session_seen.insert(t.id, t.downloaded);
+                }
+                Some(prev) if t.downloaded > prev => {
+                    gained += t.downloaded - prev;
+                    self.session_seen.insert(t.id, t.downloaded);
+                }
+                Some(_) => {}
+            }
+        }
+        self.session_bytes += gained;
         if speed_due {
             self.push_hist(global_dl, 0.0);
         }
@@ -260,8 +283,11 @@ impl App {
                 etag,
                 last_modified,
             } => {
-                // CD 命名回写需重新去重（Gherkin 01-add-task-10：目标被占时保留
-                // 原推导名，防止下载覆盖既有文件——先算定名再可变借用）
+                // CD 命名回写：引擎侧已在建文件前对盘上去重（derive→dedupe 先于
+                // 文件创建），App 只需对其它任务同名去重。此处不得再查盘：事件
+                // 异步处理时引擎可能已建 <名字>.downloading，盘查会把自己当
+                // 占用者而漂移新名（m4.bin → m4.bin.1），使 sidecar 落盘名与
+                // 任务名错位、下轮续传一致性检查被跳过（FR-01-22 违例）。
                 let rename_to = {
                     let cur = self.tasks.iter().find(|t| t.id == id);
                     match cur {
@@ -270,7 +296,6 @@ impl App {
                                 self.tasks
                                     .iter()
                                     .any(|x| x.id != id && x.name == n && x.save_dir == t0.save_dir)
-                                    || namegen::exists_on_disk(&t0.save_dir, n)
                             };
                             Some(namegen::dedupe(&name, taken))
                         }
@@ -368,6 +393,9 @@ impl App {
                 t.connections.clear();
                 t.speed = 0.0;
                 self.windows.remove(&id);
+                // 会话累计账本同步重置基线：失效重下的全部字节都属本次运行
+                // 下载（若保留旧基线，重下进度超过旧值前会被漏计）
+                self.session_seen.insert(id, 0);
                 if stop_wait {
                     t.state = TaskState::Failed;
                     t.fail_kind = Some(FailKind::Fatal);

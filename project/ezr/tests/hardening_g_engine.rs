@@ -326,21 +326,30 @@ async fn session_bytes_zero_speed_noop() {
     a.shutdown().await;
 }
 
-/// 靶 198:28（`+=→-=`）/198:42（`*→+`/`*→/`）：累计按 速度×dt 增长
+/// 累计按真实已下载字节的运行内增量增长（FR-01-81「本次运行累计下载字节」；
+/// QA 会话修订：原「速度×dt 积分」口径为 EMA 展示速度积分，短任务少计约一半，
+/// 与 Gherkin 01-tui-display-12 THEN 冲突，改为 downloaded 增量账本。变异靶
+/// （原 198:28 `+=→-=`、198:42 `*→+`/`*→/`）的行号待下一 hardender 会话重扫刷新。
 #[tokio::test]
 async fn session_bytes_accumulates() {
     let mut a = mkapp("sb-acc");
     let mut t = queued(1, "a2.bin", "/tmp");
     t.state = TaskState::Downloading;
-    t.speed = 2000.0;
+    t.downloaded = 400;
     a.tasks.push(t);
     a.session_bytes = 100;
     a.tick().await;
-    let sb = a.session_bytes;
-    assert!(sb > 100, "必须累加（-= 变异体递减）");
-    assert!(
-        sb < 2000,
-        "增量 = 2000×dt ≤ 2000×0.5，+ / 变异体越界（got {sb}）"
+    assert_eq!(
+        a.session_bytes, 100,
+        "首次观察仅建基线，不得计入既有（sidecar 恢复）进度（+=→*= 变异体放大）"
+    );
+    if let Some(t) = a.tasks.get_mut(0) {
+        t.downloaded = 1500; // 数据面前进 1100 字节
+    }
+    a.tick().await;
+    assert_eq!(
+        a.session_bytes, 1200,
+        "累计必须按真实字节增量累加（-= 变异体递减/下溢、*→+ 变异体越界）"
     );
     a.shutdown().await;
 }

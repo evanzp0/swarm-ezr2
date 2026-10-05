@@ -353,6 +353,7 @@ mod main_loop_tests {
             expected_value: None,
             sidecar: None,
             sidecar_path: None,
+            keep_name: false,
             added_at: 0,
         }
     }
