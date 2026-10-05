@@ -4,7 +4,8 @@
 //! 每个任务条目 3 行：标题行(名称+协议/状态徽标+百分比)、整体进度条(不分块)、统计行。
 //! 协议徽标 [HTTP/HTTPS/BT] 统一黄色；详情页分块以文字显示 x/y（已完成/总块数）与块大小 N/块。
 //! 分块策略：块大小按协议写死（HTTP 1 MB / BT 256 KB），块数与并发数解耦。
-//! 对话框：添加任务(URL+目录+并发+校验算法下拉+校验码) / 删除任务(仅任务|任务和文件|取消)。
+//! 对话框：添加任务(URL+目录+并发+校验算法下拉+校验码+代理下拉) /
+//! 修改任务(并发+校验+校验码+代理，v1.5/FR-01-87 同步) / 删除任务(仅任务|任务和文件|取消)。
 
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
@@ -98,16 +99,6 @@ fn pad_right(s: &str, width: usize) -> String {
         s.to_string()
     } else {
         format!("{}{}", s, " ".repeat(width - cur))
-    }
-}
-
-/// 按终端显示宽度左填充空格
-fn pad_left(s: &str, width: usize) -> String {
-    let cur = w(s);
-    if cur >= width {
-        s.to_string()
-    } else {
-        format!("{}{}", " ".repeat(width - cur), s)
     }
 }
 
@@ -205,7 +196,13 @@ fn plain_bar(width: usize, frac: f64, fill: Color) -> Vec<Span<'static>> {
 // 任务条目（3 行）
 // ---------------------------------------------------------------------------
 
-fn task_lines(t: &Task, sel: bool, spinner: char, width: usize, queue_pos: usize) -> Vec<Line<'static>> {
+fn task_lines(
+    t: &Task,
+    sel: bool,
+    spinner: char,
+    width: usize,
+    queue_pos: usize,
+) -> Vec<Line<'static>> {
     let width = width.max(20);
     let state_c = state_color(t.state);
 
@@ -232,7 +229,9 @@ fn task_lines(t: &Task, sel: bool, spinner: char, width: usize, queue_pos: usize
         Span::styled(
             name_txt,
             if sel {
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(FG)
             },
@@ -473,10 +472,15 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(BORDER))
         .title(Line::from(vec![
-            Span::styled(" ◆ ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " ◆ ",
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(
                 "EZR Downloader",
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled("  v0.1.0-m1", Style::default().fg(DIM)),
         ]));
@@ -491,16 +495,18 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
             format!("   ↑ {}", fmt_speed(ul)),
             Style::default().fg(MAGENTA),
         ),
-        Span::styled(
-            format!("   并发线程 {} ", threads),
-            Style::default().fg(FG),
-        ),
+        Span::styled(format!("   并发线程 {} ", threads), Style::default().fg(FG)),
         Span::styled(
             format!("  会话已下载 {}", fmt_size(app.session_bytes)),
             Style::default().fg(FG),
         ),
         Span::styled(
-            format!("  任务 {} · 正在下载 {} · 已完成 {}", app.tasks.len(), doing, done),
+            format!(
+                "  任务 {} · 正在下载 {} · 已完成 {}",
+                app.tasks.len(),
+                doing,
+                done
+            ),
             Style::default().fg(DIM),
         ),
     ]);
@@ -536,10 +542,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(BORDER))
-        .title(Span::styled(
-            " 任务队列 ",
-            Style::default().fg(BORDER),
-        ))
+        .title(Span::styled(" 任务队列 ", Style::default().fg(BORDER)))
         // 右侧：下载槽位占用（已满时黄色提醒：等待任务需排队）
         .title(
             Line::from(Span::styled(
@@ -564,13 +567,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(BORDER))
-        .title(Line::from(vec![
-            Span::styled(" 下载任务 ", Style::default().fg(ACCENT)),
-            Span::styled(
-                format!("（鼠标: 点击选中 / 滚轮滚动） "),
-                Style::default().fg(DIM2),
-            ),
-        ]))
+        .title(Span::styled(" 下载任务 ", Style::default().fg(ACCENT)))
         .title(
             Line::from(Span::styled(
                 format!(" {}/{} 项 ", app.selected + 1, app.filtered().len()),
@@ -586,7 +583,8 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
     if rows == 0 || idxs.is_empty() {
         let msg = if idxs.is_empty() {
-            "（此页签下没有任务）"
+            // 空态提示（Gherkin 01-tui-display-13 同步：显示「按 A 添加下载任务」）
+            "（此页签下没有任务，按 A 添加下载任务）"
         } else {
             "（区域过小）"
         };
@@ -637,10 +635,7 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(BORDER))
-        .title(Span::styled(
-            " 任务详情 ",
-            Style::default().fg(ACCENT),
-        ));
+        .title(Span::styled(" 任务详情 ", Style::default().fg(ACCENT)));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -662,15 +657,9 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(" ", Style::default()),
         Span::styled(
             truncate(&t.name, (inner.width as usize).saturating_sub(4)),
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-        ),
-    ]));
-    lines.push(Line::from(vec![
-        Span::raw(" "),
-        label("状态"),
-        Span::styled(
-            format!("[{}] {:.1}%", t.state.label(), t.progress() * 100.0),
-            Style::default().fg(state_c).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         ),
     ]));
     // 等待中任务：显示槽位排队详情（位次按列表顺序从上往下；已获槽位 = 重试排队即将开始）
@@ -707,9 +696,7 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
         label("类型"),
         Span::styled(
             t.protocol.label().to_string(),
-            Style::default()
-                .fg(YELLOW)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
         ),
         // 并发数仅在「下载中」与「做种中」有数值，其他状态显示 -
         {
@@ -753,11 +740,12 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
     lines.push(Line::from(vec![
         Span::raw(" "),
         label("大小"),
+        // v1.12/FR-01-80 同步：仅「已下载/总大小」，不含「（剩余 …）」后缀
+        // （进度展示由列表行承载，FR-01-17 口径不变）
         val(format!(
-            "{} / {}（剩余 {}）",
+            "{} / {}",
             fmt_size(t.downloaded),
-            fmt_size(t.total),
-            fmt_size(t.total.saturating_sub(t.downloaded))
+            fmt_size(t.total)
         )),
     ]));
     // 失败原因（仅已失败）
@@ -774,78 +762,18 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
             ),
         ]));
     }
-    // 速度行（无平均值；缺失用 -）
-    let speed_line: Vec<Span<'static>> = match t.state {
-        TaskState::Downloading => {
-            let mut v = vec![
-                Span::raw(" "),
-                label("速度"),
-                Span::styled(
-                    format!("↓ {}", fmt_speed(t.speed)),
-                    Style::default().fg(ACCENT),
-                ),
-            ];
-            if t.protocol.is_bt() {
-                v.push(Span::styled(
-                    format!("  ↑ {}", fmt_speed(t.upload_speed)),
-                    Style::default().fg(MAGENTA),
-                ));
-            }
-            v.push(Span::styled(
-                format!("  剩余 {}", fmt_eta(t.eta_secs())),
-                Style::default().fg(DIM),
-            ));
-            v
-        }
-        TaskState::Seeding => {
-            vec![
-                Span::raw(" "),
-                label("速度"),
-                Span::styled(
-                    format!("↑ {}", fmt_speed(t.upload_speed)),
-                    Style::default().fg(MAGENTA),
-                ),
-                Span::styled(
-                    format!("  剩余做种 {}", fmt_dur(t.seed_left.ceil() as u64)),
-                    Style::default().fg(DIM),
-                ),
-            ]
-        }
-        TaskState::Completed => {
-            vec![
-                Span::raw(" "),
-                label("速度"),
-                Span::styled(
-                    format!("—  总用时 {}", fmt_dur(t.elapsed as u64)),
-                    Style::default().fg(DIM),
-                ),
-            ]
-        }
-        _ => {
-            let mut v = vec![Span::raw(" "), label("速度"), Span::raw("↓ ")];
-            v.push(Span::styled("-", Style::default().fg(DIM)));
-            if t.protocol.is_bt() {
-                v.push(Span::raw("  ↑ "));
-                v.push(Span::styled("-", Style::default().fg(DIM)));
-            }
-            v.push(Span::raw("  剩余 "));
-            v.push(Span::styled("-", Style::default().fg(DIM)));
-            v
-        }
-    };
-    lines.push(Line::from(speed_line));
     lines.push(Line::from(vec![
         Span::raw(" "),
         label("保存"),
-        val(truncate(&t.save_path, (inner.width as usize).saturating_sub(12))),
+        val(truncate(
+            &t.save_path,
+            (inner.width as usize).saturating_sub(12),
+        )),
     ]));
     lines.push(Line::from(vec![
         Span::raw(" "),
         label("URL"),
-        val(truncate(
-            &t.url,
-            (inner.width as usize).saturating_sub(12),
-        )),
+        val(truncate(&t.url, (inner.width as usize).saturating_sub(12))),
     ]));
 
     // 分块：文字显示——x/y（x=已完成分块数，y=总分块数）与块大小「N/块」；
@@ -858,9 +786,7 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
         } else {
             l.push(Span::styled(
                 format!("{}/{}", x, y),
-                Style::default()
-                    .fg(state_c)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(state_c).add_modifier(Modifier::BOLD),
             ));
             l.push(Span::styled(
                 format!(" · {}/块", chunk_size_label(t.protocol)),
@@ -870,88 +796,7 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(l));
     }
 
-    if inner.height as usize > lines.len() + 2 {
-        lines.push(Line::from(Span::styled(
-            " ────────── 并发分块明细 ──────────",
-            Style::default().fg(DIM2),
-        )));
-        // 表头（紧凑列宽，适配窄面板；CJK 按显示宽度填充）
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!(
-                    "{}{}{}{}  {}",
-                    pad_right("#", 4),
-                    pad_right("当前分块", 14),
-                    pad_left("进度", 7),
-                    pad_left("速度", 11),
-                    "状态"
-                ),
-                Style::default().fg(DIM),
-            ),
-        ]));
-        let rows_avail = (inner.height as usize).saturating_sub(lines.len() + 1);
-        for (i, c) in t.connections.iter().enumerate() {
-            if i >= rows_avail.max(1) {
-                break;
-            }
-            let idle = c.cap() == 0;
-            let frac = if idle { 0.0 } else { c.frac() };
-            let done = !idle && frac >= 1.0;
-            let st = if idle {
-                Span::styled("待命", Style::default().fg(DIM2))
-            } else if done {
-                Span::styled("完成", Style::default().fg(GREEN))
-            } else if c.speed > 0.0 {
-                Span::styled("传输中", Style::default().fg(ACCENT))
-            } else {
-                Span::styled("挂起", Style::default().fg(DIM))
-            };
-            // 分块列：块号「块 k/y」（分块队列按块大小顺序领块），待命显示 —
-            let chunk_col = if idle {
-                "—".to_string()
-            } else {
-                let (_, yy, nn) = t.chunk_info();
-                if nn > 0 {
-                    format!("块 {}/{}", c.start / nn + 1, yy)
-                } else {
-                    "—".to_string()
-                }
-            };
-            lines.push(Line::from(vec![
-                Span::styled(
-                    pad_right(&format!("#{}", c.id), 4),
-                    Style::default().fg(FG),
-                ),
-                Span::styled(
-                    pad_right(&chunk_col, 14),
-                    Style::default().fg(if idle { DIM2 } else { FG }),
-                ),
-                Span::styled(
-                    if idle {
-                        pad_left("—", 7)
-                    } else {
-                        pad_left(&format!("{:.1}%", frac * 100.0), 7)
-                    },
-                    Style::default().fg(if done { GREEN } else if idle { DIM2 } else { FG }),
-                ),
-                Span::styled(
-                    format!(
-                        "{}  ",
-                        pad_left(
-                            &if c.speed > 0.0 {
-                                fmt_speed(c.speed)
-                            } else {
-                                "—".to_string()
-                            },
-                            11
-                        )
-                    ),
-                    Style::default().fg(if done { DIM } else { ACCENT }),
-                ),
-                st,
-            ]));
-        }
-    }
+    // （FR-01-81 修订二同步）并发分块明细表已整体移除：详情面板止于任务级字段行。
 
     f.render_widget(Paragraph::new(lines), inner);
 }
@@ -1010,19 +855,34 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(inner);
 
     // 快捷键行
-    let key = |s: &str| Span::styled(s.to_string(), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD));
+    let key = |s: &str| {
+        Span::styled(
+            s.to_string(),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )
+    };
     let desc = |s: &str| Span::styled(s.to_string(), Style::default().fg(DIM));
     let mut l1 = vec![
-        key(" ↑↓"), desc(" 选择  "),
-        key("Space"), desc(" 暂停/继续  "),
-        key("R"), desc(" 重试  "),
-        key("A"), desc(" 添加  "),
-        key("D"), desc(" 删除  "),
-        key("U/J"), desc(" 上移/下移  "),
-        key("C"), desc(" 清已完成  "),
-        key("Tab"), desc(" 页签  "),
-        key("G"), desc(" 图表  "),
-        key("Q"), desc(" 退出"),
+        key(" ↑↓"),
+        desc(" 选择  "),
+        key("Space"),
+        desc(" 暂停/继续  "),
+        key("R"),
+        desc(" 重试  "),
+        key("A"),
+        desc(" 添加  "),
+        key("D"),
+        desc(" 删除  "),
+        key("U/J"),
+        desc(" 上移/下移  "),
+        key("C"),
+        desc(" 清已完成  "),
+        key("Tab"),
+        desc(" 页签  "),
+        key("G"),
+        desc(" 图表  "),
+        key("Q"),
+        desc(" 退出"),
     ];
     // 窄屏精简
     if inner.width < 100 {
@@ -1047,10 +907,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(YELLOW),
         ));
     }
-    f.render_widget(
-        Paragraph::new(Line::from(l2)),
-        rows[1],
-    );
+    f.render_widget(Paragraph::new(Line::from(l2)), rows[1]);
 }
 
 // ---------------------------------------------------------------------------
@@ -1128,14 +985,78 @@ fn button_spans(txt: &str, focused: bool) -> Vec<Span<'static>> {
 fn draw_dialogs(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(d) = app.dialog.as_ref() else { return };
     app.dlg_btn_rects.clear();
+    app.dlg_field_rects.clear();
+    app.dlg_ck_rects.clear();
+    app.dlg_proxy_rects.clear();
     match d.kind {
-        DialogKind::Add => draw_add_dialog(f, app, area),
+        DialogKind::Add => draw_task_dialog(f, app, area, DialogKind::Add),
+        DialogKind::Modify => draw_task_dialog(f, app, area, DialogKind::Modify),
         DialogKind::Delete => draw_delete_dialog(f, app, area),
     }
 }
 
-fn draw_add_dialog(f: &mut Frame, app: &mut App, area: Rect) {
-    let dlg = dialog_rect(area, 74, 11);
+/// 字段行显示值：空值显示占位提示；超宽显示尾部（…+末尾字符，便于核对校验码结尾）
+fn field_display(val: &str, ph: &str, avail: usize) -> String {
+    if val.is_empty() {
+        truncate(ph, avail)
+    } else if w(val) > avail {
+        let keep = avail.saturating_sub(1);
+        format!(
+            "…{}",
+            val.chars()
+                .skip(val.chars().count() - keep)
+                .collect::<String>()
+        )
+    } else {
+        val.to_string()
+    }
+}
+
+/// 下拉浮层定位：优先展开在选择行下方；超出终端底部则改为行上方；
+/// 横向钳制在终端内（左右各留 1 列边距）
+fn dropdown_rect(area: Rect, inner: Rect, row_y: u16, pw: u16, ph: u16) -> Rect {
+    let mut py = row_y + 1;
+    if py + ph > area.y + area.height {
+        py = row_y.saturating_sub(ph);
+    }
+    let px = (inner.x + 8)
+        .min(area.x + area.width.saturating_sub(pw + 1))
+        .max(area.x + 1);
+    Rect {
+        x: px,
+        y: py.max(area.y),
+        width: pw,
+        height: ph,
+    }
+}
+
+/// 任务对话框行种类（文本输入 / 校验算法下拉 / 代理下拉）
+enum RowKind {
+    Text,
+    CkSel,
+    ProxySel,
+}
+
+struct Row {
+    label: &'static str,
+    value: String,
+    placeholder: String,
+    kind: RowKind,
+}
+
+/// 添加/修改任务对话框统一渲染（v1.5/FR-01-86/87 同步）：字段行 + 按钮行 + 提示行
+/// + 算法/代理下拉浮层。
+///
+/// * Add —— URL/保存到/并发/校验/校验码/代理（确认 6 取消 7）
+/// * Modify —— 并发/校验/校验码/代理（确定 4 取消 5）
+fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) {
+    let is_add = kind == DialogKind::Add;
+    let (title, dw, dh, btn_confirm, btn_cancel) = if is_add {
+        (" 添加下载任务 ", 74u16, 12u16, 6usize, 7usize)
+    } else {
+        (" 修改任务 ", 74, 10, 4, 5)
+    };
+    let dlg = dialog_rect(area, dw, dh);
     f.render_widget(Clear, dlg);
     clip_wide_at_edges(f, dlg);
     let block = Block::default()
@@ -1143,16 +1064,17 @@ fn draw_add_dialog(f: &mut Frame, app: &mut App, area: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(ACCENT))
         .title(Span::styled(
-            " 添加下载任务 ",
+            title,
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(dlg);
     f.render_widget(block, dlg);
-    if inner.width < 24 || inner.height < 9 {
+    let min_h = if is_add { 10 } else { 8 };
+    if inner.width < 24 || inner.height < min_h {
         return;
     }
 
-    let (focus, url, dir, conns, ck_type, ck_value, ck_open, ck_sel) = {
+    let (focus, url, dir, conns, ck_type, ck_value, ck_open, ck_sel, proxy_sel, proxy_open) = {
         let d = app.dialog.as_ref().unwrap();
         (
             d.focus,
@@ -1163,75 +1085,117 @@ fn draw_add_dialog(f: &mut Frame, app: &mut App, area: Rect) {
             d.ck_value.clone(),
             d.ck_open,
             d.ck_sel,
+            d.proxy_sel,
+            d.proxy_open,
         )
     };
     let (algo_name, algo_need) = CHECKSUM_ALGOS[ck_type.min(CHECKSUM_ALGOS.len() - 1)];
+    let proxy_label = app
+        .proxy_labels
+        .get(proxy_sel)
+        .cloned()
+        .unwrap_or_else(|| "直连".to_string());
 
-    // 五个字段行（URL / 保存目录 / 并发数 / 校验算法 / 校验码）
-    // 校验算法为下拉选择行（Enter/Space/点击展开），其余为文本输入行
-    let fields: [(&str, String, String, bool); 5] = [
-        ("URL", url, "https://example.com/file.zip".to_string(), false),
-        ("保存到", dir, "/srv/downloads".to_string(), false),
-        ("并发", conns, "4".to_string(), false),
-        ("校验", algo_name.to_string(), String::new(), true),
-        (
-            "校验码",
-            ck_value,
-            format!("{} 位十六进制（可留空）", algo_need),
-            false,
-        ),
-    ];
+    // 字段行构建（Add 六行 / Modify 四行；校验与代理为下拉选择行）
+    let mut rows: Vec<Row> = Vec::new();
+    if is_add {
+        rows.push(Row {
+            label: "URL",
+            value: url,
+            placeholder: "https://example.com/file.zip".to_string(),
+            kind: RowKind::Text,
+        });
+        rows.push(Row {
+            label: "保存到",
+            value: dir,
+            placeholder: "/srv/downloads".to_string(),
+            kind: RowKind::Text,
+        });
+    }
+    rows.push(Row {
+        label: "并发",
+        value: conns,
+        placeholder: "4".to_string(),
+        kind: RowKind::Text,
+    });
+    rows.push(Row {
+        label: "校验",
+        value: String::new(),
+        placeholder: String::new(),
+        kind: RowKind::CkSel,
+    });
+    rows.push(Row {
+        label: "校验码",
+        value: ck_value,
+        placeholder: format!("{} 位十六进制（可留空）", algo_need),
+        kind: RowKind::Text,
+    });
+    rows.push(Row {
+        label: "代理",
+        value: String::new(),
+        placeholder: String::new(),
+        kind: RowKind::ProxySel,
+    });
+
     let avail = (inner.width as usize).saturating_sub(12);
-    let mut type_row_y = inner.y + 4;
-    for (i, (lab, val, ph, is_sel)) in fields.iter().enumerate() {
+    let mut ck_row_y = inner.y;
+    let mut proxy_row_y = inner.y;
+    for (i, row) in rows.iter().enumerate() {
         let focused = focus == i;
         let row_y = inner.y + 1 + i as u16;
-        if *is_sel {
-            type_row_y = row_y;
+        match row.kind {
+            RowKind::CkSel => ck_row_y = row_y,
+            RowKind::ProxySel => proxy_row_y = row_y,
+            RowKind::Text => {}
         }
         let mut spans = vec![
             Span::styled(
-                pad_right(lab, 7),
+                pad_right(row.label, 7),
                 Style::default().fg(if focused { ACCENT } else { DIM }),
             ),
             Span::styled("> ".to_string(), Style::default().fg(DIM2)),
         ];
-        if *is_sel {
-            // 下拉选择行：算法名黄色加粗 + ▾ 指示
-            spans.push(Span::styled(
-                format!("{} ", algo_name),
-                Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::styled(
-                "▾",
-                Style::default().fg(if focused { YELLOW } else { DIM }),
-            ));
-            if focused {
+        match row.kind {
+            RowKind::CkSel => {
+                // 下拉选择行：算法名黄色加粗 + ▾ 指示
                 spans.push(Span::styled(
-                    "  Enter 选择算法",
-                    Style::default().fg(DIM2),
+                    format!("{} ", algo_name),
+                    Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+                ));
+                spans.push(Span::styled(
+                    "▾",
+                    Style::default().fg(if focused { YELLOW } else { DIM }),
+                ));
+                if focused {
+                    spans.push(Span::styled("  Enter 选择算法", Style::default().fg(DIM2)));
+                }
+            }
+            RowKind::ProxySel => {
+                spans.push(Span::styled(
+                    format!("{} ", proxy_label),
+                    Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+                ));
+                spans.push(Span::styled(
+                    "▾",
+                    Style::default().fg(if focused { YELLOW } else { DIM }),
                 ));
             }
-        } else if val.is_empty() {
-            spans.push(Span::styled(
-                truncate(ph, avail),
-                Style::default().fg(DIM2),
-            ));
-        } else {
-            // 长校验码尾部显示（…+末尾字符），便于核对输入结尾
-            let shown = if w(val) > avail {
-                let keep = avail.saturating_sub(1);
-                format!("…{}", val.chars().skip(val.chars().count() - keep).collect::<String>())
-            } else {
-                val.clone()
-            };
-            spans.push(Span::styled(shown, Style::default().fg(Color::White)));
-        }
-        if focused && !*is_sel {
-            spans.push(Span::styled(
-                "▏",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-            ));
+            RowKind::Text => {
+                spans.push(Span::styled(
+                    field_display(&row.value, &row.placeholder, avail),
+                    Style::default().fg(if row.value.is_empty() {
+                        DIM2
+                    } else {
+                        Color::White
+                    }),
+                ));
+                if focused {
+                    spans.push(Span::styled(
+                        "▏",
+                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                    ));
+                }
+            }
         }
         let rect = Rect {
             x: inner.x + 1,
@@ -1240,13 +1204,17 @@ fn draw_add_dialog(f: &mut Frame, app: &mut App, area: Rect) {
             height: 1,
         };
         f.render_widget(Paragraph::new(Line::from(spans)), rect);
-        // 回填字段行命中区域（鼠标点击聚焦；校验算法行再展开下拉框）
+        // 回填字段行命中区域（鼠标点击聚焦；下拉行点击展开）
         app.dlg_field_rects.push((rect, i));
     }
 
-    // 按钮行：[ 确认 ] [ 取消 ]
-    let btn_row = inner.y + 7;
-    let labels: [(&str, usize); 2] = [("确认", 5), ("取消", 6)];
+    let n_rows = rows.len() as u16;
+    // 按钮行：[ 确认 ] [ 取消 ]（Add）/ [ 确定 ] [ 取消 ]（Modify）
+    let btn_row = inner.y + n_rows + 2;
+    let labels: [(&str, usize); 2] = [
+        (if is_add { "确认" } else { "确定" }, btn_confirm),
+        ("取消", btn_cancel),
+    ];
     let btn_ws: Vec<usize> = labels
         .iter()
         .map(|(txt, _)| w(&format!("[ {} ]", txt)) + 2)
@@ -1270,14 +1238,18 @@ fn draw_add_dialog(f: &mut Frame, app: &mut App, area: Rect) {
     // 提示行（下拉框展开时切换为列表操作提示）
     let hint = if ck_open {
         " ↑↓ 选择算法 · Enter 确认选择 · Esc 关闭列表"
-    } else {
+    } else if proxy_open {
+        " ↑↓ 选择代理 · Enter 确认选择 · Esc 关闭列表"
+    } else if is_add {
         " Enter 确认 · Tab/↑↓ 切换 · Esc 取消 · 校验码留空 = 不校验"
+    } else {
+        " Enter 确定 · Tab/↑↓ 切换 · Esc 取消 · 确定后立即生效"
     };
     f.render_widget(
         Paragraph::new(Span::styled(hint, Style::default().fg(DIM2))),
         Rect {
             x: inner.x + 1,
-            y: inner.y + 8,
+            y: inner.y + n_rows + 3,
             width: inner.width.saturating_sub(2),
             height: 1,
         },
@@ -1288,20 +1260,7 @@ fn draw_add_dialog(f: &mut Frame, app: &mut App, area: Rect) {
         let items = CHECKSUM_ALGOS;
         let pw = 24u16;
         let ph = items.len() as u16 + 2;
-        // 优先展开在校验算法行下方；超出终端底部则改为行上方展开
-        let mut py = type_row_y + 1;
-        if py + ph > area.y + area.height {
-            py = type_row_y.saturating_sub(ph);
-        }
-        let px = (inner.x + 8)
-            .min(area.x + area.width.saturating_sub(pw + 1))
-            .max(area.x + 1);
-        let prect = Rect {
-            x: px,
-            y: py.max(area.y),
-            width: pw,
-            height: ph,
-        };
+        let prect = dropdown_rect(area, inner, ck_row_y, pw, ph);
         f.render_widget(Clear, prect);
         clip_wide_at_edges(f, prect);
         let pblock = Block::default()
@@ -1320,22 +1279,22 @@ fn draw_add_dialog(f: &mut Frame, app: &mut App, area: Rect) {
             let line = Line::from(vec![
                 Span::styled(
                     format!(" {} ", if sel { "▸" } else { " " }),
-                    Style::default()
-                        .fg(if sel { ACCENT } else { DIM2 })
-                        .bg(bg),
+                    Style::default().fg(if sel { ACCENT } else { DIM2 }).bg(bg),
                 ),
                 Span::styled(
                     pad_right(name, 9),
                     Style::default()
                         .fg(if sel { Color::White } else { FG })
                         .bg(bg)
-                        .add_modifier(if sel { Modifier::BOLD } else { Modifier::empty() }),
+                        .add_modifier(if sel {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
                 ),
                 Span::styled(
                     format!("{} 位", need),
-                    Style::default()
-                        .fg(if sel { ACCENT } else { DIM2 })
-                        .bg(bg),
+                    Style::default().fg(if sel { ACCENT } else { DIM2 }).bg(bg),
                 ),
             ]);
             let irect = Rect {
@@ -1347,6 +1306,56 @@ fn draw_add_dialog(f: &mut Frame, app: &mut App, area: Rect) {
             f.render_widget(Paragraph::new(line).style(Style::default().bg(bg)), irect);
             // 回填下拉选项命中区域（鼠标点击选择）
             app.dlg_ck_rects.push((irect, i));
+        }
+    }
+
+    // 代理下拉框（v1.5/FR-01-86：直连 + 命名条目，显示名含类型标注，不含认证信息）
+    if proxy_open {
+        let items: Vec<String> = app.proxy_labels.clone();
+        let pw = 26u16;
+        let ph = items.len() as u16 + 2;
+        let prect = dropdown_rect(area, inner, proxy_row_y, pw, ph);
+        f.render_widget(Clear, prect);
+        clip_wide_at_edges(f, prect);
+        let pblock = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT))
+            .title(Span::styled(
+                " 选择代理 ",
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ));
+        let pinner = pblock.inner(prect);
+        f.render_widget(pblock, prect);
+        for (i, name) in items.iter().enumerate() {
+            let sel = i == proxy_sel;
+            let bg = if sel { Color::DarkGray } else { Color::Reset };
+            let line = Line::from(vec![
+                Span::styled(
+                    format!(" {} ", if sel { "▸" } else { " " }),
+                    Style::default().fg(if sel { ACCENT } else { DIM2 }).bg(bg),
+                ),
+                Span::styled(
+                    truncate(name, (pw as usize).saturating_sub(6)),
+                    Style::default()
+                        .fg(if sel { Color::White } else { FG })
+                        .bg(bg)
+                        .add_modifier(if sel {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
+                ),
+            ]);
+            let irect = Rect {
+                x: pinner.x,
+                y: pinner.y + i as u16,
+                width: pinner.width,
+                height: 1,
+            };
+            f.render_widget(Paragraph::new(line).style(Style::default().bg(bg)), irect);
+            // 回填代理选项命中区域（鼠标点击选择）
+            app.dlg_proxy_rects.push((irect, i));
         }
     }
 }
@@ -1379,8 +1388,13 @@ fn draw_delete_dialog(f: &mut Frame, app: &mut App, area: Rect) {
         Paragraph::new(Line::from(vec![
             Span::styled(" 删除任务 ", Style::default().fg(DIM)),
             Span::styled(
-                format!("「{}」", truncate(&task_name, (inner.width as usize).saturating_sub(22))),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                format!(
+                    "「{}」",
+                    truncate(&task_name, (inner.width as usize).saturating_sub(22))
+                ),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" ？", Style::default().fg(DIM)),
         ])),
@@ -1449,14 +1463,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     let wide = outer[2].width >= 100;
     if wide && app.show_chart {
-        let cols = Layout::horizontal([
-            Constraint::Percentage(58),
-            Constraint::Percentage(42),
-        ])
-        .split(outer[2]);
+        let cols = Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
+            .split(outer[2]);
         draw_list(f, app, cols[0]);
-        let right = Layout::vertical([Constraint::Percentage(58), Constraint::Min(4)])
-            .split(cols[1]);
+        let right =
+            Layout::vertical([Constraint::Percentage(58), Constraint::Min(4)]).split(cols[1]);
         draw_detail(f, app, right[0]);
         draw_chart(f, app, right[1]);
     } else {

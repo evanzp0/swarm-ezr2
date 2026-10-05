@@ -10,7 +10,8 @@ use std::io;
 
 use crossterm::{
     event::{
-        DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyEventKind,
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, EventStream, KeyEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -24,6 +25,7 @@ fn restore_terminal() {
     let _ = disable_raw_mode();
     let _ = execute!(
         io::stdout(),
+        DisableBracketedPaste,
         LeaveAlternateScreen,
         DisableMouseCapture
     );
@@ -51,6 +53,7 @@ async fn main() -> std::io::Result<()> {
     execute!(
         stdout,
         EnterAlternateScreen,
+        EnableBracketedPaste,
         EnableMouseCapture
     )?;
     let backend = CrosstermBackend::new(stdout);
@@ -118,6 +121,10 @@ async fn run(
                     }
                     Some(Ok(Event::Mouse(m))) => {
                         app.on_mouse(m);
+                    }
+                    Some(Ok(Event::Paste(text))) => {
+                        // bracketed paste（FR-01-06 同步）：对话框文本字段整体接收
+                        app.on_paste(&text);
                     }
                     Some(Ok(_)) => {}
                     // 事件流结束（stdin 关闭）或错误：退出

@@ -26,7 +26,7 @@
                       D 删除 → 任务消失。
 场景 D（5s end）：      跳到最后一个任务（BT 下载中）→ [BT] 徽标黄色、
                         分块 x/y · 256 KB/块且 y=15984（4.19GB/256KB）。
-场景 E（5s a）：        添加对话框打开：并发预填 4；校验行默认 SHA-256；
+场景 E（5s a）：        添加对话框打开：并发预填 4；校验行默认 SHA-256；代理行默认直连；
                         校验码占位「64 位十六进制（可留空）」；无『最大并发』提示。
 场景 F（10s space）：   暂停 ubuntu 释放槽位 → 队首 rust 自动获得槽位并从断点
                         继续下载（[下载中]）；imagenet 递补为排队第 1 位；
@@ -346,14 +346,15 @@ def scenario_d():
 
 
 def scenario_e():
-    print("\n== 场景 E：添加对话框——5 字段（含校验算法/校验码），默认 SHA-256 ==")
+    print("\n== 场景 E：添加对话框——6 字段（含校验算法/校验码/代理下拉），默认 SHA-256 ==")
     samples, _ = run(120, 44, 5.0, keys=["a"], key_delay_frac=0.3)
     # 取按键后的最后几帧（对话框稳定可见）
     final_rows = samples[-1][1]
     final = "\n".join(final_rows)
     check("E1 对话框已打开", "添加下载任务" in final)
     dialog_rows = [r for r in final_rows if any(
-        s in r for s in ("添加下载任务", "URL", "保存到", "并发", "校验", "确认", "取消", "Enter 确认"))]
+        s in r for s in ("添加下载任务", "URL", "保存到", "并发", "校验", "代理", "直连",
+                         "确认", "取消", "Enter 确认"))]
     dlg_text = "\n".join(dialog_rows)
     check("E2 无『最大并发』提示文字", "最大并发" not in dlg_text and "最大并发" not in final)
     check("E3 校验行默认 SHA-256 下拉指示", re.search(r"校验\s*>\s*SHA-256 ▾", dlg_text) is not None,
@@ -362,6 +363,8 @@ def scenario_e():
     check("E5 并发字段预填默认值 4", re.search(r"并发\s*>\s*4", dlg_text) is not None,
           next((r.strip()[:40] for r in dialog_rows if "并发" in r and ">" in r), ""))
     check("E6 提示行含校验码留空说明", "Enter 确认" in final and "校验码留空 = 不校验" in final)
+    check("E7 代理行默认「直连」下拉指示", re.search(r"代理\s*>\s*直连 ▾", dlg_text) is not None,
+          next((r.strip()[:44] for r in dialog_rows if "代理" in r and ">" in r), ""))
 
 
 def find_text_pos(screen, needle: str):
