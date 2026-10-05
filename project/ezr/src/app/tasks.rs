@@ -128,7 +128,7 @@ impl App {
             }
             self.tasks[idx].state = TaskState::Verifying;
             self.tasks[idx].has_slot = true;
-            let spec = crate::engine::supervisor::VerifySpec {
+            let spec = crate::engine::VerifySpec {
                 id,
                 path: self.tasks[idx].downloading_path(),
                 final_path: self.tasks[idx].target_path(),

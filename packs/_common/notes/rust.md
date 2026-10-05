@@ -213,7 +213,33 @@ group_imports = "StdExternalCrate"
   `pmd-dist-<版本>-bin.zip`）；GitHub API 限流时按已知 tag 拼直链下载，勿据 404 误判
   "未发布"。CPD 无独立启动器，用 `pmd cpd` 子命令（`-l rust` 必带，见 engineering.md
   「静默空输出」条）；输入用位置参数（7.28 无 `--files` 选项），发现重复时 exit 4 属
-  正常语义（非调用失败）。
+  正常语义（非调用失败）。另有两个坑：① **报告文件清单 ≠ 全部拷贝清单**——同一 tile
+  多份拷贝时报告只列部分配对（实测 16 份相同拷贝只报 2 对），"几处重复"以独立 grep 计数
+  为准；② **Rust 词法器在 `/* */` 块注释内遇全角字符报 Lexical error（exit 5）**，
+  `//` 行注释免疫——Rust 代码注释一律用行注释可保 CPD 可跑；exit 5（词法失败）与
+  exit 4（发现重复）语义不同，先看 `[ERROR]` 行再读结果。
+- **lint 姿态块去重：宏/include! 提取是死路，正确路径是「验证冗余 → 删除 → 单源 crate 根」**：
+  模块级 `#![allow(...)]` 姿态块多拷贝时，提取共享文件的两条路都不可行——`include!()` 与
+  `macro_rules!` 均不能拼接内部属性（探针实证：两者都报 "an inner attribute is not
+  permitted in this context"）。先验证冗余性再动手：把 crate 级 posture（bin 入口 crate
+  根）与各实现子模块块的 allow 清单逐一对照，子模块块全部被 crate 根覆盖时（含 pedantic/
+  nursery 传递覆盖的子 lint）直接删除即可，clippy --all-targets 0 即闭环实证；只把子模块
+  块中 crate 根没有的个别 lint（及依据注释）收敛回 crate 根。注意 bin-only crate 的
+  `src/bin/*` 是独立编译单元，其 crate 根姿态不被主入口覆盖，不属冗余；带具体依据注释的
+  定点 allow（如单文件复杂度豁免）是窄作用域豁免，不属姿态块，保留。
+- **`#[path]` 挂载测试与产品 crate 的模块私有化联动**：产品侧把引擎实现子模块私有化
+  （`pub mod` → `mod` + 门面 re-export）会断掉挂载同一 mod.rs 的测试 crate 的内部路径
+  （E0603）。解法：产品 mod.rs 加 `#[cfg(test)] pub use` 门面 re-export——挂载测试 crate
+  整体在 cfg(test) 下编译（re-export 生效），产品非测试构建不产生该路径（窄接口不破坏）；
+  产品 crate 自身测试编译不消费该路径时的 `unused_imports` 属挂载机制固有告警，按三分法 ①
+  在 re-export 处精确 allow 并注明依据。re-export 不可超越项自身可见性（E0364）：
+  `pub(super)` 项要先在定义处升 `pub`（私有模块内不外泄）再 `#[cfg(test)] pub(crate) use`。
+- **纯文本工具的属性测试模板**（显示宽度表/格式化函数，CJK 混排终端 UI 高发）：
+  宽度表函数锁「n ≤ w(s) ≤ 2n」界 + 截断/填充幂等（truncate 二次调用恒等、pad 恰达
+  max(w, width)）；时长/日期格式化锁 parse-back 往返（格式化→按格式解析→原值）与
+  Option 包装同口径；字节/速度格式化锁后缀封闭域（单位后缀只取固定集合）+「单位绑定
+  总量」（配对展示的单位只由 total 决定）+ 负零归一。宽度界属性注意 `max=0` 边界：单
+  字符省略号使 w(truncate(s,0))=1>0 属既有契约，属性域排除该点并在 doc 注明。
 - **proptest 多参数的长度必须耦合**：一个属性同时生成「数量 n」与「逐项数据 vec」时，
   两个独立策略（`n in 0..N` + `vec(..., 0..N)`）长度各随机，测试体内按 `[i]` 索引必
   越界 panic（表现为属性随机红，缩小到 `n > vec.len()` 才现形）。正确形态：定长 vec

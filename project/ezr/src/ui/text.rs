@@ -5,7 +5,7 @@ use ratatui::text::Span;
 
 use super::EMPTY;
 
-pub(super) fn w(s: &str) -> usize {
+pub fn w(s: &str) -> usize {
     s.chars()
         .map(|c| {
             let u = c as u32;
@@ -24,7 +24,7 @@ pub(super) fn w(s: &str) -> usize {
         .sum()
 }
 
-pub(super) fn truncate(s: &str, max: usize) -> String {
+pub fn truncate(s: &str, max: usize) -> String {
     if w(s) <= max {
         return s.to_string();
     }
@@ -44,7 +44,7 @@ pub(super) fn truncate(s: &str, max: usize) -> String {
 }
 
 /// 按终端显示宽度右填充空格（Rust format! 的宽度按字符数计，对 CJK 不准）
-pub(super) fn pad_right(s: &str, width: usize) -> String {
+pub fn pad_right(s: &str, width: usize) -> String {
     let cur = w(s);
     if cur >= width {
         s.to_string()
@@ -53,7 +53,7 @@ pub(super) fn pad_right(s: &str, width: usize) -> String {
     }
 }
 
-pub(super) fn fmt_size(bytes: u64) -> String {
+pub fn fmt_size(bytes: u64) -> String {
     const MB: f64 = 1_000_000.0;
     const GB: f64 = 1_000_000_000.0;
     let b = bytes as f64;
@@ -68,7 +68,7 @@ pub(super) fn fmt_size(bytes: u64) -> String {
     }
 }
 
-pub(super) fn fmt_speed(bps: f64) -> String {
+pub fn fmt_speed(bps: f64) -> String {
     const MB: f64 = 1_000_000.0;
     let bps = if bps == 0.0 { 0.0 } else { bps }; // 归一化负零（-0.0 == 0.0），避免「-0 B/s」显示
     if bps >= MB {
@@ -80,14 +80,14 @@ pub(super) fn fmt_speed(bps: f64) -> String {
     }
 }
 
-pub(super) fn fmt_eta(secs: Option<u64>) -> String {
+pub fn fmt_eta(secs: Option<u64>) -> String {
     match secs {
         None => "--:--".to_string(),
         Some(s) => fmt_dur(s),
     }
 }
 
-pub(super) fn fmt_dur(s: u64) -> String {
+pub fn fmt_dur(s: u64) -> String {
     let h = s / 3600;
     let m = (s % 3600) / 60;
     let sec = s % 60;
@@ -99,7 +99,7 @@ pub(super) fn fmt_dur(s: u64) -> String {
 }
 
 /// 同单位大小对（BT 行更紧凑）：1.72/4.32 GB
-pub(super) fn fmt_size_pair(a: u64, b: u64) -> String {
+pub fn fmt_size_pair(a: u64, b: u64) -> String {
     const KB: f64 = 1_000.0;
     const MB: f64 = 1_000_000.0;
     const GB: f64 = 1_000_000_000.0;

@@ -1,22 +1,5 @@
 //! plan — 分块计划数学（块数计算/块区间/块大小格式化，纯函数）
 
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
-// 字节/速度/时间算术在 u64-f64 间转换是下载器领域固有；边界由调用方保证
-#![allow(clippy::missing_const_for_fn)] // nursery 误报为主（含 trait impl 场景）
-#![allow(clippy::doc_markdown, clippy::doc_lazy_continuation)] // 中文文档中英文术语不强制反引号
-#![allow(clippy::float_cmp)] // 速度/时间为 0 的语义判断使用精确比较
-#![allow(
-    clippy::map_unwrap_or,
-    clippy::option_if_let_else,
-    clippy::unnested_or_patterns
-)]
-#![allow(clippy::cognitive_complexity, clippy::too_many_lines)] // 分块计算/状态机逻辑固有复杂度
-
 /// HTTP 协议默认块大小（phase-01 定案：1 MB/块，块数与并发数解耦；demo D13 默认值）
 pub const HTTP_CHUNK_SIZE: u64 = 1024 * 1024;
 

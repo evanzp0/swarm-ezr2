@@ -1,34 +1,36 @@
 //! engine — 下载引擎（tokio 任务集：探测、分块下载、校验、限速、事件上报）
 //!
 //! 架构：App（UI 线程）持 [`EngineHandle`] 下发 [`Cmd`]；引擎主循环 spawn 每
-//! 任务一个 supervisor（见 [`supervisor`]），supervisor 经 [`Evt`] 上报探测、
+//! 任务一个 supervisor，supervisor 经 [`Evt`] 上报探测、
 //! 进度、完成、失败与暂停。任务上下文（URL/路径/并发等）由 App 在
-//! `Cmd::Start` 时以 [`supervisor::TaskSpec`] 一次性携带，引擎不持有任务模型，
+//! `Cmd::Start` 时以 [`TaskSpec`] 一次性携带，引擎不持有任务模型，
 //! 避免跨线程锁竞争。
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
-// 字节/速度/时间算术在 u64-f64 间转换是下载器领域固有；边界由调用方保证
-#![allow(clippy::missing_const_for_fn)] // nursery 误报为主（含 trait impl 场景）
-#![allow(clippy::doc_markdown, clippy::doc_lazy_continuation)] // 中文文档中英文术语不强制反引号
-#![allow(clippy::float_cmp)] // 速度/时间为 0 的语义判断使用精确比较
-#![allow(
-    clippy::map_unwrap_or,
-    clippy::option_if_let_else,
-    clippy::unnested_or_patterns
-)]
-#![allow(clippy::cognitive_complexity, clippy::too_many_lines)] // 分块计算/状态机逻辑固有复杂度
+//!
+//! 窄接口：本模块门面只导出 [`Cmd`]/[`Evt`]/[`ConnView`]/[`EngineHandle`]
+//! 与载荷类型 [`TaskSpec`]/[`VerifySpec`]；supervisor/error/throttle 为实现
+//! 子模块（私有，app/ui 不可达，防越层 reach-in）。
 
-pub mod error;
-pub mod supervisor;
-pub mod throttle;
+mod error;
+mod supervisor;
+mod throttle;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
+// 测试可达性门面：#[path] 挂载的加固测试需直接测实现子模块（throttle/error），
+// 经 cfg(test) 门控在门面 re-export（notes/rust.md「门面 re-export」手法）；
+// 产品构建（cfg(test)=off）不产生该路径，窄接口不受影响。allow 依据：产品
+// crate 自身的测试编译不消费该路径（消费方是独立编译的挂载测试 crate），
+// unused_imports 属挂载机制固有告警（三分法 ①，notes/rust.md）。
+#[cfg(test)]
+#[allow(unused_imports)]
+pub use error::classify_reqwest;
+/// 窄接口载荷：`Cmd::Start`/`Cmd::Verify` 携带的任务上下文（单源于 supervisor
+/// 定义，门面 re-export 供 app 构造；app 不得再 reach 进 supervisor 内部）。
+pub use supervisor::{TaskSpec, VerifySpec};
+#[cfg(test)]
+#[allow(unused_imports)]
+pub use throttle::Throttle;
 use tokio::sync::mpsc;
 
 /// 引擎命令（App → 引擎）
@@ -169,7 +171,7 @@ pub(crate) struct EngineShared {
     /// HTTP 客户端（代理/重定向/TLS 配置一次成型）
     pub client: reqwest::Client,
     /// 全局限速器
-    pub throttle: Arc<throttle::Throttle>,
+    throttle: Arc<throttle::Throttle>,
 }
 
 /// 引擎句柄（App 持有；命令下发与事件消费的边界；Clone 以便任务内发送）

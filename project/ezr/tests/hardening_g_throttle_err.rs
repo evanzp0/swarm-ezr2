@@ -45,7 +45,7 @@ mod model;
 use std::io::{Read, Write};
 use std::time::Duration;
 
-use engine::throttle::Throttle;
+use engine::Throttle;
 
 /// 靶 throttle `68:63`：突发容量 = rate × BURST_SECS(0.5)。
 /// 空闲 600ms 蓄满后真实桶容量 5MB；`*→+`（cap=rate+0.5）与 `*→/`（cap=rate/0.5）
@@ -109,7 +109,7 @@ async fn body_read_failure_classifies_as_transfer_interrupted() {
         .await
         .expect_err("body 长度不足必须读取失败");
     srv.join().expect("server thread");
-    let f = engine::error::classify_reqwest(&err);
+    let f = engine::classify_reqwest(&err);
     assert!(
         f.reason.starts_with("传输中断"),
         "body 错误须分类传输中断，got: {}",
@@ -130,7 +130,7 @@ async fn connect_failure_reason_embeds_real_chain_text() {
         .send()
         .await
         .expect_err("端口 1 必拒连");
-    let f = engine::error::classify_reqwest(&err);
+    let f = engine::classify_reqwest(&err);
     assert!(f.reason.starts_with("连接失败（"), "reason={}", f.reason);
     assert!(
         f.reason.contains("refused") || f.reason.contains("os error 111"),
@@ -154,7 +154,7 @@ async fn chain_text_truncated_at_160() {
         .send()
         .await
         .expect_err("端口 1 必拒连");
-    let f = engine::error::classify_reqwest(&err);
+    let f = engine::classify_reqwest(&err);
     assert!(f.reason.contains("连接失败（"), "reason={}", f.reason);
     assert!(
         !f.reason.contains(tail),
@@ -181,7 +181,7 @@ async fn verify_command_spawns_verify_task() {
     let (evt_tx, mut evt_rx) = tokio::sync::mpsc::channel(16);
     let h = engine::EngineHandle::start(&model::config::Config::default(), evt_tx);
     h.send(engine::Cmd::Verify {
-        spec: engine::supervisor::VerifySpec {
+        spec: engine::VerifySpec {
             id: 7,
             path: dl.to_string_lossy().into_owned(),
             final_path: fin.to_string_lossy().into_owned(),

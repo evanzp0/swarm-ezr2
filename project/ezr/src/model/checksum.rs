@@ -8,22 +8,6 @@
 //! ② 保存目录下伴随文件 `<目标文件>.<算法后缀>`（算法由后缀确定，大小写不敏感；
 //! 内容为十六进制摘要或 `hex  文件名` 格式；位数不符视为无效、忽略校验；
 //! 多个并存按算法表声明顺序取最先存在者）。
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
-// 字节/速度/时间算术在 u64-f64 间转换是下载器领域固有；边界由调用方保证
-#![allow(clippy::missing_const_for_fn)] // nursery 误报为主（含 trait impl 场景）
-#![allow(clippy::doc_markdown, clippy::doc_lazy_continuation)] // 中文文档中英文术语不强制反引号
-#![allow(clippy::float_cmp)] // 速度/时间为 0 的语义判断使用精确比较
-#![allow(
-    clippy::map_unwrap_or,
-    clippy::option_if_let_else,
-    clippy::unnested_or_patterns
-)]
-#![allow(clippy::cognitive_complexity, clippy::too_many_lines)] // 分块计算/状态机逻辑固有复杂度
 
 use std::path::Path;
 

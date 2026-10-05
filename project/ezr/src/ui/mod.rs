@@ -8,20 +8,6 @@
 //! 模块划分：`text`（纯文本工具）/ `task_lines`（列表行构造）/
 //! `list`（任务列表区）/ `header`（头部·页签·页脚）/ `detail`（详情与速度图）/
 //! `dialog`（对话框与浮层）/ 总入口 [`draw`]。
-#![allow(missing_docs)] // 交互层：demo 定稿基线复用，接口文档见 model/engine 层
-#![allow(clippy::pedantic)] // 交互层字节/速度展示算术与 demo 基线风格豁免
-#![allow(clippy::nursery)] // 同上
-#![allow(
-    clippy::cognitive_complexity,
-    clippy::too_many_lines,
-    clippy::too_many_arguments
-)]
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
 
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::Color;
@@ -39,10 +25,18 @@ mod list;
 mod task_lines;
 mod text;
 
+// 测试可达性门面：property_tests 属性测试需触达 text 纯函数（显示宽度不变量/
+// 截断·填充幂等/时长往返/格式化稳定性），经 cfg(test) 门控 re-export
+// （notes/rust.md「门面 re-export」手法）；产品构建（cfg(test)=off）不产生
+// 该路径，外部 API 面零增量。
 use detail::{draw_chart, draw_detail};
 use dialog::draw_dialogs;
 use header::{draw_footer, draw_header, draw_tabs};
 use list::draw_list;
+#[cfg(test)]
+pub(crate) use text::{
+    fmt_dur, fmt_eta, fmt_size, fmt_size_pair, fmt_speed, pad_right, truncate, w,
+};
 
 // ---------------------------------------------------------------------------
 // 调色板（语义状态色；下载中=淡蓝，暂停=白，等待=黄，失败=红，完成=绿，做种=粉）

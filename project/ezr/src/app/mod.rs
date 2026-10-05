@@ -12,20 +12,6 @@
 //! 模块划分：`cli`（CLI 启动参数添加任务）/ `engine`（tick 事件消费/槽位调度/
 //! 失败处理）/ `keys`（键盘输入）/ `mouse`（鼠标输入）/ `dialogs`（对话框确认流）/
 //! `paste`（bracketed paste）/ `tasks`（暂停·重试·清理操作）。App 结构体与构造在此。
-#![allow(missing_docs)] // 交互层：demo 定稿基线复用，接口文档见 model/engine 层
-#![allow(clippy::pedantic)] // 交互层字节/速度展示算术与 demo 基线风格豁免
-#![allow(clippy::nursery)] // 同上
-#![allow(
-    clippy::cognitive_complexity,
-    clippy::too_many_lines,
-    clippy::too_many_arguments
-)]
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
 
 use std::collections::HashMap;
 use std::time::Instant;

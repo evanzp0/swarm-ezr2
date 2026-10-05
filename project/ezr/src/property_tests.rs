@@ -769,3 +769,139 @@ proptest! {
         }
     }
 }
+
+/// 混合 CJK/全角/任意字符的文本策略（覆盖 w() 的宽度表三个分支域）
+fn text_with_wide() -> impl proptest::strategy::Strategy<Value = String> {
+    proptest::collection::vec(
+        prop_oneof![
+            3 => any::<char>(),
+            2 => proptest::char::range('\u{4E00}', '\u{9FA5}'),
+            1 => proptest::char::range('\u{3000}', '\u{303F}'),
+            1 => proptest::char::range('\u{FF00}', '\u{FF60}'),
+        ],
+        0..48,
+    )
+    .prop_map(|chars| chars.into_iter().collect())
+}
+
+proptest! {
+    // ---- ui/text 纯文本工具（architect 第三轮补充）----
+    // 覆盖维度：显示宽度不变量、截断/填充幂等、时长格式化往返、
+    // 大小/速度格式化的单位后缀封闭域与「单位绑定总量」口径。
+
+    /// w() 显示宽度界：n ≤ w(s) ≤ 2n（CJK/全角按 2 计，其余按 1 计）
+    #[test]
+    fn prop_text_width_within_bounds(s in text_with_wide()) {
+        let n = s.chars().count();
+        let width = crate::ui::w(&s);
+        prop_assert!(width >= n, "宽度下界（每字符至少 1 列）");
+        prop_assert!(width <= 2 * n, "宽度上界（每字符至多 2 列）");
+    }
+
+    /// truncate 宽度界 + 幂等：w(truncate(s, max)) ≤ max（max ≥ 1；max=0 时
+    /// 单字符省略号超出属既有契约口径，不在本属性域）；二次截断恒等
+    #[test]
+    fn prop_truncate_bounded_and_idempotent(
+        s in text_with_wide(),
+        max in 1usize..=80,
+    ) {
+        let once = crate::ui::truncate(&s, max);
+        prop_assert!(crate::ui::w(&once) <= max, "截断后显示宽度不超预算");
+        let twice = crate::ui::truncate(&once, max);
+        prop_assert_eq!(&twice, &once, "截断幂等");
+    }
+
+    /// pad_right 精确宽度 + 幂等：w(pad(s, width)) == max(w(s), width)；二次填充恒等
+    #[test]
+    fn prop_pad_right_exact_and_idempotent(
+        s in text_with_wide(),
+        width in 0usize..=60,
+    ) {
+        let once = crate::ui::pad_right(&s, width);
+        prop_assert_eq!(
+            crate::ui::w(&once),
+            std::cmp::max(crate::ui::w(&s), width),
+            "填充后显示宽度恰为 max(原宽, 目标宽)"
+        );
+        let twice = crate::ui::pad_right(&once, width);
+        prop_assert_eq!(&twice, &once, "填充幂等");
+    }
+
+    /// fmt_dur 往返：格式化 → 解析回原秒数（h:mm:ss / mm:ss 两形态全遍历）；
+    /// fmt_eta(Some(s)) 与 fmt_dur(s) 一致（eta 是 dur 的 Option 包装）
+    #[test]
+    fn prop_fmt_dur_round_trip(secs in 0u64..1_000_000) {
+        fn parse_back(text: &str) -> Option<u64> {
+            let parts: Vec<&str> = text.split(':').collect();
+            match parts.as_slice() {
+                [h, m, sec] => Some(
+                    h.parse::<u64>().ok()? * 3600
+                        + m.parse::<u64>().ok()? * 60
+                        + sec.parse::<u64>().ok()?,
+                ),
+                [m, sec] => Some(m.parse::<u64>().ok()? * 60 + sec.parse::<u64>().ok()?),
+                _ => None,
+            }
+        }
+        let text = crate::ui::fmt_dur(secs);
+        prop_assert_eq!(
+            parse_back(&text),
+            Some(secs),
+            "时长格式化往返保真"
+        );
+        prop_assert_eq!(
+            crate::ui::fmt_eta(Some(secs)),
+            text,
+            "eta(Some) 与 dur 同口径"
+        );
+        prop_assert_eq!(crate::ui::fmt_eta(None), "--:--", "eta(None) 恒占位符");
+    }
+
+    /// fmt_size / fmt_size_pair 单位后缀封闭域：后缀只取 B/KB/MB/GB；
+    /// fmt_size_pair 的单位只由总量 y 决定（x 同单位展示）且恒含 '/'
+    #[test]
+    fn prop_fmt_size_suffix_domain(
+        bytes in 0u64..u64::MAX,
+        x in 0u64..(1u64 << 50),
+        y in 0u64..(1u64 << 50),
+    ) {
+        let unit_of = |total: u64| {
+            if total >= 1_000_000_000 { "GB" } else if total >= 1_000_000 { "MB" } else if total >= 1_000 { "KB" } else { "B" }
+        };
+        let single = crate::ui::fmt_size(bytes);
+        let expected = unit_of(bytes);
+        prop_assert!(
+            single.ends_with(&format!(" {expected}")),
+            "fmt_size 后缀封闭域与阈值口径"
+        );
+        let pair = crate::ui::fmt_size_pair(x, y);
+        let expected_pair = unit_of(y);
+        prop_assert!(
+            pair.ends_with(&format!(" {expected_pair}")),
+            "fmt_size_pair 单位绑定总量"
+        );
+        prop_assert!(pair.contains('/'), "配对格式恒含分隔符");
+    }
+
+    /// fmt_speed 稳定域：负零归一（-0.0 与 0.0 同输出）；后缀封闭域
+    /// B/s、KB/s、MB/s 且数值前缀可解析
+    #[test]
+    fn prop_fmt_speed_suffix_domain(bps in 0.0f64..1e15) {
+        prop_assert_eq!(
+            crate::ui::fmt_speed(-0.0),
+            crate::ui::fmt_speed(0.0),
+            "负零归一"
+        );
+        let text = crate::ui::fmt_speed(bps);
+        let expected = if bps >= 1_000_000.0 {
+            "MB/s"
+        } else if bps >= 1_000.0 {
+            "KB/s"
+        } else {
+            "B/s"
+        };
+        prop_assert!(text.ends_with(expected), "速度后缀封闭域与阈值口径");
+        let prefix = text.strip_suffix(expected).and_then(|p| p.trim().parse::<f64>().ok());
+        prop_assert!(prefix.is_some(), "数值前缀可解析");
+    }
+}

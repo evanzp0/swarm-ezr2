@@ -16,6 +16,8 @@
     clippy::too_many_lines,
     clippy::too_many_arguments
 )]
+// 字节/速度/时间算术在 u64-f64 间转换是下载器领域固有；边界由调用方保证
+// （architect 第三轮：模块级姿态块 16 份拷贝收敛至此——lint 姿态单源 crate 根）
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,

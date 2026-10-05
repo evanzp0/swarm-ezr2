@@ -4,22 +4,6 @@
 //! 任一变化或服务器不再返回这些头 → 判定「续传一致性失效」：
 //! sidecar 作废、从头重新下载（不计失败、不占重试计数）；
 //! 同一任务连续 3 次失效 → 转为「已失败（服务器内容持续变化）」停等。
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
-// 字节/速度/时间算术在 u64-f64 间转换是下载器领域固有；边界由调用方保证
-#![allow(clippy::missing_const_for_fn)] // nursery 误报为主（含 trait impl 场景）
-#![allow(clippy::doc_markdown, clippy::doc_lazy_continuation)] // 中文文档中英文术语不强制反引号
-#![allow(clippy::float_cmp)] // 速度/时间为 0 的语义判断使用精确比较
-#![allow(
-    clippy::map_unwrap_or,
-    clippy::option_if_let_else,
-    clippy::unnested_or_patterns
-)]
-#![allow(clippy::cognitive_complexity, clippy::too_many_lines)] // 分块计算/状态机逻辑固有复杂度
 
 /// sidecar 记录的服务端标识（探测快照）
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

@@ -8,22 +8,6 @@
 //! 状态机口径（phase-01 FR-01-30）：01 实际出现 6 态——等待中/下载中/已暂停/
 //! 校验中/已失败/已完成；「后期处理中」与「做种中」为后续期预留（枚举与配色
 //! 保留、01 内无触发路径）。不存在「连接中」状态。
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
-// 字节/速度/时间算术在 u64-f64 间转换是下载器领域固有；边界由调用方保证
-#![allow(clippy::missing_const_for_fn)] // nursery 误报为主（含 trait impl 场景）
-#![allow(clippy::doc_markdown, clippy::doc_lazy_continuation)] // 中文文档中英文术语不强制反引号
-#![allow(clippy::float_cmp)] // 速度/时间为 0 的语义判断使用精确比较
-#![allow(
-    clippy::map_unwrap_or,
-    clippy::option_if_let_else,
-    clippy::unnested_or_patterns
-)]
-#![allow(clippy::cognitive_complexity, clippy::too_many_lines)] // 分块计算/状态机逻辑固有复杂度
 
 pub mod checksum;
 pub mod chunk;

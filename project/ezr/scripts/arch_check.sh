@@ -2,7 +2,7 @@
 # arch_check.sh — EZR 自动化架构边界检查（six-pack/architect 交付）
 #
 # 依据 packs/_common/notes/rust.md「架构边界与适配器方向」条款的 grep 级方案：
-# 零依赖、可读、易维护，覆盖本项目八条分层规则；CI 可作为 && 链一环集成。
+# 零依赖、可读、易维护，覆盖本项目十条分层规则；CI 可作为 && 链一环集成。
 # （v1.3 后复核批次，architect 第二轮：新增规则 7/8，见 POSITIVE-CONTROL 尾注）
 #
 # 分层基线（依赖方向：低层指向高层，model 为最内层纯逻辑）：
@@ -91,6 +91,26 @@ if [ -n "$hit" ]; then
   echo "[FAIL] 业务/机制层直读环境变量（应收口 config/sentinel/入口）:"; echo "$hit"; fails=$((fails+1))
 else
   echo "[ OK ] 环境变量读取收口适配缝（config/sentinel/入口）"
+fi
+
+# 规则 9【窄接口】engine 实现子模块保持私有：supervisor/error/throttle 只允许
+# 以 `mod` 声明（architect 第三轮：payload 类型经门面 re-export 消费；重新
+# `pub mod` 即窄接口破坏——app/ui 将能 reach 引擎内部）
+hit=$(grep -nE '^[[:space:]]*pub[[:space:]]+mod[[:space:]]+(supervisor|error|throttle)' src/engine/mod.rs || true)
+if [ -n "$hit" ]; then
+  echo "[FAIL] engine 实现子模块被 pub mod（窄接口破坏，应为私有 mod + 门面 re-export）:"; echo "$hit"; fails=$((fails+1))
+else
+  echo "[ OK ] engine 实现子模块私有（窄接口经门面 re-export）"
+fi
+
+# 规则 10【单源】crate 级 lint 姿态单源于入口 main.rs：模块级姿态块（判别注释
+# 「字节/速度/时间算术…」）不得再出现（architect 第三轮：曾 16 份拷贝致 CPD
+# 重复，已收敛至 crate 根——再出现即重复姿态回归）
+hit=$(grep -rln '字节/速度/时间算术在 u64-f64 间转换' src/ --include='*.rs' | grep -v '^src/main.rs$' || true)
+if [ -n "$hit" ]; then
+  echo "[FAIL] lint 姿态块出现第二拷贝（单源于 main.rs crate 级 allow）:"; echo "$hit"; fails=$((fails+1))
+else
+  echo "[ OK ] lint 姿态单源 main.rs（无模块级拷贝）"
 fi
 
 if [ "$fails" -gt 0 ]; then

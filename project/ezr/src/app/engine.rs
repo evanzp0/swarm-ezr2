@@ -44,10 +44,10 @@ impl App {
 
     /// 构建任务启动规格（Start 前置：读 sidecar 断点、磁盘预检在获槽时）
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn make_spec(t: &Task) -> crate::engine::supervisor::TaskSpec {
+    pub(super) fn make_spec(t: &Task) -> crate::engine::TaskSpec {
         let sidecar = Sidecar::load(&t.sidecar_path());
         let sc_path = (sidecar.is_some()).then(|| t.sidecar_path());
-        crate::engine::supervisor::TaskSpec {
+        crate::engine::TaskSpec {
             id: t.id,
             url: t.url.clone(),
             save_dir: t.save_dir.clone(),
@@ -411,7 +411,7 @@ impl App {
                         .checksum
                         .as_ref()
                         .map_or(String::new(), |c| c.value.clone());
-                    let spec = crate::engine::supervisor::VerifySpec {
+                    let spec = crate::engine::VerifySpec {
                         id,
                         path: t.downloading_path(),
                         final_path: t.target_path(),
