@@ -1,6 +1,8 @@
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   01-persistence-config-01 任务注册表跨会话保留
 #   01-persistence-config-02 数据与配置目录布局
+#   （v1.4 注：config.toml 缺失时启动自动生成全注释默认模板，FR-01-85 ——
+#    判据由「允许缺失」改为「缺失时自动生成」，生成细则见 01-config-template.feature）
 #   01-persistence-config-03 配置文件缺失时全部使用默认值
 #   01-persistence-config-04 配置非法值回退默认或钳制边界
 #   01-persistence-config-05 block_size_http 可配置生效
@@ -28,7 +30,8 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
 
   Scenario: 01-persistence-config-02 数据与配置目录布局
     When 运行 ezr 并添加任务
-    Then 用户主目录下存在 .ezr/config.toml（或未改动时允许缺失）与 .ezr/state/ 任务注册表
+    Then 用户主目录下存在 .ezr/config.toml（缺失时启动自动生成全注释默认模板，v1.4/FR-01-85，
+      细则见 01-config-template.feature）与 .ezr/state/ 任务注册表
     And sidecar 文件随各自目标文件存放（不在 .ezr/ 集中存放）
 
   Scenario: 01-persistence-config-03 配置文件缺失时全部使用默认值

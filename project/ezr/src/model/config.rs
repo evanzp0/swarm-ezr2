@@ -184,6 +184,74 @@ pub fn default_download_dir() -> String {
         .unwrap_or_else(|| "Downloads".to_string())
 }
 
+impl Config {
+    /// 配置模板（FR-01-85，v1.4）：全部行被注释的默认值模板，每键注明**用途**与
+    /// **取值范围**。默认值取自 [`Config::default`]（单一事实来源，不引入第二份
+    /// 字面量）；模板整体被解析时得到全部默认值——保持注释状态 = 文件缺失行为
+    /// （契约测试 `template_parses_to_defaults`）。
+    #[must_use]
+    pub fn default_template() -> String {
+        let d = Config::default();
+        let mut t = String::new();
+        t.push_str("# EZR Downloader 配置模板（首次启动自动生成，FR-01-85）\n");
+        t.push_str("# 说明：本文件每行均为注释，去掉行首 # 并改值即可生效；任何键缺失或\n");
+        t.push_str("# 非法时按默认/回退口径处理（FR-01-71），保持注释状态 = 全默认行为。\n");
+        t.push_str("\n# download_dir：默认保存目录（添加对话框目录留空时使用）\n");
+        t.push_str("# 取值范围：任意目录路径；留空或缺失 = 用户主目录下的下载目录\n");
+        t.push_str("# download_dir = \"\"\n");
+        t.push_str("\n# block_size_http：HTTP 分块块大小（字节）\n");
+        t.push_str("# 取值范围：正整数（≥1）；0 或非法值回退默认（1 MB）\n");
+        t.push_str(&format!("# block_size_http = {}\n", d.block_size_http));
+        t.push_str("\n# download_slots：全局下载槽位数（同时下载的任务数上限）\n");
+        t.push_str("# 取值范围：正整数（≥1）；0 或非法值回退默认\n");
+        t.push_str(&format!("# download_slots = {}\n", d.download_slots));
+        t.push_str("\n# max_speed：全局下载限速（0 = 不限）\n");
+        t.push_str("# 取值范围：≥0；支持 \"2 MB/s\" / \"500 KB/s\" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）\n");
+        t.push_str(&format!("# max_speed = {}\n", d.max_speed));
+        t.push_str("\n# max_retries：自动重试上限次数（达上限转停等，可按 R 手动重试）\n");
+        t.push_str("# 取值范围：≥1 的整数；0 或非法值回退默认\n");
+        t.push_str(&format!("# max_retries = {}\n", d.max_retries));
+        t.push_str("\n# auto_retry：失败后是否自动重试\n");
+        t.push_str("# 取值范围：true / false\n");
+        t.push_str(&format!("# auto_retry = {}\n", d.auto_retry));
+        t.push_str("\n# backoff_initial：自动重试退避初始秒（指数退避序列起点）\n");
+        t.push_str("# 取值范围：>0 的有限数；非法值回退默认\n");
+        t.push_str(&format!("# backoff_initial = {:.1}\n", d.backoff_initial));
+        t.push_str("\n# backoff_cap：自动重试退避封顶秒\n");
+        t.push_str("# 取值范围：>0 的有限数；非法值回退默认\n");
+        t.push_str(&format!("# backoff_cap = {:.1}\n", d.backoff_cap));
+        t.push_str("\n# proxy：HTTP(S) 代理地址（仅经配置文件，不读取环境变量代理）\n");
+        t.push_str("# 取值范围：合法代理 URL；留空或缺失 = 不使用代理\n");
+        t.push_str("# proxy = \"\"\n");
+        t.push_str("\n# default_concurrency：默认并发数（添加对话框并发留空时使用）\n");
+        t.push_str("# 取值范围：1–64 的整数；越界钳制到边界\n");
+        t.push_str(&format!(
+            "# default_concurrency = {}\n",
+            d.default_concurrency
+        ));
+        t
+    }
+}
+
+/// 配置模板自动生成（FR-01-85/D17）：`path` 不存在时创建父目录并写入全注释
+/// 默认模板；已存在（含损坏文件）一律不覆写（D17①，`create_new` 语义：
+/// 并发竞态下同样宁可不写）；创建/写失败错误向上传播（调用点按 D17② 静默
+/// 跳过，不阻塞启动，配置按 FR-01-71 缺失口径加载）。
+pub fn ensure_default_config(path: &Path) -> std::io::Result<()> {
+    if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
+    }
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(mut f) => std::io::Write::write_all(&mut f, Config::default_template().as_bytes()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,5 +359,139 @@ mod tests {
             expect_dir,
             "未设置 → ~/.ezr（FR-01-70/71 缺省口径）"
         );
+    }
+
+    // ===== 配置模板自动生成（FR-01-85，v1.4；D17 两条边界）=====
+
+    /// 模板内每条非空行均为注释（全注释 ⇒ 解析结果与文件缺失一致）
+    #[test]
+    fn template_lines_all_commented() {
+        for line in Config::default_template().lines() {
+            let t = line.trim_start();
+            assert!(
+                t.is_empty() || t.starts_with('#'),
+                "模板出现非注释行：{line}"
+            );
+        }
+    }
+
+    /// 10 键逐一以 `# 键 = 默认值` 示例行在位（值与 FR-01-71/D13 默认口径一致，
+    /// 单源 DEFAULT_* 常量拼装防漂移）
+    #[test]
+    fn template_defaults_match_contract() {
+        let t = Config::default_template();
+        for expected in [
+            "# download_dir = \"\"",
+            "# block_size_http = 1048576",
+            "# download_slots = 5",
+            "# max_speed = 0",
+            "# max_retries = 5",
+            "# auto_retry = true",
+            "# backoff_initial = 8.0",
+            "# backoff_cap = 60.0",
+            "# proxy = \"\"",
+            "# default_concurrency = 4",
+        ] {
+            assert!(t.contains(expected), "模板缺默认值行：{expected}");
+        }
+    }
+
+    /// 每键段落含：用途说明 + 「取值范围」标注（FR-01-85 用途/取值范围双注释契约；
+    /// 10 键 10 段，段落 = 空行分隔的注释块）
+    #[test]
+    fn template_documents_purpose_and_range_for_every_key() {
+        let t = Config::default_template();
+        let blocks: Vec<&str> = t.split("\n\n").collect();
+        for (key, purpose) in [
+            ("download_dir", "保存目录"),
+            ("block_size_http", "块大小"),
+            ("download_slots", "槽位"),
+            ("max_speed", "限速"),
+            ("max_retries", "重试上限"),
+            ("auto_retry", "自动重试"),
+            ("backoff_initial", "退避"),
+            ("backoff_cap", "退避"),
+            ("proxy", "代理"),
+            ("default_concurrency", "并发"),
+        ] {
+            let block = blocks
+                .iter()
+                .find(|b| b.contains(&format!("# {key} = ")))
+                .unwrap_or_else(|| panic!("模板缺键 {key} 的默认值段落"));
+            assert!(
+                block.contains(purpose),
+                "键 {key} 的段落缺用途说明（应含「{purpose}」）"
+            );
+            assert!(block.contains("取值范围"), "键 {key} 的段落缺取值范围标注");
+        }
+        assert_eq!(
+            t.matches("取值范围").count(),
+            10,
+            "每键恰好一段取值范围标注"
+        );
+    }
+
+    /// 核心行为契约：模板整体被解析时得到全部默认值（模板本身不改变行为，
+    /// FR-01-85「与文件缺失完全一致」）
+    #[test]
+    fn template_parses_to_defaults() {
+        assert_eq!(
+            Config::from_toml(&Config::default_template()),
+            Config::default()
+        );
+    }
+
+    /// 不存在 → 建父目录 + 写模板；幂等（再次调用内容不变）
+    #[test]
+    fn ensure_creates_template_when_missing() {
+        let dir = std::env::temp_dir().join(format!("ezr-tpl-create-{}", std::process::id()));
+        let p = dir.join("nested/config.toml");
+        std::fs::remove_dir_all(&dir).ok();
+        ensure_default_config(&p).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            Config::default_template(),
+            "缺失时写入模板原文"
+        );
+        ensure_default_config(&p).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            Config::default_template(),
+            "已存在后再次调用内容不变（幂等）"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 已存在（含生效值）→ 不覆写（D17①：操作者手工配置优先于模板）
+    #[test]
+    fn ensure_keeps_existing_content() {
+        let dir = std::env::temp_dir().join(format!("ezr-tpl-keep-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("config.toml");
+        std::fs::write(&p, "download_slots = 2\n").unwrap();
+        ensure_default_config(&p).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "download_slots = 2\n",
+            "已存在文件字节级不变"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 写失败（目录只读）→ 错误向上传播，不写半截文件（调用点按 D17② 静默跳过）
+    #[cfg(unix)]
+    #[test]
+    fn ensure_propagates_write_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ezr-tpl-ro-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let p = dir.join("config.toml");
+        let r = ensure_default_config(&p);
+        // 先恢复权限再断言，防断言失败时残留只读目录
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(r.is_err(), "只读目录写失败应报错");
+        assert!(!p.exists(), "失败路径不得留下半截文件");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

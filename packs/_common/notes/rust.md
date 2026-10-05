@@ -234,6 +234,11 @@ group_imports = "StdExternalCrate"
   产品 crate 自身测试编译不消费该路径时的 `unused_imports` 属挂载机制固有告警，按三分法 ①
   在 re-export 处精确 allow 并注明依据。re-export 不可超越项自身可见性（E0364）：
   `pub(super)` 项要先在定义处升 `pub`（私有模块内不外泄）再 `#[cfg(test)] pub(crate) use`。
+- **`#[path]` 挂载 crate 会连带执行产品源里的 `#[cfg(test)]` 模块，全量计数按编译上下文倍增**：
+  加固类测试 crate 挂载产品 mod.rs 时，产品文件内联测试模块随挂载编译执行——在产品文件里
+  新增 N 个单测，`cargo test` 总数增加 N ×（产品 bin 1 份 + 挂载该模块的 crate 数），
+  不是 N。对账按各测试二进制 "test result" 行复算自洽（同名测试在多 crate 各出现一次属
+  机制固有，`duplicate_mod` allow 已在挂载壳声明）；判断计数异常先数编译上下文再找测试。
 - **纯文本工具的属性测试模板**（显示宽度表/格式化函数，CJK 混排终端 UI 高发）：
   宽度表函数锁「n ≤ w(s) ≤ 2n」界 + 截断/填充幂等（truncate 二次调用恒等、pad 恰达
   max(w, width)）；时长/日期格式化锁 parse-back 往返（格式化→按格式解析→原值）与

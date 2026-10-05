@@ -842,3 +842,663 @@ mod tick_tests {
         std::fs::remove_dir_all(reg_path.parent().unwrap()).ok();
     }
 }
+
+#[cfg(test)]
+mod evt_tests {
+    //! on_evt arm 级单测（QA 轮登记的单测缺口补齐）：不经引擎/网络，直接构造
+    //! `Evt` 驱动状态机权威转换点，锁定每个 arm 与关键内部分支的可观察效果。
+    //! 事件全流程（探测→下载→完成→校验）由 tick_tests 与 PTY e2e 套件覆盖。
+
+    use super::*;
+    use crate::engine::ConnView;
+    use crate::model::config::Config;
+
+    fn make_app(tag: &str) -> App {
+        let dir = std::env::temp_dir().join(format!("ezr-evt-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        let reg = dir.join("registry.json").to_string_lossy().into_owned();
+        App::new(Config::default(), reg)
+    }
+
+    /// 种子任务：模型层 sample_task 改 id/名字（终态避免被 tick 自动推进；
+    /// 本模块不经 tick，直接驱动 on_evt，状态播种即为确定起点）
+    fn seed_task(id: u32, name: &str) -> Task {
+        let mut t = crate::model::sample_task();
+        t.id = id;
+        t.name = name.to_string();
+        t
+    }
+
+    fn conn_view(id: usize, start: u64, end: u64, done: u64) -> ConnView {
+        ConnView {
+            id,
+            block: 0,
+            start,
+            end,
+            done,
+        }
+    }
+
+    // ===== Evt::Probed =====
+
+    #[tokio::test]
+    async fn probed_unknown_id_is_noop() {
+        let mut app = make_app("probe-ghost");
+        app.on_evt(Evt::Probed {
+            id: 9,
+            name: "x.bin".to_string(),
+            final_url: "http://x/x.bin".to_string(),
+            total: 10,
+            resumable: true,
+            etag: None,
+            last_modified: None,
+        })
+        .await;
+        assert!(app.tasks.is_empty(), "未知 id：无任务被创建或修改");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn probed_renames_with_dedupe_when_name_taken_in_same_dir() {
+        let mut app = make_app("probe-dedupe");
+        let mut t1 = seed_task(1, "a.bin");
+        t1.save_dir = "/dl".to_string();
+        let mut t2 = seed_task(2, "b.bin");
+        t2.save_dir = "/dl".to_string();
+        app.tasks.push(t1);
+        app.tasks.push(t2);
+        app.on_evt(Evt::Probed {
+            id: 1,
+            name: "b.bin".to_string(),
+            final_url: "http://x/b.bin".to_string(),
+            total: 10,
+            resumable: true,
+            etag: None,
+            last_modified: None,
+        })
+        .await;
+        assert_eq!(app.tasks[0].name, "b.bin.1", "同名任务占用 → 追加 .1 去重");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn probed_renames_plainly_when_name_only_taken_in_other_dir() {
+        let mut app = make_app("probe-otherdir");
+        let mut t1 = seed_task(1, "a.bin");
+        t1.save_dir = "/dl".to_string();
+        let mut t2 = seed_task(2, "b.bin");
+        t2.save_dir = "/other".to_string();
+        app.tasks.push(t1);
+        app.tasks.push(t2);
+        app.on_evt(Evt::Probed {
+            id: 1,
+            name: "b.bin".to_string(),
+            final_url: "http://x/b.bin".to_string(),
+            total: 10,
+            resumable: true,
+            etag: None,
+            last_modified: None,
+        })
+        .await;
+        assert_eq!(app.tasks[0].name, "b.bin", "不同保存目录的同名不算占用");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn probed_skips_rename_when_task_already_has_progress() {
+        let mut app = make_app("probe-resumed");
+        let mut t1 = seed_task(1, "a.bin");
+        t1.save_dir = "/dl".to_string();
+        t1.downloaded = 100; // 断点续传进行中
+        let mut t2 = seed_task(2, "b.bin");
+        t2.save_dir = "/dl".to_string();
+        app.tasks.push(t1);
+        app.tasks.push(t2);
+        app.on_evt(Evt::Probed {
+            id: 1,
+            name: "b.bin".to_string(),
+            final_url: "http://x/b.bin".to_string(),
+            total: 10,
+            resumable: true,
+            etag: None,
+            last_modified: None,
+        })
+        .await;
+        assert_eq!(
+            app.tasks[0].name, "a.bin",
+            "已下载 > 0 时不得改名（FR-01-22 断点一致性）"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn probed_fills_fields_and_starts_queued_task() {
+        let mut app = make_app("probe-fields");
+        let mut t = seed_task(1, "f.bin");
+        t.state = TaskState::Queued;
+        t.has_slot = true;
+        app.tasks.push(t);
+        app.on_evt(Evt::Probed {
+            id: 1,
+            name: "f.bin".to_string(),
+            final_url: "http://final/f.bin".to_string(),
+            total: 1234,
+            resumable: false,
+            etag: Some("\"e1\"".to_string()),
+            last_modified: Some("yesterday".to_string()),
+        })
+        .await;
+        let t = &app.tasks[0];
+        assert!(t.probed, "探测标记置位");
+        assert_eq!(t.final_url.as_deref(), Some("http://final/f.bin"));
+        assert_eq!(t.total, 1234);
+        assert!(!t.resumable);
+        assert_eq!(t.etag.as_deref(), Some("\"e1\""));
+        assert_eq!(t.last_modified.as_deref(), Some("yesterday"));
+        assert_eq!(
+            t.state,
+            TaskState::Downloading,
+            "等待中 + 探测完成 → 下载中"
+        );
+        assert!(!t.made_progress, "新一轮尝试进展标记从零起算");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn probed_keeps_nonqueued_state_but_marks_probed() {
+        let mut app = make_app("probe-paused");
+        let mut t = seed_task(1, "f.bin");
+        t.state = TaskState::Paused;
+        app.tasks.push(t);
+        app.on_evt(Evt::Probed {
+            id: 1,
+            name: "f.bin".to_string(),
+            final_url: "http://final/f.bin".to_string(),
+            total: 5,
+            resumable: true,
+            etag: None,
+            last_modified: None,
+        })
+        .await;
+        let t = &app.tasks[0];
+        assert!(t.probed);
+        assert_eq!(t.state, TaskState::Paused, "非等待中状态不被探测改写");
+        app.shutdown().await;
+    }
+
+    // ===== Evt::Progress =====
+
+    #[tokio::test]
+    async fn progress_ghost_cleans_speed_state_without_touching_tasks() {
+        let mut app = make_app("progress-ghost");
+        app.windows.insert(9, SpeedWindow::new());
+        app.speed_display.entry(9).or_default();
+        app.on_evt(Evt::Progress {
+            id: 9,
+            downloaded: 100,
+            conns: vec![conn_view(1, 0, 100, 100)],
+            chunk_done: 1,
+        })
+        .await;
+        assert!(
+            !app.windows.contains_key(&9) && !app.speed_display.contains_key(&9),
+            "已删除/未知任务的幽灵进度：速度状态一并清除"
+        );
+        assert!(app.tasks.is_empty());
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn progress_seeds_window_and_updates_task_view() {
+        let mut app = make_app("progress-seed");
+        let mut t = seed_task(1, "f.bin");
+        t.state = TaskState::Downloading;
+        app.tasks.push(t);
+        app.on_evt(Evt::Progress {
+            id: 1,
+            downloaded: 500,
+            conns: vec![conn_view(2, 0, 1000, 500)],
+            chunk_done: 3,
+        })
+        .await;
+        assert!(app.windows.contains_key(&1), "首次进度为任务建速度滑窗");
+        let t = &app.tasks[0];
+        assert_eq!(t.downloaded, 500);
+        assert_eq!(t.chunk_done, 3);
+        assert_eq!(t.connections.len(), 1, "连接视图按 ConnView 直传适配");
+        assert_eq!(t.connections[0].id, 2);
+        assert_eq!(t.connections[0].done, 500);
+        assert!(t.made_progress, "downloaded > 0 → 连续性进展标记");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn progress_zero_bytes_does_not_mark_progress() {
+        let mut app = make_app("progress-zero");
+        let mut t = seed_task(1, "f.bin");
+        t.state = TaskState::Downloading;
+        app.tasks.push(t);
+        app.on_evt(Evt::Progress {
+            id: 1,
+            downloaded: 0,
+            conns: vec![],
+            chunk_done: 0,
+        })
+        .await;
+        assert!(!app.tasks[0].made_progress, "零字节进度不算进展");
+        assert!(app.windows.contains_key(&1), "窗口仍然建立（观测后续速率）");
+        app.shutdown().await;
+    }
+
+    // ===== Evt::PausedDone =====
+
+    #[tokio::test]
+    async fn paused_done_snapshots_breakpoint_and_clears_window() {
+        let mut app = make_app("paused-snap");
+        let mut t = seed_task(1, "f.bin");
+        t.state = TaskState::Downloading;
+        t.total = 1000;
+        t.downloaded = 30;
+        t.has_slot = true;
+        t.speed = 999.0;
+        app.tasks.push(t);
+        app.windows.insert(1, SpeedWindow::new());
+        app.on_evt(Evt::PausedDone {
+            id: 1,
+            downloaded: 50,
+            chunk_done: 2,
+        })
+        .await;
+        let t = &app.tasks[0];
+        assert_eq!(t.downloaded, 50, "事件口径较大值生效（30 → 50）");
+        assert_eq!(t.speed, 0.0);
+        assert!(!t.has_slot, "暂停完成释放槽位");
+        assert_eq!(
+            t.chunk_done, 2,
+            "断点视图快照含事件块数（snap=0 → max 取 2）"
+        );
+        assert_eq!(t.connections.len(), 1, "快照推导连接视图（详情页分块表）");
+        assert!(!app.windows.contains_key(&1), "速度窗口随暂停清除");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn paused_done_keeps_larger_local_downloaded() {
+        let mut app = make_app("paused-max");
+        let mut t = seed_task(1, "f.bin");
+        t.downloaded = 80;
+        app.tasks.push(t);
+        app.on_evt(Evt::PausedDone {
+            id: 1,
+            downloaded: 50,
+            chunk_done: 0,
+        })
+        .await;
+        assert_eq!(
+            app.tasks[0].downloaded, 80,
+            "本地已下载较大时不得回退（事件滞后兜底）"
+        );
+        app.shutdown().await;
+    }
+
+    // ===== Evt::Failed =====
+
+    #[tokio::test]
+    async fn failed_transient_schedules_auto_retry_and_keeps_slot() {
+        let mut app = make_app("failed-transient");
+        let mut t = seed_task(1, "f.bin");
+        t.state = TaskState::Downloading;
+        t.downloaded = 100;
+        t.has_slot = true;
+        app.tasks.push(t);
+        app.windows.insert(1, SpeedWindow::new());
+        app.on_evt(Evt::Failed {
+            id: 1,
+            kind: FailKind::Transient,
+            reason: "连接被重置".to_string(),
+            retry_after: None,
+            made_progress: false,
+            downloaded: 400,
+            chunk_done: 1,
+        })
+        .await;
+        let t = &app.tasks[0];
+        assert_eq!(t.state, TaskState::Failed);
+        assert_eq!(t.retries, 1, "无进展失败 → 计数累加（FR-01-41）");
+        assert_eq!(t.retry_in, Some(8.0), "首轮退避 8s（FR-01-42）");
+        assert!(t.has_slot, "待自动重试继续占槽位");
+        assert_eq!(t.downloaded, 400, "失败时点进度取较大值落账");
+        assert_eq!(t.error.as_deref(), Some("连接被重置"));
+        assert_eq!(t.speed, 0.0);
+        assert!(!app.windows.contains_key(&1), "失败清除速度窗口");
+        let toast = app.toast.clone().unwrap_or_default();
+        assert!(
+            toast.contains("8s 后自动重试") && toast.contains("1/5"),
+            "toast={toast}"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn failed_fatal_releases_slot_and_stops_auto_retry() {
+        let mut app = make_app("failed-fatal");
+        let mut t = seed_task(1, "f.bin");
+        t.state = TaskState::Downloading;
+        t.has_slot = true;
+        app.tasks.push(t);
+        app.on_evt(Evt::Failed {
+            id: 1,
+            kind: FailKind::Fatal,
+            reason: "HTTP 403".to_string(),
+            retry_after: None,
+            made_progress: true,
+            downloaded: 0,
+            chunk_done: 0,
+        })
+        .await;
+        let t = &app.tasks[0];
+        assert_eq!(t.state, TaskState::Failed);
+        assert_eq!(t.retries, 1, "有进展 → 计数重置为 1");
+        assert!(t.retry_in.is_none(), "停等类别不设自动重试倒计时");
+        assert!(!t.has_slot, "停等释放槽位");
+        let toast = app.toast.clone().unwrap_or_default();
+        assert!(
+            toast.contains("不自动重试") && toast.contains("按 R 手动重试"),
+            "toast={toast}"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn failed_unknown_id_is_noop() {
+        let mut app = make_app("failed-ghost");
+        app.on_evt(Evt::Failed {
+            id: 42,
+            kind: FailKind::Transient,
+            reason: "ghost".to_string(),
+            retry_after: None,
+            made_progress: false,
+            downloaded: 0,
+            chunk_done: 0,
+        })
+        .await;
+        assert!(app.tasks.is_empty());
+        app.shutdown().await;
+    }
+
+    // ===== Evt::Invalidated =====
+
+    #[tokio::test]
+    async fn invalidated_unknown_id_is_noop() {
+        let mut app = make_app("inval-ghost");
+        app.on_evt(Evt::Invalidated { id: 7 }).await;
+        assert!(app.tasks.is_empty(), "未知 id 直接忽略");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn invalidated_first_streak_requeues_and_resets_session_baseline() {
+        let mut app = make_app("inval-requeue");
+        let mut t = seed_task(1, "f.bin");
+        t.state = TaskState::Downloading;
+        t.downloaded = 500;
+        t.chunk_done = 1;
+        t.has_slot = true;
+        t.probed = true;
+        t.speed = 42.0;
+        t.connections = vec![crate::model::Connection {
+            id: 1,
+            start: 0,
+            end: 100,
+            done: 50,
+        }];
+        app.tasks.push(t);
+        app.windows.insert(1, SpeedWindow::new());
+        app.session_seen.insert(1, 500);
+        app.on_evt(Evt::Invalidated { id: 1 }).await;
+        let t = &app.tasks[0];
+        assert_eq!(t.invalidation_streak, 1, "连击计数推进（0 → 1）");
+        assert_eq!(t.state, TaskState::Queued, "从头重下 → 等待中重排");
+        assert!(!t.probed, "重排后需重新探测");
+        assert!(
+            !t.has_slot,
+            "引擎任务已结束，槽位释放供调度器重分（FR-01-22）"
+        );
+        assert_eq!(t.downloaded, 0);
+        assert_eq!(t.chunk_done, 0);
+        assert!(t.connections.is_empty());
+        assert_eq!(t.speed, 0.0);
+        assert!(!app.windows.contains_key(&1));
+        assert_eq!(
+            app.session_seen.get(&1),
+            Some(&0),
+            "会话累计账本基线同步归零（重下字节全属本次运行）"
+        );
+        let toast = app.toast.clone().unwrap_or_default();
+        assert!(toast.contains("从头重新下载"), "toast={toast}");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn invalidated_third_streak_fails_and_stops_auto() {
+        let mut app = make_app("inval-stop");
+        let mut t = seed_task(1, "f.bin");
+        t.state = TaskState::Downloading;
+        t.invalidation_streak = 2;
+        t.has_slot = true;
+        t.retry_in = Some(8.0);
+        app.tasks.push(t);
+        app.on_evt(Evt::Invalidated { id: 1 }).await;
+        let t = &app.tasks[0];
+        assert_eq!(t.invalidation_streak, 3);
+        assert_eq!(
+            t.state,
+            TaskState::Failed,
+            "连续 3 次失效 → 停等失败（防循环）"
+        );
+        assert_eq!(t.fail_kind, Some(FailKind::Fatal));
+        assert!(t.retry_in.is_none());
+        assert!(!t.has_slot);
+        assert_eq!(t.error.as_deref(), Some("服务器内容持续变化"));
+        let toast = app.toast.clone().unwrap_or_default();
+        assert!(toast.contains("连续 3 次一致性失效"), "toast={toast}");
+        app.shutdown().await;
+    }
+
+    // ===== Evt::DownloadDone =====
+
+    #[tokio::test]
+    async fn download_done_without_checksum_completes_and_clears() {
+        let mut app = make_app("done-nocheck");
+        let mut t = seed_task(1, "f.bin");
+        t.state = TaskState::Downloading;
+        t.has_slot = true;
+        t.connections = vec![crate::model::Connection {
+            id: 1,
+            start: 0,
+            end: 100,
+            done: 100,
+        }];
+        app.tasks.push(t);
+        app.windows.insert(1, SpeedWindow::new());
+        app.on_evt(Evt::DownloadDone {
+            id: 1,
+            total: 1000,
+            has_checksum: false,
+        })
+        .await;
+        let t = &app.tasks[0];
+        assert_eq!(t.state, TaskState::Completed, "无校验值直接完成");
+        assert_eq!(t.downloaded, 1000);
+        assert_eq!(t.total, 1000);
+        assert!(!t.has_slot);
+        assert!(t.verify_ok.is_none(), "未校验 → 结果 None");
+        assert!(t.connections.is_empty(), "连接视图随完成清空");
+        assert!(!app.windows.contains_key(&1));
+        let toast = app.toast.clone().unwrap_or_default();
+        assert!(toast.contains("无校验"), "toast={toast}");
+        assert!(
+            std::path::Path::new(&app.registry_path).exists(),
+            "完成态即时落盘注册表"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn download_done_with_checksum_moves_to_verifying_and_keeps_slot() {
+        let mut app = make_app("done-check");
+        let mut t = seed_task(1, "f.bin");
+        t.state = TaskState::Downloading;
+        t.has_slot = true;
+        t.checksum = Some(Checksum {
+            algo: "MD5",
+            value: "aa".to_string(),
+        });
+        app.tasks.push(t);
+        app.on_evt(Evt::DownloadDone {
+            id: 1,
+            total: 64,
+            has_checksum: true,
+        })
+        .await;
+        let t = &app.tasks[0];
+        assert_eq!(
+            t.state,
+            TaskState::Verifying,
+            "有校验值 → 校验中（D12 占槽位）"
+        );
+        assert!(t.has_slot, "校验中不释放槽位（D12）");
+        assert_eq!(t.speed, 0.0);
+        let toast = app.toast.clone().unwrap_or_default();
+        assert!(toast.contains("开始校验"), "toast={toast}");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn download_done_unknown_id_is_noop() {
+        let mut app = make_app("done-ghost");
+        app.on_evt(Evt::DownloadDone {
+            id: 11,
+            total: 1,
+            has_checksum: false,
+        })
+        .await;
+        assert!(app.tasks.is_empty());
+        app.shutdown().await;
+    }
+
+    // ===== Evt::VerifyDone =====
+
+    #[tokio::test]
+    async fn verify_done_ok_completes_and_clears_error() {
+        let mut app = make_app("verify-ok");
+        let mut t = seed_task(1, "f.bin");
+        t.state = TaskState::Verifying;
+        t.has_slot = true;
+        t.error = Some("历史错误残留".to_string());
+        t.checksum = Some(Checksum {
+            algo: "MD5",
+            value: "aa".to_string(),
+        });
+        t.connections = vec![crate::model::Connection {
+            id: 1,
+            start: 0,
+            end: 10,
+            done: 10,
+        }];
+        app.tasks.push(t);
+        app.on_evt(Evt::VerifyDone {
+            id: 1,
+            ok: true,
+            computed: "aa".to_string(),
+            expected: "aa".to_string(),
+        })
+        .await;
+        let t = &app.tasks[0];
+        assert_eq!(t.state, TaskState::Completed);
+        assert_eq!(t.verify_ok, Some(true));
+        assert!(t.error.is_none(), "校验通过清除错误行");
+        assert!(!t.has_slot);
+        assert!(t.connections.is_empty());
+        let toast = app.toast.clone().unwrap_or_default();
+        assert!(toast.contains("MD5 校验通过"), "toast={toast}");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn verify_done_mismatch_fails_without_auto_retry() {
+        let mut app = make_app("verify-bad");
+        let mut t = seed_task(1, "f.bin");
+        t.state = TaskState::Verifying;
+        t.has_slot = true;
+        t.checksum = Some(Checksum {
+            algo: "MD5",
+            value: "aa".to_string(),
+        });
+        app.tasks.push(t);
+        app.on_evt(Evt::VerifyDone {
+            id: 1,
+            ok: false,
+            computed: "bb".to_string(),
+            expected: "aa".to_string(),
+        })
+        .await;
+        let t = &app.tasks[0];
+        assert_eq!(t.state, TaskState::Failed);
+        assert_eq!(t.fail_kind, Some(FailKind::Verify));
+        assert_eq!(t.verify_ok, Some(false));
+        assert!(t.retry_in.is_none(), "校验失败不自动重试（FR-01-51）");
+        assert!(!t.has_slot, "校验失败释放槽位");
+        assert_eq!(t.error.as_deref(), Some("MD5 校验失败：内容与校验值不符"));
+        let toast = app.toast.clone().unwrap_or_default();
+        assert!(
+            toast.contains("computed=bb") && toast.contains("expected=aa"),
+            "toast 带实测/期望摘要：{toast}"
+        );
+        app.shutdown().await;
+    }
+
+    // ===== Evt::Cancelled =====
+
+    #[tokio::test]
+    async fn cancelled_executes_pending_delete_then_unknown_id_ignored() {
+        let mut app = make_app("cancelled-del");
+        let dir = std::env::temp_dir().join(format!("ezr-evt-files-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.to_string_lossy().trim_end_matches('/').to_string();
+        for f in ["f.bin", "f.bin.downloading", "f.bin.ezr"] {
+            std::fs::write(format!("{base}/{f}"), b"x").unwrap();
+        }
+        app.pending_deletes
+            .insert(5, (base.clone(), "f.bin".to_string()));
+        // 相位一：未知 id → 不触碰延迟删除表（负向探测单发口径）
+        app.on_evt(Evt::Cancelled { id: 99 }).await;
+        assert!(
+            std::path::Path::new(&format!("{base}/f.bin")).exists(),
+            "未知 id 的停止确认不触发删除"
+        );
+        assert!(app.pending_deletes.contains_key(&5));
+        // 相位二：确认 id → 三类本地文件删除、登记清除
+        app.on_evt(Evt::Cancelled { id: 5 }).await;
+        for f in ["f.bin", "f.bin.downloading", "f.bin.ezr"] {
+            assert!(
+                !std::path::Path::new(&format!("{base}/{f}")).exists(),
+                "{f} 应被删除"
+            );
+        }
+        assert!(app.pending_deletes.is_empty(), "已执行的登记应清除");
+        std::fs::remove_dir_all(&dir).ok();
+        app.shutdown().await;
+    }
+
+    // ===== Evt::Toast =====
+
+    #[tokio::test]
+    async fn toast_sets_message_with_fresh_expiry() {
+        let mut app = make_app("toast");
+        app.on_evt(Evt::Toast("引擎提示".to_string())).await;
+        assert_eq!(app.toast.as_deref(), Some("引擎提示"));
+        assert!(app.toast_until.is_some(), "toast 附带过期时刻");
+        app.shutdown().await;
+    }
+}

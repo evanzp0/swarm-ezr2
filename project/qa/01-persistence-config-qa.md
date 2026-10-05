@@ -14,7 +14,7 @@
 | 用例 | 场景 | 操作 | 通过判据 |
 |---|---|---|---|
 | QA-PC-01 | 01-persistence-config-01 | 预置各状态任务→优雅退出→重启 | 任务/历史/顺序完整还原；续传点与状态一致 |
-| QA-PC-02 | 01-persistence-config-02 | 添加任务后检查主目录 | 存在 `.ezr/state/`（注册表）；`.ezr/config.toml` 缺失或合法；sidecar 随目标文件 |
+| QA-PC-02 | 01-persistence-config-02 | 添加任务后检查主目录 | 存在 `.ezr/state/`（注册表）；`.ezr/config.toml` 存在（v1.4/FR-01-85：缺失时启动自动生成全注释默认模板，细则见 `qa/01-config-template-qa.md`）；sidecar 随目标文件 |
 | QA-PC-03 | 01-persistence-config-03 | 删除 config.toml 后下载 | 默认并发 4/槽位 5/块 1MB/重试 5/auto_retry 开/不限速/download_dir=用户主目录下载目录（Linux ~/Downloads） |
 | QA-PC-04 | 01-persistence-config-04 | 分别写入非法值：block_size_http=abc、download_slots=0、max_retries=-1、default_concurrency=99、max_speed=xyz | 启动不报错；各按回退/钳制值 1MB/5/5/64/0 生效（并发超界钳制 1–64 上限） |
 | QA-PC-05 | 01-persistence-config-05 | block_size_http=256KB / 2MB 下载 5MB | 分块行 `x/20 · 256 KB/块` / `x/3 · 2 MB/块` |

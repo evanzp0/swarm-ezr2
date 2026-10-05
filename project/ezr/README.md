@@ -74,6 +74,10 @@ md5/sha1/sha224/sha256/sha384/sha512/adler32，大小写不敏感；位数不符
 
 ### 配置（~/.ezr/config.toml，可缺失，非法值回退默认；`.ezr` 根目录可经环境变量 `EZR_HOME` 重定位）
 
+首次启动时若配置文件不存在，会自动生成一份**全部行被注释**的默认值模板
+（每个参数注明用途与取值范围；保持注释状态即为全默认行为，取消注释并改值即可生效；
+已存在的配置文件不会被覆盖）。可配置键与默认值：
+
 ```toml
 download_dir = "/data/downloads"   # 对话框留空时的默认目录（缺省 ~/Downloads）
 block_size_http = 1048576          # HTTP 块大小（字节，默认 1 MB）
@@ -91,7 +95,7 @@ default_concurrency = 4            # 对话框留空时的默认并发
 断点续传/一致性失效/状态码分类）：
 
 ```sh
-cargo test                        # 全部测试（966 个：单测 + 引擎端到端冒烟 + 属性测试）
+cargo test                        # 全部测试（1105 个：单测 + 引擎端到端冒烟 + 属性测试）
 cargo clippy --all-targets        # 零警告门槛
 bash scripts/arch_check.sh        # 架构边界检查（10 规则）
 ```

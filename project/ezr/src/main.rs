@@ -50,7 +50,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use crate::app::App;
-use crate::model::config::{config_path, state_dir, Config};
+use crate::model::config::{config_path, ensure_default_config, state_dir, Config};
 use crate::model::{checksum, Checksum};
 
 /// 版本号随期号递进（FR-01-83）
@@ -194,15 +194,21 @@ fn try_lock_path(path: &std::path::Path) -> std::io::Result<Option<std::fs::File
     }
 }
 
+/// 单实例锁落点目录：state 目录可用则用之；不可得（无主目录环境）回退系统
+/// 临时目录。抽为纯函数使回退决策可单测（no-HOME 场景不入 env 类测试，避免
+/// 与并行读 HOME 的测试竞态，口径同 model/config 测试注记）。
+fn lock_dir(state: Option<PathBuf>) -> PathBuf {
+    state.unwrap_or_else(std::env::temp_dir)
+}
+
 /// 单实例文件锁（FR-01-72：`<.ezr>/state/ezr.lock`，flock 独占；`.ezr` 根目录
 /// 经 `EZR_HOME` 重定位，v1.3/D16——不同 EZR_HOME 的实例互不冲突）。
+/// state 目录不可得时回退 `<系统临时目录>/ezr.lock`：回退分支与正常分支同走
+/// [`try_lock_path`] 的「打开 + flock」（原回退分支仅 `File::create` 无锁，
+/// 二次启动防重在无主目录环境失效——操作者裁决已修）。
 /// 锁文件句柄保持打开直至进程退出；`Ok(None)` = 已有实例在运行。
 fn acquire_instance_lock() -> std::io::Result<Option<std::fs::File>> {
-    let Some(dir) = state_dir() else {
-        return Ok(Some(std::fs::File::create(
-            std::env::temp_dir().join("ezr.lock"),
-        )?));
-    };
+    let dir = lock_dir(state_dir());
     std::fs::create_dir_all(&dir)?;
     try_lock_path(&dir.join("ezr.lock"))
 }
@@ -250,6 +256,13 @@ async fn ezr_main() -> std::io::Result<()> {
             std::process::exit(1);
         }
     };
+
+    // 配置模板自动生成（FR-01-85，v1.4）：配置文件不存在时按默认值生成全注释
+    // 模板（每键注明用途与取值范围）；已存在（含损坏）不覆写，生成失败静默
+    // 跳过（D17）——便利性增强不阻塞启动，下方配置加载按 FR-01-71 缺失/回退口径。
+    if let Some(p) = config_path() {
+        let _ = ensure_default_config(&p);
+    }
 
     // 配置加载 + `--max-speed` 参数优先（FR-01-60）
     let mut cfg = config_path().map(|p| Config::load(&p)).unwrap_or_default();
@@ -532,6 +545,16 @@ mod cli_parse_tests {
         assert!(c.is_some());
         drop(c);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 回退落点决策（纯函数）：state 目录缺失 → 系统临时目录（回退分支与正常
+    /// 分支同走 try_lock_path「打开 + flock」，本测试锁定回退决策点本身；
+    /// no-HOME 场景不入 env 类测试——与并行读 HOME 的测试竞态，见 config 测试注记）
+    #[test]
+    fn lock_dir_falls_back_to_temp_without_state() {
+        assert_eq!(lock_dir(None), std::env::temp_dir());
+        let custom = std::path::PathBuf::from("/tmp/ezr-state-lockdir-probe");
+        assert_eq!(lock_dir(Some(custom.clone())), custom);
     }
 
     #[tokio::test]
