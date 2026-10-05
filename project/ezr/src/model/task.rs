@@ -100,8 +100,6 @@ pub struct Task {
     /// BT 剩余做种时间秒（02 预留）
     #[allow(dead_code)]
     pub seed_left: f64,
-    /// 累计下载用时（秒，仅统计下载中时段）
-    pub elapsed: f64,
     /// 添加时间（显示与 sidecar/注册表记录）
     pub created: String,
     /// 添加时刻的 Unix 秒（注册表用）
@@ -161,7 +159,6 @@ impl Task {
             seeders: 0,
             peers: 0,
             seed_left: 0.0,
-            elapsed: 0.0,
             created: fmt_created(added_at),
             added_at,
         }

@@ -184,7 +184,6 @@ impl From<&TaskSnapshot> for Task {
             seeders: 0,
             peers: 0,
             seed_left: 0.0,
-            elapsed: 0.0,
             created: s.created.clone(),
             added_at: s.added_at,
         }

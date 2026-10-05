@@ -1,6 +1,6 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/specifier　会话：specifier-20261005-v110（操作者第七批指令建册：配置模板最小化——操作者钦定文本成为 `default_template()` 输出的逐字节唯一权威）
+> 流程：six-pack　当前节点：six-pack/coder　会话：coder-20261005-v112（操作者第九批指令实现：任务详情大小行移除「（剩余 …）」后缀）
 
 ## 一、产物历史完成情况
 
@@ -14,10 +14,12 @@
   矛盾不作废 + D20 维持落账，AIR2/aria2 实证）+ coder v1.7（D24 改判实现）、
   specifier v1.8 + coder v1.8（FR-01-93 代理凭证按类型收紧 + socks5 userinfo 认证修复）、
   specifier v1.9 + coder v1.9（操作者第六批指令：`[[proxies]]` 条目字段重构——ip/port/
-  type/username/password，type 必填三值且为唯一事实来源，url 键退役），
-  本轮 specifier v1.10（操作者第七批指令：配置模板最小化——钦定文本逐字节权威，
-  9 键三行式保留、proxies 段收敛、解释性注释全部退出模板）。
-  需求权威来源 `project/mission.md`（v1.10），phase-01 详述见 `project/mission/phase-01.md`（v1.10），
+  type/username/password，type 必填三值且为唯一事实来源，url 键退役）、
+  specifier v1.10（操作者第七批指令：配置模板最小化——钦定文本逐字节权威，
+  9 键三行式保留、proxies 段收敛、解释性注释全部退出模板）、
+  specifier v1.11 + coder v1.11（操作者第八批指令：任务详情面板移除「状态」「速度」字段行），
+  本轮 specifier v1.12（操作者第九批指令：任务详情「大小」行移除「（剩余 …）」后缀）+ 本轮 coder v1.12（同指令实现，TDD）。
+  需求权威来源 `project/mission.md`（v1.12），phase-01 详述见 `project/mission/phase-01.md`（v1.12），
   feature 规格在 `project/features/`（12 份），QA 规程在 `project/qa/`（12 份规程 / 9 份脚本）。
 
 ### 产物总账
@@ -33,6 +35,10 @@
 | specifier（v1.8）/ coder（v1.8） | FR-01-93 代理凭证按类型（socks5 必填/http 可选）+ socks5 认证经 url userinfo RFC 1929（修复 v1.5 起静默失效缺陷）+ 模板凭证契约 | 已交付 | 1276P/0F（10 二进制）；clippy 0；fmt 0；arch_check 10/10 |
 | specifier（v1.9）/ coder（v1.9） | 操作者第六批指令全链：`[[proxies]]` 字段重构 name/type/ip/port/username/password，type 必填三值唯一事实来源（url 键退役按未知键忽略零迁移）；内部 url = {type}://{ip}:{port}（IPv6 方括号）；非法清单更新；UI「名（type）」三值标注 | 已交付 | **1305P/0F（10 二进制 297/30/11/106/235/234/2/12/212/166）**；clippy 0；fmt 0；arch_check 全通过 |
 | **specifier（20261005 v1.10）** | 操作者第七批指令建档：**配置模板最小化**——操作者钦定模板文本成为 `default_template()` 输出的唯一权威（逐字节一致，54 行：标题行 + 9 键×3 行三行式 + proxies 一句头注释 + 双示例块各 7 行 + 11 空行，EOF 单换行收尾）；9 键「用途 + 取值范围 + 示例行」三行式保留（FR-01-85 双注释契约对 9 键仍成立）；proxies 段豁免解释性注释——三类型语义、凭证规则、IPv6、type/url 语义说明全部不进模板（语义由运行期校验警告与 README/规格承载）；FR-01-93⑤ 凭证注释行条款废止（运行期凭证语义不变）；v1.6「空格/顺序可调」口径废止；钦定文本示例值与 DEFAULT_* 常量比对 **9/9 一致（无冲突）**。phase-01 v1.10 + mission.md v1.10 + 01-config-template.feature 重写（钦定原文内嵌）+ qa/01-config-template-qa.md 整文本比对口径 | 已交付 | APS parser 12 份全通过（01-config-template IR=5 景、Examples 9 组；02-named-proxy IR=18 景阳性对照） |
+| **specifier（20261005 v1.11）** | 操作者第八批指令建档：**任务详情面板移除「状态」「速度」字段行**（主会话直执，零子代理）——FR-01-80 详情字段清单重写（排队（仅等待中）/ ID / 类型 / 大小 / 失败原因（仅已失败）/ 保存 / URL / 分块；状态/进度由列表行承载、速度与剩余时间不在详情展示；FR-01-17 展示面口径不变，任务速度仍指列表信息行）；phase-01 v1.11 头注记 + mission.md v1.11 注记；01-tui-display.feature 场景 03 字段清单重写 + 新增不含「状态」「速度」负向断言行；qa/01-tui-display-qa.md QA-TD-03 判据同步；suite_tui_display.py _case_03 断言集同步（删状态/速度正断言、增负断言） | 已交付 | APS parser 12 份全通过（修正调用式后实跑：12/12，01-tui-display IR=14 景） |
+| **coder（20261005 v1.11）** | 操作者第八批指令实现（主会话直执）：detail.rs 删状态行（含 state_c 绑定）与速度行；speed_row 函数整体删除；import 清理（fmt_eta/fmt_dur/MAGENTA 出清）；**顺带清除死字段 Task.elapsed**（clippy dead_code 实证：唯一读取者即被删速度行；构造恒 0.0、注册表不持久化——task.rs 字段+Default+registry.rs 恢复构造+model/mod.rs 测试夹具四处删除）；新增隔离渲染负向断言测试 draw_detail_omits_status_and_speed_rows（draw_detail 单独渲染规避整帧「全局速度」标题子串误报） | 已交付 | **1312P/0F**（10 二进制 299/30/11/107/236/235/2/12/213/167）；clippy 0；fmt 0；arch_check 通过；零重复 |
+| **specifier（20261005 v1.12）** | 操作者第九批指令建档（主会话直执）：**任务详情「大小」行移除「（剩余 …）」后缀**，收敛为「已下载/总大小」——phase-01 v1.12 头注记 + FR-01-80 增 v1.12 修订句（大小行 = 已下载/总大小；列表信息行「剩余 <eta>」与做种「剩余做种」口径不变，FR-01-17 展示面不动）；mission.md v1.12 注记；01-tui-display.feature 场景 03 字段清单「大小（已下载/总大小，含剩余字节）」改「大小（已下载/总大小）」+ 新增大小行不含「（剩余 …）」负向断言行；qa/01-tui-display-qa.md QA-TD-03 判据同步；suite_tui_display.py _case_03 docstring 同步 + assert_not_in("剩余", d)（detail_text 仅取右栏，列表行剩余词不误伤；suite_throttle_proxy 大小行正则 `大小 X /` 前缀形态不变不受影响） | 已交付 | APS parser 12 份全通过（cwd 式调用 `bb run gherkin-parser`，01-tui-display IR 含 v1.12 新步实证） |
+| **coder（20261005 v1.12）** | 操作者第九批指令实现（主会话直执，TDD）：红——新增隔离渲染负向断言测试 draw_detail_size_row_omits_remaining_suffix（Downloading 夹具 downloaded<total，旧实现必渲染「（剩余 …）」实跑证实红）；绿——detail.rs 大小行 format `"{} / {}（剩余 {}）"` → `"{} / {}"`（第三参数删除，附 v1.12 修订注释）；task_lines.rs 列表/做种「剩余」口径零改动；顺带修 clippy unused_mut（夹具无需 mut） | 已交付 | **1313P/0F**（10 二进制 300/30/11/107/236/235/2/12/213/167；首跑 appcore 1F 系 /tmp pid 复用撞库假阳，清残留复跑全绿）；clippy 0；fmt 0；arch_check 全通过；零重复；+1 对账自洽 |
 
 ### 遗留受限项（当前有效）
 - **CRAP 为受限近似口径**（继承上游；操作者已裁决维持现状）：无标准 CRAP 工具；新增代码为

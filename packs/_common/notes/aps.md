@@ -50,3 +50,9 @@
   peer（只绑不答的 listener）——拨入成功、握手 reply 无超时挂起，worker 必活至
   kill9，stop 确定性胜出；Given 收尾再重武装真 seeder。凡「构造无 peer 停止态」
   的 fixture 均适用，不要依赖空 peer/死 peer 让任务「稳定停留 downloading」。
+- **bb 任务调用式（APS gherkin-parser 实跑配方）**：`.tools/Acceptance-Pipeline-Specification`
+  内 `bb` 是源码目录不是二进制，可执行 bb 在 PATH（/usr/local/bin/bb）；任务表在根 `bb.edn`
+  （`gherkin-parser`/`gherkin-ir-dry-checker`/`gherkin-mutator`）。正确调用 = **cwd 切到 APS 根
+  目录用 `bb run <task> <in> <out>`**（bb 靠 cwd 探测 bb.edn；`bb --project <dir> run ...` 在该版
+  本会把 `--project` 当任务参数漏进 CLI 报 File does not exist）。解析器要求恰好 2 参数
+  （feature 路径、JSON 输出路径），异常退出码 2=参数错、1=解析失败，输出为 JSON（不是 EDN）。

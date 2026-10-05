@@ -231,6 +231,50 @@ mod ui_tests {
         app.shutdown().await;
     }
 
+    /// v1.11/FR-01-80 修订（操作者第八批指令）：详情面板移除「状态」「速度」字段行。
+    /// 单独渲染 draw_detail 隔离断言——整帧含图表标题「全局速度」（含「速度」子串）
+    /// 与列表速度值，整帧负向断言不适用；隔离面板内两标签必须完全不出现。
+    #[tokio::test]
+    async fn draw_detail_omits_status_and_speed_rows() {
+        let mut app = make_app("no-status-speed");
+        let mut t = task(1, "detail.bin", TaskState::Downloading);
+        t.speed = 123456.0;
+        app.tasks.push(t);
+        let area = ratatui::layout::Rect::new(0, 0, 110, 24);
+        let mut term = Terminal::new(TestBackend::new(110, 24)).unwrap();
+        term.draw(|f| draw_detail(f, &app, area)).unwrap();
+        let s = term.backend().to_string();
+        assert!(s.contains("任务详情"), "详情标题在位: {s}");
+        assert!(!s.contains("状态"), "状态行应已移除: {s}");
+        assert!(
+            !s.contains("速度"),
+            "速度行应已移除（speed≠0 也不展示）: {s}"
+        );
+        assert!(s.contains("分块"), "分块行保留: {s}");
+        assert!(s.contains("大小"), "大小行保留: {s}");
+        assert!(s.contains("保存"), "保存行保留: {s}");
+        app.shutdown().await;
+    }
+
+    /// v1.12/FR-01-80 修订（操作者第九批指令）：详情「大小」行移除「（剩余 …）」后缀，
+    /// 收敛为「已下载/总大小」。隔离渲染 draw_detail：downloaded<total 时旧实现必渲染
+    /// 「（剩余 …）」，负向断言先红；进度展示由列表行承载（FR-01-17 口径不变）。
+    #[tokio::test]
+    async fn draw_detail_size_row_omits_remaining_suffix() {
+        let mut app = make_app("no-remaining");
+        let t = task(1, "detail.bin", TaskState::Downloading);
+        assert!(t.downloaded < t.total, "夹具须未完成（否则负断言无意义）");
+        app.tasks.push(t);
+        let area = ratatui::layout::Rect::new(0, 0, 110, 24);
+        let mut term = Terminal::new(TestBackend::new(110, 24)).unwrap();
+        term.draw(|f| draw_detail(f, &app, area)).unwrap();
+        let s = term.backend().to_string();
+        assert!(s.contains("大小"), "大小行在位: {s}");
+        assert!(!s.contains("剩余"), "大小行不应含「（剩余 …）」后缀: {s}");
+        assert!(s.contains("分块"), "分块行保留: {s}");
+        app.shutdown().await;
+    }
+
     #[tokio::test]
     async fn draw_empty_app_shows_placeholder() {
         let mut app = make_app("empty");

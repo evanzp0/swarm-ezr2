@@ -6,8 +6,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Sparkline};
 use ratatui::Frame;
 
-use super::text::{fmt_dur, fmt_eta, fmt_size, fmt_speed, pad_right, truncate};
-use super::{state_color, ACCENT, BORDER, DIM, FG, GREEN, LIGHT_BLUE, MAGENTA, RED, YELLOW};
+use super::text::{fmt_size, fmt_speed, pad_right, truncate};
+use super::{state_color, ACCENT, BORDER, DIM, FG, GREEN, LIGHT_BLUE, RED, YELLOW};
 use crate::app::App;
 use crate::model::chunk::fmt_block_size;
 use crate::model::{Task, TaskState};
@@ -41,64 +41,6 @@ fn verify_status(verify_ok: Option<bool>, state: TaskState) -> (&'static str, Co
         (Some(false), _) => ("（未通过）", RED),
         (None, TaskState::Verifying) => ("（校验中）", LIGHT_BLUE),
         _ => ("（待校验）", DIM),
-    }
-}
-
-/// 速度行（无平均值；缺失用 -；BT 双向、做种、完成态各有版式）
-fn speed_row(t: &Task) -> Vec<Span<'static>> {
-    match t.state {
-        TaskState::Downloading => {
-            let mut v = vec![
-                Span::raw(" "),
-                dim_label("速度"),
-                Span::styled(
-                    format!("↓ {}", fmt_speed(t.speed)),
-                    Style::default().fg(ACCENT),
-                ),
-            ];
-            if t.protocol.is_bt() {
-                v.push(Span::styled(
-                    format!("  ↑ {}", fmt_speed(t.upload_speed)),
-                    Style::default().fg(MAGENTA),
-                ));
-            }
-            v.push(Span::styled(
-                format!("  剩余 {}", fmt_eta(t.eta_secs())),
-                Style::default().fg(DIM),
-            ));
-            v
-        }
-        TaskState::Seeding => vec![
-            Span::raw(" "),
-            dim_label("速度"),
-            Span::styled(
-                format!("↑ {}", fmt_speed(t.upload_speed)),
-                Style::default().fg(MAGENTA),
-            ),
-            Span::styled(
-                format!("  剩余做种 {}", fmt_dur(t.seed_left.ceil() as u64)),
-                Style::default().fg(DIM),
-            ),
-        ],
-        TaskState::Completed => vec![
-            Span::raw(" "),
-            dim_label("速度"),
-            Span::styled(
-                format!("—  总用时 {}", fmt_dur(t.elapsed as u64)),
-                Style::default().fg(DIM),
-            ),
-        ],
-        _ => {
-            let mut v = vec![Span::raw(" "), dim_label("速度"), Span::raw("↓ ")];
-            v.push(Span::styled("-", Style::default().fg(DIM)));
-            if t.protocol.is_bt() {
-                v.push(Span::raw("  ↑ "));
-                v.push(Span::styled("-", Style::default().fg(DIM)));
-            }
-            v.push(Span::raw("  剩余 "));
-            v.push(Span::styled("-", Style::default().fg(DIM)));
-            v
-        }
     }
 }
 
@@ -141,7 +83,6 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let val = |s: String| Span::styled(s, Style::default().fg(FG));
-    let state_c = state_color(t.state);
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(vec![
@@ -151,14 +92,6 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
-        ),
-    ]));
-    lines.push(Line::from(vec![
-        Span::raw(" "),
-        dim_label("状态"),
-        Span::styled(
-            format!("[{}] {:.1}%", t.state.label(), t.progress() * 100.0),
-            Style::default().fg(state_c).add_modifier(Modifier::BOLD),
         ),
     ]));
     // 等待中任务：显示槽位排队详情（位次按列表顺序从上往下；已获槽位 = 重试排队即将开始）
@@ -221,11 +154,12 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
     lines.push(Line::from(vec![
         Span::raw(" "),
         dim_label("大小"),
+        // v1.12/FR-01-80 修订（操作者第九批指令）：仅「已下载/总大小」，
+        // 不含「（剩余 …）」后缀（进度展示由列表行承载，FR-01-17 口径不变）
         val(format!(
-            "{} / {}（剩余 {}）",
+            "{} / {}",
             fmt_size(t.downloaded),
-            fmt_size(t.total),
-            fmt_size(t.total.saturating_sub(t.downloaded))
+            fmt_size(t.total)
         )),
     ]));
     // 失败原因（已失败与已暂停（失败）均保留可见，v1.6/FR-01-92）
@@ -242,8 +176,6 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
             ),
         ]));
     }
-    // 速度行（无平均值；缺失用 -）
-    lines.push(Line::from(speed_row(t)));
     lines.push(Line::from(vec![
         Span::raw(" "),
         dim_label("保存"),

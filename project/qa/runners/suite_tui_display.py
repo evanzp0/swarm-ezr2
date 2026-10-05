@@ -103,8 +103,9 @@ class TuiDisplaySuite(Suite):
                 app.graceful_quit()
 
     def _case_03(self):
-        """QA-TD-03 下载中详情字段全集齐备；分块行 1 MB/块；无「并发分块明细」段落
-        （FR-01-81 修订二：明细表整体移除，详情面板止于任务级字段行）。"""
+        """QA-TD-03 下载中详情字段全集齐备（v1.11 起不含状态/速度）；分块行 1 MB/块；
+        无「并发分块明细」段落（FR-01-81 修订二）与「状态」「速度」字段行
+        （v1.11/FR-01-80 修订）；大小行无「（剩余」后缀（v1.12/FR-01-80 修订）。"""
         @self.case("QA-TD-03")
         def go(env: Env):
             app = EzrApp(env.home, save_dir=env.save_dir)
@@ -112,12 +113,15 @@ class TuiDisplaySuite(Suite):
                 add_task_via_dialog(app, env, self._slow(env, "three-m.bin", 1))
                 assert app.wait_for("下载中", 8)
                 d = detail_text(app)
-                for field in ("状态", "ID", "类型", "大小", "速度", "保存",
+                for field in ("ID", "类型", "大小", "保存",
                               "URL", "分块"):
                     assert_in(field, d, f"详情字段 {field}")
                 assert_in("1 MB/块", d, "默认块大小")
                 assert_in("支持断点续传", d, "续传标记")
                 assert_not_in("并发分块明细", d, "明细表应已移除（FR-01-81 修订二）")
+                assert_not_in("状态", d, "状态行应已移除（v1.11/FR-01-80）")
+                assert_not_in("速度", d, "速度行应已移除（v1.11/FR-01-80）")
+                assert_not_in("剩余", d, "大小行剩余后缀应已移除（v1.12/FR-01-80）")
             finally:
                 app.graceful_quit()
 
