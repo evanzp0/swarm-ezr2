@@ -124,14 +124,13 @@ pub enum Evt {
         /// 任务 ID
         id: u32,
     },
-    /// 下载完成（全块完成 + 大小校验通过）
+    /// 下载完成（全块完成 + 大小校验通过；是否需校验由 App 按任务当前
+    /// checksum 判定，D19「完成校验用最新值」）
     DownloadDone {
         /// 任务 ID
         id: u32,
         /// 文件实际大小
         total: u64,
-        /// 是否需要校验（false = 无校验值，引擎已完成收尾：改名+删 sidecar）
-        has_checksum: bool,
     },
     /// 校验完成（ok = true 时引擎已完成收尾：改名+删 sidecar）
     VerifyDone {

@@ -17,12 +17,10 @@ import subprocess
 import time
 
 from harness import (
-    EZR_BIN, Env, EzrApp, Suite, add_task_via_dialog, assert_file_content,
-    assert_in, assert_not_in, expected_content, file_bytes, read_file,
-    wait_file_size, QA_FILE_SIZES,
+    Env, EzrApp, Suite, add_task_via_dialog, assert_file_content,
+    assert_in, assert_not_in, expected_content, file_bytes, proxy_reqs,
+    read_file, start_proxy, stop_proxy, wait_file_size, QA_FILE_SIZES,
 )
-
-PROXY_BIN = os.path.join(os.path.dirname(EZR_BIN), "ezr-proxy")
 
 FIVE_M = QA_FILE_SIZES["five-m.bin"]
 
@@ -99,30 +97,10 @@ class ThrottleProxySuite(Suite):
                 return (total_bytes - skip_bytes) / max(0.1, t_done - t_skip)
         raise AssertionError(f"{timeout}s 内未完成: {bare_path}")
 
-    @staticmethod
-    def _start_proxy(env: Env, name: str, port: int) -> dict:
-        """启动 ezr-proxy 并返回句柄（进程 + 日志路径）。"""
-        log = os.path.join(env.home, f"{name}.jsonl")
-        proc = subprocess.Popen(
-            [PROXY_BIN, "serve", "--port", str(port), "--name", name, "--log", log],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return {"proc": proc, "log": log, "port": port, "name": name}
-
-    @staticmethod
-    def _proxy_reqs(handle: dict) -> list[dict]:
-        try:
-            with open(handle["log"], encoding="utf-8") as f:
-                return [json.loads(x) for x in f if x.strip()]
-        except (OSError, json.JSONDecodeError):
-            return []
-
-    @staticmethod
-    def _stop_proxy(handle: dict) -> None:
-        handle["proc"].terminate()
-        try:
-            handle["proc"].wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            handle["proc"].kill()
+    # 实例管理收口共享 harness（QA DRY 条款：跨套件共享操作上提）
+    _start_proxy = staticmethod(start_proxy)
+    _proxy_reqs = staticmethod(proxy_reqs)
+    _stop_proxy = staticmethod(stop_proxy)
 
 
     # -- 用例 -----------------------------------------------------------------

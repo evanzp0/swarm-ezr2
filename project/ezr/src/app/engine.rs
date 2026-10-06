@@ -442,11 +442,7 @@ impl App {
                     ));
                 }
             }
-            Evt::DownloadDone {
-                id,
-                total,
-                has_checksum,
-            } => {
+            Evt::DownloadDone { id, total } => {
                 let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else {
                     return;
                 };
@@ -455,7 +451,23 @@ impl App {
                 t.speed = 0.0;
                 self.windows.remove(&id);
                 let name = t.name.clone();
-                if has_checksum {
+                // D19「完成校验用最新值」：是否校验以任务当前 checksum 为准，
+                // 不用事件携带的 spec 快照标志 —— 下载中经修改对话框清空/设置
+                // 校验码（Reconfigure 不携带 checksum）后，spec 标志已过期：
+                // 按过期标志校验会以空期望值产生假性「校验失败」（QA-MT-05
+                // 端到端指纹）或跳过新设校验（QA-MT-04）。TDD 回归测试锁定。
+                // 引擎侧收尾（改名 + 删 sidecar）按 spec 快照执行：快照过期时
+                // 由 App 按文件实际位置补齐/对齐，两侧操作均幂等。
+                let verify_now = t.checksum.is_some();
+                if verify_now {
+                    let dl = t.downloading_path();
+                    let fin = t.target_path();
+                    // 校验目标以文件实际位置为准（spec 无校验快照时引擎已先行改名）
+                    let path = if std::path::Path::new(&fin).exists() {
+                        fin
+                    } else {
+                        dl
+                    };
                     let algo = t.checksum.as_ref().map_or("SHA-256", |c| c.algo);
                     // 校验中占槽位（D12：不释放）
                     t.state = TaskState::Verifying;
@@ -466,7 +478,7 @@ impl App {
                         .map_or(String::new(), |c| c.value.clone());
                     let spec = crate::engine::VerifySpec {
                         id,
-                        path: t.downloading_path(),
+                        path,
                         final_path: t.target_path(),
                         sidecar_path: t.sidecar_path(),
                         algo,
@@ -475,7 +487,15 @@ impl App {
                     self.engine.send(Cmd::Verify { spec }).await;
                     self.set_toast(format!("✓ 下载完成，开始校验: {name}"));
                 } else {
-                    // 无校验值直接完成（引擎已收尾：改名 + 删 sidecar）
+                    // 无校验值直接完成。引擎已按 spec 收尾时此处为空操作；
+                    // spec 有校验快照（引擎未收尾）→ App 幂等补收尾
+                    // （去 `.downloading` 扩展名 + 删 sidecar，FR-01-24/20）
+                    let dl = t.downloading_path();
+                    let fin = t.target_path();
+                    if std::path::Path::new(&dl).exists() {
+                        let _ = tokio::fs::rename(&dl, &fin).await;
+                    }
+                    let _ = tokio::fs::remove_file(t.sidecar_path()).await;
                     t.state = TaskState::Completed;
                     t.has_slot = false;
                     t.verify_ok = None;
@@ -1383,12 +1403,7 @@ mod evt_tests {
         }];
         app.tasks.push(t);
         app.windows.insert(1, SpeedWindow::new());
-        app.on_evt(Evt::DownloadDone {
-            id: 1,
-            total: 1000,
-            has_checksum: false,
-        })
-        .await;
+        app.on_evt(Evt::DownloadDone { id: 1, total: 1000 }).await;
         let t = &app.tasks[0];
         assert_eq!(t.state, TaskState::Completed, "无校验值直接完成");
         assert_eq!(t.downloaded, 1000);
@@ -1417,12 +1432,7 @@ mod evt_tests {
             value: "aa".to_string(),
         });
         app.tasks.push(t);
-        app.on_evt(Evt::DownloadDone {
-            id: 1,
-            total: 64,
-            has_checksum: true,
-        })
-        .await;
+        app.on_evt(Evt::DownloadDone { id: 1, total: 64 }).await;
         let t = &app.tasks[0];
         assert_eq!(
             t.state,
@@ -1439,13 +1449,63 @@ mod evt_tests {
     #[tokio::test]
     async fn download_done_unknown_id_is_noop() {
         let mut app = make_app("done-ghost");
-        app.on_evt(Evt::DownloadDone {
-            id: 11,
-            total: 1,
-            has_checksum: false,
-        })
-        .await;
+        app.on_evt(Evt::DownloadDone { id: 11, total: 1 }).await;
         assert!(app.tasks.is_empty());
+        app.shutdown().await;
+    }
+
+    /// D19「完成校验用最新值」· 清除相位：下载中清空校验码（任务侧
+    /// checksum = None）后完成 —— 不得以过期 spec 的 has_checksum=true
+    /// 触发校验（旧实现以空期望值校验 → 假性「校验失败」）。
+    /// 失败先行（TDD）：QA-MT-05 端到端缺陷指纹。
+    #[tokio::test]
+    async fn download_done_checksum_cleared_midflight_skips_verify() {
+        let mut app = make_app("done-ck-cleared");
+        let mut t = seed_task(1, "f.bin");
+        t.state = TaskState::Downloading;
+        t.has_slot = true;
+        t.checksum = Some(Checksum {
+            algo: "SHA-256",
+            value: "aa".to_string(),
+        });
+        app.tasks.push(t);
+        // 模拟修改对话框清空校验码（t.checksum = None，spec 标志已过期）
+        app.tasks[0].checksum = None;
+        app.on_evt(Evt::DownloadDone { id: 1, total: 1000 }).await;
+        let t = &app.tasks[0];
+        assert_eq!(
+            t.state,
+            TaskState::Completed,
+            "最新值无校验 → 直接完成，不得进入校验"
+        );
+        assert!(t.verify_ok.is_none(), "清除后完成不应产生校验结果");
+        let toast = app.toast.clone().unwrap_or_default();
+        assert!(toast.contains("无校验"), "toast={toast}");
+        app.shutdown().await;
+    }
+
+    /// D19「完成校验用最新值」· 设置相位：下载中设置校验码（任务侧
+    /// checksum = Some）后完成 —— 必须按新值进入校验（旧实现以过期 spec
+    /// 的 has_checksum=false 跳过校验 → 「无校验」完成）。
+    #[tokio::test]
+    async fn download_done_checksum_set_midflight_verifies() {
+        let mut app = make_app("done-ck-set");
+        let mut t = seed_task(1, "f.bin");
+        t.state = TaskState::Downloading;
+        t.has_slot = true;
+        app.tasks.push(t);
+        // 模拟修改对话框设置校验码（t.checksum = Some，spec 标志已过期）
+        app.tasks[0].checksum = Some(Checksum {
+            algo: "MD5",
+            value: "aa".to_string(),
+        });
+        app.on_evt(Evt::DownloadDone { id: 1, total: 64 }).await;
+        let t = &app.tasks[0];
+        assert_eq!(
+            t.state,
+            TaskState::Verifying,
+            "最新值有校验 → 应进入校验（D19 完成校验用最新值）"
+        );
         app.shutdown().await;
     }
 

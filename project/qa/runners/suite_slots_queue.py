@@ -16,7 +16,7 @@ import time
 
 from harness import (
     Env, EzrApp, Suite, add_task_via_dialog, assert_in, assert_not_in,
-    detail_text, expected_content, file_bytes, wait_file_size,
+    detail_text, expected_content, file_bytes, wait_file_size, task_pct,
     QA_FILE_SIZES,
 )
 
@@ -262,8 +262,8 @@ class SlotsQueueSuite(Suite):
                 deadline = time.time() + 30
                 while time.time() < deadline:
                     app.pump(0.2)
-                    m = re.search(r"(\d+\.\d)%", detail_text(app))
-                    if m and float(m.group(1)) >= 20.0:
+                    pct = task_pct(app)
+                    if pct is not None and pct >= 20.0:
                         break
                 app.send("space")
                 assert app.wait_for("已暂停", 5)
@@ -286,17 +286,17 @@ class SlotsQueueSuite(Suite):
                 pct_before = 0.0
                 while time.time() < deadline:
                     app.pump(0.2)
-                    m = re.search(r"(\d+\.\d)%", detail_text(app))
-                    if m and float(m.group(1)) >= 20.0:
-                        pct_before = float(m.group(1))
+                    pct = task_pct(app)
+                    if pct is not None and pct >= 20.0:
+                        pct_before = pct
                         break
                 app.send("space")
                 assert app.wait_for("已暂停", 5)
                 app.send("space")
                 assert app.wait_for("下载中", 8)
-                m = re.search(r"(\d+\.\d)%", detail_text(app))
-                assert m and float(m.group(1)) >= pct_before - 0.5, \
-                    f"续传进度不应回退: {pct_before} → {m.group(1) if m else '?'}"
+                pct_after = task_pct(app)
+                assert pct_after is not None and pct_after >= pct_before - 0.5, \
+                    f"续传进度不应回退: {pct_before} → {pct_after if pct_after is not None else '?'}"
             finally:
                 app.graceful_quit()
 

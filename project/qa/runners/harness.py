@@ -21,6 +21,7 @@ import fcntl
 import json
 import os
 import pty
+import re
 import select
 import shutil
 import signal
@@ -446,6 +447,57 @@ def write_checksum_sidecar(save_dir: str, filename: str, algo: str, hexval: str)
 
 
 # ---------------------------------------------------------------------------
+# ezr-proxy 实例管理（跨套件共享：01-throttle-proxy / 03-modify-task / 02-named-proxy）
+# ---------------------------------------------------------------------------
+
+
+def start_proxy(env: "Env", name: str, port: int) -> dict:
+    """启动 ezr-proxy 实例并返回句柄（进程 + 日志路径 + 端口）。
+
+    日志落 env.home（用例隔离目录，随用例清理）。正向探测：端口就绪窗口。
+    """
+    log = os.path.join(env.home, f"{name}.jsonl")
+    proc = subprocess.Popen(
+        [PROXY_BIN, "serve", "--port", str(port), "--name", name, "--log", log],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    import socket
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                break
+        except OSError:
+            time.sleep(0.05)
+    else:
+        proc.kill()
+        raise RuntimeError(f"ezr-proxy {name} 端口 {port} 5s 未就绪")
+    return {"proc": proc, "log": log, "port": port, "name": name}
+
+
+def proxy_reqs(handle: dict) -> list[dict]:
+    """读代理 JSONL 日志（全量行；append-only，包含口径断言用）。"""
+    out: list[dict] = []
+    try:
+        with open(handle["log"], encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    out.append(json.loads(line))
+    except (OSError, json.JSONDecodeError):
+        pass
+    return out
+
+
+def stop_proxy(handle: dict) -> None:
+    handle["proc"].terminate()
+    try:
+        handle["proc"].wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        handle["proc"].kill()
+        handle["proc"].wait(timeout=3)
+
+
+# ---------------------------------------------------------------------------
 # 用例与套件
 # ---------------------------------------------------------------------------
 
@@ -585,8 +637,39 @@ def add_task_via_dialog(app: "EzrApp", env: "Env", url: str, conns: str = "",
 
 
 def detail_text(app: "EzrApp") -> str:
-    """详情面板文本（120 列布局右栏从 64 列起）。"""
-    return "\n".join(row[64:].rstrip() for row in app.screen.display)
+    """任务详情面板箱体文本（120 列布局右栏，不含下方「全局速度」图表面板）。
+
+    区域锚定（engineering.md）：右栏自上而下 = 详情面板 + 图表面板，图表面板
+    标题「↓ 全局速度 …」含「速度」子串——整右栏截取会把它误算进详情断言区
+    （v1.11 起规格只约束详情面板无「状态/速度」字段行，图表面板合法常驻）。
+    故以「任务详情」标题行起、图表面板标题行止（不含）截取箱体行。
+    """
+    rows = app.screen.display
+    top = next((i for i, r in enumerate(rows) if "任务详情" in r), None)
+    if top is None:
+        return ""
+    end = next(
+        (i for i in range(top + 1, len(rows)) if "全局速度" in rows[i]), len(rows)
+    )
+    return "\n".join(row[64:].rstrip() for row in rows[top:end])
+
+
+def task_pct(app: "EzrApp") -> float | None:
+    r"""选中任务行的进度百分比（无选中行时退回全画面首个匹配）。
+
+    区域锚定（engineering.md）：进度百分比渲染在列表任务行右缘
+    （实测列 60–65），右栏切片（detail_text，列 64 起）永远读不全
+    （截断片段不匹配 ``\d+\.\d%``）——必须读全宽行。选中行以光标
+    ▌ 标记（task_lines 渲染，单元测试锁定）；无选中行时退回全画面
+    首个匹配（单任务场景等价）。
+    """
+    rows = app.screen.display
+    sel = [r for r in rows if "▌" in r]
+    for r in (sel if sel else rows):
+        m = re.search(r"(\d+\.\d)%", r)
+        if m:
+            return float(m.group(1))
+    return None
 
 
 def select_completed(app: "EzrApp", needles: list[str],

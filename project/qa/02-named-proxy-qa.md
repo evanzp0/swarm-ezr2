@@ -69,3 +69,7 @@
   Proxy-Authorization: Basic（basic auth 在 TLS 会话内生效，FR-01-93 ②）。
 - NP-09/10/11/12/14/16/17 作废条目判定补充：引擎无该条目的连接尝试（无以作废条目为代理的
   请求记录），且启动与合法条目下载不受阻（容错口径同 FR-01-71）。
+
+## 套件脚本
+
+- 可执行套件：`project/qa/runners/suite_named_proxy.py`（QA 会话落，端到端 UI 层；`python3 suite_named_proxy.py` 于 runners 目录执行，依赖 `harness.py` 共享基建与 pyte/wcwidth）。

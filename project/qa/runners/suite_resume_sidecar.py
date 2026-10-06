@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from harness import (
     Env, EzrApp, Suite, TMP_ROOT, add_task_via_dialog, assert_file_content,
     assert_in, assert_not_in, detail_text, expected_content, file_bytes,
-    read_file, wait_file_size, QA_FILE_SIZES,
+    read_file, wait_file_size, task_pct, QA_FILE_SIZES,
 )
 
 EIGHT_M = QA_FILE_SIZES["eight-m.bin"]  # 8,000,000（十进制口径）
@@ -162,8 +162,8 @@ class ResumeSidecarSuite(Suite):
         deadline = time.time() + timeout
         while time.time() < deadline:
             app.pump(0.2)
-            m = re.search(r"(\d+\.\d)%", detail_text(app))
-            if m and float(m.group(1)) >= min_pct:
+            pct = task_pct(app)
+            if pct is not None and pct >= min_pct:
                 break
         app.send("space")
         assert app.wait_for("已暂停", 5), "暂停后应显示已暂停"

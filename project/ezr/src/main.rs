@@ -203,14 +203,30 @@ fn lock_dir(state: Option<PathBuf>) -> PathBuf {
 
 /// 单实例文件锁（FR-01-72：`<.ezr>/state/ezr.lock`，flock 独占；`.ezr` 根目录
 /// 经 `EZR_HOME` 重定位，v1.3/D16——不同 EZR_HOME 的实例互不冲突）。
-/// state 目录不可得时回退 `<系统临时目录>/ezr.lock`：回退分支与正常分支同走
-/// [`try_lock_path`] 的「打开 + flock」（原回退分支仅 `File::create` 无锁，
-/// 二次启动防重在无主目录环境失效——操作者裁决已修）。
+/// state 目录不可得（无主目录环境）或不可写（权限受限等退化环境）时回退
+/// `<系统临时目录>/ezr.lock`：回退分支与正常分支同走 [`try_lock_path`] 的
+/// 「打开 + flock」（原回退分支仅 `File::create` 无锁，二次启动防重在无主目录
+/// 环境失效——操作者裁决已修；不可写目录回退为 QA 终局轮 01-config-template-04
+/// 缺陷修复，TDD 回归测试锁定）。
 /// 锁文件句柄保持打开直至进程退出；`Ok(None)` = 已有实例在运行。
 fn acquire_instance_lock() -> std::io::Result<Option<std::fs::File>> {
-    let dir = lock_dir(state_dir());
-    std::fs::create_dir_all(&dir)?;
-    try_lock_path(&dir.join("ezr.lock"))
+    acquire_lock_at(&[lock_dir(state_dir()), std::env::temp_dir()])
+}
+
+/// 按候选落点序列获取单实例锁（FR-01-72 v1.4 回退口径扩展，01-config-template-04
+/// 「配置所在目录不可写时启动不报错不崩溃」）：逐落点「create_dir_all + 打开 +
+/// flock」，首选落点不可得或不可写（含权限受限）时回退下一落点（末位恒为
+/// `<系统临时目录>`）；全部失败才 Err（main 据此报错退出）。
+/// 回退分支与正常分支共用同一「打开 + flock」收口（engineering.md 回退分支条款）。
+fn acquire_lock_at(dirs: &[std::path::PathBuf]) -> std::io::Result<Option<std::fs::File>> {
+    let mut last_err: Option<std::io::Error> = None;
+    for dir in dirs {
+        match std::fs::create_dir_all(dir).and_then(|()| try_lock_path(&dir.join("ezr.lock"))) {
+            Ok(res) => return Ok(res),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| std::io::Error::other("无可用的锁落点")))
 }
 
 fn main() -> std::io::Result<()> {
@@ -554,6 +570,26 @@ mod cli_parse_tests {
         assert_eq!(lock_dir(None), std::env::temp_dir());
         let custom = std::path::PathBuf::from("/tmp/ezr-state-lockdir-probe");
         assert_eq!(lock_dir(Some(custom.clone())), custom);
+    }
+
+    /// 不可写 state 目录的锁回退（01-config-template-04：配置所在目录不可写
+    /// 时启动不报错不崩溃）：首选落点锁定失败 → 回退落点应成功上锁。
+    /// 失败先行（TDD）：旧实现仅回退 no-HOME 形态，不可写目录直接 Err 退出。
+    #[test]
+    fn instance_lock_falls_back_when_state_dir_unwritable() {
+        let base = crate::model::testenv::uniq_tmp_dir("ezr-lock-ro");
+        let ro = base.join("ro-state");
+        std::fs::create_dir_all(&ro).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let alt = base.join("alt-state");
+        let res = acquire_lock_at(&[ro.clone(), alt.clone()]);
+        // 清理权限后再删除（删只读目录内容会失败）
+        std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let locked = res.expect("首选落点不可写应回退第二落点而非报错退出");
+        assert!(locked.is_some(), "回退落点应成功上锁");
+        drop(locked);
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[tokio::test]

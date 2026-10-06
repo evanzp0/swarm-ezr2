@@ -498,12 +498,16 @@ class TuiDisplaySuite(Suite):
                 else:
                     raise AssertionError(
                         f"暂停后速度应立即归零无拖尾（任务行={row!r} 全局={hdr!r}）")
-                # ④ 恢复：EMA 平滑爬升（首个非零读数 < 峰值 × 0.75）
+                # ④ 恢复：EMA 平滑爬升（首个非零读数 < 峰值 × 0.75）。
+                # 观察窗下限核算（engineering.md）：恢复延迟 = 连接重建
+                # （秒级，实测方差大）+ 首个 128 KB 块 ~1.4 s（90KB/s 聚合），
+                # 12 样本窗 ~5 s 裕度不足（本轮实测一例恢复后全程零读数、
+                # 单跑复现即消失）；扩至 20 样本 ~8 s+，覆盖慢恢复分位。
                 app.send("space")
                 assert app.wait_for("下载中", 5)
                 climb: list[float] = []
-                deadline = time.time() + 9.0
-                while time.time() < deadline and len(climb) < 12:
+                deadline = time.time() + 15.0
+                while time.time() < deadline and len(climb) < 20:
                     app.pump(0.1)
                     s = self._task_speed_sample(app)
                     if s:

@@ -427,3 +427,17 @@ group_imports = "StdExternalCrate"
   `FN:<line>,<name>`、`BRDA:<line>,<block>,<branch>,<taken>`、`DA:<line>,<count>`——
   自写解析器（如 CRAP 近似脚本）时 `FN:`/`BRDA:` 先以冒号切前缀再按逗号切字段，
   直接 `split(":")` 取三段会在标准格式上崩；名字段本身可含逗号，只切第一个逗号。
+
+- **llvm-cov JSON 同源函数跨 crate 实例化必须剥 crate-disambiguator 再聚合**：
+  同一源函数被多个测试 crate（`#[path]` 挂载树）编译时，每个实例化的 mangled
+  name 带 crate hash（`Cs<hash>` 段），粗规范化会把同一函数拆成多个键、零覆盖
+  实例在「取极值」聚合下冒充未覆盖——函数级覆盖率/CRAP 度量先把 `Cs[0-9A-Za-z]+`
+  归一为 `Cs` 再提取可读名，按（文件, 规范化名）合并后取「任一实例覆盖即覆盖」。
+  阳性对照：某已知被测函数（如 UI 渲染助手）在未剥 hash 的报告里常显示 cov=0。
+
+- **对账时挂载树内的 cfg(test) 测试会在每个挂载它的测试 crate 重复注册（合法）**：
+  `#[path]` 收编的产品源里 `#[cfg(test)]` 测试随挂载树进入每个引用它的测试
+  crate，全量 `cargo test` 计数比「新增测试数」多出「新增测试 × 挂载该源的
+  crate 数」——增量对账按 cargo test 输出逐目标列出并按挂载关系解释，勿与
+  「重复 #[test] 属性虚增」（engineering.md 条款）混淆：后者是同 crate 内双注册，
+  前者是跨 crate 合法副本（`--list | sort | uniq -d` 在跨 crate 场景会误报）。

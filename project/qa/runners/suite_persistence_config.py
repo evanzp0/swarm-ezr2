@@ -21,7 +21,7 @@ import time
 from harness import (
     EZR_BIN, Env, EzrApp, Suite, add_task_via_dialog, assert_file_content,
     assert_in, assert_not_in, detail_text, file_bytes, read_file,
-    wait_file_size, QA_FILE_SIZES,
+    wait_file_size, task_pct, QA_FILE_SIZES,
 )
 
 FIVE_M = QA_FILE_SIZES["five-m.bin"]
@@ -39,8 +39,8 @@ class PersistenceConfigSuite(Suite):
         deadline = time.time() + timeout
         while time.time() < deadline:
             app.pump(0.2)
-            m = re.search(r"(\d+\.\d)%", detail_text(app))
-            if m and float(m.group(1)) >= min_pct:
+            pct = task_pct(app)
+            if pct is not None and pct >= min_pct:
                 break
         app.send("space")
         assert app.wait_for("已暂停", 5), "暂停后应显示已暂停"

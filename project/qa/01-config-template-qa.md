@@ -34,3 +34,7 @@
 - QA-CT-01/05 的模板内容断言与钦定文本整文本逐字节对账（`cmp` 口径，不再按逐行 contains
   宽容比对——v1.10 起模板逐字节锁定，含空行/行序/EOF）；模板行为等价性
   （QA-CT-01/03/04）与 `qa/01-persistence-config-qa.md` QA-PC-03 默认值口径一致。
+
+## 套件脚本
+
+- 可执行套件：`project/qa/runners/suite_config_template.py`（QA 会话落，端到端 UI 层；`python3 suite_config_template.py` 于 runners 目录执行，依赖 `harness.py` 共享基建与 pyte/wcwidth）。

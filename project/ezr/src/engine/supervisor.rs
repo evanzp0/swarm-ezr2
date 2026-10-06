@@ -543,7 +543,6 @@ async fn download(
                     let _ = emit(evt_tx, Evt::DownloadDone {
                         id: spec.id,
                         total,
-                        has_checksum,
                     }).await;
                     return Flow::Completed;
                 }
@@ -699,7 +698,6 @@ async fn single_stream(
                     let _ = emit(evt_tx, Evt::DownloadDone {
                         id: spec.id,
                         total: final_total,
-                        has_checksum: spec.expected_algo.is_some(),
                     }).await;
                     return Flow::Completed;
                 }
@@ -1155,11 +1153,7 @@ mod tests {
         let mut probed = false;
         while std::time::Instant::now() < deadline {
             match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
-                Ok(Some(Evt::DownloadDone {
-                    total: t,
-                    has_checksum: false,
-                    ..
-                })) => {
+                Ok(Some(Evt::DownloadDone { total: t, .. })) => {
                     assert_eq!(t, total);
                     done = true;
                     break;

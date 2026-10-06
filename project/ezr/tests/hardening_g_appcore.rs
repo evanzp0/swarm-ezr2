@@ -467,6 +467,27 @@ async fn toggle_pause_on_completed_hints() {
     shutdown(a).await;
 }
 
+/// 靶 tasks Paused 恢复臂（QA 终局轮 · 02-named-proxy-05 缺陷修复）：恢复时
+/// 引用的命名代理已不存在 → 提醒 toast「引用的代理不存在，已按直连」必须
+/// 可见，不得被同刻的「继续下载」提示同步覆盖。失败先行（TDD）：旧实现
+/// resolve 的提醒被恢复提示立即覆盖，端到端 NP-05 提醒不可见（假失败）。
+#[tokio::test]
+async fn toggle_pause_resume_missing_named_proxy_warns() {
+    let mut a = mkapp("pause-gone-proxy");
+    push_tasks(&mut a, 1);
+    a.tasks[0].state = TaskState::Paused;
+    a.tasks[0].proxy = crate::model::config::ProxyChoice::Named("gone-proxy".into());
+    a.selected = 0;
+    tap(&mut a, KeyCode::Char(' '));
+    assert_eq!(a.tasks[0].state, TaskState::Downloading, "恢复直接续传");
+    let toast = a.toast.as_deref().unwrap_or_default();
+    assert!(
+        toast.contains("不存在"),
+        "缺失引用提醒应可见（不得被恢复提示覆盖）: {toast}"
+    );
+    shutdown(a).await;
+}
+
 // ------------------------------------------------------------- paste.rs ---
 
 fn add_dialog(focus: usize, ck_open: bool) -> Dialog {

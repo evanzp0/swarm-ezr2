@@ -29,3 +29,7 @@
 - 「立即生效」判定（QA-MT-02/03）以 D19 口径为准：不要求在途请求/在途块被打断重连；
   并发下调允许块级过渡延迟（默认块 1 MB 秒级）。
 - 修改落盘判定（QA-MT-08）允许注册表写入与退出间秒级窗口，但重启后必须读到新参数。
+
+## 套件脚本
+
+- 可执行套件：`project/qa/runners/suite_modify_task.py`（QA 会话落，端到端 UI 层；`python3 suite_modify_task.py` 于 runners 目录执行，依赖 `harness.py` 共享基建与 pyte/wcwidth）。

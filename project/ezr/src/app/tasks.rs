@@ -46,21 +46,24 @@ impl App {
                 self.tasks[idx].has_slot = true;
                 self.tasks[idx].made_progress = false;
                 let choice = self.tasks[idx].proxy.clone();
-                let endpoint = self.resolve_endpoint(&choice);
-                let spec = self.make_spec(&self.tasks[idx], endpoint);
                 let id = self.tasks[idx].id;
                 self.windows.remove(&id);
                 let engine = self.engine.clone();
                 let was_resumable = self.tasks[idx].resumable;
-                tokio::spawn(async move {
-                    engine.send(Cmd::Start { spec }).await;
-                });
-                let toast = if was_resumable {
+                let resume_toast = if was_resumable {
                     format!("▶ 继续下载（从断点恢复）: {name}")
                 } else {
                     format!("⚠ 服务器不支持断点续传，已从头开始下载: {name}")
                 };
-                self.set_toast(toast);
+                // 恢复提示先行；引用缺失提醒（resolve_endpoint 内）在其后发出
+                // 时覆盖本提示 —— 缺失提醒必须可见（02-named-proxy-05：
+                // toast 提醒一次；toast 槽位单一，后发覆盖先发）
+                self.set_toast(resume_toast);
+                let endpoint = self.resolve_endpoint(&choice);
+                let spec = self.make_spec(&self.tasks[idx], endpoint);
+                tokio::spawn(async move {
+                    engine.send(Cmd::Start { spec }).await;
+                });
             }
             TaskState::Queued => {
                 // 等待中 → 暂停并退出等待队列；已获槽位者取消引擎任务
