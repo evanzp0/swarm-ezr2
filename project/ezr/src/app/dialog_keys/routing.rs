@@ -9,7 +9,7 @@ use crate::app::CHECKSUM_ALGOS;
 
 /// 校验码字段字符追加（Add focus 4 / Modify focus 2 共用，DRY 收敛）：
 /// 仅十六进制、≤ 128 位（SHA-512 上限）
-pub(super) fn push_hex_capped(d: &mut Dialog, c: char) {
+pub fn push_hex_capped(d: &mut Dialog, c: char) {
     if c.is_ascii_hexdigit() && d.ck_value.chars().count() < 128 {
         d.ck_value.push(c);
     }
@@ -23,7 +23,7 @@ pub(super) const fn kind_add() -> DialogKind {
 
 /// 下拉框展开态逐键处理（Up/Down/Home/End 选择，Enter/Esc 关闭，
 /// Tab/BackTab 关闭并跳转焦点，其余键关闭下拉）。消费所有按键。
-pub(super) fn dropdown_open_key(d: &mut Dialog, code: KeyCode) {
+pub fn dropdown_open_key(d: &mut Dialog, code: KeyCode) {
     match code {
         KeyCode::Up => {
             d.ck_sel = (d.ck_sel + CHECKSUM_ALGOS.len() - 1) % CHECKSUM_ALGOS.len();
@@ -52,7 +52,7 @@ pub(super) fn dropdown_open_key(d: &mut Dialog, code: KeyCode) {
 
 /// 代理下拉框展开态逐键处理（v1.5/FR-01-86；Up/Down/Home/End 选择，
 /// Enter/Esc 关闭，Tab/BackTab 关闭并跳转焦点，其余键关闭）。消费所有按键。
-pub(super) fn proxy_dropdown_open_key(d: &mut Dialog, n: usize, code: KeyCode) {
+pub fn proxy_dropdown_open_key(d: &mut Dialog, n: usize, code: KeyCode) {
     let n = n.max(1);
     match code {
         KeyCode::Up => {
@@ -78,7 +78,7 @@ pub(super) fn proxy_dropdown_open_key(d: &mut Dialog, n: usize, code: KeyCode) {
 
 /// 文本字段退格（kind 感知焦点映射：Add 0=URL 1=目录 2=并发 4=校验码；
 /// Modify 0=并发 2=校验码）
-pub(super) fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> bool {
+pub fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> bool {
     match (kind, focus) {
         (DialogKind::Add, 0) => {
             d.url.pop();
@@ -103,7 +103,7 @@ pub(super) fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> 
 
 /// 文本字段字符输入（kind 感知：Add 0=URL 1=目录 2=并发；Modify 0=并发。
 /// URL/目录 ≤300 字符；并发仅 2 位数字）
-pub(super) fn text_char(kind: DialogKind, d: &mut Dialog, focus: usize, c: char) -> bool {
+pub fn text_char(kind: DialogKind, d: &mut Dialog, focus: usize, c: char) -> bool {
     match (kind, focus) {
         (DialogKind::Add, 0) => {
             if d.url.chars().count() < 300 {

@@ -425,26 +425,24 @@ async fn download(
 
     // worker 池：按设置并发数生成 worker（FR-01-11）；块数不足时多余 worker
     // 立即转「待命」（明细表可见），活跃传输数仍 = min(并发数, 未完成块数)
+    // spawn 依赖单源（架构轮：12 参 spawn 表收敛为 WorkerDeps 参数对象——
+    // 初始池与 Reconfigure 扩容两个调用点共用同一份克隆清单，防两处漂移）
+    let deps = WorkerDeps {
+        url: worker_url.clone(),
+        file_path: dl_path.clone(),
+        blocks: blocks_shared.clone(),
+        lease_next: lease_next.clone(),
+        stop_rx: stop_rx.clone(),
+        quota_rx: quota_rx.clone(),
+        ep_rx: ep_rx.clone(),
+        total_written: total_written.clone(),
+        failure: failure.clone(),
+        conns: conns.clone(),
+    };
     let n_workers = spec.concurrency.clamp(1, 64);
     let mut handles: Vec<(usize, tokio::task::JoinHandle<()>)> = Vec::with_capacity(n_workers);
     for wid in 1..=n_workers {
-        handles.push((
-            wid,
-            tokio::spawn(block_worker(
-                wid,
-                Arc::clone(shared),
-                worker_url.clone(),
-                dl_path.clone(),
-                blocks_shared.clone(),
-                lease_next.clone(),
-                stop_rx.clone(),
-                quota_rx.clone(),
-                ep_rx.clone(),
-                total_written.clone(),
-                failure.clone(),
-                conns.clone(),
-            )),
-        ));
+        handles.push((wid, deps.spawn(wid, Arc::clone(shared))));
     }
 
     // 监督循环：进度事件 + sidecar 周期落盘 + 完成/暂停/取消判定
@@ -465,23 +463,7 @@ async fn download(
                         while live.contains(&next) {
                             next += 1;
                         }
-                        handles.push((
-                            next,
-                            tokio::spawn(block_worker(
-                                next,
-                                Arc::clone(shared),
-                                worker_url.clone(),
-                                dl_path.clone(),
-                                blocks_shared.clone(),
-                                lease_next.clone(),
-                                stop_rx.clone(),
-                                quota_rx.clone(),
-                                ep_rx.clone(),
-                                total_written.clone(),
-                                failure.clone(),
-                                conns.clone(),
-                            )),
-                        ));
+                        handles.push((next, deps.spawn(next, Arc::clone(shared))));
                         live.insert(next);
                         next += 1;
                     }
@@ -770,22 +752,55 @@ pub(crate) async fn verify(spec: VerifySpec, evt_tx: mpsc::Sender<Evt>) {
     }
 }
 
-/// 块 worker：领块 → Range 下载 → 写盘；无块可领或停止信号时退出
-#[allow(clippy::too_many_arguments)]
-async fn block_worker(
-    wid: usize,
-    shared: Arc<super::EngineShared>,
+/// worker 共享依赖包（spawn 参数对象）：分块下载路径的全部跨 worker 共享
+/// 句柄与任务上下文。依赖清单唯一登记于本结构体定义；`spawn` 是唯一 spawn
+/// 调用点——初始 worker 池与 Reconfigure 扩容共用（架构轮：原两处 12 参
+/// 调用表收敛，防漂移单源）。字段全部 Clone，逐 worker 克隆后转移所有权。
+#[derive(Clone)]
+struct WorkerDeps {
+    /// 下载 URL（探测重定向后的最终地址）
     url: String,
+    /// `.downloading` 目标文件路径
     file_path: PathBuf,
+    /// 共享块视图（领块与写盘记账）
     blocks: Arc<tokio::sync::Mutex<Blocks>>,
+    /// 全局块租约序号（原子领块指针）
     lease_next: Arc<AtomicU32>,
+    /// 停止信号（暂停/取消/失败收尾）
     stop_rx: watch::Receiver<bool>,
+    /// 目标 worker 数（下调时多余 worker 完成当前块后自行退出）
     quota_rx: watch::Receiver<usize>,
+    /// 任务代理端点（每次领块解析 client——切换后新连接即新代理）
     ep_rx: watch::Receiver<Arc<Option<ProxyEndpoint>>>,
+    /// 全任务累计写字节（进度上报）
     total_written: Arc<AtomicU64>,
+    /// 首个致命失败（任一 worker 登记后监督循环收尾）
     failure: Arc<tokio::sync::Mutex<Option<EngineFailure>>>,
+    /// 活跃连接视图（进度事件携带）
     conns: Arc<tokio::sync::Mutex<Vec<ConnView>>>,
-) {
+}
+
+impl WorkerDeps {
+    /// 克隆本依赖包产出第 `wid` 号 worker（依赖集单一来源：WorkerDeps 定义）
+    fn spawn(&self, wid: usize, shared: Arc<super::EngineShared>) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(block_worker(wid, shared, self.clone()))
+    }
+}
+
+/// 块 worker：领块 → Range 下载 → 写盘；无块可领或停止信号时退出
+async fn block_worker(wid: usize, shared: Arc<super::EngineShared>, deps: WorkerDeps) {
+    let WorkerDeps {
+        url,
+        file_path,
+        blocks,
+        lease_next,
+        mut stop_rx,
+        mut quota_rx,
+        mut ep_rx,
+        total_written,
+        failure,
+        conns,
+    } = deps;
     let mut file = match tokio::fs::OpenOptions::new()
         .write(true)
         .open(&file_path)
@@ -797,9 +812,6 @@ async fn block_worker(
             return;
         }
     };
-    let mut stop_rx = stop_rx;
-    let mut quota_rx = quota_rx;
-    let mut ep_rx = ep_rx;
     loop {
         if *stop_rx.borrow() {
             return;

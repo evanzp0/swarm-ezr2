@@ -2,8 +2,9 @@
 # arch_check.sh — EZR 自动化架构边界检查（six-pack/architect 交付）
 #
 # 依据 packs/_common/notes/rust.md「架构边界与适配器方向」条款的 grep 级方案：
-# 零依赖、可读、易维护，覆盖本项目十条分层规则；CI 可作为 && 链一环集成。
-# （v1.3 后复核批次，architect 第二轮：新增规则 7/8，见 POSITIVE-CONTROL 尾注）
+# 零依赖、可读、易维护，覆盖本项目十一条分层规则；CI 可作为 && 链一环集成。
+# （v1.3 后复核批次，architect 第二轮：新增规则 7/8，见 POSITIVE-CONTROL 尾注；
+# architect 第四轮：新增规则 11——model 纯同步逻辑护栏，阳性对照实测本轮会话）
 #
 # 分层基线（依赖方向：低层指向高层，model 为最内层纯逻辑）：
 #   main.rs → app → engine → model；ui → app + model；model → ∅
@@ -113,6 +114,17 @@ else
   echo "[ OK ] lint 姿态单源 main.rs（无模块级拷贝）"
 fi
 
+# 规则 11【纯逻辑层】model 禁入异步运行时与 HTTP 客户端（architect 第四轮：
+# model 是最内层纯同步逻辑——"全部可单元测试"的模块声明需要护栏；tokio/
+# reqwest 出现即引入 IO/运行时依赖，破坏纯函数面与属性测试可测性。扫描域
+# 仅 model/ 目录——外层合法定向使用，不扩面）
+hit=$(grep -rnE '^[[:space:]]*use[[:space:]]+(tokio|reqwest)' src/model/ --include='*.rs' || true)
+if [ -n "$hit" ]; then
+  echo "[FAIL] model 层引入 tokio/reqwest（纯同步逻辑层不得有运行时/HTTP 依赖）:"; echo "$hit"; fails=$((fails+1))
+else
+  echo "[ OK ] model 层零异步运行时/HTTP 客户端依赖（纯同步逻辑）"
+fi
+
 if [ "$fails" -gt 0 ]; then
   echo "arch_check: ${fails} 条规则未过"; exit 1
 fi
@@ -123,9 +135,14 @@ echo "arch_check: 全部边界规则通过"
 #   `fn _probe() -> crate::model::Connection { crate::model::Connection { id: 0, start: 0, end: 0, done: 0 } }`
 # 规则 5 即非零退出并命中该行；向 src/main.rs 临时插入 `impl App {}` 规则 4 命中；
 # 向 src/ui/mod.rs 临时插入 `use crate::engine::EngineHandle;` 规则 3 命中；
-# 对照后均已移除。零发现结论以阳性对照生效为前提（engineering.md）。
+# 对照后均已移除。
 # architect 第二轮新增规则 7/8 阳性对照（本轮会话实测）：
 #   向 src/app/mod.rs 临时插入 `use crate::sentinel::TerminalSentinel;`
 #   → 规则 7 命中并非零退出；
 #   向 src/engine/mod.rs 临时插入 `fn _probe_env() -> String { std::env::var("X").unwrap_or_default() }`
 #   → 规则 8 命中并非零退出；对照后均已移除。
+# architect 第四轮新增规则 11 阳性对照（本轮会话实测）：
+#   向 src/model/mod.rs 末尾临时追加真实 use 语句 `use tokio::sync::mpsc;`
+#   → 规则 11 命中并非零退出；移除后全过。注意探针必须是真实 use 语句——
+#   注释形态（`// use tokio…`）不被扫描（规则只认代码行，与判例对齐），
+#   以注释探针得「零发现」是假阴性而非规则失效。零发现结论以阳性对照生效为前提（engineering.md）。

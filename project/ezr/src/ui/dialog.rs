@@ -47,6 +47,90 @@ fn dropdown_rect(area: Rect, inner: Rect, type_row_y: u16, pw: u16, ph: u16) -> 
     }
 }
 
+/// 下拉浮层框架（架构轮单源：算法/代理下拉共用）：定位 + Clear + 宽字符
+/// 边缘裁剪 + 圆角边框块。返回选项内框，逐行渲染由调用方按各自行内容继续。
+fn dropdown_frame(
+    f: &mut Frame,
+    area: Rect,
+    inner: Rect,
+    row_y: u16,
+    pw: u16,
+    ph: u16,
+    title: &str,
+) -> Rect {
+    let prect = dropdown_rect(area, inner, row_y, pw, ph);
+    f.render_widget(Clear, prect);
+    clip_wide_at_edges(f, prect);
+    let pblock = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(
+            title,
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ));
+    let pinner = pblock.inner(prect);
+    f.render_widget(pblock, prect);
+    pinner
+}
+
+/// 下拉选项行渲染（架构轮单源）：选中高亮 + ▸ 指针 + 主体文本 + 可选后缀，
+/// 逐行回填命中区域（鼠标点击选择）。渲染字节与原两处内联形态一致。
+fn dropdown_item(
+    f: &mut Frame,
+    pinner: Rect,
+    i: usize,
+    sel: usize,
+    main: String,
+    suffix: Option<String>,
+    rects: &mut Vec<(Rect, usize)>,
+) {
+    let selected = i == sel;
+    let bg = if selected {
+        Color::DarkGray
+    } else {
+        Color::Reset
+    };
+    let mut spans = vec![
+        Span::styled(
+            format!(" {} ", if selected { "▸" } else { " " }),
+            Style::default()
+                .fg(if selected { ACCENT } else { DIM2 })
+                .bg(bg),
+        ),
+        Span::styled(
+            main,
+            Style::default()
+                .fg(if selected { Color::White } else { FG })
+                .bg(bg)
+                .add_modifier(if selected {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        ),
+    ];
+    if let Some(sfx) = suffix {
+        spans.push(Span::styled(
+            sfx,
+            Style::default()
+                .fg(if selected { ACCENT } else { DIM2 })
+                .bg(bg),
+        ));
+    }
+    let irect = Rect {
+        x: pinner.x,
+        y: pinner.y + i as u16,
+        width: pinner.width,
+        height: 1,
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)),
+        irect,
+    );
+    rects.push((irect, i));
+}
+
 pub(super) fn draw_dialogs(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(d) = app.dialog.as_ref() else { return };
     app.dlg_btn_rects.clear();
@@ -271,57 +355,23 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         },
     );
 
-    // 校验算法下拉框（浮层最后绘制，覆盖对话框与下层内容）
+    // 校验算法下拉框（浮层最后绘制，覆盖对话框与下层内容；框架与选项行
+    // 渲染经 dropdown_frame/dropdown_item 单源，与代理下拉共用）
     if ck_open {
         let items = CHECKSUM_ALGOS;
         let pw = 24u16;
         let ph = items.len() as u16 + 2;
-        let prect = dropdown_rect(area, inner, ck_row_y, pw, ph);
-        f.render_widget(Clear, prect);
-        clip_wide_at_edges(f, prect);
-        let pblock = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(ACCENT))
-            .title(Span::styled(
-                " 校验算法 ",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-            ));
-        let pinner = pblock.inner(prect);
-        f.render_widget(pblock, prect);
+        let pinner = dropdown_frame(f, area, inner, ck_row_y, pw, ph, " 校验算法 ");
         for (i, (name, need, _)) in items.iter().enumerate() {
-            let sel = i == ck_sel;
-            let bg = if sel { Color::DarkGray } else { Color::Reset };
-            let line = Line::from(vec![
-                Span::styled(
-                    format!(" {} ", if sel { "▸" } else { " " }),
-                    Style::default().fg(if sel { ACCENT } else { DIM2 }).bg(bg),
-                ),
-                Span::styled(
-                    pad_right(name, 9),
-                    Style::default()
-                        .fg(if sel { Color::White } else { FG })
-                        .bg(bg)
-                        .add_modifier(if sel {
-                            Modifier::BOLD
-                        } else {
-                            Modifier::empty()
-                        }),
-                ),
-                Span::styled(
-                    format!("{} 位", need),
-                    Style::default().fg(if sel { ACCENT } else { DIM2 }).bg(bg),
-                ),
-            ]);
-            let irect = Rect {
-                x: pinner.x,
-                y: pinner.y + i as u16,
-                width: pinner.width,
-                height: 1,
-            };
-            f.render_widget(Paragraph::new(line).style(Style::default().bg(bg)), irect);
-            // 回填下拉选项命中区域（鼠标点击选择）
-            app.dlg_ck_rects.push((irect, i));
+            dropdown_item(
+                f,
+                pinner,
+                i,
+                ck_sel,
+                pad_right(name, 9),
+                Some(format!("{need} 位")),
+                &mut app.dlg_ck_rects,
+            );
         }
     }
 
@@ -330,48 +380,17 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         let items: Vec<String> = app.proxy_labels.clone();
         let pw = 26u16;
         let ph = items.len() as u16 + 2;
-        let prect = dropdown_rect(area, inner, proxy_row_y, pw, ph);
-        f.render_widget(Clear, prect);
-        clip_wide_at_edges(f, prect);
-        let pblock = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(ACCENT))
-            .title(Span::styled(
-                " 选择代理 ",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-            ));
-        let pinner = pblock.inner(prect);
-        f.render_widget(pblock, prect);
+        let pinner = dropdown_frame(f, area, inner, proxy_row_y, pw, ph, " 选择代理 ");
         for (i, name) in items.iter().enumerate() {
-            let sel = i == proxy_sel;
-            let bg = if sel { Color::DarkGray } else { Color::Reset };
-            let line = Line::from(vec![
-                Span::styled(
-                    format!(" {} ", if sel { "▸" } else { " " }),
-                    Style::default().fg(if sel { ACCENT } else { DIM2 }).bg(bg),
-                ),
-                Span::styled(
-                    truncate(name, (pw as usize).saturating_sub(6)),
-                    Style::default()
-                        .fg(if sel { Color::White } else { FG })
-                        .bg(bg)
-                        .add_modifier(if sel {
-                            Modifier::BOLD
-                        } else {
-                            Modifier::empty()
-                        }),
-                ),
-            ]);
-            let irect = Rect {
-                x: pinner.x,
-                y: pinner.y + i as u16,
-                width: pinner.width,
-                height: 1,
-            };
-            f.render_widget(Paragraph::new(line).style(Style::default().bg(bg)), irect);
-            // 回填代理选项命中区域（鼠标点击选择）
-            app.dlg_proxy_rects.push((irect, i));
+            dropdown_item(
+                f,
+                pinner,
+                i,
+                proxy_sel,
+                truncate(name, (pw as usize).saturating_sub(6)),
+                None,
+                &mut app.dlg_proxy_rects,
+            );
         }
     }
 }

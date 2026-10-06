@@ -36,8 +36,11 @@
 //! - `registry` 持久化往返：from_tasks → JSON → load 全量保真 + next_id
 //!   不变量；快照投影往返 TaskSnapshot → Task → TaskSnapshot 保真。
 
+use crossterm::event::KeyCode;
 use proptest::prelude::*;
 
+use crate::app::DialogKind;
+use crate::model::checksum::CHECKSUM_ALGOS;
 use crate::model::chunk::{block_range, chunk_total, fmt_block_size, lease_snapshot, spread_bytes};
 use crate::model::namegen::{dedupe, join_path, sanitize_name};
 use crate::model::retry::{backoff_secs, decide};
@@ -903,5 +906,199 @@ proptest! {
         prop_assert!(text.ends_with(expected), "速度后缀封闭域与阈值口径");
         let prefix = text.strip_suffix(expected).and_then(|p| p.trim().parse::<f64>().ok());
         prop_assert!(prefix.is_some(), "数值前缀可解析");
+    }
+}
+
+// ---------------------------------------------------------------------
+// app::dialog_keys/routing — 对话框键路由纯函数（architect 第四轮补充：
+// app 层状态机不变量——字段容量上限、消费矩阵、下拉选择同步与越界钳制）
+// ---------------------------------------------------------------------
+
+/// 键序列策略：下拉导航/确认/关闭键全集 + 退格 + 任意字符键（模拟真实输入流）
+fn dialog_key_seq() -> impl Strategy<Value = Vec<KeyCode>> {
+    let nav_keys = prop::sample::select(vec![
+        KeyCode::Up,
+        KeyCode::Down,
+        KeyCode::Home,
+        KeyCode::End,
+        KeyCode::Enter,
+        KeyCode::Esc,
+        KeyCode::Tab,
+        KeyCode::BackTab,
+        KeyCode::Backspace,
+    ])
+    .boxed();
+    let char_keys = any::<char>().prop_map(KeyCode::Char).boxed();
+    prop::collection::vec(
+        prop::strategy::Union::new_weighted(vec![(8, nav_keys), (2, char_keys)]),
+        0..60,
+    )
+}
+
+proptest! {
+    /// text_char 消费矩阵与容量上限：仅文本字段消费（true），追加后
+    /// URL/目录 ≤ 300 字符、并发 ≤ 2 位且仅数字；并发非空时 conns_edited
+    /// 必已置位（加数字路径全部置位，无清除路径）
+    #[test]
+    fn prop_text_char_caps_and_consumption(
+        kind in prop::sample::select(vec![DialogKind::Add, DialogKind::Modify]),
+        focus in 0usize..8,
+        chars in prop::collection::vec(any::<char>(), 0..320),
+    ) {
+        let mut d = crate::app::testutil::dialog(kind, focus);
+        let is_text = matches!(
+            (kind, focus),
+            (DialogKind::Add, 0)
+                | (DialogKind::Add, 1)
+                | (DialogKind::Add, 2)
+                | (DialogKind::Modify, 0)
+        );
+        for c in &chars {
+            let consumed = crate::app::text_char(kind, &mut d, focus, *c);
+            prop_assert_eq!(consumed, is_text, "消费口径与文本字段矩阵一致 (focus={})", focus);
+            prop_assert!(d.url.chars().count() <= 300, "URL ≤ 300");
+            prop_assert!(d.dir.chars().count() <= 300, "目录 ≤ 300");
+            prop_assert!(d.conns.chars().count() <= 2, "并发 ≤ 2 位");
+            prop_assert!(d.conns.chars().all(|x| x.is_ascii_digit()), "并发仅数字");
+            if !d.conns.is_empty() {
+                prop_assert!(d.conns_edited, "并发非空时 edited 必已置位");
+            }
+        }
+    }
+
+    /// text_backspace 消费矩阵与「至多弹出一字符」：退格仅作用于文本字段
+    /// （Add 0/1/2/4，Modify 0/2），命中字段时长度 -1（空则不变）且返回 true，
+    /// 其余焦点零变化且返回 false；并发臂无条件置 conns_edited
+    #[test]
+    fn prop_text_backspace_pops_at_most_one(
+        kind in prop::sample::select(vec![DialogKind::Add, DialogKind::Modify]),
+        focus in 0usize..8,
+        seed in prop::collection::vec(any::<char>(), 0..8),
+    ) {
+        let mut d = crate::app::testutil::dialog(kind, focus);
+        let seed_s: String = seed.into_iter().collect();
+        d.url = seed_s.clone();
+        d.dir = seed_s.clone();
+        d.conns = "42".to_string();
+        d.ck_value = seed_s.clone();
+        let is_bs_field = matches!(
+            (kind, focus),
+            (DialogKind::Add, 0)
+                | (DialogKind::Add, 1)
+                | (DialogKind::Add, 2)
+                | (DialogKind::Add, 4)
+                | (DialogKind::Modify, 0)
+                | (DialogKind::Modify, 2)
+        );
+        let (url0, dir0, conns0, ck0) = (
+            d.url.clone(),
+            d.dir.clone(),
+            d.conns.clone(),
+            d.ck_value.clone(),
+        );
+        let consumed = crate::app::text_backspace(kind, &mut d, focus);
+        prop_assert_eq!(consumed, is_bs_field, "退格消费口径与字段矩阵一致 (focus={})", focus);
+        let expect_pop = |before: &str, after: &str| {
+            let mut expect = before.to_string();
+            expect.pop();
+            assert_eq!(after, expect);
+        };
+        match (kind, focus) {
+            (DialogKind::Add, 0) => expect_pop(&url0, &d.url),
+            (DialogKind::Add, 1) => expect_pop(&dir0, &d.dir),
+            (DialogKind::Add, 4) => expect_pop(&ck0, &d.ck_value),
+            (DialogKind::Modify, 2) => expect_pop(&ck0, &d.ck_value),
+            (DialogKind::Add, 2) | (DialogKind::Modify, 0) => {
+                expect_pop(&conns0, &d.conns);
+                prop_assert!(d.conns_edited, "并发退格置 edited");
+            }
+            _ => {
+                prop_assert_eq!(&d.url, &url0, "非退格字段零变化");
+                prop_assert_eq!(&d.dir, &dir0, "非退格字段零变化");
+                prop_assert_eq!(&d.conns, &conns0, "非退格字段零变化");
+                prop_assert_eq!(&d.ck_value, &ck0, "非退格字段零变化");
+            }
+        }
+    }
+
+    /// push_hex_capped 容量与字符集：仅十六进制字符追加且总数 ≤ 128
+    /// （SHA-512 上限；任意字符流下均不得越界）
+    #[test]
+    fn prop_push_hex_capped_cap_and_charset(
+        chars in prop::collection::vec(any::<char>(), 0..200),
+    ) {
+        let mut d = crate::app::testutil::dialog(DialogKind::Add, 4);
+        for c in &chars {
+            crate::app::push_hex_capped(&mut d, *c);
+            prop_assert!(d.ck_value.chars().count() <= 128, "校验码 ≤ 128");
+            prop_assert!(
+                d.ck_value.chars().all(|x| x.is_ascii_hexdigit()),
+                "仅十六进制字符"
+            );
+        }
+    }
+
+    /// 算法下拉状态机不变量：任意键序列下 ck_sel 恒在算法表界内且
+    /// ck_type == ck_sel 同步；选择键（Up/Down/Home/End）保持展开，
+    /// Tab/BackTab 关闭并按 Add 布局跳焦（4/2）
+    #[test]
+    fn prop_dropdown_open_key_sync_and_bounds(
+        sel0 in 0usize..CHECKSUM_ALGOS.len(),
+        keys in dialog_key_seq(),
+    ) {
+        let mut d = crate::app::testutil::dialog(DialogKind::Add, 3);
+        d.ck_open = true;
+        d.ck_sel = sel0;
+        d.ck_type = sel0;
+        for k in &keys {
+            if !d.ck_open {
+                break; // 与 on_dialog_key 守卫一致：展开态才路由（消费所有键）
+            }
+            let was_open = d.ck_open;
+            let navigated = matches!(k, KeyCode::Up | KeyCode::Down | KeyCode::Home | KeyCode::End);
+            crate::app::dropdown_open_key(&mut d, *k);
+            prop_assert!(d.ck_sel < CHECKSUM_ALGOS.len(), "ck_sel 恒在界内");
+            prop_assert_eq!(d.ck_type, d.ck_sel, "ck_type 与 ck_sel 同步");
+            if was_open && navigated {
+                prop_assert!(d.ck_open, "选择键保持展开");
+            }
+            if *k == KeyCode::Tab {
+                prop_assert_eq!(d.focus, 4, "Tab 关闭并跳焦 4");
+            }
+            if *k == KeyCode::BackTab {
+                prop_assert_eq!(d.focus, 2, "BackTab 关闭并跳焦 2");
+            }
+        }
+    }
+
+    /// 代理下拉状态机不变量（含 n=0 守卫）：任意键序列下 proxy_sel 恒在
+    /// [0, max(n,1)) 界内；Tab/BackTab 按 kind 跳焦（Add 6/4，Modify 4/2）
+    #[test]
+    fn prop_proxy_dropdown_open_key_bounds_and_guard(
+        n in 0usize..12,
+        sel0 in 0usize..12,
+        kind in prop::sample::select(vec![DialogKind::Add, DialogKind::Modify]),
+        keys in dialog_key_seq(),
+    ) {
+        let mut d = crate::app::testutil::dialog(kind, 5);
+        d.proxy_open = true;
+        d.proxy_sel = sel0 % n.max(1); // 起点合法化
+        for k in &keys {
+            if !d.proxy_open {
+                break; // 与 on_dialog_key 守卫一致：展开态才路由
+            }
+            crate::app::proxy_dropdown_open_key(&mut d, n, *k);
+            prop_assert!(d.proxy_sel < n.max(1), "proxy_sel 恒在界内（n=0 守卫后 n'=1）");
+            let expect_focus = match (kind, k) {
+                (DialogKind::Add, KeyCode::Tab) => Some(6),
+                (DialogKind::Add, KeyCode::BackTab) => Some(4),
+                (DialogKind::Modify, KeyCode::Tab) => Some(4),
+                (DialogKind::Modify, KeyCode::BackTab) => Some(2),
+                _ => None,
+            };
+            if let Some(f) = expect_focus {
+                prop_assert_eq!(d.focus, f, "关闭并按布局跳焦");
+            }
+        }
     }
 }

@@ -4,9 +4,13 @@ use crossterm::event::KeyCode;
 
 mod routing;
 
-use routing::{
-    dropdown_open_key, kind_add, proxy_dropdown_open_key, push_hex_capped, text_backspace,
-    text_char,
+// 键路由函数经本模块 re-export（pub(crate) 兼作内部使用的名字绑定，产品构建
+// 由内部消费者消化、无 unused 警告）。可见性链：routing 项 pub（私有模块内
+// 不外泄）→ 本模块 pub(crate) → app 门面 #[cfg(test)] pub(crate)——供 crate 根
+// property_tests 触达（notes/rust.md「门面 re-export」手法，产品 API 面零增量）。
+use routing::kind_add;
+pub(crate) use routing::{
+    dropdown_open_key, proxy_dropdown_open_key, push_hex_capped, text_backspace, text_char,
 };
 
 use super::{Dialog, DialogKind};

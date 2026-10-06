@@ -5,4 +5,3 @@ target/
 **/mutants.out*/
 .work/
 .tools/
-Cargo.lock

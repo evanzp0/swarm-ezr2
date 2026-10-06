@@ -37,6 +37,16 @@ mod tasks;
 #[cfg(test)]
 pub(crate) mod testutil;
 
+// 测试可达性门面：property_tests 属性测试需触达 dialog_keys/routing 键路由
+// 纯函数（对话框状态机不变量：字段容量上限、下拉选择同步与越界钳制）。
+// 经 cfg(test) 门控 re-export（notes/rust.md「门面 re-export」手法）；测试
+// 构建由 crate 根 property_tests 消费、产品构建不产生该路径，外部 API 面
+// 零增量（挂载测试 crate 的 unused 属机制固有豁免，三分法 ①）。
+#[cfg(test)]
+pub(crate) use dialog_keys::{
+    dropdown_open_key, proxy_dropdown_open_key, push_hex_capped, text_backspace, text_char,
+};
+
 /// 每个任务在列表中占用的行高（3 行内容 + 1 行空行分隔）
 pub const ITEM_HEIGHT: u16 = 4;
 

@@ -318,6 +318,22 @@ group_imports = "StdExternalCrate"
   会因数组不是 `Cow` 而编译失败；正确形态 `select(&[a, b])`（借用切片）或
   `select(vec![a, b])`（`Vec` 实现 `Into<Cow>`）。自定义枚举类型需 `Clone + Debug + 'static`。
 
+- **proptest 的 `prop_union` 要求两侧同型**：`A.prop_union(B)` 签名为
+  `other: Self`——枚举键 `select` 策略与 `any::<char>().prop_map(KeyCode::Char)`
+  这类不同型策略不能直接 union（E0308：`Select<T>` ≠ `Map<CharStrategy, _>`）。
+  正确形态：两侧各自 `.boxed()` 统一为 `BoxedStrategy<T>` 后经
+  `prop::strategy::Union::new_weighted(vec![(w, a), (w, b)])` 合并（顺带控制
+  键类占比，如导航键 8 / 字符键 2）。
+
+- **两处以上克隆同一参数表的调用点收敛为「参数对象 + 方法」**：N 参函数在
+  多个调用点逐参 clone（worker spawn 表、批次提交表）时，把共享句柄收进
+  `#[derive(Clone)] struct`，调用点只构造一次结构体、spawn 经方法克隆整包；
+  被调函数以结构体为参、函数体首解构（`let Struct { field, mut rx, .. } = deps`）——
+  镜像参数表消失、`too_many_arguments` 豁免随之删除；字段清单唯一登记于
+  结构体定义，构造点与消费点的漂移由编译器锁定（新增字段漏初始化/漏消费均
+  编译错）。watch::Receiver 等句柄均 Clone，逐字段 clone 与整包 clone 语义
+  等价，行为保持。
+
 - **轻量架构检查脚本用 grep 即可覆盖大多数分层规则**：Rust 的 `use crate::xxx` 语句
   是依赖方向的显式标记，`grep -rnE "^[[:space:]]*use[[:space:]]+crate::(<高层模块名枚举>)"`
   按"低层目录内不得出现高层 use"过滤即可（模块枚举替换为项目自身的顶层分层名）。跳过
