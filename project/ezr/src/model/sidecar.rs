@@ -178,7 +178,18 @@ mod tests {
     use crate::model::Protocol;
 
     fn tmp_dir() -> String {
-        let d = std::env::temp_dir().join(format!("ezr-side-{}-{}", std::process::id(), unix_ms()));
+        // 进程内自增序号参与命名：同 pid 同毫秒的并发 tmp_dir() 调用
+        // 曾撞出同一目录（先完成者 remove_dir_all 令后者 save 报 NotFound）；
+        // 序号使每次调用唯一，跨会话 pid 复用 + 毫秒撞库同样消除
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static SEQ: AtomicU32 = AtomicU32::new(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!(
+            "ezr-side-{}-{}-{}",
+            std::process::id(),
+            seq,
+            unix_ms()
+        ));
         std::fs::create_dir_all(&d).unwrap();
         d.to_string_lossy().to_string()
     }

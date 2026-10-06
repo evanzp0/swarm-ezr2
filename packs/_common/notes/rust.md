@@ -160,6 +160,19 @@ group_imports = "StdExternalCrate"
 - **`cargo fix` 会误删测试专用导入**：cfg(test) 代码使用的符号在非 test 编译下视为
   未使用，`cargo fix` 跑完可能删掉 `use` 导致测试编译失败——跑完 fix 必须再跑一次
   `cargo test` 兜底（fix 的 diff 也要过目）。
+- **模块拆分隐式断掉测试模块的 `use super::*` 间接路径**：把 `xxx.rs` 目录化为
+  `xxx/mod.rs` + 子模块（如把自由函数下沉 `xxx/routing.rs`）时，原来定义在 mod.rs
+  顶层、被测试模块经 `use super::*` 间接消费的 `use` 导入（如常量）会随产品路径收敛
+  而失效——非 test 编译 0 警告（该导入确实无人用），`--all-targets` 下测试编译才报
+  E0425。防法：拆分后先跑 `cargo test`（不是只 `cargo build`），测试模块对拆分前
+  依赖的符号**显式补导入**，不依赖 glob 隐式传递。挂载兼容性本身无忧：`#[path]`
+  挂载 mod.rs 时，`mod 子模块;` 对 `xxx.rs` 与 `xxx/mod.rs` 两种形态解析等价。
+- **重复失败分支提取为 `&mut self` 方法会暴露 NLL 的路径敏感借用**：内联的
+  `Err(e) => { self.set_toast(..); return; }` 型重复块（`&self` 借用在错误路径上
+  提前 return 终止，NLL 按控制流路径判定不冲突）提取成共用方法后，`&mut self`
+  变成主路径无条件借用，与同函数内尚在存活的 `&self` 长借用撞 E0502。防法：方法
+  化前先把调用点后续要用的借用字段**读出为局部值**（收窄借用窗口），再调用方法；
+  这是机械等价变换，不改变行为。
 - **rustc 1.87+ 的 `u64::is_multiple_of`** 可替换 `x % m == 0`（clippy manual_is_multiple_of
   会提示）；`checked_div` 用于除数可能为 0 的展示算术。
 

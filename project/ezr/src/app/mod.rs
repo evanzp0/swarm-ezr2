@@ -34,6 +34,8 @@ mod keys;
 mod mouse;
 mod paste;
 mod tasks;
+#[cfg(test)]
+pub(crate) mod testutil;
 
 /// 每个任务在列表中占用的行高（3 行内容 + 1 行空行分隔）
 pub const ITEM_HEIGHT: u16 = 4;

@@ -1,24 +1,16 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/coder　会话：coder-20261005-v112（操作者第九批指令实现：任务详情大小行移除「（剩余 …）」后缀）
+> 流程：six-pack　当前节点：six-pack/cleaner　会话：cleaner-20261006-v113（度量收敛轮 +
+> 行为保持清理：覆盖率/CRAP/DRY/变异点扫描 + 10 条补测 + 3 处产品去重 + dialog_keys 拆分）
 
 ## 一、产物历史完成情况
 
 ### 项目与需求
 - EZR Downloader（ezr download）：TUI 高性能多协议下载器，phase-01（HTTP/HTTPS 真实下载
-  内核与 TUI 正式版）已交付并通过 QA 终局独立验证；QA 后增量轮：coder 裁决落地轮
-  （on_evt 单测 24 条 / 锁回退收口）、specifier v1.4 + coder v14（FR-01-85 配置模板）、
-  coder r17（D17 裁决落账）、specifier v1.5（FR-01-86/87/88 建档）+ coder v1.5（实现）、
-  specifier v1.6（第三批指令：旧 proxy 键退役/代理 type/UI 文案清理/失败任务空格暂停，
-  FR-01-89..92 建档）+ coder v1.6（实现）、specifier v1.7（D24 改判：type 两值合并/
-  矛盾不作废 + D20 维持落账，AIR2/aria2 实证）+ coder v1.7（D24 改判实现）、
-  specifier v1.8 + coder v1.8（FR-01-93 代理凭证按类型收紧 + socks5 userinfo 认证修复）、
-  specifier v1.9 + coder v1.9（操作者第六批指令：`[[proxies]]` 条目字段重构——ip/port/
-  type/username/password，type 必填三值且为唯一事实来源，url 键退役）、
-  specifier v1.10（操作者第七批指令：配置模板最小化——钦定文本逐字节权威，
-  9 键三行式保留、proxies 段收敛、解释性注释全部退出模板）、
-  specifier v1.11 + coder v1.11（操作者第八批指令：任务详情面板移除「状态」「速度」字段行），
-  本轮 specifier v1.12（操作者第九批指令：任务详情「大小」行移除「（剩余 …）」后缀）+ 本轮 coder v1.12（同指令实现，TDD）。
+  内核与 TUI 正式版）已交付并通过 QA 终局独立验证；QA 后增量轮：coder 裁决落地轮、
+  specifier v1.4–v1.12 + coder v14–v1.12（FR-01-85..93 建档与实现、D17/D20/D24/D25 裁决
+  落账、操作者第七/八/九批指令直落），本轮 cleaner v113（全库度量收敛与行为保持清理，
+  上游 = coder-20261005-v112 交接）。
   需求权威来源 `project/mission.md`（v1.12），phase-01 详述见 `project/mission/phase-01.md`（v1.12），
   feature 规格在 `project/features/`（12 份），QA 规程在 `project/qa/`（12 份规程 / 9 份脚本）。
 
@@ -27,143 +19,146 @@
 |---|---|---|---|
 | specifier（基线）+ coder（phase-01） | mission/features/qa 9 份 + 下载内核 + TUI + fixtures | 已交付 | 上游既定口径 |
 | cleaner / architect / hardender / QA（历轮） | 加固 ~110 测试、度量收敛、架构复核、PTY e2e 终局验证 | 已交付 | QA 终局 966P/0F；行覆盖 90.5% |
-| coder（20261005 裁决落地轮） | ①CRAP 登记 ②on_evt arm 单测 24 条 ③锁回退分支收口 | 已交付 | 1063P/0F |
-| specifier（v1.4）/ coder（v14）/ coder（r17） | FR-01-85 配置模板（建档/实现/裁决落账） | 已交付 | 1105P/0F |
-| specifier（v1.5）/ coder（v1.5） | FR-01-86/87/88：命名代理任务级选择 + client 缓存池 + Reconfigure + m 修改对话框 + http_concurrency 改名 | 已交付 | 1152P/0F |
-| specifier（v1.6）/ coder（v1.6） | FR-01-89..92：旧 proxy 键退役 + type 键（D24 待批）+ UI 文案清理 + FailedPaused | 已交付 | 1206P/0F（v1.7 去重后真实计数 1205） |
-| specifier（v1.7）/ coder（v1.7） | D24 改判落地：type 两值、url scheme 唯一事实来源、矛盾/未知保留按 url 处理 + 警告；D20 维持落账 | 已交付 | 1205P/0F（10 二进制）；clippy 0；fmt 0；arch_check 通过 |
-| specifier（v1.8）/ coder（v1.8） | FR-01-93 代理凭证按类型（socks5 必填/http 可选）+ socks5 认证经 url userinfo RFC 1929（修复 v1.5 起静默失效缺陷）+ 模板凭证契约 | 已交付 | 1276P/0F（10 二进制）；clippy 0；fmt 0；arch_check 10/10 |
-| specifier（v1.9）/ coder（v1.9） | 操作者第六批指令全链：`[[proxies]]` 字段重构 name/type/ip/port/username/password，type 必填三值唯一事实来源（url 键退役按未知键忽略零迁移）；内部 url = {type}://{ip}:{port}（IPv6 方括号）；非法清单更新；UI「名（type）」三值标注 | 已交付 | **1305P/0F（10 二进制 297/30/11/106/235/234/2/12/212/166）**；clippy 0；fmt 0；arch_check 全通过 |
-| **specifier（20261005 v1.10）** | 操作者第七批指令建档：**配置模板最小化**——操作者钦定模板文本成为 `default_template()` 输出的唯一权威（逐字节一致，54 行：标题行 + 9 键×3 行三行式 + proxies 一句头注释 + 双示例块各 7 行 + 11 空行，EOF 单换行收尾）；9 键「用途 + 取值范围 + 示例行」三行式保留（FR-01-85 双注释契约对 9 键仍成立）；proxies 段豁免解释性注释——三类型语义、凭证规则、IPv6、type/url 语义说明全部不进模板（语义由运行期校验警告与 README/规格承载）；FR-01-93⑤ 凭证注释行条款废止（运行期凭证语义不变）；v1.6「空格/顺序可调」口径废止；钦定文本示例值与 DEFAULT_* 常量比对 **9/9 一致（无冲突）**。phase-01 v1.10 + mission.md v1.10 + 01-config-template.feature 重写（钦定原文内嵌）+ qa/01-config-template-qa.md 整文本比对口径 | 已交付 | APS parser 12 份全通过（01-config-template IR=5 景、Examples 9 组；02-named-proxy IR=18 景阳性对照） |
-| **specifier（20261005 v1.11）** | 操作者第八批指令建档：**任务详情面板移除「状态」「速度」字段行**（主会话直执，零子代理）——FR-01-80 详情字段清单重写（排队（仅等待中）/ ID / 类型 / 大小 / 失败原因（仅已失败）/ 保存 / URL / 分块；状态/进度由列表行承载、速度与剩余时间不在详情展示；FR-01-17 展示面口径不变，任务速度仍指列表信息行）；phase-01 v1.11 头注记 + mission.md v1.11 注记；01-tui-display.feature 场景 03 字段清单重写 + 新增不含「状态」「速度」负向断言行；qa/01-tui-display-qa.md QA-TD-03 判据同步；suite_tui_display.py _case_03 断言集同步（删状态/速度正断言、增负断言） | 已交付 | APS parser 12 份全通过（修正调用式后实跑：12/12，01-tui-display IR=14 景） |
-| **coder（20261005 v1.11）** | 操作者第八批指令实现（主会话直执）：detail.rs 删状态行（含 state_c 绑定）与速度行；speed_row 函数整体删除；import 清理（fmt_eta/fmt_dur/MAGENTA 出清）；**顺带清除死字段 Task.elapsed**（clippy dead_code 实证：唯一读取者即被删速度行；构造恒 0.0、注册表不持久化——task.rs 字段+Default+registry.rs 恢复构造+model/mod.rs 测试夹具四处删除）；新增隔离渲染负向断言测试 draw_detail_omits_status_and_speed_rows（draw_detail 单独渲染规避整帧「全局速度」标题子串误报） | 已交付 | **1312P/0F**（10 二进制 299/30/11/107/236/235/2/12/213/167）；clippy 0；fmt 0；arch_check 通过；零重复 |
-| **specifier（20261005 v1.12）** | 操作者第九批指令建档（主会话直执）：**任务详情「大小」行移除「（剩余 …）」后缀**，收敛为「已下载/总大小」——phase-01 v1.12 头注记 + FR-01-80 增 v1.12 修订句（大小行 = 已下载/总大小；列表信息行「剩余 <eta>」与做种「剩余做种」口径不变，FR-01-17 展示面不动）；mission.md v1.12 注记；01-tui-display.feature 场景 03 字段清单「大小（已下载/总大小，含剩余字节）」改「大小（已下载/总大小）」+ 新增大小行不含「（剩余 …）」负向断言行；qa/01-tui-display-qa.md QA-TD-03 判据同步；suite_tui_display.py _case_03 docstring 同步 + assert_not_in("剩余", d)（detail_text 仅取右栏，列表行剩余词不误伤；suite_throttle_proxy 大小行正则 `大小 X /` 前缀形态不变不受影响） | 已交付 | APS parser 12 份全通过（cwd 式调用 `bb run gherkin-parser`，01-tui-display IR 含 v1.12 新步实证） |
-| **coder（20261005 v1.12）** | 操作者第九批指令实现（主会话直执，TDD）：红——新增隔离渲染负向断言测试 draw_detail_size_row_omits_remaining_suffix（Downloading 夹具 downloaded<total，旧实现必渲染「（剩余 …）」实跑证实红）；绿——detail.rs 大小行 format `"{} / {}（剩余 {}）"` → `"{} / {}"`（第三参数删除，附 v1.12 修订注释）；task_lines.rs 列表/做种「剩余」口径零改动；顺带修 clippy unused_mut（夹具无需 mut） | 已交付 | **1313P/0F**（10 二进制 300/30/11/107/236/235/2/12/213/167；首跑 appcore 1F 系 /tmp pid 复用撞库假阳，清残留复跑全绿）；clippy 0；fmt 0；arch_check 全通过；零重复；+1 对账自洽 |
+| coder（20261005 裁决落地轮）~ coder v1.9 | 见上游各轮登记（on_evt 单测、锁回退收口、FR-01-85..93 全链） | 已交付 | 逐轮对账自洽（1276P/0F @ v1.8） |
+| specifier（v1.10）/ coder（v1.10） | 操作者第七批指令：配置模板最小化（钦定文本逐字节权威 54 行） | 已交付 | 钦定文本 9/9 值一致 |
+| specifier（v1.11）/ coder（v1.11） | 操作者第八批指令：详情面板移除「状态」「速度」行 + 死字段 Task.elapsed 清除 | 已交付 | 1312P/0F |
+| specifier（v1.12）/ coder（v1.12） | 操作者第九批指令：详情「大小」行移除「（剩余 …）」后缀（TDD） | 已交付 | 1313P/0F（10 二进制 300/30/11/107/236/235/2/12/213/167）；clippy 0；fmt 0；arch 全通过 |
+| **cleaner（20261006 v113）** | **全库度量收敛 + 行为保持清理（详见第二节）**：覆盖率 91.49%→**93.42%**；CRAP>6 34→**30**（cov=0 杠杆全兑现）；PMD CPD 57→**48**（产品代码三处真重复收敛 + 测试夹具单源化）；变异点全库 1785、已更改文件全部 <100（dialog_keys 118 拆分为 49+69）；新增 10 条单测；fixture 双撞名修复；1313P→**1350P**/0F | 已交付 | **1350P/0F（310/30/11/107/245/244/2/12/222/167）**；clippy 0；fmt 0；arch_check 10/10；各二进制测试名唯一性 0 重复 |
 
 ### 遗留受限项（当前有效）
-- **CRAP 为受限近似口径**（继承上游；操作者已裁决维持现状）：无标准 CRAP 工具；新增代码为
-  纯函数 + 单点接线风格，未复算。
+- **CRAP 为受限近似口径**（继承上游；操作者已裁决维持现状）：无标准 CRAP 工具；本轮按
+  「llvm-cov lcov BRDA 弧数/2 + 1 代入 comp，闭包并入外层取极值，测试符号排除」复算并
+  复核（脚本存于 `.tools/crap-approx-lcov.py`，口径登记在脚本头注）。偏差方向：`?` 早退
+  不计 BRDA → comp 低估（入口胶水类 CRAP 偏乐观）；残余 CRAP>6 的 30 个函数见第二节
+  登记口径，交 hardender 以变异为最终准绳。
 - **e2e 套件预登记 S 项（3 用例）**：RB-09；TP-02/03/06（既有口径不变）。
 - **沙箱无 TTY**：TUI 进程级端到端不可自动化；pty E2E 由 QA 会话以 pyte 口径完成。
 - **QA 规程就绪、套件脚本未落**：QA-CT-01..05、QA-NP-01..18、QA-MT-01..08 共三套
   （12 份规程 / 9 份脚本，v1.6 起 suite_throttle_proxy.py 收敛为 7 限速用例）；
-  脚本化按 six-pack 编排属 QA 角色会话产物。v1.10 起 QA-CT-01/05 的模板内容断言改为
-  **与钦定文本整文本 `cmp` 逐字节比对**（基线文件从规格内嵌原文落盘）。v1.9 起 QA-NP
-  另需 ezr-proxy 扩展 **https 代理监听**（NP-08 p-https）、**socks5+user/pass 认证监听**
-  （NP-15）、**IPv6 回环监听**（NP-18）三种形态（均沿 ezr-proxy 扩展遗留受限项口径，
-  未就绪登记 S；NP-11/12/16/17 的作废条目用例无连接尝试，不依赖扩展）。
+  QA-CT-01/05 的模板内容断言为与钦定文本整文本 `cmp` 逐字节比对。QA-NP 另需
+  ezr-proxy 扩展 https 代理监听（NP-08）、socks5+user/pass 认证监听（NP-15）、
+  IPv6 回环监听（NP-18）三种形态（未就绪登记 S；NP-11/12/16/17 无连接尝试不依赖扩展）。
 
 ### 实现定义值登记
-- 无新增产品契约值（v1.10 钦定文本本身即操作者权威文本，示例值与代码常量 9/9 一致——
-  见下节比对表；模板警告/凭证运行期文案沿 v1.9 口径不变）。
+- 无新增产品契约值（本轮为行为保持清理：新增 helper 均为既有逻辑收敛，对外语义零变化；
+  模板/警告/凭证运行期文案沿 v1.9 口径不变）。
 
-## 二、当前产出情况（specifier-20261005-v110）
+## 二、当前产出情况（cleaner-20261006-v113）
 
-### 本会话产物清单（纯规格轮，零代码改动，指令直落不触发 Inversion）
-- **`mission/phase-01.md` v1.10**：头部第七批指令修订注记；FR-01-85 增 v1.10 修订
-  （钦定文本唯一权威/逐字节/EOF 单换行、54 行结构、最小注释集、9 键三行式契约保留、
-  proxies 段豁免解释性注释、v1.6「空格/顺序可调」口径废止、值比对 9/9 登记）；
-  FR-01-93⑤ 废止改写（模板凭证规则注释行废止，①②③④ 运行期语义照旧）；FR-01-89
-  模板句同步（type 行仍在双示例块内，语义注释退出模板）。
-- **`mission.md` v1.10**：头部 v1.10 注记（一行变更摘要，操作者第七批指令）。
-- **`features/01-config-template.feature`**：Feature 头补 v1.10 修订段；场景 01 新增
-  「模板内容与操作者钦定文本逐字节一致」步 + **钦定原文 54 行逐字节内嵌**（权威行集，
-  coder 不得增删改任何字符/空行；空行即真实空行）；Examples 表 9 键的 purpose/range
-  要点全部改为钦定文本的子串（含用途与取值范围要点对齐）；旧 proxies 段解释性注释
-  期望行（字段说明/三类型语义/IPv6/凭证规则/示例块凭证语义注记）全部删除，替换为
-  一句头注释 + 双示例块钦定行集；场景 02–05 零改动（存在不覆写/损坏不重写/生成失败
-  静默/EZR_HOME 重定位语义不变）。
-- **`qa/01-config-template-qa.md`**：头部 v1.10 注记；环境前置基线改「操作者钦定模板
-  文本整文本」（54 行，QA 脚本化时落盘为基线文件供 `cmp`）；QA-CT-01 判据改整文本
-  逐字节比对 + proxies 段最小形态断言（一句头注释 `# proxies：命名代理列表（可配置
-  多个）` + 双示例块 2 个 `# [[proxies]]`，无凭证规则/三类型语义/IPv6 等解释性注释行）；
-  QA-CT-05 同步整文本口径；通过准则改「与钦定文本整文本逐字节对账（cmp 口径，
-  不再逐行 contains 宽容比对）」。
-- **`packs/_common/engineering.md`**：经验沉淀——「生成默认文件」三条纪律增补第 ④ 点：
-  操作者钦定权威文本时改用整文本逐字节锁定（整文本比对而非逐行 contains 的理由）+
-  钦定值 ↔ 产品常量逐项比对要在规格层完成（两处事实来源漂移的调和）。
+### 本会话产物清单（行为保持清理轮，产品代码零行为变化）
+**① 覆盖率提升（测试补齐纯追加，共 10 条单测）**
+- `src/app/dialog_keys.rs`（现 `dialog_keys/mod.rs` 测试模块末尾追加 4 条）：
+  `modify_dialog_char_routes`（Modify 字符输入全焦点路由）、`modify_dialog_enter_routes`
+  （Enter 五臂路由）、`proxy_dropdown_open_key_routes`（代理下拉逐键 + n=0 守卫 +
+  Add/Modify 双布局跳焦点）、`add_dialog_char_routes`（Add 字符输入：控制字符拒绝、
+  双下拉展开、校验码 128 上限、确认/取消按钮）。
+- `src/app/mouse.rs`（新增 `mouse_tests` 模块，该文件此前零测试，3 条）：
+  `click_selects_and_scroll_bounded`（列表点击选中/越界/滚轮钳制/Drag 忽略）、
+  `dialog_click_routes`（字段聚焦、算法/代理下拉点选与点外关闭、按钮激活、
+  非左键与滚轮消费）、`dialog_click_modify_delete_buttons`（Modify/Delete 按钮臂）。
+- `src/app/paste.rs`（测试模块末尾追加 1 条）：`on_paste_routes_by_dialog_state`
+  （App::on_paste 入口路由：无对话框/下拉展开/Delete 一律忽略）。
+- `src/ui/mod.rs`（测试模块末尾追加 1 条）：`resume_with_free_slot_direct_start`
+  （toggle_pause 槽位空闲直接恢复 + 续传双文案臂 + Completed 兜底臂；URL 指向
+  127.0.0.1:9 即刻拒绝端口，真实 Cmd::Start 不产生外网副作用）。
+- `src/app/engine.rs`（evt_tests 模块末尾追加 1 条）：`disk_precheck_skips_passes_and_fails_overneed`
+  （磁盘预检三分支：未探测跳过/小需求通过/u64::MAX 需求转 Fatal + toast）。
+- 成效：行覆盖 91.49%→**93.42%**（11306 行，漏行 921→744）；函数执行率 93.95%→**94.63%**；
+  CRAP 最大点塌缩：modify_dialog_char 132→6 以下、on_mouse 108.8→25.5、add_dialog_char
+  62→11 以下、on_paste/proxy_dropdown_open_key/modify_dialog_enter→6 以下。
 
-### 值一致性比对结果（钦定文本示例值 ↔ 代码常量，specifier 现场核对——重点登记）
-结论：**9/9 一致，无冲突**。无需「示例值以钦定文本为准」标注；无需任何常量对齐任务。
+**② DRY 收敛（PMD CPD `-l rust`，阳性对照 exit 4 实证过滤生效；57→48 项 ≥50 tokens）**
+- `src/app/dialogs.rs`：dlg_confirm_add/dlg_confirm_modify 校验码校验块（97 tokens 重复）
+  → 提取 `App::checksum_from_input(ck_type, ck_raw, ck_focus)`（Some(None)=清除 /
+  Some(Some)=设置 / None=非法中止并聚焦回校验码字段）。
+- `src/app/dialog_keys/`：add/modify 字符处理的十六进制追加臂（62 tokens 重复）→
+  `push_hex_capped(d, c)`。
+- `src/engine/mod.rs`：`build_endpoint_client` 与 `EngineHandle::start` 的 client 策略
+  重复（redirect 10 / no_proxy / 15s+30s 超时）→ `base_client_builder()` 单一事实来源。
+- 测试夹具单源化：Dialog 14 字段字面量在 dialog_keys/paste/mouse 各测试模块重复 4 份 →
+  新增 `src/app/testutil.rs`（`#[cfg(test)] pub(crate) mod testutil::dialog(kind, focus)`，
+  默认值对齐既有 Add/Modify 夹具）。
+- **CPD 残余 48 项登记口径（不再收敛，理由）**：a) 测试场景 Evt::Probed/渲染 setup 字面量
+  ——字段各异，提取即参数膨胀；b) ui 层渲染习语对（边框/段落/居中矩形）——展示层内部
+  模式，重排属 architect 视觉布局裁决；c) supervisor block_worker 12 参数 spawn 表——
+  参数对象化为设计变更（architect）；d) 三个二进制入口样板（main/ezr-proxy/ezr-fixture）
+  ——去重需 lib target 重构（模块边界，architect）；e) Task::new_queued 调用点参数表
+  ——10 参工厂无净收益。
 
-| 键 | 钦定文本示例值 | 代码现状（v1.9 实现） | 比对 |
-|---|---|---|---|
-| download_dir | `""` | `Config::default().download_dir = None`（≡ 留空/缺失语义） | 一致 |
-| block_size_http | `1048576` | `DEFAULT_BLOCK_SIZE_HTTP` = `chunk::HTTP_CHUNK_SIZE` = 1024×1024 | 一致 |
-| download_slots | `5` | `DEFAULT_DOWNLOAD_SLOTS = 5` | 一致 |
-| max_speed | `0` | `Config::default().max_speed = 0` | 一致 |
-| max_retries | `5` | `DEFAULT_MAX_RETRIES = 5` | 一致 |
-| auto_retry | `true` | `Config::default().auto_retry = true` | 一致 |
-| backoff_initial | `8.0` | `Config::default().backoff_initial = 8.0` | 一致 |
-| backoff_cap | `60.0` | `Config::default().backoff_cap = 60.0` | 一致 |
-| http_concurrency | `4` | `DEFAULT_HTTP_CONCURRENCY = 4` | 一致 |
+**③ 变异点扫描（cargo-mutants 27.1.0 `--list --line-col=true`，scan 模式，未跑变异测试）**
+- 全库 1785 变异点；每文件计数登记：dialog_keys/mod.rs 49 + routing.rs 69（拆分后）、
+  app/engine.rs 94、model/chunk/lease.rs 88、model/timefmt.rs 78、model/config.rs 68、
+  ui/task_lines.rs 67、model/namegen.rs 65、ui/text.rs 64、ui/dialog.rs 62、
+  engine/supervisor.rs 61（其余 <55）。已更改/新增文件全部 <100。
+- **dialog_keys.rs 118>100 已拆分**：`src/app/dialog_keys.rs` → `src/app/dialog_keys/mod.rs`
+  （App 对话框处理器）+ `src/app/dialog_keys/routing.rs`（下拉/文本字段键路由纯函数，
+  `pub(super)` + mod.rs 显式 use）。「xxx.rs → xxx/ 目录」对既有 `#[path]` 挂载兼容
+  （挂载点为 app/mod.rs，子模块相对解析两种形态等价），hardening 各 crate 全量复跑实证。
+- 高计数文件未拆分登记：lease.rs 88/timefmt.rs 78 等均为纯函数热路径且 <100；>100 的
+  未更改文件（无）不触发 SKILL 拆分义务；hardender 全量变异前可按上表 `--file` 分块。
 
-（代码位置 `project/ezr/src/model/config.rs`：常量 L9–15、`impl Default` L155–171、
-`default_template()` L437–514。后续任何 DEFAULT_* 常量变更须回到操作者钦定文本对齐，
-不得单方改模板或单方改常量——见 phase-01 FR-01-85 v1.10 修订句。）
+**④ fixture 健壮性（行为保持，测试基建两类撞名修复）**
+- `src/model/sidecar.rs` 测试夹具 `tmp_dir()`：原 `pid+毫秒` 双后缀在**同进程并发测试
+  同一毫秒内**会撞出同一目录（先完成者 `remove_dir_all` 令并发者 save 报 NotFound，
+  本轮 llvm-cov 首跑 appcore 1F 复现；清 /tmp 残留复跑全绿与上游 v1.12 登记同形态）。
+  修复：进程内原子自增序号参与命名（pid + seq + ms），同撞库与跨会话 pid 复用一并消除。
+- `src/engine/supervisor.rs`：`keep_name_restart_skips_dedupe` 与
+  `verify_computes_matching_digest` 两测试曾共用 `ezr-e2e4-{pid}` 同一目录且并行运行
+  （前者中途 remove_dir_all 会删后者工作目录）——后者改唯一名 `ezr-e2e8-{pid}`。
+- 经验已按归属沉淀：同进程同粒度撞名 → `packs/_common/engineering.md`「测试执行纪律」
+  （pid 条目增补）；#[path] 挂载模块目录化拆分断 `use super::*` 隐式路径、NLL 路径
+  敏感借用方法化撞 E0502 → `packs/_common/notes/rust.md` §6。
 
-### 解释口径（操作者指令的解释与落地，均按指令直接落地，非待批项）
-- **钦定文本 = 唯一权威**：`default_template()` 输出与钦定原文逐字节一致（含空行、行序、
-  EOF 单换行收尾）；模板内容不再是「从 Config::default() 拼装」的派生物——钦定文本为
-  第一事实来源，既有「往返契约测试」（模板解析 = 全默认）保留作为行为护栏，模板内容
-  契约改为整文本精确比对（engineering.md 第 ④ 条纪律）。
-- **最小注释集的边界**：9 键的「用途 + 取值范围」双注释契约保留；proxies 段豁免解释性
-  注释——仅一句头注释 + 双示例块（示例值 = 办公网代理 http 与本地 SOCKS5，与既有
-  示例同源）。凭证规则/三类型语义/IPv6/type-url 语义由运行期校验警告（FR-01-86/89/93
-  既有链）与 README/规格承载，运行期行为零变化。
-- **v1.6「空格/顺序可调」口径废止**：v1.10 逐字节锁定取代之（空行、行序、EOF 收尾均
-  在契约内）。
+**⑤ 工具与环境（本轮沙箱重建，跨会话复用）**
+- 工具链：rustup 1.29.1 + nightly `rustc 1.101.0-nightly (282215592 2026-10-04)`、
+  rustfmt/clippy 组件 + llvm-tools-preview（`export PATH="$HOME/.cargo/bin:$PATH"` 注入；
+  项目 rust-toolchain.toml 钉 nightly 生效）。
+- 度量工具：cargo-llvm-cov 0.9.1、cargo-mutants 27.1.0（`~/.cargo/bin`）；PMD 7.28.0
+  （`.tools/pmd-bin-7.28.0`，GitHub API 403 时按 expanded_assets 页读资产清单直链下载）；
+  CRAP 受限近似脚本 `.tools/crap-approx-lcov.py`（输入：`cargo llvm-cov --lcov --branch
+  --hide-instantiations` 产物）。
+- 无 lld 桥接需求（项目无 `.cargo/config.toml` 链接器钉死）。
 
 ### 验证证据
 | 验证项 | 结果 | 命令（可复现） |
 |---|---|---|
-| Gherkin 规格 | 12 份全通过（01-config-template IR = 5 场景、Examples 9 组解析正确；02-named-proxy IR = 18 场景阳性对照，本轮未动） | `(cd .tools/Acceptance-Pipeline-Specification && bb gherkin-parser <feature> <out>.json)`，输出在 `.work/tmp/aps-v110/*.json` |
-| 钦定文本逐字节自查 | feature 内嵌原文 ≡ 钦定文本（54 行，diff 为空，EOF 单换行 `od -c` 实证）；Examples 表 9 键 purpose/range 要点全部为钦定文本子串（python `in` 精确比对） | `.work/tmp/authorized-template-v110.txt`（钦定基准）vs `.work/tmp/embedded-extract.txt`（从 feature 反提取）`diff` |
-| 口径自查 | FR-01-85/93⑤/89 三处互洽无残留矛盾（「空格/顺序可调」仅存废止语境）；QA-CT 与 feature 契约一致；01-persistence-config feature/qa 的指针引用不受影响 | `rg -n "空格/顺序可调" project/`（仅 phase-01 废止注记 + feature 头修订段命中） |
+| 全量单元/集成测试 | **1350P/0F**（310/30/11/107/245/244/2/12/222/167）；对账：上游 1313 + 37 = 新增 10 条 × 挂载倍增（app 层 9 条在 main bin + 3 个挂载 crate 各一份、ui 1 条仅 main bin） | `cargo test`（crate 根） |
+| 测试名唯一性 | 各二进制内 0 重复（跨 crate 挂载同名属机制固有） | `cargo test --bin ezr -- --list \| sort \| uniq -d` 等 10 目标 |
+| clippy / fmt / arch | 0 警告 / 0 差异 / 10 条边界规则全过 | `cargo clippy --all-targets`、`cargo fmt --check`、`bash scripts/arch_check.sh` |
+| 行覆盖率 | **93.42%**（上游基线 90.5%、本轮开工 91.49%） | `cargo llvm-cov --summary-only` |
+| CRAP 受限近似 | 产品函数 313 个，CRAP>6 共 30 个（开工 34），杠杆点全兑现；残余为分发核/入口胶水/渲染核/100% 覆盖高 comp 纯函数，登记移交 hardender | `.tools/crap-approx-lcov.py`（口径见脚本头注） |
+| DRY（CPD ≥50 tokens） | 57→48 项；产品真重复三处已收敛；残余五类登记口径（见②） | `bash .tools/pmd-bin-7.28.0/bin/pmd cpd -l rust --dir src --minimum-tokens 50`（exit 4=发现重复） |
+| 变异点扫描 | 1785 点；已更改文件全部 <100（dialog_keys 118 拆为 49+69）；未跑变异测试（SKILL 禁令，归 hardender） | `cargo mutants --list --line-col=true` |
 
 ### 待办与待批（未决项）
-- **无操作者待批项**：本轮为指令直落（操作者第七批指令），钦定文本全盘按指令落地；
-  值一致性比对无冲突，无需操作者裁决面。
-- **coder 实现（下一轮）**：见「四、移交建议」改动面。
-- **QA 套件脚本化**（累积）：QA-CT-01..05、QA-NP-01..18、QA-MT-01..08、QA-SQ-14/15 待 QA
-  会话落成 `qa/runners/suite_*.py` 并入回归；QA-CT-01/05 需先把钦定文本落盘为基线文件
-  （源：`features/01-config-template.feature` 内嵌原文）；QA-NP-08/15/18 前置需扩展
-  ezr-proxy（沿既有移交口径）。
+- **无操作者待批项**：本轮为行为保持清理，产品语义零变化；无实现定义值新增。
+- **hardender 承接**：变异测试全量执行（cleaner 仅 scan）；CRAP 残余 30 点以变异为准绳
+  复核（受限近似 comp 有低估方向）；可按登记的每文件计数 `--file` 分块跑。
+- **architect 承接（若操作者选择续跑）**：CPD 残余中的跨二进制入口样板去重（lib target
+  重构）、supervisor spawn 参数对象化、ui 渲染习语收敛，均属模块边界/架构裁决面。
+- **QA 会话承接（累积）**：QA-CT-01..05、QA-NP-01..18、QA-MT-01..08 脚本化与
+  ezr-proxy 三类监听扩展（https / socks5+认证 / IPv6 回环）。
 - **遗留受限项**：沙箱无 TTY（pty E2E 归 QA 会话）；CRAP 受限近似口径（操作者已裁决维持）。
 
-## 三、上一轮产出存档（coder-20261005-v19，本轮基线）
-
-### 产物与验证（本轮 specifier 零代码，基线不变）
-- v1.9 全链落地：`ProxyRaw` 增 ip/port 删 url、`ProxyKind` 三值（Http/Https/Socks5）
-  + scheme()/label() 同源、`from_toml` 校验链重写（type 缺失/未知作废、ip 空白作废、
-  port 越界作废、凭证规则三类型）、`ProxyConfig` 字段 ip/port 化 + `endpoint_url()`
-  （IPv6 方括号，单一构造点）；engine `build_endpoint_client` 三值分支（Https 与 Http
-  同路 basic_auth；Socks5 userinfo RFC 1929）；dialogs 夹具 ip/port/type 化 + 下拉
-  三值标注；README 代理节同步。
-- 验证基线：**1305P/0F（10 二进制 297/30/11/106/235/234/2/12/212/166）**、clippy 0、
-  fmt 0、arch_check 全通过、测试名唯一性 0 重复；对账删除 3 / 改写 12 / 新增 8
-  （+29 与 1305−1276 精确自洽）。
-- **v1.10 实现相关代码现状**：`Config::default_template()`（config.rs L437–514）现按
-  v1.9 口径逐行 `push_str` 拼装（含 3 行文件头说明、proxies 段 10+ 行解释性注释、
-  示例块凭证语义注记）——v1.10 需整段替换为钦定文本；模板契约测试现有
-  `template_parses_to_defaults`（往返，保留）与逐行 contains 式断言（需改整文本比对）。
+## 三、上一轮产出存档（coder-20261005-v112，本轮基线）
+- v1.12 全链（操作者第九批指令）：detail.rs 大小行移除「（剩余 …）」后缀（TDD：红——
+  `draw_detail_size_row_omits_remaining_suffix` 负向断言；绿——format 三参删一 +
+  v1.12 修订注释）；task_lines.rs 列表/做种「剩余」口径零改动；顺带修 clippy unused_mut。
+- 验证基线：1313P/0F（300/30/11/107/236/235/2/12/213/167）、clippy 0、fmt 0、
+  arch_check 全通过；本轮开工实跑精确对账一致（同口径复跑 1313P/0F 后再动工）。
 
 ## 四、移交建议
-- 本轮为纯规格轮（零代码改动），建议操作者运行 `bin/swarm complete` 归档后链式启动
-  `six-pack/coder` 实现 v1.10（TDD）。改动面集中且小：
-  1. **`project/ezr/src/model/config.rs`**：`default_template()` 整段替换——输出与
-     `features/01-config-template.feature` 内嵌钦定原文**逐字节一致**（54 行、11 空行、
-     EOF 单换行收尾；不得增删改任何字符/空行）。建议以整文本字面量（`concat!` 或
-     裸字符串常量）替代逐行 `push_str` 拼装；`ensure_default_config`（create-new 语义、
-     D17 不覆写/静默）零改动。
-  2. **模板契约单测改写**：新增/改写为**整文本精确比对**断言（生成输出 ≡ 钦定原文，
-     含空行/行序/EOF——不要逐行 contains，防多余行/空行漂移；基线可内嵌同一字面量
-     或 `include_str!` 对照文件）；`template_parses_to_defaults` 往返契约保留；
-     旧「凭证规则注释行/三类型语义注释/示例块凭证注记」相关断言删除（FR-01-93⑤
-     废止承载）；9 键三行式与双示例块断言并入整文本比对即可。
-  3. **README**：配置节 v1.9 凭证/三类型解释**保留**（语义承载地，正是 v1.10 的去向）；
-     仅 L79–81「每个参数注明用途与取值范围」一句宜微调（9 键注明、proxies 段最小化），
-     属可选措辞同步。
-  4. **无需常量改动**：值一致性 9/9 一致（见上表），DEFAULT_* 全部原样。
-- QA 会话后续承接：QA-CT-01..05 脚本化（整文本 cmp 基线落盘）+ QA-NP-01..18 脚本化
-  + ezr-proxy 三类监听扩展（https / socks5+认证 / IPv6 回环）。
+- 本轮为行为保持清理轮（six-pack 编排：specifier→coder→**cleaner**→architect→hardender→QA），
+  建议操作者运行 `bin/swarm complete` 归档后链式启动 `six-pack/architect`：
+  1. **复核本轮两处结构变更**：dialog_keys 模块拆分（mod/routing 两子模块职责边界）与
+     testutil 测试夹具单源化，确认模块边界符合其架构意图（变异点 >100 触发的机械拆分，
+     依赖方向零变化）。
+  2. **CRAP 残余 30 点裁决**：登记清单（draw_task_dialog 35.1 / download 29.1 / on_mouse
+     25.5 / tick 25.2 / dlg_confirm_add 20.4 / on_evt 19.0 / block_worker 15.3 / from_toml
+     12.0 / spread_bytes 9.0 等，全量见 `.tools/crap-approx-lcov.py` 复算）——其中
+     100% 覆盖纯函数（spread_bytes、consistency::check、fmt_block_size 等 comp=7..9）是否
+     值得表驱动拆分，或维持登记口径（hardender 变异为最终准绳）。
+  3. **CPD 残余五类裁决**（见② a–e）：是否立项 lib target 入口样板收敛与 spawn 参数
+     对象化。
+- 环境与工具安装位置见第二节⑤；`.work/tmp/` 会话产物（lcov/日志）随 complete 清除，
+  度量命令均可按表中命令复现。

@@ -269,13 +269,20 @@ fn build_endpoint_client(ep: &crate::model::ProxyEndpoint) -> Option<reqwest::Cl
             px
         }
     };
-    let cb = reqwest::Client::builder()
+    base_client_builder().proxy(px).build().ok()
+}
+
+/// 客户端策略单一事实来源（DRY 收敛：直连基线与端点 client 共用）：
+/// 重定向上限 10（FR-01-14）、不读环境变量代理（FR-01-61）、
+/// 连接 15s / 读 30s 超时
+fn base_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        // FR-01-14：最多跟随 10 次重定向
         .redirect(reqwest::redirect::Policy::limited(10))
+        // FR-01-61：代理仅配置文件，不读取环境变量（no_proxy 关闭系统代理解析）
         .no_proxy()
         .connect_timeout(std::time::Duration::from_secs(15))
         .read_timeout(std::time::Duration::from_secs(30))
-        .proxy(px);
-    cb.build().ok()
 }
 
 /// 引擎句柄（App 持有；命令下发与事件消费的边界；Clone 以便任务内发送）
@@ -293,15 +300,7 @@ impl EngineHandle {
     pub fn start(cfg: &crate::model::config::Config, evt_tx: mpsc::Sender<Evt>) -> EngineHandle {
         // 直连基线 client（v1.5/FR-01-86：全局/命名代理一律走端点解析 +
         // client 池；全局 proxy 键语义 = 「默认代理」由 App 按 D18 解析）
-        let client = reqwest::Client::builder()
-            // FR-01-14：最多跟随 10 次重定向
-            .redirect(reqwest::redirect::Policy::limited(10))
-            // FR-01-61：代理仅配置文件，不读取环境变量（no_proxy 关闭系统代理解析）
-            .no_proxy()
-            .connect_timeout(std::time::Duration::from_secs(15))
-            .read_timeout(std::time::Duration::from_secs(30))
-            .build()
-            .expect("HTTP 客户端构建失败");
+        let client = base_client_builder().build().expect("HTTP 客户端构建失败");
         let shared = Arc::new(EngineShared {
             client,
             clients: std::sync::Mutex::new(HashMap::new()),

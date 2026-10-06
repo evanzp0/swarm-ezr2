@@ -1329,7 +1329,9 @@ mod tests {
     #[tokio::test]
     async fn verify_computes_matching_digest() {
         // 校验通过路径：expected = 真实摘要（模式填充内容）
-        let dir = std::env::temp_dir().join(format!("ezr-e2e4-{}", std::process::id()));
+        // 目录名唯一化（原与 keep_name_restart_skips_dedupe 同用 ezr-e2e4-{pid}，
+        // 并行测试下先完成者的 remove_dir_all 会删除另一测试的工作目录）
+        let dir = std::env::temp_dir().join(format!("ezr-e2e8-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let total: u64 = 2 * 4096;
         let url = mock_server(total, vec![]);

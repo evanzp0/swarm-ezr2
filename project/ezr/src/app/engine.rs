@@ -1532,4 +1532,63 @@ mod evt_tests {
         assert!(app.toast_until.is_some(), "toast 附带过期时刻");
         app.shutdown().await;
     }
+
+    // ===== 磁盘预检（disk_precheck）=====
+
+    /// 开始前磁盘预检三分支：未探测/无余量跳过、需求 ≤ 可用空间通过、
+    /// 需求超可用空间转 Fatal 失败并提示（不自动重试）
+    #[tokio::test]
+    async fn disk_precheck_skips_passes_and_fails_overneed() {
+        let dir = std::env::temp_dir().join(format!("ezr-evt-disk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        let mut app = make_app("disk");
+
+        // 未探测（probed=false）→ 跳过预检返回 true
+        let mut t = seed_task(1, "d1.bin");
+        t.probed = false;
+        t.total = u64::MAX;
+        t.save_dir = dir.to_string_lossy().into_owned();
+        app.tasks.push(t);
+        app.selected = 0;
+        assert!(app.disk_precheck(0), "未探测时跳过预检");
+        assert_eq!(app.tasks[0].state, crate::model::TaskState::Queued);
+
+        // 已探测但需求为 0 → 通过
+        app.tasks[0].probed = true;
+        app.tasks[0].total = 0;
+        assert!(app.disk_precheck(0), "无待下载量时通过");
+        assert_eq!(app.tasks[0].state, crate::model::TaskState::Queued);
+
+        // 已探测、需求 ≤ 可用空间 → 通过
+        app.tasks[0].total = 1024;
+        assert!(app.disk_precheck(0), "小需求通过预检");
+
+        // 需求超可用空间（u64::MAX 需求必超）→ Fatal 失败 + 提示
+        app.tasks[0].total = u64::MAX;
+        assert!(!app.disk_precheck(0), "超量需求预检失败");
+        assert_eq!(app.tasks[0].state, crate::model::TaskState::Failed);
+        assert_eq!(
+            app.tasks[0].fail_kind,
+            Some(crate::model::FailKind::Fatal),
+            "预检失败为 Fatal 不自动重试"
+        );
+        assert!(app.tasks[0].retry_in.is_none());
+        assert!(!app.tasks[0].has_slot);
+        assert!(
+            app.tasks[0]
+                .error
+                .as_deref()
+                .is_some_and(|m| m.contains("磁盘空间不足")),
+            "错误信息: {:?}",
+            app.tasks[0].error
+        );
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|m| m.contains("磁盘空间不足")),
+            "toast 提示"
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

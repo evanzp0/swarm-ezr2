@@ -6,6 +6,35 @@ use crate::model::sidecar::Sidecar;
 use crate::model::{checksum, namegen, unix_now, Checksum, Protocol, Task, TaskState};
 
 impl App {
+    /// 校验码输入共识（Add/Modify 共用，DRY 收敛）：空 = 清除（None）；
+    /// 非空按算法合法性校验，合法构造 Checksum；非法 → toast 提示并
+    /// 聚焦回校验码字段（Add focus 4 / Modify focus 2），返回 None 表示
+    /// 流程中止（不生效）。外层 Some(None) = 清除校验、Some(Some(..)) = 设置。
+    fn checksum_from_input(
+        &mut self,
+        ck_type: usize,
+        ck_raw: &str,
+        ck_focus: usize,
+    ) -> Option<Option<Checksum>> {
+        if ck_raw.is_empty() {
+            return Some(None);
+        }
+        match checksum::validate_value(ck_type, ck_raw) {
+            Ok(v) => Some(Some(Checksum {
+                algo: CHECKSUM_ALGOS[ck_type].0,
+                value: v,
+            })),
+            Err(e) => {
+                let algo = CHECKSUM_ALGOS[ck_type].0;
+                self.set_toast(format!("⚠ {algo} {e}"));
+                if let Some(d) = self.dialog.as_mut() {
+                    d.focus = ck_focus;
+                }
+                None
+            }
+        }
+    }
+
     pub(super) fn dlg_activate_add(&mut self, btn: usize) {
         match btn {
             6 => self.dlg_confirm_add(),
@@ -52,23 +81,8 @@ impl App {
 
         // 校验：空 = 清除（03-modify-task-05）；非空同添加对话框合法性口径，
         // 非法 → 不生效 + 聚焦校验码字段（03-modify-task-06）
-        let checksum = if ck_raw.is_empty() {
-            None
-        } else {
-            match checksum::validate_value(ck_type, &ck_raw) {
-                Ok(v) => Some(Checksum {
-                    algo: CHECKSUM_ALGOS[ck_type].0,
-                    value: v,
-                }),
-                Err(e) => {
-                    let algo = CHECKSUM_ALGOS[ck_type].0;
-                    self.set_toast(format!("⚠ {algo} {e}"));
-                    if let Some(d) = self.dialog.as_mut() {
-                        d.focus = 2;
-                    }
-                    return;
-                }
-            }
+        let Some(checksum) = self.checksum_from_input(ck_type, &ck_raw, 2) else {
+            return;
         };
 
         let (endpoint, missing) = self.cfg.resolve_proxy(&proxy);
@@ -121,25 +135,13 @@ impl App {
         let conns_raw = d.conns.trim().to_string();
         let ck_raw = d.ck_value.trim().to_string();
         let ck_type = d.ck_type;
+        // 代理选择先读出（借用收窄：后续 checksum_from_input 需要 &mut self）
+        let proxy = self.proxy_options[d.proxy_sel.min(self.proxy_options.len() - 1)].clone();
 
-        // 校验码（可留空 = 不校验；输入统一小写，位数与算法匹配）
-        let checksum = if ck_raw.is_empty() {
-            None
-        } else {
-            match checksum::validate_value(ck_type, &ck_raw) {
-                Ok(v) => Some(Checksum {
-                    algo: CHECKSUM_ALGOS[ck_type].0,
-                    value: v,
-                }),
-                Err(e) => {
-                    let algo = CHECKSUM_ALGOS[ck_type].0;
-                    self.set_toast(format!("⚠ {algo} {e}"));
-                    if let Some(d) = self.dialog.as_mut() {
-                        d.focus = 4;
-                    }
-                    return;
-                }
-            }
+        // 校验码（可留空 = 不校验；输入统一小写，位数与算法匹配）；
+        // 非法 → toast 提示并聚焦回校验码字段（Add focus 4）
+        let Some(checksum) = self.checksum_from_input(ck_type, &ck_raw, 4) else {
+            return;
         };
 
         // 保存目录（FR-01-03）：留空 = 配置 download_dir；缺省 = ~/Downloads；
@@ -196,7 +198,6 @@ impl App {
         // 校验值来源②（FR-01-50/D14）：未显式提供时查保存目录伴随文件
         let checksum = Self::resolve_checksum(&dir, &name, checksum);
         let ts = unix_now();
-        let proxy = self.proxy_options[d.proxy_sel.min(self.proxy_options.len() - 1)].clone();
         let t = Task::new_queued(
             id,
             name.clone(),

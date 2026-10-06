@@ -648,4 +648,63 @@ mod ui_tests {
         assert!(!d.ck_open, "点选后收起下拉");
         app.shutdown().await;
     }
+
+    /// 已暂停 → 继续：空闲槽位直接恢复下载（FR-01-33 续传双文案臂 +
+    /// Completed 兜底臂；不可续传任务走「从头下载」提示）
+    #[tokio::test]
+    async fn resume_with_free_slot_direct_start() {
+        let dir = std::env::temp_dir().join(format!("ezr-ui-resume2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        let mut app = make_app("resume2");
+        app.max_slots = 5;
+        let mut t = task(1, "r1.bin", TaskState::Paused);
+        t.resumable = true;
+        t.save_dir = dir.to_string_lossy().into_owned();
+        // 指向立即拒绝的本机端口：Cmd::Start 会真实下发引擎，探测即刻失败，
+        // 不产生外网副作用（重试计时随测试运行器结束丢弃）
+        t.url = "http://127.0.0.1:9/r1.bin".to_string();
+        app.tasks.push(t);
+        app.selected = 0;
+
+        // 可续传：直接恢复 + 断点文案
+        app.toggle_pause();
+        assert_eq!(
+            app.tasks[0].state,
+            TaskState::Downloading,
+            "空闲槽位直接恢复"
+        );
+        assert!(app.tasks[0].has_slot, "恢复占槽位");
+        assert!(!app.tasks[0].made_progress, "恢复清 made_progress");
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|m| m.contains("从断点恢复")),
+            "可续传文案: {:?}",
+            app.toast
+        );
+
+        // 不可续传：从头下载文案
+        app.tasks[0].state = TaskState::Paused;
+        app.tasks[0].resumable = false;
+        app.toggle_pause();
+        assert_eq!(app.tasks[0].state, TaskState::Downloading);
+        assert!(
+            app.toast.as_deref().is_some_and(|m| m.contains("从头开始")),
+            "不可续传文案: {:?}",
+            app.toast
+        );
+
+        // Completed 兜底臂：提示无需操作（完成任务在「已完成」页签可见）
+        app.tasks[0].state = TaskState::Completed;
+        app.filter = 1;
+        app.selected = 0;
+        app.toggle_pause();
+        assert!(
+            app.toast.as_deref().is_some_and(|m| m.contains("已完成")),
+            "完成态提示: {:?}",
+            app.toast
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

@@ -63,22 +63,7 @@ mod paste_tests {
     use super::*;
 
     fn add_dialog(focus: usize) -> Dialog {
-        Dialog {
-            kind: DialogKind::Add,
-            url: String::new(),
-            dir: String::new(),
-            conns: String::new(),
-            conns_edited: false,
-            ck_type: 3,
-            ck_value: String::new(),
-            ck_open: false,
-            ck_sel: 3,
-            proxy_sel: 0,
-            proxy_open: false,
-            focus,
-            task_name: String::new(),
-            task_id: None,
-        }
+        crate::app::testutil::dialog(DialogKind::Add, focus)
     }
 
     /// 01-add-task-17：粘贴 200 字符长 URL，字段完整接收
@@ -172,5 +157,51 @@ mod paste_tests {
         assert_eq!(s, "下载器");
         assert!(!push_capped(&mut s, "x", 3));
         assert_eq!(s, "下载器");
+    }
+
+    fn make_app(tag: &str) -> crate::app::App {
+        let dir = std::env::temp_dir().join(format!("ezr-paste-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        let reg = dir.join("registry.json").to_string_lossy().into_owned();
+        crate::app::App::new(crate::model::config::Config::default(), reg)
+    }
+
+    /// App::on_paste 入口路由（FR-01-06）：Add 对话框文本字段接收粘贴；
+    /// 无对话框 / 算法下拉展开 / Delete 对话框一律忽略
+    #[tokio::test]
+    async fn on_paste_routes_by_dialog_state() {
+        let mut app = make_app("route");
+
+        // 无对话框 → 忽略（不 panic、无副作用）
+        app.on_paste("http://example.com/x.bin");
+
+        // Add 对话框 focus 0 → 粘贴进 URL
+        app.dialog = Some(add_dialog(0));
+        app.on_paste("http://example.com/p.bin\r\n");
+        assert_eq!(
+            app.dialog.as_ref().unwrap().url,
+            "http://example.com/p.bin",
+            "粘贴净化后进入 URL 字段"
+        );
+
+        // 算法下拉展开 → 忽略
+        app.dialog.as_mut().unwrap().ck_open = true;
+        app.on_paste("http://example.com/y.bin");
+        assert_eq!(
+            app.dialog.as_ref().unwrap().url,
+            "http://example.com/p.bin",
+            "下拉展开时不接收粘贴"
+        );
+
+        // Delete 对话框 → 忽略（避免粘贴触发按钮/导航）
+        let mut del = add_dialog(0);
+        del.kind = DialogKind::Delete;
+        app.dialog = Some(del);
+        app.on_paste("http://example.com/z.bin");
+        assert!(
+            app.dialog.as_ref().unwrap().url.is_empty(),
+            "Delete 忽略粘贴"
+        );
+        app.shutdown().await;
     }
 }
