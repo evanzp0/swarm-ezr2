@@ -1,173 +1,184 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/architect　会话：architect-20261006-v114
-> 版本注：v114 归档后两次整理——①易读版重写（20261006 整理轮，只改表述不改事实）；
-> ②裁决落账（20261006 裁决轮）：操作者裁决「三入口重构」**不立项**，CPD 类别 d 闭环
-> 为终态登记（逐块画像已并入裁决依据）。
+> 流程：six-pack　当前节点：six-pack/coder　会话：coder-20261007-v116
+> 版本注：操作者裁决「两缺陷不移交、直接修复」落地轮——缺陷①（v115 待办①）产品源码
+> 修复 + 缺陷②（v115 待办②）测试隔离全类收口；上游 hardender v115 交接内容已消化。
 
 ## 速览（先读这一页）
 
 - **项目**：EZR Downloader——终端里的多协议下载工具（Rust / TUI）。需求权威来源
   `project/mission.md`（v1.12）。
 - **流水线走到哪**：six-pack 六角色顺序流水线
-  specifier→coder→cleaner→**architect**→hardender→QA；前四棒已完成，下一棒 hardender（变异测试）。
-- **本轮（architect v114）做了什么**：架构体检（四阶段评审）全部通过；两处内部代码整理
-  （12 参数收拢成结构体、下拉浮层渲染去重）；架构自检脚本新增第 11 条规则；新增 5 条
-  属性测试。**对外功能与界面零变化**。
-- **质量现状**：1355 个测试全部通过（0 失败）；架构自检 11/11；clippy 与格式检查 0 问题；
-  行覆盖率 93.63%；重复代码块 48→45。
-- **操作者裁决已闭环**：「三入口重构」操作者 20261006 裁决**不立项**（CPD 类别 d 终态
-  登记，依据见 CPD 裁决表「三入口逐块画像」）；当前无待操作者裁决项，其余事项均已移交
-  hardender / QA。
+  specifier→coder→cleaner→architect→hardender→QA；前五棒已完成，本轮为操作者钦点的
+  缺陷修复轮（coder），下一棒 QA。
+- **本轮（coder v116）做了什么**：①修复 26 列窄终端代理下拉越界渲染 panic——
+  `dropdown_rect` 浮层宽/高一律钳制在终端 area 内（横向为报告触发点，纵向同缺陷
+  分支一并钳制），选项行渲染按钳后内框截断；②修复测试隔离缺陷——v115 待办②的
+  make_app 固定 pid 式目录在现场**跨目标复现**（dialog_keys 收编测试真实失败），遂从
+  单点修复扩为全类收口：新增 `src/model/testenv.rs` 单源 helper（pid+序号+毫秒，
+  sidecar 序号法同款），src 内全部 40 处固定 pid/时间戳式测试临时目录一次转换。
+  新增回归测试 4 条，全部失败先行（TDD）。
+- **质量现状**：全目标 1644P/0F（11 目标，分目标见验证证据）；clippy 0；fmt 0；
+  arch 11/11。**本轮产品源码有一处行为修复**（dialog.rs `dropdown_rect`），其余全部
+  为 cfg(test) 测试代码与测试基建。
+- **两个移交缺陷均已闭环**：v115 待办①②由操作者裁决「直接修复」，本轮完成并附
+  回归测试；其余遗留项（CRAP 三项未变异裁定、QA 三套规程脚本化等）口径不变。
 
 ## 术语速查（本文件用到的黑话）
 
 | 词 | 意思 |
 |---|---|
-| P / F / S | 测试通过 / 失败 / 跳过数量。「1355P/0F」= 1355 个通过、0 个失败 |
-| clippy / fmt | Rust 官方静态检查 / 代码格式检查；记「0」= 无任何问题 |
-| arch_check | 本项目自带的架构自检脚本，现有 11 条规则（如禁止反向依赖、model 层禁框架） |
-| 覆盖率 | 被测试执行到的代码占比；93.63% 指代码行，94.77% 指函数 |
-| CPD | 重复代码检测（PMD 工具，统计 ≥50 token 的重复代码块数） |
-| CRAP | 「复杂度 × 覆盖率」的风险评分；无标准工具，本项目用自研近似脚本估算（操作者已裁决维持该口径） |
-| 属性测试 | proptest：随机生成大量输入，验证不变量（如"数字永不超过上限"） |
-| 变异测试 | cargo-mutants：故意改坏一处代码，看测试能否抓住，用于衡量测试强度 |
-| 行为保持 | 只动内部结构，不改任何用户可见行为（本轮属性） |
-| 单源化 | 把两份重复实现合并成一份公共代码 |
-| 登记 / 移交 / 维持 | 记录在案、暂不处理，转后续角色或操作者裁决 |
+| P / F | 测试通过 / 失败数。1644P/0F = 1644 通过 0 失败 |
+| 失败先行（TDD） | 先写测试并确认在旧实现上失败（锁住缺陷指纹），再实现使其通过 |
+| #[path] 收编 | 集成测试以 `#[path = "..."]` 把产品源文件挂载进独立测试 crate（mutants 口径：产品树零改动） |
+| 挂载壳 | 测试侧为收编源提供 `crate::xxx` 路径解析点的同名模块（如 hardening/model/mod.rs） |
+| testenv | 本轮新增的 cfg(test) 单源工具模块：进程内唯一临时目录（pid+序号+毫秒） |
+| clippy / fmt | Rust 官方静态检查 / 代码格式检查；0 = 无任何问题 |
+| arch_check | 本项目架构自检脚本，11 条规则 |
 
 ## 一、产物历史完成情况
 
 ### 项目与需求
 - EZR Downloader（`ezr download`）：高性能多协议 TUI 下载器。phase-01（HTTP/HTTPS 真实
-  下载内核与 TUI 正式版）已交付并通过 QA 终局独立验证；其后为多轮增量：coder 裁决落地、
-  specifier/coder 第 7–9 批操作者指令（v1.10–v1.12）、cleaner v113（度量收敛）、本轮
-  architect v114（架构评审 + 属性测试）。
+  下载内核与 TUI 正式版）已交付并通过 QA 终局独立验证；其后为多轮增量（coder 裁决落地、
+  specifier/coder 第 7–9 批操作者指令 v1.10–v1.12、cleaner v113 度量收敛、architect v114
+  架构评审、hardender v115 变异加固、本轮 coder v116 缺陷修复）。
 - 需求权威来源：`project/mission.md`（v1.12）；分期详述 `project/mission/phase-01.md`；
-  功能规格 `project/features/`（12 份）；QA 规程 `project/qa/`（12 份规程 / 9 份套件脚本，
-  另有共用 harness）。
+  功能规格 `project/features/`（12 份）；QA 规程 `project/qa/`（12 份规程 / 9 份套件脚本
+  + 共用 harness）。
 
 ### 产物总账
 | 阶段 | 做了什么 | 验证状态 |
 |---|---|---|
-| 基线交付（specifier + coder） | 需求文档 9 份 + 下载内核 + TUI + 测试夹具 | 已交付；QA 终局 966P/0F、行覆盖 90.5% |
-| 历轮加固与 QA（cleaner / architect / hardender / QA） | 历次加固约 110 条测试、度量收敛、架构复核、PTY 端到端终局验证 | 已交付 |
-| coder 裁决落地轮（至 v1.9） | 落地上游裁决（on_evt 单测、锁回退收口、FR-01-85..93 全链） | 已交付；逐轮对账自洽 |
-| 操作者第 7–9 批指令（v1.10–v1.12） | 配置模板最小化（钦定文本逐字节权威）、详情面板删 2 行字段、「大小」行去后缀 | 已交付；末轮 1313P/0F |
-| cleaner v113（度量收敛轮） | 行覆盖提至 93.42%、CRAP>6 收敛至 30 点、CPD 57→48、对话框键盘模块拆分、10 条补测、测试夹具单源 | 1350P/0F；clippy 0；fmt 0；arch 10/10 |
-| **architect v114（本轮）** | 架构评审四阶段全过；内部整理两处；arch_check 新增规则 11；属性测试 +5（详见第二节） | **1355P/0F；clippy 0；fmt 0；arch 11/11；覆盖 93.63%；CPD 45** |
+| 基线交付（specifier + coder） | 需求文档 + 下载内核 + TUI + 测试夹具 | 已交付；QA 终局 966P/0F |
+| 历轮加固与 QA | 历次加固约 110 条测试、度量收敛、架构复核、PTY 端到端 | 已交付 |
+| coder 裁决落地轮（至 v1.9） | 上游裁决落地（on_evt 单测、锁回退收口、FR-01-85..93） | 已交付 |
+| 操作者第 7–9 批指令（v1.10–v1.12） | 配置模板最小化、详情面板删 2 行、大小行去后缀 | 已交付 |
+| cleaner v113（度量收敛） | 行覆盖 93.42%、CRAP>6 收敛 30 点、CPD 57→48、键盘模块拆分 | 1350P/0F |
+| architect v114（架构评审） | 四阶段评审全过；WorkerDeps 收拢、下拉渲染单源；arch 规则 11；属性测试 +5 | 1355P/0F；arch 11/11；CPD 45 |
+| hardender v115（变异加固） | 4 高点文件 288 点全量变异 + 3 杀灭测试 + 6 等价论证；产品源码零改动 | 1594P/0F（其口径未计 ezr-fixture 30 / ezr_proxy 11 两 bin 单测目标）；非等价存活 0 |
+| **coder v116（本轮）** | 两移交缺陷直接修复：下拉浮层 Rect 钳制（产品源码 1 处）+ 测试临时目录全类唯一化收口（testenv 单源，src 40 处转换）；回归测试 +4（全部失败先行） | **1644P/0F；clippy 0；fmt 0；arch 11/11** |
 
 ### 遗留受限项（当前有效）
-只登记状态与影响：
-1. **CRAP 是近似口径**：无标准 CRAP 工具，按自研近似脚本（`.tools/crap-approx-lcov.py`）
-   估算；操作者已裁决维持。残余 30 个高风险点交 hardender 以变异测试做最终裁定。
-   本轮沙箱未重建该脚本，CRAP 未复跑（cleaner v113 的 30 点清单仍为当前口径）。
-2. **e2e 预登记跳过 3 例**：RB-09；TP-02/03/06（既有口径不变）。
-3. **沙箱无 TTY**：TUI 进程级端到端无法自动化；PTY 端到端由 QA 会话以 pyte 完成。
-4. **QA 三套规程有文档、脚本未落**：QA-CT-01..05、QA-NP-01..18、QA-MT-01..08（共 12 规程
-   / 9 脚本）；其中 QA-NP 需 ezr-proxy 先扩展三种监听形态（https / socks5+账号密码 /
-   IPv6 回环）；NP-11/12/16/17 无连接尝试，不依赖该扩展。
-5. **环境**：本轮沙箱为全新环境，工具链全部重装——rustup nightly 1.101.0-nightly、
-   cargo-llvm-cov 0.9.1、cargo-mutants 27.1.0（`~/.cargo/bin`）、PMD 7.28.0（`.tools/`）。
-   `export PATH="$HOME/.cargo/bin:$PATH"` 后所有验证命令可复现。
+1. **变异覆盖为时间盒口径**：全量变异仅覆盖 4 个高点文件（288 点）+ 校准 + 定向重跑；
+   其余文件约 1500 点未跑。**本轮新增注意**：dialog.rs `dropdown_rect` 新增钳制逻辑
+   （约 8 个变异位点）与 testenv/helper 尚未入变异集，交 QA 后的下一轮 hardender。
+2. **CRAP 三项未获变异裁定**：on_mouse（mouse.rs:25）、dlg_confirm_add（dialogs.rs:175）、
+   spread_bytes（lease.rs:60）维持 v113 登记口径（时间盒外）。
+3. **e2e 预登记跳过 3 例**：RB-09；TP-02/03/06（既有口径不变）。
+4. **沙箱无 TTY**：TUI 进程级端到端无法自动化；PTY 端到端由 QA 会话以 pyte 完成。
+5. **QA 三套规程有文档、脚本未落**：QA-CT-01..05、QA-NP-01..18、QA-MT-01..08；
+   其中 QA-NP 需 ezr-proxy 先扩展三种监听形态（https / socks5+账号密码 / IPv6 回环）。
+6. **Gherkin 变异清单仅为 01-persistence-config**：其余 11 份 feature 无步骤处理器，
+   按 mutation-hardening §5 不入清单。
+7. **tests/ 内部重复不入 CPD 账**：历史口径为 src-only（45 块）；本轮 src 净变化为
+   dialog.rs 钳制 2 行 + testenv.rs 新模块（单源，无新增重复），CPD 口径预期不变
+   （未在本轮复跑 PMD，交 QA/后续度量轮复核）。
+8. **环境**：沙箱 2 核 / 4G / 磁盘 10G；工具链 rustup nightly 1.101.0-nightly、
+   cargo-mutants 27.1.0（`~/.cargo/bin`）、PMD 7.28.0（`.tools/`）、bb 1.13.225 + APS
+   仓库（`.tools/`）。`export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"` 后验证
+   命令可复现。
 
 ### 实现定义值登记
-- 无新增产品契约值。本轮为行为保持轮：两处整理均为等价变换，对外语义零变化；
-  配置模板 / 警告 / 凭证运行期文案沿 v1.9 口径不变。
+- 无新增产品契约值。产品行为变化仅一处且为缺陷修复：**下拉浮层在终端不足以容纳时
+  截断显示（宽或高方向），不再越界 panic**——26 列宽终端浮层右缘钳在末列（末列
+  原为对话框右边框处，浮层覆盖之属预期遮挡）；浮层条目多于终端可容纳行数时只显示
+  前若干项（无滚动，超出部分不可见）。此为窄端/多代理场景的可接受视觉口径，
+  QA 复验时按「不 panic + 不越界」为契约、完整可见性不设契约。
 
-## 二、当前产出情况（architect-20261006-v114）
+## 二、当前产出情况（coder-20261007-v116）
 
-### 上游三项移交的处理结果
-| 上游移交项 | 处理结论 |
-|---|---|
-| cleaner 拆分对话框键盘模块（dialog_keys） | **复核合格**：纯键路由函数（routing.rs）与处理器（mod.rs）职责边界清晰、依赖方向零变化；本轮在其上补了属性测试 |
-| cleaner 单源化测试夹具（testutil） | **复核合格**：对话框默认值单一来源；本轮属性测试直接复用 |
-| CRAP 残余 30 点 | **维持登记，交 hardender**：分发核函数是"路由表"形态、已有契约单测锁定，硬拆表驱动反而破坏结构，且近似口径本身低估——以变异测试为最终准绳 |
+### 本会话产物清单
+**缺陷①修复（产品源码，1 处）**
+- `project/ezr/src/ui/dialog.rs`：`dropdown_rect` 浮层 Rect 宽/高钳制在 area 内
+  （`width: pw.min(area 右缘 - px)`、`height: ph.min(area 底缘 - y)`）；同函数
+  `draw_task_dialog` 内算法/代理两处下拉选项行循环加 `.take(pinner.height)`
+  （钳后内框截断）。触发点：26 列终端 + 代理下拉（pw=26，旧几何右缘 27>26 →
+  ratatui 0.29 Clear 渲染 `index outside of buffer` panic）；纵向分支：浮层条目数
+  +2 超过终端高（如 12 个命名代理 + 12 行终端）同样越界，一并钳制。
 
-### 架构评审结论（四阶段全部 PASS）
-| 评审项 | 结论 | 一句话依据 |
-|---|---|---|
-| UI 与核心分离 | PASS | model 目录零框架依赖、零 async（grep 实证），核心逻辑可无界面测试；1 项 trade-off 登记：app 层持有 Rect（纯值类型，无 IO），迁移成本>收益，维持现状 |
-| 依赖规则 | PASS | 分层 main→app→engine→model 严格单向、无循环依赖（编译器 + arch_check 锁定）；engine 对外只暴露窄接口 |
-| 信息隐藏 | PASS | model 对外 API 均为领域概念；测试专用门面全部 cfg(test) 门控，产品构建零 API 增量 |
-| 局部代码质量 | 2 项改进（见下），其余为登记口径 | |
+**缺陷②修复（测试隔离，全类收口）**
+- `project/ezr/src/model/testenv.rs`（**新增**）：cfg(test) 单源
+  `uniq_tmp_dir(prefix)` → `<前缀>-<pid>-<进程内原子序号>-<毫秒>`，建目录失败即
+  panic。收口于 model 层（最内层，被全部测试 crate 收编，app/ui/engine 依赖合规，
+  arch 规则 1/2/3/8/11 逐条核对通过）。
+- 转换 40 处固定 pid/时间戳式临时目录（`std::env::temp_dir().join(format!(...pid...))`
+  → `uniq_tmp_dir(...)`）：app/dialog_keys（2）、app/dialogs（3）、app/cli（1）、
+  app/mouse（1）、app/paste（1）、app/engine tick/evt（7）、app/testutil（1，先建后
+  并入 testenv）、ui/mod（2）、main.rs（2）、model/config（4）、model/checksum（4）、
+  model/registry（6）、engine/supervisor（11）、engine/mod（1）、sentinel（2）、
+  bin/ezr-fixture（6，独立 crate 经 `#[path]` 挂载同一源文件）。
+- `project/ezr/src/app/testutil.rs`：uniq_tmp_dir 并入 testenv 后移除（保留 dialog 夹具）。
+- `project/ezr/tests/hardening/model/mod.rs`：挂载壳补挂 testenv（收编 config.rs 的
+  cfg(test) 代码引用 `crate::model::testenv` 所需）。
 
-### 本轮代码改动（两处，行为保持）
-1. **12 个参数收拢成一个结构体**（`src/engine/supervisor.rs`）：启动下载工作线程原本要传
-   12 个参数、两个调用点各传一遍；现打包为 `WorkerDeps` 结构体 + `spawn()` 方法，函数签名
-   12 参→3 参。漏传/传错由编译器直接锁定，`too_many_arguments` 豁免注解删除。
-2. **下拉浮层渲染去重**（`src/ui/dialog.rs`）：「算法下拉」「代理下拉」两段各约 30 行的
-   几乎相同渲染代码，合并为 `dropdown_frame()` / `dropdown_item()` 两个公共函数；逐像素
-   渲染结果不变（TestBackend 像素锁定测试佐证）。
+**回归测试（+4，全部失败先行确认后转绿）**
+- `project/ezr/src/ui/dialog.rs` `dropdown_rect_clamps_within_area`：钳制几何单元锁定
+  （26 列横向钳宽 25 / 纵向钳高 12 / 常态不钳）。
+- `project/ezr/tests/hardening_v115.rs` `proxy_dropdown_no_panic_at_26_cols`：26 列渲染
+  不 panic + 左上角 (1,22) ╭ + 右缘 (25,22) ╮ + 对话框左边框未被覆盖；并更新该文件
+  头部 v115 备注（26 列由「另行登记」改为「已修复，见下方回归」）。
+- `project/ezr/tests/hardening_v115.rs` `proxy_dropdown_no_panic_when_taller_than_terminal`：
+  12 代理 + 80×12 终端渲染不 panic + 浮层顶 (12,0) ╭ + 底 (12,11) ╰。
+- `project/ezr/src/app/engine.rs` `make_app_same_tag_never_restores_previous_registry`：
+  同 tag 两次 make_app 后者不得恢复前者的 registry（旧实现下此测试真实失败——
+  污染机制的进程内精确复现）。
 
-### 新增护栏与测试
-- **arch_check 规则 11**（`scripts/arch_check.sh`）：model 目录禁止引入 tokio/reqwest——
-  保护最内层纯逻辑不被异步/网络框架污染。已做阳性对照实测（人为注入即红、移除即绿）。
-- **属性测试 +5**（`src/property_tests.rs`）：对话框键盘状态机的 5 条不变量——字符数上限
-  （URL/目录 ≤300、验证码 ≤2 位）、退格至多弹一格、十六进制输入 ≤128 且仅合法字符、
-  下拉选中项永不越界、空列表守卫。随机输入轰炸验证，属性测试总数 30→35。
-  测试专用导出链全部 cfg(test) 门控，产品 API 零增量。
+**工具侧经验沉淀（packs/_common/，宪法第三章）**
+- engineering.md：「pid 命名的测试临时目录」既有条目合并新内核——**根治靠收口**：
+  唯一化命名收敛为单一 cfg(test) 工具函数、全仓禁手拼 pid 公式；审计优先级按
+  「路径是否被夹具构造函数读取以恢复状态」排。
+- notes/rust.md +2：`#[path]` 收编源的 cfg(test) 代码按测试 crate 解析 crate 路径
+  （挂载壳须提供解析点，cargo fmt 解析失败是首个信号）；嵌套 mod 文件内 `#[path]`
+  相对该文件所在目录解析（层级按 mod 文件位置数）。
 
-### 重复代码（CPD）五类裁决
-| 类 | 是什么 | 处理 |
-|---|---|---|
-| a | 测试场景字面量 ~17 项 | 维持：各处字段与断言目的不同，硬提取反而更难读 |
-| b | UI 渲染习语 ~11 项 | 部分收敛：两大下拉浮层已由改动②消除；残余为 4–8 行微习语，维持 |
-| c | 12 参 spawn 表 2 处 | **已修**：即本轮改动① |
-| d | 三个程序入口样板 ~6 项 | **操作者 20261006 裁决：不立项（终态登记）**——依据见下方「三入口逐块画像」 |
-| e | 10 参工厂调用点 | 维持：调用点字面清晰，包装只搬运复杂度 |
-
-> **三入口逐块画像（裁决依据，行号实证，CPD ≥50 token）**：6 处相似块中 5 处集中在
-> ezr-proxy ↔ ezr-fixture 两个测试基建之间的骨架同型——宽松式 CLI 解析骨架（proxy
-> 240-268 ↔ fixture main 62-90，~28 行）、accept 循环（proxy 271-283 ↔ fixture main
-> 94-108，13 行）、JSONL 日志壳（proxy 35-63 ↔ fixture request.rs 79-95，骨架同型
-> 字段各异）、测试 tcp_pair()（proxy 497 ↔ respond.rs 404，8 行逐字相同）；main 与
-> 另两入口仅共享 lint 姿态块（main.rs 11 / proxy 9 / fixture main 23，#![allow] 属性须
-> 在各自 crate 根，共享需 include! 机制，收益不成立）。可收敛净行数 ~80，且需泛型化
-> handler 签名、参数化日志字段，抽象层自耗相当部分；QA-NP 代理扩展（加 https /
-> socks5+认证 / IPv6 监听）落地后 proxy 与 fixture 体量差距进一步拉开，共享价值走低。
-> 重新评估唯一窗口：QA-NP 扩展轮顺带轻量评估（#[path] 双挂载共享模块即可，不涉
-> main 模块树与 tests/hardening 的 #[path] 挂载点——后者挂 src/model，与 bin 无关）。
-
-### 验证证据
-| 验证项 | 结果 | 复现命令 |
-|---|---|---|
-| 全量测试 | **1355P/0F**（分目标：315/30/11/107/245/244/2/12/222/167） | `cargo test`（crate 根） |
-| 属性测试独立口径 | 35P/0F（30 既有 + 5 新增） | `cargo test property_tests::` |
-| 静态检查 / 格式 | clippy 0 警告 / fmt 0 差异 | `cargo clippy --all-targets` / `cargo fmt --check` |
-| 架构自检 | **11/11**（规则 11 新增，含阳性对照实测） | `bash scripts/arch_check.sh` |
-| 行覆盖率 | **93.63%**（上游 93.42%，+0.21pp）；函数执行率 94.63→94.77% | `cargo llvm-cov --summary-only` |
-| 重复代码（CPD ≥50 token） | **48→45**（spawn 表 1 项 + 下拉浮层 2 项消除） | `bash .tools/pmd-bin-7.28.0/bin/pmd cpd -l rust --dir src --minimum-tokens 50` |
-| 变异点扫描 | **1788** 点（+3，均为本轮新增 helper）；未跑变异测试（归 hardender） | `cargo mutants --list --line-col=true --exclude-re property_tests` |
+### 验证证据（四要素①：本地验证命令清单，按序；crate 根 = project/ezr）
+| # | 验证项 | 结果 | 复现命令 |
+|---|---|---|---|
+| 1 | 缺陷①指纹复现（修复前） | 两测试 panic：`index outside of buffer ... index is (26, 22)` / `(12, 12)` | 修复前 `cargo test --test hardening_v115 -- proxy_dropdown_no_panic`（已修复，指纹留档本表） |
+| 2 | 缺陷②指纹复现（修复前） | 隔离测试失败：同 tag 二次构造恢复出前次任务（assert tasks.is_empty() 失败） | 修复前 `cargo test --bin ezr make_app_same_tag`（已修复） |
+| 3 | 全目标测试 | **1644P/0F**（11 目标：bin 317 + ezr-fixture 30 + ezr_proxy 11 + hardening 107 + g_appcore 246 + g_engine 245 + g_main 2 + g_proxy 12 + g_supervisor 223 + g_throttle_err 167 + v115 284） | `cargo test` |
+| 4 | 下拉回归组 | 5P/0F（既有 3 + 新增 2） | `cargo test --test hardening_v115 -- proxy_dropdown` |
+| 5 | 静态检查 / 格式 | clippy 0 警告 / fmt 0 差异 | `cargo clippy --all-targets` / `cargo fmt --check` |
+| 6 | 架构自检 | 11/11 | `bash scripts/arch_check.sh` |
+| 7 | 缺陷②现场修复确认 | confirm_add_validates_then_creates 转绿（v115 全量轮曾真实失败于此） | `cargo test --test hardening_v115 -- confirm_add_validates` |
 
 ### 对账口径
-- 测试数：上游 1350 + 本轮属性测试 5（挂 main bin 单份、无倍增）= **1355** ✓
-- CPD：48 − spawn 表 1 项 − 下拉浮层 2 项 = **45** ✓
-- 变异点：1785 + 3（dropdown_item 等 helper 净增）= **1788** ✓；已更改文件全部 <100
-  （supervisor 61→65、ui/dialog 62→61、routing 69 不变）。
+- 与 v115 交接的 1594 口径差：1644 − 1594 = +50 = +41（ezr-fixture 30 + ezr_proxy 11
+  两个 bin 单测目标本轮计入总账，上游口径未单列）+ +9（本轮新增 4 条测试在含收编源
+  目标中的计次：bin +2、g_appcore +1、g_engine +1、g_supervisor +1、v115 +4）。
+  每目标数字均可在 `cargo test` 输出逐行复算。
+- 本轮改动面：产品源码 1 文件（dialog.rs，行为修复 1 处）；产品内 cfg(test) 代码
+  15 文件；测试基建 2 文件（testutil.rs、hardening 挂载壳）；新增 1 模块 + 4 测试；
+  测试目录（tests/）仅 hardening_v115.rs（新增 2 测试 + 备注更新）。
 
-### 待办与待批
-**裁决闭环注记**：「三入口重构」是否立项——**操作者 20261006 裁决不立项**（CPD 类别 d
-终态登记；逐块画像与依据已并入第二节 CPD 裁决表备注）。当前无待操作者裁决/待批项。
+### 四要素②：会话运行时产物位置与复现方法
+- 本轮为缺陷修复轮，无变异/覆盖率/CPD 运行时产物；`.work/tmp/` 仅会话临时文件。
+- 上游 v115 的复现资产（变异、Gherkin、pristine）随会话终结已不保留，复现方法见
+  归档包 v115 交接（要素①第 4/5 条命令仍有效）。**注意**：v115 的 pristine 基线
+  已不含本轮 dialog.rs 修复，下一轮变异/对账以本轮后的工作区为新基线。
 
-**移交 hardender（下一棒）**
-1. 变异测试全量执行（高点文件清单见移交建议）。
-2. CRAP 残余 30 点以变异结果为最终准绳复核（cleaner v113 登记清单有效）。
+### 四要素③/④
+- 无 feature 注释块变化；无等价突变体新增（本轮未跑变异）。
 
-**移交 QA（累积）**
-3. QA-CT-01..05、QA-NP-01..18、QA-MT-01..08 脚本化；ezr-proxy 三类监听扩展
-   （https / socks5+账号密码 / IPv6 回环；落地时按 CPD 表 d「重新评估窗口」条款顺带
-   轻量评估骨架共享）。
-
-**无待批代码问题**：v114 为行为保持轮，无实现定义值新增。
+### 待办与待批（未决项）
+1. **【已闭环】v115 待办①（26 列下拉越界 panic）**：操作者裁决直接修复，本轮完成，
+   回归测试 3 条锁定（单元几何 + 26 列集成 + 高于终端集成）。
+2. **【已闭环】v115 待办②（make_app 临时目录跨目标污染）**：操作者裁决直接修复，
+   本轮完成并扩为全类收口（40 处转换 + 隔离回归测试 + engineering.md 根治条款）。
+3. **【移交 QA / 后续轮】** CRAP 三项未变异裁定（on_mouse / dlg_confirm_add /
+   spread_bytes）与其余 ~1500 变异点 + 本轮新增钳制逻辑与 testenv 的变异补跑：
+   按时间盒维持登记，是否扩大变异范围由操作者定。
+4. **【移交 QA（累积，继承自上游）】** QA-CT-01..05、QA-NP-01..18、QA-MT-01..08
+   脚本化；ezr-proxy 三类监听扩展（https / socks5+账号密码 / IPv6 回环）。
+5. **【移交 QA 复验清单（本轮新增）】** ①窄端下拉：26 列添加对话框展开代理下拉不
+   panic、末列钳制符合「实现定义值登记」口径；②浮层高于终端只显示前若干项（无
+   滚动）的视觉可接受性；③测试套件在连续多轮 `cargo test`（pid 复用场景）下全绿。
 
 ### 移交建议
-- 建议操作者运行 `bin/swarm complete` 归档后，链式启动 `six-pack/hardender`：
-  1. **变异测试全量**：按每文件计数分块（`--file`），共 1788 点；高点文件 app/engine.rs 94、
-     lease.rs 88、timefmt.rs 78、fixture/respond.rs 69、routing.rs 69、config.rs 68。
-  2. **CRAP 30 点复核**：cleaner v113 清单（draw_task_dialog 35.1 / download 29.1 /
-     on_mouse 25.5 / tick 25.2 / dlg_confirm_add 20.4 / on_evt 19.0 / block_worker 15.3 /
-     from_toml 12.0 / spread_bytes 9.0 等），以变异结果为准绳。
-  3. **本轮两处改造重点盯**：WorkerDeps 字段遗漏/次序错误应被既有测试杀灭；dropdown 两个
-     helper 的选中/后缀/回填行为由像素测试 + 属性测试共同锁定。
-- 工具位置与 PATH 见第一节「遗留受限项」第 5 条；全部度量命令见验证证据表。
+- 建议操作者运行 `bin/swarm complete` 归档后，链式启动 `six-pack/QA`：
+  1. 独立复验两缺陷修复（上复验清单①②③ + 要素① #4/#7）；
+  2. 既定 QA 规程执行（累积移交第 4 条），PTY 端到端按 pyte 口径；
+  3. 变异补跑（移交第 3 条）建议下一 hardender 轮以本轮后工作区为新基线。
+
+By coder.

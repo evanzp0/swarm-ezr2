@@ -616,8 +616,7 @@ mod tests {
 
     #[test]
     fn ezr_home_env_relocates_config_and_state() {
-        let dir = std::env::temp_dir().join(format!("ezr-home-env-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-home-env");
         std::env::set_var("EZR_HOME", &dir);
         assert_eq!(ezr_dir(), Some(dir.clone()), "EZR_HOME 非空 → 直接采用");
         assert_eq!(config_path(), Some(dir.join("config.toml")));
@@ -1290,7 +1289,7 @@ mod tests {
     /// 不存在 → 建父目录 + 写模板；幂等（再次调用内容不变）
     #[test]
     fn ensure_creates_template_when_missing() {
-        let dir = std::env::temp_dir().join(format!("ezr-tpl-create-{}", std::process::id()));
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-tpl-create");
         let p = dir.join("nested/config.toml");
         std::fs::remove_dir_all(&dir).ok();
         ensure_default_config(&p).unwrap();
@@ -1311,8 +1310,7 @@ mod tests {
     /// 已存在（含生效值）→ 不覆写（D17①：操作者手工配置优先于模板）
     #[test]
     fn ensure_keeps_existing_content() {
-        let dir = std::env::temp_dir().join(format!("ezr-tpl-keep-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-tpl-keep");
         let p = dir.join("config.toml");
         std::fs::write(&p, "download_slots = 2\n").unwrap();
         ensure_default_config(&p).unwrap();
@@ -1329,8 +1327,7 @@ mod tests {
     #[test]
     fn ensure_propagates_write_error() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("ezr-tpl-ro-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-tpl-ro");
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
         let p = dir.join("config.toml");
         let r = ensure_default_config(&p);

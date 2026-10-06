@@ -497,8 +497,7 @@ mod main_loop_tests {
         supervisor::TaskSpec {
             id,
             url: "http://127.0.0.1:1/ezr-ml.bin".to_string(),
-            save_dir: std::env::temp_dir()
-                .join("ezr-ml")
+            save_dir: crate::model::testenv::uniq_tmp_dir("ezr-ml")
                 .to_string_lossy()
                 .into_owned(),
             name: format!("ezr-ml-{id}.bin"),

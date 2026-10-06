@@ -451,8 +451,7 @@ mod tests {
     fn restore_tty_non_tty_file_writes_sequence_but_no_termios() {
         // 非 tty 的常规可写文件：复原序列可写入（seq_written=true），
         // termios 经 stty 还原必然失败（stty 只作用于终端）→ false
-        let dir = std::env::temp_dir().join(format!("ezr-sentinel-restore-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-sentinel-restore");
         let f = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
@@ -477,8 +476,7 @@ mod tests {
     fn stty_save_and_restore_fail_without_tty() {
         // 非 tty 输入：`stty -g` 捕获失败 → None；`stty <saved>` 还原失败 → false
         // （失败容错契约：返回 None/false 而非 panic）
-        let dir = std::env::temp_dir().join(format!("ezr-sentinel-stty-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-sentinel-stty");
         let f = std::fs::OpenOptions::new()
             .create(true)
             .write(true)

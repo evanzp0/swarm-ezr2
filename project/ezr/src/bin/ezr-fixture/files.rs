@@ -59,8 +59,7 @@ mod tests {
 
     #[test]
     fn write_patterned_matches_i_mod_251_across_buffers() {
-        let dir = std::env::temp_dir().join(format!("ezr-fx-pt-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testenv::uniq_tmp_dir("ezr-fx-pt");
         let p = dir.join("pat.bin");
         let f = std::fs::File::create(&p).unwrap();
         // 200_000 字节 > 64 KiB 缓冲：跨块连续性必验
@@ -76,8 +75,7 @@ mod tests {
 
     #[test]
     fn gen_files_skips_existing_files() {
-        let dir = std::env::temp_dir().join(format!("ezr-fx-skip-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testenv::uniq_tmp_dir("ezr-fx-skip");
         std::fs::write(dir.join("small.bin"), b"custom").unwrap();
         gen_files(&dir).unwrap();
         // 既有文件未被覆盖

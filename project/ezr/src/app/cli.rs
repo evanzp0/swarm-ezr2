@@ -82,8 +82,7 @@ mod cli_add_tests {
 
     #[tokio::test]
     async fn cli_add_dedupes_duplicate_names() {
-        let dir = std::env::temp_dir().join(format!("ezr-cli-add-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-cli-add");
         let reg = dir.join("registry.json").to_string_lossy().to_string();
         let mut app = App::new(Config::default(), reg);
         let url = "http://example.com/f.bin".to_string();

@@ -143,8 +143,7 @@ mod tests {
 
     #[test]
     fn access_log_jsonl_shape() {
-        let dir = std::env::temp_dir().join(format!("ezr-fx-log-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testenv::uniq_tmp_dir("ezr-fx-log");
         let p = dir.join("a.jsonl");
         {
             let log = AccessLog::open(p.to_str());

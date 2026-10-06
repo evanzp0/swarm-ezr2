@@ -160,8 +160,7 @@ mod paste_tests {
     }
 
     fn make_app(tag: &str) -> crate::app::App {
-        let dir = std::env::temp_dir().join(format!("ezr-paste-{tag}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).ok();
+        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-paste-{tag}"));
         let reg = dir.join("registry.json").to_string_lossy().into_owned();
         crate::app::App::new(crate::model::config::Config::default(), reg)
     }

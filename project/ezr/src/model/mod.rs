@@ -20,6 +20,11 @@ pub mod sidecar;
 pub mod slots;
 pub mod speed;
 
+/// 测试专用临时目录唯一化（仅 cfg(test) 编译；src 内全部测试临时目录的
+/// 单一事实来源——被全部测试 crate 收编，app/ui/engine 对其依赖合规）
+#[cfg(test)]
+pub(crate) mod testenv;
+
 /// 传输协议（01 仅 HTTP/HTTPS；`Bt` 为 phase-02 预留枚举，01 无触发路径）
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Protocol {

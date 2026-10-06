@@ -271,6 +271,15 @@ group_imports = "StdExternalCrate"
   （如速度解析 `parse_speed("inf")` 实得 u64::MAX），属性会红——这是口径选择问题而非
   产品缺陷：要么收紧生成字母表（如正则排除 `i`），要么把饱和路径显式纳入规格口径，
   二选一并在属性 doc 注明，不得默默排除后当作"已验证非法面"。
+- **`#[path]` 收编源的 cfg(test) 代码按测试 crate 解析 crate 路径**：产品源经 `#[path]`
+  挂载进独立测试 crate 时，其 cfg(test) 模块里的 `crate::xxx` 引用按**该测试 crate** 的根
+  解析，而非产品 bin 的根——挂载壳必须提供同名路径点（如在测试侧的 `mod model` 壳内
+  `#[path]` 再挂同一个工具模块），漏一处就是「只在部分测试目标编译失败」。首个暴露信号
+  常是 `cargo fmt` 报 `failed to resolve mod`，而非 cargo test。
+- **嵌套 mod 文件内的 `#[path]` 相对该文件所在目录解析**：`tests/a/b/mod.rs` 里的
+  `#[path = "../../src/x.rs"]` 实际解析为 `tests/a/src/x.rs`（相对 `b/` 上跳两级），不是
+  相对 crate 根——层级按 mod 文件自身位置数。tests 根处 `#[path = "../src/..."]` 只上跳
+  一级，两者极易混淆，解析失败先数层数再改路径。
 
 ## 8. 架构边界与适配器方向
 
@@ -402,3 +411,19 @@ group_imports = "StdExternalCrate"
   脱阻塞）。单流降级路径例外：探测响应体本身就是下载流，必须移交续读。
   推广纪律：凡是"读头部拿元数据、body 另起连接取"的下载器模式，探测响应
   必须显式释放，且 e2e 至少留一个 MB 级用例兜底。
+
+- **多 target 目录的磁盘归属要先辨再清**：`cargo llvm-cov`、`cargo mutants` 各自使用
+  独立 target 目录（`target/llvm-cov-target/` 等），主 `target/debug/build/`（build
+  script 产物，常达 GB 级）只服务主 target——删它不影响 llvm-cov/mutants 的增量性，
+  反之删 llvm-cov-target 则下次需 2.5G+ 全量重建、磁盘紧张沙箱直接放不下。清缓存前
+  按「下一步要跑什么工具」决定归属，别按目录名直觉。
+
+- **PMD 7 的 cpd 子命令用 `--dir`（`--files` 已废弃）**：`pmd cpd -l rust
+  --minimum-tokens 50 --dir <src>`；退出码 4 = 发现重复（正常语义，不是失败），
+  0 = 无重复。重复块计数口径随目录参数变化，src-only 与 src+tests 是两套数字
+  （对账纪律见 engineering.md「度量数字对账先核口径」）。
+
+- **llvm-cov 的 lcov 输出是标准 lcov 格式（冒号+逗号混合分隔）**：记录行为
+  `FN:<line>,<name>`、`BRDA:<line>,<block>,<branch>,<taken>`、`DA:<line>,<count>`——
+  自写解析器（如 CRAP 近似脚本）时 `FN:`/`BRDA:` 先以冒号切前缀再按逗号切字段，
+  直接 `split(":")` 取三段会在标准格式上崩；名字段本身可含逗号，只切第一个逗号。

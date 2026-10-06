@@ -533,8 +533,7 @@ mod cli_parse_tests {
 
     #[test]
     fn try_lock_path_exclusive_on_fresh_file() {
-        let dir = std::env::temp_dir().join(format!("ezr-lock-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-lock");
         let p = dir.join("probe.lock");
         let a = try_lock_path(&p).unwrap();
         assert!(a.is_some());
@@ -559,8 +558,7 @@ mod cli_parse_tests {
 
     #[tokio::test]
     async fn overlay_sig_tracks_dialog_and_dropdown() {
-        let dir = std::env::temp_dir().join(format!("ezr-ov-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-ov");
         let reg = dir.join("registry.json").to_string_lossy().to_string();
         let mut app = App::new(Config::default(), reg);
         assert_eq!(overlay_sig(&app), 0);

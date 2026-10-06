@@ -2,6 +2,12 @@
 //! `Connection` 与 src/model/task.rs 同构（名义类型按结构兼容挂载）。
 
 #![allow(missing_docs)]
+
+/// 收编产品侧测试环境工具（src/model/config.rs 等收编源引用
+/// `crate::model::testenv::uniq_tmp_dir`，挂载壳须提供同路径解析点）
+#[path = "../../../src/model/testenv.rs"]
+pub mod testenv;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Connection {
     pub id: usize,

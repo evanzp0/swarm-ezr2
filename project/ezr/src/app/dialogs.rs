@@ -406,8 +406,7 @@ mod add_dialog_flow_tests {
     /// 保存目录尾斜杠归一（FR-01-03，目录归一单点化的行为锚定）
     #[tokio::test]
     async fn add_dialog_confirm_creates_task_with_normalized_dir() {
-        let dir = std::env::temp_dir().join(format!("ezr-app-dlg-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-app-dlg");
         let reg = dir.join("registry.json").to_string_lossy().to_string();
         let mut app = App::new(Config::default(), reg);
 
@@ -447,8 +446,7 @@ mod add_dialog_flow_tests {
     ///（含类型标注，v1.9 三值 http/https/socks5），默认选中恒直连；确认后写入任务
     #[tokio::test]
     async fn add_dialog_proxy_options_two_states() {
-        let dir = std::env::temp_dir().join(format!("ezr-dlg-pdef-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-pdef");
         let reg = dir.join("registry.json").to_string_lossy().to_string();
         let mut cfg = Config::from_toml(
             // v1.9/FR-01-86/89：夹具按 ip/port/type 字段形态（url 键退役）；
@@ -501,8 +499,7 @@ mod add_dialog_flow_tests {
     /// 校验/代理写入任务）+ toast + 注册表落盘；已完成任务拒绝（D20）
     #[tokio::test]
     async fn modify_dialog_prefills_applies_and_rejects_completed() {
-        let dir = std::env::temp_dir().join(format!("ezr-dlg-mod-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-mod");
         let reg = dir.join("registry.json").to_string_lossy().to_string();
         let mut cfg = Config::from_toml(
             // v1.9/FR-01-86/89：夹具按 ip/port/type 字段形态（url 键退役）

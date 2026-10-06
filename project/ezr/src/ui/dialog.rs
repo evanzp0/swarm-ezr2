@@ -30,7 +30,10 @@ fn field_display(val: &str, ph: &str, avail: usize) -> String {
 }
 
 /// 校验算法下拉浮层定位：优先展开在校验算法行下方；超出终端底部则改为行上方；
-/// 横向钳制在终端内（左右各留 1 列边距）
+/// 横向钳制在终端内（左右各留 1 列边距）；宽/高最终钳制在终端内——窄终端
+/// （宽 ≤ pw）时 px 触下限钳后右缘会越界、浮层高于终端时下缘同理，
+/// 不钳制则 ratatui Clear/Block 渲染越界 panic（coder v116 缺陷修复），
+/// 钳制只截去越界部分、常态几何不变。
 fn dropdown_rect(area: Rect, inner: Rect, type_row_y: u16, pw: u16, ph: u16) -> Rect {
     let mut py = type_row_y + 1;
     if py + ph > area.y + area.height {
@@ -39,11 +42,12 @@ fn dropdown_rect(area: Rect, inner: Rect, type_row_y: u16, pw: u16, ph: u16) -> 
     let px = (inner.x + 8)
         .min(area.x + area.width.saturating_sub(pw + 1))
         .max(area.x + 1);
+    let y = py.max(area.y);
     Rect {
         x: px,
-        y: py.max(area.y),
-        width: pw,
-        height: ph,
+        y,
+        width: pw.min(area.x + area.width.saturating_sub(px)),
+        height: ph.min(area.y + area.height.saturating_sub(y)),
     }
 }
 
@@ -362,7 +366,8 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         let pw = 24u16;
         let ph = items.len() as u16 + 2;
         let pinner = dropdown_frame(f, area, inner, ck_row_y, pw, ph, " 校验算法 ");
-        for (i, (name, need, _)) in items.iter().enumerate() {
+        // 浮层被终端钳短时只渲染可见行（coder v116：选项行不得越出钳后内框）
+        for (i, (name, need, _)) in items.iter().enumerate().take(pinner.height as usize) {
             dropdown_item(
                 f,
                 pinner,
@@ -381,7 +386,8 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         let pw = 26u16;
         let ph = items.len() as u16 + 2;
         let pinner = dropdown_frame(f, area, inner, proxy_row_y, pw, ph, " 选择代理 ");
-        for (i, name) in items.iter().enumerate() {
+        // 浮层被终端钳短时只渲染可见行（coder v116：选项行不得越出钳后内框）
+        for (i, name) in items.iter().enumerate().take(pinner.height as usize) {
             dropdown_item(
                 f,
                 pinner,
@@ -443,5 +449,56 @@ mod helper_tests {
         assert_eq!(r.x, 5); // max(area.x + 1)
                             // y 不低于浮层顶
         assert!(r.y >= area.y);
+    }
+
+    /// 缺陷回归（coder v116）：浮层 Rect 必须整体钳制在终端 area 内。
+    /// ①26 列 + 代理下拉（pw=26）：px 触下限钳后右缘 27>26，Clear 渲染
+    /// panic——宽钳为 area 右缘内（25）；②浮层高于终端（多代理 ph>高）：
+    /// 上移展开后下缘越界——高钳为 area 底缘内。
+    #[test]
+    fn dropdown_rect_clamps_within_area() {
+        // ① 横向：26 列终端，pw=26 → 宽钳为 25，右缘不越界
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 26,
+            height: 40,
+        };
+        let inner = Rect {
+            x: 1,
+            y: 14,
+            width: 24,
+            height: 10,
+        };
+        let r = dropdown_rect(area, inner, 21, 26, 3);
+        assert_eq!(r.x, 1, "px 仍触下限钳");
+        assert_eq!(r.width, 25, "宽钳为 area.width - 1");
+        assert!(r.right() <= area.right(), "右缘不得越界");
+        // ② 纵向：ph=15 > 终端高 12 → 高钳为 12，下缘不越界
+        let small = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 12,
+        };
+        let inner2 = Rect {
+            x: 4,
+            y: 1,
+            width: 72,
+            height: 10,
+        };
+        let r = dropdown_rect(small, inner2, 7, 26, 15);
+        assert_eq!(r.y, 0, "上移展开后顶在 area.y");
+        assert_eq!(r.height, 12, "高钳为终端高");
+        assert!(r.bottom() <= small.bottom(), "下缘不得越界");
+        // 常态不受钳制影响：宽高原样保留
+        let wide = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 30,
+        };
+        let r = dropdown_rect(wide, inner, 15, 24, 9);
+        assert_eq!((r.width, r.height), (24, 9));
     }
 }

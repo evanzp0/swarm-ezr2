@@ -128,8 +128,7 @@ mod ui_tests {
     use crate::model::{Checksum, FailKind, Protocol, Task};
 
     fn make_app(tag: &str) -> App {
-        let dir = std::env::temp_dir().join(format!("ezr-ui-{tag}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).ok();
+        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-ui-{tag}"));
         let reg = dir.join("registry.json").to_string_lossy().into_owned();
         App::new(Config::default(), reg)
     }
@@ -653,8 +652,7 @@ mod ui_tests {
     /// Completed 兜底臂；不可续传任务走「从头下载」提示）
     #[tokio::test]
     async fn resume_with_free_slot_direct_start() {
-        let dir = std::env::temp_dir().join(format!("ezr-ui-resume2-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).ok();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-ui-resume2");
         let mut app = make_app("resume2");
         app.max_slots = 5;
         let mut t = task(1, "r1.bin", TaskState::Paused);

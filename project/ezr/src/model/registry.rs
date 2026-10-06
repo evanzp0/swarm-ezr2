@@ -265,7 +265,7 @@ impl Default for Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{sample_task, unix_now};
+    use crate::model::sample_task;
 
     #[test]
     fn roundtrip_and_next_id() {
@@ -277,8 +277,7 @@ mod tests {
             value: "d".repeat(32),
         });
         let reg = Registry::from_tasks(&[t.clone()], 6);
-        let dir = std::env::temp_dir().join(format!("ezr-reg-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg");
         let p = dir.join("registry.json");
         reg.save(p.to_str().unwrap()).unwrap();
         let loaded = Registry::load(p.to_str().unwrap()).unwrap();
@@ -320,8 +319,7 @@ mod tests {
             "现行编码为 direct: {raw}"
         );
         let legacy = raw.replace("\"proxy\":\"direct\"", "\"proxy\":\"global\"");
-        let dir = std::env::temp_dir().join(format!("ezr-reg-global-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg-global");
         let p = dir.join("registry.json");
         std::fs::write(&p, legacy).unwrap();
         let loaded = Registry::load(p.to_str().unwrap()).unwrap();
@@ -354,8 +352,7 @@ mod tests {
     #[test]
     fn missing_or_corrupt_registry_is_none() {
         assert!(Registry::load("/nonexistent/registry.json").is_none());
-        let dir = std::env::temp_dir().join(format!("ezr-reg2-{}", unix_now()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg2");
         let p = dir.join("r.json");
         std::fs::write(&p, "garbage{").unwrap();
         assert!(Registry::load(p.to_str().unwrap()).is_none());
@@ -365,8 +362,7 @@ mod tests {
     #[test]
     fn atomic_save_no_tmp_left() {
         let reg = Registry::new();
-        let dir = std::env::temp_dir().join(format!("ezr-reg3-{}", unix_now()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg3");
         let p = dir.join("registry.json");
         reg.save(p.to_str().unwrap()).unwrap();
         assert!(!dir.join("registry.json.tmp").exists());
@@ -383,8 +379,7 @@ mod tests {
         t.total = 100;
         t.downloaded = 100;
         let reg = Registry::from_tasks(&[t], 2);
-        let dir = std::env::temp_dir().join(format!("ezr-reg4-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg4");
         let p = dir.join("registry.json");
         reg.save(p.to_str().unwrap()).unwrap();
         let m1 = std::fs::metadata(&p).unwrap().modified().unwrap();
@@ -405,8 +400,7 @@ mod tests {
         t.id = 1;
         t.total = 200;
         t.downloaded = 100;
-        let dir = std::env::temp_dir().join(format!("ezr-reg5-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg5");
         let p = dir.join("registry.json");
         Registry::from_tasks(&[t.clone()], 2)
             .save(p.to_str().unwrap())

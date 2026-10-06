@@ -1103,8 +1103,7 @@ mod tests {
     /// （活跃连接数峰值 ≥2），任务完成且无失败（代理热调同通道，None=直连）
     #[tokio::test]
     async fn reconfigure_hot_adjusts_concurrency_and_completes() {
-        let dir = std::env::temp_dir().join(format!("ezr-hot-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-hot");
         let total: u64 = 256 * 4096; // 256 块，足够维持多 worker 在途窗口
         let url = mock_server(total, vec![]);
         let spec = spec_for(1, &url, dir.to_str().unwrap(), 4096, 1, None);
@@ -1147,8 +1146,7 @@ mod tests {
 
     #[tokio::test]
     async fn end_to_end_resumable_download_completes() {
-        let dir = std::env::temp_dir().join(format!("ezr-e2e-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-e2e");
         let total: u64 = 3 * 4096 + 1111; // 4 块（块 4KB），末块吸收余数
         let url = mock_server(total, vec![]);
         let (_cmd_tx, mut rx, deadline) =
@@ -1195,8 +1193,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_emits_cancelled_and_no_ghost_progress() {
-        let dir = std::env::temp_dir().join(format!("ezr-e2e-cancel-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-e2e-cancel");
         let total: u64 = 3 * 4096 + 1111;
         let url = mock_server(total, vec![]);
         let (tx, mut rx) = mpsc::channel::<Evt>(64);
@@ -1243,8 +1240,7 @@ mod tests {
 
     #[tokio::test]
     async fn norange_server_falls_back_single_stream() {
-        let dir = std::env::temp_dir().join(format!("ezr-e2e2-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-e2e2");
         let total: u64 = 9000;
         let url = mock_server(total, vec![("norange".to_string(), "1".to_string())]);
         let (_cmd_tx, mut rx, deadline) =
@@ -1279,8 +1275,7 @@ mod tests {
     /// 检查在下轮续传被跳过）；keep_name=false（首次启动）仍按规则去重。
     #[tokio::test]
     async fn keep_name_restart_skips_dedupe() {
-        let dir = std::env::temp_dir().join(format!("ezr-e2e4-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-e2e4");
         let total: u64 = 9000;
         let url = mock_server(total, vec![]);
         // 残留的部分下载文件（失效重启现场）：f.bin.downloading + 旧 sidecar 名
@@ -1304,8 +1299,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
 
         // keep_name=false（首次启动）：残留文件存在时按规则去重
-        let dir2 = std::env::temp_dir().join(format!("ezr-e2e7-{}", std::process::id()));
-        std::fs::create_dir_all(&dir2).unwrap();
+        let dir2 = crate::model::testenv::uniq_tmp_dir("ezr-e2e7");
         std::fs::write(dir2.join("f.bin.downloading"), b"stale").unwrap();
         let (_cmd_tx, mut rx, deadline) =
             launch_spec(spec_for(5, &url, dir2.to_str().unwrap(), 4096, 2, None));
@@ -1320,8 +1314,7 @@ mod tests {
 
     #[tokio::test]
     async fn status_503_fails_transient() {
-        let dir = std::env::temp_dir().join(format!("ezr-e2e3-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-e2e3");
         let url = mock_server(1000, vec![("status".to_string(), "503".to_string())]);
         let (_cmd_tx, mut rx, deadline) =
             launch_spec(spec_for(3, &url, dir.to_str().unwrap(), 4096, 2, None));
@@ -1343,8 +1336,7 @@ mod tests {
         // 校验通过路径：expected = 真实摘要（模式填充内容）
         // 目录名唯一化（原与 keep_name_restart_skips_dedupe 同用 ezr-e2e4-{pid}，
         // 并行测试下先完成者的 remove_dir_all 会删除另一测试的工作目录）
-        let dir = std::env::temp_dir().join(format!("ezr-e2e8-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-e2e8");
         let total: u64 = 2 * 4096;
         let url = mock_server(total, vec![]);
         // 先下载（无校验值）生成文件
@@ -1390,8 +1382,7 @@ mod tests {
     #[tokio::test]
     async fn sidecar_resume_continues_from_breakpoint() {
         // 断点接续：预置 sidecar（前 1.5 块已写）→ 探测一致 → 续传 → 完成
-        let dir = std::env::temp_dir().join(format!("ezr-e2e5-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-e2e5");
         let total: u64 = 4 * 4096; // 4 块
         let url = mock_server(total, vec![]);
         // 盘上预写 .downloading（真实内容前 6000 字节）+ sidecar（块 0 完成、块 1 部分写 1904）
@@ -1456,8 +1447,7 @@ mod tests {
     #[tokio::test]
     async fn changed_etag_invalidates_sidecar() {
         // 一致性失效：sidecar ETag 与探测不符 → Invalidated
-        let dir = std::env::temp_dir().join(format!("ezr-e2e6-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-e2e6");
         let total: u64 = 2 * 4096;
         let url = mock_server(total, vec![]);
         let stamp = ServerStamp {
@@ -1515,7 +1505,9 @@ mod tests {
             SidecarTask {
                 id: 1,
                 added_at: 0,
-                save_dir: std::env::temp_dir().to_string_lossy().into_owned(),
+                save_dir: crate::model::testenv::uniq_tmp_dir("ezr-sup-sd")
+                    .to_string_lossy()
+                    .into_owned(),
                 concurrency: 2,
                 protocol: Protocol::Http,
             },

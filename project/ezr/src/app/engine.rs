@@ -645,10 +645,45 @@ mod tick_tests {
     use crate::model::config::Config;
 
     fn make_app(tag: &str) -> App {
-        let dir = std::env::temp_dir().join(format!("ezr-tick-{tag}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).ok();
+        // 目录进程内唯一化（coder v116 隔离修复）：pid 复用不再撞残留 registry
+        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-tick-{tag}"));
         let reg = dir.join("registry.json").to_string_lossy().into_owned();
         App::new(Config::default(), reg)
+    }
+
+    /// 测试隔离回归（coder v116）：同 tag 两次 make_app 不得互相恢复。
+    /// 旧方案 `ezr-tick-<tag>-<pid>` 目录测试后不清理，容器内 pid 复用时
+    /// 后到进程的 App::new 经 Self::restore 恢复前到进程残留 registry
+    /// （tasks[0] 为旧 Completed 任务 → pump 秒回假完成 → 产物断言
+    /// NotFound）；修复后目录进程内唯一化（pid+序号+毫秒），同 tag 两次
+    /// 构造必然指向不同 registry 文件。
+    #[tokio::test]
+    async fn make_app_same_tag_never_restores_previous_registry() {
+        let mut a = make_app("iso");
+        let mut t = crate::model::sample_task();
+        t.id = 1;
+        t.state = TaskState::Completed;
+        a.tasks.push(t);
+        a.next_id = 2;
+        a.save_registry();
+        a.shutdown().await;
+        let dir_a = std::path::Path::new(&a.registry_path)
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let mut b = make_app("iso"); // 旧方案：pid 复用时此处会恢复 a 的残留
+        assert!(
+            b.tasks.is_empty(),
+            "同 tag 两次构造不得恢复前次 registry（临时目录进程内唯一化）"
+        );
+        b.shutdown().await;
+        let dir_b = std::path::Path::new(&b.registry_path)
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        assert_ne!(dir_a, dir_b, "两次构造的临时目录必须不同");
+        std::fs::remove_dir_all(&dir_a).ok();
+        std::fs::remove_dir_all(&dir_b).ok();
     }
 
     /// 若干轮 tick：deadline 前反复推进帧；`done` 返回 true 时提前收束
@@ -666,7 +701,7 @@ mod tick_tests {
     async fn tick_drives_failed_state_from_bogus_url() {
         let mut app = make_app("fail");
         let url = "http://127.0.0.1:1/none.bin".to_string();
-        let dir = std::env::temp_dir().join("ezr-tick-dl");
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-tick-dl");
         app.add_cli_task(url, Some(dir.to_string_lossy().into_owned()), Some(2), None);
         assert_eq!(app.tasks.len(), 1);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -723,8 +758,7 @@ mod tick_tests {
         // 桩服务器：固定响应头 + 确定性内容（i%251）
         let addr = stub_server(128_000);
         let mut app = make_app("done");
-        let save = std::env::temp_dir().join(format!("ezr-tick-save-{}", std::process::id()));
-        std::fs::create_dir_all(&save).ok();
+        let save = crate::model::testenv::uniq_tmp_dir("ezr-tick-save");
         app.add_cli_task(
             format!("http://{addr}/stub.bin"),
             Some(save.to_string_lossy().into_owned()),
@@ -775,8 +809,7 @@ mod tick_tests {
     async fn requeued_probed_task_gets_restart_from_slot() {
         let addr = stub_server(64_000);
         let mut app = make_app("retry4b");
-        let save = std::env::temp_dir().join(format!("ezr-tick-save4b-{}", std::process::id()));
-        std::fs::create_dir_all(&save).ok();
+        let save = crate::model::testenv::uniq_tmp_dir("ezr-tick-save4b");
         app.add_cli_task(
             format!("http://{addr}/stub4b.bin"),
             Some(save.to_string_lossy().into_owned()),
@@ -832,8 +865,7 @@ mod tick_tests {
 
     /// make_app 变体：同时返回注册表落盘路径（空闲期零写放大测试用）
     fn make_app_with_reg(tag: &str) -> (App, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!("ezr-tick-{tag}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).ok();
+        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-tick-{tag}"));
         let reg = dir.join("registry.json").to_string_lossy().into_owned();
         (App::new(Config::default(), reg), dir.join("registry.json"))
     }
@@ -885,8 +917,7 @@ mod evt_tests {
     use crate::model::config::Config;
 
     fn make_app(tag: &str) -> App {
-        let dir = std::env::temp_dir().join(format!("ezr-evt-{tag}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).ok();
+        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-evt-{tag}"));
         let reg = dir.join("registry.json").to_string_lossy().into_owned();
         App::new(Config::default(), reg)
     }
@@ -1494,8 +1525,7 @@ mod evt_tests {
     #[tokio::test]
     async fn cancelled_executes_pending_delete_then_unknown_id_ignored() {
         let mut app = make_app("cancelled-del");
-        let dir = std::env::temp_dir().join(format!("ezr-evt-files-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-evt-files");
         let base = dir.to_string_lossy().trim_end_matches('/').to_string();
         for f in ["f.bin", "f.bin.downloading", "f.bin.ezr"] {
             std::fs::write(format!("{base}/{f}"), b"x").unwrap();
@@ -1539,8 +1569,7 @@ mod evt_tests {
     /// 需求超可用空间转 Fatal 失败并提示（不自动重试）
     #[tokio::test]
     async fn disk_precheck_skips_passes_and_fails_overneed() {
-        let dir = std::env::temp_dir().join(format!("ezr-evt-disk-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).ok();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-evt-disk");
         let mut app = make_app("disk");
 
         // 未探测（probed=false）→ 跳过预检返回 true

@@ -58,8 +58,7 @@ mod handle_tests {
 
     /// 起一个临时 root 的 fixture，返回 (端口, root 路径)
     fn spawn_fixture() -> (u16, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("ezr-fx-h-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testenv::uniq_tmp_dir("ezr-fx-h");
         // 3000 字节 i%251 模式文件
         let data: Vec<u8> = (0..3000u32).map(|i| (i % 251) as u8).collect();
         std::fs::write(dir.join("f.bin"), &data).unwrap();

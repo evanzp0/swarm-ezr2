@@ -179,8 +179,7 @@ mod dialog_key_tests {
     use crate::model::Protocol;
 
     fn make_app(tag: &str) -> crate::app::App {
-        let dir = std::env::temp_dir().join(format!("ezr-dlgkey-{tag}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).ok();
+        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-dlgkey-{tag}"));
         let reg = dir.join("registry.json").to_string_lossy().into_owned();
         crate::app::App::new(Config::default(), reg)
     }
@@ -317,8 +316,7 @@ mod dialog_key_tests {
     /// toast 提示接续（不再追加去重序号）
     #[tokio::test]
     async fn confirm_add_resumes_from_existing_sidecar() {
-        let dir = std::env::temp_dir().join(format!("ezr-dlgkey-resume-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).ok();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlgkey-resume");
         let mut app = make_app("resume");
         app.dialog = Some(add_dlg());
         let d = app.dialog.as_mut().unwrap();

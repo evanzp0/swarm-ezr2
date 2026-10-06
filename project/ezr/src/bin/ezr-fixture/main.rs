@@ -42,6 +42,11 @@ mod range;
 mod request;
 mod respond;
 
+/// 测试专用临时目录唯一化（挂载产品侧 src/model/testenv.rs，与主 crate 同源）
+#[cfg(test)]
+#[path = "../../model/testenv.rs"]
+mod testenv;
+
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -201,7 +206,7 @@ mod main_tests {
 
     #[test]
     fn run_cmd_gen_creates_fileset_and_is_idempotent() {
-        let dir = std::env::temp_dir().join(format!("ezr-fx-gen-{}", std::process::id()));
+        let dir = crate::testenv::uniq_tmp_dir("ezr-fx-gen");
         std::fs::remove_dir_all(&dir).ok();
         let code = run_cmd(FixtureArgs {
             cmd: "gen".to_string(),
@@ -248,8 +253,7 @@ mod main_tests {
 
     #[test]
     fn serve_loop_serves_generated_root() {
-        let dir = std::env::temp_dir().join(format!("ezr-fx-serve-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testenv::uniq_tmp_dir("ezr-fx-serve");
         std::fs::write(dir.join("small.bin"), b"0123456789").unwrap();
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();

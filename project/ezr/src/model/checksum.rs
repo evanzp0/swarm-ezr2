@@ -352,8 +352,7 @@ mod tests {
 
     #[test]
     fn find_companion_prefers_table_order() {
-        let dir = std::env::temp_dir().join(format!("ezr-ck-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-ck");
         let file = dir.join("f.bin");
         std::fs::write(&file, b"abc").unwrap();
         // 并存 sha256 与 md5：算法表顺序 MD5 在前 → 取 md5
@@ -379,8 +378,7 @@ mod tests {
 
     #[test]
     fn digest_file_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("ezr-ck2-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-ck2");
         let p = dir.join("data.bin");
         std::fs::write(&p, b"abc").unwrap();
         let h = digest_file(p.to_str().unwrap(), 3).unwrap();
@@ -395,8 +393,7 @@ mod tests {
 
     #[test]
     fn digest_file_all_algos_roundtrip_crossing_buffer() {
-        let dir = std::env::temp_dir().join(format!("ezr-ck3-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-ck3");
         let p = dir.join("big.bin");
         // 300_000 字节 > 256 KiB 缓冲：强制多次 read 循环（覆盖函数表全部分支）
         let data: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
@@ -413,8 +410,7 @@ mod tests {
 
     #[test]
     fn digest_file_empty_file_all_algos() {
-        let dir = std::env::temp_dir().join(format!("ezr-ck4-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-ck4");
         let p = dir.join("empty.bin");
         std::fs::write(&p, b"").unwrap();
         for algo in 0..7 {
