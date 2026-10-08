@@ -720,7 +720,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     app.list_area = Some(inner);
 }
 
-fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
+fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -730,6 +730,9 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(block, area);
 
     let Some(t) = app.sel_task() else {
+        // 无选中任务：字段名热区清空（修订-5）
+        app.detail_url_rect = None;
+        app.detail_ck_rect = None;
         f.render_widget(
             Paragraph::new(Span::styled("（未选中任务）", Style::default().fg(DIM)))
                 .alignment(Alignment::Center),
@@ -739,6 +742,20 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let label = |s: &str| Span::styled(pad_right(s, 9), Style::default().fg(DIM));
+    // 修订-5：可点击复制的字段名（URL/校验）= 蓝色链接样式；点击行为见 on_mouse。
+    // 修订-6：下划线仅覆盖字段名文字部分（pad_right 填充空格不带下划线），
+    // 热区仍为整段 9 列（与 label 对齐块一致，便于点击）
+    let label_link = |s: &str| -> Vec<Span<'static>> {
+        vec![
+            Span::styled(
+                s.to_string(),
+                Style::default()
+                    .fg(LIGHT_BLUE)
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
+            Span::raw(" ".repeat(9 - w(s))),
+        ]
+    };
     let val = |s: String| Span::styled(s, Style::default().fg(FG));
     let state_c = state_color(t.state);
 
@@ -788,22 +805,19 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
             t.protocol.label().to_string(),
             Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
         ),
-        // 并发数仅在「下载中」与「做种中」有数值，其他状态显示 -
+        // 修订-3：类型行不再展示并发数，仅保留协议与断点续传支持
         {
-            let conn_txt = match t.state {
-                TaskState::Downloading | TaskState::Seeding => t.thread_count().to_string(),
-                _ => "-".to_string(),
-            };
             let resume_txt = if t.resumable {
                 "支持断点续传"
             } else {
                 "不支持断点续传"
             };
-            val(format!(" · {} 并发 · {}", conn_txt, resume_txt))
+            val(format!(" · {}", resume_txt))
         },
     ]));
     // 校验行（提供了校验码的任务）：算法 · 校验码前缀 + 状态
     // 前缀取 10 位、状态用短文案，保证 110 列窄面板也能完整显示
+    let mut ck_line_idx: Option<usize> = None;
     if let Some(ck) = &t.checksum {
         let vshort: String = if ck.value.chars().count() > 10 {
             format!("{}…", ck.value.chars().take(10).collect::<String>())
@@ -816,16 +830,16 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
             (None, TaskState::Verifying) => ("（校验中）", LIGHT_BLUE),
             _ => ("（待校验）", DIM),
         };
-        lines.push(Line::from(vec![
-            Span::raw(" "),
-            label("校验"),
-            Span::styled(
-                ck.algo.to_string(),
-                Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(format!(" · {}", vshort), Style::default().fg(FG)),
-            Span::styled(st, Style::default().fg(stc)),
-        ]));
+        ck_line_idx = Some(lines.len());
+        let mut ck_line = vec![Span::raw(" ")];
+        ck_line.extend(label_link("校验"));
+        ck_line.push(Span::styled(
+            ck.algo.to_string(),
+            Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+        ));
+        ck_line.push(Span::styled(format!(" · {}", vshort), Style::default().fg(FG)));
+        ck_line.push(Span::styled(st, Style::default().fg(stc)));
+        lines.push(Line::from(ck_line));
     }
     lines.push(Line::from(vec![
         Span::raw(" "),
@@ -860,11 +874,15 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
             (inner.width as usize).saturating_sub(12),
         )),
     ]));
-    lines.push(Line::from(vec![
-        Span::raw(" "),
-        label("URL"),
-        val(truncate(&t.url, (inner.width as usize).saturating_sub(12))),
-    ]));
+    // 修订-5：URL 字段名可点击复制（蓝色下划线）；记录行号供热区回填
+    let url_line_idx = lines.len();
+    let mut url_line = vec![Span::raw(" ")];
+    url_line.extend(label_link("URL"));
+    url_line.push(val(truncate(
+        &t.url,
+        (inner.width as usize).saturating_sub(12),
+    )));
+    lines.push(Line::from(url_line));
 
     // 分块：文字显示——x/y（x=已完成分块数，y=总分块数）与块大小「N/块」；
     // 块大小按协议写死（HTTP 1 MB / BT 256 KB），块数 = ceil(total/块大小)
@@ -889,6 +907,20 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
     // （FR-01-81 修订二同步）并发分块明细表已整体移除：详情面板止于任务级字段行。
 
     f.render_widget(Paragraph::new(lines), inner);
+
+    // 修订-5：回填字段名热区（点击复制）。热区 = 行首空格后的字段名整段
+    // （pad_right 9 列，与下划线视觉一致）；y = 内框顶 + 行号，超出内框则不设
+    let hot = |idx: usize| {
+        let y = inner.y + idx as u16;
+        (y < inner.y + inner.height).then(|| Rect {
+            x: inner.x + 1,
+            y,
+            width: 9,
+            height: 1,
+        })
+    };
+    app.detail_url_rect = hot(url_line_idx);
+    app.detail_ck_rect = ck_line_idx.and_then(hot);
 }
 
 /// 流量图（内嵌于头部面板右侧、**无边框**；第八轮定稿：单色面积图，REQ-8.5）。
@@ -976,7 +1008,8 @@ fn draw_chart(f: &mut Frame, app: &App, area: Rect) {
 /// Ctrl+↑/↓ 选中行高亮（跟随滚动），Ctrl+B 断开选中连接（仅 BT）。
 /// 连接数超出面板高度时滚轮/Ctrl+↑↓ 滚动（指针悬停于本面板时滚轮滚动这里而非任务列表）。
 fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
-    let (is_bt, total_n, active, empty) = match app.sel_task() {
+    // 修订-3：标题仅展示活跃并发数（原「活跃 x/y」中的上限 y 已移除）
+    let (is_bt, _total_n, active, empty) = match app.sel_task() {
         Some(t) => {
             // 仅「下载中」与「做种中」任务显示并发明细：
             // 其余状态（等待中/已暂停/校验中/后期处理中/已失败/已完成）按空面板处理
@@ -1004,7 +1037,7 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         .title(Span::styled(" 并发连接 ", Style::default().fg(ACCENT)))
         .title(
             Line::from(Span::styled(
-                format!("活跃 {}/{} ", active, total_n),
+                format!("活跃 {} ", active),
                 Style::default().fg(DIM),
             ))
             .alignment(Alignment::Right),
@@ -1013,8 +1046,7 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(block, area);
     app.conns_area = Some(inner);
 
-    // 面板结构：表头 1 行 + 数据行 + 提示行 1 行（裁剪时显示翻看提示，
-    // 否则显示快捷键提示）
+    // 面板结构：表头 1 行 + 数据行 + 提示行 1 行（提示行恒定显示选择方式提示，修订-2）
     let rows = (inner.height as usize).saturating_sub(2);
     let hint_row = inner.y + inner.height.saturating_sub(1);
 
@@ -1068,11 +1100,8 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     let mut lines = vec![Line::from(head)];
 
     let start = app.conns_scroll.min(t.connections.len() - 1);
-    let end = (start + rows).min(t.connections.len());
-    let clipped = end < t.connections.len();
-    let data_rows = if clipped { rows.saturating_sub(1) } else { rows };
+    let data_rows = rows;
     let end = (start + data_rows).min(t.connections.len());
-    let clipped = end < t.connections.len();
 
     for (i, c) in t.connections[start..end].iter().enumerate() {
         let i = start + i;
@@ -1129,15 +1158,8 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         lines.push(Line::from(spans));
     }
 
-    // 提示行：连接被裁剪时显示总数与翻看方式，否则显示快捷键提示
-    let hint = if clipped {
-        format!(
-            "… 共 {} 条 · 滚轮翻看（指针悬停本面板）",
-            t.connections.len()
-        )
-    } else {
-        "Ctrl+↑↓ 选择 · Ctrl+B 断开（仅 BT）".to_string()
-    };
+    // 提示行（修订-4：恒定显示快捷键提示；「共 x 条 · 滚轮翻看」总数提示已删除）
+    let hint = "Ctrl+↑↓ 选择 · Ctrl+B 断开（仅 BT）".to_string();
     f.render_widget(
         Paragraph::new(Span::styled(hint, Style::default().fg(DIM2))),
         Rect {
@@ -1188,7 +1210,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         key("Tab"),
         desc(" 页签  "),
         key("G"),
-        desc(" 图表  "),
+        desc(" 面板  "),
         key("Q"),
         desc(" 退出"),
     ];
@@ -1766,24 +1788,36 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     .split(area);
 
     let wide = area.width >= 100;
-    if wide && app.show_chart {
+    if wide {
         // 头部仪表面板：通栏全宽（右缘 = 屏幕右缘 = 任务详情面板右缘）；字段行 +
-        // 分割线 + 页签行，右侧内嵌无边框像素级流量图（占内容区全高、20% 宽）
+        // 分割线 + 页签行，右侧内嵌无边框像素级流量图（占内容区全高、20% 宽）。
+        // 修订-1：流量图始终显示，不再随 G 键隐藏
         draw_header(f, app, outer[0], true);
 
-        // 主区：左列 58% = 任务列表（「任务队列」面板已并入头部，列表自头部正下方
-        // 起、占满左列全高）；右列 42% = 任务详情（9 行内容 + 边框 = 11 行）+
-        // 并发连接面板（占余下全部高度）
-        let cols = Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
-            .split(outer[1]);
-        draw_list(f, app, cols[0]);
-        let right =
-            Layout::vertical([Constraint::Length(11), Constraint::Min(6)]).split(cols[1]);
-        draw_detail(f, app, right[0]);
-        draw_conns(f, app, right[1]);
+        if app.show_panes {
+            // 主区：左列 58% = 任务列表（「任务队列」面板已并入头部，列表自头部正下方
+            // 起、占满左列全高）；右列 42% = 任务详情（9 行内容 + 边框 = 11 行）+
+            // 并发连接面板（占余下全部高度）
+            let cols = Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
+                .split(outer[1]);
+            draw_list(f, app, cols[0]);
+            let right =
+                Layout::vertical([Constraint::Length(11), Constraint::Min(6)]).split(cols[1]);
+            draw_detail(f, app, right[0]);
+            draw_conns(f, app, right[1]);
+        } else {
+            // G 键紧凑布局：流量图保留在头部，仅收起任务详情 / 并发连接面板，
+            // 任务列表占满整行
+            app.conns_area = None;
+            app.detail_url_rect = None;
+            app.detail_ck_rect = None;
+            draw_list(f, app, outer[1]);
+        }
     } else {
-        // 窄终端 / 隐藏图表：头部面板无图（分割线与页签行贯通全宽），任务列表占满整行
+        // 窄终端（< 100 列）：头部面板无图（分割线与页签行贯通全宽），任务列表占满整行
         app.conns_area = None;
+        app.detail_url_rect = None;
+        app.detail_ck_rect = None;
         draw_header(f, app, outer[0], false);
         draw_list(f, app, outer[1]);
     }

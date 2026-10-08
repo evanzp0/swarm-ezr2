@@ -9,6 +9,7 @@ ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 
 [profile.release]
 strip = true

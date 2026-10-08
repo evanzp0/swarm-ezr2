@@ -306,19 +306,6 @@ impl Task {
         Some((remain / self.speed) as u64)
     }
 
-    /// 并发线程数（展示用）：下载中 = 活跃连接数（有速度且未下载完的分块），
-    /// 其余状态 = 有效连接数（排除已待命的空连接）
-    pub fn thread_count(&self) -> usize {
-        if self.state == TaskState::Downloading {
-            self.connections
-                .iter()
-                .filter(|c| c.speed > 0.0 && c.done < c.cap())
-                .count()
-        } else {
-            self.connections.iter().filter(|c| c.cap() > 0).count()
-        }
-    }
-
     /// 分块信息 (x=已完成块数, y=总块数, n=块大小字节)：
     /// 块大小按协议写死（HTTP 1 MB / BT 256 KB），块数 = ceil(total/块大小)，
     /// 与并发数解耦；x 由 tick 维护（分块队列动态领块，HTTP 与 BT 同模型）
@@ -476,12 +463,16 @@ pub struct App {
     pub conns_sel: usize,
     /// 并发连接面板内框区域（由 ui 层回填，用于鼠标滚轮命中测试）
     pub conns_area: Option<Rect>,
+    /// 任务详情面板「URL」字段名热区（由 ui 层每帧回填；点击复制 url 值，修订-5）
+    pub detail_url_rect: Option<Rect>,
+    /// 任务详情面板「校验」字段名热区（由 ui 层每帧回填；点击复制校验码值，修订-5）
+    pub detail_ck_rect: Option<Rect>,
     /// 并发连接面板可视行数（由 ui 层回填，用于滚动钳制）
     pub visible_conns_rows: usize,
     /// 并发连接面板滚动所属的选中序号（选中变化时重置滚动）
     conns_scroll_for: usize,
-    /// 是否显示右侧速度图表面板
-    pub show_chart: bool,
+    /// 是否显示右侧任务详情 / 并发连接面板（`G` 切换；头部流量图始终显示、不受影响）
+    pub show_panes: bool,
     /// 当前打开的对话框（None = 无）
     pub dialog: Option<Dialog>,
     /// 对话框按钮的可点击区域（由 ui 层每帧回填）
@@ -499,6 +490,8 @@ pub struct App {
     pub proxy_labels: Vec<String>,
     /// 添加对话框代理默认选中下标（恒直连 = 0）
     pub default_proxy_sel: usize,
+    /// 系统剪贴板实例（修订-7：懒初始化并复用，避免每次点击重建 X11/桌面连接）
+    clipboard: Option<arboard::Clipboard>,
 }
 
 impl App {
@@ -535,9 +528,11 @@ impl App {
             conns_scroll: 0,
             conns_sel: 0,
             conns_area: None,
+            detail_url_rect: None,
+            detail_ck_rect: None,
             visible_conns_rows: 8,
             conns_scroll_for: 0,
-            show_chart: true,
+            show_panes: true,
             dialog: None,
             dlg_btn_rects: Vec::new(),
             dlg_field_rects: Vec::new(),
@@ -546,6 +541,7 @@ impl App {
             proxy_options,
             proxy_labels,
             default_proxy_sel: 0,
+            clipboard: None,
         }
     }
 
@@ -1211,7 +1207,8 @@ impl App {
             KeyCode::Char('m') | KeyCode::Char('M') => self.open_modify_dialog(),
             KeyCode::Char('d') | KeyCode::Char('D') => self.open_delete_dialog(),
             KeyCode::Char('c') | KeyCode::Char('C') => self.clear_completed(),
-            KeyCode::Char('g') | KeyCode::Char('G') => self.show_chart = !self.show_chart,
+            // 修订-1：G 仅切换任务详情 / 并发连接面板（紧凑布局），流量图始终显示
+            KeyCode::Char('g') | KeyCode::Char('G') => self.show_panes = !self.show_panes,
             KeyCode::Char('u') | KeyCode::Char('U') => self.move_task(-1),
             KeyCode::Char('j') | KeyCode::Char('J') => self.move_task(1),
             _ => {}
@@ -1800,6 +1797,27 @@ impl App {
         }
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                // 修订-5/7：任务详情面板点击字段名复制——URL → url 值、校验 → 校验码值；
+                // 系统剪贴板（arboard）优先，无图形会话回退 OSC 52；
+                // 反馈仅在底部提示（toast），面板本身无提示信息
+                if Self::pointer_in(&self.detail_url_rect, m.column, m.row) {
+                    if let Some(t) = self.sel_task() {
+                        let url = t.url.clone();
+                        self.copy_to_clipboard(&url);
+                        self.set_toast("已复制 url");
+                    }
+                    return;
+                }
+                if Self::pointer_in(&self.detail_ck_rect, m.column, m.row) {
+                    if let Some(t) = self.sel_task() {
+                        if let Some(ck) = &t.checksum {
+                            let v = ck.value.clone();
+                            self.copy_to_clipboard(&v);
+                            self.set_toast("已复制 校验码");
+                        }
+                    }
+                    return;
+                }
                 if let Some(a) = self.list_area {
                     let in_x = m.column >= a.x && m.column < a.x.saturating_add(a.width);
                     let in_y = m.row >= a.y && m.row < a.y.saturating_add(a.height);
@@ -2789,4 +2807,63 @@ fn demo_tasks() -> Vec<Task> {
     });
 
     v
+}
+
+// ---------------------------------------------------------------------------
+// 修订-5/7：剪贴板复制（点击任务详情面板字段名触发）
+// ---------------------------------------------------------------------------
+
+impl App {
+    /// 将文本复制到剪贴板（修订-7）：
+    /// 1) 优先 arboard 写系统剪贴板（Windows / macOS / Linux X11 & Wayland，
+    ///    不依赖终端支持，iTerm2/gnome-terminal 等不开 OSC 52 也能复制）；
+    ///    实例懒初始化并常驻复用（首次建连后，后续点击零建连开销）；
+    /// 2) 无图形会话（SSH/纯控制台）或写入失败时，回退 OSC 52 终端转义序列
+    ///    （ESC ]52;c;<base64> BEL，由终端代写剪贴板，主流终端多数支持）。
+    fn copy_to_clipboard(&mut self, text: &str) {
+        if self.clipboard.is_none() {
+            self.clipboard = arboard::Clipboard::new().ok();
+        }
+        if let Some(cb) = self.clipboard.as_mut() {
+            if cb.set_text(text.to_string()).is_ok() {
+                return; // 系统剪贴板写入成功
+            }
+            self.clipboard = None; // 实例失效：下次点击重建，本次回退
+        }
+        copy_osc52(text);
+    }
+}
+
+/// OSC 52 终端转义序列回退：终端原生方案，无需 X11/Wayland 会话与外部依赖；
+/// 写入失败时静默忽略。
+fn copy_osc52(text: &str) {
+    use std::io::Write;
+    let seq = format!("\x1b]52;c;{}\x07", b64_encode(text.as_bytes()));
+    let mut out = std::io::stdout();
+    let _ = out.write_all(seq.as_bytes());
+    let _ = out.flush();
+}
+
+/// 极简 base64 编码（标准字母表 + '=' 填充），仅供 OSC 52 使用，避免引入外部 crate
+fn b64_encode(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let n = ((*chunk.first().unwrap_or(&0) as u32) << 16)
+            | ((*chunk.get(1).unwrap_or(&0) as u32) << 8)
+            | (*chunk.get(2).unwrap_or(&0) as u32);
+        out.push(T[(n >> 18) as usize & 63] as char);
+        out.push(T[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            T[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            T[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
