@@ -125,11 +125,22 @@ impl TaskState {
     pub fn is_done(&self) -> bool {
         matches!(self, TaskState::Completed | TaskState::Seeding)
     }
+
+    /// 是否显示并发连接明细：仅「下载中」与「做种中」任务持有活跃连接。
+    /// 其余状态（等待中/已暂停/校验中/后期处理中/已失败/已完成）无并发明细，
+    /// 面板为空、活跃 0/0（演示口径：连接随任务开始下载建立、随任务离开
+    /// 下载/做种状态断开；面板数据在状态下沉时冻结隐藏，恢复下载时原样续用，
+    /// 保证暂停/断点续传的累计量口径不受影响）。
+    pub fn shows_conns(&self) -> bool {
+        matches!(self, TaskState::Downloading | TaskState::Seeding)
+    }
 }
 
 /// 单个并发连接（分块）状态：一段连续的 byte range 由一个线程负责
 #[derive(Clone)]
 pub struct Connection {
+    /// 对端地址（演示数据：BT 任务界面以掩码显示首末段，HTTP 不显示）
+    pub ip: String,
     /// 分块起始字节（含）
     pub start: u64,
     /// 分块结束字节（不含）
@@ -138,11 +149,68 @@ pub struct Connection {
     pub done: u64,
     /// 当前速度 B/s
     pub speed: f64,
+    /// 当前上传速度 B/s（演示：BT 任务边下边传按连接均摊，HTTP 恒 0）
+    pub up_speed: f64,
+    /// 本次开始下载后的累计下载字节（重新排队/重试开新一次下载时清零，
+    /// 断点续传的已完成量不受影响；块完成后领新块也不清零）
+    pub cum_down: u64,
+    /// 本次开始下载后的累计上传字节
+    pub cum_up: u64,
 }
 
 impl Connection {
     pub fn cap(&self) -> u64 {
         self.end.saturating_sub(self.start)
+    }
+
+    /// 对端地址掩码显示（隐私口径）：IPv4「首段.*.末端」、IPv6「首段:*:末端」
+    pub fn ip_masked(&self) -> String {
+        mask_ip(&self.ip)
+    }
+}
+
+/// 对端地址掩码：IPv4 a.b.c.d → 「a.*.d」，IPv6 g0:g1:…:g7 → 「g0:*:g7」
+/// （只保留首末段、中间段以 * 隐藏，兼顾可辨识与隐私）
+fn mask_ip(ip: &str) -> String {
+    if ip.contains(':') {
+        let first = ip.split(':').next().unwrap_or("");
+        let last = ip.rsplit(':').next().unwrap_or("");
+        format!("{}:*:{}", first, last)
+    } else {
+        let first = ip.split('.').next().unwrap_or("");
+        let last = ip.rsplit('.').next().unwrap_or("");
+        format!("{}.*.{}", first, last)
+    }
+}
+
+/// 由 (任务种子, 连接槽位) 确定性生成演示用对端地址：约 1/5 为 IPv6，其余 IPv4。
+/// 同一任务同一槽位的地址稳定（重建分块/断点续传时同槽位对端不变，演示口径）。
+fn pseudo_ip(seed: u64, idx: usize) -> String {
+    let mix = |mut x: u64| {
+        x ^= x >> 33;
+        x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        x ^= x >> 33;
+        x
+    };
+    let h = mix(seed ^ mix((idx as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15)));
+    if h % 5 == 0 {
+        // IPv6：全形 8 组 4 位十六进制（如 2001:0db8:…:7334，不做 :: 压缩，
+        // 便于按「首段:*:末端」掩码显示）
+        let g = |k: u64| (mix(h ^ k.wrapping_mul(0x9E37_79B9_7F4A_7C15)) & 0xffff) as u16;
+        (0..8)
+            .map(|k| format!("{:04x}", g(k)))
+            .collect::<Vec<_>>()
+            .join(":")
+    } else {
+        // IPv4：首段 1..=223（避开 0/组播/保留段），末段 1..=254
+        let o = |k: u64, m: u64| mix(h ^ k.wrapping_mul(0x9E37_79B9_7F4A_7C15)) % m;
+        format!(
+            "{}.{}.{}.{}",
+            1 + o(1, 223),
+            o(2, 256),
+            o(3, 256),
+            1 + o(4, 254)
+        )
     }
 }
 
@@ -384,6 +452,9 @@ pub struct App {
     pub filter: usize,
     /// 全局下载速度历史（KB/s 采样）
     pub speed_hist: Vec<u64>,
+    /// 共享带宽波动相位（秒）：多尺度正弦叠加模拟真实共享带宽起伏，
+    /// 使全局速度曲线连续波动（流量图波形丰富）
+    pub bw_t: f64,
     /// 全局上传速度历史（KB/s 采样）
     pub up_hist: Vec<u64>,
     /// 本次会话累计下载字节
@@ -399,6 +470,16 @@ pub struct App {
     pub visible_rows: usize,
     /// 列表内框区域（由 ui 层回填，用于鼠标命中测试）
     pub list_area: Option<Rect>,
+    /// 并发连接面板滚动偏移（以"连接行"为单位，滚轮/Ctrl+↑↓ 滚动）
+    pub conns_scroll: usize,
+    /// 并发连接面板当前选中行（以连接序号 0 基下标；Ctrl+↑↓ 移动，Ctrl+B 断开）
+    pub conns_sel: usize,
+    /// 并发连接面板内框区域（由 ui 层回填，用于鼠标滚轮命中测试）
+    pub conns_area: Option<Rect>,
+    /// 并发连接面板可视行数（由 ui 层回填，用于滚动钳制）
+    pub visible_conns_rows: usize,
+    /// 并发连接面板滚动所属的选中序号（选中变化时重置滚动）
+    conns_scroll_for: usize,
     /// 是否显示右侧速度图表面板
     pub show_chart: bool,
     /// 当前打开的对话框（None = 无）
@@ -439,6 +520,7 @@ impl App {
             scroll: 0,
             filter: 0,
             speed_hist: vec![0; 90],
+            bw_t: 0.0,
             up_hist: vec![0; 90],
             session_bytes: 0,
             rng: Rng::new(seed),
@@ -450,6 +532,11 @@ impl App {
             last_tick: Instant::now(),
             visible_rows: 6,
             list_area: None,
+            conns_scroll: 0,
+            conns_sel: 0,
+            conns_area: None,
+            visible_conns_rows: 8,
+            conns_scroll_for: 0,
             show_chart: true,
             dialog: None,
             dlg_btn_rects: Vec::new(),
@@ -606,6 +693,14 @@ impl App {
 
         // 下载槽位调度：先回收/分配槽位，再进行状态推进
         self.enforce_slots();
+        // 共享带宽波动相位推进（多尺度正弦叠加：≈6.5s 主周期 + ≈2.1s 次周期 +
+        // ≈1.1s 纹波，合成 ±19% 连续起伏 —— 模拟真实共享带宽波动，让流量图呈现
+        // 连续多尺度波形）
+        self.bw_t += dt;
+        let bw = 1.0
+            + 0.11 * (std::f64::consts::TAU * self.bw_t / 6.5).sin()
+            + 0.05 * (std::f64::consts::TAU * self.bw_t / 2.1 + 1.7).sin()
+            + 0.03 * (std::f64::consts::TAU * self.bw_t / 1.1 + 4.0).sin();
 
         let rng = &mut self.rng;
         let mut global_dl = 0.0f64;
@@ -618,19 +713,33 @@ impl App {
                     // 演示：首次失败之后的重试模拟「连接卡死」——速度为 0、无数据下载，
                     // 用于展示「连续失败（无进展）累加重试次数」规则
                     let stalled = t.flaky && t.fail_count > 1;
-                    // 聚合速度抖动 ±18%
-                    t.speed = if stalled {
+                    // 聚合速度 = 基准速 × 共享带宽波动(bw) × 每帧小幅抖动 ±8%，
+                    // 并做轻度 EMA 平滑（消除逐帧跳变）；
+                    // 连接全部被断开时视为无传输（速度归零，等待重新建连）
+                    let target = if stalled || t.connections.is_empty() {
                         0.0
                     } else {
-                        t.base_speed * rng.range(0.82, 1.18)
+                        t.base_speed * bw * rng.range(0.92, 1.08)
                     };
-                    // 分块推进：每个连接独立抖动
+                    t.speed = if target == 0.0 || t.speed == 0.0 {
+                        target
+                    } else {
+                        t.speed * 0.6 + target * 0.4
+                    };
+                    // 分块推进：每个连接围绕任务均摊值小幅抖动，并经 EMA 平滑写入；
+                    // 累计下载量记本次开始下载后的实际落盘字节
                     let n = t.connections.len().max(1) as f64;
                     for c in t.connections.iter_mut() {
                         if c.cap() > 0 && c.done < c.cap() {
-                            let seg = (t.speed / n) * rng.range(0.55, 1.45);
-                            c.speed = seg;
-                            c.done = (c.done as f64 + seg * dt).min(c.cap() as f64) as u64;
+                            let seg = (t.speed / n) * rng.range(0.88, 1.12);
+                            c.speed = if c.speed > 0.0 {
+                                c.speed * 0.55 + seg * 0.45
+                            } else {
+                                seg
+                            };
+                            let nd = (c.done as f64 + c.speed * dt).min(c.cap() as f64) as u64;
+                            c.cum_down = c.cum_down.saturating_add(nd.saturating_sub(c.done));
+                            c.done = nd;
                         } else {
                             c.speed = 0.0;
                         }
@@ -657,7 +766,8 @@ impl App {
                                         c.start + piece
                                     };
                                     c.done = 0;
-                                    c.speed = 0.0;
+                                    // 速度沿用上一块末速（EMA 自然收敛），
+                                    // 避免领块瞬间归零造成明细速度闪烁
                                     next += 1;
                                 } else {
                                     // 队列已空：连接待命
@@ -687,11 +797,31 @@ impl App {
                         t.made_progress = true;
                     }
                     global_dl += t.speed;
-                    // BT 边下边传
+                    // BT 边下边传：上传按活跃连接均摊（围绕均摊值小幅抖动 + EMA 平滑防闪烁），
+                    // 并累计到各连接
                     if t.protocol.is_bt() {
-                        t.upload_speed = 420_000.0 * rng.range(0.5, 1.7);
+                        let up_target = 420_000.0 * rng.range(0.5, 1.7);
+                        t.upload_speed = if t.upload_speed > 0.0 {
+                            t.upload_speed * 0.6 + up_target * 0.4
+                        } else {
+                            up_target
+                        };
                         t.uploaded = (t.uploaded as f64 + t.upload_speed * dt) as u64;
                         global_ul += t.upload_speed;
+                        let un = t.connections.len().max(1) as f64;
+                        for c in t.connections.iter_mut() {
+                            if c.cap() > 0 && c.done < c.cap() {
+                                let seg = (t.upload_speed / un) * rng.range(0.88, 1.12);
+                                c.up_speed = if c.up_speed > 0.0 {
+                                    c.up_speed * 0.55 + seg * 0.45
+                                } else {
+                                    seg
+                                };
+                            } else {
+                                c.up_speed = 0.0;
+                            }
+                            c.cum_up = c.cum_up.saturating_add((c.up_speed * dt) as u64);
+                        }
                     }
                     // 演示用：周期性失败（展示失败分类/退避倒计时/自动重试流转，FR-M1-40~43）；
                     // 卡死重试 2.0s 即失败，正常尝试 6s 后失败
@@ -742,7 +872,7 @@ impl App {
                                     let piece = chunk_size(t.protocol);
                                     t.downloaded = 0;
                                     t.chunk_done = 0;
-                                    t.connections = make_chunk_conns(total, 0, n, piece).0;
+                                    t.connections = make_chunk_conns(total, 0, n, piece, t.id as u64).0;
                                     notices.push(format!(
                                         "⚠ 服务器内容已更新，断点已作废，{}s 后从头重新下载: {}",
                                         secs as u64, t.name
@@ -791,6 +921,8 @@ impl App {
                             notices.push(format!("✓ 下载完成，开始后期处理: {}", t.name));
                         } else {
                             t.state = TaskState::Completed;
+                            // 已完成任务不保留并发连接明细（面板为空、活跃 0/0）
+                            t.connections.clear();
                             notices.push(format!("✓ 下载完成: {}", t.name));
                         }
                     }
@@ -827,6 +959,8 @@ impl App {
                                     ));
                                 } else {
                                     t.state = TaskState::Completed;
+                                    // 已完成任务不保留并发连接明细（面板为空、活跃 0/0）
+                                    t.connections.clear();
                                     notices.push(format!("✓ {} 校验通过: {}", algo, t.name));
                                 }
                             }
@@ -840,18 +974,48 @@ impl App {
                             t.post_started = None;
                             t.speed = 0.0;
                             t.upload_speed = 0.0;
+                            // 已完成任务不保留并发连接明细（面板为空、活跃 0/0）
+                            t.connections.clear();
                             notices.push(format!("✓ 后期处理完成: {}", t.name));
                         }
                     }
                 }
                 TaskState::Seeding => {
-                    t.upload_speed = 1_900_000.0 * rng.range(0.6, 1.5);
+                    let up_target = 1_900_000.0 * rng.range(0.6, 1.5);
+                    t.upload_speed = if t.upload_speed > 0.0 {
+                        t.upload_speed * 0.6 + up_target * 0.4
+                    } else {
+                        up_target
+                    };
                     t.uploaded = (t.uploaded as f64 + t.upload_speed * dt) as u64;
                     global_ul += t.upload_speed;
+                    // 做种上传按持有块的连接均摊展示（EMA 平滑防闪烁），
+                    // 累计上传量延续下载阶段继续累计
+                    let un = t
+                        .connections
+                        .iter()
+                        .filter(|c| c.cap() > 0)
+                        .count()
+                        .max(1) as f64;
+                    for c in t.connections.iter_mut() {
+                        if c.cap() > 0 {
+                            let seg = (t.upload_speed / un) * rng.range(0.88, 1.12);
+                            c.up_speed = if c.up_speed > 0.0 {
+                                c.up_speed * 0.55 + seg * 0.45
+                            } else {
+                                seg
+                            };
+                            c.cum_up = c.cum_up.saturating_add((c.up_speed * dt) as u64);
+                        } else {
+                            c.up_speed = 0.0;
+                        }
+                    }
                     t.seed_left = (t.seed_left - dt).max(0.0);
                     if t.seed_left <= 0.0 {
                         t.state = TaskState::Completed;
                         t.upload_speed = 0.0;
+                        // 已完成任务不保留并发连接明细（面板为空、活跃 0/0）
+                        t.connections.clear();
                         notices.push(format!("✓ 做种结束: {}", t.name));
                     }
                 }
@@ -889,12 +1053,19 @@ impl App {
                                 let piece = chunk_size(t.protocol);
                                 t.downloaded = 0;
                                 t.chunk_done = 0;
-                                t.connections = make_chunk_conns(total, 0, n, piece).0;
+                                t.connections = make_chunk_conns(total, 0, n, piece, t.id as u64).0;
                             }
                             t.state = TaskState::Downloading;
                             t.queued_since = None;
                             t.running_since = Some(now);
                             t.made_progress = false; // 新尝试开始：清空进展标记
+                            // 本次开始下载：各连接的累计上传/下载量清零
+                            //（重新排队/重试/新任务均经此路径；断点续传的已完成量不受影响）
+                            for c in t.connections.iter_mut() {
+                                c.cum_down = 0;
+                                c.cum_up = 0;
+                                c.up_speed = 0.0;
+                            }
                             let name = t.name.clone();
                             if t.fail_count > 0 {
                                 notices.push(format!(
@@ -969,6 +1140,27 @@ impl App {
             let max_scroll = flen.saturating_sub(vis);
             self.scroll = self.scroll.min(max_scroll);
         }
+
+        // 并发连接面板：选中任务变化时重置滚动与选中行，并按连接数与可视行数钳制
+        if self.conns_scroll_for != self.selected {
+            self.conns_scroll_for = self.selected;
+            self.conns_scroll = 0;
+            self.conns_sel = 0;
+        }
+        // 仅「下载中」/「做种中」状态存在可视并发明细：
+        // 其余状态按 0 条处理（选中行与滚动自然归零）
+        let conns_visible = self.sel_task().map(|t| t.state.shows_conns()).unwrap_or(false);
+        let clen = if conns_visible {
+            self.sel_task().map(|t| t.connections.len()).unwrap_or(0)
+        } else {
+            0
+        };
+        let cvis = self.visible_conns_rows.max(1);
+        let cmax = clen.saturating_sub(cvis);
+        self.conns_scroll = self.conns_scroll.min(cmax);
+        if self.conns_sel >= clen.max(1) {
+            self.conns_sel = clen.saturating_sub(1);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -979,6 +1171,17 @@ impl App {
         if mods.contains(KeyModifiers::CONTROL) {
             if code == KeyCode::Char('c') {
                 self.quit = true;
+                return;
+            }
+            // 并发连接面板快捷键（对话框打开时不响应）：
+            // Ctrl+↑/↓ 上下选择连接明细，Ctrl+B 断开选中连接（仅 BT 任务）
+            if self.dialog.is_none() {
+                match code {
+                    KeyCode::Up => self.move_conn_sel(-1),
+                    KeyCode::Down => self.move_conn_sel(1),
+                    KeyCode::Char('b') | KeyCode::Char('B') => self.disconnect_conn(),
+                    _ => {}
+                }
             }
             return;
         }
@@ -1280,7 +1483,7 @@ impl App {
                 // 立即生效（v1.5/FR-01-87 demo 语义）：按新并发重建分块连接
                 //（沿用 make_chunk_conns，已下载字节按块进度重分配，不丢进度）
                 let piece = chunk_size(t.protocol);
-                let (conns_new, x) = make_chunk_conns(t.total, t.downloaded, concurrency, piece);
+                let (conns_new, x) = make_chunk_conns(t.total, t.downloaded, concurrency, piece, t.id as u64);
                 t.connections = conns_new;
                 t.chunk_done = x;
             }
@@ -1610,15 +1813,30 @@ impl App {
                 }
             }
             MouseEventKind::ScrollUp => {
-                self.scroll = self.scroll.saturating_sub(2);
+                // 指针在并发连接面板上：滚动该面板；否则滚动任务列表
+                if Self::pointer_in(&self.conns_area, m.column, m.row) {
+                    self.conns_scroll = self.conns_scroll.saturating_sub(2);
+                } else {
+                    self.scroll = self.scroll.saturating_sub(2);
+                }
             }
             MouseEventKind::ScrollDown => {
-                let vis = self.visible_rows.max(1);
-                let maxs = self.filtered().len().saturating_sub(vis);
-                self.scroll = (self.scroll + 2).min(maxs);
+                // 指针在并发连接面板上：滚动该面板；否则滚动任务列表
+                if Self::pointer_in(&self.conns_area, m.column, m.row) {
+                    self.conns_scroll += 2;
+                } else {
+                    let vis = self.visible_rows.max(1);
+                    let maxs = self.filtered().len().saturating_sub(vis);
+                    self.scroll = (self.scroll + 2).min(maxs);
+                }
             }
             _ => {}
         }
+    }
+
+    /// 指针是否位于给定矩形内
+    fn pointer_in(area: &Option<Rect>, x: u16, y: u16) -> bool {
+        matches!(area, Some(a) if x >= a.x && x < a.x.saturating_add(a.width) && y >= a.y && y < a.y.saturating_add(a.height))
     }
 
     /// bracketed paste 事件入口（FR-01-06 同步）：仅 Add 对话框的文本字段接收
@@ -1632,6 +1850,67 @@ impl App {
         }
         let focus = d.focus;
         dlg_apply_paste(d, focus, text);
+    }
+
+    /// Ctrl+↑/↓：在并发连接明细中上下移动选中行（跟随滚动保持可见）
+    fn move_conn_sel(&mut self, delta: i32) {
+        let Some(idx) = self.sel_idx() else { return };
+        // 仅「下载中」/「做种中」任务有并发明细可选
+        if !self.tasks[idx].state.shows_conns() {
+            self.set_toast("当前状态无并发明细（仅下载中/做种中可选）");
+            return;
+        }
+        let n = self.tasks[idx].connections.len();
+        if n == 0 {
+            self.set_toast("当前任务没有并发连接明细");
+            return;
+        }
+        let new = (self.conns_sel as i32 + delta).clamp(0, n as i32 - 1) as usize;
+        self.conns_sel = new;
+        // 选中行越出可视窗口时跟随滚动（visible_conns_rows 由 ui 层回填）
+        let vis = self.visible_conns_rows.max(1);
+        if new < self.conns_scroll {
+            self.conns_scroll = new;
+        } else if new >= self.conns_scroll + vis {
+            self.conns_scroll = new + 1 - vis;
+        }
+    }
+
+    /// Ctrl+B：断开当前选中的并发连接（仅 BT 任务），明细行从屏幕移除。
+    /// 断开时未传完的块按「由其他节点补完」记入已完成块数（演示口径，
+    /// 保证块队列持续推进、任务仍可正常完成；进度前跳不超过一个块）。
+    fn disconnect_conn(&mut self) {
+        let Some(idx) = self.sel_idx() else { return };
+        // 仅「下载中」/「做种中」任务有可断开的活跃连接（其余状态明细为空）
+        if !self.tasks[idx].state.shows_conns() {
+            self.set_toast("当前状态无可断开的并发连接（仅下载中/做种中）");
+            return;
+        }
+        if !self.tasks[idx].protocol.is_bt() {
+            self.set_toast("仅 BT 任务支持断开并发连接（Ctrl+B）");
+            return;
+        }
+        if self.tasks[idx].connections.is_empty() {
+            self.set_toast("当前任务没有可断开的并发连接");
+            return;
+        }
+        if self.conns_sel >= self.tasks[idx].connections.len() {
+            self.conns_sel = self.tasks[idx].connections.len() - 1;
+        }
+        let piece = chunk_size(self.tasks[idx].protocol);
+        let (masked, left) = {
+            let t = &mut self.tasks[idx];
+            let c = t.connections.remove(self.conns_sel);
+            if c.cap() > 0 && c.done < c.cap() {
+                let y = chunk_total(t.total, piece);
+                t.chunk_done = (t.chunk_done + 1).min(y);
+            }
+            if self.conns_sel >= t.connections.len() {
+                self.conns_sel = t.connections.len().saturating_sub(1);
+            }
+            (c.ip_masked(), t.connections.len())
+        };
+        self.set_toast(format!("✂ 已断开连接 {}（剩余 {} 条）", masked, left));
     }
 
     // -----------------------------------------------------------------------
@@ -1684,7 +1963,8 @@ impl App {
                     let piece = chunk_size(self.tasks[idx].protocol);
                     self.tasks[idx].downloaded = 0;
                     self.tasks[idx].chunk_done = 0;
-                    self.tasks[idx].connections = make_chunk_conns(total, 0, n, piece).0;
+                    self.tasks[idx].connections =
+                        make_chunk_conns(total, 0, n, piece, self.tasks[idx].id as u64).0;
                 }
                 self.tasks[idx].state = TaskState::Downloading;
                 self.tasks[idx].has_slot = true;
@@ -1721,9 +2001,10 @@ impl App {
                 self.requeue_failed(idx, false);
             }
             TaskState::Seeding => {
-                // 做种中 → 暂停做种，进入「已完成」
+                // 做种中 → 暂停做种，进入「已完成」（并发连接明细清空、活跃 0/0）
                 self.tasks[idx].state = TaskState::Completed;
                 self.tasks[idx].upload_speed = 0.0;
+                self.tasks[idx].connections.clear();
                 self.set_toast(format!("⏸ 已停止做种（进入已完成）: {}", name));
             }
             TaskState::Completed => self.set_toast("该任务已完成，无需操作".to_string()),
@@ -1755,7 +2036,8 @@ impl App {
             let piece = chunk_size(self.tasks[idx].protocol);
             self.tasks[idx].downloaded = 0;
             self.tasks[idx].chunk_done = 0;
-            self.tasks[idx].connections = make_chunk_conns(total, 0, n, piece).0;
+            self.tasks[idx].connections =
+                make_chunk_conns(total, 0, n, piece, self.tasks[idx].id as u64).0;
         }
         self.tasks[idx].state = TaskState::Queued;
         self.tasks[idx].error = None;
@@ -2117,7 +2399,13 @@ fn spread_bytes(amount: u64, n: usize, cap: u64) -> Vec<u64> {
 /// - done_total ≥ total（校验/完成/做种）时展示最后 min(n, y) 个满块。
 ///
 /// 返回 (连接列表, 已完成块数 x)
-fn make_chunk_conns(total: u64, done_total: u64, n: usize, piece: u64) -> (Vec<Connection>, u32) {
+fn make_chunk_conns(
+    total: u64,
+    done_total: u64,
+    n: usize,
+    piece: u64,
+    seed: u64,
+) -> (Vec<Connection>, u32) {
     let y = chunk_total(total, piece);
     if y == 0 {
         return (Vec::new(), 0);
@@ -2139,15 +2427,21 @@ fn make_chunk_conns(total: u64, done_total: u64, n: usize, piece: u64) -> (Vec<C
             let idx = lease_from + i as u64;
             let start = idx * piece;
             let end = piece_end(idx);
+            let partial = if done >= total {
+                end - start
+            } else {
+                partials[i].min(end - start)
+            };
             Connection {
+                ip: pseudo_ip(seed, i),
                 start,
                 end,
-                done: if done >= total {
-                    end - start
-                } else {
-                    partials[i].min(end - start)
-                },
+                done: partial,
                 speed: 0.0,
+                up_speed: 0.0,
+                // 累计下载量以当前持有块内的进度为初值（演示任务从中途开始）
+                cum_down: partial,
+                cum_up: 0,
             }
         })
         .collect();
@@ -2169,7 +2463,11 @@ fn mk(
     created: &str,
 ) -> Task {
     let piece = chunk_size(protocol);
-    let (connections, chunk_done) = make_chunk_conns(total, done, conns, piece);
+    let (mut connections, chunk_done) = make_chunk_conns(total, done, conns, piece, id as u64);
+    if state == TaskState::Completed {
+        // 已完成任务不保留并发连接明细（面板为空、活跃 0/0）
+        connections.clear();
+    }
     let downloaded = done.min(total);
     Task {
         id,

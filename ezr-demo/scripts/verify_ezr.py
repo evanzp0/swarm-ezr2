@@ -56,8 +56,36 @@
                         预检通过进入下载中。
 场景 M（50s 键盘）：    46s 处选中 win11 → 详情「失败原因」展示含状态码文案
                         「HTTP 503 Service Unavailable…」（FR-M1-40）。
+场景 N（三段运行）：   顶部布局（第八轮）：头部仪表面板通栏全宽 5 行（字段单行 + 分割线 +
+                        页签行），右缘 = 屏幕右缘 = 任务详情右缘；流量图 = 单色面积
+                        图（▁▂▃▄▅▆▇█ 八级部分块、1/8 格亚字符精度、自底向上填充，
+                        全图仅一种颜色 = 下载淡蓝，REQ-8.5），内嵌头部右侧（宽
+                        20%、占 3 行内容区全高、仅下行流量；│ 分隔符 + 图区左右各
+                        1 列空白；双向 EMA + 窗口 min–max 缩放，每列双子样本取较
+                        大值，无断列、无间隔、无盲文点阵）；头部字段顺序 = 并发、会
+                        话已下
+                        载、全局、峰值（单行、峰值写在面板内容里）；「任务队列」
+                        面板移除，页签行（正在下载/已完成/下载槽位，槽位内联左对
+                        齐、紧跟已完成并以 │ 分隔）并入头部第 3 内容行，任务列表
+                        自头部正下方起；
+                        HTTP 任务并发连接列 = 序号/下载速度/累计下载（无上传两列）；
+                        BT 任务 = IP(掩码)/下载速度/累计下载/上传速度/累计上传 五列，
+                        首列为掩码 IP（IPv4 首段.*.末端 / IPv6 首段:*:末端，
+                        无完整地址泄露、互不重复、IPv4/IPv6 混合）；
+                        已完成任务（godot）明细为空、活跃 0/0；
+                        下载中任务并发明细速度不闪烁（采样 5s 无「-」闪现）。
+场景 O（键盘）：        Ctrl+↓/↑ 选中并发明细行（高亮跟随）；BT 任务 Ctrl+B 断开
+                        选中连接（行移除、掩码 IP 互不重复、活跃总数 -1、toast
+                        含被断开的掩码 IP）；HTTP 任务 Ctrl+B 被拒绝（toast、
+                        序号列行数不变）。
+场景 P（明细门槛）：    仅「下载中」/「做种中」任务有并发明细：已暂停（blender）、
+                        等待中（rust）、已失败（win11）、校验中（gpt4all）、
+                        后期处理中（neovim）均明细空、活跃 0/0；无明细状态
+                        Ctrl+↓/Ctrl+B 给出提示 toast；win11 按 R 重试开始下载后
+                        明细恢复（序号 1..8、活跃 /8）；做种中（arch）明细显示
+                        （BT 五列、首列掩码 IP、活跃 1/1）。
 
-用法：python3 scripts/verify_ezr.py [场景集合，默认 abcdefhjklm；g 为 150s 长跑可单独运行]
+用法：python3 scripts/verify_ezr.py [场景集合，默认 abcdefhjklmnop；g 为 150s 长跑可单独运行]
 """
 
 import fcntl
@@ -69,6 +97,7 @@ import struct
 import sys
 import termios
 import time
+import unicodedata
 
 import pyte
 
@@ -93,6 +122,8 @@ def key_bytes(k: str) -> bytes:
         "enter": b"\r", "esc": b"\x1b", "tab": b"\t", "space": b" ",
         "pgup": b"\x1b[5~", "pgdn": b"\x1b[6~", "home": b"\x1b[H", "end": b"\x1b[F",
         "bs": b"\x7f", "backtab": b"\x1b[Z",
+        # Ctrl 组合键：Ctrl+↑/↓（xterm 修饰键编码）与 Ctrl+B（0x02）
+        "c-up": b"\x1b[1;5A", "c-down": b"\x1b[1;5B", "c-b": b"\x02",
     }
     if k in named:
         return named[k]
@@ -189,9 +220,18 @@ def list_rows_have_no_threads(rows):
 
 
 def task_block(rows, name_part):
-    """返回任务条目 3 行块（徽标行 + 进度条行 + 统计行）拼接文本；未找到返回 None"""
+    """返回任务条目 3 行块（徽标行 + 进度条行 + 统计行）拼接文本；未找到返回 None
+
+    仅当状态徽标出现在任务名之后才视为列表行命中：详情面板首行的任务名
+    与左侧列表行同处一行文本，其徽标位于名称之前（左侧列表列），
+    据此排除详情行误匹配（否则选中任务的块永远定位到详情首行）。
+    """
     for i, row in enumerate(rows):
-        if name_part in row and badge_of(row):
+        p = row.find(name_part)
+        if p < 0:
+            continue
+        b = badge_of(row)
+        if b and row.find(b) > p:
             return "\n".join(rows[i:i + 3])
     return None
 
@@ -368,12 +408,19 @@ def scenario_e():
 
 
 def find_text_pos(screen, needle: str):
-    """在 pyte 缓冲区（含宽字符占位的列空间）中查找文本，返回 (行, 列)（0 基）；找不到返回 None。"""
+    """在 pyte 缓冲区中查找文本，返回 (行, 真实列)（0 基）；找不到返回 None。
+
+    宽字符（CJK）在 buffer 中占 2 个 cell（首 cell 有字符、次 cell 为空占位），
+    直接 join 会把宽字压缩成 1 个下标导致列号偏小——这里按「非空 cell 的真实
+    列位」建立映射，返回 needle 首字符的真实列（此前返回压缩列号，背后行含
+    CJK 时鼠标点击会向左偏移脱靶）。"""
     for y in range(screen.lines):
-        s = "".join(screen.buffer[y][x].data for x in range(screen.columns))
+        cells = [(x, screen.buffer[y][x].data) for x in range(screen.columns)
+                 if screen.buffer[y][x].data != ""]
+        s = "".join(c for _, c in cells)
         i = s.find(needle)
         if i >= 0:
-            return y, i
+            return y, cells[i][0]
     return None
 
 
@@ -607,8 +654,382 @@ def scenario_h():
           "无空闲下载槽位（5/5），已进入等待队列: rust-toolchain-nightly" in all_text2)
 
 
+def is_wide_ch(ch: str) -> bool:
+    """CJK 全宽字符（pyte 以 字符+空续格 两格存储，位置无漂移，仅 join 时坍缩）"""
+    return len(ch) == 1 and unicodedata.east_asian_width(ch) in ("W", "F")
+
+
+def true_row(screen, y: int) -> str:
+    """按真实终端列位重建行文本：pyte 为宽字分配 字符+空(" ")续格 两格，
+    续格 data 为空串，直接 join 会使后续字符在字符串中的下标左移；
+    把空串补为空格后即为真实列位（长度恒等于终端列数）。"""
+    return "".join(
+        (screen.buffer[y][x].data or " ") for x in range(screen.columns)
+    )[: screen.columns]
+
+
+def conns_panel_left(screen):
+    """并发连接面板左边框真实列位（由标题「并发连接」反推）；未找到返回 None。
+    子串查找用 display 行（CJK 连续），列位经宽字计数换算回真实终端列。"""
+    for y in range(screen.lines):
+        disp = screen.display[y]
+        p = disp.find("并发连接")
+        if p >= 0:
+            true_p = p + sum(1 for ch in disp[:p] if is_wide_ch(ch))
+            return true_p - 2
+    return None
+
+
+# 并发连接首列标识：HTTP = 序号数字；BT = 掩码 IP
+# IPv4 掩码「首段.*.末端」如 192.*.100；IPv6 掩码「首段:*:末端」如 2001:*:7334
+IPV4_MASK_RE = re.compile(r"^(\d{1,3}\.\*\.\d{1,3})(?=\s|$)")
+IPV6_MASK_RE = re.compile(r"^([0-9a-f]{1,4}:\*:[0-9a-f]{1,4})(?=\s|$)")
+SERIAL_RE = re.compile(r"^\s{0,4}(\d{1,3})\s")
+CONN_TOKEN_RE = re.compile(
+    r"^(?:\d{1,3}\.\*\.\d{1,3}|[0-9a-f]{1,4}:\*:[0-9a-f]{1,4})$"
+)
+
+
+def conn_token(seg):
+    """从并发明细行片段提取首列标识：掩码 IP（BT）或序号数字串（HTTP），无则 None"""
+    m = IPV4_MASK_RE.match(seg) or IPV6_MASK_RE.match(seg) or SERIAL_RE.match(seg)
+    return m.group(1) if m else None
+
+
+def conns_data_rows(screen, px):
+    """提取并发连接面板数据行（px = 面板左边框真实列，从内框起点切片）：
+    返回 (首列标识, 行片段) 列表——HTTP 任务为序号数字串，BT 任务为掩码 IP"""
+    out = []
+    for y in range(screen.lines):
+        seg = true_row(screen, y)[px + 1 :]
+        tok = conn_token(seg)
+        if tok is not None:
+            out.append((tok, seg))
+    return out
+
+
+def selected_conn_ident(screen, px):
+    """并发连接面板内高亮选中行（背景 SEL_BG=162a30）的首列标识
+    （HTTP = 序号数字串 / BT = 掩码 IP）。
+    任务列表选中行同色，但起始于列表内框（x 远小于 px），按列位区分。"""
+    for y in range(screen.lines):
+        row_buf = screen.buffer[y]
+        for x in range(screen.columns):
+            if row_buf[x].bg == "162a30" and x >= px - 2:
+                seg = true_row(screen, y)[px + 1 :]
+                return conn_token(seg)
+    return None
+
+
+def scenario_n():
+    print("\n== 场景 N：顶部布局对齐 / 头部精简 / 并发连接列序（HTTP·BT）/ 已完成明细为空 / 速度防闪烁 ==")
+
+    # 第一段：无按键 6s（默认选中 ubuntu，HTTP 下载中）——布局 + 头部内容 + HTTP 列 + 闪烁采样
+    flicker = []
+
+    def watch(t, rows, scr):
+        if t < 1.5:
+            return  # 预热期（首帧速度尚未建立）不参与闪烁判定
+        px = conns_panel_left(scr)
+        if px is None:
+            return
+        for _, seg in conns_data_rows(scr, px):
+            if "B/s" not in seg:
+                flicker.append(seg.strip()[:48])
+
+    samples, screen = run(120, 44, 6.0, watch=watch)
+    final_rows = samples[-1][1]
+
+    # N1 头部字段（第七轮）：单行排列 = 并发、会话已下载、全局 ↓↑、峰值 ↓↑；
+    # 峰值写在面板内容里而非标题行边框上
+    d0, d1 = final_rows[0], final_rows[1]
+    n1a = all(t in d1 for t in ("并发", "会话已下载", "全局", "峰值"))
+    check("N1a 头部字段单行存在（row1 = 并发/会话已下载/全局/峰值）", n1a,
+          d1.strip()[:96])
+    if n1a:
+        check("N1b 字段顺序 并发→会话已下载→全局→峰值（同一行）",
+              d1.index("并发") < d1.index("会话已下载")
+              < d1.index("全局") < d1.index("峰值"),
+              d1.strip()[:96])
+        check("N1c 字段行不含 并发线程/任务（页签行的 正在下载/已完成 不在此行）",
+              all(t not in d1 for t in ("并发线程", "任务")),
+              d1.strip()[:60])
+    check("N1d 峰值不在标题行边框上、写在面板内容里（row1 含 峰值 ↓/↑）",
+          "峰值" not in d0 and "峰值" in d1 and "↓" in d1 and "↑" in d1,
+          d0.strip()[:50])
+
+    # N2 顶部布局（宽字还原真实列位，第八轮：头部 5 行仪表面板 + 任务队列并入）：
+    #   row0 = 头部顶边框（通栏 ╭…╮）；row1 = 字段单行 + │分隔 + 内嵌流量图（右端）；
+    #   row2 = 分割线（字段区宽）+ │分隔 + 流量图；row3 = 页签行 + │分隔 + 流量图；
+    #   row4 = 头部底边框；row5 = 任务列表/任务详情顶边框；
+    #   row16 = 并发连接标题行（详情 11 行自 row5 起）
+    r0, r1, r2, r3, r4, r5 = (true_row(screen, i) for i in (0, 1, 2, 3, 4, 5))
+    tl0 = [x for x, ch in enumerate(r0) if ch == "╮"]
+    tl5 = [x for x, ch in enumerate(r5) if ch == "╮"]
+    borders = set("╭╮╰╯─│┌┐└┘├┤┬┴┼")
+
+    # 图区块字符集：面积图填充用八级块元素（▁▂▃▄▅▆▇█）
+    blocks = set("▁▂▃▄▅▆▇█")
+
+    def stroke_cols(row, start):
+        return [x for x in range(start, screen.columns) if row[x] in blocks]
+
+    # 流量图区 = 头部内容区右端（120 列终端：内宽 118 = 字段区 92 + │ 1 + 空白 1
+    # + 图区 23 + 空白 1）；左/右界 = rows1-3 中块字符（面积填充）最左/最右列
+    all_strokes = [x for ty in (1, 2, 3) for x in stroke_cols(true_row(screen, ty), 1)]
+    chart_l = min(all_strokes) if all_strokes else screen.columns - 24
+    chart_r = max(all_strokes) if all_strokes else chart_l
+    check("N2a 头部通栏全宽（右缘 = 屏幕右缘 = 任务详情面板右缘）",
+          len(tl0) == 1 and tl0[0] == screen.columns - 1
+          and len(tl5) == 2 and tl5[-1] == tl0[0],
+          f"row0╮={tl0} row5╮={tl5}")
+    check("N2b 头部面板 5 行高（row4 = 底边框）",
+          r4[0] == "╰" and r4[screen.columns - 1] == "╯",
+          f"row4 首尾={r4[0]!r}/{r4[screen.columns - 1]!r}")
+    check("N2c 图区占内容区右端约 20%（23±2 列）且 rows1-3 均有波形",
+          21 <= chart_r - chart_l + 1 <= 25 and bool(all_strokes),
+          f"图宽={chart_r - chart_l + 1}")
+    sep_x = chart_l - 2  # │ 分隔符列（图区左侧 1 列空白 + 分隔符）
+    check("N2d 行2 = 分割线贯通字段区 + │ 分隔符 + 图区左右各 1 列留白",
+          all(r2[x] == "─" for x in range(1, sep_x))
+          and r2[sep_x] == "│" and r2[sep_x + 1] == " "
+          and r2[screen.columns - 2] == " "
+          and all(r2[x] not in borders for x in range(chart_l, screen.columns - 1)),
+          repr(r2[1:6]) + repr(r2[sep_x - 1:sep_x + 2]))
+    d3 = screen.display[3]  # display 行 CJK 连续（true_row 会在宽字后插占位列）
+    check("N2e 页签行并入头部（row3 = 正在下载 ( → 已完成 ( → │ → 下载槽位，内联左对齐）",
+          "正在下载 (" in d3 and "已完成 (" in d3 and "下载槽位" in d3
+          and d3.index("正在下载 (") < d3.index("已完成 (") < d3.index("下载槽位")
+          and d3.index("下载槽位") < 60
+          and "│" in d3[d3.index("已完成 ("):d3.index("下载槽位")],
+          d3.strip()[:70])
+    check("N2f 任务队列面板已移除（全屏无「任务队列」标题）",
+          all("任务队列" not in true_row(screen, y) for y in range(screen.lines)),
+          next(("任务队列@row%d" % y for y in range(screen.lines)
+                if "任务队列" in true_row(screen, y)), "none"))
+
+    # 面积波形：图区每列均有块字符（自底向上填充、无断列）；纵向起伏 ≥2/3 行；
+    # 全行无盲文点阵字符（不用点）；顶线含部分块字符（1/8 格亚字符精度）
+    stroke_set = set(all_strokes)
+    check("N2g 波形连续无断列（图区每个字符列均有 ≥1 面积块字符）",
+          len(stroke_set) == chart_r - chart_l + 1,
+          f"填充列={len(stroke_set)}/{chart_r - chart_l + 1}")
+    stroke_rows = [ty for ty in (1, 2, 3) if stroke_cols(true_row(screen, ty), chart_l)]
+    check("N2h 波形有纵向起伏（≥2/3 行有面积块字符）",
+          len(stroke_rows) >= 2,
+          f"有波形行={stroke_rows}")
+    check("N2i 无盲文点阵字符（rows1-3 全行无 U+2800..28FF，面积块而非点）",
+          all(not any(0x2800 <= ord(c) <= 0x28FF for c in true_row(screen, ty))
+              for ty in (1, 2, 3)),
+          next((hex(ord(c)) for ty in (1, 2, 3) for c in true_row(screen, ty)
+                if 0x2800 <= ord(c) <= 0x28FF), "none"))
+    chart_text = "".join(true_row(screen, ty) for ty in (1, 2, 3))
+    part_n = sum(chart_text.count(ch) for ch in "▁▂▃▄▅▆▇")
+    check("N2l 顶线亚格精度（图区含部分块字符 ▁▂▃▄▅▆▇，非整格阶梯）",
+          part_n >= 1, f"部分块字符数={part_n}")
+    check("N2j 任务列表自头部正下方起（row5 顶边框、左缘 col0）",
+          r5[0] == "╭" and len(tl5) == 2,
+          f"row5 首字符={r5[0]!r} ╮位={tl5}")
+    # 详情 11 行（自 row5 起）→ 并发连接标题行 = row16
+    check("N2k 并发连接面板（标题行 = 详情顶 + 11 行 = 第 16 行）",
+          "并发连接" in screen.display[16], true_row(screen, 16).strip()[:40])
+
+    # N3 HTTP 任务（ubuntu）并发连接列 = 序号/下载速度/累计下载，无上传两列
+    head_line = next((r for r in final_rows if "序号" in r and "下载速度" in r), None)
+    check("N3a 并发连接表头存在（序号/下载速度）", head_line is not None)
+    if head_line:
+        check("N3b HTTP 任务无 上传速度/累计上传 列",
+              "上传速度" not in head_line and "累计上传" not in head_line, head_line.strip()[:60])
+        check("N3c 表头含 累计下载 列", "累计下载" in head_line)
+
+    # N4 速度防闪烁：1.5s 后所有并发明细行恒有速度值（无「-」闪现）
+    check("N4 并发明细速度不闪烁（采样期无缺速行）", not flicker,
+          flicker[0] if flicker else "采样 4.5s")
+
+    # 第二段：end 选中 sintel（BT 下载中）→ 五列齐全 + 首列掩码 IP
+    samples2, screen2 = run(120, 44, 5.0, keys=["end"], key_delay_frac=0.3)
+    rows2 = samples2[-1][1]
+    final2 = "\n".join(rows2)
+    bt_head = next((r for r in rows2 if "下载速度" in r and "累计上传" in r), None)
+    check("N5 BT 任务并发连接五列齐全（IP/下载速度/累计下载/上传速度/累计上传）",
+          bt_head is not None and all(s in bt_head for s in ("IP", "下载速度", "累计下载", "上传速度", "累计上传")),
+          bt_head.strip()[:70] if bt_head else "not found")
+    check("N6 BT 下载中任务选中（sintel）", "sintel-4k-2160p" in final2)
+
+    # N10/N11 BT 首列 = 掩码 IP：12 条互不重复、无完整地址泄露、IPv4/IPv6 混合
+    px_n = conns_panel_left(screen2)
+    bt_tokens = [s for s, _ in conns_data_rows(screen2, px_n)] if px_n is not None else []
+    check("N10 BT 首列 12 条掩码 IP（格式合规且互不重复）",
+          len(bt_tokens) == 12
+          and all(CONN_TOKEN_RE.match(s) for s in bt_tokens)
+          and len(set(bt_tokens)) == 12, str(bt_tokens[:4]))
+    check("N11 BT 首列 IPv4/IPv6 掩码混合且无完整 IP 泄露",
+          any(".*." in s for s in bt_tokens) and any(":*:" in s for s in bt_tokens)
+          and not re.search(r"\d+\.\d+\.\d+\.\d+", " ".join(bt_tokens)),
+          str(bt_tokens))
+
+    # 第三段：end → tab 切到已完成页签（自动选中 godot）→ 明细为空、活跃 0/0
+    samples3, _ = run(120, 44, 5.0, keys=["end", "tab"], key_delay_frac=0.35)
+    rows3 = samples3[-1][1]
+    final3 = "\n".join(rows3)
+    act = next((r for r in rows3 if "活跃" in r and "并发连接" in r), None)
+    check("N7 已完成任务并发连接明细为空（无并发连接）", "（无并发连接）" in final3)
+    check("N8 已完成任务活跃显示 0/0", act is not None and "活跃 0/0" in act,
+          act.strip()[:50] if act else "not found")
+    check("N9 已完成任务选中（godot·已完成）", "godot-4.4-stable" in final3 and "已完成" in final3)
+
+
+def scenario_o():
+    print("\n== 场景 O：Ctrl+↑/↓ 选中并发明细 + Ctrl+B 断开连接（BT 生效 / HTTP 拒绝）==")
+
+    # 第一段：end 选中 sintel（BT，12 条连接）→ Ctrl+↓×3 → Ctrl+↑ → Ctrl+B 断开
+    keys = ["end", "c-down", "c-down", "c-down", "c-up", "c-b"]
+    samples, screen = run(120, 44, 9.0, keys=keys, key_delay_frac=0.35)
+    all_text = "\n".join("".join(rows) for _, rows in samples)
+    final_rows = samples[-1][1]
+    px = conns_panel_left(screen)
+    check("O1 并发连接面板定位", px is not None, str(px))
+    if px is None:
+        return
+
+    # Ctrl+↓×3 → Ctrl+↑ 后选中第 3 条（掩码 IP）；Ctrl+B 断开后选中第 3 条原位置
+    sel = selected_conn_ident(screen, px)
+    tokens = [s for s, _ in conns_data_rows(screen, px)]
+    check("O2 Ctrl+↓×3 + Ctrl+↑ 选中第 3 条（高亮）",
+          bool(tokens) and len(tokens) >= 3 and sel is not None and sel == tokens[2],
+          f"选中={sel} 第3条={tokens[2] if len(tokens) >= 3 else None}")
+    check("O3 Ctrl+B 断开后明细行移除（12→11 条掩码 IP，格式合规且互不重复）",
+          len(tokens) == 11
+          and all(CONN_TOKEN_RE.match(s) for s in tokens)
+          and len(set(tokens)) == len(tokens), str(tokens))
+    check("O4 Ctrl+B toast 出现「已断开连接」+ 被断开的掩码 IP",
+          "已断开连接" in all_text
+          and re.search(r"已断开连接 \S+（剩余 \d+ 条）", all_text) is not None,
+          str([l for l in all_text.splitlines() if "已断开连接" in l][:1]))
+    act = next((r for r in final_rows if "活跃" in r and "并发连接" in r), None)
+    check("O5 活跃总数减一（活跃 x/11）", act is not None and "/11" in act,
+          act.strip()[:50] if act else "not found")
+    check("O6 断开后任务仍正常下载（sintel [下载中]）",
+          any("[下载中]" in r and "sintel-4k-2160p" in r for r in final_rows))
+    check("O7 面板提示行显示快捷键（Ctrl+↑↓ 选择 · Ctrl+B 断开）",
+          any("Ctrl+↑↓ 选择" in r and "Ctrl+B" in r for r in final_rows))
+
+    # 第二段：ubuntu（HTTP）按 Ctrl+B → 拒绝（toast + 行数不变）
+    samples2, screen2 = run(120, 44, 5.0, keys=["c-b"], key_delay_frac=0.4)
+    all_text2 = "\n".join("".join(rows) for _, rows in samples2)
+    final_rows2 = samples2[-1][1]
+    px2 = conns_panel_left(screen2)
+    serials2 = [int(s) for s, _ in conns_data_rows(screen2, px2)] if px2 is not None else []
+    check("O8 HTTP 任务 Ctrl+B 被拒绝（toast 提示）",
+          "仅 BT 任务支持断开并发连接" in all_text2)
+    check("O9 HTTP 任务明细行数不变（序号 1..8）", serials2 == list(range(1, 9)), str(serials2))
+
+    # 第三段：顶部再按 Ctrl+↑ → 选中保持第 1 条（边界钳制）
+    samples3, screen3 = run(120, 44, 4.0, keys=["end", "c-up"], key_delay_frac=0.4)
+    px3 = conns_panel_left(screen3)
+    tokens3 = [s for s, _ in conns_data_rows(screen3, px3)] if px3 is not None else []
+    sel3 = selected_conn_ident(screen3, px3) if px3 is not None else None
+    check("O10 顶部 Ctrl+↑ 边界钳制（选中保持第 1 条）",
+          bool(tokens3) and sel3 == tokens3[0], f"选中={sel3} 首行={tokens3[0] if tokens3 else None}")
+
+
+def scenario_p():
+    print("\n== 场景 P：仅「下载中」/「做种中」有并发明细（其余状态空、活跃 0/0）+ 交互守卫 ==")
+
+    # 第一段：↓↓↓ 选中 blender（已暂停）→ 明细空；Ctrl+↓ 提示无明细可选
+    samples, screen = run(120, 44, 8.0,
+                          keys=["down", "down", "down", "c-down"], key_delay_frac=0.3)
+    all_text = "\n".join("".join(rows) for _, rows in samples)
+    rows = samples[-1][1]
+    final = "\n".join(rows)
+    act = next((r for r in rows if "活跃" in r and "并发连接" in r), None)
+    check("P1 已暂停任务选中（blender）", "blender-4.5-linux-x64" in final)
+    check("P2 已暂停任务明细为空（无并发连接）", "（无并发连接）" in final)
+    check("P3 已暂停任务活跃 0/0", act is not None and "活跃 0/0" in act,
+          act.strip()[:50] if act else "not found")
+    check("P4 已暂停任务 Ctrl+↓ 提示无明细", "当前状态无并发明细" in all_text)
+    px = conns_panel_left(screen)
+    serials = [s for s, _ in conns_data_rows(screen, px)] if px is not None else []
+    check("P5 已暂停任务无明细数据行", serials == [], str(serials))
+    # 第二段：↓↓ 选中 rust（等待中）→ 明细空；Ctrl+B 提示无可断开连接
+    samples2, _ = run(120, 44, 5.0, keys=["down", "down", "c-b"], key_delay_frac=0.35)
+    all_text2 = "\n".join("".join(rows) for _, rows in samples2)
+    rows2 = samples2[-1][1]
+    final2 = "\n".join(rows2)
+    act2 = next((r for r in rows2 if "活跃" in r and "并发连接" in r), None)
+    check("P6 等待中任务选中（rust）", "rust-toolchain-nightly" in final2)
+    check("P7 等待中任务明细为空 + 活跃 0/0",
+          "（无并发连接）" in final2 and act2 is not None and "活跃 0/0" in act2,
+          act2.strip()[:50] if act2 else "not found")
+    check("P8 等待中任务 Ctrl+B 提示无可断开连接", "当前状态无可断开的并发连接" in all_text2)
+
+    # 第三段：↓↓↓↓↓↓ 选中 win11（已失败）→ 明细空
+    samples3, _ = run(120, 44, 4.5, keys=["down"] * 6, key_delay_frac=0.35)
+    rows3 = samples3[-1][1]
+    final3 = "\n".join(rows3)
+    act3 = next((r for r in rows3 if "活跃" in r and "并发连接" in r), None)
+    check("P9 已失败任务选中（win11·已失败）", "win11-24h2-x64" in final3 and "已失败" in final3)
+    check("P10 已失败任务明细为空 + 活跃 0/0",
+          "（无并发连接）" in final3 and act3 is not None and "活跃 0/0" in act3,
+          act3.strip()[:50] if act3 else "not found")
+
+    # 第四段：win11 按 R 重试 → 3s 后开始下载 → 明细恢复（序号 1..8、活跃 /8）
+    samples4, screen4 = run(120, 44, 11.0, keys=["down"] * 6 + ["r"], key_delay_frac=0.22)
+    rows4 = samples4[-1][1]
+    final4 = "\n".join(rows4)
+    px4 = conns_panel_left(screen4)
+    serials4 = [int(s) for s, _ in conns_data_rows(screen4, px4)] if px4 is not None else []
+    check("P11 重试后 win11 开始下载", any("[下载中]" in r and "win11-24h2" in r for r in rows4))
+    check("P12 下载恢复后明细重建（HTTP 序号 1..8 升序）", serials4 == list(range(1, 9)), str(serials4))
+    act4 = next((r for r in rows4 if "活跃" in r and "并发连接" in r), None)
+    check("P13 下载恢复后活跃 x/8", act4 is not None and "/8" in act4,
+          act4.strip()[:50] if act4 else "not found")
+
+    # 第五段：选中 gpt4all（校验中）→ 明细空
+    samples5, _ = run(120, 44, 4.5, keys=["down"] * 8, key_delay_frac=0.3)
+    rows5 = samples5[-1][1]
+    final5 = "\n".join(rows5)
+    act5 = next((r for r in rows5 if "活跃" in r and "并发连接" in r), None)
+    check("P14 校验中任务选中（gpt4all·校验中）",
+          "gpt4all-models-bundle" in final5 and "校验中" in final5)
+    check("P15 校验中任务明细为空 + 活跃 0/0",
+          "（无并发连接）" in final5 and act5 is not None and "活跃 0/0" in act5,
+          act5.strip()[:50] if act5 else "not found")
+
+    # 第六段：neovim（后期处理中）——启动后约 2.2s 完成并移出本页签（列表缩短、
+    # 选中项回跳），故用快速按键 + 采样帧断言：选中 neovim 且仍为 [后期处理中]
+    # 的帧内明细为空、活跃 0/0（任务名出现在 详情+列表+保存路径 ≥2 处 = 已选中）
+    samples6, _ = run(120, 44, 2.6, keys=["down"] * 9, key_delay_frac=0.02)
+    hit6 = False
+    for _, rows6 in samples6:
+        text6 = "\n".join(rows6)
+        if (text6.count("neovim-0.11.2") >= 2 and "[后期处理中]" in text6
+                and "（无并发连接）" in text6 and "活跃 0/0" in text6):
+            hit6 = True
+            break
+    check("P16 后期处理中任务选中且明细为空 + 活跃 0/0（neovim 采样帧）", hit6)
+
+    # 第七段：Tab → 已完成页签选中 arch（做种中）→ 明细显示（BT 五列、掩码 IP、活跃 1/1）
+    samples7, screen7 = run(120, 44, 5.0, keys=["tab"], key_delay_frac=0.4)
+    rows7 = samples7[-1][1]
+    final7 = "\n".join(rows7)
+    head7 = next((r for r in rows7 if "下载速度" in r and "累计上传" in r), None)
+    px7 = conns_panel_left(screen7)
+    tokens7 = [s for s, _ in conns_data_rows(screen7, px7)] if px7 is not None else []
+    act7 = next((r for r in rows7 if "活跃" in r and "并发连接" in r), None)
+    check("P18 做种中任务选中（arch）", "archlinux-x86_64" in final7)
+    check("P19 做种中任务明细显示（1 条连接，首列为掩码 IP）",
+          len(tokens7) == 1 and CONN_TOKEN_RE.match(tokens7[0]) is not None,
+          str(tokens7))
+    check("P20 做种中任务五列齐全（BT：IP/下载速度/累计下载/上传速度/累计上传）",
+          head7 is not None and all(s in head7 for s in ("IP", "下载速度", "累计下载", "上传速度", "累计上传")),
+          head7.strip()[:70] if head7 else "not found")
+    check("P21 做种中任务活跃 1/1（上传连接活跃）", act7 is not None and "活跃 1/1" in act7,
+          act7.strip()[:50] if act7 else "not found")
+
+
 if __name__ == "__main__":
-    only = sys.argv[1] if len(sys.argv) > 1 else "abcdefhjklm"
+    only = sys.argv[1] if len(sys.argv) > 1 else "abcdefhjklmnop"
     if "a" in only:
         scenario_a()
     if "b" in only:
@@ -635,6 +1056,12 @@ if __name__ == "__main__":
         scenario_l()
     if "m" in only:
         scenario_m()
+    if "n" in only:
+        scenario_n()
+    if "o" in only:
+        scenario_o()
+    if "p" in only:
+        scenario_p()
     print(f"\n通过 {len(PASS)} 项 / 失败 {len(FAIL)} 项")
     if FAIL:
         print("失败项:")

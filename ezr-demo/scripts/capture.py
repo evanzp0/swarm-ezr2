@@ -52,6 +52,8 @@ def main() -> None:
             "enter": b"\r", "esc": b"\x1b", "tab": b"\t", "space": b" ",
             "pgup": b"\x1b[5~", "pgdn": b"\x1b[6~", "home": b"\x1b[H", "end": b"\x1b[F",
             "bs": b"\x7f",
+            # Ctrl 组合键：Ctrl+↑/↓（xterm 修饰键编码）与 Ctrl+B（0x02）
+            "c-up": b"\x1b[1;5A", "c-down": b"\x1b[1;5B", "c-b": b"\x02",
         }
         if k in named:
             return named[k]
