@@ -77,8 +77,35 @@ impl App {
             }
             return;
         }
+        // 指针命中并发连接面板（FR-01-96：明细非空时面板接收滚轮）→ 滚动明细；
+        // 空明细 / 未选中任务时 conns_area 为 None → 滚轮穿透滚动任务列表
+        let over_conns = pointer_in(&self.conns_area, m.column, m.row);
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                // FR-01-101：详情面板字段名点击复制（URL → url 展示值、校验 → 校验码值）。
+                // 热区由 ui 层每帧回填（None = 无热区：无校验行 / 面板收起 / 窄终端）；
+                // 面板本身无提示信息，反馈仅在底部 toast（文案照录 demo 原文，D26 同口径）
+                if pointer_in(&self.detail_url_rect, m.column, m.row) {
+                    // D27：复制详情展示值（final_url 优先回退原始 url，FR-01-14 口径）
+                    let url = self
+                        .sel_task()
+                        .map(|t| t.final_url.clone().unwrap_or_else(|| t.url.clone()));
+                    if let Some(url) = url {
+                        self.copy_to_clipboard(&url);
+                        self.set_toast("已复制 url");
+                    }
+                    return;
+                }
+                if pointer_in(&self.detail_ck_rect, m.column, m.row) {
+                    let v = self
+                        .sel_task()
+                        .and_then(|t| t.checksum.as_ref().map(|c| c.value.clone()));
+                    if let Some(v) = v {
+                        self.copy_to_clipboard(&v);
+                        self.set_toast("已复制 校验码");
+                    }
+                    return;
+                }
                 if let Some(a) = self.list_area {
                     let in_x = m.column >= a.x && m.column < a.x.saturating_add(a.width);
                     let in_y = m.row >= a.y && m.row < a.y.saturating_add(a.height);
@@ -91,6 +118,18 @@ impl App {
                     }
                 }
             }
+            MouseEventKind::ScrollUp if over_conns => {
+                self.conns_scroll = self.conns_scroll.saturating_sub(2);
+            }
+            MouseEventKind::ScrollDown if over_conns => {
+                let vis = self.visible_conns_rows.max(1);
+                let maxlen = self
+                    .sel_task()
+                    .filter(|t| t.state.shows_conns())
+                    .map_or(0, |t| t.connections.len());
+                let maxs = maxlen.saturating_sub(vis);
+                self.conns_scroll = (self.conns_scroll + 2).min(maxs);
+            }
             MouseEventKind::ScrollUp => {
                 self.scroll = self.scroll.saturating_sub(2);
             }
@@ -102,10 +141,13 @@ impl App {
             _ => {}
         }
     }
+}
 
-    // -----------------------------------------------------------------------
-    // 任务操作（Space/R/D/C 语义沿用 demo + 真实引擎动作）
-    // -----------------------------------------------------------------------
+/// 指针是否落在区域内（None 区域恒不命中）
+fn pointer_in(area: &Option<Rect>, x: u16, y: u16) -> bool {
+    area.is_some_and(|a| {
+        x >= a.x && x < a.x.saturating_add(a.width) && y >= a.y && y < a.y.saturating_add(a.height)
+    })
 }
 
 #[cfg(test)]
@@ -147,6 +189,101 @@ mod mouse_tests {
 
     fn dlg(kind: DialogKind, focus: usize) -> super::super::Dialog {
         crate::app::testutil::dialog(kind, focus)
+    }
+
+    /// FR-01-101：详情字段名点击复制——URL/校验热区命中（toast 文案照录 demo 原文、
+    /// 复制内容含 final_url 口径与完整校验码）、无校验任务无热区、对话框分支消费优先
+    #[tokio::test]
+    async fn detail_label_click_copies_and_toasts() {
+        let mut app = make_app("copy");
+        let mut t = task(1, "copy.bin");
+        t.final_url = Some("http://final.example/copy.bin".to_string());
+        t.checksum = Some(crate::model::Checksum {
+            algo: "SHA-256",
+            value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
+        });
+        app.tasks.push(t);
+        // 模拟 ui 层热区回填（内框 (1,1) 起；校验行 idx=4、URL 行 idx=6 的形态不限，
+        // 点击臂只看 rect 命中）
+        app.detail_url_rect = Some(Rect {
+            x: 1,
+            y: 7,
+            width: 9,
+            height: 1,
+        });
+        app.detail_ck_rect = Some(Rect {
+            x: 1,
+            y: 5,
+            width: 9,
+            height: 1,
+        });
+
+        // 点击「URL」字段名 → 复制详情展示值（final_url 优先）+ toast
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 3, 7));
+        assert_eq!(app.toast.as_deref(), Some("已复制 url"), "URL 点击 toast");
+        assert_eq!(
+            app.last_copied.as_deref(),
+            Some("http://final.example/copy.bin"),
+            "复制 final_url 展示值（D27）"
+        );
+
+        // 点击「校验」字段名 → 复制完整校验码（非 10 位截断）+ toast
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 3, 5));
+        assert_eq!(
+            app.toast.as_deref(),
+            Some("已复制 校验码"),
+            "校验点击 toast"
+        );
+        assert_eq!(
+            app.last_copied.as_deref(),
+            Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+            "复制完整校验码"
+        );
+
+        // 无校验码任务：校验热区 None（ui 层回填口径）→ 点击原位置无动作
+        app.tasks.push(task(2, "nock.bin"));
+        app.selected = 1;
+        app.detail_ck_rect = None;
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 3, 5));
+        assert_eq!(
+            app.last_copied.as_deref(),
+            Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+            "无热区点击不改变复制内容"
+        );
+        assert_eq!(app.toast.as_deref(), Some("已复制 校验码"), "toast 不变");
+        app.shutdown().await;
+    }
+
+    /// FR-01-101：G 收起（热区 None）点击无动作；对话框打开时点击被对话框分支
+    /// 先行消费（复制与 toast 均不触发）
+    #[tokio::test]
+    async fn detail_click_guards() {
+        let mut app = make_app("copyg");
+        app.tasks.push(task(1, "g.bin"));
+        app.detail_url_rect = Some(Rect {
+            x: 1,
+            y: 7,
+            width: 9,
+            height: 1,
+        });
+
+        // 热区清空（面板收起/窄终端回填口径）：点击原位置 → 无动作
+        app.detail_url_rect = None;
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 3, 7));
+        assert!(app.last_copied.is_none(), "热区 None 点击无复制");
+
+        // 热区在位但对话框打开：对话框分支先行消费，点击不触发复制
+        app.detail_url_rect = Some(Rect {
+            x: 1,
+            y: 7,
+            width: 9,
+            height: 1,
+        });
+        app.dialog = Some(dlg(DialogKind::Add, 0));
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 3, 7));
+        assert!(app.last_copied.is_none(), "对话框内点击不触发复制");
+        assert!(app.dialog.is_some(), "对话框不被详情点击关闭");
+        app.shutdown().await;
     }
 
     /// 无对话框：列表点击选中（ITEM_HEIGHT 行距）、列表外点击不动、

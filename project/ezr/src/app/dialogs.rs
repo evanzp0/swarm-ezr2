@@ -271,6 +271,7 @@ impl App {
         };
         self.tasks.remove(idx);
         self.windows.remove(&id);
+        self.clear_conn_stats(id);
         if delete_files {
             self.pending_deletes.insert(id, (save_dir, name));
         }

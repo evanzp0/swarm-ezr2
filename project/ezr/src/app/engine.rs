@@ -1,12 +1,13 @@
 //! engine — 主循环 tick：消费引擎事件 → 槽位调度 → 启动/重试推进 → 统计
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use super::App;
 use crate::engine::{Cmd, Evt};
 use crate::model::registry::Registry;
 use crate::model::sidecar::Sidecar;
-use crate::model::speed::SpeedWindow;
+use crate::model::speed::{SmoothedSpeed, SpeedWindow};
 use crate::model::{checksum, namegen, slots, Checksum, FailKind, Task, TaskState};
 
 /// 展示面采样节拍（FR-01-17 修订：数值每秒最多变化一次）
@@ -22,6 +23,49 @@ fn conn_from_view(c: &crate::engine::ConnView) -> crate::model::Connection {
         start: c.start,
         end: c.end,
         done: c.done,
+    }
+}
+
+/// 连接级账本键（任务 id, 连接 id）与观测三元组（块号, 块内已写, 时刻）
+type ConnKey = (u32, usize);
+type ConnObs = (u32, u64, Instant);
+
+/// 连接级账本推进（FR-01-99，App 消费侧计量）：按 (任务, 连接) 跟踪 Progress
+/// 事件的块内 done 增量——同块 = 差值；换块/首次观测 = 新块内已写字节（本轮
+/// 下载内的落盘量）；增量/时间差经 EMA 得展示速度，累计量随增量累加。
+/// 待命/空连接（cap = 0 或块已完成）零值速断（`zero()`，无拖尾），
+/// 在传连接即使瞬时零增量也持续平滑（避免 `-` 闪烁，FR-01-99 ①）。
+fn update_conn_stats(
+    conn_prev: &mut HashMap<ConnKey, ConnObs>,
+    conn_cum: &mut HashMap<ConnKey, u64>,
+    conn_speed: &mut HashMap<ConnKey, SmoothedSpeed>,
+    task_id: u32,
+    conns: &[crate::engine::ConnView],
+) {
+    let now = Instant::now();
+    for c in conns {
+        let key = (task_id, c.id);
+        let (delta, dt) = match conn_prev.get(&key) {
+            Some(&(pb, pd, pt)) if pb == c.block => (
+                c.done.saturating_sub(pd),
+                now.duration_since(pt).as_secs_f64(),
+            ),
+            // 换块（领新块）或首次观测：增量 = 新块内已写字节（均为本轮下载内落盘）
+            _ => (c.done, 0.0),
+        };
+        conn_prev.insert(key, (c.block, c.done, now));
+        let cap = c.end.saturating_sub(c.start);
+        let active = cap > 0 && c.done < cap;
+        let d = conn_speed.entry(key).or_default();
+        if !active {
+            d.zero();
+        } else if dt > 0.0 {
+            // 首次观测/换块帧无时间差，只累计不复算速度（EMA 下一帧收敛）
+            d.push(delta as f64 / dt);
+        }
+        if delta > 0 {
+            *conn_cum.entry(key).or_insert(0) += delta;
+        }
     }
 }
 
@@ -279,6 +323,23 @@ impl App {
             let max_scroll = flen.saturating_sub(vis);
             self.scroll = self.scroll.min(max_scroll);
         }
+
+        // 9) 并发明细选择 / 滚动钳制（FR-01-97）：切换选中任务后复位，
+        //    选中行越界钳制到有效范围
+        if self.conns_scroll_for != self.selected {
+            self.conns_scroll_for = self.selected;
+            self.conns_scroll = 0;
+            self.conns_sel = 0;
+        }
+        let clen = self
+            .sel_task()
+            .filter(|t| t.state.shows_conns())
+            .map_or(0, |t| t.connections.len());
+        if self.conns_sel >= clen.max(1) {
+            self.conns_sel = clen.saturating_sub(1);
+        }
+        let cvis = self.visible_conns_rows.max(1);
+        self.conns_scroll = self.conns_scroll.min(clen.saturating_sub(cvis));
     }
 
     /// 重试补发 Start 并清进展标记（FR-01-41：新一轮尝试的连续性判定从零起算；
@@ -338,8 +399,11 @@ impl App {
                     t.etag = etag;
                     t.last_modified = last_modified;
                     if t.state == TaskState::Queued {
+                        // 进入下载 = 新的一次下载（首次启动 / 重试重新排队 / 失效重下）：
+                        // 连接级累计从零重计（FR-01-99 ②）
                         t.state = TaskState::Downloading;
                         t.made_progress = false;
+                        self.clear_conn_stats(id);
                     }
                 }
             }
@@ -365,6 +429,13 @@ impl App {
                 t.downloaded = downloaded;
                 t.chunk_done = chunk_done;
                 t.connections = conns.iter().map(conn_from_view).collect();
+                update_conn_stats(
+                    &mut self.conn_prev,
+                    &mut self.conn_cum,
+                    &mut self.conn_speed,
+                    id,
+                    &conns,
+                );
                 if downloaded > 0 {
                     t.made_progress = true;
                 }
@@ -441,6 +512,9 @@ impl App {
                         "⚠ 服务器内容已更新，断点已作废，从头重新下载: {name}"
                     ));
                 }
+                // 连接级账本同步作废（从头重下 = 新的一次下载，FR-01-99 ②）；
+                // 置于任务借用结束之后（&mut self 方法借用与字段借用不交叠）
+                self.clear_conn_stats(id);
             }
             Evt::DownloadDone { id, total } => {
                 let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else {
@@ -500,6 +574,7 @@ impl App {
                     t.has_slot = false;
                     t.verify_ok = None;
                     t.connections.clear();
+                    self.clear_conn_stats(id);
                     self.set_toast(format!("✓ 下载完成: {name}（无校验）"));
                 }
                 self.save_registry();
@@ -522,6 +597,7 @@ impl App {
                     t.has_slot = false;
                     t.error = None;
                     t.connections.clear();
+                    self.clear_conn_stats(id);
                     self.set_toast(format!("✓ {algo} 校验通过: {name}"));
                 } else {
                     t.verify_ok = Some(false);
@@ -1679,5 +1755,130 @@ mod evt_tests {
         );
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod conn_stats_tests {
+    //! FR-01-99 连接级账本单测：增量累计 / 换块增量 / 待命零值速断 /
+    //! 新一次下载清零（Probed 进入下载）/ 续传保留（恢复不清零）。
+    //! 直接驱动 on_evt（不经引擎/网络），账本为确定性纯状态。
+
+    use super::*;
+    use crate::engine::ConnView;
+    use crate::model::config::Config;
+
+    fn make_app(tag: &str) -> App {
+        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-cc-{tag}"));
+        let reg = dir.join("registry.json").to_string_lossy().into_owned();
+        App::new(Config::default(), reg)
+    }
+
+    fn seed(id: u32, name: &str, state: TaskState) -> Task {
+        let mut t = crate::model::sample_task();
+        t.id = id;
+        t.name = name.to_string();
+        t.state = state;
+        t
+    }
+
+    fn cv(id: usize, block: u32, start: u64, end: u64, done: u64) -> ConnView {
+        ConnView {
+            id,
+            block,
+            start,
+            end,
+            done,
+        }
+    }
+
+    async fn progress(app: &mut App, id: u32, conns: Vec<ConnView>) {
+        let downloaded = conns.iter().map(|c| c.done).sum();
+        app.on_evt(Evt::Progress {
+            id,
+            downloaded,
+            conns,
+            chunk_done: 0,
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn conn_speed_and_cum_accumulate_within_block() {
+        let mut app = make_app("acc");
+        app.tasks.push(seed(1, "a.bin", TaskState::Downloading));
+        progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 100)]).await;
+        assert_eq!(app.conn_cum_of(1, 1), 100, "首次观测：新块内已写计入累计");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 400)]).await;
+        assert_eq!(app.conn_cum_of(1, 1), 400, "同块增量 = done 差值");
+        assert!(
+            app.conn_speed_of(1, 1) > 0.0,
+            "同块有增量 → 展示速度经 EMA 非零"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn conn_block_change_counts_new_block_done() {
+        let mut app = make_app("reblock");
+        app.tasks.push(seed(1, "b.bin", TaskState::Downloading));
+        progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 1000)]).await;
+        assert_eq!(app.conn_cum_of(1, 1), 1000);
+        // 领新块：done 从新块内偏移重新增长（增量 = 新块内已写字节）
+        progress(&mut app, 1, vec![cv(1, 1, 1000, 2000, 200)]).await;
+        assert_eq!(app.conn_cum_of(1, 1), 1200, "换块增量 = 新块内已写");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn idle_conn_speed_snaps_to_zero() {
+        let mut app = make_app("idle");
+        app.tasks.push(seed(1, "c.bin", TaskState::Downloading));
+        // 待命空连接（cap = 0）与块满连接（done == cap）速度均为 0（零值速断）
+        progress(&mut app, 1, vec![cv(2, 0, 0, 0, 0), cv(3, 0, 0, 500, 500)]).await;
+        assert_eq!(app.conn_speed_of(1, 2), 0.0, "空连接待命 → 0");
+        assert_eq!(app.conn_speed_of(1, 3), 0.0, "块满待命 → 0");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn conn_cum_resets_on_new_download_run() {
+        let mut app = make_app("newrun");
+        app.tasks.push(seed(1, "n.bin", TaskState::Queued));
+        progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 500)]).await;
+        assert_eq!(app.conn_cum_of(1, 1), 500);
+        // Probed 使任务 Queued → Downloading = 新的一次下载：账本清零
+        app.on_evt(Evt::Probed {
+            id: 1,
+            name: "n.bin".to_string(),
+            final_url: "http://x/n.bin".to_string(),
+            total: 4000,
+            resumable: true,
+            etag: None,
+            last_modified: None,
+        })
+        .await;
+        progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 120)]).await;
+        assert_eq!(app.conn_cum_of(1, 1), 120, "新一次下载从零重计");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn conn_cum_kept_across_resumable_resume() {
+        let mut app = make_app("keep");
+        app.tasks.push(seed(1, "k.bin", TaskState::Downloading));
+        progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 500)]).await;
+        assert_eq!(app.conn_cum_of(1, 1), 500);
+        // 暂停后直接继续（可续传）：同一次下载的延续，累计量保留
+        app.tasks[0].state = TaskState::Paused;
+        app.tasks[0].resumable = true;
+        app.selected = 0;
+        app.toggle_pause();
+        assert_eq!(app.tasks[0].state, TaskState::Downloading, "恢复直接续传");
+        // 恢复后领新块继续传输：累计量在原值上延续（不清零）
+        progress(&mut app, 1, vec![cv(1, 1, 1000, 2000, 250)]).await;
+        assert_eq!(app.conn_cum_of(1, 1), 750, "续传保留累计并延续");
+        app.shutdown().await;
     }
 }

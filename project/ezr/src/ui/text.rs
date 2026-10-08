@@ -53,6 +53,16 @@ pub fn pad_right(s: &str, width: usize) -> String {
     }
 }
 
+/// 按终端显示宽度左填充空格（数值列右对齐用，CJK 宽度感知）
+pub fn pad_left(s: &str, width: usize) -> String {
+    let cur = w(s);
+    if cur >= width {
+        s.to_string()
+    } else {
+        format!("{}{}", " ".repeat(width - cur), s)
+    }
+}
+
 pub fn fmt_size(bytes: u64) -> String {
     const MB: f64 = 1_000_000.0;
     const GB: f64 = 1_000_000_000.0;

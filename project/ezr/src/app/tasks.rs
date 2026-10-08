@@ -50,6 +50,10 @@ impl App {
                 self.windows.remove(&id);
                 let engine = self.engine.clone();
                 let was_resumable = self.tasks[idx].resumable;
+                if !was_resumable {
+                    // 不支持续传 = 从头下载 = 新的一次下载：连接级累计清零（FR-01-99 ②）
+                    self.clear_conn_stats(id);
+                }
                 let resume_toast = if was_resumable {
                     format!("▶ 继续下载（从断点恢复）: {name}")
                 } else {
@@ -190,7 +194,17 @@ impl App {
     /// C：清理已完成任务
     pub fn clear_completed(&mut self) {
         let before = self.tasks.len();
+        let removed: Vec<u32> = self
+            .tasks
+            .iter()
+            .filter(|t| t.state == TaskState::Completed)
+            .map(|t| t.id)
+            .collect();
         self.tasks.retain(|t| t.state != TaskState::Completed);
+        for id in removed {
+            self.windows.remove(&id);
+            self.clear_conn_stats(id);
+        }
         let n = before - self.tasks.len();
         if n > 0 {
             self.set_toast(format!("已清理 {n} 个已完成任务"));

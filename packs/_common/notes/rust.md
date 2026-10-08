@@ -441,3 +441,18 @@ group_imports = "StdExternalCrate"
   crate 数」——增量对账按 cargo test 输出逐目标列出并按挂载关系解释，勿与
   「重复 #[test] 属性虚增」（engineering.md 条款）混淆：后者是同 crate 内双注册，
   前者是跨 crate 合法副本（`--list | sort | uniq -d` 在跨 crate 场景会误报）。
+
+- **`&mut self` 方法调用与字段级不相交借用不可混用（事件臂改造高发）**：在同一函数里
+  持有 `self.tasks.iter_mut().find()` 返回的 `&mut Task` 期间，对同结构体**其他字段的
+  直接访问**（`self.windows.remove(..)`）因字段不相交而合法；但换成 **`&mut self` 方法**
+  （如 `self.clear_stats(id)`）会借走整个 self，与仍在存活期的 `t` 冲突（E0499）。改造
+  事件处理臂时，收口型 helper 调用要么放在任务借用的最后一次使用之后，要么在方法内
+  部改用字段级访问。判别：报错行是方法调用、且同块内另有 `&mut` 迭代借用存活。
+- **ratatui TestBackend 断言的两个坑（CJK 跳过单元 / Cell 字段访问）**：①缓冲区里宽字符
+  （CJK）占两格——第二格是空符号的跳过单元，逐格拼行文本会在宽字符间混入空格，
+  `contains("并发")` 类断言必须先把行文本 `replace(' ', "")` 再匹配（顺序断言用压缩后
+  下标）；`TestBackend::to_string()`（buffer_view）自动跳过续格，全文 `contains` 可直接
+  用 CJK 连续文本。②`Cell` 的前景色是**公开字段 `fg`**（0.29 无 `fg()` 方法），取格用
+  `buffer.cell((x, y)) -> Option<&Cell>`（`Buffer::get` 已 deprecated），配色断言遍历
+  用 `cell(..).expect("界内")` 解包。配色断言**只锚定宽字符首格**——续格 fg=Reset、
+  修饰为空（视觉由首格承载）；逐格配色遍历遇 Reset 即续格，跳过即可。

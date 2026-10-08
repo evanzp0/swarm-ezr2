@@ -1,12 +1,15 @@
-//! detail — 任务详情面板与速度图
+//! detail — 任务详情面板（定高 11 行 = 9 行内容 + 上下边框，FR-01-94 ⑥）
+//!
+//! v1.14（FR-01-100/101，对齐 ezr-demo 源码修订-3/5/6/7）：类型行去并发数；
+//! 「校验」「URL」字段名 = 淡蓝下划线链接样式 + 热区每帧回填（点击复制见 app/mouse）。
 
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Sparkline};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
-use super::text::{fmt_size, fmt_speed, pad_right, truncate};
+use super::text::{fmt_size, pad_right, truncate, w};
 use super::{state_color, ACCENT, BORDER, DIM, FG, GREEN, LIGHT_BLUE, RED, YELLOW};
 use crate::app::App;
 use crate::model::chunk::fmt_block_size;
@@ -15,6 +18,20 @@ use crate::model::{Task, TaskState};
 /// 详情面板字段行标签 Span（pad_right 9 列 + DIM 前景色；各字段行共用）
 fn dim_label(s: &str) -> Span<'static> {
     Span::styled(pad_right(s, 9), Style::default().fg(DIM))
+}
+
+/// 链接样式字段名（FR-01-101，demo 修订-5/6）：文字淡蓝 + 下划线（仅覆盖文字部分），
+/// pad_right 对齐填充空格不带下划线；热区仍为整段 9 列（与 label 对齐块一致便于点击）
+fn link_label(s: &str) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(
+            s.to_string(),
+            Style::default()
+                .fg(LIGHT_BLUE)
+                .add_modifier(Modifier::UNDERLINED),
+        ),
+        Span::raw(" ".repeat(9 - w(s))),
+    ]
 }
 
 /// 排队详情文案（紧凑：保证「Space 暂停」提示在窄面板不被截断）
@@ -64,7 +81,7 @@ fn chunk_row(t: &Task) -> Vec<Span<'static>> {
     l
 }
 
-pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -74,6 +91,9 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(block, area);
 
     let Some(t) = app.sel_task() else {
+        // 无选中任务：字段名热区清空（FR-01-101）
+        app.detail_url_rect = None;
+        app.detail_ck_rect = None;
         f.render_widget(
             Paragraph::new(Span::styled("（未选中任务）", Style::default().fg(DIM)))
                 .alignment(Alignment::Center),
@@ -121,35 +141,37 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
             t.protocol.label().to_string(),
             Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
         ),
-        // 并发数仅在「下载中」与「做种中」有数值，其他状态显示 -
+        // FR-01-100（demo 修订-3）：类型行不再展示并发数，仅保留协议与断点续传支持
+        //（并发信息由头部「并发」字段与并发连接面板承载）
         {
-            let conn_txt = match t.state {
-                TaskState::Downloading | TaskState::Seeding => t.thread_count().to_string(),
-                _ => "-".to_string(),
-            };
             let resume_txt = if t.resumable {
                 "支持断点续传"
             } else {
                 "不支持断点续传"
             };
-            val(format!(" · {} 并发 · {}", conn_txt, resume_txt))
+            val(format!(" · {resume_txt}"))
         },
     ]));
     // 校验行（提供了校验码的任务）：算法 · 校验码前缀 + 状态
     // 前缀取 10 位、状态用短文案，保证 110 列窄面板也能完整显示
+    let mut ck_line_idx: Option<usize> = None;
     if let Some(ck) = &t.checksum {
         let vshort = checksum_value_short(&ck.value);
         let (st, stc) = verify_status(t.verify_ok, t.state);
-        lines.push(Line::from(vec![
-            Span::raw(" "),
-            dim_label("校验"),
-            Span::styled(
-                ck.algo.to_string(),
-                Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(format!(" · {}", vshort), Style::default().fg(FG)),
-            Span::styled(st, Style::default().fg(stc)),
-        ]));
+        ck_line_idx = Some(lines.len());
+        let mut ck_line = vec![Span::raw(" ")];
+        // FR-01-101：字段名链接样式（淡蓝下划线，点击复制校验码值）
+        ck_line.extend(link_label("校验"));
+        ck_line.push(Span::styled(
+            ck.algo.to_string(),
+            Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+        ));
+        ck_line.push(Span::styled(
+            format!(" · {vshort}"),
+            Style::default().fg(FG),
+        ));
+        ck_line.push(Span::styled(st, Style::default().fg(stc)));
+        lines.push(Line::from(ck_line));
     }
     lines.push(Line::from(vec![
         Span::raw(" "),
@@ -184,63 +206,39 @@ pub(super) fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
             (inner.width as usize).saturating_sub(12),
         )),
     ]));
-    lines.push(Line::from(vec![
-        Span::raw(" "),
-        dim_label("URL"),
-        val(truncate(
-            // 重定向后展示最终 URL（FR-01-14 / 规格 01-download-engine-08「详情 URL 显示最终 URL」）
-            t.final_url.as_deref().unwrap_or(&t.url),
-            (inner.width as usize).saturating_sub(12),
-        )),
-    ]));
+    // FR-01-101：URL 字段名可点击复制（淡蓝下划线）；记录行号供热区回填
+    let url_line_idx = lines.len();
+    let mut url_line = vec![Span::raw(" ")];
+    url_line.extend(link_label("URL"));
+    url_line.push(val(truncate(
+        // 重定向后展示最终 URL（FR-01-14 / 规格 01-download-engine-08「详情 URL 显示最终 URL」）
+        t.final_url.as_deref().unwrap_or(&t.url),
+        (inner.width as usize).saturating_sub(12),
+    )));
+    lines.push(Line::from(url_line));
 
     // 分块：文字显示 x/y 与块大小「N/块」（块大小按协议写死）
     lines.push(Line::from(chunk_row(t)));
 
-    // （FR-01-81 修订二）并发分块明细表已整体移除：详情面板止于任务级字段行。
+    // （FR-01-81 修订二）并发分块明细表已整体移除：详情面板止于任务级字段行；
+    // 逐连接明细自 v1.13 起由独立「并发连接」面板承载（FR-01-96）。
 
     f.render_widget(Paragraph::new(lines), inner);
+
+    // FR-01-101：回填字段名热区（点击复制）。热区 = 行首空格后的字段名整段
+    // （pad_right 9 列，与下划线视觉一致）；y = 内框顶 + 行号，超出内框则不设
+    app.detail_url_rect = hot_rect(inner, url_line_idx);
+    app.detail_ck_rect = ck_line_idx.and_then(|idx| hot_rect(inner, idx));
 }
 
-pub(super) fn draw_chart(f: &mut Frame, app: &App, area: Rect) {
-    let dl: u64 = (app
-        .tasks
-        .iter()
-        .filter(|t| t.state == TaskState::Downloading)
-        .map(|t| t.speed)
-        .sum::<f64>()
-        / 1024.0) as u64;
-    let peak = app.speed_hist.iter().copied().max().unwrap_or(0);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(BORDER))
-        .title(Line::from(vec![
-            Span::styled(" ↓ 全局速度 ", Style::default().fg(ACCENT)),
-            Span::styled(
-                fmt_speed(dl as f64 * 1024.0),
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" "),
-        ]))
-        .title(
-            Line::from(Span::styled(
-                format!(" 峰值 {} ", fmt_speed(peak as f64 * 1024.0)),
-                Style::default().fg(DIM),
-            ))
-            .alignment(Alignment::Right),
-        );
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let width = (inner.width as usize).max(1);
-    let start = app.speed_hist.len().saturating_sub(width);
-    let data: Vec<u64> = app.speed_hist[start..].to_vec();
-    f.render_widget(
-        Sparkline::default()
-            .data(&data)
-            .style(Style::default().fg(ACCENT)),
-        inner,
-    );
+/// FR-01-101 热区矩形：行首空格后的字段名整段 9 列（x = 内框左 + 1、宽 9、高 1）；
+/// 行号超出内框高度时不设（None）
+fn hot_rect(inner: Rect, line_idx: usize) -> Option<Rect> {
+    let y = inner.y + line_idx as u16;
+    (y < inner.y + inner.height).then_some(Rect {
+        x: inner.x + 1,
+        y,
+        width: 9,
+        height: 1,
+    })
 }

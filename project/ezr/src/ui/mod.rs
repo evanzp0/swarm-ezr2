@@ -1,13 +1,21 @@
-//! ui.rs — EZR Downloader TUI Demo 的界面渲染
+//! ui.rs — EZR Downloader 的界面渲染
 //!
-//! 布局：头部(全局统计) / 页签(正在下载|已完成) / 主区(任务列表 + 详情与速度图) / 页脚(快捷键与提示)
+//! 布局（定稿口径，FR-01-94/95/96/98，对齐 ezr-demo 八轮定稿）：
+//! 顶部带 5 行 = 头部仪表面板通栏全宽（标题边框行 + 字段/分割线/页签 3 内容行 +
+//! 底边框；字段单行：并发、会话已下载、全局 ↓↑、峰值 ↓↑；页签行 = 原「任务队列」
+//! 面板并入：正在下载 (n) │ 已完成 (n) │ 下载槽位 x/y 内联左对齐）；内容区右侧 =
+//! │ 竖线分隔符（贯通全高）+ 左右各 1 列空白 + 内嵌无边框单色面积流量图
+//! （占内容区全高 3 行、宽 20%，仅绘下行流量，八级部分块 ▁▂▃▄▅▆▇█ 亚字符
+//! 精度，全图仅一种颜色 = 下载淡蓝）。主区：左列 58% = 任务列表（占满全高）；
+//! 右列 42% = 任务详情（9 行内容 + 边框 = 定高 11 行）及并发连接面板
+//! （占右列余下全部高度；仅「下载中」显示明细，HTTP 三列：序号/下载速度/
+//! 累计下载）。页脚 = 快捷键与提示（G 提示「面板」）。窄终端 / 紧凑布局
+//! （G 键，FR-01-98）降级：头部与列表满宽、右栏两面板不渲染（流量图仅在
+//! 窄终端时隐藏；紧凑布局下头部流量图常显）。
 //! 每个任务条目 3 行：标题行(名称+协议/状态徽标+百分比)、整体进度条(不分块)、统计行。
-//! 协议徽标 [HTTP/HTTPS/BT] 统一黄色；详情页分块以文字显示 x/y（已完成/总块数）与块大小 N/块。
-//! 分块策略：块大小按协议写死（HTTP 1 MB / BT 256 KB），块数与并发数解耦。
-//! 对话框：添加任务(URL+目录+并发+校验算法下拉+校验码) / 删除任务(仅任务|任务和文件|取消)。
-//! 模块划分：`text`（纯文本工具）/ `task_lines`（列表行构造）/
-//! `list`（任务列表区）/ `header`（头部·页签·页脚）/ `detail`（详情与速度图）/
-//! `dialog`（对话框与浮层）/ 总入口 [`draw`]。
+//! 协议徽标 [HTTP/HTTPS] 统一黄色；详情分块以文字显示 x/y（已完成/总块数）与块大小 N/块。
+//! 对话框：添加任务(URL+目录+并发+校验算法下拉+校验码+代理下拉) / 修改任务 /
+//! 删除任务(仅任务|任务和文件|取消)。
 
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::Color;
@@ -17,6 +25,7 @@ use crate::app::App;
 use crate::model::TaskState;
 
 mod btn;
+mod conns;
 mod delete;
 mod detail;
 mod dialog;
@@ -29,9 +38,10 @@ mod text;
 // 截断·填充幂等/时长往返/格式化稳定性），经 cfg(test) 门控 re-export
 // （notes/rust.md「门面 re-export」手法）；产品构建（cfg(test)=off）不产生
 // 该路径，外部 API 面零增量。
-use detail::{draw_chart, draw_detail};
+use conns::draw_conns;
+use detail::draw_detail;
 use dialog::draw_dialogs;
-use header::{draw_footer, draw_header, draw_tabs};
+use header::{draw_footer, draw_header};
 use list::draw_list;
 #[cfg(test)]
 pub(crate) use text::{
@@ -86,30 +96,51 @@ pub(super) fn state_color(s: TaskState) -> Color {
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let outer = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Length(3),
-        Constraint::Min(8),
-        Constraint::Length(4),
+        Constraint::Length(5), // 顶部带：头部仪表面板通栏全宽 5 行（FR-01-94）
+        Constraint::Min(8),    // 主区：任务列表 | 任务详情 + 并发连接面板
+        Constraint::Length(4), // 页脚
     ])
     .split(area);
 
-    draw_header(f, app, outer[0]);
-    draw_tabs(f, app, outer[1]);
+    let wide = area.width >= 100;
+    if wide {
+        // 头部仪表面板：通栏全宽；字段行 + 分割线 + 页签行，右侧内嵌无边框
+        // 单色面积流量图（占内容区全高、20% 宽）。FR-01-98：流量图常显，
+        // 不再随 G 键隐藏
+        draw_header(f, app, outer[0], true);
 
-    let wide = outer[2].width >= 100;
-    if wide && app.show_chart {
-        let cols = Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
-            .split(outer[2]);
-        draw_list(f, app, cols[0]);
-        let right =
-            Layout::vertical([Constraint::Percentage(58), Constraint::Min(4)]).split(cols[1]);
-        draw_detail(f, app, right[0]);
-        draw_chart(f, app, right[1]);
+        if app.show_panes {
+            // 主区：左列 58% = 任务列表（自头部正下方起、占满左列全高）；
+            // 右列 42% = 任务详情（定高 11 行）+ 并发连接面板（占余下全部高度）
+            let cols = Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
+                .split(outer[1]);
+            draw_list(f, app, cols[0]);
+            let right =
+                Layout::vertical([Constraint::Length(11), Constraint::Min(6)]).split(cols[1]);
+            draw_detail(f, app, right[0]);
+            draw_conns(f, app, right[1]);
+        } else {
+            // G 键紧凑布局（FR-01-98）：流量图保留在头部，仅收起任务详情 /
+            // 并发连接面板，任务列表占满整行
+            app.conns_area = None;
+            app.visible_conns_rows = 0;
+            // FR-01-101：详情字段名热区随面板收起清空（点击无动作）
+            app.detail_url_rect = None;
+            app.detail_ck_rect = None;
+            draw_list(f, app, outer[1]);
+        }
     } else {
-        draw_list(f, app, outer[2]);
+        // 窄终端（< 100 列）：头部面板无图（分割线与页签行贯通全宽），任务列表占满整行
+        app.conns_area = None;
+        app.visible_conns_rows = 0;
+        // FR-01-101：详情不渲染 → 字段名热区清空
+        app.detail_url_rect = None;
+        app.detail_ck_rect = None;
+        draw_header(f, app, outer[0], false);
+        draw_list(f, app, outer[1]);
     }
 
-    draw_footer(f, app, outer[3]);
+    draw_footer(f, app, outer[2]);
 
     // 对话框最后绘制（覆盖层）
     if app.dialog.is_some() {
@@ -221,7 +252,7 @@ mod ui_tests {
             })
             .collect();
         app.tasks.push(t);
-        app.show_chart = true;
+        app.show_panes = true;
         let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
         term.draw(|f| draw(f, &mut app)).unwrap();
         let s = term.backend().to_string();
@@ -241,7 +272,7 @@ mod ui_tests {
         app.tasks.push(t);
         let area = ratatui::layout::Rect::new(0, 0, 110, 24);
         let mut term = Terminal::new(TestBackend::new(110, 24)).unwrap();
-        term.draw(|f| draw_detail(f, &app, area)).unwrap();
+        term.draw(|f| draw_detail(f, &mut app, area)).unwrap();
         let s = term.backend().to_string();
         assert!(s.contains("任务详情"), "详情标题在位: {s}");
         assert!(!s.contains("状态"), "状态行应已移除: {s}");
@@ -266,7 +297,7 @@ mod ui_tests {
         app.tasks.push(t);
         let area = ratatui::layout::Rect::new(0, 0, 110, 24);
         let mut term = Terminal::new(TestBackend::new(110, 24)).unwrap();
-        term.draw(|f| draw_detail(f, &app, area)).unwrap();
+        term.draw(|f| draw_detail(f, &mut app, area)).unwrap();
         let s = term.backend().to_string();
         assert!(s.contains("大小"), "大小行在位: {s}");
         assert!(!s.contains("剩余"), "大小行不应含「（剩余 …）」后缀: {s}");
@@ -330,7 +361,7 @@ mod ui_tests {
     async fn draw_narrow_hides_split_layout() {
         let mut app = make_app("narrow");
         app.tasks.push(task(1, "n1.bin", TaskState::Downloading));
-        app.show_chart = true;
+        app.show_panes = true;
         let mut term = Terminal::new(TestBackend::new(80, 30)).unwrap();
         term.draw(|f| draw(f, &mut app)).unwrap();
         let s = term.backend().to_string();
@@ -350,7 +381,7 @@ mod ui_tests {
             value: value.clone(),
         });
         app.tasks.push(t);
-        app.show_chart = true; // 详情面板仅在宽布局 + 图表开启分支渲染
+        app.show_panes = true; // 详情面板仅在宽布局 + 图表开启分支渲染
         let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
 
         // 待校验（None + 非校验中态）
@@ -569,9 +600,9 @@ mod ui_tests {
         assert_eq!(app.selected, 0);
 
         // g 图表开关
-        let chart = app.show_chart;
+        let panes = app.show_panes;
         app.on_key(KeyCode::Char('g'), KeyModifiers::NONE);
-        assert_eq!(app.show_chart, !chart, "g 切换图表面板");
+        assert_eq!(app.show_panes, !panes, "g 切换右栏两面板（FR-01-98）");
 
         // a 打开添加对话框；对话框打开后 Esc 关闭（on_dialog_key 路由）
         app.on_key(KeyCode::Char('a'), KeyModifiers::NONE);
@@ -704,5 +735,481 @@ mod ui_tests {
         );
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod ui_v113_tests {
+    //! v1.13 定稿布局渲染测试（FR-01-94/95/96/98）：通栏 5 行头部带、单色面积
+    //! 流量图、并发连接面板、G 键紧凑布局与窄终端降级。
+
+    use crossterm::event::{KeyCode, KeyModifiers};
+    use ratatui::backend::TestBackend;
+    use ratatui::style::Color;
+    use ratatui::Terminal;
+
+    use super::*;
+    use crate::model::config::Config;
+    use crate::model::{Connection, Task};
+
+    fn make_app(tag: &str) -> App {
+        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-uiv13-{tag}"));
+        let reg = dir.join("registry.json").to_string_lossy().into_owned();
+        App::new(Config::default(), reg)
+    }
+
+    fn task(id: u32, name: &str, state: TaskState) -> Task {
+        let mut t = crate::model::sample_task();
+        t.id = id;
+        t.name = name.to_string();
+        t.state = state;
+        t.total = 3000;
+        t.downloaded = 1500;
+        t.probed = true;
+        t
+    }
+
+    fn conns(ids: &[usize]) -> Vec<Connection> {
+        ids.iter()
+            .map(|&i| Connection {
+                id: i,
+                start: (i as u64 - 1) * 1000,
+                end: i as u64 * 1000,
+                done: 100,
+            })
+            .collect()
+    }
+
+    /// 逐单元格 (符号, 前景色) 网格
+    fn grid(term: &Terminal<TestBackend>) -> Vec<Vec<(char, Color)>> {
+        let buf = term.backend().buffer();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| {
+                        let c = buf.cell((x, y)).expect("网格坐标在界内");
+                        (c.symbol().chars().next().unwrap_or(' '), c.fg)
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn row_strings(term: &Terminal<TestBackend>) -> Vec<String> {
+        let buf = term.backend().buffer();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| {
+                        buf.cell((x, y))
+                            .expect("网格坐标在界内")
+                            .symbol()
+                            .to_string()
+                    })
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    fn render(app: &mut App, w: u16, h: u16) -> Terminal<TestBackend> {
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| draw(f, app)).unwrap();
+        term
+    }
+
+    fn hist() -> Vec<u64> {
+        (0..60).map(|i| 30 + (i % 7) * 10).collect()
+    }
+
+    #[tokio::test]
+    async fn header_band_final_layout() {
+        let mut app = make_app("hdr");
+        app.tasks.push(task(1, "h1.bin", TaskState::Downloading));
+        let term = render(&mut app, 120, 40);
+        let s = term.backend().to_string();
+        assert!(!s.contains("任务队列"), "任务队列面板已撤销: {s}");
+        assert!(!s.contains("全局速度"), "旧 Sparkline 面板已移除: {s}");
+        let rows: Vec<String> = row_strings(&term)
+            .iter()
+            .map(|r| r.replace(' ', ""))
+            .collect();
+        assert!(rows[0].contains("EZRDownloader"), "标题行");
+        assert!(
+            !rows[0].contains("峰值"),
+            "峰值写在面板内容而非标题行边框（REQ-6.1）"
+        );
+        let r1 = &rows[1];
+        let (a, b, c, d) = (
+            r1.find("并发"),
+            r1.find("会话已下载"),
+            r1.find("全局"),
+            r1.find("峰值"),
+        );
+        assert!(
+            matches!((a, b, c, d), (Some(a), Some(b), Some(c), Some(d)) if a < b && b < c && c < d),
+            "字段单行顺序 并发→会话已下载→全局→峰值: {r1}"
+        );
+        let r3 = &rows[3];
+        let (t1, t2, t3) = (
+            r3.find("正在下载("),
+            r3.find("已完成("),
+            r3.find("下载槽位"),
+        );
+        assert!(
+            matches!((t1, t2, t3), (Some(a), Some(b), Some(c)) if a < b && b < c),
+            "页签行：正在下载 │ 已完成 │ 下载槽位（内联左对齐）: {r3}"
+        );
+        assert!(
+            r3.contains("已完成(0)│下载槽位1/5"),
+            "槽位紧跟「已完成」页签并以 │ 分隔（内联左对齐，REQ-8.1）: {r3}"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn chart_area_single_color_partial_blocks_no_braille() {
+        let mut app = make_app("chart");
+        app.tasks.push(task(1, "w1.bin", TaskState::Downloading));
+        app.speed_hist = hist();
+        let term = render(&mut app, 120, 40);
+        let g = grid(&term);
+        // 布局推算（120 宽）：头部内框 x=1..119（宽 118）→ 图宽 23、字段区 92、
+        // │ 分隔符 x=93、图区 x=95..118
+        let mut partials = 0;
+        let mut foreign_color = false;
+        for row in &g[1..4] {
+            for &(ch, fg) in &row[95..118] {
+                if ch != ' ' {
+                    partials += 1;
+                    if fg != LIGHT_BLUE {
+                        foreign_color = true;
+                    }
+                }
+            }
+        }
+        assert!(partials > 0, "图区每列均有面积块字符（无断列）");
+        assert!(!foreign_color, "全图仅一种颜色（下载淡蓝，REQ-8.5）");
+        // 顶线含部分块字符（亚字符精度，N2l 口径）
+        let top_line: String = (95..118).map(|x| g[1][x].0).collect();
+        assert!(
+            top_line.chars().any(|c| ('▁'..='▇').contains(&c)),
+            "顶线含部分块字符（1/8 格精度）: {top_line}"
+        );
+        // 分隔符贯通内容区全高 + 左右各 1 列空白
+        for (y, row) in g.iter().enumerate().take(4).skip(1) {
+            assert_eq!(row[93].0, '│', "│ 分隔符贯通全高 y={y}");
+            assert_eq!(row[94].0, ' ', "分隔符右侧（图区侧）1 列空白");
+        }
+        // 全帧无盲文点阵字符
+        for row in &g {
+            for (ch, _) in row {
+                let u = *ch as u32;
+                assert!(!(0x2800..=0x28FF).contains(&u), "无盲文点阵: {ch}");
+            }
+        }
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn conns_panel_http_structure_and_state_gate() {
+        let mut app = make_app("conns");
+        let mut t = task(1, "c1.bin", TaskState::Downloading);
+        t.connections = conns(&[1, 2, 3]);
+        app.tasks.push(t);
+        let term = render(&mut app, 120, 40);
+        let rows = row_strings(&term);
+        let s = term.backend().to_string();
+        assert!(s.contains("并发连接"), "面板标题");
+        assert!(s.contains("活跃 0"), "待命连接速度 0 → 活跃 0");
+        assert!(s.contains("序号"), "HTTP 表头 序号 列");
+        assert!(s.contains("下载速度") && s.contains("累计下载"), "数据列");
+        assert!(
+            s.contains("Ctrl+↑↓ 选择 · Ctrl+B 断开（仅 BT）"),
+            "提示行恒定显示"
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.trim().contains(" 1 ") && r.contains('-')),
+            "数据行按序号展示、待命速度显示 -"
+        );
+        // 详情定高 11 行：右列详情 y=5..16，明细面板标题在 y=16
+        let row16: String = rows[16].replace(' ', "");
+        assert!(
+            row16.contains("并发连接"),
+            "明细面板紧随详情 11 行: {}",
+            rows[16]
+        );
+        // 状态门槛：已暂停 → 空面板 + 活跃 0 + 面板不接收滚轮
+        app.tasks[0].state = TaskState::Paused;
+        let term = render(&mut app, 120, 40);
+        let s = term.backend().to_string();
+        assert!(s.contains("（无并发连接）"), "非下载态空面板: {s}");
+        assert!(s.contains("活跃 0"));
+        assert!(app.conns_area.is_none(), "空明细面板不接收滚轮（穿透）");
+        app.shutdown().await;
+    }
+
+    fn count_partials(
+        g: &[Vec<(char, Color)>],
+        ys: std::ops::Range<usize>,
+        xs: std::ops::Range<usize>,
+    ) -> usize {
+        let mut n = 0;
+        for y in ys {
+            for x in xs.clone() {
+                let (ch, _) = g[y][x];
+                if (char::from_u32(0x2581).unwrap()..=char::from_u32(0x2588).unwrap()).contains(&ch)
+                {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
+    #[tokio::test]
+    async fn g_compact_keeps_chart_and_narrow_hides_it() {
+        let mut app = make_app("gkey");
+        app.tasks.push(task(1, "g1.bin", TaskState::Downloading));
+        app.speed_hist = hist();
+        app.on_key(KeyCode::Char('g'), KeyModifiers::NONE);
+        assert!(!app.show_panes, "G 切换右栏两面板");
+        let term = render(&mut app, 120, 40);
+        let s = term.backend().to_string();
+        assert!(!s.contains("任务详情"), "紧凑布局收起详情");
+        assert!(!s.contains("并发连接"), "紧凑布局收起明细");
+        let g = grid(&term);
+        let partials = count_partials(&g, 1..4, 1..119);
+        assert!(partials > 0, "紧凑布局下头部流量图仍显示（FR-01-98）");
+        // 窄终端：头部无图、列表满宽、明细不渲染
+        let mut app = make_app("narrow");
+        app.tasks.push(task(1, "n1.bin", TaskState::Downloading));
+        app.speed_hist = hist();
+        let term = render(&mut app, 80, 34);
+        let g = grid(&term);
+        let partials = count_partials(&g, 1..4, 1..79);
+        assert_eq!(partials, 0, "窄终端流量图不渲染");
+        let s = term.backend().to_string();
+        assert!(!s.contains("并发连接"), "窄终端明细不渲染");
+        assert!(s.contains("n1.bin"), "列表满宽");
+        assert!(!s.contains("任务详情"), "窄终端右栏不渲染");
+        app.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+mod ui_v114_tests {
+    //! v1.14 详情面板测试（FR-01-100/101，对齐 ezr-demo 源码修订-3/5/6/7）：
+    //! 类型行去并发数；「校验」「URL」字段名淡蓝下划线链接样式；热区每帧回填与清空。
+
+    use ratatui::backend::TestBackend;
+    use ratatui::style::{Color, Modifier};
+    use ratatui::Terminal;
+
+    use super::*;
+    use crate::model::config::Config;
+    use crate::model::{Checksum, Task};
+
+    fn make_app(tag: &str) -> App {
+        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-uiv14-{tag}"));
+        let reg = dir.join("registry.json").to_string_lossy().into_owned();
+        App::new(Config::default(), reg)
+    }
+
+    fn task(id: u32, name: &str, state: TaskState) -> Task {
+        let mut t = crate::model::sample_task();
+        t.id = id;
+        t.name = name.to_string();
+        t.state = state;
+        t.total = 3000;
+        t.downloaded = 1500;
+        t.probed = true;
+        t
+    }
+
+    fn render_detail(app: &mut App, w: u16, h: u16) -> Terminal<TestBackend> {
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| draw_detail(f, app, ratatui::layout::Rect::new(0, 0, w, h)))
+            .unwrap();
+        term
+    }
+
+    /// 整帧渲染（draw 全流程，走 G/窄终端分支）
+    fn render_full(app: &mut App, w: u16, h: u16) -> Terminal<TestBackend> {
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| draw(f, app)).unwrap();
+        term
+    }
+
+    fn row_strings(term: &Terminal<TestBackend>) -> Vec<String> {
+        let buf = term.backend().buffer();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| {
+                        buf.cell((x, y))
+                            .expect("网格坐标在界内")
+                            .symbol()
+                            .to_string()
+                    })
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    /// (前景色, 修饰) 网格（下划线断言用）
+    fn style_grid(term: &Terminal<TestBackend>) -> Vec<Vec<(Color, Modifier)>> {
+        let buf = term.backend().buffer();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| {
+                        let c = buf.cell((x, y)).expect("网格坐标在界内");
+                        (c.fg, c.modifier)
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// FR-01-100（demo 修订-3）：类型行不再展示并发数——下载中任务（含活跃连接）
+    /// 类型行 = `协议名 · 支持断点续传`，全面板无「并发」字样与并发数值。
+    #[tokio::test]
+    async fn type_row_omits_concurrency() {
+        let mut app = make_app("t14-type");
+        let mut t = task(1, "type.bin", TaskState::Downloading);
+        t.concurrency = 4;
+        t.connections = (1..=4usize)
+            .map(|i| crate::model::Connection {
+                id: i,
+                start: (i as u64 - 1) * 750,
+                end: i as u64 * 750,
+                done: 100,
+            })
+            .collect();
+        app.tasks.push(t);
+        let term = render_detail(&mut app, 110, 24);
+        // 手工逐格拼接对 CJK 含续格占位（buffer_view 跳过）→ 去空格后断言
+        let type_row = row_strings(&term)[3].replace(' ', ""); // inner(1,1) 起：0 名 / 1 ID / 2 类型
+        assert!(type_row.contains("HTTP"), "协议名在位: {type_row}");
+        assert!(
+            type_row.contains("支持断点续传"),
+            "续传说明在位: {type_row}"
+        );
+        assert!(
+            !type_row.contains("并发"),
+            "类型行无「并发」字样: {type_row}"
+        );
+        assert!(!type_row.contains("·4"), "类型行无并发数值段: {type_row}");
+        // to_string() 跳过续格（CJK 连续）：resumable=true 显示支持口径
+        let all = term.backend().to_string();
+        assert!(all.contains("HTTP · 支持断点续传"), "类型行定稿形态: {all}");
+        assert!(!all.contains("不支持断点续传"), "resumable=true 无否定口径");
+        app.shutdown().await;
+    }
+
+    /// FR-01-101（demo 修订-5/6）：「校验」「URL」字段名 = 淡蓝 RGB(122,185,242) +
+    /// 下划线（仅覆盖文字部分）；其余字段名暗灰无下划线。热区随行回填（x=inner.x+1、
+    /// 宽 9；无校验行 → ck 热区 None）。
+    #[tokio::test]
+    async fn link_labels_styled_and_hot_rects_backfilled() {
+        let mut app = make_app("t14-link");
+        let mut t = task(1, "link.bin", TaskState::Downloading);
+        t.checksum = Some(Checksum {
+            algo: "SHA-256",
+            value: "0123abcd0123abcd0123abcd0123abcd".to_string(),
+        });
+        app.tasks.push(t);
+        let term = render_detail(&mut app, 110, 24);
+        let g = style_grid(&term);
+
+        // 行结构（inner y=1 起）：1 名 / 2 ID / 3 类型 / 4 校验 / 5 大小 / 6 保存 / 7 URL / 8 分块
+        let underlined = |x: usize, y: usize| -> (Color, bool) {
+            let (fg, m) = g[y][x];
+            (fg, m.contains(Modifier::UNDERLINED))
+        };
+
+        // 「校验」字段名（CJK 2 字各占 2 格，首格 x=2/4）：淡蓝 + 下划线
+        for x in [2, 4] {
+            let (fg, ul) = underlined(x, 4);
+            assert_eq!(fg, LIGHT_BLUE, "校验字段名淡蓝 x={x}");
+            assert!(ul, "校验字段名带下划线 x={x}");
+        }
+        // 填充空格（x≥6）不带下划线（修订-6：下划线仅覆盖文字部分）
+        for x in [6, 7, 8] {
+            let (_, ul) = underlined(x, 4);
+            assert!(!ul, "校验填充空格无下划线 x={x}");
+        }
+        // 「URL」字段名（x 2..5）：淡蓝 + 下划线；填充空格无下划线
+        for x in [2, 3, 4] {
+            let (fg, ul) = underlined(x, 7);
+            assert_eq!(fg, LIGHT_BLUE, "URL 字段名淡蓝 x={x}");
+            assert!(ul, "URL 字段名带下划线 x={x}");
+        }
+        for x in [5, 7, 9] {
+            let (_, ul) = underlined(x, 7);
+            assert!(!ul, "URL 填充空格无下划线 x={x}");
+        }
+        // 其余字段名仍暗灰无下划线（类型行「类」字）
+        let (fg, ul) = underlined(2, 3);
+        assert_eq!(fg, DIM, "类型标签仍暗灰");
+        assert!(!ul, "类型标签无下划线");
+
+        // 热区回填：x = inner.x + 1 = 2、宽 9、高 1；y = inner.y + 行号
+        assert_eq!(
+            app.detail_url_rect,
+            Some(ratatui::layout::Rect::new(2, 7, 9, 1)),
+            "URL 热区"
+        );
+        assert_eq!(
+            app.detail_ck_rect,
+            Some(ratatui::layout::Rect::new(2, 4, 9, 1)),
+            "校验热区"
+        );
+        app.shutdown().await;
+    }
+
+    /// FR-01-101：无校验码任务无「校验」热区（URL 热区仍在）；无选中任务热区双清空。
+    #[tokio::test]
+    async fn hot_rects_cleared_for_no_checksum_and_no_selection() {
+        // 无校验码任务
+        let mut app = make_app("t14-nock");
+        app.tasks.push(task(1, "nock.bin", TaskState::Downloading));
+        let term = render_detail(&mut app, 110, 24);
+        assert!(term.backend().to_string().contains("URL"), "URL 行在位");
+        assert!(app.detail_url_rect.is_some(), "URL 热区在位");
+        assert!(app.detail_ck_rect.is_none(), "无校验行 → 校验热区 None");
+
+        // 无选中任务：热区双清空
+        let mut app = make_app("t14-nosel");
+        let term = render_detail(&mut app, 110, 24);
+        assert!(
+            term.backend().to_string().contains("未选中任务"),
+            "空态占位"
+        );
+        assert!(app.detail_url_rect.is_none(), "无选中 → URL 热区清空");
+        assert!(app.detail_ck_rect.is_none(), "无选中 → 校验热区清空");
+        app.shutdown().await;
+    }
+
+    /// FR-01-101：G 收起右栏两面板（show_panes=false）与窄终端（<100 列）不渲染详情
+    /// → 整帧渲染后热区双清空（点击无动作）。
+    #[tokio::test]
+    async fn hot_rects_cleared_when_layout_hides_detail() {
+        // G 紧凑布局
+        let mut app = make_app("t14-g");
+        app.tasks.push(task(1, "g.bin", TaskState::Downloading));
+        app.show_panes = false;
+        render_full(&mut app, 120, 40);
+        assert!(app.detail_url_rect.is_none(), "G 收起 → URL 热区清空");
+        assert!(app.detail_ck_rect.is_none(), "G 收起 → 校验热区清空");
+
+        // 窄终端
+        let mut app = make_app("t14-narrow");
+        app.tasks.push(task(1, "n.bin", TaskState::Downloading));
+        render_full(&mut app, 80, 34);
+        assert!(app.detail_url_rect.is_none(), "窄终端 → URL 热区清空");
+        assert!(app.detail_ck_rect.is_none(), "窄终端 → 校验热区清空");
+        app.shutdown().await;
     }
 }

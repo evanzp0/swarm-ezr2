@@ -103,6 +103,14 @@ impl TaskState {
     pub fn is_done(&self) -> bool {
         matches!(self, TaskState::Completed | TaskState::Seeding)
     }
+
+    /// 是否显示并发连接明细（FR-01-96）：仅「下载中」与「做种中」（BT 二期预留）
+    /// 持有活跃连接；其余状态明细为空、活跃 0（渲染层门槛——状态下沉时连接
+    /// 数据冻结隐藏，恢复下载原样续用，保证暂停续传的累计量口径不受影响）。
+    #[must_use]
+    pub fn shows_conns(&self) -> bool {
+        matches!(self, TaskState::Downloading | TaskState::Seeding)
+    }
 }
 
 /// 失败类别（FR-01-40/43/44/51/22）：决定自动重试行为与列表行文案

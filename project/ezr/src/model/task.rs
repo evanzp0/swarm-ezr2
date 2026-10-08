@@ -186,6 +186,9 @@ impl Task {
 
     /// 并发线程数（展示用）：下载中 = 活跃连接数（数据面口径，FR-01-81 修订二：
     /// 持有未完成块的连接），其余状态 = 有效连接数（排除已待命的空连接）
+    /// FR-01-100（详情类型行去并发数）后产品面暂无调用点；数据面语义测试保留，
+    /// phase-02 BT（做种/上传速度展示）预期复用
+    #[allow(dead_code)]
     #[must_use]
     pub fn thread_count(&self) -> usize {
         if self.state == TaskState::Downloading {

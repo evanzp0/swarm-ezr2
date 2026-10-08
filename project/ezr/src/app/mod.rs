@@ -27,6 +27,7 @@ use crate::model::speed::{SmoothedSpeed, SpeedWindow};
 pub use crate::model::Task;
 
 mod cli;
+mod clipboard;
 mod dialog_keys;
 mod dialogs;
 mod engine;
@@ -125,6 +126,13 @@ pub struct App {
     pub session_bytes: u64,
     /// 各任务上次观察到的已下载字节（会话累计账本，增量式计数用）
     session_seen: HashMap<u32, u64>,
+    /// 连接级账本（FR-01-99，App 消费侧计量不回写引擎）：
+    /// (任务, 连接) → 上一观测 (块号, 块内已写字节, 时刻)——增量与换块判定依据
+    conn_prev: HashMap<(u32, usize), (u32, u64, Instant)>,
+    /// (任务, 连接) → 本次开始下载起累计落盘字节（新一次下载清零、续传保留）
+    conn_cum: HashMap<(u32, usize), u64>,
+    /// (任务, 连接) → 连接速度展示面平滑器（EMA；待命零值速断）
+    conn_speed: HashMap<(u32, usize), SmoothedSpeed>,
     /// 帧计数（转轮动画）
     pub frame: u64,
     /// 退出标志
@@ -165,8 +173,27 @@ pub struct App {
     pub visible_rows: usize,
     /// 列表内框区域（ui 层回填，鼠标命中用）
     pub list_area: Option<Rect>,
-    /// 是否显示右侧速度图表面板
-    pub show_chart: bool,
+    /// 是否显示右栏两面板（任务详情 / 并发连接面板；`G` 切换，FR-01-98；
+    /// 头部流量图常显不受影响）
+    pub show_panes: bool,
+    /// 并发连接面板滚动偏移（连接行单位；滚轮 / Ctrl+↑↓ 滚动，FR-01-96）
+    pub conns_scroll: usize,
+    /// 并发连接面板当前选中行（连接下标 0 基；Ctrl+↑↓ 移动，Ctrl+B 断开目标，FR-01-97）
+    pub conns_sel: usize,
+    /// 并发连接面板内框区域（ui 层回填；滚轮命中；空明细时 None = 穿透）
+    pub conns_area: Option<Rect>,
+    /// 任务详情面板「URL」字段名热区（ui 层每帧回填；点击复制 url 展示值，FR-01-101）
+    pub detail_url_rect: Option<Rect>,
+    /// 任务详情面板「校验」字段名热区（ui 层每帧回填；点击复制校验码值，FR-01-101）
+    pub detail_ck_rect: Option<Rect>,
+    /// 系统剪贴板实例（FR-01-101：懒初始化并复用，避免每次点击重建桌面连接）
+    clipboard: Option<arboard::Clipboard>,
+    /// 最近一次复制的内容（FR-01-101 诊断与测试断言复制内容用）
+    pub(crate) last_copied: Option<String>,
+    /// 并发连接面板可视数据行数（ui 层回填，滚动钳制）
+    pub visible_conns_rows: usize,
+    /// 明细滚动所属的列表选中序号（切换任务时重置滚动与选择，FR-01-97）
+    conns_scroll_for: usize,
     /// 当前打开的对话框
     pub dialog: Option<Dialog>,
     /// 对话框按钮可点击区域（ui 层每帧回填）
@@ -207,6 +234,9 @@ impl App {
             up_hist: vec![0; 90],
             session_bytes: 0,
             session_seen: HashMap::new(),
+            conn_prev: HashMap::new(),
+            conn_cum: HashMap::new(),
+            conn_speed: HashMap::new(),
             frame: 0,
             quit: false,
             toast: Some("EZR Downloader 就绪".to_string()),
@@ -224,7 +254,16 @@ impl App {
             speed_display: HashMap::new(),
             visible_rows: 6,
             list_area: None,
-            show_chart: true,
+            show_panes: true,
+            conns_scroll: 0,
+            conns_sel: 0,
+            conns_area: None,
+            detail_url_rect: None,
+            detail_ck_rect: None,
+            clipboard: None,
+            last_copied: None,
+            visible_conns_rows: 8,
+            conns_scroll_for: 0,
             dialog: None,
             dlg_btn_rects: Vec::new(),
             dlg_field_rects: Vec::new(),
@@ -310,7 +349,7 @@ impl App {
         self.toast_until = Some(Instant::now() + std::time::Duration::from_secs(3));
     }
 
-    /// 全局速度历史采样（UI Sparkline 用，最大 180 点）
+    /// 全局速度历史采样（UI 流量图用，最大 180 点）
     pub(super) fn push_hist(&mut self, global_dl: f64, global_ul: f64) {
         self.speed_hist.push((global_dl / 1024.0) as u64);
         if self.speed_hist.len() > 180 {
@@ -320,5 +359,24 @@ impl App {
         if self.up_hist.len() > 180 {
             self.up_hist.remove(0);
         }
+    }
+
+    /// 连接级展示面：指定连接的平滑速度（B/s；无记录 = 0 待命）
+    pub(crate) fn conn_speed_of(&self, task_id: u32, conn_id: usize) -> f64 {
+        self.conn_speed
+            .get(&(task_id, conn_id))
+            .map_or(0.0, SmoothedSpeed::value)
+    }
+
+    /// 连接级展示面：指定连接自本次开始下载起累计落盘字节（无记录 = 0）
+    pub(crate) fn conn_cum_of(&self, task_id: u32, conn_id: usize) -> u64 {
+        self.conn_cum.get(&(task_id, conn_id)).copied().unwrap_or(0)
+    }
+
+    /// 清空指定任务的连接级账本（新一次下载开始 / 任务移除 / 收尾时调用，FR-01-99）
+    pub(super) fn clear_conn_stats(&mut self, task_id: u32) {
+        self.conn_prev.retain(|(tid, _), _| *tid != task_id);
+        self.conn_cum.retain(|(tid, _), _| *tid != task_id);
+        self.conn_speed.retain(|(tid, _), _| *tid != task_id);
     }
 }

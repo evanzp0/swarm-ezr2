@@ -9,6 +9,12 @@
   near-duplicate / possible-synonym 因此大面积误报。按其 spec「findings 为 advisory、
   synonym 须人工复核后处置」的规则逐条人工复核后判定为假阳性、不修改规格文本即可；
   不要据此改写中文规格或绕开 dry-check。
+- **dry-check 验收口径 = 错误级 0 + 增量对账防退化**：findings 全部为 advisory
+  （near-duplicate / possible-synonym，medium confidence），「通过」的判定 = 无 error 级
+  finding；修订既有 feature 后把 findings 数与修改前基线（归档包/上一版）对比——存量
+  提示不代表退化，**增量提示**才是复核对象：逐条审为语义性差异（不同守卫臂/不同文案）
+  即通过，非意外漂移不归一化。直接拿全量 findings 数当错误数、或以「提示数 >0」判失败，
+  都是对 advisory 性质的误读。
 - **IR 场景行数与 feature 场景名计数口径不同**：gherkin-parser 的 IR 把 Scenario
   Outline 按 Examples 行展开，IR 场景行数 > feature 内场景名个数——对账 pass/skip
   增量时先统一口径（执行行数 vs 场景数），差异属展开口径而非丢场景。
