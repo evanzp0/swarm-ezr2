@@ -135,6 +135,28 @@ fn dropdown_item(
     rects.push((irect, i));
 }
 
+/// 下拉浮层整体渲染（architect v116 收口：校验算法/代理两处仅 (选项集, 宽,
+/// 标题, 选中项, 命中区域表) 不同——框架定位 + 逐项渲染 + 钳短裁剪收口为
+/// 单一函数，选项内容由调用方以 (主体文本, 可选后缀) 对传入）
+fn draw_dropdown(
+    f: &mut Frame,
+    area: Rect,
+    inner: Rect,
+    anchor_y: u16,
+    pw: u16,
+    title: &str,
+    sel: usize,
+    items: &[(String, Option<String>)],
+    rects: &mut Vec<(Rect, usize)>,
+) {
+    let ph = items.len() as u16 + 2;
+    let pinner = dropdown_frame(f, area, inner, anchor_y, pw, ph, title);
+    // 浮层被终端钳短时只渲染可见行（coder v116：选项行不得越出钳后内框）
+    for (i, (main, suffix)) in items.iter().enumerate().take(pinner.height as usize) {
+        dropdown_item(f, pinner, i, sel, main.clone(), suffix.clone(), rects);
+    }
+}
+
 pub(super) fn draw_dialogs(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(d) = app.dialog.as_ref() else { return };
     app.dlg_btn_rects.clear();
@@ -359,45 +381,45 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         },
     );
 
-    // 校验算法下拉框（浮层最后绘制，覆盖对话框与下层内容；框架与选项行
-    // 渲染经 dropdown_frame/dropdown_item 单源，与代理下拉共用）
+    // 校验算法下拉框（浮层最后绘制，覆盖对话框与下层内容；架构轮单源的
+    // dropdown_frame/dropdown_item + architect v116 整体渲染收口 draw_dropdown）
     if ck_open {
-        let items = CHECKSUM_ALGOS;
-        let pw = 24u16;
-        let ph = items.len() as u16 + 2;
-        let pinner = dropdown_frame(f, area, inner, ck_row_y, pw, ph, " 校验算法 ");
-        // 浮层被终端钳短时只渲染可见行（coder v116：选项行不得越出钳后内框）
-        for (i, (name, need, _)) in items.iter().enumerate().take(pinner.height as usize) {
-            dropdown_item(
-                f,
-                pinner,
-                i,
-                ck_sel,
-                pad_right(name, 9),
-                Some(format!("{need} 位")),
-                &mut app.dlg_ck_rects,
-            );
-        }
+        let items: Vec<(String, Option<String>)> = CHECKSUM_ALGOS
+            .iter()
+            .map(|(name, need, _)| (pad_right(name, 9), Some(format!("{need} 位"))))
+            .collect();
+        draw_dropdown(
+            f,
+            area,
+            inner,
+            ck_row_y,
+            24,
+            " 校验算法 ",
+            ck_sel,
+            &items,
+            &mut app.dlg_ck_rects,
+        );
     }
 
     // 代理下拉框（v1.5/FR-01-86：直连 + 默认代理 + 命名条目；不含认证信息）
     if proxy_open {
-        let items: Vec<String> = app.proxy_labels.clone();
         let pw = 26u16;
-        let ph = items.len() as u16 + 2;
-        let pinner = dropdown_frame(f, area, inner, proxy_row_y, pw, ph, " 选择代理 ");
-        // 浮层被终端钳短时只渲染可见行（coder v116：选项行不得越出钳后内框）
-        for (i, name) in items.iter().enumerate().take(pinner.height as usize) {
-            dropdown_item(
-                f,
-                pinner,
-                i,
-                proxy_sel,
-                truncate(name, (pw as usize).saturating_sub(6)),
-                None,
-                &mut app.dlg_proxy_rects,
-            );
-        }
+        let items: Vec<(String, Option<String>)> = app
+            .proxy_labels
+            .iter()
+            .map(|name| (truncate(name, (pw as usize).saturating_sub(6)), None))
+            .collect();
+        draw_dropdown(
+            f,
+            area,
+            inner,
+            proxy_row_y,
+            pw,
+            " 选择代理 ",
+            proxy_sel,
+            &items,
+            &mut app.dlg_proxy_rects,
+        );
     }
 }
 

@@ -103,6 +103,20 @@ pub fn algo_index_by_name(name: &str) -> Option<usize> {
         .position(|(disp, _, _)| disp.to_lowercase().replace('-', "") == n)
 }
 
+/// 按显示名精确匹配算法表下标，未收录回退 SHA-256 = 3（规范名回查场景：
+/// 任务 `checksum.algo` / `VerifySpec.algo` 恒为表内规范名——写入点全部取自
+/// `CHECKSUM_ALGOS[i].0`）。与 [`algo_index_by_name`]（宽容匹配，用户输入用）
+/// 语义刻意不同：变体名（如小写 "sha1"）落默认值而非宽容命中，与既有逐点
+/// 行为一致（architect v116 单源收口：supervisor verify 与修改对话框预填
+/// 原各有一份 exact-match + unwrap_or(3) 内联）。
+#[must_use]
+pub fn algo_index_exact_or_default(name: &str) -> usize {
+    CHECKSUM_ALGOS
+        .iter()
+        .position(|(disp, _, _)| *disp == name)
+        .unwrap_or(3)
+}
+
 /// 六种 Digest 算法的流式文件哈希函数表（下标即算法表下标 0..=5）；
 /// 越界下标一律走 Adler-32 流式分支（与既有 `_ =>` 口径一致）
 type FileStreamHash =

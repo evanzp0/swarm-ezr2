@@ -25,6 +25,11 @@ use std::sync::Arc;
 #[cfg(test)]
 #[allow(unused_imports)]
 pub use error::classify_reqwest;
+// architect v116：属性测试锁 parse_retry_after_header 解析稳定性（同上手法；
+// 产品构建不产生该路径，窄接口不受影响）
+#[cfg(test)]
+#[allow(unused_imports)]
+pub use error::parse_retry_after_header;
 /// 窄接口载荷：`Cmd::Start`/`Cmd::Verify` 携带的任务上下文（单源于 supervisor
 /// 定义，门面 re-export 供 app 构造；app 不得再 reach 进 supervisor 内部）。
 pub use supervisor::{TaskSpec, VerifySpec};

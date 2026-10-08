@@ -1,5 +1,6 @@
 //! paste — bracketed paste 输入路由（FR-01-06）：纯函数便于单测
 
+use super::dialog_keys::{CAP_CK_HEX, CAP_CONNS_DIGITS, CAP_TEXT};
 use super::{App, Dialog, DialogKind};
 
 impl App {
@@ -37,22 +38,23 @@ fn push_capped(dst: &mut String, src: &str, cap: usize) -> bool {
 }
 
 /// 将粘贴文本按当前焦点路由到 Add 对话框字段（FR-01-06）。
-/// 过滤规则与逐键输入一致：URL/目录 ≤300 字符；并发仅数字 ≤2 位；
-/// 校验码仅十六进制 ≤128 位；按钮焦点（5=确认 6=取消）不接收。
+/// 过滤规则与逐键输入一致（容量单源 dialog_keys 常量，architect v116）：
+/// URL/目录 ≤ CAP_TEXT 字符；并发仅数字 ≤ CAP_CONNS_DIGITS 位；
+/// 校验码仅十六进制 ≤ CAP_CK_HEX 位；按钮焦点（5=确认 6=取消）不接收。
 fn dlg_apply_paste(d: &mut Dialog, focus: usize, text: &str) -> bool {
     let clean = paste_sanitize(text);
     match focus {
-        0 => push_capped(&mut d.url, &clean, 300),
-        1 => push_capped(&mut d.dir, &clean, 300),
+        0 => push_capped(&mut d.url, &clean, CAP_TEXT),
+        1 => push_capped(&mut d.dir, &clean, CAP_TEXT),
         2 => {
             let digits: String = clean.chars().filter(|c| c.is_ascii_digit()).collect();
-            let inserted = push_capped(&mut d.conns, &digits, 2);
+            let inserted = push_capped(&mut d.conns, &digits, CAP_CONNS_DIGITS);
             d.conns_edited |= inserted;
             inserted
         }
         4 => {
             let hex: String = clean.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-            push_capped(&mut d.ck_value, &hex, 128)
+            push_capped(&mut d.ck_value, &hex, CAP_CK_HEX)
         }
         _ => false,
     }

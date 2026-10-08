@@ -125,7 +125,7 @@ fn pos_url(s: &str) -> Result<String, String> {
     if s.starts_with('-') {
         return Err(format!("未知参数（{s}），--help 查看用法"));
     }
-    if !(s.starts_with("http://") || s.starts_with("https://")) {
+    if !crate::model::is_http_url(s) {
         return Err(format!("URL 非法（仅支持 http/https）：{s}"));
     }
     Ok(s.to_string())

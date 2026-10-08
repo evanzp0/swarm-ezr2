@@ -2,8 +2,11 @@
 
 use super::{App, Dialog, DialogKind, CHECKSUM_ALGOS};
 use crate::engine::Cmd;
+use crate::model::namegen::{DOWNLOADING_EXT, SIDECAR_EXT};
 use crate::model::sidecar::Sidecar;
-use crate::model::{checksum, namegen, unix_now, Checksum, Protocol, Task, TaskState};
+use crate::model::{
+    checksum, is_http_url, namegen, protocol_of_url, unix_now, Checksum, Task, TaskState,
+};
 
 impl App {
     /// 校验码输入共识（Add/Modify 共用，DRY 收敛）：空 = 清除（None）；
@@ -126,8 +129,8 @@ impl App {
             self.set_toast("⚠ 请输入下载 URL");
             return;
         }
-        // FR-01-05：仅接受 http:// / https://
-        if !(url.starts_with("http://") || url.starts_with("https://")) {
+        // FR-01-05：仅接受 http:// / https://（口径单源 model::is_http_url）
+        if !is_http_url(&url) {
             self.set_toast("⚠ 仅支持 http:// 或 https:// 链接");
             return;
         }
@@ -156,11 +159,7 @@ impl App {
         };
         let dir = dir.trim_end_matches('/').to_string();
 
-        let protocol = if url.starts_with("https://") {
-            Protocol::Https
-        } else {
-            Protocol::Http
-        };
+        let protocol = protocol_of_url(&url);
         // 重复任务拒绝（Gherkin 01-add-task-16）：同 URL 同保存目录已在列表 →
         // toast「任务已存在」，不创建新任务（对话框保持打开，与其他校验失败一致）
         if self.tasks.iter().any(|t| t.url == url && t.save_dir == dir) {
@@ -170,7 +169,9 @@ impl App {
         let base_name = namegen::derive_name(None, None, &url);
         let id = self.next_id;
         // FR-01-26 断点自动接续：既有 sidecar 同 URL 同路径 → 接续原名
-        let resumed = Sidecar::load(&format!("{dir}/{base_name}.ezr"))
+        //（扩展名单源 namegen::SIDECAR_EXT，architect v116；join 语义保持本点
+        // 历史口径：目录尾 '/' 已归一，'\\' 不归一）
+        let resumed = Sidecar::load(&format!("{dir}/{base_name}{SIDECAR_EXT}"))
             .is_some_and(|sc| sc.url == url)
             || self.tasks.iter().any(|t| {
                 t.url == url
@@ -282,13 +283,14 @@ impl App {
         self.save_registry();
     }
 
-    /// 删除任务的三类本地文件：目标文件、.downloading、.ezr sidecar（FR-01-25「删除任务和文件」）
+    /// 删除任务的三类本地文件：目标文件、.downloading、.ezr sidecar（FR-01-25「删除任务和文件」；
+    /// 后缀单源 namegen 常量，architect v116）
     pub(super) fn delete_task_files(save_dir: &str, name: &str) {
         let base = save_dir.trim_end_matches('/');
         for path in [
             format!("{base}/{name}"),
-            format!("{base}/{name}.downloading"),
-            format!("{base}/{name}.ezr"),
+            format!("{base}/{name}{DOWNLOADING_EXT}"),
+            format!("{base}/{name}{SIDECAR_EXT}"),
         ] {
             let _ = std::fs::remove_file(&path);
         }
@@ -333,9 +335,11 @@ impl App {
             t.checksum.clone(),
             t.proxy.clone(),
         );
-        let ck_type = CHECKSUM_ALGOS
-            .iter()
-            .position(|(n, _, _)| checksum.as_ref().is_some_and(|c| c.algo == *n))
+        // 规范名回查单源 checksum::algo_index_exact_or_default（architect v116：
+        // 原内联 exact-match + unwrap_or(3) 与引擎 verify 重复）
+        let ck_type = checksum
+            .as_ref()
+            .map(|c| checksum::algo_index_exact_or_default(c.algo))
             .unwrap_or(3);
         // 选项表未收录时追加兜底项保证回显一致（命名代理被从配置删除的
         // 存量任务；正常流都在表内）
@@ -390,10 +394,6 @@ impl App {
             task_id: None,
         });
     }
-
-    // -----------------------------------------------------------------------
-    // 鼠标交互（沿用 demo：点击选中 / 滚轮 / 对话框按钮与字段）
-    // -----------------------------------------------------------------------
 }
 
 #[cfg(test)]
@@ -402,6 +402,7 @@ mod add_dialog_flow_tests {
 
     use super::*;
     use crate::model::config::Config;
+    use crate::model::Protocol;
 
     /// 添加对话框全流程：输入 URL/目录 → Enter 确认 → 任务入列；
     /// 保存目录尾斜杠归一（FR-01-03，目录归一单点化的行为锚定）

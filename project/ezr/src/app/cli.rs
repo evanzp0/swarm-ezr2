@@ -6,7 +6,8 @@
 //! （dialogs.rs）同层同权。
 
 use super::App;
-use crate::model::{unix_now, Checksum, Protocol, Task};
+use crate::model::namegen::SIDECAR_EXT;
+use crate::model::{protocol_of_url, unix_now, Checksum, Task};
 
 impl App {
     /// CLI 启动参数直接添加任务（FR-01-01；与对话框共用校验与命名规则）
@@ -17,8 +18,8 @@ impl App {
         conns: Option<usize>,
         checksum: Option<Checksum>,
     ) {
-        // URL 校验（FR-01-05）
-        if !(url.starts_with("http://") || url.starts_with("https://")) {
+        // URL 校验（FR-01-05，口径单源 model::is_http_url）
+        if !crate::model::is_http_url(&url) {
             self.set_toast(format!("⚠ 仅支持 http:// 或 https:// 链接（{url}）"));
             return;
         }
@@ -31,8 +32,9 @@ impl App {
         // 断点自动接续（FR-01-26）：同 URL 同路径的既有 sidecar → 沿用原名；
         // 否则重名检测（任务表 + 盘上）自动追加序号（与对话框添加同用
         // namegen::dedupe，口径一致）
-        let resumed = crate::model::sidecar::Sidecar::load(&format!("{dir}/{base_name}.ezr"))
-            .is_some_and(|s| s.url == url);
+        let resumed =
+            crate::model::sidecar::Sidecar::load(&format!("{dir}/{base_name}{SIDECAR_EXT}"))
+                .is_some_and(|s| s.url == url);
         let name = if resumed {
             base_name.clone()
         } else {
@@ -42,11 +44,7 @@ impl App {
                     || crate::model::namegen::exists_on_disk(&dir, n)
             })
         };
-        let protocol = if url.starts_with("https://") {
-            Protocol::Https
-        } else {
-            Protocol::Http
-        };
+        let protocol = protocol_of_url(&url);
         let ts = unix_now();
         let id = self.next_id;
         let t = Task::new_queued(

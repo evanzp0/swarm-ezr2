@@ -1,6 +1,7 @@
 //! task — 任务实体与单连接状态（模型层核心类型）
 
 use super::config::ProxyChoice;
+use super::namegen::{sidecar_path_of, DOWNLOADING_EXT};
 use super::timefmt::fmt_created;
 use super::{chunk, namegen, Checksum, FailKind, Protocol, TaskState};
 
@@ -214,16 +215,18 @@ impl Task {
         namegen::join_path(&self.save_dir, &self.name)
     }
 
-    /// 下载中的盘上文件路径（追加 `.downloading` 扩展名，FR-01-24）
+    /// 下载中的盘上文件路径（追加 `.downloading` 扩展名，FR-01-24；扩展名
+    /// 单源于 [`namegen::DOWNLOADING_EXT`]，architect v116）
     #[must_use]
     pub fn downloading_path(&self) -> String {
-        format!("{}.downloading", self.target_path())
+        format!("{}{DOWNLOADING_EXT}", self.target_path())
     }
 
-    /// sidecar 元数据文件路径（`<目标文件>.ezr`，D1）
+    /// sidecar 元数据文件路径（`<目标文件>.ezr`，D1；委托
+    /// [`namegen::sidecar_path_of`] 单源——与 (目录, 文件名) 散点同口径）
     #[must_use]
     pub fn sidecar_path(&self) -> String {
-        format!("{}.ezr", self.target_path())
+        sidecar_path_of(&self.save_dir, &self.name)
     }
 
     /// 暂停/失败收尾的断点视图快照（详情页分块表）：按 total/downloaded/

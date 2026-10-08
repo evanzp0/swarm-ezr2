@@ -9,7 +9,7 @@ use ratatui::Frame;
 use super::task_lines::task_lines;
 use super::{ACCENT, BORDER, DIM, SEL_BG};
 use crate::app::{App, ITEM_HEIGHT};
-use crate::model::{Task, TaskState};
+use crate::model::{slots, Task};
 
 pub(super) fn render_task(
     f: &mut Frame,
@@ -73,20 +73,9 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
     let spinner = app.spinner();
     let max_items = rows.min(idxs.len().saturating_sub(app.scroll));
-    // 排队位次：按列表顺序从上往下，等待槽位的任务依次编号（1 基；已获槽位/非等待 = 0）
-    let mut waiting = 0usize;
-    let qpos: Vec<usize> = idxs
-        .iter()
-        .map(|&ti| {
-            let t = &app.tasks[ti];
-            if t.state == TaskState::Queued && !t.has_slot {
-                waiting += 1;
-                waiting
-            } else {
-                0
-            }
-        })
-        .collect();
+    // 排队位次：按列表顺序从上往下，等待槽位的任务依次编号（1 基；已获槽位/非等待 = 0）。
+    // 编号规则单源 model::slots::queue_positions（architect v116：原渲染层内联重实现）
+    let qpos = slots::queue_positions(&app.tasks, &idxs);
     for vi in 0..max_items {
         let ti = app.scroll + vi;
         let t = &app.tasks[idxs[ti]];

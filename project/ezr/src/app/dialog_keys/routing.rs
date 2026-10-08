@@ -4,13 +4,13 @@
 
 use crossterm::event::KeyCode;
 
-use super::{Dialog, DialogKind};
+use super::{Dialog, DialogKind, CAP_CK_HEX, CAP_CONNS_DIGITS, CAP_TEXT};
 use crate::app::CHECKSUM_ALGOS;
 
 /// 校验码字段字符追加（Add focus 4 / Modify focus 2 共用，DRY 收敛）：
-/// 仅十六进制、≤ 128 位（SHA-512 上限）
+/// 仅十六进制、≤ [`CAP_CK_HEX`] 位（SHA-512 上限）
 pub fn push_hex_capped(d: &mut Dialog, c: char) {
-    if c.is_ascii_hexdigit() && d.ck_value.chars().count() < 128 {
+    if c.is_ascii_hexdigit() && d.ck_value.chars().count() < CAP_CK_HEX {
         d.ck_value.push(c);
     }
 }
@@ -102,23 +102,23 @@ pub fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> bool {
 }
 
 /// 文本字段字符输入（kind 感知：Add 0=URL 1=目录 2=并发；Modify 0=并发。
-/// URL/目录 ≤300 字符；并发仅 2 位数字）
+/// URL/目录 ≤ [`CAP_TEXT`] 字符；并发仅 [`CAP_CONNS_DIGITS`] 位数字）
 pub fn text_char(kind: DialogKind, d: &mut Dialog, focus: usize, c: char) -> bool {
     match (kind, focus) {
         (DialogKind::Add, 0) => {
-            if d.url.chars().count() < 300 {
+            if d.url.chars().count() < CAP_TEXT {
                 d.url.push(c);
             }
             true
         }
         (DialogKind::Add, 1) => {
-            if d.dir.chars().count() < 300 {
+            if d.dir.chars().count() < CAP_TEXT {
                 d.dir.push(c);
             }
             true
         }
         (DialogKind::Add, 2) | (DialogKind::Modify, 0) => {
-            if c.is_ascii_digit() && d.conns.chars().count() < 2 {
+            if c.is_ascii_digit() && d.conns.chars().count() < CAP_CONNS_DIGITS {
                 d.conns.push(c);
                 d.conns_edited = true;
             }

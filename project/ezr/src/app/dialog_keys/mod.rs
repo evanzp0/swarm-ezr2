@@ -15,6 +15,14 @@ pub(crate) use routing::{
 
 use super::{Dialog, DialogKind};
 
+/// 对话框文本字段容量上限（URL 与目录共用，逐键输入与 bracketed paste 两
+/// 入口单源，architect v116 防双入口容量漂移）
+pub(super) const CAP_TEXT: usize = 300;
+/// 并发数字段容量上限（位数；并发值域 1–64 恰两位）
+pub(super) const CAP_CONNS_DIGITS: usize = 2;
+/// 校验码字段容量上限（SHA-512 十六进制位数）
+pub(super) const CAP_CK_HEX: usize = 128;
+
 impl super::App {
     pub(super) fn on_dialog_key(&mut self, code: KeyCode) {
         let (kind, focus) = match &self.dialog {

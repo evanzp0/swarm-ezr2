@@ -6,77 +6,89 @@ use ratatui::layout::Rect;
 use super::{App, DialogKind, ITEM_HEIGHT};
 
 impl App {
-    /// 鼠标事件入口
+    /// 鼠标事件入口（architect v116：分发核保持行为拆分——对话框态与主界面
+    /// 命中各自成函数，消除早退 return 穿越两分支的控制流混杂；分支语义
+    /// 不变：对话框打开时一切鼠标事件仅作用于对话框）
     pub fn on_mouse(&mut self, m: MouseEvent) {
         if self.dialog.is_some() {
-            if let MouseEventKind::Down(MouseButton::Left) = m.kind {
-                let kind = self.dialog.as_ref().map(|d| d.kind);
-                let ck_open = self.dialog.as_ref().is_some_and(|d| d.ck_open);
-                let proxy_open = self.dialog.as_ref().is_some_and(|d| d.proxy_open);
-                let hit = |rects: &[(Rect, usize)]| {
-                    rects
-                        .iter()
-                        .find(|(r, _)| {
-                            m.column >= r.x
-                                && m.column < r.x.saturating_add(r.width)
-                                && m.row >= r.y
-                                && m.row < r.y.saturating_add(r.height)
-                        })
-                        .map(|(_, i)| *i)
-                };
-                if ck_open {
-                    let ck_rects = self.dlg_ck_rects.clone();
-                    if let Some(i) = hit(&ck_rects) {
-                        let d = self.dialog.as_mut().unwrap();
-                        d.ck_type = i;
-                        d.ck_sel = i;
-                        d.ck_open = false;
-                    } else if let Some(d) = self.dialog.as_mut() {
-                        d.ck_open = false;
-                    }
-                    return;
-                }
-                // 代理下拉（v1.5/FR-01-86）：点击选项选择；点外关闭
-                if proxy_open {
-                    let proxy_rects = self.dlg_proxy_rects.clone();
-                    if let Some(i) = hit(&proxy_rects) {
-                        let d = self.dialog.as_mut().unwrap();
-                        d.proxy_sel = i;
-                        d.proxy_open = false;
-                    } else if let Some(d) = self.dialog.as_mut() {
-                        d.proxy_open = false;
-                    }
-                    return;
-                }
-                let field_rects = self.dlg_field_rects.clone();
-                let btn_rects = self.dlg_btn_rects.clone();
-                if let Some(i) = hit(&field_rects) {
-                    // 下拉行下标：Add 校验=3 / Modify 校验=1；代理行恒为末二
-                    //（Add 5 / Modify 3）
-                    let ck_i = if kind == Some(DialogKind::Add) { 3 } else { 1 };
-                    let proxy_i = if kind == Some(DialogKind::Add) { 5 } else { 3 };
+            self.on_mouse_dialog(m);
+        } else {
+            self.on_mouse_main(m);
+        }
+    }
+
+    /// 对话框态命中（仅左键生效；下拉浮层优先，其次字段行/按钮行）
+    fn on_mouse_dialog(&mut self, m: MouseEvent) {
+        if let MouseEventKind::Down(MouseButton::Left) = m.kind {
+            let kind = self.dialog.as_ref().map(|d| d.kind);
+            let ck_open = self.dialog.as_ref().is_some_and(|d| d.ck_open);
+            let proxy_open = self.dialog.as_ref().is_some_and(|d| d.proxy_open);
+            let hit = |rects: &[(Rect, usize)]| {
+                rects
+                    .iter()
+                    .find(|(r, _)| {
+                        m.column >= r.x
+                            && m.column < r.x.saturating_add(r.width)
+                            && m.row >= r.y
+                            && m.row < r.y.saturating_add(r.height)
+                    })
+                    .map(|(_, i)| *i)
+            };
+            if ck_open {
+                let ck_rects = self.dlg_ck_rects.clone();
+                if let Some(i) = hit(&ck_rects) {
                     let d = self.dialog.as_mut().unwrap();
-                    d.focus = i;
-                    if i == ck_i {
-                        d.ck_open = true;
-                        d.ck_sel = d.ck_type;
-                    } else if i == proxy_i {
-                        d.proxy_open = true;
-                    }
-                } else if let Some(btn) = hit(&btn_rects) {
-                    if let Some(d) = self.dialog.as_mut() {
-                        d.focus = btn;
-                    }
-                    match kind {
-                        Some(DialogKind::Add) => self.dlg_activate_add(btn),
-                        Some(DialogKind::Modify) => self.dlg_activate_modify(btn),
-                        Some(DialogKind::Delete) => self.dlg_activate_delete(btn),
-                        None => {}
-                    }
+                    d.ck_type = i;
+                    d.ck_sel = i;
+                    d.ck_open = false;
+                } else if let Some(d) = self.dialog.as_mut() {
+                    d.ck_open = false;
+                }
+                return;
+            }
+            // 代理下拉（v1.5/FR-01-86）：点击选项选择；点外关闭
+            if proxy_open {
+                let proxy_rects = self.dlg_proxy_rects.clone();
+                if let Some(i) = hit(&proxy_rects) {
+                    let d = self.dialog.as_mut().unwrap();
+                    d.proxy_sel = i;
+                    d.proxy_open = false;
+                } else if let Some(d) = self.dialog.as_mut() {
+                    d.proxy_open = false;
+                }
+                return;
+            }
+            let field_rects = self.dlg_field_rects.clone();
+            let btn_rects = self.dlg_btn_rects.clone();
+            if let Some(i) = hit(&field_rects) {
+                // 下拉行下标：Add 校验=3 / Modify 校验=1；代理行恒为末二
+                //（Add 5 / Modify 3）
+                let ck_i = if kind == Some(DialogKind::Add) { 3 } else { 1 };
+                let proxy_i = if kind == Some(DialogKind::Add) { 5 } else { 3 };
+                let d = self.dialog.as_mut().unwrap();
+                d.focus = i;
+                if i == ck_i {
+                    d.ck_open = true;
+                    d.ck_sel = d.ck_type;
+                } else if i == proxy_i {
+                    d.proxy_open = true;
+                }
+            } else if let Some(btn) = hit(&btn_rects) {
+                if let Some(d) = self.dialog.as_mut() {
+                    d.focus = btn;
+                }
+                match kind {
+                    Some(DialogKind::Add) => self.dlg_activate_add(btn),
+                    Some(DialogKind::Modify) => self.dlg_activate_modify(btn),
+                    Some(DialogKind::Delete) => self.dlg_activate_delete(btn),
+                    None => {}
                 }
             }
-            return;
         }
+    }
+
+    /// 主界面命中（详情热区复制 / 列表点击选中 / 明细与列表滚轮）
+    fn on_mouse_main(&mut self, m: MouseEvent) {
         // 指针命中并发连接面板（FR-01-96：明细非空时面板接收滚轮）→ 滚动明细；
         // 空明细 / 未选中任务时 conns_area 为 None → 滚轮穿透滚动任务列表
         let over_conns = pointer_in(&self.conns_area, m.column, m.row);

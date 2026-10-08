@@ -2,9 +2,10 @@
 # arch_check.sh — EZR 自动化架构边界检查（six-pack/architect 交付）
 #
 # 依据 packs/_common/notes/rust.md「架构边界与适配器方向」条款的 grep 级方案：
-# 零依赖、可读、易维护，覆盖本项目十一条分层规则；CI 可作为 && 链一环集成。
+# 零依赖、可读、易维护，覆盖本项目十二条分层规则；CI 可作为 && 链一环集成。
 # （v1.3 后复核批次，architect 第二轮：新增规则 7/8，见 POSITIVE-CONTROL 尾注；
-# architect 第四轮：新增规则 11——model 纯同步逻辑护栏，阳性对照实测本轮会话）
+# architect 第四轮：新增规则 11——model 纯同步逻辑护栏，阳性对照实测本轮会话；
+# architect v116：新增规则 12——ui 层 IO 框架导入禁令，阳性对照实测本轮会话）
 #
 # 分层基线（依赖方向：低层指向高层，model 为最内层纯逻辑）：
 #   main.rs → app → engine → model；ui → app + model；model → ∅
@@ -125,6 +126,19 @@ else
   echo "[ OK ] model 层零异步运行时/HTTP 客户端依赖（纯同步逻辑）"
 fi
 
+# 规则 12【展示层】ui 层禁入 IO 框架导入（architect v116：ui 是纯渲染层——
+# 零文件/网络/剪贴板/运行时依赖，渲染输入只经 App 状态与 ui 层回填；本轮
+# 评审实测 ui 产品代码零命中，规则化固化防漂移。扫描域 = 导入语句且只盯
+# tokio/reqwest/arboard/fs2 四框架；不含 crossterm/ratatui（ui 的合法呈现
+# 依赖，测试内 crossterm 亦属既有形态）与 #[tokio::test] 属性（非导入语句，
+# 不在扫描域））
+hit=$(grep -rnE '^[[:space:]]*use[[:space:]]+(tokio|reqwest|arboard|fs2)' src/ui/ --include='*.rs' || true)
+if [ -n "$hit" ]; then
+  echo "[FAIL] ui 层引入 IO 框架导入（展示层零 IO 依赖，输入只经 App 状态）:"; echo "$hit"; fails=$((fails+1))
+else
+  echo "[ OK ] ui 层零 IO 框架导入（纯渲染层）"
+fi
+
 if [ "$fails" -gt 0 ]; then
   echo "arch_check: ${fails} 条规则未过"; exit 1
 fi
@@ -146,3 +160,7 @@ echo "arch_check: 全部边界规则通过"
 #   → 规则 11 命中并非零退出；移除后全过。注意探针必须是真实 use 语句——
 #   注释形态（`// use tokio…`）不被扫描（规则只认代码行，与判例对齐），
 #   以注释探针得「零发现」是假阴性而非规则失效。零发现结论以阳性对照生效为前提（engineering.md）。
+# architect v116 新增规则 12 阳性对照（本轮会话实测）：
+#   向 src/ui/chart.rs 顶部临时插入真实 use 语句 `use tokio::sync::mpsc;`
+#   → 规则 12 命中并非零退出；移除后全过。#[tokio::test] 属性形态不命中
+#   （非 use 语句，与判例对齐）。

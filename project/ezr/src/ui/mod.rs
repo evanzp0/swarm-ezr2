@@ -25,10 +25,12 @@ use crate::app::App;
 use crate::model::TaskState;
 
 mod btn;
+mod chart;
 mod conns;
 mod delete;
 mod detail;
 mod dialog;
+mod footer;
 mod header;
 mod list;
 mod task_lines;
@@ -41,7 +43,8 @@ mod text;
 use conns::draw_conns;
 use detail::draw_detail;
 use dialog::draw_dialogs;
-use header::{draw_footer, draw_header};
+use footer::draw_footer;
+use header::draw_header;
 use list::draw_list;
 #[cfg(test)]
 pub(crate) use text::{

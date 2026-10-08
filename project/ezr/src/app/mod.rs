@@ -22,9 +22,10 @@ use crate::engine::{EngineHandle, Evt};
 use crate::model::config::Config;
 use crate::model::registry::Registry;
 use crate::model::sidecar::Sidecar;
-use crate::model::slots;
 use crate::model::speed::{SmoothedSpeed, SpeedWindow};
-pub use crate::model::Task;
+use crate::model::{slots, Task};
+// architect v116：原 `pub use crate::model::Task;` 死 re-export（crate::app::Task
+// 零消费者，各层均直用 crate::model::Task）降为模块内私有导入
 
 mod cli;
 mod clipboard;
@@ -371,6 +372,54 @@ impl App {
     /// 连接级展示面：指定连接自本次开始下载起累计落盘字节（无记录 = 0）
     pub(crate) fn conn_cum_of(&self, task_id: u32, conn_id: usize) -> u64 {
         self.conn_cum.get(&(task_id, conn_id)).copied().unwrap_or(0)
+    }
+
+    /// 全局下载速度合计（B/s；头部仪表面板「全局 ↓」与 tick 流量图采样共用
+    /// 口径：仅合计「下载中」任务速度。architect v116 自渲染路径提取——
+    /// 原头部内联聚合无直接单测面；tick 侧原合计全任务（非下载态速度已被
+    /// 同帧归零，数值恒等）。
+    #[must_use]
+    pub fn global_dl_speed(&self) -> f64 {
+        self.tasks
+            .iter()
+            .filter(|t| t.state == crate::model::TaskState::Downloading)
+            .map(|t| t.speed)
+            .sum()
+    }
+
+    /// 全局上传速度合计（B/s；头部「全局 ↑」口径：仅合计有上传的任务；
+    /// 01 期 BT 未启用恒 0，FR-01-94 ③）
+    #[must_use]
+    pub fn global_ul_speed(&self) -> f64 {
+        self.tasks
+            .iter()
+            .filter(|t| t.upload_speed > 0.0)
+            .map(|t| t.upload_speed)
+            .sum()
+    }
+
+    /// 头部「并发 N」口径（FR-01-94 ②/FR-01-96 数据面）：显示并发明细的任务
+    /// 连接总数（architect v116 自渲染路径提取）
+    #[must_use]
+    pub fn conns_display_total(&self) -> usize {
+        self.tasks
+            .iter()
+            .filter(|t| t.state.shows_conns())
+            .map(|t| t.connections.len())
+            .sum()
+    }
+
+    /// 并发面板「活跃 x」计数（FR-01-96）：明细状态下速度 > 0 的连接数；
+    /// 非明细状态恒 0（architect v116 自渲染路径提取，无头单测面）
+    #[must_use]
+    pub fn active_conn_count(&self, t: &Task) -> usize {
+        if !t.state.shows_conns() {
+            return 0;
+        }
+        t.connections
+            .iter()
+            .filter(|c| c.cap() > 0 && self.conn_speed_of(t.id, c.id) > 0.0)
+            .count()
     }
 
     /// 清空指定任务的连接级账本（新一次下载开始 / 任务移除 / 收尾时调用，FR-01-99）

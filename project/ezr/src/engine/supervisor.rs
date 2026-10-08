@@ -28,10 +28,10 @@ use tokio::sync::{mpsc, watch};
 
 use super::error::{classify_reqwest, parse_retry_after_header, EngineFailure};
 use super::{ConnView, Evt, TaskCmd};
-use crate::model::checksum::CHECKSUM_ALGOS;
 use crate::model::chunk::{block_range, chunk_total, Blocks};
 use crate::model::config::ProxyEndpoint;
 use crate::model::consistency::{self, Consistency, ServerStamp};
+use crate::model::namegen::DOWNLOADING_EXT;
 use crate::model::sidecar::{Sidecar, SidecarTask};
 use crate::model::{checksum, namegen, Checksum, FailKind, Protocol};
 
@@ -155,9 +155,10 @@ fn completed_of(sc: &Sidecar) -> u32 {
         .count() as u32
 }
 
-/// sidecar 路径推导
+/// sidecar 路径推导（委托 model 单源 namegen::sidecar_path_of，architect v116：
+/// 原 `.ezr` 后缀手拼与模型 Task 方法重复）
 fn sidecar_path(save_dir: &str, name: &str) -> String {
-    format!("{}.ezr", namegen::join_path(save_dir, name))
+    namegen::sidecar_path_of(save_dir, name)
 }
 
 /// 下载流程结果
@@ -354,7 +355,7 @@ async fn download(
     // 保存目录自动创建（Gherkin 01-add-task-11「目录不存在自动创建」：
     // 引擎打开目标文件前确保父目录存在，覆盖默认下载目录与用户新输入目录）
     let _ = tokio::fs::create_dir_all(&dir).await;
-    let dl_path = dir.join(format!("{name}.downloading"));
+    let dl_path = dir.join(format!("{name}{DOWNLOADING_EXT}"));
     let final_path = dir.join(&name);
     let sc_path = sidecar_path(&spec.save_dir, &name);
 
@@ -712,10 +713,9 @@ async fn single_stream(
 /// 校验（App 转校验中后下发；流式哈希不整载内存，FR-01-51）
 pub(crate) async fn verify(spec: VerifySpec, evt_tx: mpsc::Sender<Evt>) {
     let path = spec.path.clone();
-    let algo_idx = CHECKSUM_ALGOS
-        .iter()
-        .position(|(disp, _, _)| *disp == spec.algo)
-        .unwrap_or(3);
+    // 规范名回查单源 checksum::algo_index_exact_or_default（architect v116：
+    // 原内联 exact-match + unwrap_or(3) 与修改对话框预填重复）
+    let algo_idx = checksum::algo_index_exact_or_default(spec.algo);
     let computed = tokio::task::spawn_blocking(move || checksum::digest_file(&path, algo_idx))
         .await
         .unwrap_or_else(|e| Err(format!("校验任务失败（{e}）")));

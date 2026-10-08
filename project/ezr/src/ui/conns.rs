@@ -27,17 +27,8 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
             // 状态门槛（REQ-3.1）：仅「下载中/做种中」显示明细，其余按空面板处理
             let shows = t.state.shows_conns();
             let n = if shows { t.connections.len() } else { 0 };
-            let active = if shows {
-                (0..n)
-                    .filter(|&i| {
-                        let c = &t.connections[i];
-                        c.cap() > 0 && app.conn_speed_of(t.id, c.id) > 0.0
-                    })
-                    .count()
-            } else {
-                0
-            };
-            (active, n == 0)
+            // 「活跃 x」计数单源 App::active_conn_count（architect v116 自渲染路径提取）
+            (app.active_conn_count(t), n == 0)
         }
         None => (0, true),
     };

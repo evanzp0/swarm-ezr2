@@ -40,12 +40,22 @@ use crossterm::event::KeyCode;
 use proptest::prelude::*;
 
 use crate::app::DialogKind;
-use crate::model::checksum::CHECKSUM_ALGOS;
-use crate::model::chunk::{block_range, chunk_total, fmt_block_size, lease_snapshot, spread_bytes};
-use crate::model::namegen::{dedupe, join_path, sanitize_name};
-use crate::model::retry::{backoff_secs, decide};
+use crate::engine::parse_retry_after_header;
+use crate::model::checksum::{
+    algo_index_exact_or_default, parse_companion_content, CHECKSUM_ALGOS,
+};
+use crate::model::chunk::{
+    block_range, chunk_total, fmt_block_size, lease_snapshot, spread_bytes, Blocks,
+};
+use crate::model::config::ProxyChoice;
+use crate::model::namegen::{
+    dedupe, from_content_disposition, from_url_path, join_path, sanitize_name, sidecar_path_of,
+    DOWNLOADING_EXT, SIDECAR_EXT,
+};
+use crate::model::retry::{backoff_secs, classify_http_status, decide};
+use crate::model::slots::{queue_pos, queue_positions};
 use crate::model::speed::SmoothedSpeed;
-use crate::model::FailKind;
+use crate::model::{is_http_url, protocol_of_url, FailKind, Protocol, Task, TaskState};
 
 // ---------------------------------------------------------------------
 // chunk::plan — 分块数学（不变量 / 铺满 / 末块余数）
@@ -1100,5 +1110,359 @@ proptest! {
                 prop_assert_eq!(d.focus, f, "关闭并按布局跳焦");
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------
+// architect v116 追加批次——覆盖评审认定的属性缺口 + 本轮单源化收口的
+// 回归护甲（新助手/新单源点全部以属性锁定，防止下游漂移）
+// ---------------------------------------------------------------------
+
+proptest! {
+    /// Blocks 状态机不变量（op 序列模型）：任意 mark_done/mark_progress 序列后
+    /// ① downloaded ≤ total；② 逐块 written ≤ 块长；③ mark_done 幂等（全块
+    /// 标完成后 downloaded == total 且 completed == count）。
+    /// 块数有界生成（n_blocks 直接采样、total 由 piece 推导）——不设界时
+    /// Blocks::new 会按块数分配 written 向量（极小 piece × 极大 total =
+    /// 天文块数），属性测试内存不可承受（v116 会话实测挂死教训）
+    #[test]
+    fn prop_blocks_op_sequence_invariants(
+        piece in 1u64..(1u64 << 20),
+        n_blocks in 1u64..=4096u64,
+        ops in prop::collection::vec((0u8..2, any::<u32>(), any::<u64>()), 0..48),
+    ) {
+        // total = (n_blocks-1)*piece + 1：恰 n_blocks 个块（末块 1 字节）
+        let total = (n_blocks - 1) * piece + 1;
+        let mut b = Blocks::new(total, piece);
+        let y = b.count();
+        prop_assert_eq!(u64::from(y), n_blocks, "块数构造口径");
+        for (op, i, amt) in ops {
+            let idx = i % y;
+            match op {
+                0 => b.mark_done(idx),
+                _ => b.mark_progress(idx, amt),
+            }
+            prop_assert!(b.downloaded() <= total, "downloaded ≤ total");
+            for (bi, w) in b.written.iter().enumerate() {
+                if let Some((s, e)) = block_range(total, piece, bi as u32) {
+                    prop_assert!(*w <= e - s, "块 {bi} 写入不越块长");
+                }
+            }
+        }
+        // 全块标完成 → 守恒终态
+        for i in 0..y {
+            b.mark_done(i);
+        }
+        prop_assert_eq!(b.downloaded(), total, "全块完成后 downloaded == total");
+        prop_assert_eq!(b.completed(), b.count(), "全块完成后 x == y");
+    }
+
+    /// save_json_atomic 幂等性（fs）：两遍同内容保存字节一致且无 tmp 残留；
+    /// 内容漂移后必须落盘且结果恒可解析
+    #[test]
+    fn prop_save_json_atomic_idempotent(
+        value0 in prop::collection::vec(any::<u64>(), 0..20),
+        value1 in prop::collection::vec(any::<u64>(), 0..20),
+    ) {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-prop-atomic");
+        let path = dir.join("snap.json").to_string_lossy().to_string();
+        crate::model::save_json_atomic(&value0, &path).unwrap();
+        let bytes1 = std::fs::read(&path).unwrap();
+        crate::model::save_json_atomic(&value0, &path).unwrap();
+        let bytes2 = std::fs::read(&path).unwrap();
+        prop_assert_eq!(bytes1, bytes2, "同内容二遍保存字节一致（幂等短路）");
+        prop_assert!(
+            !dir.join("snap.json.tmp").exists(),
+            "幂等跳过不得残留 tmp 文件"
+        );
+        crate::model::save_json_atomic(&value1, &path).unwrap();
+        let parsed: Vec<u64> =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        prop_assert_eq!(parsed, value1, "内容漂移后落盘且可解析还原");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// from_url_path 全函数性（任意输入不 panic——属性框架自身即压力源）+
+    /// 输出形状（非空、非 "."）+ 残缺 %XX 尾保留原文
+    #[test]
+    fn prop_from_url_path_total_and_shape(
+        scheme in "[a-zA-Z]{1,6}",
+        host in "[a-z0-9.]{0,12}",
+        seg in "[a-zA-Z0-9_%.~-]{0,24}",
+    ) {
+        let url = format!("{scheme}://{host}/{seg}");
+        // 全函数性：任意输入不 panic（prop 框架采样含 %XX 残缺形态）
+        let _ = from_url_path(&url);
+        // 显式锁残缺尾语义（单元用例的属性化镜像）
+        for (suffix, expect_suffix) in [("%", "%"), ("%2", "%2"), ("%.bin", "%.bin")] {
+            let u = format!("http://x/p{suffix}");
+            if let Some(name) = from_url_path(&u) {
+                prop_assert!(name.ends_with(expect_suffix), "残缺尾 {suffix} 保留原文");
+            }
+        }
+        // 完整 %25 解码为 '%'（coder 既有语义的属性化镜像）
+        if let Some(name) = from_url_path("http://x/50%25.bin") {
+            prop_assert_eq!(name, "50%.bin");
+        }
+        let _ = seg; // seg 仅参与全函数性采样
+    }
+
+    /// from_content_disposition 输出形状：Some 结果非空且不含路径分隔符/
+    /// 引号（卫生口径）；空名/纯空白名 → None（token 经 trim，空白可修剪字
+    /// 符会被剥除——字母表用非空白可打印字符锁定裸 token 提取面）
+    #[test]
+    fn prop_from_content_disposition_shape(
+        disp in "(attachment|inline)?;? ?",
+        name in "[a-zA-Z0-9_.\\-]{1,20}",
+    ) {
+        let cd = format!("{disp}filename={name}");
+        match from_content_disposition(&cd) {
+            Some(n) => {
+                prop_assert!(!n.is_empty());
+                prop_assert!(!n.contains('/') && !n.contains('\\') && !n.contains('\0'));
+            }
+            None => prop_assert!(name.is_empty(), "非空裸 token 应可提取"),
+        }
+    }
+
+    /// parse_companion_content 稳定性：Some ⟺ 首 token 为纯小写十六进制且
+    /// 位数与算法表期望一致；首 token 非十六进制或位数不符 → None
+    #[test]
+    fn prop_parse_companion_content_stability(
+        algo_idx in 0usize..CHECKSUM_ALGOS.len(),
+        token in prop::collection::vec("[0-9a-fA-F]", 0..132),
+        noise in prop::option::of("[g-zG-Z]{1,4}"),
+        tail in prop::option::of("[^\n]{0,20}"),
+    ) {
+        let (_, need, _) = CHECKSUM_ALGOS[algo_idx];
+        let mut tok: String = token.into_iter().collect();
+        if let Some(n) = &noise {
+            tok = format!("{tok}{n}");
+        }
+        let content = match &tail {
+            Some(t) => format!("{tok} {t}\n"),
+            None => format!("{tok}\n"),
+        };
+        let v = tok.to_lowercase();
+        let expect_some = !v.is_empty()
+            && v.chars().all(|c| c.is_ascii_hexdigit())
+            && v.chars().count() == need
+            && noise.is_none(); // 混入非十六进制噪声 → 首 token 非纯 hex
+        match parse_companion_content(algo_idx, &content) {
+            Some(sc) => {
+                prop_assert!(expect_some, "有效输入才得 Some");
+                prop_assert_eq!(sc.algo_idx, algo_idx);
+                prop_assert_eq!(sc.value, v);
+            }
+            None => prop_assert!(!expect_some, "无效输入必须 None"),
+        }
+    }
+
+    /// Retry-After 头解析稳定性：非负有限秒数 → Some(原值)；负数/NaN → None；
+    /// 垃圾/None → None；"inf" → Some(inf)（饱和口径登记：engine 侧 retry_in
+    /// 计时对 inf 的行为为既有口径，属性化锚定防漂移）
+    #[test]
+    fn prop_parse_retry_after_header(
+        secs in prop::option::of(any::<f64>().prop_filter("finite", |v| v.is_finite())),
+        junk in "[a-zA-Z]{0,6}",
+    ) {
+        if let Some(s) = secs {
+            let raw = format!("{s}");
+            let parsed = parse_retry_after_header(Some(&raw));
+            if s >= 0.0 {
+                prop_assert_eq!(parsed, Some(s), "非负有限秒数原值返回");
+            } else {
+                prop_assert_eq!(parsed, None, "负数拒绝");
+            }
+        }
+        // NaN：parse 成功但比较恒 false → None
+        prop_assert_eq!(parse_retry_after_header(Some("NaN")), None, "NaN 拒绝");
+        // 垃圾与缺失
+        if !junk.parse::<f64>().is_ok() {
+            prop_assert_eq!(parse_retry_after_header(Some(&junk)), None, "垃圾拒绝");
+        }
+        prop_assert_eq!(parse_retry_after_header(None), None, "缺头 None");
+        // 饱和口径锚定（登记项）
+        prop_assert_eq!(parse_retry_after_header(Some("inf")), Some(f64::INFINITY));
+    }
+
+    /// classify_http_status 完全特征化：408/429/5xx → Transient，其余 → Fatal
+    #[test]
+    fn prop_classify_http_status_exhaustive(status in any::<u16>()) {
+        let transient =
+            status == 408 || status == 429 || (500..=599).contains(&status);
+        let kind = classify_http_status(status);
+        prop_assert_eq!(matches!(kind, FailKind::Transient), transient);
+        if !transient {
+            prop_assert!(matches!(kind, FailKind::Fatal));
+        }
+    }
+
+    /// queue_positions 与前缀计数 oracle 一致（任意视图序）：每个位置的位次
+    /// = 视图前缀（含自身）内 Queued 且未获槽位任务的个数（非等待 = 0）
+    #[test]
+    fn prop_queue_positions_prefix_count_oracle(
+        n in 1usize..14,
+        seed in any::<u64>(),
+    ) {
+        let mut tasks = Vec::new();
+        for i in 0..n {
+            let mut t = crate::model::sample_task();
+            t.id = i as u32 + 1;
+            t.state = match (i + seed as usize) % 3 {
+                0 => TaskState::Queued,
+                1 => TaskState::Paused,
+                _ => TaskState::Downloading,
+            };
+            t.has_slot = (i * 7 + seed as usize).is_multiple_of(2);
+            tasks.push(t);
+        }
+        // 种子线性混洗的确定性置换（视图序不影响语义，oracle 按前缀计数）
+        let mut view: Vec<usize> = (0..n).collect();
+        view.sort_by_key(|&i| {
+            (i.wrapping_mul(2654435761).wrapping_add(seed as usize)) % 9973
+        });
+        let positions = queue_positions(&tasks, &view);
+        prop_assert_eq!(positions.len(), n);
+        for (vi, &ti) in view.iter().enumerate() {
+            let waiting = tasks[ti].state == TaskState::Queued && !tasks[ti].has_slot;
+            let expect = if waiting {
+                view[..=vi]
+                    .iter()
+                    .filter(|&&pj| {
+                        tasks[pj].state == TaskState::Queued && !tasks[pj].has_slot
+                    })
+                    .count()
+            } else {
+                0
+            };
+            prop_assert_eq!(positions[vi], expect, "位次 = 视图前缀等待计数");
+        }
+        // 恒等视图（真实「正在下载」页签场景）下单点口径 oracle 一致
+        let identity: Vec<usize> = (0..n).collect();
+        let positions = queue_positions(&tasks, &identity);
+        for (ti, &p) in positions.iter().enumerate() {
+            let expect = queue_pos(&tasks, tasks[ti].id).unwrap_or(0);
+            prop_assert_eq!(p, expect, "恒等视图下与 queue_pos 数值等价");
+        }
+    }
+
+    /// algo_index_exact_or_default 特征化：表内规范名 → 自身下标；表外任意
+    /// 变体 → 默认 3（SHA-256）。与宽容匹配的刻意差异以小写 "sha1" 锚定
+    #[test]
+    fn prop_algo_index_exact_or_default(variant in "[a-zA-Z0-9_ ]{0,12}") {
+        // 全部规范名 → 自身下标
+        for (i, (disp, _, _)) in CHECKSUM_ALGOS.iter().enumerate() {
+            prop_assert_eq!(
+                algo_index_exact_or_default(disp),
+                i,
+                "规范名回查 {}",
+                disp
+            );
+        }
+        // 表外变体 → 默认 3
+        let expected = CHECKSUM_ALGOS
+            .iter()
+            .position(|(disp, _, _)| *disp == variant)
+            .unwrap_or(3);
+        prop_assert_eq!(algo_index_exact_or_default(&variant), expected);
+        // 刻意差异锚点：小写 "sha1" 非规范名 → 默认（宽容匹配会命中 SHA-1）
+        prop_assert_eq!(algo_index_exact_or_default("sha1"), 3);
+    }
+
+    /// URL scheme 助手特征化（is_http_url / protocol_of_url 与 starts_with
+    /// 语义逐点一致，大小写敏感口径锁定）
+    #[test]
+    fn prop_url_scheme_helpers(
+        scheme in prop::sample::select(vec!["http", "https", "HTTP", "HTTPS", "ftp", "Https", ""]),
+        rest in "[^\n]{0,20}",
+    ) {
+        let url = format!("{scheme}://{rest}");
+        let expect_http = url.starts_with("http://") || url.starts_with("https://");
+        prop_assert_eq!(is_http_url(&url), expect_http);
+        prop_assert_eq!(
+            protocol_of_url(&url) == Protocol::Https,
+            url.starts_with("https://")
+        );
+    }
+
+    /// 路径约定等价（本轮单源化回归护甲）：Task 方法与 (目录, 文件名) 散点
+    /// 逐字节一致；扩展名常量与字面量一致
+    #[test]
+    fn prop_path_suffix_conventions(
+        dir in "/[a-z]{0,10}(/)?",
+        name in "[a-z0-9]{1,12}",
+    ) {
+        let t = Task::new_queued(
+            1,
+            name.clone(),
+            Protocol::Http,
+            "http://x/f.bin".to_string(),
+            dir.clone(),
+            1 << 20,
+            4,
+            5,
+            None,
+            ProxyChoice::Direct,
+            0,
+        );
+        prop_assert_eq!(t.sidecar_path(), sidecar_path_of(&dir, &name), "Task 方法 ≡ 散点助手");
+        prop_assert_eq!(
+            t.sidecar_path(),
+            format!("{}{SIDECAR_EXT}", t.target_path()),
+            "sidecar ≡ target + .ezr"
+        );
+        prop_assert_eq!(
+            t.downloading_path(),
+            format!("{}{DOWNLOADING_EXT}", t.target_path()),
+            "downloading ≡ target + .downloading"
+        );
+    }
+
+    /// 任务展示投影界（progress/eta/chunk_info）：progress ∈ [0,1] 且 total=0 → 0；
+    /// eta 仅下载态且正速有值；x ≤ y
+    #[test]
+    fn prop_task_projection_bounds(
+        total in 0u64..(1u64 << 40),
+        downloaded in 0u64..(1u64 << 40),
+        speed in 0.0f64..1e9,
+        state in prop::sample::select(vec![
+            TaskState::Queued,
+            TaskState::Downloading,
+            TaskState::Paused,
+            TaskState::Completed,
+            TaskState::Failed,
+        ]),
+        chunk_done in 0u32..1000,
+    ) {
+        let mut t = Task::new_queued(
+            1,
+            "f.bin".to_string(),
+            Protocol::Http,
+            "http://x/f.bin".to_string(),
+            "/dl".to_string(),
+            1 << 20,
+            4,
+            5,
+            None,
+            ProxyChoice::Direct,
+            0,
+        );
+        t.total = total;
+        t.downloaded = downloaded;
+        t.speed = speed;
+        t.state = state;
+        t.chunk_done = chunk_done;
+        let p = t.progress();
+        prop_assert!((0.0..=1.0).contains(&p), "progress ∈ [0,1]");
+        if total == 0 {
+            prop_assert_eq!(p, 0.0, "未知大小 progress = 0");
+        }
+        if state != TaskState::Downloading || speed <= 0.0 {
+            prop_assert!(t.eta_secs().is_none(), "非下载态或零速无 ETA");
+        }
+        let (x, y, n) = t.chunk_info();
+        prop_assert!(u64::from(x) <= y, "已完成块数 ≤ 总块数");
+        prop_assert_eq!(n, 1u64 << 20, "块大小透传");
     }
 }

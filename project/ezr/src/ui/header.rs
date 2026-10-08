@@ -7,39 +7,27 @@
 //! 无边框单色面积流量图（占内容区全高、宽 20%，仅绘下行流量）。原「任务队列」
 //! 面板撤销，页签行并入内容行 3（槽位内联左对齐、紧跟「已完成」页签以 │ 分隔）。
 
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
+use super::chart::draw_chart;
 use super::text::{fmt_size, fmt_speed};
 use super::{ACCENT, BORDER, DIM, DIM2, FG, LIGHT_BLUE, MAGENTA, YELLOW};
 use crate::app::{App, FILTERS};
 
 pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect, with_chart: bool) {
-    let dl: f64 = app
-        .tasks
-        .iter()
-        .filter(|t| t.state == crate::model::TaskState::Downloading)
-        .map(|t| t.speed)
-        .sum();
-    let ul: f64 = app
-        .tasks
-        .iter()
-        .filter(|t| t.upload_speed > 0.0)
-        .map(|t| t.upload_speed)
-        .sum();
+    // 头部聚合口径单源 App 访问器（architect v116：自渲染路径提取为可无头单测的
+    // 应用层策略——全局 ↓↑ 合计与并发 N 总数原内联在本函数）
+    let dl = app.global_dl_speed();
+    let ul = app.global_ul_speed();
     // 会话内峰值（速度历史为 KB/s）与全局并发连接数（下载中/做种中任务的连接总数，
     // FR-01-94 ②/FR-01-96 数据面口径）
     let peak_dl = app.speed_hist.iter().copied().max().unwrap_or(0);
     let peak_ul = app.up_hist.iter().copied().max().unwrap_or(0);
-    let conns_n: usize = app
-        .tasks
-        .iter()
-        .filter(|t| t.state.shows_conns())
-        .map(|t| t.connections.len())
-        .sum();
+    let conns_n = app.conns_display_total();
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -209,153 +197,4 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect, with_chart: bool
         };
         draw_chart(f, app, chart_area);
     }
-}
-
-/// 单色面积流量图（FR-01-95，定稿口径）：逐列自底向上填充，顶线以
-/// ▁▂▃▄▅▆▇█ 八级部分块呈现 1/8 格亚字符精度的平滑曲线；全图统一一种颜色
-/// （下载淡蓝 RGB(122,185,242)，REQ-8.5）；序列经双向 EMA 平滑（α=0.75）+
-/// 窗口 min–max 自适应缩放（上下 ≈15% 呼吸边距，下限取窗口峰值 5%），
-/// 每列取双子样本较大值（保尖峰）——面积首尾相接、无断列、无间隔、无盲文点阵。
-fn draw_chart(f: &mut Frame, app: &App, area: Rect) {
-    if area.width < 2 || area.height < 1 || app.speed_hist.len() < 2 {
-        return;
-    }
-    let w = area.width as usize;
-    let h = area.height as usize;
-    // 亚字符精度：每字符行 8 级部分块（▁▂▃▄▅▆▇█），纵向总分辨率 = h×8
-    const PARTIAL: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    let levels = h * 8;
-
-    // 取最近 2×(列数+1) 个样本（每列两个子采样），双向 EMA 平滑
-    let n = (((w + 1) * 2).min(app.speed_hist.len())).max(2);
-    let start = app.speed_hist.len() - n;
-    let raw: Vec<f64> = app.speed_hist[start..].iter().map(|&v| v as f64).collect();
-    const ALPHA: f64 = 0.75;
-    let mut sm = raw.clone();
-    for i in 1..sm.len() {
-        sm[i] = sm[i - 1] + (raw[i] - sm[i - 1]) * ALPHA;
-    }
-    for i in (0..sm.len() - 1).rev() {
-        sm[i] += (sm[i + 1] - sm[i]) * ALPHA;
-    }
-
-    // 窗口 min–max 自适应缩放（上下呼吸边距）→ 波形纵贯图区；
-    // 边距下限取窗口峰值 5%，保证稳态抖动在图上仍有可见起伏
-    let hi = sm.iter().copied().fold(f64::MIN, f64::max);
-    let lo = sm.iter().copied().fold(f64::MAX, f64::min);
-    let pad = ((hi - lo) * 0.15).max(hi * 0.05).max(1.0);
-    let y_min = (lo - pad).max(0.0);
-    let span = (hi + pad - y_min).max(1.0);
-    let last = sm.len() - 1;
-
-    // 逐列取两个子采样的较大值（保尖峰）→ 归一化高度 t ∈ [0,1] → 亚像素高度
-    let px: Vec<usize> = (0..w)
-        .map(|c| {
-            let mut m = 0.0f64;
-            for k in 0..2 {
-                let s = ((c * 2 + k) as f64 + 0.5) * last as f64 / (w * 2) as f64;
-                let i = (s as usize).min(last);
-                let v = sm[i] + (sm[(i + 1).min(last)] - sm[i]) * (s - i as f64);
-                let t = ((v - y_min) / span).clamp(0.0, 1.0);
-                m = m.max(t);
-            }
-            ((m * levels as f64).round() as usize).min(levels)
-        })
-        .collect();
-
-    // 逐行渲染（REQ-8.5：全图仅一种颜色，统一下载淡蓝）：
-    // rem = 列亚像素高度 − 本行亚像素带下界 → ≤0 空格 / ≥8 全块 █ / 其余部分块
-    for row in 0..h {
-        let band0 = (h - 1 - row) * 8; // 本行覆盖的亚像素带 [band0, band0+8)
-        let line: String = px
-            .iter()
-            .map(|&p| {
-                let rem = p as isize - band0 as isize;
-                if rem <= 0 {
-                    ' '
-                } else {
-                    PARTIAL[(rem.min(8) - 1) as usize]
-                }
-            })
-            .collect();
-        f.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                line,
-                Style::default().fg(LIGHT_BLUE),
-            ))),
-            Rect {
-                x: area.x,
-                y: area.y + row as u16,
-                width: area.width,
-                height: 1,
-            },
-        );
-    }
-}
-
-pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(BORDER));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(inner);
-
-    // 快捷键行
-    let key = |s: &str| {
-        Span::styled(
-            s.to_string(),
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        )
-    };
-    let desc = |s: &str| Span::styled(s.to_string(), Style::default().fg(DIM));
-    let mut l1 = vec![
-        key(" ↑↓"),
-        desc(" 选择  "),
-        key("Space"),
-        desc(" 暂停/继续  "),
-        key("R"),
-        desc(" 重试  "),
-        key("A"),
-        desc(" 添加  "),
-        key("D"),
-        desc(" 删除  "),
-        key("U/J"),
-        desc(" 上移/下移  "),
-        key("C"),
-        desc(" 清已完成  "),
-        key("Tab"),
-        desc(" 页签  "),
-        key("G"),
-        // FR-01-98：G 切换右栏两面板（详情/并发明细），流量图常显 → 提示「面板」
-        desc(" 面板  "),
-        key("Q"),
-        desc(" 退出"),
-    ];
-    // 窄屏精简
-    if inner.width < 100 {
-        l1.truncate(9);
-    }
-    if inner.width < 86 {
-        l1.truncate(7);
-    }
-    if inner.width < 72 {
-        l1.truncate(5);
-    }
-    f.render_widget(Paragraph::new(Line::from(l1)), rows[0]);
-
-    // 鼠标提示 + toast
-    let mut l2 = vec![
-        Span::styled(" 鼠标 ", Style::default().fg(DIM)),
-        Span::styled("点击选中 · 滚轮滚动   ", Style::default().fg(DIM)),
-    ];
-    if let Some(msg) = &app.toast {
-        l2.push(Span::styled(
-            format!("◆ {}", msg),
-            Style::default().fg(YELLOW),
-        ));
-    }
-    f.render_widget(Paragraph::new(Line::from(l2)), rows[1]);
 }

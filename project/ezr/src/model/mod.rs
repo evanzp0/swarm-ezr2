@@ -113,6 +113,25 @@ impl TaskState {
     }
 }
 
+/// URL scheme 校验（FR-01-05 口径单一来源）：01 期仅接受 http:// 与 https://。
+/// 消费点：入口 CLI 解析（pos_url）、添加对话框确认、CLI 添加任务（architect
+/// v116 收口——原三处手拼 starts_with 判定）。
+#[must_use]
+pub fn is_http_url(s: &str) -> bool {
+    s.starts_with("http://") || s.starts_with("https://")
+}
+
+/// URL scheme 推导协议（https → HTTPS，其余 → HTTP；与 [`is_http_url`] 配对使用，
+/// 消费点：添加对话框确认与 CLI 添加任务的 protocol 字段）
+#[must_use]
+pub fn protocol_of_url(s: &str) -> Protocol {
+    if s.starts_with("https://") {
+        Protocol::Https
+    } else {
+        Protocol::Http
+    }
+}
+
 /// 失败类别（FR-01-40/43/44/51/22）：决定自动重试行为与列表行文案
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum FailKind {
@@ -139,8 +158,10 @@ pub struct Checksum {
 mod task;
 mod timefmt;
 
-#[allow(unused_imports)] // ProxyConfig 为 v1.5 对外 API 面（配置项类型）
-pub use config::{ProxyChoice, ProxyConfig, ProxyEndpoint};
+#[allow(unused_imports)] // ProxyChoice/ProxyEndpoint 为对外 API 面（v1.5 配置项类型；
+// 挂载测试 crate 不消费 product re-export，unused 属机制固有告警）。
+// architect v116：ProxyConfig 零消费者，从 re-export 移除（死 API 面清理）
+pub use config::{ProxyChoice, ProxyEndpoint};
 pub use task::{Connection, Task};
 #[allow(unused_imports)] // 对外保留（01 期已暴露）
 pub use timefmt::fmt_created;

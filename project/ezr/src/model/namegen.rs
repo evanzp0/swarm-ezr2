@@ -8,6 +8,24 @@
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// 下载中盘上文件扩展名（FR-01-24 命名约定单一来源）：模型方法（Task）、
+/// 引擎（supervisor 探测盘上残留）、对话框/CLI（断点接续探测、删除清理）
+/// 共用本常量，防手拼漂移（architect v116 收口；join 语义按消费点自留，
+/// 见 `sidecar_path_of` 注记）。
+pub const DOWNLOADING_EXT: &str = ".downloading";
+
+/// sidecar 元数据文件扩展名（D1 命名约定单一来源，同 [`DOWNLOADING_EXT`] 口径）
+pub const SIDECAR_EXT: &str = ".ezr";
+
+/// sidecar 元数据文件路径（(目录, 文件名) 形态散点与 [`crate::model::Task::sidecar_path`]
+/// 共用；join 语义 = [`join_path`]，与模型方法同口径。注意：对话框/CLI 的断点
+/// 探测点沿用各自既有 `format!("{dir}/{name}")` 拼接（目录尾 '\\' 不归一的
+/// 历史口径），仅扩展名收口本常量——join 语义统一属行为变化，不在本轮裁决内）
+#[must_use]
+pub fn sidecar_path_of(dir: &str, name: &str) -> String {
+    format!("{}{SIDECAR_EXT}", join_path(dir, name))
+}
+
 /// 路径拼接（处理目录尾分隔符）
 #[must_use]
 pub fn join_path(dir: &str, name: &str) -> String {
@@ -152,8 +170,8 @@ where
 pub fn exists_on_disk(save_dir: &str, name: &str) -> bool {
     let dir = Path::new(save_dir);
     dir.join(name).exists()
-        || dir.join(format!("{name}.downloading")).exists()
-        || dir.join(format!("{name}.ezr")).exists()
+        || dir.join(format!("{name}{DOWNLOADING_EXT}")).exists()
+        || dir.join(format!("{name}{SIDECAR_EXT}")).exists()
 }
 
 #[cfg(test)]

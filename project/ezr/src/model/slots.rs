@@ -71,6 +71,26 @@ pub fn queue_pos(tasks: &[Task], task_id: u32) -> Option<usize> {
     None
 }
 
+/// 列表视图排队位次（1 基，按给定下标顺序遍历；已获槽位/非等待 = 0）。
+/// 列表渲染的排队编号单一来源（architect v116：原 draw_list 内联重实现）。
+/// 与 [`queue_pos`] 数值等价——Queued 任务恒出现在「正在下载」页签视图内
+/// 且相对顺序一致——按视图序一次线性扫描实现，避免逐任务全表扫描。
+#[must_use]
+pub fn queue_positions(tasks: &[Task], view: &[usize]) -> Vec<usize> {
+    let mut waiting = 0usize;
+    view.iter()
+        .map(|&ti| {
+            let t = &tasks[ti];
+            if t.state == TaskState::Queued && !t.has_slot {
+                waiting += 1;
+                waiting
+            } else {
+                0
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
