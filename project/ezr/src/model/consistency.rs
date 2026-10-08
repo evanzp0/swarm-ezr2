@@ -29,6 +29,16 @@ pub enum Consistency {
     MissingStamp,
 }
 
+/// 头部一致性（ETag / Last-Modified 共用口径）：sidecar 有记录而探测缺失，
+/// 或两侧都有但不一致 → 失效（false）；sidecar 未记录时以 URL/大小为准（true）。
+fn header_unchanged(stored: Option<&String>, probed: Option<&String>) -> bool {
+    match (stored, probed) {
+        (Some(a), Some(b)) => a == b,
+        (Some(_), None) => false,
+        (None, _) => true,
+    }
+}
+
 /// 续传一致性检查：sidecar 快照 vs 本次探测快照。
 /// 任一字段变化或本次探测缺失（服务器不再返回这些头）→ 失效（D11）。
 #[must_use]
@@ -39,17 +49,8 @@ pub fn check(stored: &ServerStamp, probed: &ServerStamp) -> Consistency {
     }
     let same_url = stored.final_url == probed.final_url;
     let same_size = stored.size == probed.size;
-    // ETag/Last-Modified：sidecar 有记录而探测缺失，或两侧都有但不一致 → 失效
-    let etag_ok = match (stored.etag.as_ref(), probed.etag.as_ref()) {
-        (Some(a), Some(b)) => a == b,
-        (Some(_), None) => false,
-        (None, _) => true, // sidecar 未记录时以 URL/大小为准
-    };
-    let lm_ok = match (stored.last_modified.as_ref(), probed.last_modified.as_ref()) {
-        (Some(a), Some(b)) => a == b,
-        (Some(_), None) => false,
-        (None, _) => true,
-    };
+    let etag_ok = header_unchanged(stored.etag.as_ref(), probed.etag.as_ref());
+    let lm_ok = header_unchanged(stored.last_modified.as_ref(), probed.last_modified.as_ref());
     if same_url && same_size && etag_ok && lm_ok {
         Consistency::Valid
     } else {

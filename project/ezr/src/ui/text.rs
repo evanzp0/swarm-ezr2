@@ -5,23 +5,23 @@ use ratatui::text::Span;
 
 use super::EMPTY;
 
+/// CJK 全角区间表（显示宽度按 2 计的码点闭区间，FR-01 定稿宽度口径）
+const WIDE_RANGES: [(u32, u32); 6] = [
+    (0x2E80, 0xA4CF), // CJK 部首扩展 … 谚文音节前段
+    (0xAC00, 0xD7A3), // Hangul 音节
+    (0xF900, 0xFAFF), // CJK 兼容表意文字
+    (0xFF00, 0xFF60), // 全角形式
+    (0x3000, 0x303F), // CJK 符号与标点
+    (0xFFE0, 0xFFE6), // 全角补足
+];
+
+/// 码点显示宽度是否为 2（查表，短路任一区间命中）
+fn wide(c: u32) -> bool {
+    WIDE_RANGES.iter().any(|&(lo, hi)| lo <= c && c <= hi)
+}
+
 pub fn w(s: &str) -> usize {
-    s.chars()
-        .map(|c| {
-            let u = c as u32;
-            if (0x2E80..=0xA4CF).contains(&u)
-                || (0xAC00..=0xD7A3).contains(&u)
-                || (0xF900..=0xFAFF).contains(&u)
-                || (0xFF00..=0xFF60).contains(&u)
-                || (0x3000..=0x303F).contains(&u)
-                || (0xFFE0..=0xFFE6).contains(&u)
-            {
-                2
-            } else {
-                1
-            }
-        })
-        .sum()
+    s.chars().map(|c| if wide(c as u32) { 2 } else { 1 }).sum()
 }
 
 pub fn truncate(s: &str, max: usize) -> String {

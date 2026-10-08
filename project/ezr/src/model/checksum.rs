@@ -211,6 +211,31 @@ pub fn parse_companion_content(algo_idx: usize, content: &str) -> Option<Sidecar
     Some(SidecarChecksum { algo_idx, value: v })
 }
 
+/// 读取并解析单个伴随文件；文件不可读或内容无效 → None（伴随情形，继续其余探测）
+fn probe_companion(idx: usize, path: &Path) -> Option<SidecarChecksum> {
+    let content = std::fs::read_to_string(path).ok()?;
+    parse_companion_content(idx, &content)
+}
+
+/// 目录扫描：取首个（大小写不敏感）文件名变体即停——
+/// 命中即读取解析，失败也只停在该变体（原 break 语义：不再试后续变体）。
+fn scan_companion_variant(
+    idx: usize,
+    save_dir: &str,
+    file_name: &str,
+    suffix: &str,
+) -> Option<SidecarChecksum> {
+    let entries = std::fs::read_dir(save_dir).ok()?;
+    let want = format!("{file_name}.").to_lowercase();
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().to_lowercase();
+        if name == format!("{want}{suffix}") && e.path().is_file() {
+            return probe_companion(idx, &e.path());
+        }
+    }
+    None
+}
+
 /// 在保存目录中查找目标文件的校验伴随文件（D14）：
 /// 按算法表声明顺序取最先存在且内容有效者；文件名后缀大小写不敏感。
 ///
@@ -221,24 +246,13 @@ pub fn find_companion(save_dir: &str, file_name: &str) -> Option<SidecarChecksum
         // 大小写不敏感：先试原名后缀（快路径），再扫描目录匹配大小写变体
         let p = Path::new(save_dir).join(format!("{file_name}.{suffix}"));
         if p.is_file() {
-            let content = std::fs::read_to_string(&p).ok()?;
-            if let Some(sc) = parse_companion_content(idx, &content) {
+            if let Some(sc) = probe_companion(idx, &p) {
                 return Some(sc);
             }
             continue;
         }
-        if let Ok(entries) = std::fs::read_dir(save_dir) {
-            let want = format!("{file_name}.").to_lowercase();
-            for e in entries.flatten() {
-                let name = e.file_name().to_string_lossy().to_lowercase();
-                if name == format!("{want}{suffix}") && e.path().is_file() {
-                    let content = std::fs::read_to_string(e.path()).ok()?;
-                    if let Some(sc) = parse_companion_content(idx, &content) {
-                        return Some(sc);
-                    }
-                    break;
-                }
-            }
+        if let Some(sc) = scan_companion_variant(idx, save_dir, file_name, suffix) {
+            return Some(sc);
         }
     }
     None

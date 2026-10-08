@@ -90,6 +90,18 @@ pub fn sanitize_name(name: &str) -> String {
         .collect()
 }
 
+/// 解码自下标 `i` 起的完整 `%XX` 三元组；不是 `%`、不足三位（含尾部 `%2`）
+/// 或两位非十六进制 → None（调用方保留原文逐字节）。
+fn decode_triplet(b: &[u8], i: usize) -> Option<u8> {
+    if b[i] != b'%' || i + 2 >= b.len() {
+        return None;
+    }
+    // is_ascii_hexdigit 已前置保证 to_digit 恒成功（原 unwrap_or(0) 等价消除）
+    let hi = (b[i + 1] as char).to_digit(16)?;
+    let lo = (b[i + 2] as char).to_digit(16)?;
+    Some(((hi * 16) + lo) as u8)
+}
+
 /// 百分号解码（URL 路径末段显示用；不严格校验，失败保留原文）
 #[must_use]
 fn percent_decode(s: &str) -> String {
@@ -97,20 +109,14 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        // 完整 %XX（两位十六进制）才解码；不足三位（含尾部 %2）保留原文逐字节
-        if b[i] == b'%'
-            && i + 2 < b.len()
-            && b[i + 1].is_ascii_hexdigit()
-            && b[i + 2].is_ascii_hexdigit()
-        {
-            let hi = (b[i + 1] as char).to_digit(16).unwrap_or(0) as u16;
-            let lo = (b[i + 2] as char).to_digit(16).unwrap_or(0) as u16;
-            out.push((hi * 16 + lo) as u8);
+        // 完整 %XX（两位十六进制）才解码；否则原文逐字节
+        if let Some(byte) = decode_triplet(b, i) {
+            out.push(byte);
             i += 3;
-            continue;
+        } else {
+            out.push(b[i]);
+            i += 1;
         }
-        out.push(b[i]);
-        i += 1;
     }
     String::from_utf8_lossy(&out).to_string()
 }

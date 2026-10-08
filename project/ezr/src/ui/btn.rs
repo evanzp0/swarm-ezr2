@@ -84,6 +84,28 @@ pub(super) fn draw_button_row(
     }
 }
 
+/// 左缘相邻列：宽字符主格（显示占两列、右半侵入浮层）→ 整格截断为空格
+fn clip_left_edge(buf: &mut ratatui::buffer::Buffer, x: u16, y: u16) {
+    if x == 0 {
+        return;
+    }
+    let i = buf.index_of(x - 1, y);
+    if w(buf.content[i].symbol()) > 1 {
+        buf.content[i].set_char(' ');
+    }
+}
+
+/// 右缘外一列：孤立半格（主格在浮层内、已被浮层改写）→ 补成空格
+fn clip_right_edge(buf: &mut ratatui::buffer::Buffer, xr: u16, y: u16) {
+    if xr + 1 >= buf.area.width {
+        return;
+    }
+    let i = buf.index_of(xr + 1, y);
+    if buf.content[i].symbol().is_empty() {
+        buf.content[i].set_char(' ');
+    }
+}
+
 pub(super) fn clip_wide_at_edges(f: &mut Frame, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -92,19 +114,7 @@ pub(super) fn clip_wide_at_edges(f: &mut Frame, area: Rect) {
     let x0 = area.x;
     let xr = area.right() - 1; // 浮层最右列
     for y in area.y..area.bottom() {
-        if x0 > 0 {
-            let i = buf.index_of(x0 - 1, y);
-            // 宽字符主格（显示占两列、右半侵入浮层）→ 整格截断为空格
-            if w(buf.content[i].symbol()) > 1 {
-                buf.content[i].set_char(' ');
-            }
-        }
-        if xr + 1 < buf.area.width {
-            let i = buf.index_of(xr + 1, y);
-            // 孤立半格（主格在浮层内、已被浮层改写）→ 补成空格
-            if buf.content[i].symbol().is_empty() {
-                buf.content[i].set_char(' ');
-            }
-        }
+        clip_left_edge(buf, x0, y);
+        clip_right_edge(buf, xr, y);
     }
 }

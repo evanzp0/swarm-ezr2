@@ -155,13 +155,10 @@ mod ui_tests {
 
     use super::*;
     use crate::app::CHECKSUM_ALGOS;
-    use crate::model::config::Config;
     use crate::model::{Checksum, FailKind, Protocol, Task};
 
     fn make_app(tag: &str) -> App {
-        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-ui-{tag}"));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        App::new(Config::default(), reg)
+        super::testfx::make_app_in("ezr-ui", tag)
     }
 
     fn task(id: u32, name: &str, state: TaskState) -> Task {
@@ -749,24 +746,14 @@ mod ui_v113_tests {
     use ratatui::Terminal;
 
     use super::*;
-    use crate::model::config::Config;
     use crate::model::{Connection, Task};
 
     fn make_app(tag: &str) -> App {
-        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-uiv13-{tag}"));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        App::new(Config::default(), reg)
+        super::testfx::make_app_in("ezr-uiv13", tag)
     }
 
     fn task(id: u32, name: &str, state: TaskState) -> Task {
-        let mut t = crate::model::sample_task();
-        t.id = id;
-        t.name = name.to_string();
-        t.state = state;
-        t.total = 3000;
-        t.downloaded = 1500;
-        t.probed = true;
-        t
+        super::testfx::task_in(id, name, state)
     }
 
     fn conns(ids: &[usize]) -> Vec<Connection> {
@@ -796,25 +783,11 @@ mod ui_v113_tests {
     }
 
     fn row_strings(term: &Terminal<TestBackend>) -> Vec<String> {
-        let buf = term.backend().buffer();
-        (0..buf.area.height)
-            .map(|y| {
-                (0..buf.area.width)
-                    .map(|x| {
-                        buf.cell((x, y))
-                            .expect("网格坐标在界内")
-                            .symbol()
-                            .to_string()
-                    })
-                    .collect::<String>()
-            })
-            .collect()
+        super::testfx::row_strings(term)
     }
 
     fn render(app: &mut App, w: u16, h: u16) -> Terminal<TestBackend> {
-        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
-        term.draw(|f| draw(f, app)).unwrap();
-        term
+        super::testfx::render_full(app, w, h)
     }
 
     fn hist() -> Vec<u64> {
@@ -1007,24 +980,14 @@ mod ui_v114_tests {
     use ratatui::Terminal;
 
     use super::*;
-    use crate::model::config::Config;
     use crate::model::{Checksum, Task};
 
     fn make_app(tag: &str) -> App {
-        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-uiv14-{tag}"));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        App::new(Config::default(), reg)
+        super::testfx::make_app_in("ezr-uiv14", tag)
     }
 
     fn task(id: u32, name: &str, state: TaskState) -> Task {
-        let mut t = crate::model::sample_task();
-        t.id = id;
-        t.name = name.to_string();
-        t.state = state;
-        t.total = 3000;
-        t.downloaded = 1500;
-        t.probed = true;
-        t
+        super::testfx::task_in(id, name, state)
     }
 
     fn render_detail(app: &mut App, w: u16, h: u16) -> Terminal<TestBackend> {
@@ -1036,25 +999,11 @@ mod ui_v114_tests {
 
     /// 整帧渲染（draw 全流程，走 G/窄终端分支）
     fn render_full(app: &mut App, w: u16, h: u16) -> Terminal<TestBackend> {
-        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
-        term.draw(|f| draw(f, app)).unwrap();
-        term
+        super::testfx::render_full(app, w, h)
     }
 
     fn row_strings(term: &Terminal<TestBackend>) -> Vec<String> {
-        let buf = term.backend().buffer();
-        (0..buf.area.height)
-            .map(|y| {
-                (0..buf.area.width)
-                    .map(|x| {
-                        buf.cell((x, y))
-                            .expect("网格坐标在界内")
-                            .symbol()
-                            .to_string()
-                    })
-                    .collect::<String>()
-            })
-            .collect()
+        super::testfx::row_strings(term)
     }
 
     /// (前景色, 修饰) 网格（下划线断言用）
@@ -1211,5 +1160,61 @@ mod ui_v114_tests {
         assert!(app.detail_url_rect.is_none(), "窄终端 → URL 热区清空");
         assert!(app.detail_ck_rect.is_none(), "窄终端 → 校验热区清空");
         app.shutdown().await;
+    }
+}
+
+/// 测试基建单源（DRY：三处 cfg(test) 模块的 make_app/task/渲染/行文本助手收口于此）。
+/// 仅测试编译；挂载树语义与同文件既有 cfg(test) 模块一致（crate:: 路径点由
+/// 各挂载壳提供，与本文件既有测试模块相同约束）。
+#[cfg(test)]
+pub(crate) mod testfx {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    use crate::app::App;
+    use crate::model::config::Config;
+    use crate::model::{Task, TaskState};
+
+    /// 唯一临时目录 + 默认配置构造 App（prefix 区分调用方测试组）
+    pub(crate) fn make_app_in(prefix: &str, tag: &str) -> App {
+        let dir = crate::model::testenv::uniq_tmp_dir(&format!("{prefix}-{tag}"));
+        let reg = dir.join("registry.json").to_string_lossy().into_owned();
+        App::new(Config::default(), reg)
+    }
+
+    /// sample_task 基底 + 展示字段覆盖（total/downloaded/probed 定值）
+    pub(crate) fn task_in(id: u32, name: &str, state: TaskState) -> Task {
+        let mut t = crate::model::sample_task();
+        t.id = id;
+        t.name = name.to_string();
+        t.state = state;
+        t.total = 3000;
+        t.downloaded = 1500;
+        t.probed = true;
+        t
+    }
+
+    /// 整帧渲染（draw 全流程，走 G/窄终端分支）
+    pub(crate) fn render_full(app: &mut App, w: u16, h: u16) -> Terminal<TestBackend> {
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| super::draw(f, app)).unwrap();
+        term
+    }
+
+    /// 逐行拼接缓冲区符号文本（CJK 续格自动并入，TestBackend::to_string 语义）
+    pub(crate) fn row_strings(term: &Terminal<TestBackend>) -> Vec<String> {
+        let buf = term.backend().buffer();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| {
+                        buf.cell((x, y))
+                            .expect("网格坐标在界内")
+                            .symbol()
+                            .to_string()
+                    })
+                    .collect::<String>()
+            })
+            .collect()
     }
 }
