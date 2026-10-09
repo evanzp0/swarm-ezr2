@@ -367,12 +367,12 @@ class ResumeSidecarSuite(Suite):
                 # 恢复窗口：默认停在「正在下载」页签（已完成任务仅计入头部
                 # 计数，名字在另一页签）；下载中 → 等待中一闪而过，以排队
                 # 位次与头部计数为恢复判据
-                assert app.wait_for("任务 9", 8), "全部 9 任务应恢复"
+                assert app.wait_for("正在下载 (8)", 8), "全部 9 任务应恢复（8 非完成 + 1 已完成，v1.13 页签行口径）"
                 assert app.wait_for("ghost-404", 8), "已失败任务应恢复"
                 text = app.text()
                 assert_in("已失败", text, "失败状态应保持")
                 assert_in("已暂停", text, "暂停状态应保持")
-                assert_in("已完成 1", text, "完成任务计数应保持")
+                assert_in("已完成 (1)", text, "完成任务计数应保持")
                 # 排队任务（two-m）位于列表末行可能被视口裁剪：End 滚动到底
                 app.send("end")
                 assert app.wait_for("排队第", 10), "等待队列应恢复排队位次"

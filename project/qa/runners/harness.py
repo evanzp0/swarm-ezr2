@@ -637,21 +637,47 @@ def add_task_via_dialog(app: "EzrApp", env: "Env", url: str, conns: str = "",
 
 
 def detail_text(app: "EzrApp") -> str:
-    """任务详情面板箱体文本（120 列布局右栏，不含下方「全局速度」图表面板）。
+    """任务详情面板箱体文本（120 列布局右栏，不含下方「并发连接」面板）。
 
-    区域锚定（engineering.md）：右栏自上而下 = 详情面板 + 图表面板，图表面板
-    标题「↓ 全局速度 …」含「速度」子串——整右栏截取会把它误算进详情断言区
-    （v1.11 起规格只约束详情面板无「状态/速度」字段行，图表面板合法常驻）。
-    故以「任务详情」标题行起、图表面板标题行止（不含）截取箱体行。
+    区域锚定（engineering.md「not_in 子串断言的区域必须与规格语义面板对齐」）：
+    v1.13/FR-01-94 定稿布局右栏自上而下 = 任务详情面板 + 并发连接面板
+    （详情正下方占右列余高；v1.13 前的「↓ 全局速度」独立图表面板已撤销，
+    流量图内嵌头部右侧且无标题）。详情语义区域 = 「任务详情」标题行起、
+    「并发连接」标题行止（不含）——截取到屏幕底会混入连接面板的
+    「下载速度」列头等合法常驻文本，使 TD-03 的 not_in「速度」误报。
     """
     rows = app.screen.display
     top = next((i for i, r in enumerate(rows) if "任务详情" in r), None)
     if top is None:
         return ""
     end = next(
-        (i for i in range(top + 1, len(rows)) if "全局速度" in rows[i]), len(rows)
+        (i for i in range(top + 1, len(rows)) if "并发连接" in rows[i]), len(rows)
     )
     return "\n".join(row[64:].rstrip() for row in rows[top:end])
+
+
+def chart_points(app: "EzrApp") -> int:
+    """头部右侧内嵌流量图的采样点数（1 点 = 1 列含柱条字符，按列去重）。
+
+    v1.13/FR-01-94 口径：流量图无边框无标题、占头部内容区全高（第 1–3 行）、
+    宽为内容区 20%，区域 = 每行最右两个「│」之间（字段区结束分隔符与
+    面板右边框）。按列去重而非字符计数——纵向柱高随数值幅度变化，
+    字符总数度量的是幅度和而非点数（engineering.md「画面字符计数
+    先限区域再按列去重」）。速度为零时图区无柱条字符，返回 0。
+    """
+    rows = app.screen.display
+    cols: set[int] = set()
+    for row in rows[1:4]:
+        right = row.rfind("│")
+        if right < 0:
+            continue
+        left = row.rfind("│", 0, right)
+        if left < 0:
+            continue
+        for x, ch in enumerate(row[left + 1:right]):
+            if ch in "▁▂▃▄▅▆▇█":
+                cols.add(x)
+    return len(cols)
 
 
 def task_pct(app: "EzrApp") -> float | None:

@@ -247,7 +247,8 @@ class ThrottleProxySuite(Suite):
                 assert_in("全局", text, "头部")
                 assert_in("Space 暂停/继续", text, "页脚")
                 assert_not_in("限速", text.replace("max_speed", ""), "无限速控件")
-                assert_in("全局速度", text, "速度图区块不变")
+                assert_in("峰值 ↓", text, "头部流量图区块不变（v1.13 内嵌无标题，峰值图例）")
+                assert_in("并发连接", text, "并发连接面板区块不变")
             finally:
                 app.graceful_quit()
 

@@ -15,8 +15,8 @@ import time
 
 from harness import (
     Env, EzrApp, Suite, add_task_via_dialog, assert_in, assert_not_in,
-    detail_text, expected_content, file_bytes, parse_speed, wait_file_size,
-    QA_FILE_SIZES,
+    chart_points, detail_text, expected_content, file_bytes, parse_speed,
+    wait_file_size, QA_FILE_SIZES,
 )
 
 FIVE_M = QA_FILE_SIZES["five-m.bin"]
@@ -51,11 +51,15 @@ class TuiDisplaySuite(Suite):
                 text = app.text()
                 assert_in("EZR Downloader", text, "标题")
                 assert_in("全局", text, "头部统计")
-                assert_in("任务队列", text, "任务队列块")
+                # v1.13/FR-01-94：「任务队列」面板撤销，全屏不存在其标题
+                assert_not_in("任务队列", text, "任务队列面板已撤销（04-ui-conns-01）")
                 assert_in("正在下载", text, "页签")
                 assert_in("已完成", text, "页签")
                 assert_in("任务详情", text, "详情面板")
-                assert_in("全局速度", text, "Sparkline 面板")
+                # 流量图内嵌头部右侧且无标题（04-ui-conns-05）；结构锚点为
+                # 头部字段「峰值 ↓」图例与右栏「并发连接」面板
+                assert_in("峰值 ↓", text, "头部流量图区（内嵌无标题，峰值图例）")
+                assert_in("并发连接", text, "并发连接面板")
                 assert_in("Space 暂停/继续", text, "页脚快捷键区")
                 assert_in("鼠标", text, "页脚鼠标提示区")
             finally:
@@ -333,7 +337,7 @@ class TuiDisplaySuite(Suite):
                 app.graceful_quit()
 
     def _case_12(self):
-        """QA-TD-12 多任务头部：↓ 真实速度；↑ 恒 0；并发线程=活跃连接。"""
+        """QA-TD-12 多任务头部：↓ 真实速度；↑ 恒 0；并发=下载中任务连接总数（v1.13 数据面口径）。"""
         @self.case("QA-TD-12")
         def go(env: Env):
             app = EzrApp(env.home, save_dir=env.save_dir)
@@ -349,7 +353,7 @@ class TuiDisplaySuite(Suite):
                 header = ""
                 while time.time() < deadline:
                     app.pump(0.4)
-                    m = re.search(r"全局  ↓ ([1-9][\d.]* [KMG]?B/s)", app.text())
+                    m = re.search(r"全局 ↓ ([1-9][\d.]* [KMG]?B/s)", app.text())
                     if m:
                         header = m.group(0)
                         break
@@ -358,8 +362,8 @@ class TuiDisplaySuite(Suite):
                 m = re.search(r"↑ ([\d.]+ [KMG]?B/s)", text)
                 assert m and m.group(1) == "0 B/s", \
                     f"↑ 应恒为 0: {m.group(1) if m else '?'}"
-                m = re.search(r"并发线程 (\d+)", text)
-                assert m and 1 <= int(m.group(1)) <= 12, "并发线程应=活跃连接数"
+                m = re.search(r"并发 (\d+)", text)
+                assert m and 1 <= int(m.group(1)) <= 12, "头部并发应=活跃连接数（数据面）"
             finally:
                 app.graceful_quit()
 
@@ -376,7 +380,7 @@ class TuiDisplaySuite(Suite):
                 while time.time() < deadline:
                     app.pump(1.0)
                 t1 = app.text()
-                assert "任务 0 · 正在下载 0 · 已完成 0" in t1, "应保持空任务计数"
+                assert "正在下载 (0) │ 已完成 (0)" in t1, "应保持空任务计数（v1.13 页签行口径）"
                 assert t1.split("全局")[0] == t0.split("全局")[0], "头部结构不应自行变化"
             finally:
                 app.graceful_quit()
@@ -394,31 +398,15 @@ class TuiDisplaySuite(Suite):
 
     # -- 速度展示节奏（FR-01-17 修订）-----------------------------------------
 
-    BAR_GLYPHS = "▁▂▃▄▅▆▇█"
-
     @staticmethod
     def _bar_count(app: "EzrApp") -> int:
-        """「↓ 全局速度」面板内 Sparkline 采样点数（1 点 = 1 列含柱条字符）。
+        """头部右侧内嵌流量图采样点数（v1.13 布局，harness.chart_points 承载）。
 
-        两层口径修正：
-        - 只统计图表面板内部行——全画面口径会把任务行/详情面板的进度条
-          「█」也计入（实测 6s +38 点，全部来自进度条列）；
-        - 按列去重而非字符计数——Sparkline 纵向柱高随数值幅度变化，字符
-          总数度量的是幅度和而非点数（实测 EMA 爬升期 6s +25 字符）；
-          「每秒至多新增 1 点」口径只关心列（数据点）数。
+        口径不变：只统计图区内部、按列去重（1 点 = 1 列含柱条字符）——
+        区域从旧「↓ 全局速度」独立面板改为头部第 1–3 行最右两个「│」
+        之间的内嵌图区（FR-01-94/95 定稿，区域实现收口在共享 harness）。
         """
-        rows = app.screen.display
-        start = next((i for i, r in enumerate(rows) if "全局速度" in r), None)
-        if start is None:
-            return 0
-        cols: set[int] = set()
-        for r in rows[start + 1:]:
-            if "╰" in r and "╯" in r and r.count("─") > 10:
-                break  # 面板底边框
-            for x, ch in enumerate(r):
-                if ch in "▁▂▃▄▅▆▇█":
-                    cols.add(x)
-        return len(cols)
+        return chart_points(app)
 
     @staticmethod
     def _task_speed_sample(app: "EzrApp") -> str | None:

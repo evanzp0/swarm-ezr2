@@ -93,9 +93,11 @@ class PersistenceConfigSuite(Suite):
                 text = app.text()
                 assert_in("已失败", text, "失败状态保持")
                 assert_in("已暂停", text, "暂停状态保持")
-                assert_in("任务 4", text, "全部 4 任务注册表还原")
+                # v1.13 页签行计数：1 已完成 + 3 非完成（失败/暂停/下载中）= 全部 4 任务
+                assert_in("正在下载 (3)", text, "非完成 3 任务还原（v1.13 页签行口径）")
+                assert_in("已完成 (1)", text, "已完成 1 任务还原")
                 # 下载中任务重启后自动续传至完成（结果口径，避免速率竞速）
-                assert app.wait_for("已完成 2", 90), "退出前下载中的任务应续传至完成"
+                assert app.wait_for("已完成 (2)", 90), "退出前下载中的任务应续传至完成（v1.13 页签行口径）"
                 # 已完成历史（含顺序：small.bin 先于 three-m）在第二页签
                 app.send("tab")
                 app.pump(0.3)
@@ -150,7 +152,8 @@ class PersistenceConfigSuite(Suite):
                                     save_dir="")
                 assert app.wait_for("下载中", 8)
                 d = detail_text(app)
-                assert_in("4 并发", d, "默认并发 4")
+                # v1.14：详情类型行无并发数，默认并发 4 经头部数据面字段核验
+                assert app.wait_for("并发 4", 15), "默认并发 4（头部数据面）"
                 assert_in("1 MB/块", d, "默认块 1MB")
                 text = app.text()
                 assert_in("下载槽位", text, "槽位栏存在")

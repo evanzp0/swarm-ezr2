@@ -29,9 +29,14 @@ FIVE_M = QA_FILE_SIZES["five-m.bin"]
 SMALL = 1_024
 
 
-def _header_threads(app: EzrApp) -> int | None:
-    """头部「并发线程 N」（活跃连接数，数据面判定）。"""
-    m = re.search(r"并发线程 (\d+)", app.text())
+def _active_conns(app: EzrApp) -> int | None:
+    """并发连接面板标题右侧「活跃 x」（04-ui-conns-08：活跃 = 速度 > 0 的连接数）。
+
+    注意口径：头部「并发 N」= 下载中任务的连接**总数**（04-ui-conns-04，
+    含已完成块待续的空闲连接）；「活跃」才是速度 > 0 的活跃连接数——
+    QA-MT-02 观测升降级调度效果以「活跃」为准（规程：活跃连接数）。
+    """
+    m = re.search(r"活跃 (\d+)", app.text())
     return int(m.group(1)) if m else None
 
 
@@ -163,7 +168,7 @@ class ModifyTaskSuite(Suite):
                 deadline = time.time() + 9.0
                 while time.time() < deadline:
                     app.pump(0.15)
-                    t = _header_threads(app)
+                    t = _active_conns(app)
                     if t is not None:
                         peak = max(peak, t)
                     p = task_pct(app)
@@ -198,7 +203,7 @@ class ModifyTaskSuite(Suite):
                 deadline = time.time() + 8.0
                 while time.time() < deadline:
                     app.pump(0.15)
-                    t = _header_threads(app)
+                    t = _active_conns(app)
                     if t is None:
                         continue
                     if t > 1:
@@ -444,7 +449,8 @@ class ModifyTaskSuite(Suite):
                 try:
                     assert app.wait_for("下载中", 15), "重启应续传"
                     d = detail_text(app)
-                    assert_in("3 并发", d, "并发 3 应还原")
+                    # v1.14：详情类型行无并发数，并发还原经头部数据面字段核验
+                    assert app.wait_for("并发 3", 15), "并发 3 应还原（头部数据面）"
                     assert_in("校验", d, "校验行应还原")
                     n0 = len(proxy_reqs(px))
                     hit = False

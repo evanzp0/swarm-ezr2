@@ -109,7 +109,8 @@ class ConfigTemplateSuite(Suite):
                     app, env, env.fixture.url("five-m.bin?speed=900000"))
                 assert app.wait_for("下载中", 8), "任务应下载（启动不受模板影响）"
                 d = detail_text(app)
-                assert_in("4 并发", d, "默认并发 4")
+                # v1.14：详情类型行无并发数，默认并发 4 经头部数据面字段核验
+                assert app.wait_for("并发 4", 15), "默认并发 4（头部数据面）"
                 assert_in("1 MB/块", d, "默认块 1 MB")
             finally:
                 app.graceful_quit()
@@ -164,7 +165,7 @@ class ConfigTemplateSuite(Suite):
                 assert app.wait_for("下载中", 8), "正常下载"
                 d = detail_text(app)
                 assert_in("1 MB/块", d, "默认块 1 MB")
-                assert_in("4 并发", d, "默认并发 4")
+                assert app.wait_for("并发 4", 15), "默认并发 4（头部数据面）"
                 with open(cfg, "rb") as f:
                     after = f.read()
                 assert after == before, "损坏文件不被模板覆盖"

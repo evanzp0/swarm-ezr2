@@ -33,8 +33,10 @@ class AddTaskSuite(Suite):
     @staticmethod
     def _task_count(app: EzrApp) -> int:
         import re
-        m = re.search(r"任务 (\d+) ·", app.text())
-        return int(m.group(1)) if m else -1
+        # v1.13/FR-01-94 页签行口径：正在下载 (n) 计全部非已完成任务
+        # （含失败/暂停/等待，04-ui-conns-04 数据面注记），已完成 (m) 计终态
+        mm = re.search(r"正在下载 \((\d+)\) │ 已完成 \((\d+)\)", app.text())
+        return int(mm.group(1)) + int(mm.group(2)) if mm else -1
 
     @staticmethod
     def _cli(env: Env, *args: str, timeout: float = 15.0):
@@ -69,9 +71,9 @@ class AddTaskSuite(Suite):
                 assert_in("five-m.bin", text, "任务应出现在列表")
                 d = detail_text(app)
                 assert_in("HTTP", d, "类型徽标 HTTP")
-                import re
-                m = re.search(r"(\d+) 并发", d)
-                assert m and m.group(1) == "4", f"详情并发 4: {m.group(0) if m else '?'}"
+                # v1.14/FR-01-100：详情类型行无并发数，并发信息由头部数据面
+                # 字段承载（04-ui-conns-16）——门控下 4 worker 活跃即可观测
+                assert app.wait_for("并发 4", 15), "头部并发 4（配置默认生效）"
                 assert_in("SHA-256", d, "校验算法 SHA-256")
                 target = os.path.join(env.save_dir, "five-m.bin")
                 wait_file_size(target, QA_FILE_SIZES["five-m.bin"], 90, app=app)
@@ -212,10 +214,10 @@ class AddTaskSuite(Suite):
                             f"five-m.bin?swapsize={5000000 + idx}&speed=400000"),
                         conns=conns)
                     assert app.wait_for("下载中", 8), f"conns={conns!r} 应建任务"
-                    # 详情「N 并发」= 活跃连接数；门控下 4 worker 持续活跃，
-                    # 断言窗口内出现 4 并发即验证配置并发生效
-                    assert app.wait_for("4 并发", 15), \
-                        f"conns={conns!r} 应显示 4 并发（配置默认生效）"
+                    # 头部「并发 4」= 活跃连接数（v1.13 数据面口径）；门控下
+                    # 4 worker 持续活跃，断言窗口内出现即验证配置并发生效
+                    assert app.wait_for("并发 4", 15), \
+                        f"conns={conns!r} 头部应显示并发 4（配置默认生效）"
                     app.graceful_quit()
                 except Exception:
                     app.graceful_quit()
@@ -497,8 +499,8 @@ class AddTaskSuite(Suite):
                 app.type_text(env.save_dir)
                 app.send("enter")
                 # 小文件瞬时完成：「已添加」toast 会被完成 toast 覆盖，
-                # 以「已完成 1」计数断言创建成功
-                assert app.wait_for("已完成 1", 15), "粘贴 URL 确认后应创建成功"
+                # 以「已完成 (1)」页签计数断言创建成功（v1.13 页签行口径）
+                assert app.wait_for("已完成 (1)", 15), "粘贴 URL 确认后应创建成功"
             finally:
                 app.graceful_quit()
 

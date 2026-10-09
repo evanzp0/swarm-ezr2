@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from harness import (
     CaseResult, Env, EzrApp, Fixture, Suite, assert_file_content,
-    assert_in, assert_not_in, add_task_via_dialog, detail_text,
+    assert_in, assert_not_in, add_task_via_dialog, chart_points, detail_text,
     expected_content, file_bytes, gen_qa_files, read_file, select_completed,
     wait_file_size, QA_FILE_SIZES,
 )
@@ -396,10 +396,11 @@ class DownloadEngineSuite(Suite):
                     app.pump(1.05)
                     rows = app.display_rows()
                     header_speeds.append(rows[1])
-                    spark = "\n".join(rows[22:31])
-                    if any(ch in spark for ch in "▁▂▃▄▅▆▇█"):
+                    # v1.13：流量图内嵌头部第 1–3 行右侧（旧独立面板已撤销），
+                    # 区域限定 + 按列去重收口在 harness.chart_points
+                    if chart_points(app) > 0:
                         spark_seen = True
-                assert spark_seen, "Sparkline 区域应出现速度图块字符"
+                assert spark_seen, "头部流量图区域应出现速度图块字符"
                 joined = " ".join(header_speeds)
                 assert re.search(r"↓\s*[1-9]", joined), \
                     f"头部 ↓ 应出现非零速度: {joined[:200]}"
@@ -462,7 +463,7 @@ class DownloadEngineSuite(Suite):
                 # 「校验中」均为亚帧瞬态（engineering.md 瞬时值陷阱：断言锚定
                 # 最终态常驻文本）；页签计数「已完成 (1)」为持久终态证据。
                 # 分块行断言由 _select_completed 后的详情断言（100/100 · 1 MB/块）覆盖。
-                assert app.wait_for("任务 1", 10), "CLI 任务应自动创建"
+                assert app.wait_for("已完成 (1)", 10), "CLI 任务应自动创建并完成（亚秒级传输，锚定持久终态计数）"
                 assert app.wait_for("已完成 (1)", 8) \
                     or app.wait_for("校验中", 5) \
                     or app.wait_for("下载中", 5), "CLI 任务应自动开始并推进"
