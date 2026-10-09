@@ -29,6 +29,8 @@
 #![allow(unused_imports)]
 #[path = "hardening/blocks_hard.rs"]
 mod blocks_hard;
+#[path = "hardening/checksum_hard.rs"]
+mod checksum_hard;
 #[path = "hardening/config_fallback.rs"]
 mod config_fallback;
 #[path = "hardening/lease_spread.rs"]
