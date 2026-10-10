@@ -334,29 +334,8 @@ mod dialog_key_tests {
         let d = app.dialog.as_mut().unwrap();
         d.url = "http://example.com/r.bin".to_string();
         d.dir = dir.to_string_lossy().into_owned();
-        // 预置同 URL sidecar（断点视图：模拟既有下载残留）
-        let sc = crate::model::sidecar::Sidecar::build(
-            "http://example.com/r.bin",
-            &crate::model::consistency::ServerStamp {
-                final_url: None,
-                etag: None,
-                last_modified: None,
-                size: Some(1000),
-            },
-            1000,
-            1024 * 1024,
-            &[0],
-            false,
-            None,
-            crate::model::sidecar::SidecarTask {
-                id: 99,
-                added_at: 0,
-                save_dir: dir.to_string_lossy().into_owned(),
-                concurrency: 4,
-                protocol: Protocol::Http,
-            },
-        );
-        sc.save(&dir.join("r.bin.ezr").to_string_lossy()).ok();
+        // 预置同 URL sidecar（断点视图：模拟既有下载残留）——夹具单源 testutil
+        crate::app::testutil::preset_resume_sidecar(&dir);
         app.dlg_confirm_add();
         assert!(app.dialog.is_none(), "确认后关闭");
         assert_eq!(app.tasks.len(), 1);

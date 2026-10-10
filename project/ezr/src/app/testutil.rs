@@ -27,3 +27,33 @@ pub(crate) fn dialog(kind: DialogKind, focus: usize) -> Dialog {
         task_id: None,
     }
 }
+
+/// 预置同 URL sidecar 夹具（断点接续视图：模拟既有下载残留）——
+/// dialog_keys「确认添加接续既有 sidecar」与 dialogs「仅添加接续落暂停」
+/// 两个测试共享的单一构造点（PMD CPD 127tok 同构收敛）。
+/// URL 固定 `http://example.com/r.bin`、size=1000、块 1 MB、单块已完成、
+/// sidecar 落 `dir/r.bin.ezr`。
+pub(crate) fn preset_resume_sidecar(dir: &std::path::Path) {
+    let sc = crate::model::sidecar::Sidecar::build(
+        "http://example.com/r.bin",
+        &crate::model::consistency::ServerStamp {
+            final_url: None,
+            etag: None,
+            last_modified: None,
+            size: Some(1000),
+        },
+        1000,
+        1024 * 1024,
+        &[0],
+        false,
+        None,
+        crate::model::sidecar::SidecarTask {
+            id: 99,
+            added_at: 0,
+            save_dir: dir.to_string_lossy().into_owned(),
+            concurrency: 4,
+            protocol: crate::model::Protocol::Http,
+        },
+    );
+    sc.save(&dir.join("r.bin.ezr").to_string_lossy()).ok();
+}

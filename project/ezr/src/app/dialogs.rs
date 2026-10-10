@@ -546,29 +546,8 @@ mod add_dialog_flow_tests {
             task_name: String::new(),
             task_id: None,
         });
-        // 预置同 URL sidecar（断点接续）
-        let sc = crate::model::sidecar::Sidecar::build(
-            "http://example.com/r.bin",
-            &crate::model::consistency::ServerStamp {
-                final_url: None,
-                etag: None,
-                last_modified: None,
-                size: Some(1000),
-            },
-            1000,
-            1024 * 1024,
-            &[0],
-            false,
-            None,
-            crate::model::sidecar::SidecarTask {
-                id: 99,
-                added_at: 0,
-                save_dir: dir.to_string_lossy().into_owned(),
-                concurrency: 4,
-                protocol: Protocol::Http,
-            },
-        );
-        sc.save(&dir.join("r.bin.ezr").to_string_lossy()).ok();
+        // 预置同 URL sidecar（断点接续）——夹具单源 testutil
+        crate::app::testutil::preset_resume_sidecar(&dir);
         app.dlg_activate_add(7);
         assert!(app.dialog.is_none(), "仅添加后关闭");
         assert_eq!(app.tasks[0].name, "r.bin", "断点接续沿用原名");

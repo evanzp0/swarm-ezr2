@@ -515,3 +515,25 @@ group_imports = "StdExternalCrate"
   `buffer.cell((x, y)) -> Option<&Cell>`（`Buffer::get` 已 deprecated），配色断言遍历
   用 `cell(..).expect("界内")` 解包。配色断言**只锚定宽字符首格**——续格 fg=Reset、
   修饰为空（视觉由首格承载）；逐格配色遍历遇 Reset 即续格，跳过即可。
+- **cargo-llvm-cov 导出的 lcov 缺 `#[path]` 挂载测试 crate 的覆盖上下文，函数级覆盖率/CRAP
+  对挂载源文件严重失真**：集成测试 crate 经 `#[path = "../src/…"]` 挂载产品源时，覆盖映射
+  把源路径记录为非规范形（`tests/../src/app/x.rs`，SF 节按路径分立）；cargo-llvm-cov 0.9.x
+  导出的 lcov 实测只含 bin harness 上下文，挂载副本的 FN/FNDA/DA 整体缺失——表象是
+  「集成测试明明通过，对应分支体 cov=0/FNDA 偏低」（分支体 DA 全 0 而该臂单测断言通过即
+  应怀疑此因）。解法：用工具链自带 llvm-cov 直接导出——`llvm-cov export --object <每个测试
+  二进制>… --instr-profile=<target/llvm-cov-target 下的 .profdata> --format=lcov`（测试二进制
+  在 `target/llvm-cov-target/debug/build/<pkg>/<hash>/out/`；勿给 llvm-cov export 传
+  `--branch`——那是 cargo-llvm-cov 包装层 flag，export 本身报 Unknown argument，且 BRDA
+  默认输出、`--skip-branches` 才关闭）。解析侧三个合并口径：① SF 路径先 normpath 再合并
+  同名节（不规范化会把产品文件按 `tests/` 前缀误判为测试文件排除）；② 同节内同线号 DA
+  重复记录（多 object 按映射交错输出）按线号去重取 max，BRDA 按（线号, block, branch）
+  去重取 max（'-' 视 0）；③ 同一起始行跨 crate 副本 FNDA 取 max（list 语义；标量映射
+  后写覆盖前写 → 命中数假 0，阳性对照应选「明显被大量测试调用的函数」核 FNDA>0）。
+- **lcov 函数级归属必须按「具名函数跨距」，不能按「下一起始行」**：闭包的 FN 记录无结束
+  边界，按「起始行 ≤ 数据行 < 下一起始行」归属时，函数体内最后一个闭包会吞掉其后全部
+  数据行（外层函数后半段的 DA/BRDA 全记到闭包头上，cov/comp 双双失真、闭包 FNDA 显示
+  异常）。正确口径：按反消歧区分具名函数与闭包（rustfilt v0 输出含 `{closure#N}`），
+  闭包 FN 记录忽略，数据行按「具名函数起始行 ≤ 行 < 下一个具名函数起始行」并入外层
+  （闭包与外层本就同一逻辑函数，comp/cov 随跨距天然合并，无需再对闭包单独取极值）；
+  具名函数跨 crate 多副本按起始行去重。与上文「闭包的 DA 会同时计入外层与闭包」条互为
+  补充：那条管 FNDA 归属视角，本条管行级数据归属视角。

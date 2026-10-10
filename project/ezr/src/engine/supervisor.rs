@@ -522,11 +522,13 @@ async fn download(
                         EngineFailure::network("传输中断")
                     });
                     let blocks = blocks_shared.lock().await.clone();
-                    let sidecar = build_sidecar(spec, &probed_stamp, &blocks, false);
-                    return Flow::Failed(
+                    return failed_flow(
+                        spec,
+                        &probed_stamp,
+                        &blocks,
                         f,
-                        total_written.load(Ordering::Relaxed) > 0,
-                        Some((sidecar, sc_path.clone())),
+                        &total_written,
+                        &sc_path,
                     );
                 }
                 let b = blocks_shared.lock().await;
@@ -557,11 +559,13 @@ async fn download(
                         };
                         stop_workers(&stop, &stop_tx, &mut handles).await;
                         let blocks = blocks_shared.lock().await.clone();
-                        let sidecar = build_sidecar(spec, &probed_stamp, &blocks, false);
-                        return Flow::Failed(
+                        return failed_flow(
+                            spec,
+                            &probed_stamp,
+                            &blocks,
                             f,
-                            total_written.load(Ordering::Relaxed) > 0,
-                            Some((sidecar, sc_path.clone())),
+                            &total_written,
+                            &sc_path,
                         );
                     }
                     stop_workers(&stop, &stop_tx, &mut handles).await;
@@ -579,10 +583,7 @@ async fn download(
                         // 恢复会回退重传尾巴。verify() 通过后仍删此 sidecar（收尾
                         // 单源不破坏）；校验失败路径保留台账——全块完成口径下
                         // 引擎恢复零重传（FR-01-22/51）
-                        let b2 = blocks_shared.lock().await;
-                        let sidecar = build_sidecar(spec, &probed_stamp, &b2, false);
-                        drop(b2);
-                        let _ = Sidecar::save(&sidecar, &sc_path);
+                        flush_sidecar(spec, &probed_stamp, &blocks_shared, &sc_path).await;
                     }
                     let _ = emit(evt_tx, Evt::DownloadDone {
                         id: spec.id,
@@ -593,14 +594,51 @@ async fn download(
                 // sidecar 周期落盘
                 if tokio::time::Instant::now() >= flush_deadline {
                     flush_deadline = tokio::time::Instant::now() + SIDECAR_FLUSH;
-                    let b2 = blocks_shared.lock().await;
-                    let sidecar = build_sidecar(spec, &probed_stamp, &b2, false);
-                    drop(b2);
-                    let _ = Sidecar::save(&sidecar, &sc_path);
+                    flush_sidecar(spec, &probed_stamp, &blocks_shared, &sc_path).await;
                 }
             }
         }
     }
+}
+
+/// blocks 快照构建并落盘 sidecar（周期落盘与完成前终态落盘共用同一收口：
+/// 加锁 → 全块口径构建 → 解锁后写盘，与两侧原内联序列逐句等价）
+async fn flush_sidecar(
+    spec: &TaskSpec,
+    stamp: &ServerStamp,
+    blocks_shared: &tokio::sync::Mutex<Blocks>,
+    sc_path: &str,
+) {
+    let b = blocks_shared.lock().await;
+    let sidecar = build_sidecar(spec, stamp, &b, false);
+    drop(b);
+    let _ = Sidecar::save(&sidecar, sc_path);
+}
+
+/// 失败臂共用尾段：blocks 快照构建 sidecar，连同失败信息回报 Failed 流
+/// （监督循环失败臂与大小校验失败臂两处同构收敛，PMD CPD 66tok）
+fn failed_flow(
+    spec: &TaskSpec,
+    stamp: &ServerStamp,
+    blocks: &Blocks,
+    f: EngineFailure,
+    total_written: &AtomicU64,
+    sc_path: &str,
+) -> Flow {
+    let sidecar = build_sidecar(spec, stamp, blocks, false);
+    Flow::Failed(
+        f,
+        total_written.load(Ordering::Relaxed) > 0,
+        Some((sidecar, sc_path.to_string())),
+    )
+}
+
+/// 块区间与已写字节视图（block_worker 重领臂与新领臂两处同构收敛，
+/// PMD CPD 52tok；`block_range` 无解时区间落 (0, 0)、已写量落 0）
+fn block_span(b: &Blocks, idx: u32) -> (u64, u64, u64) {
+    let (s, e) = block_range(b.total, b.piece, idx).unwrap_or((0, 0));
+    let written = b.written.get(idx as usize).copied().unwrap_or(0);
+    (s, e, written)
 }
 
 /// 构建 sidecar（下载中/暂停/失败共用）
@@ -888,8 +926,7 @@ async fn block_worker(wid: usize, shared: Arc<super::EngineShared>, deps: Worker
             };
             if let Some(idx) = requeued {
                 let b = blocks.lock().await;
-                let (s, e) = block_range(b.total, b.piece, idx).unwrap_or((0, 0));
-                let written = b.written.get(idx as usize).copied().unwrap_or(0);
+                let (s, e, written) = block_span(&b, idx);
                 Some((idx, s, e, written))
             } else {
                 let b = blocks.lock().await;
@@ -905,8 +942,7 @@ async fn block_worker(wid: usize, shared: Arc<super::EngineShared>, deps: Worker
                     i += 1;
                 }
                 found.map(|idx| {
-                    let (s, e) = block_range(b.total, b.piece, idx).unwrap_or((0, 0));
-                    let written = b.written.get(idx as usize).copied().unwrap_or(0);
+                    let (s, e, written) = block_span(&b, idx);
                     (idx, s, e, written)
                 })
             }
