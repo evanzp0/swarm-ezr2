@@ -428,11 +428,62 @@ impl App {
             .count()
     }
 
+    /// 页签计数（FR-01-94 ④ 页签行「正在下载 (n) │ 已完成 (n)」口径；
+    /// architect v126 自渲染路径提取——原 header 内联聚合无直接单测面）：
+    /// 下标对齐 [`FILTERS`]（0 = 未完成态计数，1 = `is_done` 态计数，
+    /// 两项之和恒等于任务总数）。
+    #[must_use]
+    pub fn tab_counts(&self) -> [usize; 2] {
+        let doing = self.tasks.iter().filter(|t| !t.state.is_done()).count();
+        [doing, self.tasks.len() - doing]
+    }
+
     /// 清空指定任务的连接级账本（新一次下载开始 / 任务移除 / 收尾时调用，FR-01-99）
     pub(super) fn clear_conn_stats(&mut self, task_id: u32) {
         self.conn_prev.retain(|(tid, _), _| *tid != task_id);
         self.conn_cum.retain(|(tid, _), _| *tid != task_id);
         self.conn_speed.retain(|(tid, _), _| *tid != task_id);
         self.conn_windows.retain(|(tid, _), _| *tid != task_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::TaskState;
+
+    fn make_app(tag: &str) -> App {
+        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-app-{tag}"));
+        let reg = dir.join("registry.json").to_string_lossy().into_owned();
+        App::new(Config::default(), reg)
+    }
+
+    fn task(id: u32, name: &str, state: TaskState) -> Task {
+        let mut t = crate::model::sample_task();
+        t.id = id;
+        t.name = name.to_string();
+        t.state = state;
+        t
+    }
+
+    /// 页签计数访问器（architect v126 提取）：口径与页签行一致——
+    /// 0 = 未完成态计数、1 = is_done 态计数，两项之和恒等于任务总数
+    #[tokio::test]
+    async fn tab_counts_split_by_done_state() {
+        let mut app = make_app("tab");
+        assert_eq!(app.tab_counts(), [0, 0], "空表双零");
+        app.tasks.push(task(1, "a.bin", TaskState::Downloading));
+        app.tasks.push(task(2, "b.bin", TaskState::Queued));
+        app.tasks.push(task(3, "c.bin", TaskState::FailedPaused));
+        app.tasks.push(task(4, "d.bin", TaskState::Completed));
+        app.tasks.push(task(5, "e.bin", TaskState::Seeding));
+        let counts = app.tab_counts();
+        assert_eq!(counts[0], 3, "未完成态 = 下载中/等待/暂停（失败）");
+        assert_eq!(counts[1], 2, "is_done = 已完成/做种");
+        assert_eq!(counts[0] + counts[1], app.tasks.len(), "两页签不重不漏");
+        // 状态翻转 → 计数随动（校验中属未完成页签）
+        app.tasks[2].state = TaskState::Completed;
+        assert_eq!(app.tab_counts(), [2, 3]);
+        app.shutdown().await;
     }
 }

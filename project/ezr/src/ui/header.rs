@@ -121,9 +121,8 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect, with_chart: bool
     // 内容行 3：页签行（原「任务队列」面板并入，FR-01-94 ④）：正在下载 (n) │
     // 已完成 (n) │ 下载槽位 x/y（槽位内联左对齐；已满黄色加粗：等待任务需排队）
     if inner.height >= 3 {
-        let doing = app.tasks.iter().filter(|t| !t.state.is_done()).count();
-        let done = app.tasks.len() - doing;
-        let counts = [doing, done];
+        // 页签计数口径在应用层访问器（architect v126 提取，无头单测面）
+        let counts = app.tab_counts();
         let row_y = inner.y + 2;
         let mut spans: Vec<Span> = Vec::new();
         let mut tabs_w: u16 = 0;

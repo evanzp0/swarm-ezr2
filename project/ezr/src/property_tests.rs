@@ -1477,3 +1477,235 @@ proptest! {
         prop_assert_eq!(n, 1u64 << 20, "块大小透传");
     }
 }
+
+// ---------------------------------------------------------------------
+// architect v126 补齐批次（四缺口）：checksum 摘要管线 / Task 纯函数 /
+// 代理端点 url 构造 / 速度滑窗不变量
+// ---------------------------------------------------------------------
+
+// ---- checksum 摘要管线：digest_bytes 输出域 + validate_value 闭环 ----
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// digest_bytes 输出域不变量（7 算法全量）：小写十六进制、位数恰为
+    /// 算法表期望值、且被 validate_value 原样接受（计算→校验闭环——运行时
+    /// 校验路径消费的就是这个输出）
+    #[test]
+    fn prop_digest_bytes_output_domain(
+        data in prop::collection::vec(any::<u8>(), 0..300),
+        algo_idx in 0usize..7,
+    ) {
+        let digest = crate::model::checksum::digest_bytes(&data, algo_idx);
+        let (_, need, _) = CHECKSUM_ALGOS[algo_idx];
+        prop_assert_eq!(digest.len(), need, "位数恰为算法表期望值");
+        prop_assert!(
+            digest.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "小写十六进制"
+        );
+        prop_assert_eq!(
+            crate::model::checksum::validate_value(algo_idx, &digest),
+            Ok(digest.clone()),
+            "计算输出被校验器原样接受"
+        );
+    }
+
+    /// 流式与内存两条计算路径守恒（digest_file == digest_bytes）：运行时校验
+    /// 走流式 digest_file，测试/内存校验走 digest_bytes——两路径对同一内容
+    /// 必须同值，否则「本地算的」与「校验算的」口径分叉
+    #[test]
+    fn prop_digest_file_matches_bytes(
+        data in prop::collection::vec(any::<u8>(), 0..(1 << 20)),
+        algo_idx in 0usize..7,
+    ) {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-prop-digest");
+        let path = dir.join("payload.bin");
+        std::fs::write(&path, &data).unwrap();
+        let streamed =
+            crate::model::checksum::digest_file(&path.to_string_lossy(), algo_idx).unwrap();
+        let inmem = crate::model::checksum::digest_bytes(&data, algo_idx);
+        prop_assert_eq!(streamed, inmem, "流式 == 内存 同内容同摘要");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 代理端点 url 构造（endpoint_url）双属性：① 括号 iff ip 含冒号
+    /// （纯格式契约，任意 ip 字符串成立）；② 合法 IPv6 字面量（全 8 段）
+    /// 必产出可被 url 解析的方括号形态且端口保真（rust.md「IPv6 进 url
+    /// 必须加方括号」契约的属性化）。注意生成域与规格域对齐（rust.md
+    /// 「属性字母表」条）：少于 8 段且无 ：: 压缩的段串不是合法 IPv6，
+    /// url 解析必败属产品正确拒绝生成器以为的合法输入——可解析断言只
+    /// 锁全 8 段合法形态。
+    #[test]
+    fn prop_endpoint_url_bracket_iff_colon(
+        ip in "[0-9a-fA-F:]{2,50}",
+    ) {
+        let cfg = crate::model::config::ProxyConfig {
+            name: "p".to_string(),
+            kind: crate::model::config::ProxyKind::Http,
+            ip: ip.clone(),
+            port: 1,
+            username: None,
+            password: None,
+        };
+        let url = cfg.endpoint_url();
+        if ip.contains(':') {
+            prop_assert!(url.contains(&format!("[{ip}]:1")), "含冒号必带方括号: {url}");
+        } else {
+            prop_assert!(!url.contains('['), "无冒号不加括号: {url}");
+        }
+    }
+
+    #[test]
+    fn prop_endpoint_url_ipv6_parseable(
+        segs in prop::collection::vec("[0-9a-fA-F]{1,4}", 8..=8),
+        port in 1u16..=65535,
+    ) {
+        let ip = segs.join(":");
+        let cfg = crate::model::config::ProxyConfig {
+            name: "p".to_string(),
+            kind: crate::model::config::ProxyKind::Http,
+            ip: ip.clone(),
+            port,
+            username: None,
+            password: None,
+        };
+        let url = cfg.endpoint_url();
+        prop_assert!(url.contains(&format!("[{ip}]:{port}")), "IPv6 必带方括号: {url}");
+        let parsed = url::Url::parse(&url);
+        prop_assert!(parsed.is_ok(), "全 8 段方括号形态可被 url 解析: {url}");
+        if let Ok(parsed) = parsed {
+            prop_assert_eq!(parsed.port(), Some(port), "端口保真");
+        }
+    }
+
+    #[test]
+    fn prop_endpoint_url_plain_ip_parseable(
+        ip in "[0-9]{1,3}(\\.[0-9]{1,3}){3}",
+        port in 1u16..=65535,
+    ) {
+        let cfg = crate::model::config::ProxyConfig {
+            name: "p".to_string(),
+            kind: crate::model::config::ProxyKind::Socks5,
+            ip,
+            port,
+            username: None,
+            password: None,
+        };
+        let url = cfg.endpoint_url();
+        prop_assert!(!url.contains('['), "无冒号 ip 不加方括号: {url}");
+        prop_assert!(url::Url::parse(&url).is_ok(), "点分形态可解析: {url}");
+    }
+}
+
+// ---- Task 纯函数：进度界 / ETA 门 / 分块口径 / 路径三件套 ----
+
+proptest! {
+    /// progress() 值域不变量：任意 total/downloaded（含 0 与 downloaded>total）
+    /// 输出 ∈ [0,1]；total=0 恒 0（progress_clamps 单测的属性化全量覆盖）
+    #[test]
+    fn prop_task_progress_bounded(total in 0u64..(1 << 40), downloaded in 0u64..(1 << 40)) {
+        let mut t = crate::model::sample_task();
+        t.total = total;
+        t.downloaded = downloaded;
+        let p = t.progress();
+        prop_assert!((0.0..=1.0).contains(&p), "progress 越界: {p}");
+        if total == 0 {
+            prop_assert_eq!(p, 0.0);
+        }
+    }
+
+    /// eta_secs() 门语义：非下载态或速度 ≤ 0 恒 None；仅下载中且速度 > 0
+    /// 才有 Some（剩余 = ⌊(total−downloaded)/speed⌋ 非负）
+    #[test]
+    fn prop_task_eta_none_gates(
+        state in prop::sample::select(&[
+            TaskState::Queued, TaskState::Paused, TaskState::Downloading,
+            TaskState::Verifying, TaskState::Completed, TaskState::Failed,
+            TaskState::FailedPaused,
+        ]),
+        speed in -1.0f64..1e9,
+        total in 0u64..(1 << 40),
+        downloaded in 0u64..(1 << 40),
+    ) {
+        let mut t = crate::model::sample_task();
+        t.state = state;
+        t.speed = speed;
+        t.total = total;
+        t.downloaded = downloaded.min(total);
+        let eta = t.eta_secs();
+        if state != TaskState::Downloading || speed <= 0.0 {
+            prop_assert_eq!(eta, None, "非下载态/零速恒 None");
+        } else {
+            prop_assert!(eta.is_some(), "下载中正速必有 ETA");
+            if let Some(secs) = eta {
+                prop_assert!(secs < u64::MAX, "非饱和有限值");
+            }
+        }
+    }
+
+    /// chunk_info() 与分块数学一致：y = chunk_total(total, block_size)、
+    /// x ≤ y（完成数不越界钳制）
+    #[test]
+    fn prop_task_chunk_info_consistent(
+        total in 1u64..(1 << 32),
+        block_size in 1u64..(1 << 20),
+        chunk_done in 0u32..6000,
+    ) {
+        let mut t = crate::model::sample_task();
+        t.total = total;
+        t.block_size = block_size;
+        t.chunk_done = chunk_done;
+        let (x, y, n) = t.chunk_info();
+        prop_assert_eq!(y, u64::from(crate::model::chunk::chunk_total(total, block_size)));
+        prop_assert_eq!(n, block_size);
+        prop_assert!(u64::from(x) <= y, "完成块数不得越界: x={x} y={y}");
+    }
+
+    /// 路径三件套后缀不变量：downloading/sidecar 路径 = 目标路径 + 固定后缀
+    /// （namegen 常量单源；任意目录与文件名形态下成立）
+    #[test]
+    fn prop_task_paths_suffix_invariants(
+        dir in "[a-zA-Z0-9_./-]{0,40}",
+        name in "[a-zA-Z0-9_-]{1,30}",
+    ) {
+        let mut t = crate::model::sample_task();
+        t.save_dir = dir;
+        t.name = name.clone();
+        let target = t.target_path();
+        prop_assert_eq!(t.downloading_path(), format!("{target}{}", crate::model::namegen::DOWNLOADING_EXT));
+        prop_assert_eq!(t.sidecar_path(), format!("{target}{}", crate::model::namegen::SIDECAR_EXT));
+        prop_assert!(target.ends_with(&name), "目标路径以文件名收尾");
+    }
+}
+
+// ---- SpeedWindow：滑窗速率非负与上界（含累计回退样本的安全口径）----
+
+proptest! {
+    /// rate() 不变量：任意推进序（含累计值回退/重置形态）下速率恒非负
+    /// （saturating 差值），且上界 = 全程累计极差 / dt 下限 0.05s；
+    /// last_push() 恒为最后推进的时间戳（单调序）
+    #[test]
+    fn prop_speed_window_rate_bounded(
+        n in 1usize..40,
+        base_ms in 0u64..600_000,
+        cums in prop::collection::vec(any::<u64>(), 1..40),
+    ) {
+        let t0 = std::time::Instant::now();
+        let mut w = crate::model::speed::SpeedWindow::new();
+        let mut last = None;
+        for i in 0..n {
+            let at = t0 + std::time::Duration::from_millis(base_ms + i as u64 * 120);
+            let c = cums[i % cums.len()];
+            w.push(at, c);
+            last = Some(at);
+        }
+        let rate = w.rate();
+        prop_assert!(rate >= 0.0, "速率恒非负: {rate}");
+        let (cmin, cmax) = cums.iter().fold((u64::MAX, 0u64), |(lo, hi), &c| {
+            (lo.min(c), hi.max(c))
+        });
+        let bound = (cmax.saturating_sub(cmin)) as f64 / 0.05;
+        prop_assert!(rate <= bound + 1e-9, "速率超极差上界: rate={rate} bound={bound}");
+        prop_assert_eq!(w.last_push(), last, "last_push = 最后推进时刻");
+    }
+}

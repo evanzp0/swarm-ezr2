@@ -2,10 +2,12 @@
 # arch_check.sh — EZR 自动化架构边界检查（six-pack/architect 交付）
 #
 # 依据 packs/_common/notes/rust.md「架构边界与适配器方向」条款的 grep 级方案：
-# 零依赖、可读、易维护，覆盖本项目十二条分层规则；CI 可作为 && 链一环集成。
+# 零依赖、可读、易维护，覆盖本项目十四条分层规则；CI 可作为 && 链一环集成。
 # （v1.3 后复核批次，architect 第二轮：新增规则 7/8，见 POSITIVE-CONTROL 尾注；
 # architect 第四轮：新增规则 11——model 纯同步逻辑护栏，阳性对照实测本轮会话；
-# architect v116：新增规则 12——ui 层 IO 框架导入禁令，阳性对照实测本轮会话）
+# architect v116：新增规则 12——ui 层 IO 框架导入禁令，阳性对照实测本轮会话；
+# architect v126：新增规则 13——app 层零 ui 依赖（组装根在 main.rs）；
+# 规则 14——ui 渲染路径对 App 写操作只允许回填字段白名单，阳性对照实测本轮会话）
 #
 # 分层基线（依赖方向：低层指向高层，model 为最内层纯逻辑）：
 #   main.rs → app → engine → model；ui → app + model；model → ∅
@@ -139,6 +141,38 @@ else
   echo "[ OK ] ui 层零 IO 框架导入（纯渲染层）"
 fi
 
+# 规则 13【组装根】app 层零 ui 依赖（architect v126：组合根是 main.rs——
+# app 是策略层，ui 是展示层，二者依赖必须经入口组装而非策略反向触达展示；
+# 扫描域 = 导入语句，与规则 1–3 同口径）
+hit=$(grep -rnE '^[[:space:]]*use[[:space:]]+crate::ui' src/app/ --include='*.rs' || true)
+if [ -n "$hit" ]; then
+  echo "[FAIL] app 层出现对 ui 的依赖（组装根在 main.rs，策略不得反向触达展示）:"; echo "$hit"; fails=$((fails+1))
+else
+  echo "[ OK ] app 层零 ui 依赖（组装根 main.rs）"
+fi
+
+# 规则 14【回填白名单】ui 渲染路径对 App 状态的写操作只允许回填字段
+# （architect v126：ui 是纯渲染层，读 App 状态渲染 + 把命中区域/可视行数
+# 回填 App 供鼠标交互——写面仅限字段名含 rect/area/visible 的回填字段；
+# 策略状态（quit/filter/selected/tasks/dialog 等）从渲染路径改写即分层泄漏。
+# 扫描域 = 各 ui 文件首个 #[cfg(test)] 之前的产品区（测试夹具播种状态属
+# 合法豁免形态，不入扫描域）；写形态 = 字段赋值或容器方法调用（push/clear/
+# insert/remove/retain/swap/drain/resize/append/truncate）；已知豁免：经别名
+# 改写（如 if let Some(d) = app.dialog.as_mut() 后经 d 赋值）不在本规则扫描域，
+# 产品渲染路径现无此形态）
+ui_product_lines=$(for f in src/ui/*.rs; do
+  awk '/#\[cfg\(test\)\]/{exit} {print FILENAME":"FNR":"$0}' "$f"
+done)
+hit=$(printf '%s\n' "$ui_product_lines" \
+  | grep -E 'app\.[a-z_]+([[:space:]]*=[^=]|\.(push|clear|insert|remove|retain|swap|drain|resize|append|truncate)\()' \
+  | grep -vE 'app\.[a-z_]*(rect|area|visible)' \
+  | grep -vE ':[0-9]+:[[:space:]]*//' || true)
+if [ -n "$hit" ]; then
+  echo "[FAIL] ui 渲染路径改写非回填 App 字段（写面只限 rect/area/visible 回填）:"; echo "$hit"; fails=$((fails+1))
+else
+  echo "[ OK ] ui 渲染路径只回填 rect/area/visible 字段"
+fi
+
 if [ "$fails" -gt 0 ]; then
   echo "arch_check: ${fails} 条规则未过"; exit 1
 fi
@@ -164,3 +198,11 @@ echo "arch_check: 全部边界规则通过"
 #   向 src/ui/chart.rs 顶部临时插入真实 use 语句 `use tokio::sync::mpsc;`
 #   → 规则 12 命中并非零退出；移除后全过。#[tokio::test] 属性形态不命中
 #   （非 use 语句，与判例对齐）。
+# architect v126 新增规则 13/14 阳性对照（本轮会话实测）：
+#   向 src/app/mod.rs 顶部临时插入真实 use 语句 `use crate::ui;`
+#   → 规则 13 命中并非零退出；移除后全过。
+#   向 src/ui/header.rs 产品区临时插入真实赋值语句 `let _ = { app.quit = true; };`
+#   → 规则 14 命中并非零退出；移除后全过。注意规则 14 扫描域是各 ui 文件
+#   首个 #[cfg(test)] 之前的产品区——把探针插进测试模块（如 mod.rs 底部
+#   tests 内的合法夹具播种）不命中属扫描域对齐行为，非规则失效；探针必须是
+#   真实赋值/容器调用行，注释形态（`// app.quit = true`）不被扫描。
