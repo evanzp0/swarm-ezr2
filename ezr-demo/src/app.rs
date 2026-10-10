@@ -10,12 +10,20 @@
 //! 已失败任务重试时先回到「等待中」队列；
 //! 「等待中」任务按 Space 会暂停（退出等待队列，→ 已暂停）。
 //!
-//! 失败与重试规则（FR-M1-40~44 / 51 / 22）：
+//! 失败与重试规则（FR-M1-40~44 / 51 / 22；R 语义已同步生产 v1.16/v1.17）：
 //! - 自动重试类（网络错误 / HTTP 408·429·5xx / 文件大小不符）：指数退避
 //!   8s → 16s → 32s → 60s 封顶；响应带 Retry-After（≤60s）时优先采用；
 //! - 不自动重试类（语义性 HTTP 4xx / 磁盘空间不足 / SHA-256 校验失败）：
 //!   直接停等（「已达上限」式），仅可 R 手动重试；
-//!   其中校验失败按 R 时清除断点、从头重新下载（数据损坏时断点无意义）；
+//!   校验失败按 R = 重新校验（无块重传，D10；生产 v1.17/FR-01-51 同步——
+//!   原演示口径「清除断点从头重下」已废止）；
+//!   校验码已清空（修改对话框清码）时按 R = 不校验：文件完整性直判不经
+//!   引擎零排队零重传直接收尾「已完成」显示「无校验」
+//!   （生产 v1.18/FR-01-51 + D34 钦定同步）；
+//! - 速度展示面（v1.15/FR-01-102 同步）：连接/任务/全局速度同一管线——
+//!   数据面逐帧推进窗口字节，展示面每秒采样 + EMA α=1/5，数值每秒最多
+//!   变化一次；非下载态逐帧零值速断，下载中任务的待命连接采样点归零
+//!   （D33：最坏 1s 时延）。
 //! - 续传一致性失效（服务器内容已更新）：断点作废、清零进度、从头重新下载；
 //! - 重试计数连续性：连续失败（无进展）→ 累加、有进展 → 重置为 1；
 //!   达上限（默认 5）→ 停止自动重试、释放槽位、显示「已达上限」。
@@ -42,6 +50,12 @@ pub const MAX_DOWNLOAD_SLOTS: usize = 5;
 
 /// braille 转轮字符（校验中/后期处理等动态效果）
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/// 速度展示面采样节拍（v1.15/FR-01-102 同步）：1s 窗口 + 每秒采样 +
+/// EMA α=1/5——数值每秒最多变化一次，与生产任务/连接速度同一管线
+const SPEED_TICK: Duration = Duration::from_secs(1);
+/// 展示面 EMA 平滑系数（α = 1/5，与生产 SpeedDisplay 同口径）
+const SPEED_EMA_ALPHA: f64 = 0.2;
 
 // ---------------------------------------------------------------------------
 // 基础模型
@@ -141,6 +155,10 @@ impl TaskState {
 pub struct Connection {
     /// 对端地址（演示数据：BT 任务界面以掩码显示首末段，HTTP 不显示）
     pub ip: String,
+    /// 当前采样窗口内累计的下载字节（展示面每秒采样后清零；v1.15/FR-01-102）
+    pub win: u64,
+    /// 当前采样窗口内累计的上传字节（展示面每秒采样后清零；BT）
+    pub win_up: u64,
     /// 分块起始字节（含）
     pub start: u64,
     /// 分块结束字节（不含）
@@ -415,7 +433,7 @@ pub struct Dialog {
     pub proxy_sel: usize,
     /// Add/Modify: 代理下拉框是否展开
     pub proxy_open: bool,
-    /// Add:    0=URL 1=保存目录 2=并发数 3=校验算法 4=校验码 5=代理 6=确认 7=取消
+    /// Add:    0=URL 1=保存目录 2=并发数 3=校验算法 4=校验码 5=代理 6=立即下载 7=仅添加 8=取消
     /// Modify: 0=并发数 1=校验算法 2=校验码 3=代理 4=确定 5=取消
     /// Delete: 0=仅删除任务  1=删除任务和文件  2=取消
     pub focus: usize,
@@ -453,6 +471,8 @@ pub struct App {
     toast_until: Option<Instant>,
     pub next_id: u32,
     last_tick: Instant,
+    /// 速度展示面上次采样时刻（每 SPEED_TICK=1s 采样一次；v1.15/FR-01-102）
+    last_speed_tick: Instant,
     /// 列表可视条目数（由 ui 层回填，用于滚动钳制）
     pub visible_rows: usize,
     /// 列表内框区域（由 ui 层回填，用于鼠标命中测试）
@@ -512,9 +532,11 @@ impl App {
             selected: 0,
             scroll: 0,
             filter: 0,
-            speed_hist: vec![0; 90],
+            // 速度历史不预填（每秒采样一个样本，暖机 ~2s 后图区开始绘制；
+            // 生产同口径逐秒推进）
+            speed_hist: Vec::new(),
             bw_t: 0.0,
-            up_hist: vec![0; 90],
+            up_hist: Vec::new(),
             session_bytes: 0,
             rng: Rng::new(seed),
             frame: 0,
@@ -523,6 +545,7 @@ impl App {
             toast_until: Some(Instant::now() + Duration::from_secs(4)),
             next_id: 100,
             last_tick: Instant::now(),
+            last_speed_tick: Instant::now(),
             visible_rows: 6,
             list_area: None,
             conns_scroll: 0,
@@ -699,46 +722,39 @@ impl App {
             + 0.03 * (std::f64::consts::TAU * self.bw_t / 1.1 + 4.0).sin();
 
         let rng = &mut self.rng;
-        let mut global_dl = 0.0f64;
-        let mut global_ul = 0.0f64;
         let mut notices: Vec<String> = Vec::new();
+        // 本帧实际落盘字节（会话已下载累计改用实际字节而非展示 EMA 积分，
+        // 与生产 FR-01-81 口径一致：EMA 爬升期少计会随任务结束固化）
+        let mut frame_dl_bytes: u64 = 0u64;
 
         for t in self.tasks.iter_mut() {
             match t.state {
                 TaskState::Downloading => {
-                    // 演示：首次失败之后的重试模拟「连接卡死」——速度为 0、无数据下载，
+                    // 演示：首次失败之后的重试模拟「连接卡死」——无数据下载，
                     // 用于展示「连续失败（无进展）累加重试次数」规则
                     let stalled = t.flaky && t.fail_count > 1;
-                    // 聚合速度 = 基准速 × 共享带宽波动(bw) × 每帧小幅抖动 ±8%，
-                    // 并做轻度 EMA 平滑（消除逐帧跳变）；
-                    // 连接全部被断开时视为无传输（速度归零，等待重新建连）
-                    let target = if stalled || t.connections.is_empty() {
+                    // ---- 数据面（逐帧）：瞬时速率仅推进字节与采样窗口累计，
+                    // 不再直接写展示速度——展示面统一由每秒采样 + EMA α=1/5
+                    // 驱动（见下方采样块，v1.15/FR-01-102 同步）；连接全部
+                    // 被断开时视为无传输（无字节进窗）
+                    let task_inst = if stalled || t.connections.is_empty() {
                         0.0
                     } else {
                         t.base_speed * bw * rng.range(0.92, 1.08)
                     };
-                    t.speed = if target == 0.0 || t.speed == 0.0 {
-                        target
-                    } else {
-                        t.speed * 0.6 + target * 0.4
-                    };
-                    // 分块推进：每个连接围绕任务均摊值小幅抖动，并经 EMA 平滑写入；
-                    // 累计下载量记本次开始下载后的实际落盘字节
                     let n = t.connections.len().max(1) as f64;
                     for c in t.connections.iter_mut() {
                         if c.cap() > 0 && c.done < c.cap() {
-                            let seg = (t.speed / n) * rng.range(0.88, 1.12);
-                            c.speed = if c.speed > 0.0 {
-                                c.speed * 0.55 + seg * 0.45
-                            } else {
-                                seg
-                            };
-                            let nd = (c.done as f64 + c.speed * dt).min(c.cap() as f64) as u64;
-                            c.cum_down = c.cum_down.saturating_add(nd.saturating_sub(c.done));
-                            c.done = nd;
-                        } else {
-                            c.speed = 0.0;
+                            let rate = (task_inst / n) * rng.range(0.88, 1.12);
+                            let nd = ((c.done as f64 + rate * dt).min(c.cap() as f64) as u64)
+                                .saturating_sub(c.done);
+                            c.win += nd;
+                            c.cum_down = c.cum_down.saturating_add(nd);
+                            c.done += nd;
+                            frame_dl_bytes += nd;
                         }
+                        // 待命/空连接：展示速度不在逐帧路径上触碰——下一采样点
+                        // 零值速断（D33 锚定的最坏 1s 时延）
                     }
                     // 分块队列（HTTP 与 BT 同模型，仅块大小不同）：完成一块立即领取下一块，
                     // 队列临近结束时剩余连接自然转入待命（start=end=0）
@@ -766,11 +782,11 @@ impl App {
                                     // 避免领块瞬间归零造成明细速度闪烁
                                     next += 1;
                                 } else {
-                                    // 队列已空：连接待命
+                                    // 队列已空：连接待命（展示速度不动——下一采样点
+                                    // 零值速断，D33 最坏 1s 时延；数据面无字节进窗）
                                     c.start = 0;
                                     c.end = 0;
                                     c.done = 0;
-                                    c.speed = 0.0;
                                 }
                             }
                         }
@@ -792,32 +808,24 @@ impl App {
                     if !stalled {
                         t.made_progress = true;
                     }
-                    global_dl += t.speed;
-                    // BT 边下边传：上传按活跃连接均摊（围绕均摊值小幅抖动 + EMA 平滑防闪烁），
-                    // 并累计到各连接
+                    // BT 边下边传（数据面）：上传瞬时速率按活跃连接均摊抖动，
+                    // 推进累计与采样窗口；展示面由下方每秒采样驱动
                     if t.protocol.is_bt() {
-                        let up_target = 420_000.0 * rng.range(0.5, 1.7);
-                        t.upload_speed = if t.upload_speed > 0.0 {
-                            t.upload_speed * 0.6 + up_target * 0.4
+                        let up_inst = if stalled || t.connections.is_empty() {
+                            0.0
                         } else {
-                            up_target
+                            420_000.0 * rng.range(0.5, 1.7)
                         };
-                        t.uploaded = (t.uploaded as f64 + t.upload_speed * dt) as u64;
-                        global_ul += t.upload_speed;
                         let un = t.connections.len().max(1) as f64;
                         for c in t.connections.iter_mut() {
                             if c.cap() > 0 && c.done < c.cap() {
-                                let seg = (t.upload_speed / un) * rng.range(0.88, 1.12);
-                                c.up_speed = if c.up_speed > 0.0 {
-                                    c.up_speed * 0.55 + seg * 0.45
-                                } else {
-                                    seg
-                                };
-                            } else {
-                                c.up_speed = 0.0;
+                                let rate = (up_inst / un) * rng.range(0.88, 1.12);
+                                let nb = (rate * dt) as u64;
+                                c.win_up += nb;
+                                c.cum_up = c.cum_up.saturating_add(nb);
                             }
-                            c.cum_up = c.cum_up.saturating_add((c.up_speed * dt) as u64);
                         }
+                        t.uploaded = t.uploaded.saturating_add((up_inst * dt) as u64);
                     }
                     // 演示用：周期性失败（展示失败分类/退避倒计时/自动重试流转，FR-M1-40~43）；
                     // 卡死重试 2.0s 即失败，正常尝试 6s 后失败
@@ -930,8 +938,9 @@ impl App {
                             t.verify_started = None;
                             t.speed = 0.0;
                             t.upload_speed = 0.0;
-                            // 校验失败路径（FR-M1-51）：不自动重试；按 R 清除断点从头重新下载
-                            //（演示：gpt4all 首次校验失败，R 重下后校验通过）
+                            // 校验失败路径（FR-M1-51；生产 v1.17 同步）：不自动重试；
+                            // 按 R = 重新校验（无块重传，D10）——校验码清空后按 R
+                            // 则不校验直接完成「无校验」（D34）
                             if t.verify_fail_once {
                                 t.verify_fail_once = false;
                                 t.verify_ok = Some(false);
@@ -941,7 +950,7 @@ impl App {
                                 t.has_slot = false;
                                 t.error = Some(format!("{} 校验失败：内容与校验值不符", algo));
                                 notices.push(format!(
-                                    "✘ {} 校验失败：不自动重试，按 R 清除断点从头下载: {}",
+                                    "✘ {} 校验失败：不自动重试，按 R 重新校验: {}",
                                     algo, t.name
                                 ));
                             } else {
@@ -977,16 +986,9 @@ impl App {
                     }
                 }
                 TaskState::Seeding => {
-                    let up_target = 1_900_000.0 * rng.range(0.6, 1.5);
-                    t.upload_speed = if t.upload_speed > 0.0 {
-                        t.upload_speed * 0.6 + up_target * 0.4
-                    } else {
-                        up_target
-                    };
-                    t.uploaded = (t.uploaded as f64 + t.upload_speed * dt) as u64;
-                    global_ul += t.upload_speed;
-                    // 做种上传按持有块的连接均摊展示（EMA 平滑防闪烁），
-                    // 累计上传量延续下载阶段继续累计
+                    // 上传数据面：瞬时速率按持有块的连接均摊抖动，推进累计与
+                    // 采样窗口；展示面由下方每秒采样驱动（同下载口径）
+                    let up_inst = 1_900_000.0 * rng.range(0.6, 1.5);
                     let un = t
                         .connections
                         .iter()
@@ -995,17 +997,13 @@ impl App {
                         .max(1) as f64;
                     for c in t.connections.iter_mut() {
                         if c.cap() > 0 {
-                            let seg = (t.upload_speed / un) * rng.range(0.88, 1.12);
-                            c.up_speed = if c.up_speed > 0.0 {
-                                c.up_speed * 0.55 + seg * 0.45
-                            } else {
-                                seg
-                            };
-                            c.cum_up = c.cum_up.saturating_add((c.up_speed * dt) as u64);
-                        } else {
-                            c.up_speed = 0.0;
+                            let rate = (up_inst / un) * rng.range(0.88, 1.12);
+                            let nb = (rate * dt) as u64;
+                            c.win_up += nb;
+                            c.cum_up = c.cum_up.saturating_add(nb);
                         }
                     }
+                    t.uploaded = t.uploaded.saturating_add((up_inst * dt) as u64);
                     t.seed_left = (t.seed_left - dt).max(0.0);
                     if t.seed_left <= 0.0 {
                         t.state = TaskState::Completed;
@@ -1096,15 +1094,119 @@ impl App {
             }
         }
 
-        // 会话统计与速度历史
-        self.session_bytes += (global_dl * dt) as u64;
-        self.speed_hist.push((global_dl / 1024.0) as u64);
-        if self.speed_hist.len() > 180 {
-            self.speed_hist.remove(0);
+        // -------------------------------------------------------------------
+        // 速度展示面（v1.15/FR-01-102 同步，与生产同管线）：
+        // ① 非下载/做种展示任务逐帧零值速断（无衰减拖尾）；
+        // ② 下载/做种展示值每秒采样一次（1s 窗口字节速率 → EMA α=1/5），
+        //    数值每秒最多变化一次；
+        // ③ 下载中任务的待命/空连接在采样点立即归零（D33：最坏 1s 时延）；
+        //    在传连接即使窗口速率为 0 也持续平滑（避免 `-` 闪烁）。
+        // -------------------------------------------------------------------
+        let speed_due = now.duration_since(self.last_speed_tick) >= SPEED_TICK;
+        if speed_due {
+            self.last_speed_tick = now;
         }
-        self.up_hist.push((global_ul / 1024.0) as u64);
-        if self.up_hist.len() > 180 {
-            self.up_hist.remove(0);
+        for t in self.tasks.iter_mut() {
+            match t.state {
+                TaskState::Downloading => {
+                    if !speed_due {
+                        continue;
+                    }
+                    if t.connections.is_empty() {
+                        // 连接全部被断开：视为无传输，展示速度立即归零
+                        t.speed = 0.0;
+                        continue;
+                    }
+                    // 任务级：1s 窗口字节速率 → EMA α=1/5（与连接同一节拍）
+                    let win: u64 = t.connections.iter().map(|c| c.win).sum();
+                    let sample = win as f64 / SPEED_TICK.as_secs_f64();
+                    t.speed += (sample - t.speed) * SPEED_EMA_ALPHA;
+                    for c in t.connections.iter_mut() {
+                        if c.cap() == 0 || c.done >= c.cap() {
+                            // 待命/空连接：零值速断（无拖尾）
+                            c.speed = 0.0;
+                        } else {
+                            // 在传连接：即使窗口速率为 0 也持续平滑
+                            let s = c.win as f64 / SPEED_TICK.as_secs_f64();
+                            c.speed += (s - c.speed) * SPEED_EMA_ALPHA;
+                        }
+                    }
+                    // 上传展示采样（BT 下载中）
+                    if t.protocol.is_bt() {
+                        let win_up: u64 = t.connections.iter().map(|c| c.win_up).sum();
+                        let up = win_up as f64 / SPEED_TICK.as_secs_f64();
+                        t.upload_speed += (up - t.upload_speed) * SPEED_EMA_ALPHA;
+                        for c in t.connections.iter_mut() {
+                            if c.cap() == 0 || c.done >= c.cap() {
+                                c.up_speed = 0.0;
+                            } else {
+                                let s = c.win_up as f64 / SPEED_TICK.as_secs_f64();
+                                c.up_speed += (s - c.up_speed) * SPEED_EMA_ALPHA;
+                            }
+                        }
+                    }
+                    // 窗口清零（下一采样窗口重新累计）
+                    for c in t.connections.iter_mut() {
+                        c.win = 0;
+                        c.win_up = 0;
+                    }
+                }
+                TaskState::Seeding => {
+                    if !speed_due {
+                        continue;
+                    }
+                    let win_up: u64 = t.connections.iter().map(|c| c.win_up).sum();
+                    let up = win_up as f64 / SPEED_TICK.as_secs_f64();
+                    t.upload_speed += (up - t.upload_speed) * SPEED_EMA_ALPHA;
+                    for c in t.connections.iter_mut() {
+                        // 下载列待命（做种无下行）；上传按持有块连接采样
+                        c.speed = 0.0;
+                        if c.cap() == 0 {
+                            c.up_speed = 0.0;
+                        } else {
+                            let s = c.win_up as f64 / SPEED_TICK.as_secs_f64();
+                            c.up_speed += (s - c.up_speed) * SPEED_EMA_ALPHA;
+                        }
+                        c.win = 0;
+                        c.win_up = 0;
+                    }
+                }
+                _ => {
+                    // 非下载/做种态：逐帧零值速断（无拖尾，与生产 tick ⑤一致）
+                    t.speed = 0.0;
+                    t.upload_speed = 0.0;
+                    for c in t.connections.iter_mut() {
+                        c.speed = 0.0;
+                        c.up_speed = 0.0;
+                    }
+                }
+            }
+        }
+
+        // 会话统计与速度历史（历史/峰值仅在采样点推进：每秒一个样本，
+        // 与生产 push_hist 同节拍；会话累计用实际落盘字节）
+        self.session_bytes = self.session_bytes.saturating_add(frame_dl_bytes);
+        if speed_due {
+            let global_dl: f64 = self
+                .tasks
+                .iter()
+                .filter(|t| t.state == TaskState::Downloading)
+                .map(|t| t.speed)
+                .sum();
+            let global_ul: f64 = self
+                .tasks
+                .iter()
+                .filter(|t| t.upload_speed > 0.0)
+                .map(|t| t.upload_speed)
+                .sum();
+            self.speed_hist.push((global_dl / 1024.0) as u64);
+            if self.speed_hist.len() > 180 {
+                self.speed_hist.remove(0);
+            }
+            self.up_hist.push((global_ul / 1024.0) as u64);
+            if self.up_hist.len() > 180 {
+                self.up_hist.remove(0);
+            }
         }
 
         if let Some(last) = notices.pop() {
@@ -1225,7 +1327,7 @@ impl App {
             None => return,
         };
         let nfocus = match kind {
-            DialogKind::Add => 8,
+            DialogKind::Add => 9,
             DialogKind::Modify => 6,
             DialogKind::Delete => 3,
         };
@@ -1284,7 +1386,8 @@ impl App {
         }
     }
 
-    /// Add 对话框 Enter：算法/代理行展开下拉、取消按钮关闭、其余确认
+    /// Add 对话框 Enter：算法/代理行展开下拉；7=仅添加 8=取消（v1.15/FR-01-103）；
+    /// 其余（含非按钮焦点 0/1/2/4）= 立即下载（D32：非按钮焦点 Enter 同确认）
     fn add_dialog_enter(&mut self, focus: usize) {
         if focus == 3 {
             let d = self.dialog.as_mut().unwrap();
@@ -1294,10 +1397,18 @@ impl App {
             let d = self.dialog.as_mut().unwrap();
             d.proxy_open = true;
         } else if focus == 7 {
+            self.dlg_add_only();
+        } else if focus == 8 {
             self.dialog = None;
         } else {
-            self.dlg_confirm_add();
+            self.dlg_confirm_add(false);
         }
+    }
+
+    /// 仅添加（v1.15/FR-01-103，D28）：与立即下载同校验、同建任务链路，
+    /// 唯一差别 = 任务落「已暂停」态，不占下载槽位、不被自动调度启动
+    fn dlg_add_only(&mut self) {
+        self.dlg_confirm_add(true);
     }
 
     /// Modify 对话框 Enter（v1.5/FR-01-87）：0=并发 1=算法 2=校验码 3=代理
@@ -1318,7 +1429,7 @@ impl App {
     }
 
     /// Add 对话框字符输入：0-2 文本字段、3 空格展开算法下拉、4 校验码、
-    /// 5 空格展开代理下拉、6/7 空格激活按钮
+    /// 5 空格展开代理下拉、6/7/8 空格激活按钮（立即下载/仅添加/取消）
     fn add_dialog_char(&mut self, focus: usize, c: char) {
         if focus < 3 {
             if !c.is_control() {
@@ -1402,9 +1513,11 @@ impl App {
     }
 
     fn dlg_activate_add(&mut self, btn: usize) {
+        // v1.15/FR-01-103：6=立即下载 7=仅添加 8=取消
         match btn {
-            6 => self.dlg_confirm_add(),
-            7 => self.dialog = None,
+            6 => self.dlg_confirm_add(false),
+            7 => self.dlg_add_only(),
+            8 => self.dialog = None,
             _ => {}
         }
     }
@@ -1477,10 +1590,19 @@ impl App {
             t.checksum = checksum;
             t.proxy = proxy;
             if changed {
-                // 立即生效（v1.5/FR-01-87 demo 语义）：按新并发重建分块连接
-                //（沿用 make_chunk_conns，已下载字节按块进度重分配，不丢进度）
+                // 立即生效（v1.5/FR-01-87 demo 语义；v1.16/D30 同步）：按新并发
+                // 重建分块连接（沿用 make_chunk_conns，已下载字节按块进度重分配，
+                // 不丢进度）；幸存槽位展示速度沿用旧值（同槽位同 IP，收缩时
+                // 行数立即减少且幸存行速度不闪烁——与生产 D30 下调即时收缩观感一致）
+                let old_speeds: Vec<f64> = t.connections.iter().map(|c| c.speed).collect();
                 let piece = chunk_size(t.protocol);
-                let (conns_new, x) = make_chunk_conns(t.total, t.downloaded, concurrency, piece, t.id as u64);
+                let (mut conns_new, x) =
+                    make_chunk_conns(t.total, t.downloaded, concurrency, piece, t.id as u64);
+                for (i, c) in conns_new.iter_mut().enumerate() {
+                    if let Some(s) = old_speeds.get(i) {
+                        c.speed = *s;
+                    }
+                }
                 t.connections = conns_new;
                 t.chunk_done = x;
             }
@@ -1489,7 +1611,10 @@ impl App {
         self.set_toast("✓ 任务参数已更新，立即生效");
     }
 
-    fn dlg_confirm_add(&mut self) {
+    /// 确认添加（paused=false 立即下载 / true 仅添加）。校验与创建链路两路
+    /// 完全一致（FR-01-103）；唯一差别 = D28：仅添加任务落「已暂停」态，
+    /// 不占下载槽位、不被槽位调度自动启动
+    fn dlg_confirm_add(&mut self, paused: bool) {
         // 先取出全部需要的值（避免后续可变借用冲突）
         let Some(d) = self.dialog.as_ref() else {
             return;
@@ -1563,15 +1688,24 @@ impl App {
             &url,
             &save_path,
             total,
-            TaskState::Queued,
+            if paused {
+                TaskState::Paused
+            } else {
+                TaskState::Queued
+            },
             0,
             conns,
             base,
             "刚刚",
         );
         t.post_process = is_archive(&name);
-        t.queued_since = Some(Instant::now());
-        t.start_delay = 2.0;
+        if paused {
+            // FR-01-103/D28：仅添加 → 已暂停（不占下载槽位、不被槽位调度
+            // 自动启动；不设 queued_since——按空格继续时走 Paused 链路）
+        } else {
+            t.queued_since = Some(Instant::now());
+            t.start_delay = 2.0;
+        }
         t.checksum = checksum;
         t.proxy = proxy;
         self.tasks.push(t);
@@ -1582,15 +1716,23 @@ impl App {
         if flen > 0 {
             self.selected = flen - 1;
         }
-        self.set_toast(format!("✓ 已添加任务 #{}: {}", id, name));
-        if self.used_slots() >= MAX_DOWNLOAD_SLOTS {
+        // toast（D29 钦定文案）：立即下载路径维持原两态；仅添加 ⏸ + 空格引导
+        if paused {
             self.set_toast(format!(
-                "✓ 已添加任务 #{}: {}（槽位已满 {}/{}，进入等待队列）",
-                id,
-                name,
-                self.used_slots(),
-                MAX_DOWNLOAD_SLOTS
+                "⏸ 已添加任务 #{}: {}（已暂停，按空格开始下载）",
+                id, name
             ));
+        } else {
+            self.set_toast(format!("✓ 已添加任务 #{}: {}", id, name));
+            if self.used_slots() >= MAX_DOWNLOAD_SLOTS {
+                self.set_toast(format!(
+                    "✓ 已添加任务 #{}: {}（槽位已满 {}/{}，进入等待队列）",
+                    id,
+                    name,
+                    self.used_slots(),
+                    MAX_DOWNLOAD_SLOTS
+                ));
+            }
         }
     }
 
@@ -1857,17 +1999,23 @@ impl App {
         matches!(area, Some(a) if x >= a.x && x < a.x.saturating_add(a.width) && y >= a.y && y < a.y.saturating_add(a.height))
     }
 
-    /// bracketed paste 事件入口（FR-01-06 同步）：仅 Add 对话框的文本字段接收
-    /// 粘贴；下拉框展开、删除/修改对话框、无对话框时忽略（避免粘贴触发按钮/导航）
+    /// bracketed paste 事件入口（FR-01-06 v1.17 同步）：粘贴覆盖 Add 与
+    /// Modify 两对话框的文本字段（Add：URL/目录/并发/校验码；Modify：并发/
+    /// 校验码），与逐键输入同口径；算法/代理下拉展开、Delete 对话框、
+    /// 无对话框时忽略（避免粘贴触发按钮/导航；proxy 门为 belt-and-braces——
+    /// 展开时焦点在下拉行，字段路由天然 no-op，显式拦截防回归）
     pub fn on_paste(&mut self, text: &str) {
         let Some(d) = self.dialog.as_mut() else {
             return;
         };
-        if d.kind != DialogKind::Add || d.ck_open {
+        if !matches!(d.kind, DialogKind::Add | DialogKind::Modify)
+            || d.ck_open
+            || d.proxy_open
+        {
             return;
         }
-        let focus = d.focus;
-        dlg_apply_paste(d, focus, text);
+        let (kind, focus) = (d.kind, d.focus);
+        dlg_apply_paste(kind, d, focus, text);
     }
 
     /// Ctrl+↑/↓：在并发连接明细中上下移动选中行（跟随滚动保持可见）
@@ -2014,7 +2162,7 @@ impl App {
             }
             TaskState::Failed => {
                 // 重新排队 → 已重试次数重置为 1，进入「等待中」队列；
-                // 校验失败的任务断点无意义 → 清除断点从头下载（FR-M1-51）；
+                // 校验失败任务按重校验/不校验分支处理（requeue_failed）；
                 // 原本持有槽位的（未达重试上限的）失败任务继续占用槽位
                 self.requeue_failed(idx, false);
             }
@@ -2033,8 +2181,8 @@ impl App {
     pub fn retry(&mut self) {
         let Some(idx) = self.sel_idx() else { return };
         if self.tasks[idx].state == TaskState::Failed {
-            // 手动重试 → 已重试次数重置为 1，进入「等待中」队列（无「连接中」状态）；
-            // 校验失败的任务清除断点从头下载（FR-M1-51）；
+            // 手动重试 → 已重试次数重置为 1；校验失败任务按重校验/不校验
+            // 分支处理（生产 v1.17/FR-01-51 + D34 同步）；
             // 原本持有槽位的（未达重试上限的）失败任务继续占用槽位，
             // 已达上限/停等释放槽位的任务重新排队后等待新的空闲槽位
             self.requeue_failed(idx, true);
@@ -2043,50 +2191,57 @@ impl App {
         }
     }
 
-    /// 失败任务重新排队（R 手动重试 / Space）：重试计数重置为 1、回到等待队列；
-    /// 校验失败（fail_kind = Verify）时断点无意义 → 清除断点从头下载（FR-M1-51）；
-    /// 其余失败沿用断点续传（已下载块的字节保持有效）
+    /// 失败任务重新排队（R 手动重试 / Space）。校验失败（fail_kind = Verify）
+    /// 按期望值分支解析（生产 v1.16/D10 + v1.17/FR-01-51 三分支同步；demo 无
+    /// 伴随文件 → 两分支）：
+    /// ① 任务显式校验值在 → **重新校验（无块重传）**：不重传数据、不 rebuild
+    ///    分块，落「校验中」（demo：verify_fail_once 已消费 → 本次校验通过）；
+    /// ② 校验码已清空（修改对话框清码确定）→ **不校验**：不重传、不重校验，
+    ///    落回正常重新排队尾（等待中）——下载已完成，获得槽位后立即收尾
+    ///    「已完成」（列表/详情「无校验」，生产 D34 钦定语义）。
+    /// 其余失败沿用断点续传（已下载块的字节保持有效）。
+    /// 原演示口径「校验失败清除断点从头重下」已废止（生产 v1.17 改判）。
     fn requeue_failed(&mut self, idx: usize, manual: bool) {
-        let from_scratch = self.tasks[idx].fail_kind == Some(FailKind::Verify);
-        if from_scratch {
-            let total = self.tasks[idx].total;
-            let n = self.tasks[idx].connections.len().max(1);
-            let piece = chunk_size(self.tasks[idx].protocol);
-            self.tasks[idx].downloaded = 0;
-            self.tasks[idx].chunk_done = 0;
-            self.tasks[idx].connections =
-                make_chunk_conns(total, 0, n, piece, self.tasks[idx].id as u64).0;
-        }
+        let verify_fail = self.tasks[idx].fail_kind == Some(FailKind::Verify);
+        // 公共字段重置（与生产一致：错误/倒计时/失败类别清除、计数重置、让槽）
         self.tasks[idx].state = TaskState::Queued;
         self.tasks[idx].error = None;
         self.tasks[idx].retry_in = None;
         self.tasks[idx].fail_kind = None;
         self.tasks[idx].retries = 1;
+        self.tasks[idx].made_progress = false;
+        self.tasks[idx].has_slot = false;
+        if verify_fail {
+            // 分支①：显式校验值在 → 重新校验（无块重传）：不重置 downloaded/
+            // chunk_done/connections（生产 D10：全块已完成，重传只会丢弃
+            // 完好的已下载数据），直接落「校验中」占槽位
+            if self.tasks[idx].checksum.is_some() {
+                self.tasks[idx].state = TaskState::Verifying;
+                self.tasks[idx].has_slot = true;
+                self.tasks[idx].verify_started = Some(Instant::now());
+                let name = self.tasks[idx].name.clone();
+                self.set_toast(format!("↻ 重新校验（无块重传）: {name}"));
+                return;
+            }
+            // 分支②（校验码 = None）：v1.18 文件完整性直判（生产 FR-01-51 v1.18
+            // 同步）——校验失败时全块已完成、文件已 100% 落盘 → 不经引擎直接
+            // 收尾「已完成/无校验」（零排队零重传零进度回退；原「落回重新排队
+            // → 获槽后同帧完成」的等待过渡废止）。demo 无外部文件改动面，直判
+            // 恒命中（生产侧文件缺失/大小不符时作废断点从头重下，demo 不可达
+            // 不建模）
+            let name = self.tasks[idx].name.clone();
+            self.tasks[idx].state = TaskState::Completed;
+            self.tasks[idx].verify_ok = None;
+            self.tasks[idx].speed = 0.0;
+            self.tasks[idx].connections.clear();
+            self.set_toast(format!("✓ 文件已完整，直接完成（无校验）: {name}"));
+            return;
+        }
         self.tasks[idx].queued_since = Some(Instant::now());
         self.tasks[idx].start_delay = 3.0;
         let name = self.tasks[idx].name.clone();
-        let toast = if from_scratch {
-            format!(
-                "↻ {}（已清除断点，从头下载）: {}",
-                if manual {
-                    "手动重试"
-                } else {
-                    "重新排队"
-                },
-                name
-            )
-        } else {
-            format!(
-                "↻ {}（等待中）: {}",
-                if manual {
-                    "手动重试"
-                } else {
-                    "重新排队"
-                },
-                name
-            )
-        };
-        self.set_toast(toast);
+        let label = if manual { "手动重试" } else { "重新排队" };
+        self.set_toast(format!("↻ {label}（等待中）: {name}"));
     }
 
     pub fn clear_completed(&mut self) {
@@ -2195,21 +2350,21 @@ fn push_capped(dst: &mut String, src: &str, cap: usize) -> bool {
     inserted
 }
 
-/// 将粘贴文本按当前焦点路由到 Add 对话框字段（FR-01-06）。
-/// 过滤规则与逐键输入一致：URL/目录 ≤300 字符；并发仅数字 ≤2 位；
-/// 校验码仅十六进制 ≤128 位；按钮焦点不接收。
-fn dlg_apply_paste(d: &mut Dialog, focus: usize, text: &str) -> bool {
+/// 将粘贴文本按 (kind, focus) 矩阵路由到对话框字段（FR-01-06 v1.17：
+/// Add 与 Modify 同权）。过滤规则与逐键输入一致：URL/目录 ≤300 字符；
+/// 并发仅数字 ≤2 位；校验码仅十六进制 ≤128 位；下拉行/按钮焦点不接收。
+fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, text: &str) -> bool {
     let clean = paste_sanitize(text);
-    match focus {
-        0 => push_capped(&mut d.url, &clean, 300),
-        1 => push_capped(&mut d.dir, &clean, 300),
-        2 => {
+    match (kind, focus) {
+        (DialogKind::Add, 0) => push_capped(&mut d.url, &clean, 300),
+        (DialogKind::Add, 1) => push_capped(&mut d.dir, &clean, 300),
+        (DialogKind::Add, 2) | (DialogKind::Modify, 0) => {
             let digits: String = clean.chars().filter(|c| c.is_ascii_digit()).collect();
             let inserted = push_capped(&mut d.conns, &digits, 2);
             d.conns_edited |= inserted;
             inserted
         }
-        4 => {
+        (DialogKind::Add, 4) | (DialogKind::Modify, 2) => {
             let hex: String = clean.chars().filter(|c| c.is_ascii_hexdigit()).collect();
             push_capped(&mut d.ck_value, &hex, 128)
         }
@@ -2452,6 +2607,8 @@ fn make_chunk_conns(
             };
             Connection {
                 ip: pseudo_ip(seed, i),
+                win: 0,
+                win_up: 0,
                 start,
                 end,
                 done: partial,
@@ -2767,7 +2924,9 @@ fn demo_tasks() -> Vec<Task> {
     v[9].flaky = true;
 
     // 校验中任务启动计时（带 SHA-256 校验码，完成后展示「SHA-256 校验通过」）；
-    // 演示：首次校验失败（FR-M1-51）——不自动重试，R 清除断点从头下载。
+    // 演示：首次校验失败（生产 v1.17/FR-01-51 同步）——不自动重试，R 重新
+    // 校验（无块重传）→ 校验通过完成；校验码清空后 R 则不校验直接完成
+    // 「无校验」（D34）。
     // 计时推后 8s：首屏保持「校验中」可见，10.6s 后转「已失败（不自动重试）」
     //（gpt4all 交换到 v[11]：让 tensorflow 排在前保证首屏可见排队行）
     v[11].verify_started = Some(now + Duration::from_secs(8));

@@ -310,6 +310,7 @@ impl Config {
             block_size_http: raw
                 .block_size_http
                 .filter(|v| *v > 0)
+                .map(|v| v.max(super::chunk::MIN_HTTP_BLOCK_SIZE))
                 .unwrap_or(d.block_size_http),
             download_slots: raw
                 .download_slots
@@ -555,6 +556,23 @@ mod tests {
         assert_eq!(c.download_slots, 5);
         assert_eq!(c.max_retries, 5);
         assert_eq!(c.http_concurrency, 64); // 钳制而非回退
+    }
+
+    /// v1.16/FR-01-104（D31）：block_size_http 正值 < 1 MB 一律钳制为 1 MB 生效
+    /// （下限钳制，非回退默认）；≥ 1 MB 原值生效；0 仍回退默认
+    #[test]
+    fn block_size_http_positive_below_floor_clamped() {
+        // 小于下限的正值 → 钳到 1 MB（非回退路径：回退也恰好是 1 MB，用可区分
+        // 的默认值场景断言钳制来源——0 → 默认；512 → 钳制，两者同值但语义分支
+        // 不同，另用 ≥1MB 原值生效锁住“非无条件覆盖”）
+        let c = Config::from_toml("block_size_http = 512\n");
+        assert_eq!(c.block_size_http, 1_048_576);
+        let c = Config::from_toml("block_size_http = 1048575\n");
+        assert_eq!(c.block_size_http, 1_048_576, "下限之下 1 字节也钳制");
+        let c = Config::from_toml("block_size_http = 1048576\n");
+        assert_eq!(c.block_size_http, 1_048_576, "恰在下限 = 原值");
+        let c = Config::from_toml("block_size_http = 2097152\n");
+        assert_eq!(c.block_size_http, 2_097_152, "大于下限原值生效");
     }
 
     /// v1.5/FR-01-88：旧键名 default_concurrency 不设别名——按未知键忽略

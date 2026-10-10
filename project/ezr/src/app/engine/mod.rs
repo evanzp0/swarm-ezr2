@@ -20,9 +20,9 @@ use crate::engine::Cmd;
 use crate::engine::Evt;
 use crate::model::registry::Registry;
 use crate::model::sidecar::Sidecar;
-use crate::model::speed::SmoothedSpeed;
-#[cfg(test)]
-use crate::model::speed::SpeedWindow;
+// SpeedWindow：连接级滑窗（FR-01-102 数据面，与任务级 windows 同构）；
+// WINDOW：窗口端点老化守卫。SmoothedSpeed（展示面 EMA）在 tick.rs。
+use crate::model::speed::{SpeedWindow, WINDOW};
 use crate::model::{checksum, Checksum, FailKind, Task, TaskState};
 
 mod evt;
@@ -41,45 +41,46 @@ fn conn_from_view(c: &crate::engine::ConnView) -> crate::model::Connection {
     }
 }
 
-/// 连接级账本键（任务 id, 连接 id）与观测三元组（块号, 块内已写, 时刻）
+/// 连接级账本键（任务 id, 连接 id）与观测对（块号, 块内已写字节）
 type ConnKey = (u32, usize);
-type ConnObs = (u32, u64, Instant);
+type ConnObs = (u32, u64);
 
-/// 连接级账本推进（FR-01-99，App 消费侧计量）：按 (任务, 连接) 跟踪 Progress
-/// 事件的块内 done 增量——同块 = 差值；换块/首次观测 = 新块内已写字节（本轮
-/// 下载内的落盘量）；增量/时间差经 EMA 得展示速度，累计量随增量累加。
-/// 待命/空连接（cap = 0 或块已完成）零值速断（`zero()`，无拖尾），
-/// 在传连接即使瞬时零增量也持续平滑（避免 `-` 闪烁，FR-01-99 ①）。
+/// 连接级账本推进（FR-01-99 ②累计 + FR-01-102 数据面，App 消费侧计量）：
+/// 按 (任务, 连接) 跟踪 Progress 事件的块内 done 增量——同块 = 差值；
+/// 换块/首次观测 = 新块内已写字节（本轮下载内的落盘量）；累计量随增量累加。
+/// 在传连接（cap > 0 且未写满）的 1s 滑窗以连接级累计字节读数推进（每次事件 push，
+/// 任务级 SpeedWindow 同构，FR-01-102 ①）；展示面采样（每秒一次 + EMA）在 tick ⑤。
+/// 待命/空连接（cap = 0 或块已完成）不推进窗口（展示面零值速断，FR-01-102 ③）；
+/// 窗口端点老化（停传 > 1s：暂停恢复、块间隙）先清窗再推，速率只测最近 1s 增量。
 fn update_conn_stats(
     conn_prev: &mut HashMap<ConnKey, ConnObs>,
     conn_cum: &mut HashMap<ConnKey, u64>,
-    conn_speed: &mut HashMap<ConnKey, SmoothedSpeed>,
+    conn_windows: &mut HashMap<ConnKey, SpeedWindow>,
     task_id: u32,
     conns: &[crate::engine::ConnView],
 ) {
     let now = Instant::now();
     for c in conns {
         let key = (task_id, c.id);
-        let (delta, dt) = match conn_prev.get(&key) {
-            Some(&(pb, pd, pt)) if pb == c.block => (
-                c.done.saturating_sub(pd),
-                now.duration_since(pt).as_secs_f64(),
-            ),
+        let delta = match conn_prev.get(&key) {
+            Some(&(pb, pd)) if pb == c.block => c.done.saturating_sub(pd),
             // 换块（领新块）或首次观测：增量 = 新块内已写字节（均为本轮下载内落盘）
-            _ => (c.done, 0.0),
+            _ => c.done,
         };
-        conn_prev.insert(key, (c.block, c.done, now));
+        conn_prev.insert(key, (c.block, c.done));
         let cap = c.end.saturating_sub(c.start);
         let active = cap > 0 && c.done < cap;
-        let d = conn_speed.entry(key).or_default();
-        if !active {
-            d.zero();
-        } else if dt > 0.0 {
-            // 首次观测/换块帧无时间差，只累计不复算速度（EMA 下一帧收敛）
-            d.push(delta as f64 / dt);
-        }
         if delta > 0 {
             *conn_cum.entry(key).or_insert(0) += delta;
+        }
+        if active {
+            let w = conn_windows.entry(key).or_default();
+            if w.last_push()
+                .is_some_and(|t| now.duration_since(t) > WINDOW)
+            {
+                *w = SpeedWindow::new();
+            }
+            w.push(now, conn_cum.get(&key).copied().unwrap_or(0));
         }
     }
 }
@@ -1286,9 +1287,11 @@ mod conn_stats_tests {
         std::thread::sleep(std::time::Duration::from_millis(20));
         progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 400)]).await;
         assert_eq!(app.conn_cum_of(1, 1), 400, "同块增量 = done 差值");
+        // FR-01-102：展示速度 = 每秒采样窗口速率 → EMA（单测直驱采样；生产入口 tick ⑤）
+        app.sample_conn_speed_display();
         assert!(
             app.conn_speed_of(1, 1) > 0.0,
-            "同块有增量 → 展示速度经 EMA 非零"
+            "同块有增量 → 窗口速率经 EMA 非零"
         );
         app.shutdown().await;
     }
@@ -1313,6 +1316,58 @@ mod conn_stats_tests {
         progress(&mut app, 1, vec![cv(2, 0, 0, 0, 0), cv(3, 0, 0, 500, 500)]).await;
         assert_eq!(app.conn_speed_of(1, 2), 0.0, "空连接待命 → 0");
         assert_eq!(app.conn_speed_of(1, 3), 0.0, "块满待命 → 0");
+        // FR-01-102：在传连接立起速度后转待命（done == cap）→ 采样即精确归零（无拖尾）
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 100)]).await;
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 300)]).await;
+        app.sample_conn_speed_display();
+        assert!(app.conn_speed_of(1, 1) > 0.0, "在传连接速度立起");
+        progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 1000)]).await;
+        app.sample_conn_speed_display();
+        assert_eq!(app.conn_speed_of(1, 1), 0.0, "在传 → 待命：精确归零无拖尾");
+        app.shutdown().await;
+    }
+
+    /// FR-01-102：任务非下载态 → 采样时其全部连接展示速度归零（零值速断）
+    #[tokio::test]
+    async fn conn_speed_zeroed_when_task_not_downloading() {
+        let mut app = make_app("nondl");
+        app.tasks.push(seed(1, "x.bin", TaskState::Downloading));
+        progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 100)]).await;
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 400)]).await;
+        app.sample_conn_speed_display();
+        assert!(app.conn_speed_of(1, 1) > 0.0, "前置：速度已立起");
+        app.tasks[0].state = TaskState::Paused;
+        app.sample_conn_speed_display();
+        assert_eq!(
+            app.conn_speed_of(1, 1),
+            0.0,
+            "任务非下载态 → 连接速度零值速断"
+        );
+        app.shutdown().await;
+    }
+
+    /// FR-01-102：展示采样与任务速度同一每秒节拍——1s 内 tick 不重采样
+    /// （数值每秒最多变化一次；直驱采样建立基线后，节拍内的 tick 不改变展示值）
+    #[tokio::test]
+    async fn conn_speed_sampling_gated_to_one_second() {
+        let mut app = make_app("gate");
+        app.tasks.push(seed(1, "g.bin", TaskState::Downloading));
+        progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 100)]).await;
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 900)]).await;
+        app.sample_conn_speed_display();
+        let base = app.conn_speed_of(1, 1);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 1700)]).await;
+        app.tick().await;
+        assert_eq!(
+            app.conn_speed_of(1, 1),
+            base,
+            "1s 节拍内 tick 不重采样（每秒最多变化一次）"
+        );
         app.shutdown().await;
     }
 

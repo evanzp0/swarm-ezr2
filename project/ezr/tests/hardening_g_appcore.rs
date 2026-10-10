@@ -570,3 +570,183 @@ async fn add_cli_task_resumes_with_matching_sidecar() {
     shutdown(a).await;
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// 靶 tasks.rs requeue_failed verify_fail 臂（FR-01-51 v1.17 三分支③ + D34，
+/// 操作者 20261009 第十四批指令缺陷 B）：校验失败任务清空校验码后 R = 不校验
+/// ——落「等待中」正常重新排队（旧实现仍发空期望 Verify、落「校验中」，空串
+/// 比对恒败，R 后仍「校验失败」——旧实现语义下 state==Verifying，红）
+#[tokio::test]
+async fn retry_verify_failed_cleared_checksum_requeues_without_verify() {
+    let dir = crate::model::testenv::uniq_tmp_dir("ezr-retry-cleared-ck");
+    let mut a = mkapp("retry-cleared-ck");
+    push_tasks(&mut a, 1);
+    a.tasks[0].state = TaskState::Failed;
+    a.tasks[0].fail_kind = Some(model::FailKind::Verify);
+    a.tasks[0].checksum = None; // 已按 03-modify-task-05 清空（修改对话框清码确定）
+    a.tasks[0].save_dir = dir.to_string_lossy().into_owned();
+    a.selected = 0;
+    a.retry();
+    assert_eq!(
+        a.tasks[0].state,
+        TaskState::Queued,
+        "清码 + 无伴随 → 正常重新排队（不进「校验中」，FR-01-51 v1.17③）"
+    );
+    assert!(
+        a.tasks[0].checksum.is_none(),
+        "不复活期望值（无伴随可解析）"
+    );
+    assert!(a.tasks[0].fail_kind.is_none(), "失败类别随重排清除");
+    assert!(!a.tasks[0].has_slot, "等待槽位，不占槽");
+    shutdown(a).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 靶 tasks.rs requeue_failed verify_fail 臂分支③ v1.18 直判臂（FR-01-51 v1.18
+/// 修订 B，操作者 20261009 第十六批指令缺陷改判）：文件在且大小与 total 一致 →
+/// 不经引擎直接收尾「已完成/无校验」——`.downloading` 改名目标、删 sidecar、
+/// verify_ok=None、速度归零、清连接（旧实现落 Queued 经引擎恢复过期 sidecar
+/// 回退重传尾巴，红）
+#[tokio::test]
+async fn retry_verify_failed_cleared_checksum_completes_directly_when_file_intact() {
+    let dir = crate::model::testenv::uniq_tmp_dir("ezr-retry-direct-hit");
+    let mut a = mkapp("retry-direct-hit");
+    push_tasks(&mut a, 1);
+    a.tasks[0].state = TaskState::Failed;
+    a.tasks[0].fail_kind = Some(model::FailKind::Verify);
+    a.tasks[0].checksum = None; // 已按 03-modify-task-05 清空
+    a.tasks[0].total = 1024;
+    a.tasks[0].downloaded = 1024;
+    a.tasks[0].save_dir = dir.to_string_lossy().into_owned();
+    // 盘上预置完整 `.downloading`（1024 B = total）与 sidecar
+    std::fs::write(dir.join("t1.bin.downloading"), vec![0u8; 1024]).unwrap();
+    std::fs::write(dir.join("t1.bin.ezr"), b"sidecar").unwrap();
+    a.selected = 0;
+    a.retry();
+    assert_eq!(
+        a.tasks[0].state,
+        TaskState::Completed,
+        "文件完整必须不经引擎直接收尾（修订 B 直判臂）"
+    );
+    assert!(a.tasks[0].verify_ok.is_none(), "无校验完成 verify_ok=None");
+    assert_eq!(a.tasks[0].speed, 0.0, "完成态速度归零");
+    assert!(a.tasks[0].connections.is_empty(), "完成态清连接视图");
+    assert!(
+        dir.join("t1.bin").exists(),
+        "目标文件在（`.downloading` 已改名）"
+    );
+    assert!(
+        !dir.join("t1.bin.downloading").exists(),
+        ".downloading 已改名消失"
+    );
+    assert!(!dir.join("t1.bin.ezr").exists(), "sidecar 已删");
+    assert!(
+        a.toast.as_deref().is_some_and(|t| t.contains("无校验")),
+        "toast 必须含「无校验」（got {:?}）",
+        a.toast
+    );
+    shutdown(a).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 靶 tasks.rs requeue_failed verify_fail 臂分支③ v1.18 fallback 臂（FR-01-51
+/// v1.18 修订 B；作废语义 FR-01-22 同源）：文件大小与 total 不符（外部改动，
+/// 台账与磁盘脱节）→ 删 sidecar 作废断点、清零进度/块视图、落「等待中」从头
+/// 重下（旧实现经引擎恢复过期 sidecar 回退重传，红）
+#[tokio::test]
+async fn retry_verify_failed_cleared_checksum_discards_checkpoint_when_file_short() {
+    let dir = crate::model::testenv::uniq_tmp_dir("ezr-retry-discards-ck");
+    let mut a = mkapp("retry-discards-ck");
+    push_tasks(&mut a, 1);
+    a.tasks[0].state = TaskState::Failed;
+    a.tasks[0].fail_kind = Some(model::FailKind::Verify);
+    a.tasks[0].checksum = None;
+    a.tasks[0].total = 1024;
+    a.tasks[0].downloaded = 1024;
+    a.tasks[0].chunk_done = 1;
+    a.tasks[0].save_dir = dir.to_string_lossy().into_owned();
+    // 盘上 `.downloading` 只有 100 B（大小不符）+ sidecar 预置
+    std::fs::write(dir.join("t1.bin.downloading"), vec![0u8; 100]).unwrap();
+    std::fs::write(dir.join("t1.bin.ezr"), b"sidecar").unwrap();
+    a.selected = 0;
+    a.retry();
+    assert_eq!(
+        a.tasks[0].state,
+        TaskState::Queued,
+        "大小不符 → 作废断点从头重下（保持等待中）"
+    );
+    assert_eq!(a.tasks[0].downloaded, 0, "进度视图清零");
+    assert_eq!(a.tasks[0].chunk_done, 0, "块视图清零");
+    assert!(!a.tasks[0].has_slot, "等待槽位，不占槽");
+    assert!(!dir.join("t1.bin.ezr").exists(), "sidecar 已作废");
+    assert!(
+        a.toast.as_deref().is_some_and(|t| t.contains("断点已作废")),
+        "toast 必须含「断点已作废」（got {:?}）",
+        a.toast
+    );
+    shutdown(a).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 靶 tasks.rs requeue_failed（FR-01-51 v1.17 三分支①，D10 不回归）：伴随文件
+/// 存在 → 期望值取伴随现值并走重校验（Verifying）
+#[tokio::test]
+async fn retry_verify_failed_with_companion_reverifies_with_companion_value() {
+    let dir = crate::model::testenv::uniq_tmp_dir("ezr-retry-companion");
+    std::fs::write(
+        dir.join("t1.bin.sha256"),
+        "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+    )
+    .unwrap();
+    let mut a = mkapp("retry-companion");
+    push_tasks(&mut a, 1);
+    a.tasks[0].state = TaskState::Failed;
+    a.tasks[0].fail_kind = Some(model::FailKind::Verify);
+    a.tasks[0].save_dir = dir.to_string_lossy().into_owned();
+    a.selected = 0;
+    a.retry();
+    assert_eq!(
+        a.tasks[0].state,
+        TaskState::Verifying,
+        "伴随在 → 重校验（D10① 语义不回归）"
+    );
+    let ck = a.tasks[0].checksum.as_ref().expect("伴随现值已回填");
+    assert_eq!(
+        ck.value, "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        "期望值 = 伴随现值（伴随在时无视任务显式旧值，D10 重查语义）"
+    );
+    assert_eq!(ck.algo, "SHA-256", "算法按伴随后缀解析");
+    assert!(a.tasks[0].has_slot, "校验中占槽位（D12）");
+    shutdown(a).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 靶 tasks.rs requeue_failed（FR-01-51 v1.17 三分支②，原口径不回归）：伴随
+/// 缺失、任务显式校验值在 → 按显式值重校验（Verifying，期望值原样保留）
+#[tokio::test]
+async fn retry_verify_failed_with_explicit_checksum_reverifies() {
+    let dir = crate::model::testenv::uniq_tmp_dir("ezr-retry-explicit-ck");
+    let mut a = mkapp("retry-explicit-ck");
+    push_tasks(&mut a, 1);
+    a.tasks[0].state = TaskState::Failed;
+    a.tasks[0].fail_kind = Some(model::FailKind::Verify);
+    a.tasks[0].save_dir = dir.to_string_lossy().into_owned();
+    a.tasks[0].checksum = Some(model::Checksum {
+        algo: "SHA-256",
+        value: "aa".repeat(32),
+    });
+    a.selected = 0;
+    a.retry();
+    assert_eq!(
+        a.tasks[0].state,
+        TaskState::Verifying,
+        "显式值在 → 重校验（D10② 不回归）"
+    );
+    let ck = a.tasks[0].checksum.as_ref().expect("显式值保留");
+    assert_eq!(
+        ck.value,
+        "aa".repeat(32),
+        "期望值 = 任务显式值（D3 显式优先）"
+    );
+    shutdown(a).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}

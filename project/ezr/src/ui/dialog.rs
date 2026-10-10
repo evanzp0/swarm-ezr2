@@ -184,17 +184,17 @@ struct Row {
     kind: RowKind,
 }
 
-/// 添加/修改任务对话框统一渲染（v1.5/FR-01-86/87）：字段行 + 按钮行 + 提示行
-/// + 算法/代理下拉浮层。
+/// 添加/修改任务对话框统一渲染（v1.5/FR-01-86/87；v1.15/FR-01-103 三钮）：字段行
+/// + 按钮行 + 提示行 + 算法/代理下拉浮层。
 ///
-/// * Add —— URL/保存到/并发/校验/校验码/代理（确认 6 取消 7）
-/// * Modify —— 并发/校验/校验码/代理（确认 4 取消 5）
+/// * Add —— URL/保存到/并发/校验/校验码/代理（立即下载 6 仅添加 7 取消 8）
+/// * Modify —— 并发/校验/校验码/代理（确定 4 取消 5）
 fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) {
     let is_add = kind == DialogKind::Add;
-    let (title, dw, dh, btn_confirm, btn_cancel) = if is_add {
-        (" 添加下载任务 ", 74u16, 12u16, 6usize, 7usize)
+    let (title, dw, dh) = if is_add {
+        (" 添加下载任务 ", 74u16, 12u16)
     } else {
-        (" 修改任务 ", 74, 10, 4, 5)
+        (" 修改任务 ", 74, 10)
     };
     let dlg = dialog_rect(area, dw, dh);
     f.render_widget(Clear, dlg);
@@ -348,18 +348,14 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
     }
 
     let n_rows = rows.len() as u16;
-    // 按钮行：[ 确认 ] [ 取消 ]
-    draw_button_row(
-        f,
-        app,
-        inner,
-        inner.y + n_rows + 2,
-        &[
-            (if is_add { "确认" } else { "确定" }, btn_confirm),
-            ("取消", btn_cancel),
-        ],
-        focus,
-    );
+    // 按钮行（FR-01-103）：Add = [ 立即下载 ] [ 仅添加 ] [ 取消 ]（焦点 6/7/8）；
+    // Modify = [ 确定 ] [ 取消 ]（焦点 4/5）
+    let buttons: Vec<(&str, usize)> = if is_add {
+        vec![("立即下载", 6), ("仅添加", 7), ("取消", 8)]
+    } else {
+        vec![("确定", 4), ("取消", 5)]
+    };
+    draw_button_row(f, app, inner, inner.y + n_rows + 2, &buttons, focus);
 
     // 提示行（下拉框展开时切换为列表操作提示）
     let hint = if ck_open {
@@ -367,7 +363,7 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
     } else if proxy_open {
         " ↑↓ 选择代理 · Enter 确认选择 · Esc 关闭列表"
     } else if is_add {
-        " Enter 确认 · Tab/↑↓ 切换 · Esc 取消 · 校验码留空 = 不校验"
+        " Enter 立即下载 · Tab/↑↓ 切换 · Esc 取消 · 校验码留空 = 不校验"
     } else {
         " Enter 确定 · Tab/↑↓ 切换 · Esc 取消 · 确定后立即生效"
     };

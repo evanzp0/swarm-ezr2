@@ -88,7 +88,7 @@ impl App {
                 update_conn_stats(
                     &mut self.conn_prev,
                     &mut self.conn_cum,
-                    &mut self.conn_speed,
+                    &mut self.conn_windows,
                     id,
                     &conns,
                 );

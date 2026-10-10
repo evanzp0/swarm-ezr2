@@ -99,8 +99,9 @@ pub struct Dialog {
     pub proxy_sel: usize,
     /// Add/Modify: 代理下拉框是否展开
     pub proxy_open: bool,
-    /// Add: 0=URL 1=目录 2=并发 3=算法 4=校验码 5=代理 6=确认 7=取消
-    /// Modify: 0=并发 1=算法 2=校验码 3=代理 4=确认 5=取消
+    /// Add: 0=URL 1=目录 2=并发 3=算法 4=校验码 5=代理 6=立即下载 7=仅添加 8=取消
+    /// （v1.15/FR-01-103 三钮；原 6=确认 7=取消 两钮序废止）
+    /// Modify: 0=并发 1=算法 2=校验码 3=代理 4=确定 5=取消
     /// Delete: 0=仅删除任务 1=删除任务和文件 2=取消
     pub focus: usize,
     /// Delete 用：待删除任务名
@@ -127,13 +128,17 @@ pub struct App {
     pub session_bytes: u64,
     /// 各任务上次观察到的已下载字节（会话累计账本，增量式计数用）
     session_seen: HashMap<u32, u64>,
-    /// 连接级账本（FR-01-99，App 消费侧计量不回写引擎）：
-    /// (任务, 连接) → 上一观测 (块号, 块内已写字节, 时刻)——增量与换块判定依据
-    conn_prev: HashMap<(u32, usize), (u32, u64, Instant)>,
+    /// 连接级账本（FR-01-99 ②累计 + FR-01-102 数据面，App 消费侧计量不回写引擎）：
+    /// (任务, 连接) → 上一观测 (块号, 块内已写字节)——增量与换块判定依据
+    conn_prev: HashMap<(u32, usize), (u32, u64)>,
     /// (任务, 连接) → 本次开始下载起累计落盘字节（新一次下载清零、续传保留）
     conn_cum: HashMap<(u32, usize), u64>,
-    /// (任务, 连接) → 连接速度展示面平滑器（EMA；待命零值速断）
+    /// (任务, 连接) → 连接速度展示面平滑器（EMA α=1/5，FR-01-102 展示面；
+    /// 采样每秒一次在 tick ⑤，待命/非下载态零值速断）
     conn_speed: HashMap<(u32, usize), SmoothedSpeed>,
+    /// (任务, 连接) → 连接速度滑窗（1s，FR-01-102 数据面：与任务级 windows 同构，
+    /// 以连接级累计读数推进；生命周期随连接账本，clear_conn_stats 一并清理）
+    conn_windows: HashMap<(u32, usize), SpeedWindow>,
     /// 帧计数（转轮动画）
     pub frame: u64,
     /// 退出标志
@@ -238,6 +243,7 @@ impl App {
             conn_prev: HashMap::new(),
             conn_cum: HashMap::new(),
             conn_speed: HashMap::new(),
+            conn_windows: HashMap::new(),
             frame: 0,
             quit: false,
             toast: Some("EZR Downloader 就绪".to_string()),
@@ -427,5 +433,6 @@ impl App {
         self.conn_prev.retain(|(tid, _), _| *tid != task_id);
         self.conn_cum.retain(|(tid, _), _| *tid != task_id);
         self.conn_speed.retain(|(tid, _), _| *tid != task_id);
+        self.conn_windows.retain(|(tid, _), _| *tid != task_id);
     }
 }

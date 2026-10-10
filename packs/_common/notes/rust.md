@@ -25,6 +25,10 @@
   ~/.local/bin/ld.lld`（gcc 按 PATH 找 `ld.lld`），不改基线配置；该符号链接目录必须
   在 PATH 中，且零改动的增量构建会静默跳过链接阶段掩盖其缺失，验证见
   engineering.md「环境不跨会话持久」的强制重做条款。
+- **rustup 非交互重装的单行形态**：`sh rustup-init.sh -y --default-toolchain nightly
+  --profile minimal -c rustfmt -c clippy -c llvm-tools-preview`——组件用**重复 `-c`**
+  逐个传递（`--component a b` 两值连写会落入 init 的 usage 报错退出）；安装脚本先
+  `curl -sSf https://sh.rustup.rs -o` 落盘再执行，避免管道子 shell 吞交互错误输出。
 - **交互式安装器的首次运行提示是长验证挂死的隐形根因**：`cargo llvm-cov` 首跑会交互
   询问是否安装 `llvm-tools-preview`，非交互会话表现为"600s 超时零产出"。装工具阶段先
   `rustup component add llvm-tools-preview`，或统一 `< /dev/null` 暴露错误
@@ -175,6 +179,11 @@ group_imports = "StdExternalCrate"
   这是机械等价变换，不改变行为。
 - **rustc 1.87+ 的 `u64::is_multiple_of`** 可替换 `x % m == 0`（clippy manual_is_multiple_of
   会提示）；`checked_div` 用于除数可能为 0 的展示算术。
+- **tokio 长循环内的阻塞段必须把所有控制信号纳入同层 `select!`**：仅在任务外层循环边界
+  检查的 watch 控制变量（如目标并发配额），对卡在内层传输循环（逐 chunk select 仅监听
+  停止信号）的 worker 不生效——控制变更要等当前工作单元自然结束才被观察到，大工作单元
+  （大块/慢速）下表现为「修改不生效」。防法：控制通道与停止信号同层监听（`_ =
+  quota_rx.changed() =>` 分支判定后置 abort 标志）， abort 路径保留已写进度后再退出。
 
 ## 7. 测试与变异度量
 

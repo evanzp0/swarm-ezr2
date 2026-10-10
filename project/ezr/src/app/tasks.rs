@@ -2,6 +2,7 @@
 
 use super::App;
 use crate::engine::Cmd;
+use crate::model::sidecar::Sidecar;
 use crate::model::{checksum, slots, FailKind, TaskState};
 
 impl App {
@@ -145,41 +146,109 @@ impl App {
         self.tasks[idx].invalidation_streak = 0;
         self.tasks[idx].has_slot = false;
         if verify_fail {
-            // 重新校验（D10）：期望值重查伴随文件——若失败源于期望值写错（AC-6），
-            // 修正伴随文件后按 R 即可通过。伴随文件存在时以伴随现值为准（D10
-            // 重查语义）；伴随缺失时保留原期望值（显式提供场景，D3 显式优先）。
+            // 重新校验（D10；v1.17 三分支修订，FR-01-51/D34）期望值解析：
+            // ①伴随文件存在 → 以伴随现值为准（D10 重查语义：若失败源于期望值
+            //   写错 AC-6，修正伴随文件后按 R 即可通过）；
+            // ②伴随缺失、任务显式校验值在 → 按显式值重校验（D3 显式优先）；
+            // ③伴随缺失、显式值也已清空（03-modify-task-05）→ **不校验**：不进
+            //   「校验中」、不发校验指令、不重传，落回下方正常重新排队——引擎按
+            //   全块完成 sidecar + 无期望值直接收尾「已完成」。原实现③仍发空期望
+            //   Verify（VerifySpec 落 algo 默认/expected 空串，空串比对恒败），
+            //   「已失败」R 后仍显示校验失败，废止（操作者 20261009 第十四批
+            //   指令，缺陷 B）。
             let (save_dir, name) = (
                 self.tasks[idx].save_dir.clone(),
                 self.tasks[idx].name.clone(),
             );
-            if checksum::find_companion(&save_dir, &name).is_some() {
-                self.tasks[idx].checksum = Self::resolve_checksum(&save_dir, &name, None);
+            self.tasks[idx].checksum = if checksum::find_companion(&save_dir, &name).is_some() {
+                Self::resolve_checksum(&save_dir, &name, None)
             } else {
-                self.tasks[idx].checksum =
-                    Self::resolve_checksum(&save_dir, &name, self.tasks[idx].checksum.clone());
-            }
-            self.tasks[idx].state = TaskState::Verifying;
-            self.tasks[idx].has_slot = true;
-            let spec = crate::engine::VerifySpec {
-                id,
-                path: self.tasks[idx].downloading_path(),
-                final_path: self.tasks[idx].target_path(),
-                sidecar_path: self.tasks[idx].sidecar_path(),
-                algo: self.tasks[idx]
-                    .checksum
-                    .as_ref()
-                    .map_or("SHA-256", |c| c.algo),
-                expected: self.tasks[idx]
-                    .checksum
-                    .as_ref()
-                    .map_or(String::new(), |c| c.value.clone()),
+                Self::resolve_checksum(&save_dir, &name, self.tasks[idx].checksum.clone())
             };
-            let engine = self.engine.clone();
-            tokio::spawn(async move {
-                engine.send(Cmd::Verify { spec }).await;
-            });
+            if self.tasks[idx].checksum.is_some() {
+                self.tasks[idx].state = TaskState::Verifying;
+                self.tasks[idx].has_slot = true;
+                let spec = crate::engine::VerifySpec {
+                    id,
+                    path: self.tasks[idx].downloading_path(),
+                    final_path: self.tasks[idx].target_path(),
+                    sidecar_path: self.tasks[idx].sidecar_path(),
+                    algo: self.tasks[idx]
+                        .checksum
+                        .as_ref()
+                        .map_or("SHA-256", |c| c.algo),
+                    expected: self.tasks[idx]
+                        .checksum
+                        .as_ref()
+                        .map_or(String::new(), |c| c.value.clone()),
+                };
+                let engine = self.engine.clone();
+                tokio::spawn(async move {
+                    engine.send(Cmd::Verify { spec }).await;
+                });
+                let name = self.tasks[idx].name.clone();
+                self.set_toast(format!("↻ 重新校验（无块重传）: {name}"));
+                return;
+            }
+            // v1.18 修订 B（FR-01-51 v1.18；D34「不重传直接收尾」实现精化）：分支③
+            // 改文件完整性直判——校验失败时全块已完成、文件已 100% 落盘，按文件
+            // 实况判定而非经引擎恢复（旧路径按过期 sidecar 恢复会回退重传尾巴，
+            // 快速下载无 sidecar 时整体重下）：
+            // ① 文件在且大小与 total 一致 → 不经引擎直接收尾「已完成/无校验」；
+            // ② 文件缺失/大小不符（外部改动，台账与磁盘脱节）→ 作废断点从头重下
+            //    （FR-01-22 作废语义同源，不信任与磁盘实况脱节的全块完成台账）。
+            let total = self.tasks[idx].total;
+            let dl_path = self.tasks[idx].downloading_path();
+            let fin_path = self.tasks[idx].target_path();
+            let sc_path = self.tasks[idx].sidecar_path();
             let name = self.tasks[idx].name.clone();
-            self.set_toast(format!("↻ 重新校验（无块重传）: {name}"));
+            let intact = |p: &str| {
+                total > 0 && std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.len() == total)
+            };
+            let dl_intact = intact(&dl_path);
+            let fin_intact = intact(&fin_path);
+            if dl_intact || fin_intact {
+                // 直判命中：收尾以文件实际位置为准（引擎先行改名历史形态，比照
+                // evt.rs DownloadDone 校验臂）；命中 `.downloading` 则改名，
+                // 命中目标则免改名
+                if dl_intact {
+                    let _ = std::fs::rename(&dl_path, &fin_path);
+                }
+                let _ = Sidecar::remove(&sc_path);
+                {
+                    let t = &mut self.tasks[idx];
+                    t.state = TaskState::Completed;
+                    t.verify_ok = None;
+                    t.speed = 0.0;
+                    t.connections.clear();
+                }
+                self.windows.remove(&id);
+                self.clear_conn_stats(id);
+                self.set_toast(format!("✓ 文件已完整，直接完成（无校验）: {name}"));
+                self.save_registry();
+                return;
+            }
+            // fallback：文件缺失/大小不符 → 作废断点从头重下（state 保持 Queued，
+            // 重下字节全属本次运行，比照 Invalidated 臂重置会话基线）
+            let _ = Sidecar::remove(&sc_path);
+            {
+                let t = &mut self.tasks[idx];
+                t.downloaded = 0;
+                t.chunk_done = 0;
+                t.connections.clear();
+                t.speed = 0.0;
+            }
+            self.windows.remove(&id);
+            self.session_seen.insert(id, 0);
+            self.clear_conn_stats(id);
+            let label = if manual {
+                "手动重试"
+            } else {
+                "重新排队"
+            };
+            self.set_toast(format!(
+                "↻ {label}（本地文件不完整，断点已作废，将从头下载）: {name}"
+            ));
             return;
         }
         let name = self.tasks[idx].name.clone();

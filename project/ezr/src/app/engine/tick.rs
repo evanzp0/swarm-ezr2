@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use crate::app::App;
 use crate::engine::Cmd;
+use crate::model::speed::SpeedWindow;
 use crate::model::{slots, TaskState};
 
 /// 展示面采样节拍（FR-01-17 修订：数值每秒最多变化一次）
@@ -114,7 +115,8 @@ impl App {
     /// tick ⑤ 速度展示（FR-01-17 修订）：数据面窗口不变；展示面 1s 节拍采样 +
     /// EMA 平滑。非下载态每 tick 立即归零（零值速断，无衰减拖尾，全局同步扣除）；
     /// 下载态每秒采样一次窗口速率推入 EMA，数值每秒最多变化一次。
-    /// （FR-01-81 修订二：连接级展示随明细表移除而撤销，仅任务级三展示面。）
+    /// （FR-01-81 修订二：连接级展示随明细表移除而撤销，仅任务级三展示面。
+    /// v1.15 起连接级展示面经并发连接面板回归，采样在下方 sample_conn_speed_display。）
     /// 含会话已下载累计（FR-01-81）与流量图历史采样。
     fn tick_speed_and_session(&mut self, now: Instant) {
         for t in self.tasks.iter_mut() {
@@ -137,6 +139,8 @@ impl App {
                 d.push(sample);
                 t.speed = d.value();
             }
+            // 连接级展示采样（FR-01-102）：与任务速度同一节拍、同一 EMA 口径
+            self.sample_conn_speed_display();
         }
         // 全局 ↓（architect v116：口径单源 App::global_dl_speed——与本帧前已将
         // 非下载态速度归零的合计数值恒等）
@@ -161,6 +165,39 @@ impl App {
         self.session_bytes += gained;
         if speed_due {
             self.push_hist(global_dl, 0.0);
+        }
+    }
+
+    /// 连接级速度展示采样（FR-01-102，tick ⑤ 每秒调用；pub(super) 供单测直驱）：
+    /// 与任务速度同构流水线——数据面 1s 滑窗（update_conn_stats 推进）→ 每秒取
+    /// 窗口速率推入 EMA（α=1/5）。零值语义：任务非下载态的全部连接、下载中任务的
+    /// 待命/空连接（cap = 0 或块已完成）→ `zero()` 立即归零（无拖尾）；在传连接
+    /// 即使窗口速率为 0 也持续平滑（避免 `-` 闪烁，FR-01-99 ①语义保持）。
+    pub(super) fn sample_conn_speed_display(&mut self) {
+        for t in &self.tasks {
+            if t.state != TaskState::Downloading {
+                for ((tid, _), d) in self.conn_speed.iter_mut() {
+                    if *tid == t.id {
+                        d.zero();
+                    }
+                }
+                continue;
+            }
+            for c in &t.connections {
+                let key = (t.id, c.id);
+                let active = c.cap() > 0 && c.done < c.cap();
+                let d = self.conn_speed.entry(key).or_default();
+                if !active {
+                    d.zero();
+                    continue;
+                }
+                let sample = self
+                    .conn_windows
+                    .get_mut(&key)
+                    .map(SpeedWindow::rate)
+                    .unwrap_or(0.0);
+                d.push(sample);
+            }
         }
     }
 

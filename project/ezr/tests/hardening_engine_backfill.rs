@@ -8,10 +8,11 @@
 //! （conn_speed_of/conn_cum_of）与 pub 字段断言。入口：
 //! `cargo test --test hardening_engine_backfill`。
 //!
-//! 靶点对账（v118 补跑轮 missed 清单，本文件负责 11 点）：
-//! - app/engine/mod.rs update_conn_stats 3：73:30（&&→||）/ 73:40（<→<=）在
-//!   「末块完成帧 done==cap 必归零」窗口杀灭；79:33（/→*）速度值 delta/dt 与
-//!   delta*dt 的方向差在同一窗口区分（dt>0 时 real=0 < mutant>0）
+//! 靶点对账（v118 补跑轮 missed 清单，本文件负责 11 点；v1.20/FR-01-102 重构
+//! 后 update_conn_stats 的 EMA 直推位点消失，靶点几何由 update_conn_stats_pure_targets
+//! 与 gen-drift 守卫按新数据面口径承接）：
+//! - app/engine/mod.rs update_conn_stats：累计累加 / 窗口推进读数 / 老化清窗 /
+//!   待命不推窗（pure_targets 直测副本；gen-drift 守卫测产品源一致）
 //! - app/mod.rs active_conn_count 6：416:9 / 416:12 / 421:33 ×3 / 421:71
 //!   （cap×speed 2×2 合成矩阵 + 无账本第三连接，real=2 对全部 mutant 唯一）
 //! - app/mod.rs clear_conn_stats 1：429:51（!=→==）清除他者 id 不得误伤在册账本
@@ -164,27 +165,27 @@ async fn engine_conn_ledger_kills() {
     a.tasks
         .push(queued_task(1, &url, &dir.to_string_lossy(), 1));
 
-    // ① 等账本灌入（两连接速度 EMA 均立起——首观测帧 dt=0 只累计不复算，
-    //    速度为 0 属正常口径，须等到第二观测帧）
+    // ① 等账本灌入（FR-01-102：展示速度 = tick ⑤ 每秒采样窗口速率 → EMA；
+    //    需跨过 1s 采样节拍——窗口速率非零后，首个 speed_due 采样立起展示值）
     let mut guard = 0;
     loop {
         a.tick().await;
         if a.conn_cum_of(1, 1) > 0 && a.conn_speed_of(1, 1) > 0.0 {
             break;
         }
-        if guard % 50 == 0 {
+        if guard % 5 == 0 {
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
         guard += 1;
-        assert!(guard < 20_000, "下载未在预算内产生连接账本");
+        assert!(guard < 60_000, "下载未在预算内产生连接展示速度");
     }
 
-    // ② 靶 update_conn_stats 79:33（/→*）：速度口径 = delta/dt（dt≈200ms 发包
-    //    节流、delta≈块内增量 → real ~MB/s 量级；mutant delta*dt ≈ 数十 KB/s）。
-    //    同帧兼靶 ui/conns.rs 101:35（>→<）：速度>0 时数据行显数值（mutant 恒 '-'）。
+    // ② 靶 update_conn_stats（FR-01-102 重构后：窗口读数 = 连接级累计）+ tick 采样：
+    //    速度 EMA 已立起（窗口速率 > 0 经采样）。同帧兼靶 ui/conns.rs 101:35（>→<）：
+    //    速度>0 时数据行显数值（mutant 恒 '-'）。
     assert!(
         a.conn_speed_of(1, 1) > 0.0,
-        "速度 EMA 已立起（同块多帧 dt>0）"
+        "速度 EMA 已立起（窗口速率经每秒采样）"
     );
     let mid_rows = ui::testfx::row_strings(&ui::testfx::render_full(&mut a, 100, 24));
     assert!(
@@ -326,7 +327,7 @@ mod ucs_fix {
     use std::time::Instant;
 
     pub(crate) use crate::engine::ConnView;
-    pub(crate) use crate::model::speed::SmoothedSpeed;
+    pub(crate) use crate::model::speed::{SpeedWindow, WINDOW};
     include!("gen/update_conn_stats_stripped.rs");
 
     /// 私有纯函数的同模块转发
@@ -334,25 +335,25 @@ mod ucs_fix {
     pub fn call(
         prev: &mut HashMap<ConnKey, ConnObs>,
         cum: &mut HashMap<ConnKey, u64>,
-        speed: &mut HashMap<ConnKey, SmoothedSpeed>,
+        windows: &mut HashMap<ConnKey, SpeedWindow>,
         task_id: u32,
         conns: &[ConnView],
     ) {
-        update_conn_stats(prev, cum, speed, task_id, conns)
+        update_conn_stats(prev, cum, windows, task_id, conns)
     }
 }
 
-/// 靶 73:30 / 73:40 / 79:33：纯函数直测（合成 Instant，零抖动）。
-/// ① 完成帧（done==cap）必须归零（73:30 &&→|| / 73:40 <→<= 在该帧转 push 臂，
-///    push(0/dt) 使 EMA 残留 160 ≠ 0）；② 速度口径 delta/dt（79:33 delta*dt
-///    量级差 100 倍）。
+/// 靶（v1.20 重构后位点，FR-01-102 数据面）：①累计随增量累加（+= / delta 突变）；
+/// ②在传连接窗口推进且读数 = 连接级累计（push-读数突变 → 窗口速率量级错）；
+/// ③端点老化清窗（守卫删除 → 停传时长摊进速率，rate 残留非 0）；
+/// ④待命连接不推进窗口（展示面零值速断由 tick 采样承担，数据面不产生新样本）。
+/// 旧靶 73:30/73:40/79:33（EMA 直推位点）随 FR-01-102 重构消失；零值速断靶点
+/// 移至 App 展示采样（idle_conn_speed_snaps_to_zero，engine/mod.rs 内联测试）。
 #[test]
 fn update_conn_stats_pure_targets() {
     use std::collections::HashMap;
 
-    use ucs_fix::{ConnView, SmoothedSpeed};
-    let now = std::time::Instant::now();
-    let pt = now.checked_sub(Duration::from_millis(200)).unwrap();
+    use ucs_fix::{ConnView, SpeedWindow};
     let view = |block: u32, done: u64| ConnView {
         id: 1,
         block,
@@ -361,42 +362,50 @@ fn update_conn_stats_pure_targets() {
         done,
     };
 
-    // ① 完成帧归零：块界 end=1000，done 达界 → !active → 零值速断
+    // ①② 同块两次观测（100ms，rate() 的 dt 下限 0.05s 之上）：cum 累加至 400；
+    //    窗口速率 = 300B/100ms = 3KB/s（mutant push(delta)：样本 (100,300) → 2KB/s）
     let mut prev = HashMap::new();
     let mut cum = HashMap::new();
-    let mut speed = HashMap::new();
-    speed.insert((7u32, 1usize), SmoothedSpeed::default());
-    speed.get_mut(&(7, 1)).unwrap().push(1000.0); // 预置正速度（EMA → 200）
-    prev.insert((7, 1), (0u32, 1000u64, pt));
+    let mut windows: HashMap<(u32, usize), SpeedWindow> = HashMap::new();
+    ucs_fix::call(&mut prev, &mut cum, &mut windows, 7, &[view(0, 100)]);
+    std::thread::sleep(Duration::from_millis(100));
+    ucs_fix::call(&mut prev, &mut cum, &mut windows, 7, &[view(0, 400)]);
+    assert_eq!(cum.get(&(7, 1)), Some(&400u64), "累计量随增量累加");
+    let r = windows.get_mut(&(7, 1)).unwrap().rate();
+    assert!(
+        (2_500.0..3_500.0).contains(&r),
+        "窗口速率 = Δcum/Δt ≈ 3KB/s（push-读数突变 → 2KB/s）：{r}"
+    );
+
+    // ④ 待命连接（done == cap）：窗口不再推进——rate 冻结为末次值
+    //    （mutant 误推：新样本进入窗口 → rate 被稀释偏离 3KB/s）
+    std::thread::sleep(Duration::from_millis(30));
     ucs_fix::call(
         &mut prev,
         &mut cum,
-        &mut speed,
+        &mut windows,
         7,
         &[ConnView {
             id: 1,
             block: 0,
             start: 0,
-            end: 1000,
-            done: 1000,
+            end: 1_000,
+            done: 1_000,
         }],
     );
-    assert_eq!(
-        speed.get(&(7, 1)).map(|d| d.value()).unwrap_or(-1.0),
-        0.0,
-        "完成帧（done==cap）必须零值速断（mutant 73:30/73:40 转入 push 臂残留 160）"
+    let r_idle = windows.get_mut(&(7, 1)).unwrap().rate();
+    assert!(
+        (2_500.0..3_500.0).contains(&r_idle),
+        "待命连接窗口冻结（误推 → 速率稀释）：{r_idle}"
     );
 
-    // ② 速度口径：同块增量 320KB / dt=0.2s → 1.6MB/s（mutant delta*dt = 64KB/s）
-    let mut prev = HashMap::new();
-    let mut cum = HashMap::new();
-    let mut speed = HashMap::new();
-    prev.insert((7, 1), (0u32, 0u64, pt));
-    ucs_fix::call(&mut prev, &mut cum, &mut speed, 7, &[view(0, 320_000)]);
-    assert_eq!(cum.get(&(7, 1)), Some(&320_000u64), "累计量随增量累加");
-    let v = speed.get(&(7, 1)).map(|d| d.value()).unwrap_or(-1.0);
-    assert!(
-        v > 250_000.0,
-        "速度 = delta/dt（real ≈ 320KB/0.2s = 1.28MB/s 的 EMA 首帧 256KB/s；mutant delta*dt = 64KB/s）：{v}"
+    // ③ 端点老化清窗：停传 > WINDOW 后再推 → 清窗重开，单样本 rate == 0
+    //    （守卫删除突变：旧端点参与差值 → rate 为停传摊薄的小值 ≠ 0）
+    std::thread::sleep(Duration::from_millis(1_100));
+    ucs_fix::call(&mut prev, &mut cum, &mut windows, 7, &[view(1, 200)]);
+    let r_stale = windows.get_mut(&(7, 1)).unwrap().rate();
+    assert_eq!(
+        r_stale, 0.0,
+        "老化清窗后单样本速率为 0（守卫删除 → 摊薄残留）: {r_stale}"
     );
 }

@@ -53,7 +53,10 @@ pub(super) fn button_spans(txt: &str, focused: bool) -> Vec<Span<'static>> {
     }
 }
 
-/// 居中绘制对话框按钮行并回填命中区域（添加/删除对话框共用）
+/// 居中绘制对话框按钮行并回填命中区域（添加/删除对话框共用）。
+/// 窄终端钳制（v1.15/FR-01-103 三钮后按钮组最宽 40 列，<46 列对话框内框放不下；
+/// coder v116 下拉浮层同款纪律：钳制只截去越界部分、常态几何不变）——按钮矩形
+/// 右缘截到内框/缓冲区内，越界按钮整只跳过（无命中区域、点击无动作）。
 pub(super) fn draw_button_row(
     f: &mut Frame,
     app: &mut App,
@@ -62,23 +65,31 @@ pub(super) fn draw_button_row(
     labels: &[(&str, usize)],
     focus: usize,
 ) {
+    let area = f.area();
     let btn_ws: Vec<usize> = labels
         .iter()
         .map(|(txt, _)| w(&format!("[ {} ]", txt)) + 2)
         .collect();
     let total_w: usize = btn_ws.iter().sum::<usize>() + 2 * (labels.len() - 1);
     let mut bx = inner.x as usize + ((inner.width as usize).saturating_sub(total_w)) / 2;
+    let inner_right = inner.x as usize + inner.width as usize;
     for ((txt, idx), bw) in labels.iter().zip(btn_ws.iter()) {
         let focused = focus == *idx;
         let line = Line::from(button_spans(txt, focused));
-        let rect = Rect {
-            x: bx as u16,
-            y: btn_row,
-            width: *bw as u16,
-            height: 1,
-        };
-        f.render_widget(Paragraph::new(line), rect);
-        app.dlg_btn_rects.push((rect, *idx));
+        // 钳制：矩形右缘不超过内框右缘与缓冲区右缘（越界截断 / 整只跳过）
+        let width = (*bw)
+            .min(inner_right.saturating_sub(bx))
+            .min(area.width as usize);
+        if width > 0 {
+            let rect = Rect {
+                x: bx as u16,
+                y: btn_row,
+                width: width as u16,
+                height: 1,
+            };
+            f.render_widget(Paragraph::new(line), rect);
+            app.dlg_btn_rects.push((rect, *idx));
+        }
         bx += bw + 2;
     }
 }

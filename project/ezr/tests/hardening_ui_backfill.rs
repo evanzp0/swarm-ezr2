@@ -916,12 +916,12 @@ async fn add_dialog_button_row_centering_golden() {
     let mut a = make_app_in("ezr-h118", "btn");
     a.open_add_dialog();
     let rows = row_strings(&render_full(&mut a, 80, 24));
-    let hit = rows.iter().find(|r| r.contains("[ 确 认"));
-    assert!(hit.is_some(), "确认按钮行出现");
+    let hit = rows.iter().find(|r| r.contains("[ 立 即"));
+    assert!(hit.is_some(), "立即下载按钮行出现（FR-01-103 三钮）");
     assert_eq!(
         hit.unwrap(),
-        "│  │                          [ 确 认  ]    [ 取 消  ]                          │  │",
-        "按钮行居中金样（mutant % 使按钮组整体左移）"
+        "│  │                 [ 立 即 下 载  ]    [ 仅 添 加  ]    [ 取 消  ]                 │  │",
+        "按钮行居中金样（mutant % 使按钮组整体左移；v1.15 三钮口径）"
     );
     a.shutdown().await;
 }

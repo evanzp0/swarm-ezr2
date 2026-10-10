@@ -344,7 +344,8 @@ mod mouse_tests {
     async fn dialog_click_routes() {
         let mut app = make_app("dlgclick");
         app.dialog = Some(dlg(DialogKind::Add, 0));
-        // 字段矩形：0=URL、3=算法下拉行、5=代理下拉行；按钮：6=确认 7=取消
+        // 字段矩形：0=URL、3=算法下拉行、5=代理下拉行；按钮：6=立即下载 7=仅添加 8=取消
+        // （v1.15/FR-01-103 三钮）
         app.dlg_field_rects = vec![
             (
                 Rect {
@@ -392,6 +393,15 @@ mod mouse_tests {
                     height: 1,
                 },
                 7,
+            ),
+            (
+                Rect {
+                    x: 26,
+                    y: 12,
+                    width: 10,
+                    height: 1,
+                },
+                8,
             ),
         ];
 
@@ -448,8 +458,10 @@ mod mouse_tests {
         app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 5, 20));
         assert_eq!(app.dialog.as_ref().unwrap().focus, 0, "空白点击无动作");
 
-        // 点击取消按钮（7）→ 关闭对话框
+        // 点击取消按钮（8，第三钮 x=26）→ 关闭对话框
         app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 16, 12));
+        assert!(app.dialog.is_some(), "仅添加钮（空 URL）被校验拒绝不关闭");
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 28, 12));
         assert!(app.dialog.is_none(), "取消按钮关闭");
 
         // 非左键点击与滚轮：对话框打开时全部消费、无动作

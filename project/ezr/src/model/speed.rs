@@ -40,6 +40,13 @@ impl SpeedWindow {
             _ => 0.0,
         }
     }
+
+    /// 末次推进时刻（空表 = None；FR-01-102 连接级窗口端点老化守卫用）
+    #[must_use]
+    pub fn last_push(&self) -> Option<Instant> {
+        self.samples.back().map(|(t, _)| *t)
+    }
+
     fn evict(&mut self, now: Instant) {
         // 保留窗口内 + 最旧一个端点（差值基准）
         while self.samples.len() > 2 && now.duration_since(self.samples[1].0) > WINDOW {
@@ -106,6 +113,16 @@ mod tests {
         // 旧端点出窗后差值为 0（5s 前的 0 已被驱逐，窗口只剩最新段）
         w.push(t0 + Duration::from_secs(5), 5000);
         assert!(w.rate() >= 0.0);
+    }
+
+    #[test]
+    fn last_push_reports_newest_sample() {
+        let t0 = Instant::now();
+        let mut w = SpeedWindow::new();
+        assert_eq!(w.last_push(), None, "空表 = None");
+        w.push(t0, 0);
+        w.push(t0 + Duration::from_millis(500), 500);
+        assert_eq!(w.last_push(), Some(t0 + Duration::from_millis(500)));
     }
 
     // ---- FR-01-17 修订：展示面 EMA 平滑（α=1/5，等效约 5 秒窗口）----

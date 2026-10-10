@@ -149,8 +149,13 @@ proptest! {
     /// 完成态每连接写满整块
     #[test]
     fn prop_lease_snapshot_invariants(
-        total in 1u64..(1u64 << 40),
-        piece in 1u64..(1u64 << 20),
+        // 块数口径（chunk_total 返回 u32）：total 上界随 piece 收敛，保证
+        // ceil(total/piece) ≤ u32::MAX——生成域 ⊆ 规格域（notes/rust.md「生成域
+        // 与被测代码的资源分配维度解耦」；piece=1 × total≥2^32 的越域组合曾以
+        // 约 3%/run 的概率随机引爆 y64 - x 减法溢出）
+        (piece, total) in (1u64..(1u64 << 20)).prop_flat_map(|piece| {
+            (Just(piece), 1u64..((1u64 << 40).min(piece << 32)))
+        }),
         n in 1usize..17,
         done_raw in 0u64..(1u64 << 41),
     ) {
@@ -437,7 +442,8 @@ proptest! {
 
     /// from_toml 输出域不变量：任意（可解析）单键值下，
     /// block_size_http > 0 ∧ download_slots > 0 ∧ 并发 ∈ [1,64] ∧ max_retries ≥ 1；
-    /// 正值透传、0 回退默认；垃圾文本全默认
+    /// 块大小正值钳下限 1 MB（v1.16/FR-01-104）、0 回退默认；其余正值透传、0 回退；
+    /// 垃圾文本全默认
     /// （v 上界 2^32：TOML 整数超目标类型宽度时整段解析失败回默认，属
     /// 「垃圾输入」面，不进逐键透传断言）
     #[test]
@@ -463,8 +469,13 @@ proptest! {
         }
         match key {
             "block_size_http" => {
-                let expect = if v == 0 { Config::default().block_size_http } else { v };
-                prop_assert_eq!(c.block_size_http, expect, "正值透传/0 回退");
+                // v1.16/FR-01-104（D31）：正值 < 1 MB 钳到下限，≥ 1 MB 透传；0 回退默认
+                let expect = if v == 0 {
+                    Config::default().block_size_http
+                } else {
+                    v.max(crate::model::chunk::MIN_HTTP_BLOCK_SIZE)
+                };
+                prop_assert_eq!(c.block_size_http, expect, "正值钳下限透传/0 回退");
             }
             "download_slots" => {
                 let expect = if v == 0 { Config::default().download_slots } else { v as usize };

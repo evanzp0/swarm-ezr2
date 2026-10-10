@@ -38,10 +38,12 @@ impl App {
         }
     }
 
+    /// 添加对话框按钮激活（v1.15/FR-01-103：6=立即下载 7=仅添加 8=取消）
     pub(super) fn dlg_activate_add(&mut self, btn: usize) {
         match btn {
             6 => self.dlg_confirm_add(),
-            7 => self.dialog = None,
+            7 => self.dlg_add_only(),
+            8 => self.dialog = None,
             _ => {}
         }
     }
@@ -121,6 +123,17 @@ impl App {
 
     /// 确认添加（FR-01-01/03/04/05/26：URL 校验、目录默认、并发钳制、校验码校验、断点接续）
     pub(super) fn dlg_confirm_add(&mut self) {
+        self.dlg_finish_add(false);
+    }
+
+    /// 仅添加（v1.15/FR-01-103，D28）：校验与创建链路与立即下载完全一致，唯一
+    /// 差异 = 创建后任务落「已暂停」态（不占槽位、不被调度自动启动，空格开始）
+    pub(super) fn dlg_add_only(&mut self) {
+        self.dlg_finish_add(true);
+    }
+
+    /// 添加对话框共同收尾（FR-01-103 重构收口：两路径唯一分叉 = 落态与 toast）
+    fn dlg_finish_add(&mut self, paused: bool) {
         let Some(d) = self.dialog.as_ref() else {
             return;
         };
@@ -199,7 +212,7 @@ impl App {
         // 校验值来源②（FR-01-50/D14）：未显式提供时查保存目录伴随文件
         let checksum = Self::resolve_checksum(&dir, &name, checksum);
         let ts = unix_now();
-        let t = Task::new_queued(
+        let mut t = Task::new_queued(
             id,
             name.clone(),
             protocol,
@@ -212,6 +225,10 @@ impl App {
             proxy,
             ts,
         );
+        // FR-01-103/D28：仅添加 → 已暂停（不占下载槽位、不被槽位调度自动启动）
+        if paused {
+            t.state = TaskState::Paused;
+        }
         self.tasks.push(t);
         self.dialog = None;
         self.filter = 0;
@@ -219,7 +236,18 @@ impl App {
         if flen > 0 {
             self.selected = flen - 1;
         }
-        if resumed {
+        // toast（D29 钦定文案）：立即下载路径维持原两态；仅添加 ⏸ + 空格引导
+        if paused {
+            if resumed {
+                self.set_toast(format!(
+                    "⏸ 已添加任务 #{id}: {name}（发现有效断点，已暂停，按空格继续）"
+                ));
+            } else {
+                self.set_toast(format!(
+                    "⏸ 已添加任务 #{id}: {name}（已暂停，按空格开始下载）"
+                ));
+            }
+        } else if resumed {
             self.set_toast(format!(
                 "✓ 已添加任务 #{id}: {name}（发现有效断点，将自动接续）"
             ));
@@ -440,6 +468,154 @@ mod add_dialog_flow_tests {
             .toast
             .as_deref()
             .is_some_and(|m| m.contains("已添加任务")));
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// v1.15/FR-01-103（D28/D29）：仅添加按钮——校验与创建链路与立即下载一致，
+    /// 唯一差异 = 任务落「已暂停」态（不占槽位、不自动启动）+ 钦定 toast；
+    /// 空格继续走既有 FR-01-33 链路（槽位空闲 → 直接下载）
+    #[tokio::test]
+    async fn add_only_button_creates_paused_task() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-addonly");
+        let reg = dir.join("registry.json").to_string_lossy().to_string();
+        let mut app = App::new(Config::default(), reg);
+        app.dialog = Some(Dialog {
+            kind: DialogKind::Add,
+            url: "http://example.com/paused.bin".to_string(),
+            dir: dir.to_string_lossy().to_string(),
+            conns: String::new(),
+            conns_edited: false,
+            ck_type: 3,
+            ck_value: String::new(),
+            ck_open: false,
+            ck_sel: 3,
+            proxy_sel: 0,
+            proxy_open: false,
+            focus: 7,
+            task_name: String::new(),
+            task_id: None,
+        });
+        app.dlg_activate_add(7);
+        assert!(app.dialog.is_none(), "仅添加后关闭对话框");
+        assert_eq!(app.tasks.len(), 1);
+        let t = &app.tasks[0];
+        assert_eq!(t.name, "paused.bin");
+        assert_eq!(t.state, TaskState::Paused, "仅添加 → 已暂停（D28）");
+        assert!(!t.has_slot, "不占下载槽位");
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|m| m.contains("已添加任务") && m.contains("已暂停，按空格开始下载")),
+            "toast 钦定文案（D29）：{:?}",
+            app.toast
+        );
+        // 空格继续（FR-01-33 既有链路）：槽位空闲 → 直接下载
+        app.selected = 0;
+        app.toggle_pause();
+        assert_eq!(
+            app.tasks[0].state,
+            TaskState::Downloading,
+            "空格继续开始下载"
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// v1.15/FR-01-103：仅添加 + 有效断点 → 接续原名 + 钦定 toast（按空格继续）
+    #[tokio::test]
+    async fn add_only_with_sidecar_resume_keeps_paused() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-addonly-sc");
+        let mut app = App::new(
+            Config::default(),
+            dir.join("registry.json").to_string_lossy().into_owned(),
+        );
+        app.dialog = Some(Dialog {
+            kind: DialogKind::Add,
+            url: "http://example.com/r.bin".to_string(),
+            dir: dir.to_string_lossy().into_owned(),
+            conns: String::new(),
+            conns_edited: false,
+            ck_type: 3,
+            ck_value: String::new(),
+            ck_open: false,
+            ck_sel: 3,
+            proxy_sel: 0,
+            proxy_open: false,
+            focus: 7,
+            task_name: String::new(),
+            task_id: None,
+        });
+        // 预置同 URL sidecar（断点接续）
+        let sc = crate::model::sidecar::Sidecar::build(
+            "http://example.com/r.bin",
+            &crate::model::consistency::ServerStamp {
+                final_url: None,
+                etag: None,
+                last_modified: None,
+                size: Some(1000),
+            },
+            1000,
+            1024 * 1024,
+            &[0],
+            false,
+            None,
+            crate::model::sidecar::SidecarTask {
+                id: 99,
+                added_at: 0,
+                save_dir: dir.to_string_lossy().into_owned(),
+                concurrency: 4,
+                protocol: Protocol::Http,
+            },
+        );
+        sc.save(&dir.join("r.bin.ezr").to_string_lossy()).ok();
+        app.dlg_activate_add(7);
+        assert!(app.dialog.is_none(), "仅添加后关闭");
+        assert_eq!(app.tasks[0].name, "r.bin", "断点接续沿用原名");
+        assert_eq!(app.tasks[0].state, TaskState::Paused, "接续任务同样落暂停");
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|m| m.contains("发现有效断点") && m.contains("已暂停，按空格继续")),
+            "接续 toast 钦定文案（D29）：{:?}",
+            app.toast
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// v1.15/FR-01-103：仅添加路径校验链与立即下载一致——非法 URL 拒绝、
+    /// 对话框保持、无任务创建
+    #[tokio::test]
+    async fn add_only_rejects_invalid_url_same_as_confirm() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-addonly-bad");
+        let mut app = App::new(
+            Config::default(),
+            dir.join("registry.json").to_string_lossy().into_owned(),
+        );
+        app.dialog = Some(Dialog {
+            kind: DialogKind::Add,
+            url: "ftp://x/f.bin".to_string(),
+            dir: String::new(),
+            conns: String::new(),
+            conns_edited: false,
+            ck_type: 3,
+            ck_value: String::new(),
+            ck_open: false,
+            ck_sel: 3,
+            proxy_sel: 0,
+            proxy_open: false,
+            focus: 7,
+            task_name: String::new(),
+            task_id: None,
+        });
+        app.dlg_activate_add(7);
+        assert!(app.dialog.is_some(), "非法 URL 拒绝，对话框保持");
+        assert!(app.tasks.is_empty(), "无任务创建");
+        assert!(app
+            .toast
+            .as_deref()
+            .is_some_and(|m| m.contains("仅支持 http:// 或 https://")));
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }

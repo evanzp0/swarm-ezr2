@@ -9,8 +9,8 @@
 #   （v1.4 注：config.toml 缺失时启动自动生成全注释默认模板，FR-01-85 ——
 #    判据由「允许缺失」改为「缺失时自动生成」，生成细则见 01-config-template.feature）
 #   01-persistence-config-03 配置文件缺失时全部使用默认值
-#   01-persistence-config-04 配置非法值回退默认或钳制边界
-#   01-persistence-config-05 block_size_http 可配置生效
+#   01-persistence-config-04 配置非法值回退默认或钳制边界（v1.16：block_size_http 增 <1MB 钳制行）
+#   01-persistence-config-05 block_size_http 可配置生效（v1.16：下限 1 MB）
 #   01-persistence-config-06 download_slots 可配置生效
 #   01-persistence-config-07 单实例保护
 #   01-persistence-config-08 Q 优雅退出断点保留重启恢复
@@ -23,6 +23,9 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
   （默认并发键 http_concurrency，v1.5 自 default_concurrency 改名，FR-01-88；v1.3：EZR_HOME
   重定位 D16）。配置位于用户主目录
   .ezr/config.toml（或 $EZR_HOME/config.toml），注册表位于 .ezr/state/，均为原子写。
+  v1.16 修订（FR-01-104/D31，操作者钦定块大小下限）：`block_size_http` 正值 < 1 MB →
+  一律钳制为 1 MB 生效（场景 04 增钳制行；场景 05 原子 1 MB 下界示例行同步替换）；
+  0/缺失/非法 → 默认 1 MB 口径不变；续传以 sidecar 块大小为准（一致性优先）。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
@@ -58,19 +61,20 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
     Examples:
       | key                  | value | default |
       | block_size_http      | abc   | 1 MB    |
+      | block_size_http      | 256 KB | 1 MB   |
       | download_slots       | 0     | 5       |
       | max_retries          | -1    | 5       |
       | http_concurrency     | 99    | 64      |
       | max_speed            | xyz   | 0       |
 
-  Scenario: 01-persistence-config-05 block_size_http 可配置生效
+  Scenario: 01-persistence-config-05 block_size_http 可配置生效（v1.16：下限 1 MB）
     Given 配置文件设 block_size_http = "<block_size>"
     When 下载文件 "<file>"
     Then 详情分块行显示 "x/<chunks> · <display>/块"
 
     Examples:
       | file       | block_size | chunks | display  |
-      | five-m.bin | 256 KB     | 20     | 256 KB   |
+      | five-m.bin | 4 MB       | 2      | 4 MB     |
       | five-m.bin | 2 MB       | 3      | 2 MB     |
 
   Scenario: 01-persistence-config-06 download_slots 可配置生效

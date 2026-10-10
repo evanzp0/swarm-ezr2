@@ -30,7 +30,7 @@ impl super::App {
             None => return,
         };
         let nfocus = match kind {
-            DialogKind::Add => 8,
+            DialogKind::Add => 9,
             DialogKind::Modify => 6,
             DialogKind::Delete => 3,
         };
@@ -84,7 +84,9 @@ impl super::App {
         }
     }
 
-    /// Add 对话框 Enter：算法/代理行展开下拉、取消按钮关闭、其余确认
+    /// Add 对话框 Enter（v1.15/FR-01-103 焦点序 6=立即下载 7=仅添加 8=取消）：
+    /// 算法/代理行展开下拉、立即下载钮与其余焦点走确认、仅添加钮只建不下载、
+    /// 取消按钮关闭
     fn add_dialog_enter(&mut self, focus: usize) {
         if focus == 3 {
             let d = self.dialog.as_mut().unwrap();
@@ -94,6 +96,8 @@ impl super::App {
             let d = self.dialog.as_mut().unwrap();
             d.proxy_open = true;
         } else if focus == 7 {
+            self.dlg_add_only();
+        } else if focus == 8 {
             self.dialog = None;
         } else {
             self.dlg_confirm_add();
@@ -118,7 +122,7 @@ impl super::App {
     }
 
     /// Add 对话框字符输入：0-2 文本字段、3 空格展开算法下拉、4 校验码、
-    /// 5 空格展开代理下拉、6/7 空格激活按钮
+    /// 5 空格展开代理下拉、6/7/8 空格激活按钮（立即下载/仅添加/取消）
     fn add_dialog_char(&mut self, focus: usize, c: char) {
         if focus < 3 {
             if !c.is_control() {
@@ -314,8 +318,8 @@ mod dialog_key_tests {
         app.dlg_confirm_add();
         assert!(app.dialog.is_some(), "重复任务拒绝");
         assert_eq!(app.tasks.len(), 1);
-        // 取消按钮（btn 7）→ 直接关闭
-        app.dlg_activate_add(7);
+        // 取消按钮（btn 8）→ 直接关闭
+        app.dlg_activate_add(8);
         assert!(app.dialog.is_none(), "取消按钮关闭对话框");
         app.shutdown().await;
     }
@@ -368,15 +372,15 @@ mod dialog_key_tests {
         let mut app = make_app("dnav");
         app.dialog = Some(add_dlg());
 
-        // 焦点前进/后退与环绕（Add nfocus=8：v1.5 增代理行）
+        // 焦点前进/后退与环绕（Add nfocus=9：v1.15/FR-01-103 增仅添加钮）
         app.on_dialog_key(KeyCode::Down); // 1
         app.on_dialog_key(KeyCode::Right); // 2
         app.on_dialog_key(KeyCode::Tab); // 3
         app.on_dialog_key(KeyCode::Up); // 2
         app.on_dialog_key(KeyCode::Left); // 1
         app.on_dialog_key(KeyCode::BackTab); // 0
-        app.on_dialog_key(KeyCode::Up); // 环绕到 7
-        assert_eq!(app.dialog.as_ref().unwrap().focus, 7, "Up 环绕到末位");
+        app.on_dialog_key(KeyCode::Up); // 环绕到 8
+        assert_eq!(app.dialog.as_ref().unwrap().focus, 8, "Up 环绕到末位");
 
         // Esc 关闭
         app.on_dialog_key(KeyCode::Esc);
@@ -649,9 +653,9 @@ mod dialog_key_tests {
         assert!(app.dialog.is_none(), "确认按钮建任务");
         assert_eq!(app.tasks.len(), 1);
 
-        // focus 7：空格激活取消按钮 → 直接关闭
+        // focus 8：空格激活取消按钮 → 直接关闭
         app.dialog = Some(add_dlg());
-        app.on_dialog_key(KeyCode::Up); // 环绕到 7
+        app.on_dialog_key(KeyCode::Up); // 环绕到 8
         app.on_dialog_key(KeyCode::Char(' '));
         assert!(app.dialog.is_none(), "取消按钮直接关闭");
         app.shutdown().await;

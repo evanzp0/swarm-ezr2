@@ -3,6 +3,12 @@
 /// HTTP 协议默认块大小（phase-01 定案：1 MB/块，块数与并发数解耦；demo D13 默认值）
 pub const HTTP_CHUNK_SIZE: u64 = 1024 * 1024;
 
+/// HTTP 协议块大小生效下限（v1.16/FR-01-104，D31 操作者钦定 1 MB）：配置正值
+/// 小于该下限一律钳制为该值生效；块计划入口（新一次下载的 Blocks 构造）同样
+/// 钳制——封堵 chunk_total u32 块数口径的越域面；续传以 sidecar 块大小为准，
+/// 不在此限（FR-01-20/22 一致性优先）
+pub const MIN_HTTP_BLOCK_SIZE: u64 = 1024 * 1024;
+
 /// BT 协议默认块大小（256 KB；02 期启用，01 保留常量）
 #[allow(dead_code)]
 pub const BT_CHUNK_SIZE: u64 = 256 * 1024;

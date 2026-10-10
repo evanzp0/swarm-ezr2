@@ -324,7 +324,9 @@ mod ui_tests {
         let s = term.backend().to_string();
         assert!(s.contains("添加下载任务"), "对话框标题");
         assert!(s.contains("SHA-256"), "算法行显示当前算法");
-        assert!(s.contains("确认"), "确认按钮");
+        // v1.15/FR-01-103 三钮：立即下载 / 仅添加 / 取消
+        assert!(s.contains("立即下载"), "立即下载按钮");
+        assert!(s.contains("仅添加"), "仅添加按钮");
         assert!(s.contains("取消"), "取消按钮");
         // 展开下拉浮层
         if let Some(d) = app.dialog.as_mut() {
@@ -476,12 +478,30 @@ mod ui_tests {
         assert!(app.tasks[0].error.is_none());
         assert_eq!(app.tasks[0].fail_kind, None);
 
-        // 校验失败 → R = 重新校验：直接转校验中并占槽位（D10 无块重传）
+        // 校验失败 → R（FR-01-51 v1.17 三分支）：显式值在（无伴随）→ 重新校验：
+        // 直接转校验中并占槽位（D10 无块重传）
         app.tasks[0].state = TaskState::Failed;
         app.tasks[0].fail_kind = Some(FailKind::Verify);
+        app.tasks[0].checksum = Some(crate::model::Checksum {
+            algo: "SHA-256",
+            value: "ab".repeat(32),
+        });
         app.retry();
         assert_eq!(app.tasks[0].state, TaskState::Verifying);
         assert!(app.tasks[0].has_slot, "重校验占槽位");
+
+        // 校验失败 + 校验码已清空（无伴随）→ R = 不校验（FR-01-51 v1.17③/D34）：
+        // 正常重新排队落等待中（旧实现发空期望 Verify、空串比对恒败，R 后仍
+        // 显示校验失败——操作者 20261009 第十四批指令缺陷 B）
+        app.tasks[0].state = TaskState::Failed;
+        app.tasks[0].fail_kind = Some(FailKind::Verify);
+        app.tasks[0].checksum = None;
+        app.retry();
+        assert_eq!(app.tasks[0].state, TaskState::Queued);
+        assert!(!app.tasks[0].has_slot, "等待排队不占槽");
+        // 恢复校验中态，供下方「校验中不受 Space 影响」兜底臂断言
+        app.tasks[0].state = TaskState::Verifying;
+        app.tasks[0].has_slot = true;
 
         // C 清理已完成：只移除完成态，其余保留
         app.tasks.push(task(3, "p3.bin", TaskState::Completed));

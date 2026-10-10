@@ -16,12 +16,14 @@
 #   01-add-task-15 CLI 多 URL 部分非法全部拒绝
 #   01-add-task-16 重复任务拒绝并提示
 #   01-add-task-17 对话框支持粘贴长文本
+#   01-add-task-18 仅添加按钮：只添加任务不下载
 Feature: 01-add-task 任务添加（对话框与 CLI）
 
   期号 01。依据 project/mission/phase-01.md FR-01-01~06 与本会话澄清决定（重复任务拒绝、
   无协议前缀拒绝、CLI -c 非法报错退出、CLI 多 URL 部分非法全部拒绝、默认并发键
   http_concurrency，v1.5 自 default_concurrency 改名，FR-01-88）。UI 交互基线沿用
   ezr-tui-demo 定稿。
+  v1.15 增补：场景 18（仅添加按钮，FR-01-103/D28/D29，操作者第十二批指令）。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
@@ -209,3 +211,21 @@ Feature: 01-add-task 任务添加（对话框与 CLI）
     Examples:
       | length |
       | 200    |
+
+  Scenario: 01-add-task-18 仅添加按钮：只添加任务不下载
+    When 按 A 打开「添加下载任务」对话框
+    Then 按钮行显示 [ 立即下载 ] [ 仅添加 ] [ 取消 ]（原「确认」钮已改名「立即下载」，FR-01-103）
+    And 焦点经 Tab/↑↓ 环绕可达三钮（序 6/7/8）且提示行含 "Enter 立即下载"
+    When 输入合法 URL "<url>" 后激活「仅添加」（Enter 或空格或鼠标点击）
+    Then 对话框关闭且任务列表出现任务 "<filename>" 且状态为「已暂停」
+    And 下载槽位未被占用（下载槽位 x/5 中 x 不含该任务）且任务不开始下载
+    And toast 显示 "已添加任务" 且文案含「已暂停，按空格开始下载」（D29 钦定文案）
+    And 目标文件与 .downloading 未落盘（未发起传输）
+    When 选中该任务按空格继续
+    Then 任务转为「等待中」或「下载中」并开始传输（FR-01-33 既有链路）
+    When 按 A 重新打开对话框、输入非法 URL "<bad_url>" 后激活「仅添加」
+    Then 出现 URL 非法 toast 报错且对话框未关闭且未创建任务（校验链与立即下载一致）
+
+    Examples:
+      | url                                       | filename    | bad_url                    |
+      | http://fixture.local/files/paused-one.bin | paused-one.bin | ftp://fixture.local/file   |

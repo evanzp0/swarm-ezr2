@@ -7,13 +7,15 @@
 「等待中」任务按列表顺序（从上往下）依次获得空闲槽位后开始下载。
 失败分类（FR-M1-40/43）：网络错误 / 408·429·5xx / 大小不符 → 指数退避 8→16→32→60s
 封顶自动重试（Retry-After ≤60s 优先）；语义性 4xx / 磁盘空间不足 / SHA-256 校验失败
-→ 不自动重试（停等，仅 R）；校验失败按 R 清除断点从头下载（FR-M1-51）；
+→ 不自动重试（停等，仅 R）；校验失败按 R = 重新校验（无块重传，生产 v1.17/FR-01-51
++ D34 同步）；校验码已清空后按 R = 不校验——文件完整性直判不经引擎零排队零重传
+直接收尾「无校验」（生产 v1.18/FR-01-51 同步，toast「✓ 文件已完整，直接完成（无校验）」）；
 续传一致性失效 → 断点作废、从头重新下载（FR-M1-22）。
 重试计数连续性规则：连续失败（自上次失败后未下载到任何数据）→ 累加；
 非连续失败（重试期间有下载进展）→ 重置为 1；达上限停止自动重试并释放槽位。
 演示任务 win11：失败原因按 fail_case 轮换（超时→重置→大小不符→503 RA→一致性失效），
 首次失败后的重试正常下载一段（有进展→重置），之后模拟连接卡死（无进展→累加至 5/5）。
-演示任务 gpt4all：启动 10.6s 后 SHA-256 校验失败（不自动重试），R 后从头重下。
+演示任务 gpt4all：启动 10.6s 后 SHA-256 校验失败（不自动重试），R 后重新校验（无块重传）→ 校验通过完成。
 演示任务 tensorflow：首次获得槽位开始前磁盘空间预检失败（FR-M1-44，场景 L 自动验证）。
 
 场景 A（33s 无按键）：失败任务重试流转 已失败→等待中→下载中；全程无「连接中」；
@@ -26,8 +28,9 @@
                       D 删除 → 任务消失。
 场景 D（5s end）：      跳到最后一个任务（BT 下载中）→ [BT] 徽标黄色、
                         分块 x/y · 256 KB/块且 y=15984（4.19GB/256KB）。
-场景 E（5s a）：        添加对话框打开：并发预填 4；校验行默认 SHA-256；代理行默认直连；
-                        校验码占位「64 位十六进制（可留空）」；无『最大并发』提示。
+场景 E（5s a）：        添加对话框打开：三按钮 [ 立即下载 ] [ 仅添加 ] [ 取消 ]（v1.15/FR-01-103 同步）；
+                        并发预填 4；校验行默认 SHA-256；代理行默认直连；
+                        校验码占位「64 位十六进制（可留空）」；提示行「Enter 立即下载」；无『最大并发』提示。
 场景 F（10s space）：   暂停 ubuntu 释放槽位 → 队首 rust 自动获得槽位并从断点
                         继续下载（[下载中]）；imagenet 递补为排队第 1 位；
                         toast「▶ 槽位空闲，开始下载: rust-…」。
@@ -46,10 +49,11 @@
 场景 J（两轮鼠标）：    先跑一轮探测「SHA-256 ▾」与下拉项坐标；再以 SGR 鼠标点击
                         校验算法行展开下拉框 → 点击 SHA-512 选项 → 字段变为
                         「SHA-512 ▾」且下拉框收起。
-场景 K（16s 键盘）：    gpt4all 启动 10.6s 后 SHA-256 校验失败（不自动重试，
+场景 K（17s 键盘）：    gpt4all 启动 10.6s 后 SHA-256 校验失败（不自动重试，
                         详情「下载内容与校验值不符」）→ 选中后按 R →
-                        toast「已清除断点，从头下载」、回「等待中」、
-                        详情校验行（未通过）。
+                        toast「重新校验（无块重传）」（生产 v1.17/D10 同步）→
+                        重校验通过 → 「✓ SHA-256 校验通过」收尾 → 后期处理中（归档类）
+                        /已完成（非归档类，即离开页签）——不再回「等待中/已失败」。
 场景 L（15s 键盘）：    暂停 ubuntu/media/llama3 释放 3 槽位 → rust/imagenet 递补开始、
                         tensorflow 获槽开始前磁盘预检失败（FR-M1-44：toast「不自动重试，
                         按 R 手动重试」、详情「磁盘空间不足」）→ R 重新排队 →
@@ -80,10 +84,11 @@
                         序号列行数不变）。
 场景 P（明细门槛）：    仅「下载中」/「做种中」任务有并发明细：已暂停（blender）、
                         等待中（rust）、已失败（win11）、校验中（gpt4all）、
-                        后期处理中（neovim）均明细空、活跃 0/0；无明细状态
+                        后期处理中（neovim）均明细空、活跃 0；无明细状态
                         Ctrl+↓/Ctrl+B 给出提示 toast；win11 按 R 重试开始下载后
-                        明细恢复（序号 1..8、活跃 /8）；做种中（arch）明细显示
-                        （BT 五列、首列掩码 IP、活跃 1/1）。
+                        明细恢复（rust 递补，生产 FR-01-34：R 让槽队首递补）；
+                        做种中（arch）明细显示
+                        （BT 五列、首列掩码 IP、活跃 1）。
 
 用法：python3 scripts/verify_ezr.py [场景集合，默认 abcdefhjklmnop；g 为 150s 长跑可单独运行]
 """
@@ -101,7 +106,8 @@ import unicodedata
 
 import pyte
 
-PROG = "/home/z/my-project/ezr-tui-demo/target/release/ezr-tui-demo"
+# 二进制路径：仓库内 release 构建（bin/ezr-tui-demo 为随包预编译副本）
+PROG = "/home/z/swarm-ezr2/ezr-demo/target/release/ezr-tui-demo"
 YEL_HEX = "e4b23e"      # 黄 Rgb(228,178,62)
 
 PASS: list[str] = []
@@ -386,7 +392,7 @@ def scenario_d():
 
 
 def scenario_e():
-    print("\n== 场景 E：添加对话框——6 字段（含校验算法/校验码/代理下拉），默认 SHA-256 ==")
+    print("\n== 场景 E：添加对话框——三按钮（v1.15/FR-01-103）+ 6 字段，默认 SHA-256 ==")
     samples, _ = run(120, 44, 5.0, keys=["a"], key_delay_frac=0.3)
     # 取按键后的最后几帧（对话框稳定可见）
     final_rows = samples[-1][1]
@@ -394,7 +400,7 @@ def scenario_e():
     check("E1 对话框已打开", "添加下载任务" in final)
     dialog_rows = [r for r in final_rows if any(
         s in r for s in ("添加下载任务", "URL", "保存到", "并发", "校验", "代理", "直连",
-                         "确认", "取消", "Enter 确认"))]
+                         "立即下载", "仅添加", "取消", "Enter 立即下载"))]
     dlg_text = "\n".join(dialog_rows)
     check("E2 无『最大并发』提示文字", "最大并发" not in dlg_text and "最大并发" not in final)
     check("E3 校验行默认 SHA-256 下拉指示", re.search(r"校验\s*>\s*SHA-256 ▾", dlg_text) is not None,
@@ -402,9 +408,13 @@ def scenario_e():
     check("E4 校验码占位为 64 位十六进制（可留空）", "64 位十六进制（可留空）" in dlg_text)
     check("E5 并发字段预填默认值 4", re.search(r"并发\s*>\s*4", dlg_text) is not None,
           next((r.strip()[:40] for r in dialog_rows if "并发" in r and ">" in r), ""))
-    check("E6 提示行含校验码留空说明", "Enter 确认" in final and "校验码留空 = 不校验" in final)
+    check("E6 提示行含校验码留空说明", "Enter 立即下载" in final and "校验码留空 = 不校验" in final)
     check("E7 代理行默认「直连」下拉指示", re.search(r"代理\s*>\s*直连 ▾", dlg_text) is not None,
           next((r.strip()[:44] for r in dialog_rows if "代理" in r and ">" in r), ""))
+    check("E8 三按钮齐全（立即下载/仅添加/取消，v1.15/FR-01-103）",
+          "[ 立即下载 ]" in final and "[ 仅添加 ]" in final and "[ 取消 ]" in final,
+          next((r.strip()[:60] for r in final_rows if "仅添加" in r), "not found"))
+    check("E9 旧文案「确认」按钮已废止", "[ 确认 ]" not in final)
 
 
 def find_text_pos(screen, needle: str):
@@ -542,11 +552,12 @@ def scenario_g():
 
 
 def scenario_k():
-    print("\n== 场景 K：SHA-256 校验失败停等（不自动重试）+ R 清除断点从头下载 ==")
+    print("\n== 场景 K：SHA-256 校验失败停等（不自动重试）+ R 重新校验（无块重传）→ 校验通过完成 ==")
     # gpt4all 位于「正在下载」页签第 9 项（home + down×8）；校验失败在 10.6s 发生，
-    # 按键从 72% 处开始（≈11.5s）保证按 R 时任务已失败
-    samples, _ = run(120, 44, 16.0,
-                     keys=["home"] + ["down"] * 8 + ["r"], key_delay_frac=0.72)
+    # 按键从 65% 处开始（≈11.05s，r 落在 ≈12.5s）保证按 R 时任务已失败；
+    # 重校验 2.6s 后通过 → 完成收尾 ≈15.2s（17s 运行内可见）
+    samples, _ = run(120, 44, 17.0,
+                     keys=["home"] + ["down"] * 8 + ["r"], key_delay_frac=0.65)
     all_text = "\n".join("".join(rows) for _, rows in samples)
     final_rows = samples[-1][1]
     final = "\n".join(final_rows)
@@ -554,12 +565,18 @@ def scenario_k():
     check("K1 启动校验：toast「SHA-256 校验失败」出现", "SHA-256 校验失败" in all_text)
     check("K2 校验失败不自动重试（toast/行内「不自动重试」）", "不自动重试" in all_text)
     check("K3 详情失败原因「内容与校验值不符」", "内容与校验值不符" in all_text)
-    check("K4 R 后 toast「已清除断点，从头下载」", "已清除断点，从头下载" in all_text)
+    check("K4 R 后 toast「重新校验（无块重传）」（v1.17/D10 同步）",
+          "重新校验（无块重传）" in all_text)
+    check("K5 重校验通过完成收尾（toast「✓ SHA-256 校验通过」）",
+          "✓ SHA-256 校验通过" in all_text)
+    # 校验通过 → 归档类任务进「后期处理中」（非归档类直接「已完成」离开页签）；
+    # 绝不回「等待中/已失败」（生产 v1.17/D10+D34：R 重校验不重传、清码才不校验）
     g_blk = task_block(final_rows, "gpt4all-models-bundle")
-    check("K5 gpt4all 重试后进入等待中（无连接中）",
-          g_blk is not None and "[等待中]" in g_blk,
-          g_blk.replace("\n", " | ").strip()[:80] if g_blk else "not found")
-    check("K6 详情校验行显示（未通过）", "（未通过）" in final)
+    k6_left = g_blk is None  # 非归档类：已离开「正在下载」页签
+    k6_post = g_blk is not None and "[后期处理中]" in g_blk
+    check("K6 gpt4all 终态离开失败链路（后期处理中/已完成，非等待中/已失败）",
+          k6_left or k6_post,
+          (g_blk or "").replace("\n", " | ").strip()[:80])
 
 
 def scenario_l():
@@ -874,7 +891,7 @@ def scenario_n():
     final3 = "\n".join(rows3)
     act = next((r for r in rows3 if "活跃" in r and "并发连接" in r), None)
     check("N7 已完成任务并发连接明细为空（无并发连接）", "（无并发连接）" in final3)
-    check("N8 已完成任务活跃显示 0/0", act is not None and "活跃 0/0" in act,
+    check("N8 已完成任务活跃显示 0（修订-3 同口径）", act is not None and "活跃 0 " in act,
           act.strip()[:50] if act else "not found")
     check("N9 已完成任务选中（godot·已完成）", "godot-4.4-stable" in final3 and "已完成" in final3)
 
@@ -907,7 +924,8 @@ def scenario_o():
           and re.search(r"已断开连接 \S+（剩余 \d+ 条）", all_text) is not None,
           str([l for l in all_text.splitlines() if "已断开连接" in l][:1]))
     act = next((r for r in final_rows if "活跃" in r and "并发连接" in r), None)
-    check("O5 活跃总数减一（活跃 x/11）", act is not None and "/11" in act,
+    check("O5 断开后剩余 11 条连接全部活跃（活跃 11，修订-3 同口径）",
+          act is not None and "活跃 11 " in act,
           act.strip()[:50] if act else "not found")
     check("O6 断开后任务仍正常下载（sintel [下载中]）",
           any("[下载中]" in r and "sintel-4k-2160p" in r for r in final_rows))
@@ -945,7 +963,7 @@ def scenario_p():
     act = next((r for r in rows if "活跃" in r and "并发连接" in r), None)
     check("P1 已暂停任务选中（blender）", "blender-4.5-linux-x64" in final)
     check("P2 已暂停任务明细为空（无并发连接）", "（无并发连接）" in final)
-    check("P3 已暂停任务活跃 0/0", act is not None and "活跃 0/0" in act,
+    check("P3 已暂停任务活跃 0（修订-3 同口径）", act is not None and "活跃 0 " in act,
           act.strip()[:50] if act else "not found")
     check("P4 已暂停任务 Ctrl+↓ 提示无明细", "当前状态无并发明细" in all_text)
     px = conns_panel_left(screen)
@@ -958,8 +976,8 @@ def scenario_p():
     final2 = "\n".join(rows2)
     act2 = next((r for r in rows2 if "活跃" in r and "并发连接" in r), None)
     check("P6 等待中任务选中（rust）", "rust-toolchain-nightly" in final2)
-    check("P7 等待中任务明细为空 + 活跃 0/0",
-          "（无并发连接）" in final2 and act2 is not None and "活跃 0/0" in act2,
+    check("P7 等待中任务明细为空 + 活跃 0",
+          "（无并发连接）" in final2 and act2 is not None and "活跃 0 " in act2,
           act2.strip()[:50] if act2 else "not found")
     check("P8 等待中任务 Ctrl+B 提示无可断开连接", "当前状态无可断开的并发连接" in all_text2)
 
@@ -969,20 +987,22 @@ def scenario_p():
     final3 = "\n".join(rows3)
     act3 = next((r for r in rows3 if "活跃" in r and "并发连接" in r), None)
     check("P9 已失败任务选中（win11·已失败）", "win11-24h2-x64" in final3 and "已失败" in final3)
-    check("P10 已失败任务明细为空 + 活跃 0/0",
-          "（无并发连接）" in final3 and act3 is not None and "活跃 0/0" in act3,
+    check("P10 已失败任务明细为空 + 活跃 0",
+          "（无并发连接）" in final3 and act3 is not None and "活跃 0 " in act3,
           act3.strip()[:50] if act3 else "not found")
 
-    # 第四段：win11 按 R 重试 → 3s 后开始下载 → 明细恢复（序号 1..8、活跃 /8）
+    # 第四段：win11 按 R 重试 → 生产 v1.17/FR-01-34 同口径：正常重新排队
+    # 「等待中」并让出槽位（原持有槽位不保留），队首 rust 递补获得槽位开始下载
     samples4, screen4 = run(120, 44, 11.0, keys=["down"] * 6 + ["r"], key_delay_frac=0.22)
     rows4 = samples4[-1][1]
     final4 = "\n".join(rows4)
-    px4 = conns_panel_left(screen4)
-    serials4 = [int(s) for s, _ in conns_data_rows(screen4, px4)] if px4 is not None else []
-    check("P11 重试后 win11 开始下载", any("[下载中]" in r and "win11-24h2" in r for r in rows4))
-    check("P12 下载恢复后明细重建（HTTP 序号 1..8 升序）", serials4 == list(range(1, 9)), str(serials4))
+    check("P11 R 后 win11 重新排队（等待中，让出槽位）",
+          any("[等待中]" in r and "win11-24h2" in r for r in rows4))
+    check("P12 rust 递补获得槽位开始下载（队首优先，生产 FR-01-34 同口径）",
+          any("[下载中]" in r and "rust-toolchain" in r for r in rows4))
     act4 = next((r for r in rows4 if "活跃" in r and "并发连接" in r), None)
-    check("P13 下载恢复后活跃 x/8", act4 is not None and "/8" in act4,
+    check("P13 等待中任务明细为空 + 活跃 0（选中项仍为 win11）",
+          "（无并发连接）" in final4 and act4 is not None and "活跃 0 " in act4,
           act4.strip()[:50] if act4 else "not found")
 
     # 第五段：选中 gpt4all（校验中）→ 明细空
@@ -992,8 +1012,8 @@ def scenario_p():
     act5 = next((r for r in rows5 if "活跃" in r and "并发连接" in r), None)
     check("P14 校验中任务选中（gpt4all·校验中）",
           "gpt4all-models-bundle" in final5 and "校验中" in final5)
-    check("P15 校验中任务明细为空 + 活跃 0/0",
-          "（无并发连接）" in final5 and act5 is not None and "活跃 0/0" in act5,
+    check("P15 校验中任务明细为空 + 活跃 0",
+          "（无并发连接）" in final5 and act5 is not None and "活跃 0 " in act5,
           act5.strip()[:50] if act5 else "not found")
 
     # 第六段：neovim（后期处理中）——启动后约 2.2s 完成并移出本页签（列表缩短、
@@ -1004,10 +1024,10 @@ def scenario_p():
     for _, rows6 in samples6:
         text6 = "\n".join(rows6)
         if (text6.count("neovim-0.11.2") >= 2 and "[后期处理中]" in text6
-                and "（无并发连接）" in text6 and "活跃 0/0" in text6):
+                and "（无并发连接）" in text6 and "活跃 0 " in text6):
             hit6 = True
             break
-    check("P16 后期处理中任务选中且明细为空 + 活跃 0/0（neovim 采样帧）", hit6)
+    check("P16 后期处理中任务选中且明细为空 + 活跃 0（neovim 采样帧）", hit6)
 
     # 第七段：Tab → 已完成页签选中 arch（做种中）→ 明细显示（BT 五列、掩码 IP、活跃 1/1）
     samples7, screen7 = run(120, 44, 5.0, keys=["tab"], key_delay_frac=0.4)
@@ -1024,7 +1044,7 @@ def scenario_p():
     check("P20 做种中任务五列齐全（BT：IP/下载速度/累计下载/上传速度/累计上传）",
           head7 is not None and all(s in head7 for s in ("IP", "下载速度", "累计下载", "上传速度", "累计上传")),
           head7.strip()[:70] if head7 else "not found")
-    check("P21 做种中任务活跃 1/1（上传连接活跃）", act7 is not None and "活跃 1/1" in act7,
+    check("P21 做种中任务活跃 1（上传连接活跃，修订-3 同口径）", act7 is not None and "活跃 1 " in act7,
           act7.strip()[:50] if act7 else "not found")
 
 

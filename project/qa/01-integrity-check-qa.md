@@ -1,6 +1,6 @@
-# QA 套件 · 01-integrity-check 完整性校验（期号 01）
+# QA 套件 · 01-integrity-check 完整性校验（期号 01；v1.17 清码重试不校验；v1.18 文件完整性直判收尾）
 
-> 对应规格：`project/features/01-integrity-check.feature`（11 场景）。
+> 对应规格：`project/features/01-integrity-check.feature`（12 场景）。
 > 端到端 UI 层验证：TUI 状态/校验文案断言 + 磁盘伴随文件预置 + CLI 参数 + fixture 区间日志。
 
 ## 环境前置
@@ -25,6 +25,7 @@
 | QA-IC-09 | 01-integrity-check-09 | 失败后 R→修正伴随→R | 首次 R 无 Range 请求且仍失败；修正后 R 显示校验成功转已完成（AC-6） |
 | QA-IC-10 | 01-integrity-check-10 | 无显式值无伴随 | 直接已完成（不经校验中）；显示「无校验」；槽位释放 |
 | QA-IC-11 | 01-integrity-check-11 | fixture Range 短响应 | 按网络类瞬态失败自动重试；续传补齐缺失字节后完成（块记账不变式下「文件大小不符」终态与可补齐互斥，该文案正常路径不可达） |
+| QA-IC-12 | 01-integrity-check-12 | 校验失败停等 → 按 m 清空校验码确定 → 按 R | 无校验指令、无新请求（不探测不重传）；R 后**立即**（不经「等待中/下载中」过渡帧）转「已完成」且显示「无校验」；已下载文件保留（.downloading 后缀去除）；sidecar 删除——原缺陷形态（R 后仍显示校验失败；进度回退重传尾巴）必须不复现。变体：预置大小不符的 `.downloading`（外部改动形态）→ R 落「等待中」且 sidecar 删除、进度视图清零、从头重下（断点作废直击） |
 
 ## 通过准则
 

@@ -28,7 +28,7 @@ use tokio::sync::{mpsc, watch};
 
 use super::error::{classify_reqwest, parse_retry_after_header, EngineFailure};
 use super::{ConnView, Evt, TaskCmd};
-use crate::model::chunk::{block_range, chunk_total, Blocks};
+use crate::model::chunk::{block_range, chunk_total, Blocks, MIN_HTTP_BLOCK_SIZE};
 use crate::model::config::ProxyEndpoint;
 use crate::model::consistency::{self, Consistency, ServerStamp};
 use crate::model::namegen::DOWNLOADING_EXT;
@@ -259,6 +259,27 @@ fn prune_finished(handles: &mut Vec<(usize, tokio::task::JoinHandle<()>)>) {
     handles.retain(|(_, h)| !h.is_finished());
 }
 
+/// 补足 worker 至目标配额 q（v1.5/FR-01-87 扩容 spawn 单源；v1.16/D30
+/// 进度 tick 兜底对账复用——缩容侧 worker 退出收割与扩容 spawn 之间的
+/// 瞬时缺口由下一进度帧自愈）。槽位号取最小空闲编号（退出可复用）
+fn fill_workers(
+    handles: &mut Vec<(usize, tokio::task::JoinHandle<()>)>,
+    deps: &WorkerDeps,
+    shared: &Arc<super::EngineShared>,
+    q: usize,
+) {
+    let mut live: std::collections::HashSet<usize> = handles.iter().map(|(s, _)| *s).collect();
+    let mut next = 1usize;
+    while handles.len() < q {
+        while live.contains(&next) {
+            next += 1;
+        }
+        handles.push((next, deps.spawn(next, Arc::clone(shared))));
+        live.insert(next);
+        next += 1;
+    }
+}
+
 /// 下载主流程
 async fn download(
     spec: &TaskSpec,
@@ -328,7 +349,10 @@ async fn download(
             }
         }
     } else {
-        Blocks::new(head.total, spec.block_size)
+        // v1.16/FR-01-104（D31）：块计划入口生效值下限 1 MB——配置/注册表遗留
+        // 小块值（含极端 1B × 超大文件的 u32 块数越域面）一律钳到下限；
+        // 续传分支用 sidecar 块大小，不在此限（一致性优先）
+        Blocks::new(head.total, spec.block_size.max(MIN_HTTP_BLOCK_SIZE))
     };
 
     let total_blocks = blocks.count();
@@ -412,14 +436,21 @@ async fn download(
     let total = head.total;
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (stop_tx, stop_rx) = watch::channel(false);
-    // 任务级代理 + 并发热调通道（v1.5/FR-01-86/87，D19）：
-    // quota = 目标 worker 数（下调时多余 worker 完成当前块后自行退出）；
+    // 任务级代理 + 并发热调通道（v1.5/FR-01-86/87，D19；下调臂 v1.16/D30 改判
+    // 即时收缩——quota 臂见 block_worker 内层 select）：
+    // quota = 目标 worker 数（下调时超额 worker 立即中止在传块后退出）；
     // endpoint = 当前任务代理端点（worker 每次领块解析 client——切换后
     // 新连接即新代理，在途请求按旧 client 完成，不中断传输）
     let (quota_tx, quota_rx) = watch::channel(spec.concurrency.clamp(1, 64));
     let (ep_tx, ep_rx) = watch::channel(Arc::new(spec.proxy_endpoint.clone()));
     let blocks_shared = Arc::new(tokio::sync::Mutex::new(blocks.clone()));
+    // v1.16/FR-01-105：任务级实时读数基线 = 运行起点磁盘侧记账（含 sidecar
+    // 恢复字节）；Progress 事件 downloaded = 基线 + 本轮 total_written，
+    // 块内随字节落盘即时推进，不再等待块边界（消除任务/全局速度块内平台期）
+    let base_downloaded = blocks.downloaded();
     let lease_next = Arc::new(AtomicU32::new(0));
+    // v1.16/D30：配额中止块再领队列（与 lease_next 同源的领块面扩展）
+    let requeue = Arc::new(tokio::sync::Mutex::<Vec<u32>>::new(Vec::new()));
     let total_written = Arc::new(AtomicU64::new(0));
     let failure = Arc::new(tokio::sync::Mutex::<Option<EngineFailure>>::new(None));
     let conns = Arc::new(tokio::sync::Mutex::<Vec<ConnView>>::new(Vec::new()));
@@ -433,6 +464,7 @@ async fn download(
         file_path: dl_path.clone(),
         blocks: blocks_shared.clone(),
         lease_next: lease_next.clone(),
+        requeue: requeue.clone(),
         stop_rx: stop_rx.clone(),
         quota_rx: quota_rx.clone(),
         ep_rx: ep_rx.clone(),
@@ -452,22 +484,12 @@ async fn download(
         tokio::select! {
             cmd = cmd_rx.recv() => match cmd {
                 Some(TaskCmd::Reconfigure { concurrency, endpoint }) => {
-                    // v1.5/FR-01-87（D19 立即生效）：并发与代理热调
+                    // v1.5/FR-01-87（D19 立即生效；下调即时收缩 v1.16/D30）：并发与代理热调
                     let q = concurrency.clamp(1, 64);
                     let _ = ep_tx.send(Arc::new(endpoint));
                     let _ = quota_tx.send(q);
                     prune_finished(&mut handles);
-                    let mut live: std::collections::HashSet<usize> =
-                        handles.iter().map(|(s, _)| *s).collect();
-                    let mut next = 1usize;
-                    while handles.len() < q {
-                        while live.contains(&next) {
-                            next += 1;
-                        }
-                        handles.push((next, deps.spawn(next, Arc::clone(shared))));
-                        live.insert(next);
-                        next += 1;
-                    }
+                    fill_workers(&mut handles, &deps, shared, q);
                 }
                 Some(TaskCmd::Pause) | Some(TaskCmd::Cancel) => {
                     let cancelled = cmd == Some(TaskCmd::Cancel);
@@ -488,6 +510,12 @@ async fn download(
             },
             _ = tokio::time::sleep(PROGRESS_TICK) => {
                 prune_finished(&mut handles);
+                // v1.16/D30 兜底对账：缩容退出延迟/收割时序导致的瞬时缺口
+                // （handles.len() < quota）在下一进度帧补足
+                let want = *quota_tx.borrow();
+                if handles.len() < want {
+                    fill_workers(&mut handles, &deps, shared, want);
+                }
                 if failure.lock().await.is_some() {
                     stop_workers(&stop, &stop_tx, &mut handles).await;
                     let f = failure.lock().await.clone().unwrap_or_else(|| {
@@ -502,10 +530,13 @@ async fn download(
                     );
                 }
                 let b = blocks_shared.lock().await;
-                let downloaded = b.downloaded();
                 let chunk_done = b.completed();
                 let conns_now = conns.lock().await.clone();
                 drop(b);
+                // v1.16/FR-01-105：任务级实时口径（基线 + 本轮累计写入）；
+                // 块边界记账仅留收尾/落盘（完成时在传清零，两口径在完成点恒等，
+                // FR-01-52 大小校验语义不变）
+                let downloaded = base_downloaded + total_written.load(Ordering::Relaxed);
                 if !emit(evt_tx, Evt::Progress {
                     id: spec.id,
                     downloaded,
@@ -540,6 +571,18 @@ async fn download(
                         // 删 sidecar（FR-01-24/20）；有校验值时由 verify() 收尾
                         let _ = tokio::fs::rename(&dl_path, &final_path).await;
                         let _ = Sidecar::remove(&sc_path);
+                    } else {
+                        // v1.18 修订 A（FR-01-51 v1.18）：有校验值时完成前即时落盘
+                        // 全块完成口径的终态 sidecar——原仅 SIDECAR_FLUSH 周期落盘，
+                        // 完成点与最后落盘间的尾部字节不在台账（≤2s 内完成的快速
+                        // 下载甚至从未落过盘）；「校验中」退出应用重启按过期台账
+                        // 恢复会回退重传尾巴。verify() 通过后仍删此 sidecar（收尾
+                        // 单源不破坏）；校验失败路径保留台账——全块完成口径下
+                        // 引擎恢复零重传（FR-01-22/51）
+                        let b2 = blocks_shared.lock().await;
+                        let sidecar = build_sidecar(spec, &probed_stamp, &b2, false);
+                        drop(b2);
+                        let _ = Sidecar::save(&sidecar, &sc_path);
                     }
                     let _ = emit(evt_tx, Evt::DownloadDone {
                         id: spec.id,
@@ -764,6 +807,9 @@ struct WorkerDeps {
     blocks: Arc<tokio::sync::Mutex<Blocks>>,
     /// 全局块租约序号（原子领块指针）
     lease_next: Arc<AtomicU32>,
+    /// 配额中止块再领队列（v1.16/D30：单调租约游标不回退，被中止在传块
+    /// 经此队列交还后续 worker 从块内偏移接续；pop 单领由互斥保证）
+    requeue: Arc<tokio::sync::Mutex<Vec<u32>>>,
     /// 停止信号（暂停/取消/失败收尾）
     stop_rx: watch::Receiver<bool>,
     /// 目标 worker 数（下调时多余 worker 完成当前块后自行退出）
@@ -792,6 +838,7 @@ async fn block_worker(wid: usize, shared: Arc<super::EngineShared>, deps: Worker
         file_path,
         blocks,
         lease_next,
+        requeue,
         mut stop_rx,
         mut quota_rx,
         mut ep_rx,
@@ -814,31 +861,55 @@ async fn block_worker(wid: usize, shared: Arc<super::EngineShared>, deps: Worker
         if *stop_rx.borrow() {
             return;
         }
-        // 并发下调（v1.5/FR-01-87，D19）：超出目标配额的 worker 在完成当前块
-        // 后于本边界退出（不打断在途传输，无进度损失）；槽位 freed 后由
-        // Reconfigure 在扩容时复用
+        // 并发下调（v1.5/FR-01-87；下调臂 v1.16/D30 改判即时收缩——内层
+        // select 配额臂中止在传块，块交还再领队列）：超出目标配额的 worker
+        // 立即退出；槽位 freed 后由 Reconfigure/进度 tick 在扩容时复用
         if wid > *quota_rx.borrow_and_update() {
             return;
         }
-        // 领块：从 lease_next 顺序扫描第一个未完成块
+        // 领块：优先消费配额中止块的再领队列（v1.16/D30——单调游标不回退，
+        // 被中止的在传块经队列交还，从块内已写偏移接续；pop 单领语义由
+        // 互斥保证，无双重租约）；队列空则从 lease_next 顺序扫描第一个未完成块
         let lease = {
-            let b = blocks.lock().await;
-            let y = b.count();
-            let mut found = None;
-            let mut i = lease_next.load(Ordering::Relaxed);
-            while i < y {
-                if !b.is_done_block(i) {
-                    found = Some(i);
-                    lease_next.store(i + 1, Ordering::Relaxed);
-                    break;
+            let requeued = {
+                let mut q = requeue.lock().await;
+                let mut found = None;
+                while let Some(i) = q.pop() {
+                    let done = {
+                        let b = blocks.lock().await;
+                        b.is_done_block(i)
+                    };
+                    if !done {
+                        found = Some(i);
+                        break;
+                    }
                 }
-                i += 1;
-            }
-            found.map(|idx| {
+                found
+            };
+            if let Some(idx) = requeued {
+                let b = blocks.lock().await;
                 let (s, e) = block_range(b.total, b.piece, idx).unwrap_or((0, 0));
                 let written = b.written.get(idx as usize).copied().unwrap_or(0);
-                (idx, s, e, written)
-            })
+                Some((idx, s, e, written))
+            } else {
+                let b = blocks.lock().await;
+                let y = b.count();
+                let mut found = None;
+                let mut i = lease_next.load(Ordering::Relaxed);
+                while i < y {
+                    if !b.is_done_block(i) {
+                        found = Some(i);
+                        lease_next.store(i + 1, Ordering::Relaxed);
+                        break;
+                    }
+                    i += 1;
+                }
+                found.map(|idx| {
+                    let (s, e) = block_range(b.total, b.piece, idx).unwrap_or((0, 0));
+                    let written = b.written.get(idx as usize).copied().unwrap_or(0);
+                    (idx, s, e, written)
+                })
+            }
         };
         let Some((idx, start, end, written)) = lease else {
             // 队列已空：连接转待命（FR-01-11）——保留空连接条目（cap=0）供
@@ -889,10 +960,23 @@ async fn block_worker(wid: usize, shared: Arc<super::EngineShared>, deps: Worker
         let _ = file.seek(std::io::SeekFrom::Start(start + written)).await;
         let mut done_here = written;
         let mut aborted = false;
+        // v1.16/FR-01-87 修订臂（D30）：配额下调中止（区别于停止信号，
+        // 退出前需清除自身连接行）
+        let mut quota_aborted = false;
         loop {
             tokio::select! {
                 changed = stop_rx.changed() => {
                     if changed.is_err() || *stop_rx.borrow() {
+                        aborted = true;
+                    }
+                }
+                _ = quota_rx.changed() => {
+                    // v1.16/FR-01-87 修订臂（D30 下调即时收缩）：配额与停止
+                    // 信号同层监听——超额 worker 的在传块立即中止（不再等待
+                    // 块边界，块内已写字节经 mark_progress 保留）；上调/
+                    // 他人配额变化不打断本 worker
+                    if wid > *quota_rx.borrow_and_update() {
+                        quota_aborted = true;
                         aborted = true;
                     }
                 }
@@ -927,7 +1011,16 @@ async fn block_worker(wid: usize, shared: Arc<super::EngineShared>, deps: Worker
         }
         // 记录块内进度（部分块保留已写字节，FR-01-13）
         blocks.lock().await.mark_progress(idx, done_here);
-        if aborted || failure.lock().await.is_some() {
+        if aborted {
+            if quota_aborted {
+                // v1.16/D30：被中止块交还再领队列（后续 worker 从块内偏移接续）
+                // + 连接行即刻消失（面板反映目标并发）
+                requeue.lock().await.push(idx);
+                conns.lock().await.retain(|c| c.id != wid);
+            }
+            return;
+        }
+        if failure.lock().await.is_some() {
             return;
         }
         blocks.lock().await.mark_done(idx);
@@ -1003,6 +1096,26 @@ mod tests {
                     w,
                     "HTTP/1.1 {status} OK\r\nAccept-Ranges: bytes\r\nETag: \"mock-{total}\"\r\nLast-Modified: Mon, 09 Feb 2026 08:00:00 GMT\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n"
                 );
+                let slow = opts.iter().any(|(k, _)| k == "slow");
+                // 挂起门控（v1.17 计划外对齐，同轮扩面）：头部照发、正文永不应答
+                // （阻塞读等客户端断开），对该连接的**一切请求**生效——探测
+                // （开区间 `bytes=0-`）只需头部（Probed 事件照常），分块 worker
+                // （有界区间）与单流（复用探测响应直接流 body、无独立 Range
+                // 请求）全部阻塞在首字节读上，取消竞态测试中取消必然先于任何
+                // 数据/进度/完成事件被处理。
+                // 背景两段：①微文件瞬时完成与取消处理存在调度赛跑，workspace
+                // 并行负载下偶发 DownloadDone 先于 Evt::Cancelled（原测试无门控
+                // 靠时序幸运，硬定时非确定性）；②首轮门控只拦有界区间，漏了
+                // v1.16/FR-01-104 1MB 下限把微文件块计划收敛成单块后的单流
+                // 路径（total_blocks <= 1 走 single_stream 流探测响应 body）——
+                // 门控对它失明，赛跑复现（fail-fast 全量实测 1/4 挂载点引爆
+                // 「取消后不应完成下载」）。
+                let hold = opts.iter().any(|(k, _)| k == "hold");
+                if hold {
+                    let mut sink = [0u8; 1];
+                    let _ = std::io::Read::read(&mut r, &mut sink);
+                    continue;
+                }
                 let mut buf = vec![0u8; 8192];
                 let mut pos = start;
                 while pos <= end {
@@ -1012,6 +1125,11 @@ mod tests {
                         break;
                     }
                     pos += n as u64;
+                    if slow {
+                        // 慢速门控：8 KB/15ms ≈ 0.53 MB/s，1 MB 块约 1.9 s——
+                        // 构造跨多个进度帧的块内观察窗（FR-01-105/FR-01-87 测试用）
+                        std::thread::sleep(std::time::Duration::from_millis(15));
+                    }
                 }
             }
         });
@@ -1098,13 +1216,22 @@ mod tests {
     }
 
     /// v1.5/FR-01-87（D19）：Reconfigure 并发热调——1→4 上调后新 worker 加入
-    /// （活跃连接数峰值 ≥2），任务完成且无失败（代理热调同通道，None=直连）
+    /// （活跃连接数峰值 ≥2），任务完成且无失败（代理热调同通道，None=直连）。
+    /// v1.16/FR-01-104 对齐：块计划入口下限 1 MB 后，测试规格改用 1 MB 块
+    /// （2 块文件 + 慢速门控，保证多帧观测窗与上调后新 worker 领块）
     #[tokio::test]
     async fn reconfigure_hot_adjusts_concurrency_and_completes() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-hot");
-        let total: u64 = 256 * 4096; // 256 块，足够维持多 worker 在途窗口
-        let url = mock_server(total, vec![]);
-        let spec = spec_for(1, &url, dir.to_str().unwrap(), 4096, 1, None);
+        let total: u64 = 2 * 1024 * 1024; // 2 块 × 1 MB（下限领域；慢速维持观测窗）
+        let url = mock_server(total, vec![("slow".into(), String::new())]);
+        let spec = spec_for(
+            1,
+            &url,
+            dir.to_str().unwrap(),
+            crate::model::chunk::MIN_HTTP_BLOCK_SIZE,
+            1,
+            None,
+        );
         let (cmd_tx, mut rx, deadline) = launch_spec(spec);
         let mut hot = false;
         let mut max_conns = 0usize;
@@ -1139,6 +1266,172 @@ mod tests {
         let f = dir.join("f.bin");
         let meta = std::fs::metadata(&f).expect("目标文件在位");
         assert_eq!(meta.len(), total);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// v1.16/FR-01-105：任务级 Progress 读数实时化——块内（chunk_done 未增长）
+    /// downloaded 随字节落盘即时推进且严格单调（旧实现 = blocks.downloaded()
+    /// 块边界粒度，块内恒为基线值 → 本测试红）
+    #[tokio::test]
+    async fn progress_task_bytes_live_within_block() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-live");
+        let total: u64 = 1024 * 1024; // 1 块（1 MB），慢速门控跨多个进度帧
+        let url = mock_server(total, vec![("slow".into(), String::new())]);
+        let spec = spec_for(
+            1,
+            &url,
+            dir.to_str().unwrap(),
+            crate::model::chunk::MIN_HTTP_BLOCK_SIZE,
+            1,
+            None,
+        );
+        let (_cmd_tx, mut rx, deadline) = launch_spec(spec);
+        let mut in_block_samples: Vec<u64> = Vec::new();
+        let mut done = false;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::Progress {
+                    downloaded,
+                    chunk_done,
+                    ..
+                })) => {
+                    if chunk_done == 0 && downloaded > 0 {
+                        in_block_samples.push(downloaded);
+                    }
+                }
+                Ok(Some(Evt::DownloadDone { total: t, .. })) => {
+                    assert_eq!(t, total);
+                    done = true;
+                    break;
+                }
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("下载失败: {reason}"),
+                _ => {}
+            }
+        }
+        assert!(done, "任务应完成");
+        assert!(
+            in_block_samples.len() >= 3,
+            "块内应出现多个非零实时读数（got {}）",
+            in_block_samples.len()
+        );
+        assert!(
+            in_block_samples.windows(2).all(|w| w[0] < w[1]),
+            "块内读数应严格递增: {in_block_samples:?}"
+        );
+        let data = std::fs::read(dir.join("f.bin")).unwrap();
+        assert_eq!(data.len() as u64, total);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// v1.16/FR-01-104（D31）：块计划入口生效值下限 1 MB——spec.block_size = 1
+    /// 的新一次下载按 1 MB 块计划（连接区间 = 1 MB；旧实现 1 字节块 → 本测试红）；
+    /// 任务完成且文件正确（钳制不破坏下载链路）
+    #[tokio::test]
+    async fn block_plan_clamps_to_one_mb_floor() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-floor");
+        let total: u64 = 2 * 1024 * 1024; // 钳制后 = 2 块 × 1 MB
+        let url = mock_server(total, vec![("slow".into(), String::new())]);
+        let spec = spec_for(2, &url, dir.to_str().unwrap(), 1, 1, None); // 遗留 1 字节块值
+        let (_cmd_tx, mut rx, deadline) = launch_spec(spec);
+        let mut first_range: Option<(u64, u64)> = None;
+        let mut done = false;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::Progress { conns, .. })) => {
+                    if first_range.is_none() {
+                        if let Some(c) = conns.first() {
+                            first_range = Some((c.start, c.end));
+                        }
+                    }
+                }
+                Ok(Some(Evt::DownloadDone { .. })) => {
+                    done = true;
+                    break;
+                }
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("下载失败: {reason}"),
+                _ => {}
+            }
+        }
+        assert!(done, "钳制后任务应完成");
+        let (s, e) = first_range.expect("应观测到连接块区间");
+        assert_eq!(
+            e - s,
+            crate::model::chunk::MIN_HTTP_BLOCK_SIZE,
+            "块计划应按 1 MB 下限钳制（got {s}..{e}）"
+        );
+        let data = std::fs::read(dir.join("f.bin")).unwrap();
+        let mut expect = vec![0u8; total as usize];
+        fill(&mut expect, 0);
+        assert_eq!(data, expect, "钳制路径文件内容应逐字节一致");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// v1.16/FR-01-87 修订臂（D30）：并发下调即时收缩——2→1 确定后约 1 秒内
+    /// 多余连接的在传块被中止（不再等待块边界，旧实现块级过渡延迟 → 本测试红）、
+    /// 连接行消失；被中断块块内进度保留（最终文件逐字节正确、无回退）
+    #[tokio::test]
+    async fn reconfigure_scale_down_interrupts_inflight_immediately() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-scaledown");
+        let total: u64 = 2 * 1024 * 1024; // 2 块 × 1 MB（慢速 1.9 s/块）
+        let url = mock_server(total, vec![("slow".into(), String::new())]);
+        let spec = spec_for(
+            3,
+            &url,
+            dir.to_str().unwrap(),
+            crate::model::chunk::MIN_HTTP_BLOCK_SIZE,
+            2,
+            None,
+        );
+        let (cmd_tx, mut rx, deadline) = launch_spec(spec);
+        let mut downgraded_at: Option<std::time::Instant> = None;
+        let mut max_conns_after = 0usize;
+        let mut last_downloaded: u64 = 0;
+        let mut done = false;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::Probed { .. })) => {
+                    // 探测完成即下调并发：2 → 1（两 worker 均已在途）
+                    cmd_tx
+                        .send(TaskCmd::Reconfigure {
+                            concurrency: 1,
+                            endpoint: None,
+                        })
+                        .await
+                        .unwrap();
+                    downgraded_at = Some(std::time::Instant::now());
+                }
+                Ok(Some(Evt::Progress {
+                    downloaded, conns, ..
+                })) => {
+                    assert!(
+                        downloaded >= last_downloaded,
+                        "已下载字节单调不减: {last_downloaded} -> {downloaded}"
+                    );
+                    last_downloaded = downloaded;
+                    if let Some(t0) = downgraded_at {
+                        if t0.elapsed() >= std::time::Duration::from_millis(600) {
+                            max_conns_after = max_conns_after.max(conns.len());
+                        }
+                    }
+                }
+                Ok(Some(Evt::DownloadDone { .. })) => {
+                    done = true;
+                    break;
+                }
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("下载失败: {reason}"),
+                _ => {}
+            }
+        }
+        assert!(downgraded_at.is_some(), "下调命令应已发出");
+        assert!(done, "下调后任务应完成");
+        assert!(
+            max_conns_after <= 1,
+            "下调 600ms 后活跃连接数应 ≤ 1（got {max_conns_after}）——旧实现块级过渡延迟会超窗"
+        );
+        let data = std::fs::read(dir.join("f.bin")).unwrap();
+        let mut expect = vec![0u8; total as usize];
+        fill(&mut expect, 0);
+        assert_eq!(data, expect, "被中断块的块内进度应保留（文件逐字节一致）");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1189,7 +1482,11 @@ mod tests {
     async fn cancel_emits_cancelled_and_no_ghost_progress() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-e2e-cancel");
         let total: u64 = 3 * 4096 + 1111;
-        let url = mock_server(total, vec![]);
+        // v1.17 计划外对齐：hold 门控（有界区间请求正文永不应答）——微文件瞬时
+        // 完成与取消处理存在调度赛跑，workspace 并行负载下偶发 DownloadDone
+        // 先于 Evt::Cancelled（非确定性失败两次复现于基线复跑）；门控后取消
+        // 必然先于任何数据/完成事件被处理，测试转确定性
+        let url = mock_server(total, vec![("hold".into(), String::new())]);
         let (tx, mut rx) = mpsc::channel::<Evt>(64);
         let shared = throttle_free();
         let (cmd_tx, cmd_rx) = mpsc::channel::<TaskCmd>(4);
@@ -1435,6 +1732,68 @@ mod tests {
         let mut expect = vec![0u8; total as usize];
         fill(&mut expect, 0);
         assert_eq!(data, expect);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn full_sidecar_no_checksum_finalizes_without_transfer() {
+        // FR-01-51 v1.17③/D34 引擎链路：sidecar 全块完成 + 无期望值 → Start 后
+        // 不发起任何传输，直接收尾「已完成」（rename + 删 sidecar）。用盘上
+        // 特征字节证明无重传：预写内容与 mock 供数模式（fill）不同，若引擎误
+        // 重传，内容会被覆盖为 fill 模式、断言失败。
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-e2e-full-sc");
+        let total: u64 = 4 * 4096;
+        let url = mock_server(total, vec![]);
+        std::fs::write(dir.join("f.bin.downloading"), vec![0xAB; total as usize]).unwrap();
+        let stamp = ServerStamp {
+            final_url: Some(url.clone()),
+            etag: Some(format!("\"mock-{total}\"")),
+            last_modified: Some("Mon, 09 Feb 2026 08:00:00 GMT".to_string()),
+            size: Some(total),
+        };
+        let sc = Sidecar::build(
+            &url,
+            &stamp,
+            total,
+            4096,
+            &[4096, 4096, 4096, 4096],
+            false,
+            None,
+            SidecarTask {
+                id: 6,
+                added_at: 0,
+                save_dir: dir.to_str().unwrap().to_string(),
+                concurrency: 2,
+                protocol: Protocol::Http,
+            },
+        );
+        sc.save(dir.join("f.bin.ezr").to_str().unwrap()).unwrap();
+        let (_cmd_tx, mut rx, deadline) = launch_spec(sidecar_spec(6, &url, &dir, 2));
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::DownloadDone { total: t, .. })) => {
+                    assert_eq!(t, total);
+                    break;
+                }
+                Ok(Some(Evt::Invalidated { .. })) => panic!("一致快照不应失效"),
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("下载失败: {reason}"),
+                Err(_) => panic!("超时"),
+                _ => {}
+            }
+            if std::time::Instant::now() > deadline {
+                panic!("超时");
+            }
+        }
+        // 收尾形态：最终文件存在且内容为预写特征字节（无重传证据）、.downloading
+        // 与 sidecar 均已清除
+        let data = std::fs::read(dir.join("f.bin")).unwrap();
+        assert_eq!(
+            data,
+            vec![0xAB; total as usize],
+            "预写内容必须原样保留（误重传会被 fill 模式覆盖）"
+        );
+        assert!(!dir.join("f.bin.downloading").exists());
+        assert!(!dir.join("f.bin.ezr").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 

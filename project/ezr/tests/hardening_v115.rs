@@ -192,19 +192,22 @@ async fn add_dialog_field_rows_exact_geometry() {
 
 /// 按钮行 y = inner.y + n_rows + 2 = 15+6+2 = 23；提示行 y = inner.y + n_rows + 3 = 24，
 /// x = inner.x + 1 = 25（提示文本以空格开头、'E' 在 x=26）。
+/// v1.15/FR-01-103：三钮 [ 立即下载 ] [ 仅添加 ] [ 取消 ]——y 几何与提示行锚点不变，
+/// 按钮文案锚点随改名「确认 → 立即下载」同步。
 #[tokio::test]
 async fn add_dialog_button_and_hint_rows_exact_geometry() {
     let (mut a, reg) = app_with_add_dialog();
     let buf = render(&mut a, 120, 40);
     assert!(
         !a.dlg_btn_rects.is_empty() && a.dlg_btn_rects.iter().all(|(r, _)| r.y == 23),
-        "两个按钮的命中区 y 必须恰为 23（got {:?}）",
+        "三个按钮的命中区 y 必须恰为 23（got {:?}）",
         a.dlg_btn_rects.iter().map(|(r, _)| r.y).collect::<Vec<_>>()
     );
-    assert!(row_text(&buf, 23, 120).contains("确"), "按钮行 y=23");
-    assert!(!row_text(&buf, 22, 120).contains("确"), "按钮不得上移");
+    assert_eq!(a.dlg_btn_rects.len(), 3, "三钮（FR-01-103）");
+    assert!(row_text(&buf, 23, 120).contains("立"), "按钮行 y=23");
+    assert!(!row_text(&buf, 22, 120).contains("立"), "按钮不得上移");
     assert!(
-        !row_text(&buf, 27, 120).contains("确"),
+        !row_text(&buf, 27, 120).contains("立"),
         "按钮不得下移（n_rows*2 变异）"
     );
     assert_eq!(cell(&buf, 25, 24), " ", "提示行起始于 x=25（首字符为空格）");
@@ -560,15 +563,19 @@ fn stub_http(
                         );
                         return;
                     }
-                    let start: usize = range
-                        .trim_start_matches("bytes=")
-                        .split('-')
-                        .next()
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(0);
+                    // v1.16 对齐：解析 Range 终点并严格按请求区间供数（旧实现忽略终点、
+                    // 从 start 溢流到文件尾 —— 块边界粒度记账下被钳制掩盖，实时字节口径
+                    // 会暴露为超计；真实服务器按请求区间回数，stub 同口径）
+                    let (start, end) = match range.trim_start_matches("bytes=").split_once('-') {
+                        Some((a, b)) => (
+                            a.parse::<usize>().unwrap_or(0),
+                            b.parse::<usize>().map(|e| (e + 1).min(len)).unwrap_or(len),
+                        ),
+                        None => (0, len),
+                    };
                     let head = format!(
                         "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nETag: {ETAG}\r\nConnection: close\r\n\r\n",
-                        len.saturating_sub(start)
+                        end.saturating_sub(start)
                     );
                     let _ = c.write_all(head.as_bytes());
                     // 慢速语义落在首个 worker 连接（块 0 慢流，供暂停时机确定性）
@@ -576,7 +583,7 @@ fn stub_http(
                         &mut c,
                         &data,
                         start,
-                        len,
+                        end,
                         throttle,
                         slow_first.is_some_and(|_| n == 1),
                     );
@@ -748,13 +755,14 @@ async fn speed_window_tracks_downloading_task() {
 
 #[tokio::test]
 async fn single_conn_download_completes() {
-    let len = 96 * 1024;
+    // v1.16/FR-01-104 对齐：块下限 1 MB 后，多块路径用 2×1MB 文件（2 块，单 worker）
+    let len = 2 * 1024 * 1024;
     let (addr, data) = stub_http(len, (0, 0), None, None);
     let reg = temp_reg();
     let dir = temp_dir("sconn");
-    // 16KiB 块强制多块路径（默认 1MiB 会因 total_blocks<=1 走单流、不触及 block_worker）
+    // 1 MB 块（下限领域）保持多块路径，触及 block_worker
     let mut a = App::new(
-        Config::from_toml("block_size_http = 16384\n"),
+        Config::from_toml("block_size_http = 1048576\n"),
         reg.to_string_lossy().into_owned(),
     );
     a.add_cli_task(
@@ -781,12 +789,14 @@ async fn single_conn_download_completes() {
 #[tokio::test]
 async fn range_denied_fails_task() {
     let deny = Arc::new(AtomicBool::new(true));
-    let (addr, _data) = stub_http(64 * 1024, (0, 0), None, Some(deny));
+    // v1.16/FR-01-104 对齐：2×1MB 文件保持多块路径；块请求（bytes=0-1048575）非
+    // 探测形（bytes=0-）必入 deny 分支 403
+    let (addr, _data) = stub_http(2 * 1024 * 1024, (0, 0), None, Some(deny));
     let reg = temp_reg();
     let dir = temp_dir("r403");
-    // 16KiB 块强制多块路径（默认 1MiB 会因 total_blocks<=1 走单流、不触及 block_worker）
+    // 1 MB 块（下限领域）保持多块路径，触及 block_worker
     let mut a = App::new(
-        Config::from_toml("block_size_http = 16384\n"),
+        Config::from_toml("block_size_http = 1048576\n"),
         reg.to_string_lossy().into_owned(),
     );
     a.add_cli_task(
@@ -894,12 +904,13 @@ async fn pause_freezes_file_bytes_on_disk() {
 
 #[tokio::test]
 async fn conn_views_have_unique_ids() {
-    let (addr, _data) = stub_http(64 * 1024, (2048, 40), None, None); // ≈51KB/s/连接
+    // v1.16/FR-01-104 对齐：2×1MB 文件 + ≈2.1MB/s/连接，双连接多帧观测窗
+    let (addr, _data) = stub_http(2 * 1024 * 1024, (64 * 1024, 30), None, None);
     let reg = temp_reg();
     let dir = temp_dir("conns");
-    // 16KiB 块强制多块路径（默认 1MiB 会因 total_blocks<=1 走单流、不触及 block_worker）
+    // 1 MB 块（下限领域）保持多块路径，触及 block_worker
     let mut a = App::new(
-        Config::from_toml("block_size_http = 16384\n"),
+        Config::from_toml("block_size_http = 1048576\n"),
         reg.to_string_lossy().into_owned(),
     );
     a.add_cli_task(
@@ -942,13 +953,15 @@ async fn conn_views_have_unique_ids() {
 
 #[tokio::test]
 async fn pause_mid_block_resume_content_intact() {
-    let len = 64 * 1024; // 16KiB 块 → 4 块；暂停点落在块 0 中部
-    let (addr, data) = stub_http(len, (0, 0), Some(6 * 1024), None);
+    // v1.16/FR-01-104 对齐：2×1MB 块；暂停点落在块 0 中部（≈2.1MB/s 限速下
+    // ≈500ms/块，250ms 延时稳落块中）
+    let len = 2 * 1024 * 1024;
+    let (addr, data) = stub_http(len, (64 * 1024, 30), None, None);
     let reg = temp_reg();
     let dir = temp_dir("resm");
-    // 16KiB 块强制多块路径（默认 1MiB 会因 total_blocks<=1 走单流、不触及 block_worker）
+    // 1 MB 块（下限领域）保持多块路径，触及 block_worker
     let mut a = App::new(
-        Config::from_toml("block_size_http = 16384\n"),
+        Config::from_toml("block_size_http = 1048576\n"),
         reg.to_string_lossy().into_owned(),
     );
     a.add_cli_task(
@@ -959,11 +972,11 @@ async fn pause_mid_block_resume_content_intact() {
     );
     assert!(
         wait_until(&mut a, 30, |a| a.tasks[0].state == TaskState::Downloading).await,
-        "慢速滴流应进入下载中"
+        "限速滴流应进入下载中"
     );
     // App 可见 downloaded 是块级粒度（块内进度流结束才回写），故用固定延时
-    // 落在块 0 中部：慢速首连 100B/50ms ≈ 2KB/s，1.5s ≈ 3KB ≪ 16KiB 块
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    // 落在块 0 中部：≈2.1MB/s 限速，250ms ≈ 0.5MB < 1MB 块
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     a.tick().await;
     pause_and_wait_sidecar(&mut a, &dir.join("f.bin.ezr")).await;
     a.on_key(KeyCode::Char(' '), KeyModifiers::empty()); // 恢复（toggle_pause）
@@ -991,13 +1004,19 @@ async fn pause_mid_block_resume_content_intact() {
 #[tokio::test]
 async fn failed_reports_completed_blocks_of_sidecar() {
     let deny = Arc::new(AtomicBool::new(false));
-    // 5KB/s 限速：暂停时机落在块 0 中部（16KiB 块），且不会在暂停前跑完
-    let (addr, _data) = stub_http(64 * 1024, (256, 50), None, Some(Arc::clone(&deny)));
+    // v1.16/FR-01-104 对齐：2×1MB 块；≈2.1MB/s 限速下 250ms 停在块 0 中部
+    //（不会在暂停前跑完 500ms/块）
+    let (addr, _data) = stub_http(
+        2 * 1024 * 1024,
+        (64 * 1024, 30),
+        None,
+        Some(Arc::clone(&deny)),
+    );
     let reg = temp_reg();
     let dir = temp_dir("cdof");
-    // 16KiB 块强制多块路径（默认 1MiB 会因 total_blocks<=1 走单流、不触及 block_worker）
+    // 1 MB 块（下限领域）保持多块路径，触及 block_worker
     let mut a = App::new(
-        Config::from_toml("block_size_http = 16384\n"),
+        Config::from_toml("block_size_http = 1048576\n"),
         reg.to_string_lossy().into_owned(),
     );
     a.add_cli_task(
@@ -1011,8 +1030,8 @@ async fn failed_reports_completed_blocks_of_sidecar() {
         "限速下载应进入下载中"
     );
     // App 可见 downloaded 是块级粒度，用固定延时落在块 0 中部：
-    // 5KB/s 限速下 1s ≈ 4-5KB ≪ 16KiB 块
-    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    // ≈2.1MB/s 限速下 250ms ≈ 0.5MB < 1MB 块
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     a.tick().await;
     pause_and_wait_sidecar(&mut a, &dir.join("f.bin.ezr")).await;
     deny.store(true, Ordering::SeqCst); // 恢复后的块请求一律 403
@@ -1295,5 +1314,78 @@ async fn proxy_dropdown_no_panic_when_taller_than_terminal() {
     );
     assert_eq!(cell(&buf, 12, 11), "╰", "浮层下缘钳在末行 y=11");
     a.shutdown().await;
+    let _ = std::fs::remove_file(&reg);
+}
+
+// ---------------------------------------------------------------------------
+// v1.18/FR-01-51 修订 A+B（操作者 20261009 第十六批指令缺陷改判）：已下载
+// 100% 的文件因校验失败、清码后 R，旧实现经引擎恢复过期 sidecar → 进度回退
+// + 尾巴重传（快速下载无 sidecar 时整体重下）。修订 A = 完成点即时落盘全块
+// 完成口径终态 sidecar；修订 B = 清码 R 文件完整性直判，不经引擎直接收尾。
+// ---------------------------------------------------------------------------
+
+/// 修订 A+B 双直击（多块端到端）：错误 SHA-256 → Failed(Verify) 时盘上必已
+/// 落全块完成口径终态 sidecar（修订 A；旧实现快速下载从未落盘 → load None 红）
+/// → 清码 → R 必须立即 Completed「无校验」（修订 B；旧实现落 Queued 红），
+/// 目标文件在、`.downloading`/sidecar 均删。
+#[tokio::test]
+async fn verify_failed_cleared_checksum_completes_directly_without_redownload() {
+    let len = 2 * 1024 * 1024; // v1.16/FR-01-104：2×1MB 双块多块路径
+    let (addr, data) = stub_http(len, (0, 0), None, None);
+    let reg = temp_reg();
+    let dir = temp_dir("cleared-ck");
+    let mut a = App::new(
+        Config::from_toml("block_size_http = 1048576\n"),
+        reg.to_string_lossy().into_owned(),
+    );
+    a.add_cli_task(
+        format!("http://{addr}/f.bin"),
+        Some(dir.to_string_lossy().into_owned()),
+        Some(1),
+        Some(model::Checksum {
+            algo: "SHA-256",
+            // 与 pattern(len) 实际摘要不符的合法 hex → 校验必败
+            value: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".into(),
+        }),
+    );
+    a.selected = 0;
+    let ok = wait_until(&mut a, 30, |a| a.tasks[0].state == TaskState::Failed).await;
+    assert!(
+        ok,
+        "错误校验值必须让任务落「已失败」（实际状态 {:?}）",
+        a.tasks[0].state
+    );
+    // 修订 A：完成点即时落盘终态 sidecar（校验失败路径 verify() 不删 sidecar，
+    // 此刻盘上必在且台账全块完整）
+    let sc_path = dir.join("f.bin.ezr");
+    let sc = model::sidecar::Sidecar::load(&sc_path.to_string_lossy())
+        .expect("完成点必须已落终态 sidecar（修订 A：旧实现快速下载从未落盘）");
+    assert_eq!(
+        sc.downloaded, len as u64,
+        "终态 sidecar 台账必须全块完整（修订 A）"
+    );
+    // 清码（03-modify-task-05 清空语义）→ R = 文件完整性直判（修订 B）
+    a.tasks[0].checksum = None;
+    a.on_key(KeyCode::Char('r'), KeyModifiers::empty());
+    assert_eq!(
+        a.tasks[0].state,
+        TaskState::Completed,
+        "文件完整必须不经引擎直接收尾（修订 B：旧实现落 Queued 经引擎回退重传）"
+    );
+    assert!(
+        a.toast.as_deref().is_some_and(|t| t.contains("无校验")),
+        "toast 必须含「无校验」（got {:?}）",
+        a.toast
+    );
+    let file = std::fs::read(dir.join("f.bin")).expect("目标文件应就位");
+    assert_eq!(file, *data, "收尾后目标文件内容与服务器一致");
+    assert!(
+        !dir.join("f.bin.downloading").exists(),
+        ".downloading 已改名"
+    );
+    assert!(!sc_path.exists(), "sidecar 已删");
+    assert!(a.tasks[0].verify_ok.is_none(), "无校验完成 verify_ok=None");
+    a.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_file(&reg);
 }
