@@ -36,6 +36,12 @@ pub use supervisor::{TaskSpec, VerifySpec};
 #[cfg(test)]
 #[allow(unused_imports)]
 pub use throttle::Throttle;
+// architect v134：属性测试锁 bucket_step 令牌账本数学（限速策略提取后的
+// 可测核心；同上手法，产品构建不产生该路径，窄接口不受影响）。BURST_SECS/
+// SLEEP_MS 常量随函数一并外借（属性测试的容量/下限口径单源，防测试侧复写常量）。
+#[cfg(test)]
+#[allow(unused_imports)]
+pub use throttle::{bucket_step, BURST_SECS, SLEEP_MS};
 use tokio::sync::mpsc;
 
 /// 引擎命令（App → 引擎）

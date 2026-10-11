@@ -1709,3 +1709,128 @@ proptest! {
         prop_assert_eq!(w.last_push(), last, "last_push = 最后推进时刻");
     }
 }
+
+// ---------------------------------------------------------------------
+// engine::throttle — 令牌桶账本数学（architect v134 策略提取后的属性面：
+// 钳制 / 取走特征化 / 预算守恒 / 等待收束）
+// ---------------------------------------------------------------------
+
+proptest! {
+    /// bucket_step 账本不变量（生成域注记：rate > 0——unlimited 由 `acquire`
+    /// 提前短路，`bucket_step` 契约不含 rate=0，生成域 ⊆ 规格域）：
+    /// ① 取走特征化：taken = min(remaining, 可用)，可用 = min(补币后, 突发容量)；
+    /// ② 预算守恒：taken + 桶余 = 可用（补币后余量要么取走要么留存）；
+    /// ③ 钳制：桶余 ∈ [0, 突发容量]（补币上取容量，取走不越可用）；
+    /// ④ 等待收束：wait = 0 ⟺ remaining ≤ 可用（取足）；未取足时 wait =
+    ///    deficit 换算毫秒与 SLEEP_MS 的较大者（浮点运算序与实现一致，
+    ///    IEEE-754 确定性下精确相等）。
+    #[test]
+    fn prop_throttle_bucket_step_invariants(
+        rate in 1.0f64..1e9,
+        tokens in 0.0f64..1e9,
+        elapsed in 0.0f64..1e4,
+        remaining in 0.0f64..1e12,
+    ) {
+        let cap = rate * crate::engine::BURST_SECS;
+        let available = (tokens + elapsed * rate).min(cap);
+        let (tokens_after, taken, wait) =
+            crate::engine::bucket_step(rate, tokens, elapsed, remaining);
+        prop_assert_eq!(taken, remaining.min(available), "取走 = min(remaining, 可用)");
+        prop_assert_eq!(taken + tokens_after, available, "预算守恒");
+        prop_assert!(tokens_after >= 0.0 && tokens_after <= cap, "桶余钳制 [0, cap]");
+        if remaining <= available {
+            prop_assert_eq!(wait, 0, "取足收束");
+        } else {
+            let deficit_ms = (remaining - available) / rate * 1000.0;
+            prop_assert_eq!(
+                wait,
+                deficit_ms.max(crate::engine::SLEEP_MS as f64) as u64,
+                "等待 = max(deficit 换算, SLEEP_MS)"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// model::task — 断点快照投影与并发口径（architect v134 属性面扩展：
+// apply_chunk_snapshot 替换语义投影 / thread_count 数据面泛化）
+// ---------------------------------------------------------------------
+
+proptest! {
+    /// apply_chunk_snapshot 投影口径：connections 与直接调用 lease_snapshot
+    /// 同参投影一致；chunk_done 为**替换语义**（= max(快照完成数, 事件口径)，
+    /// 不与调用前旧值累加）且 ≥ 事件口径。写侧不按总块数钳制（存储账本
+    /// 保留事件口径原值；展示侧由 `chunk_info()` 读取时钳制——本属性一并
+    /// 锁定「存储越界、读取受控」两段口径）。生成域解耦（notes/rust.md
+    /// 资源维度条款）：先定块数 n_blocks ≤ 4096，total 由 (n-1)*piece + 余数
+    /// 推导（顺带锁定 ceil 口径），内存有界。
+    #[test]
+    fn prop_apply_chunk_snapshot_monotone(
+        n_blocks in 1usize..=4096,
+        piece in 1u64..(1 << 16),
+        extra in 0u64..4096,
+        done_bytes in 0u64..(4096u64 * (1 << 16)),
+        old_done in 0u32..6000,
+    ) {
+        let total = (n_blocks as u64 - 1) * piece + extra.min(piece) + 1;
+        let mut t = crate::model::sample_task();
+        t.total = total;
+        t.block_size = piece;
+        t.concurrency = 4;
+        t.apply_chunk_snapshot(done_bytes, old_done);
+        let (expect_conns, snap) =
+            crate::model::chunk::lease_snapshot(total, done_bytes, 4, piece);
+        prop_assert_eq!(&t.connections, &expect_conns, "连接视图 = lease_snapshot 同参投影");
+        prop_assert_eq!(t.chunk_done, snap.max(old_done), "chunk_done = max(快照, 事件口径)");
+        prop_assert!(t.chunk_done >= old_done, "不越事件口径");
+        let y = u64::from(crate::model::chunk::chunk_total(total, piece));
+        let (x, y_view, _) = t.chunk_info();
+        prop_assert_eq!(y_view, y, "展示块数 = 分块数学");
+        prop_assert!(u64::from(x) <= y, "读取侧钳制：展示完成数不越总块数（即便存储越界）");
+    }
+
+    /// thread_count 数据面口径（FR-01-81 修订二，泛化既有两状态单测）：
+    /// 下载中 = 持有未完成块的连接数（cap>0 ∧ done<cap）；其余任意态 =
+    /// 有效连接数（cap>0）。连接构造域：done ≤ cap（合法账本状态）。
+    #[test]
+    fn prop_thread_count_data_plane(
+        conns in prop::collection::vec(
+            (0u64..(1 << 20), 0u64..(1 << 20), 0u64..(1 << 20)),
+            0..12,
+        ),
+        downloading in prop::bool::ANY,
+    ) {
+        let mut t = crate::model::sample_task();
+        t.state = if downloading {
+            TaskState::Downloading
+        } else {
+            TaskState::Paused
+        };
+        t.connections = conns
+            .iter()
+            .map(|&(s, len, done)| {
+                let end = s.saturating_add(len);
+                crate::model::Connection {
+                    id: 1,
+                    start: s,
+                    end,
+                    done: done.min(end - s),
+                }
+            })
+            .collect();
+        // 口径复述（oracle）：cap = end 饱和减 start（不借 cap() 实现判定分支）
+        let expected = t
+            .connections
+            .iter()
+            .filter(|c| {
+                let cap = c.end.saturating_sub(c.start);
+                if downloading {
+                    cap > 0 && c.done < cap
+                } else {
+                    cap > 0
+                }
+            })
+            .count();
+        prop_assert_eq!(t.thread_count(), expected, "thread_count 数据面口径");
+    }
+}

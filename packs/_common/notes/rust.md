@@ -397,6 +397,11 @@ group_imports = "StdExternalCrate"
   `#[cfg(test)] pub(crate) use`；直接对 `pub(super)` 项做 `pub(crate) use`
   会报 E0364（re-export 不可超越项自身可见性），以及非测试构建报 unused import——
   `#[cfg(test)]` 门控一并解决。零外部 API 面增量的测试基建手法。
+  **自 async IO 外壳提取纯策略时的三件套要一次到位**（实测：策略数学提为纯函数
+  当轮只补了函数 re-export，属性测试编译即 E0603/E0364 连环）：① 纯函数定义处
+  升 `pub`（私有模块内）；② `#[cfg(test)]` 门面 re-export；③ **策略常量随函数
+  一并外借**（容量/阈值类 const 经同一门面 re-export）——属性测试的 oracle 需要
+  容量与下限口径时，若常量不外借，测试侧只能复写字面量成双源，产品调参即静默漂移。
 
 - **`proptest::sample::select` 需要借用或 `Cow<'static, [T]>`**：`select([a, b])`
   会因数组不是 `Cow` 而编译失败；正确形态 `select(&[a, b])`（借用切片）或
