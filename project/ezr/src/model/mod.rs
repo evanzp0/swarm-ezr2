@@ -3,7 +3,8 @@
 //! 包含：任务/状态机基础模型（`Task`）、AIR2 分块计算（`chunk`）、重试策略
 //! （`retry`）、速度滑窗（`speed`）、校验算法表（`checksum`）、sidecar 元数据
 //! （`sidecar`）、续传一致性检查（`consistency`）、配置（`config`）、文件名
-//! 推导（`namegen`）、槽位调度（`slots`）与任务注册表（`registry`）。
+//! 推导（`namegen`）、槽位调度（`slots`）、任务 ID 生成（`idgen`，v1.20 随机
+//! u32 口径）与任务注册表（`registry`）。
 //!
 //! 状态机口径（phase-01 FR-01-30）：01 实际出现 6 态——等待中/下载中/已暂停/
 //! 校验中/已失败/已完成；「后期处理中」与「做种中」为后续期预留（枚举与配色
@@ -13,6 +14,7 @@ pub mod checksum;
 pub mod chunk;
 pub mod config;
 pub mod consistency;
+pub mod idgen;
 pub mod namegen;
 pub mod registry;
 pub mod retry;

@@ -119,13 +119,18 @@ pub(super) fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
             ),
         ]));
     }
+    // 任务 ID 单独一行（v1.20 修订，操作者 20261011 指令：原「ID · 添加于」
+    // 合并行拆分；ID 为随机 u32，仅详情页展示，创建顺序由 added_at 承载）
     lines.push(Line::from(vec![
         Span::raw(" "),
-        dim_label("ID"),
-        Span::styled(
-            format!("{id} · 添加于 {created}", id = t.id, created = t.created),
-            Style::default().fg(DIM),
-        ),
+        dim_label("任务 ID"),
+        Span::styled(format!("{id}", id = t.id), Style::default().fg(DIM)),
+    ]));
+    // 创建时间单独一行（v1.20 修订，操作者 20261011 指令）
+    lines.push(Line::from(vec![
+        Span::raw(" "),
+        dim_label("创建时间"),
+        Span::styled(t.created.clone(), Style::default().fg(DIM)),
     ]));
     lines.push(Line::from(vec![
         Span::raw(" "),

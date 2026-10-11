@@ -146,8 +146,6 @@ pub struct App {
     /// toast 文案
     pub toast: Option<String>,
     toast_until: Option<Instant>,
-    /// 下一个任务 ID
-    pub next_id: u32,
     /// 下载槽位上限（配置 `download_slots`，默认 5，D13）
     pub max_slots: usize,
     /// 引擎句柄
@@ -230,7 +228,8 @@ impl App {
         }
         let default_proxy_sel = 0;
         // 崩溃恢复：注册表 → 任务列表；逐任务合并 sidecar 断点（FR-01-23）
-        let (tasks, next_id) = Self::restore(&registry_path);
+        // （v1.20：任务 ID 随快照保留，无 next_id 派生）
+        let tasks = Self::restore(&registry_path);
         let mut app = App {
             tasks,
             selected: 0,
@@ -248,7 +247,6 @@ impl App {
             quit: false,
             toast: Some("EZR Downloader 就绪".to_string()),
             toast_until: Some(Instant::now() + std::time::Duration::from_secs(3)),
-            next_id,
             max_slots: cfg.download_slots,
             engine,
             evt_rx,
@@ -291,9 +289,9 @@ impl App {
     }
 
     /// 从注册表与 sidecar 恢复任务（FR-01-23：下载中→等待中排队、断点合并）
-    fn restore(path: &str) -> (Vec<Task>, u32) {
+    fn restore(path: &str) -> Vec<Task> {
         let Some(reg) = Registry::load(path) else {
-            return (Vec::new(), 1);
+            return Vec::new();
         };
         let mut tasks = reg.restore_tasks();
         for t in &mut tasks {
@@ -304,7 +302,16 @@ impl App {
                 t.resumable = !sc.non_resumable;
             }
         }
-        (tasks, reg.next_id)
+        tasks
+    }
+
+    /// 分配新任务 ID（v1.20，操作者 20261011 指令）：u32 随机数 + 任务全集
+    /// 查重（含已完成/失败历史），0 保留——取代顺序自增 `next_id`，注册表
+    /// 簿记、空列表不回退、`u32::MAX` 溢出回绕三个问题一并消除（口径与
+    /// 唯一性论证见 `model::idgen`）
+    #[must_use]
+    pub fn alloc_task_id(&self) -> u32 {
+        crate::model::idgen::alloc_task_id(|cand| self.tasks.iter().any(|t| t.id == cand))
     }
 
     /// braille 转轮字符

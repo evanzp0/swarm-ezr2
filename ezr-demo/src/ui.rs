@@ -8,7 +8,8 @@
 //! 已完成 页签并以 │ 分隔）。内容区右侧 = │ 竖线分隔符 + 左右各 1 列空白 + 内嵌
 //! 无边框流量图（占内容区全高 3 行、宽为内容区 20%，仅绘制下行流量，上传流量
 //! 不绘制）。主区：左列 58% = 任务列表；右列 42% = 任务详情
-//! （9 行内容）及并发连接面板（占右列余下全部高度）。页脚 = 快捷键与提示。
+//! （10 行内容 = 12 行定高，v1.20：任务 ID 与创建时间拆两行）及并发连接面板
+//! （占右列余下全部高度）。页脚 = 快捷键与提示。
 //! 流量图：单色面积图——逐列自底向上填充，顶线以 ▁▂▃▄▅▆▇█ 八级部分块呈现
 //! 1/8 格亚字符精度的平滑曲线，全图统一一种颜色（下载淡蓝，REQ-8.5）；
 //! 序列经双向 EMA 平滑 + 窗口 min–max 自适应缩放，每列取双子样本较大值保尖峰
@@ -557,7 +558,10 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect, with_chart: bool) {
     let lab = |s: &str| Span::styled(s.to_string(), Style::default().fg(DIM));
     let val = |s: &str| Span::styled(s.to_string(), Style::default().fg(FG));
     let dl_now = |s: &str| {
-        Span::styled(s.to_string(), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
+        Span::styled(
+            s.to_string(),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )
     };
     let ul_now = |s: &str| Span::styled(s.to_string(), Style::default().fg(MAGENTA));
     let dl_peak = |s: &str| Span::styled(s.to_string(), Style::default().fg(LIGHT_BLUE));
@@ -583,7 +587,12 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect, with_chart: bool) {
     ]);
     f.render_widget(
         Paragraph::new(fields),
-        Rect { x: inner.x, y: inner.y, width: fields_w, height: 1 },
+        Rect {
+            x: inner.x,
+            y: inner.y,
+            width: fields_w,
+            height: 1,
+        },
     );
 
     // 行 2：横向分割线（贯通字段区宽、止于 │ 分隔符；图区让位给波形不画线）
@@ -591,7 +600,12 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect, with_chart: bool) {
         let sep = "─".repeat(fields_w as usize);
         f.render_widget(
             Paragraph::new(Span::styled(sep, Style::default().fg(BORDER))),
-            Rect { x: inner.x, y: inner.y + 1, width: fields_w, height: 1 },
+            Rect {
+                x: inner.x,
+                y: inner.y + 1,
+                width: fields_w,
+                height: 1,
+            },
         );
     }
 
@@ -644,7 +658,12 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect, with_chart: bool) {
         }
         f.render_widget(
             Paragraph::new(Line::from(spans)),
-            Rect { x: inner.x, y: row_y, width: fields_w, height: 1 },
+            Rect {
+                x: inner.x,
+                y: row_y,
+                width: fields_w,
+                height: 1,
+            },
         );
     }
 
@@ -654,7 +673,12 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect, with_chart: bool) {
         for y in 0..inner.height {
             f.render_widget(
                 Paragraph::new(Span::styled("│", Style::default().fg(BORDER))),
-                Rect { x: sep_x, y: inner.y + y, width: 1, height: 1 },
+                Rect {
+                    x: sep_x,
+                    y: inner.y + y,
+                    width: 1,
+                    height: 1,
+                },
             );
         }
         // 图：分隔符右侧留 1 列空白、图区右缘再留 1 列空白（无边框、占全高）
@@ -688,8 +712,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     // 尾部余量 ≥ 3 行（缺的只是空行）时额外渲染一个末尾部分块——
     // Paragraph 渲染进 3 行区域自动裁掉末尾空行，不吞边框
     let ih = ITEM_HEIGHT as usize;
-    let rows = inner.height as usize / ih
-        + usize::from(inner.height as usize % ih >= ih - 1);
+    let rows = inner.height as usize / ih + usize::from(inner.height as usize % ih >= ih - 1);
 
     if rows == 0 || idxs.is_empty() {
         let msg = if idxs.is_empty() {
@@ -813,11 +836,15 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     }
     lines.push(Line::from(vec![
         Span::raw(" "),
-        label("ID"),
-        Span::styled(
-            format!("{id} · 添加于 {created}", id = t.id, created = t.created),
-            Style::default().fg(DIM),
-        ),
+        label("任务 ID"),
+        Span::styled(format!("{id}", id = t.id), Style::default().fg(DIM)),
+    ]));
+    // 创建时间单独一行（v1.20 生产同步，操作者 20261011 指令：原「ID · 添加于」
+    // 合并行拆分；ID 为随机 u32，仅详情页展示）
+    lines.push(Line::from(vec![
+        Span::raw(" "),
+        label("创建时间"),
+        Span::styled(t.created.clone(), Style::default().fg(DIM)),
     ]));
     lines.push(Line::from(vec![
         Span::raw(" "),
@@ -858,7 +885,10 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
             ck.algo.to_string(),
             Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
         ));
-        ck_line.push(Span::styled(format!(" · {}", vshort), Style::default().fg(FG)));
+        ck_line.push(Span::styled(
+            format!(" · {}", vshort),
+            Style::default().fg(FG),
+        ));
         ck_line.push(Span::styled(st, Style::default().fg(stc)));
         lines.push(Line::from(ck_line));
     }
@@ -1013,8 +1043,16 @@ fn draw_chart(f: &mut Frame, app: &App, area: Rect) {
             })
             .collect();
         f.render_widget(
-            Paragraph::new(Line::from(Span::styled(line, Style::default().fg(LIGHT_BLUE)))),
-            Rect { x: area.x, y: area.y + row as u16, width: area.width, height: 1 },
+            Paragraph::new(Line::from(Span::styled(
+                line,
+                Style::default().fg(LIGHT_BLUE),
+            ))),
+            Rect {
+                x: area.x,
+                y: area.y + row as u16,
+                width: area.width,
+                height: 1,
+            },
         );
     }
 }
@@ -1146,7 +1184,11 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled(" ", Style::default().bg(bg)),
                 // 下载=淡蓝（同头部 ↓/详情速度配色），待命显示 -
                 cell(
-                    if dl_on { fmt_speed(c.speed) } else { "-".to_string() },
+                    if dl_on {
+                        fmt_speed(c.speed)
+                    } else {
+                        "-".to_string()
+                    },
                     8,
                     if dl_on { LIGHT_BLUE } else { DIM2 },
                 ),
@@ -1155,7 +1197,11 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled(" ", Style::default().bg(bg)),
                 // 上传=品红（同头部 ↑ 配色）；待命显示 -
                 cell(
-                    if up_on { fmt_speed(c.up_speed) } else { "-".to_string() },
+                    if up_on {
+                        fmt_speed(c.up_speed)
+                    } else {
+                        "-".to_string()
+                    },
                     8,
                     if up_on { MAGENTA } else { DIM2 },
                 ),
@@ -1168,7 +1214,11 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled(" ", Style::default().bg(bg)),
                 // 下载=淡蓝（同头部 ↓/详情速度配色），待命显示 -
                 cell(
-                    if dl_on { fmt_speed(c.speed) } else { "-".to_string() },
+                    if dl_on {
+                        fmt_speed(c.speed)
+                    } else {
+                        "-".to_string()
+                    },
                     8,
                     if dl_on { LIGHT_BLUE } else { DIM2 },
                 ),
@@ -1828,13 +1878,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
         if app.show_panes {
             // 主区：左列 58% = 任务列表（「任务队列」面板已并入头部，列表自头部正下方
-            // 起、占满左列全高）；右列 42% = 任务详情（9 行内容 + 边框 = 11 行）+
+            // 起、占满左列全高）；右列 42% = 任务详情（10 行内容 + 边框 = 12 行；
+            // v1.20 生产同步：任务 ID 与创建时间拆分两行）+
             // 并发连接面板（占余下全部高度）
             let cols = Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
                 .split(outer[1]);
             draw_list(f, app, cols[0]);
             let right =
-                Layout::vertical([Constraint::Length(11), Constraint::Min(6)]).split(cols[1]);
+                Layout::vertical([Constraint::Length(12), Constraint::Min(6)]).split(cols[1]);
             draw_detail(f, app, right[0]);
             draw_conns(f, app, right[1]);
         } else {

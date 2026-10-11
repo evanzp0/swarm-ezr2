@@ -46,7 +46,8 @@ impl App {
         };
         let protocol = protocol_of_url(&url);
         let ts = unix_now();
-        let id = self.next_id;
+        // v1.20：任务 ID = u32 随机数 + 任务全集查重（model::idgen），不再顺序自增
+        let id = self.alloc_task_id();
         let t = Task::new_queued(
             id,
             name.clone(),
@@ -60,7 +61,6 @@ impl App {
             crate::model::config::ProxyChoice::Direct,
             ts,
         );
-        self.next_id += 1;
         self.tasks.push(t);
         if resumed {
             self.set_toast(format!(
@@ -91,7 +91,10 @@ mod cli_add_tests {
         assert_eq!(app.tasks[0].name, "f.bin");
         // 同目录同名：第二个任务经 namegen::dedupe（任务表+盘上口径）追加序号
         assert_eq!(app.tasks[1].name, "f.bin.1");
-        assert_eq!(app.next_id, 3);
+        // v1.20：随机分配的 ID 互不相同且非零（0 为保留哨兵）
+        assert_ne!(app.tasks[0].id, app.tasks[1].id, "随机分配的 ID 互不相同");
+        assert_ne!(app.tasks[0].id, 0);
+        assert_ne!(app.tasks[1].id, 0);
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }

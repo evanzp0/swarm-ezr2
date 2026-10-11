@@ -180,7 +180,8 @@ impl App {
             return;
         }
         let base_name = namegen::derive_name(None, None, &url);
-        let id = self.next_id;
+        // v1.20：任务 ID = u32 随机数 + 任务全集查重（model::idgen），不再顺序自增
+        let id = self.alloc_task_id();
         // FR-01-26 断点自动接续：既有 sidecar 同 URL 同路径 → 接续原名
         //（扩展名单源 namegen::SIDECAR_EXT，architect v116；join 语义保持本点
         // 历史口径：目录尾 '/' 已归一，'\\' 不归一）
@@ -208,7 +209,6 @@ impl App {
             Ok(v) if (1..=64).contains(&v) => v,
             _ => self.cfg.http_concurrency,
         };
-        self.next_id += 1;
         // 校验值来源②（FR-01-50/D14）：未显式提供时查保存目录伴随文件
         let checksum = Self::resolve_checksum(&dir, &name, checksum);
         let ts = unix_now();

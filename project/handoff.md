@@ -10,8 +10,8 @@
 
 ### 项目与需求
 - EZR Downloader（Rust / TUI 下载器，01 期：HTTP/HTTPS 真实下载内核与 TUI 正式版）。
-  需求权威来源 `project/mission.md`（v1.16，分期模式）+ `project/mission/phase-01.md`
-  （v1.19，D34 v1.18 注记含 20261011 直判锚定行）。
+  需求权威来源 `project/mission.md`（v1.20，分期模式）+ `project/mission/phase-01.md`
+  （v1.20，任务 ID 随机化 + 详情拆行）。
 
 ### 产物总账
 | 节点/切片 | 产物 | 完成情况 | 验证状态 |
@@ -32,6 +32,7 @@
 | cleaner（v132-clean-v119） | 零改动清理轮：触碰面复核（无清理点）+ 新沙箱工具链重装 + 四度量复核 + 覆盖率基线首次登记 | 已交付 | **2535P/0F**、clippy 0、fmt 0、arch 14 过、覆盖率 94.28%、CPD 51 tiles、scan 2161 点/54 文件、CRAP 门禁 76 条（触碰面零新增） |
 | specifier（v133-spec-anchor-fallback） | 修订 B fallback 锚定并入正式账：phase-01.md D34 v1.18 注记补「操作者 20261011 直判认可维持」锚定行——v132 交接会话外登记项闭环 | 已交付 | 纯注记补账：git diff 仅 phase-01.md 1 行（D34），代码/feature/QA/度量零改动 |
 | architect（v134-arch-clean，本轮） | 四阶段架构评审（零结构性违规）+ throttle 令牌账本纯策略提取（bucket_step 策略/IO 分离，机械等价）+ 属性测试 57→60 + 新沙箱工具链重装（nightly + PMD）+ CPD 复测 51 同形 | 已交付 | **2546P/0F**（属性 60P 独立计数）、clippy 0、fmt 0、arch 14 过、CPD 51 tiles 与 v132 基线逐 tile 同形 |
+| 会话外登记（操作者直判 v1.20，20261011 指令） | 任务 ID 设计改版：u32 随机数分配（`model::idgen` 单源：SplitMix64 查重分配、0 保留哨兵），`next_id` 全链路退役（App 字段/注册表持久化/测试靶替换），注册表 v1 格式零迁移（旧 next_id 字段反序列化忽略）；详情面板「任务 ID」「创建时间」拆分两行、详情定高 11→12 行（FR-01-80/FR-01-94⑥ 修订 + 两 feature 场景同步）；ezr-demo 同步（随机 ID + 两行详情 + 需求文档 + 预填轮换口径保持 + release 二进制刷新）；归档前复核补遗：`tests/gen/detail_stripped.rs` 因 rustfmt 收尾晚于夹具重生成而漂移，已按守卫口径重生成（经验沉淀 → notes/rust.md「剥头夹具再生成排在 fmt 之后」条目） | 已交付 | 产品 **2578P/0F** 实测（13 测试二进制 `cargo test --all-targets`，账面历史口径 2546 为 v134 计数）、clippy 0、fmt clean；demo cargo check 过 + smoke_v_sync 全过 + verify_ezr 回归（场景 C Fedora 轮换口径保持） |
 
 ### 遗留受限项（当前有效）
 - **新沙箱工具链部分重装（v134 轮）**：Rust nightly 1.101.0（2026-10-10；rustup minimal +

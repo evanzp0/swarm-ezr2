@@ -33,8 +33,9 @@
 //!   enforce_invariants 幂等（两遍 has_slot 向量一致）+ 状态语义；
 //! - `timefmt`：分钟取整不变性、定宽形状、字典序单调；
 //! - `consistency`：等同 Valid、MissingStamp 判据、URL/大小差异必失效、确定性；
-//! - `registry` 持久化往返：from_tasks → JSON → load 全量保真 + next_id
-//!   不变量；快照投影往返 TaskSnapshot → Task → TaskSnapshot 保真。
+//! - `registry` 持久化往返：from_tasks → JSON → load 全量保真 + 任务 ID
+//!   随快照保留（v1.20：无 next_id，ID 随机分配随快照持久化）；快照投影
+//!   往返 TaskSnapshot → Task → TaskSnapshot 保真。
 
 use crossterm::event::KeyCode;
 use proptest::prelude::*;
@@ -720,12 +721,11 @@ proptest! {
     }
 
     /// Registry 持久化往返 + 快照投影保真：from_tasks → JSON → parse
-    /// 全量保真（JSON 串相等）、next_id ≥ max(id)+1；快照 → Task → 快照
+    /// 全量保真（JSON 串相等）、任务 ID 随快照保留；快照 → Task → 快照
     /// 往返不丢字段（崩溃恢复投影的数据面基础）
     #[test]
     fn prop_registry_round_trip_and_projection(
         k in 0usize..6,
-        next_id in 1u32..1000,
         states in prop::collection::vec(
             prop::sample::select(&[
                 crate::model::TaskState::Queued,
@@ -761,11 +761,11 @@ proptest! {
             }
             tasks.push(t);
         }
-        let reg = Registry::from_tasks(&tasks, next_id);
-        prop_assert!(
-            reg.next_id > tasks.iter().map(|t| t.id).max().unwrap_or(0),
-            "next_id 恒大于最大任务 id"
-        );
+        let reg = Registry::from_tasks(&tasks);
+        // 任务 ID 随快照保留（随机 u32 分配后持久化/恢复一致）
+        for (i, snap) in reg.tasks.iter().enumerate() {
+            prop_assert_eq!(snap.id, tasks[i].id, "任务 ID 随快照保留");
+        }
         let text = serde_json::to_string(&reg).unwrap();
         let loaded = serde_json::from_str::<Registry>(&text).unwrap();
         prop_assert_eq!(

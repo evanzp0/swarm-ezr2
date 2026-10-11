@@ -101,6 +101,12 @@
 > （FR-01-87 修订，D30），任务级/全局速度实时化消除块内 0 B/s 平台期（新增 FR-01-105）。
 > 规格 `features/03-modify-task.feature`（场景 02 修订）、`features/01-persistence-config.feature`
 > （场景 04/05 同步）、`features/01-tui-display.feature`（场景 17 新增），QA 套件随场景同步。
+> v1.20（操作者 20261011 指令，与 phase-01 v1.20 同步）：任务 ID 设计改版——u32 随机数
+> 分配（分配期查重、0 保留，`model::idgen` 单源），`next_id` 顺序自增与注册表持久化字段
+> 退役（任务清空不回退、ID 耗尽回绕、创建数量泄漏三问题消除；旧注册表零迁移）；详情面板
+> 「任务 ID」「创建时间」拆分两行，详情定高 11→12 行。规格与 ezr-demo 同步（见 phase-01
+> v1.20 注记）。
+
 
 ---
 

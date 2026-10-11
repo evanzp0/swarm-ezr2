@@ -185,9 +185,10 @@ async fn keys_u_moves_task_up() {
 
 // ------------------------------------------------------------- app/mod.rs ---
 
-/// 靶 mod 210:9：restore 必须从注册表恢复任务与 next_id
+/// 靶 v1.20 替换（原 mod 210:9 next_id 延续靶随顺序自增退役）：restore 必须
+/// 从注册表恢复任务及其随机 ID（ID 跨会话保留 = sidecar task.id 关联的前提）
 #[tokio::test]
-async fn restore_keeps_tasks_and_next_id() {
+async fn restore_keeps_tasks_and_ids() {
     let reg = std::env::temp_dir().join(format!("ezr-hard-restore-{}.json", std::process::id()));
     let dir = std::env::temp_dir().join(format!("ezr-hard-restore-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -204,10 +205,16 @@ async fn restore_keeps_tasks_and_next_id() {
         None,
         None,
     );
+    let ids_before: Vec<u32> = a1.tasks.iter().map(|t| t.id).collect();
+    assert_eq!(ids_before.len(), 2);
     a1.shutdown().await;
     let a2 = App::new(Config::default(), reg.to_string_lossy().into_owned());
     assert_eq!(a2.tasks.len(), 2, "重启后任务必须恢复（恒空变异体不成立）");
-    assert_eq!(a2.next_id, 3, "next_id 必须延续（恒 1 变异体不成立）");
+    let ids_after: Vec<u32> = a2.tasks.iter().map(|t| t.id).collect();
+    assert_eq!(
+        ids_after, ids_before,
+        "任务 ID 必须跨会话保留（恒重派变异体不成立）"
+    );
     shutdown(a2).await;
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_file(&reg);

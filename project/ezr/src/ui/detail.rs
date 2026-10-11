@@ -1,4 +1,5 @@
-//! detail — 任务详情面板（定高 11 行 = 9 行内容 + 上下边框，FR-01-94 ⑥）
+//! detail — 任务详情面板（定高 12 行 = 10 行内容 + 上下边框，FR-01-94 ⑥；
+//! v1.20 修订，操作者 20261011 指令：任务 ID 与创建时间拆分两行）
 //!
 //! v1.14（FR-01-100/101，对齐 ezr-demo 源码修订-3/5/6/7）：类型行去并发数；
 //! 「校验」「URL」字段名 = 淡蓝下划线链接样式 + 热区每帧回填（点击复制见 app/mouse）。
@@ -123,13 +124,18 @@ pub(super) fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
             ),
         ]));
     }
+    // 任务 ID 单独一行（v1.20 修订，操作者 20261011 指令：原「ID · 添加于」
+    // 合并行拆分；ID 为随机 u32，仅详情页展示，创建顺序由 added_at 承载）
     lines.push(Line::from(vec![
         Span::raw(" "),
-        dim_label("ID"),
-        Span::styled(
-            format!("{id} · 添加于 {created}", id = t.id, created = t.created),
-            Style::default().fg(DIM),
-        ),
+        dim_label("任务 ID"),
+        Span::styled(format!("{id}", id = t.id), Style::default().fg(DIM)),
+    ]));
+    // 创建时间单独一行（v1.20 修订，操作者 20261011 指令）
+    lines.push(Line::from(vec![
+        Span::raw(" "),
+        dim_label("创建时间"),
+        Span::styled(t.created.clone(), Style::default().fg(DIM)),
     ]));
     lines.push(Line::from(vec![
         Span::raw(" "),

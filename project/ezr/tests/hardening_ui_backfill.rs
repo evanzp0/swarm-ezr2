@@ -389,14 +389,20 @@ async fn confirm_add_dedupe_renames_on_task_table_match() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// 靶 198:22（+=→-=）：next_id 单调递增
+/// 靶 v1.20 替换（原 198:22 next_id 递增靶随顺序自增退役）：添加后任务取得
+/// 随机 u32 ID（非零）且与既有任务不撞号
 #[tokio::test]
-async fn confirm_add_increments_next_id() {
+async fn confirm_add_assigns_unique_random_id() {
     let mut a = make_app_in("ezr-h118", "nid");
-    let before = a.next_id;
+    // 存量任务占用其 ID（含已完成历史口径），新任务不得撞号
+    let existing_ids: Vec<u32> = a.tasks.iter().map(|t| t.id).collect();
     add_via_dialog(&mut a, "http://example.com/fresh.bin", "/tmp");
-    assert_eq!(a.tasks[0].id, before, "新任务取得当前 id");
-    assert_eq!(a.next_id, before + 1, "next_id 递增 1");
+    let fresh = a.tasks.last().expect("新任务已创建").id;
+    assert_ne!(fresh, 0, "0 为保留哨兵，不得分配");
+    assert!(
+        !existing_ids.contains(&fresh),
+        "新任务 ID 不得与既有任务撞号"
+    );
     a.shutdown().await;
 }
 
@@ -722,7 +728,9 @@ async fn detail_chunk_row_shows_blocks() {
     t.save_dir = "/tmp".into();
     a.tasks.push(t);
     a.selected = 0;
-    let term = render_full(&mut a, 100, 25);
+    // v1.20：详情定高 12 行（10 内容行）——终端 25 行时主区 16 行会压缩面板
+    // 裁掉分块行，夹具加高至 28 行保证 12 行面板完整渲染
+    let term = render_full(&mut a, 100, 28);
     let rows = row_strings(&term);
     let hit = rows.iter().find(|r| r.contains("分 块"));
     assert!(hit.is_some(), "分块行出现");

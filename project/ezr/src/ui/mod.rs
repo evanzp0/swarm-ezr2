@@ -7,7 +7,8 @@
 //! │ 竖线分隔符（贯通全高）+ 左右各 1 列空白 + 内嵌无边框单色面积流量图
 //! （占内容区全高 3 行、宽 20%，仅绘下行流量，八级部分块 ▁▂▃▄▅▆▇█ 亚字符
 //! 精度，全图仅一种颜色 = 下载淡蓝）。主区：左列 58% = 任务列表（占满全高）；
-//! 右列 42% = 任务详情（9 行内容 + 边框 = 定高 11 行）及并发连接面板
+//! 右列 42% = 任务详情（10 行内容 + 边框 = 定高 12 行；v1.20：任务 ID 与
+//! 创建时间拆分两行）及并发连接面板
 //! （占右列余下全部高度；仅「下载中」显示明细，HTTP 三列：序号/下载速度/
 //! 累计下载）。页脚 = 快捷键与提示（G 提示「面板」）。窄终端 / 紧凑布局
 //! （G 键，FR-01-98）降级：头部与列表满宽、右栏两面板不渲染（流量图仅在
@@ -130,12 +131,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
         if app.show_panes {
             // 主区：左列 58% = 任务列表（自头部正下方起、占满左列全高）；
-            // 右列 42% = 任务详情（定高 11 行）+ 并发连接面板（占余下全部高度）
+            // 右列 42% = 任务详情（定高 12 行，v1.20）+ 并发连接面板（占余下全部高度）
             let cols = Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
                 .split(outer[1]);
             draw_list(f, app, cols[0]);
             let right =
-                Layout::vertical([Constraint::Length(11), Constraint::Min(6)]).split(cols[1]);
+                Layout::vertical([Constraint::Length(12), Constraint::Min(6)]).split(cols[1]);
             draw_detail(f, app, right[0]);
             draw_conns(f, app, right[1]);
         } else {
@@ -1058,12 +1059,12 @@ mod ui_v113_tests {
                 .any(|r| r.trim().contains(" 1 ") && r.contains('-')),
             "数据行按序号展示、待命速度显示 -"
         );
-        // 详情定高 11 行：右列详情 y=5..16，明细面板标题在 y=16
-        let row16: String = rows[16].replace(' ', "");
+        // 详情定高 12 行（v1.20）：右列详情 y=5..17，明细面板标题在 y=17
+        let row17: String = rows[17].replace(' ', "");
         assert!(
-            row16.contains("并发连接"),
-            "明细面板紧随详情 11 行: {}",
-            rows[16]
+            row17.contains("并发连接"),
+            "明细面板紧随详情 12 行: {}",
+            rows[17]
         );
         // 状态门槛：已暂停 → 空面板 + 活跃 0 + 面板不接收滚轮
         app.tasks[0].state = TaskState::Paused;
@@ -1192,7 +1193,8 @@ mod ui_v114_tests {
         app.tasks.push(t);
         let term = render_detail(&mut app, 110, 24);
         // 手工逐格拼接对 CJK 含续格占位（buffer_view 跳过）→ 去空格后断言
-        let type_row = row_strings(&term)[3].replace(' ', ""); // inner(1,1) 起：0 名 / 1 ID / 2 类型
+        // inner(1,1) 起：0 名 / 1 任务ID / 2 创建时间 / 3 类型（v1.20 两行拆分）
+        let type_row = row_strings(&term)[4].replace(' ', "");
         assert!(type_row.contains("HTTP"), "协议名在位: {type_row}");
         assert!(
             type_row.contains("支持断点续传"),
@@ -1225,7 +1227,8 @@ mod ui_v114_tests {
         let term = render_detail(&mut app, 110, 24);
         let g = style_grid(&term);
 
-        // 行结构（inner y=1 起）：1 名 / 2 ID / 3 类型 / 4 校验 / 5 大小 / 6 保存 / 7 URL / 8 分块
+        // 行结构（inner y=1 起）：1 名 / 2 任务ID / 3 创建时间 / 4 类型 / 5 校验 /
+        // 6 大小 / 7 保存 / 8 URL / 9 分块（v1.20：任务 ID/创建时间拆两行）
         let underlined = |x: usize, y: usize| -> (Color, bool) {
             let (fg, m) = g[y][x];
             (fg, m.contains(Modifier::UNDERLINED))
@@ -1233,39 +1236,39 @@ mod ui_v114_tests {
 
         // 「校验」字段名（CJK 2 字各占 2 格，首格 x=2/4）：淡蓝 + 下划线
         for x in [2, 4] {
-            let (fg, ul) = underlined(x, 4);
+            let (fg, ul) = underlined(x, 5);
             assert_eq!(fg, LIGHT_BLUE, "校验字段名淡蓝 x={x}");
             assert!(ul, "校验字段名带下划线 x={x}");
         }
         // 填充空格（x≥6）不带下划线（修订-6：下划线仅覆盖文字部分）
         for x in [6, 7, 8] {
-            let (_, ul) = underlined(x, 4);
+            let (_, ul) = underlined(x, 5);
             assert!(!ul, "校验填充空格无下划线 x={x}");
         }
         // 「URL」字段名（x 2..5）：淡蓝 + 下划线；填充空格无下划线
         for x in [2, 3, 4] {
-            let (fg, ul) = underlined(x, 7);
+            let (fg, ul) = underlined(x, 8);
             assert_eq!(fg, LIGHT_BLUE, "URL 字段名淡蓝 x={x}");
             assert!(ul, "URL 字段名带下划线 x={x}");
         }
         for x in [5, 7, 9] {
-            let (_, ul) = underlined(x, 7);
+            let (_, ul) = underlined(x, 8);
             assert!(!ul, "URL 填充空格无下划线 x={x}");
         }
         // 其余字段名仍暗灰无下划线（类型行「类」字）
-        let (fg, ul) = underlined(2, 3);
+        let (fg, ul) = underlined(2, 4);
         assert_eq!(fg, DIM, "类型标签仍暗灰");
         assert!(!ul, "类型标签无下划线");
 
         // 热区回填：x = inner.x + 1 = 2、宽 9、高 1；y = inner.y + 行号
         assert_eq!(
             app.detail_url_rect,
-            Some(ratatui::layout::Rect::new(2, 7, 9, 1)),
+            Some(ratatui::layout::Rect::new(2, 8, 9, 1)),
             "URL 热区"
         );
         assert_eq!(
             app.detail_ck_rect,
-            Some(ratatui::layout::Rect::new(2, 4, 9, 1)),
+            Some(ratatui::layout::Rect::new(2, 5, 9, 1)),
             "校验热区"
         );
         app.shutdown().await;

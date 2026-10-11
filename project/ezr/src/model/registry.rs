@@ -2,6 +2,12 @@
 //!
 //! 全部任务（含已完成/已失败历史）跨会话保留；启动时恢复任务列表与历史，
 //! 「下载中」任务重启后回到「等待中」按序排队（FR-01-23）。
+//!
+//! 兼容性（v1.20，操作者 20261011 指令）：任务 ID 改随机 u32 分配
+//! （`model::idgen`），注册表不再持久化 `next_id`——旧版 JSON 的多余
+//! `next_id` 字段反序列化时被忽略（零迁移）；新文件缺该字段，旧版程序加载
+//! 会因缺字段失败 → 按全新注册表处理（回滚降级可接受）。格式版本保持 1
+//! （字段集随版本演进不漂移，版本闸门语义不变）。
 
 use serde::{Deserialize, Serialize};
 
@@ -52,9 +58,7 @@ impl From<ProxyChoiceCompat> for ProxyChoice {
 pub struct Registry {
     /// 格式版本
     pub version: u32,
-    /// 下一个任务 ID
-    pub next_id: u32,
-    /// 任务快照（含已完成/已失败历史）
+    /// 任务快照（含已完成/已失败历史；任务 ID 随快照保留，随机 u32）
     pub tasks: Vec<TaskSnapshot>,
 }
 
@@ -196,17 +200,16 @@ impl Registry {
     pub fn new() -> Registry {
         Registry {
             version: REGISTRY_VERSION,
-            next_id: 1,
             tasks: Vec::new(),
         }
     }
 
-    /// 从运行时任务列表构建（`next_id` 取最大 id + 1）
+    /// 从运行时任务列表构建（v1.20：ID 改随机分配，不再持久化 `next_id`——
+    /// 任务 ID 唯一性由分配期查重保证（`model::idgen`），恢复侧无需派生）
     #[must_use]
-    pub fn from_tasks(tasks: &[Task], next_id: u32) -> Registry {
+    pub fn from_tasks(tasks: &[Task]) -> Registry {
         Registry {
             version: REGISTRY_VERSION,
-            next_id: next_id.max(tasks.iter().map(|t| t.id + 1).max().unwrap_or(1)),
             tasks: tasks.iter().map(TaskSnapshot::from).collect(),
         }
     }
@@ -267,8 +270,28 @@ mod tests {
     use super::*;
     use crate::model::sample_task;
 
+    /// v1.20 兼容：旧版注册表 JSON 含 next_id 字段 → 反序列化忽略未知字段
+    /// 照常加载（零迁移；任务 ID 随快照保留）
     #[test]
-    fn roundtrip_and_next_id() {
+    fn legacy_registry_with_next_id_field_still_loads() {
+        let mut t = sample_task();
+        t.id = 5;
+        let reg = Registry::from_tasks(&[t]);
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg-legacy");
+        let p = dir.join("registry.json");
+        reg.save(p.to_str().unwrap()).unwrap();
+        // 注入旧版 next_id 字段（模拟 v1.19 及更早产物）
+        let legacy = std::fs::read_to_string(&p)
+            .unwrap()
+            .replacen('{', "{ \"next_id\": 23,", 1);
+        std::fs::write(&p, legacy).unwrap();
+        let loaded = Registry::load(p.to_str().unwrap()).expect("旧注册表应兼容加载");
+        assert_eq!(loaded.tasks[0].id, 5, "任务 ID 随快照保留");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn roundtrip_preserves_fields() {
         let mut t = sample_task();
         t.id = 5;
         t.state = TaskState::Completed;
@@ -276,12 +299,12 @@ mod tests {
             algo: "MD5",
             value: "d".repeat(32),
         });
-        let reg = Registry::from_tasks(&[t.clone()], 6);
+        let reg = Registry::from_tasks(&[t.clone()]);
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg");
         let p = dir.join("registry.json");
         reg.save(p.to_str().unwrap()).unwrap();
         let loaded = Registry::load(p.to_str().unwrap()).unwrap();
-        assert_eq!(loaded.next_id, 6);
+        assert_eq!(loaded.tasks[0].id, 5, "任务 ID 随快照往返保留");
         assert_eq!(loaded.tasks.len(), 1);
         let back = loaded.restore_tasks();
         assert_eq!(back[0].name, t.name);
@@ -298,7 +321,7 @@ mod tests {
         t.retries = 3;
         t.error = Some("连接被重置".to_string());
         t.retry_in = None;
-        let reg = Registry::from_tasks(&[t], 2);
+        let reg = Registry::from_tasks(&[t]);
         let back = reg.restore_tasks();
         assert_eq!(back[0].state, TaskState::FailedPaused, "挂起态跨会话保留");
         assert_eq!(back[0].error.as_deref(), Some("连接被重置"));
@@ -312,7 +335,7 @@ mod tests {
     fn legacy_global_proxy_value_maps_to_direct() {
         let mut t = sample_task();
         t.proxy = ProxyChoice::Direct;
-        let reg = Registry::from_tasks(&[t], 2);
+        let reg = Registry::from_tasks(&[t]);
         let raw = serde_json::to_string(&reg).unwrap();
         assert!(
             raw.contains("\"proxy\":\"direct\""),
@@ -341,7 +364,7 @@ mod tests {
         b.id = 2;
         b.state = TaskState::Verifying;
         let c = sample_task();
-        let reg = Registry::from_tasks(&[a, b, c], 4);
+        let reg = Registry::from_tasks(&[a, b, c]);
         let tasks = reg.restore_tasks();
         assert_eq!(tasks[0].state, TaskState::Queued);
         assert_eq!(tasks[1].state, TaskState::Queued);
@@ -378,7 +401,7 @@ mod tests {
         t.state = TaskState::Completed;
         t.total = 100;
         t.downloaded = 100;
-        let reg = Registry::from_tasks(&[t], 2);
+        let reg = Registry::from_tasks(&[t]);
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg4");
         let p = dir.join("registry.json");
         reg.save(p.to_str().unwrap()).unwrap();
@@ -402,11 +425,11 @@ mod tests {
         t.downloaded = 100;
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg5");
         let p = dir.join("registry.json");
-        Registry::from_tasks(&[t.clone()], 2)
+        Registry::from_tasks(&[t.clone()])
             .save(p.to_str().unwrap())
             .unwrap();
         t.downloaded = 150;
-        Registry::from_tasks(&[t], 2)
+        Registry::from_tasks(&[t])
             .save(p.to_str().unwrap())
             .unwrap();
         let loaded = Registry::load(p.to_str().unwrap()).expect("注册表应可加载");

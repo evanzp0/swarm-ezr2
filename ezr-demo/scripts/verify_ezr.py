@@ -342,7 +342,8 @@ def scenario_b():
 
 def scenario_c():
     print("\n== 场景 C：A 添加任务（等待中·排队第 4 位）+ D 删除回归 ==")
-    # next_id=100 → ADD_POOL[100 % 6] = Fedora
+    # 预填轮换 prefill_seq=100 → ADD_POOL[100 % 6] = Fedora（v1.20：任务 ID
+    # 已改随机分配，本序号仅驱动预填池轮换，推进口径不变）
     name = "Fedora-Workstation-Live-x86_64-42.iso"
     samples, _ = run(120, 44, 9.0, keys=["a", "enter", "d", "2"], key_delay_frac=0.3)
     added_seen = False
@@ -847,9 +848,9 @@ def scenario_n():
     check("N2j 任务列表自头部正下方起（row5 顶边框、左缘 col0）",
           r5[0] == "╭" and len(tl5) == 2,
           f"row5 首字符={r5[0]!r} ╮位={tl5}")
-    # 详情 11 行（自 row5 起）→ 并发连接标题行 = row16
-    check("N2k 并发连接面板（标题行 = 详情顶 + 11 行 = 第 16 行）",
-          "并发连接" in screen.display[16], true_row(screen, 16).strip()[:40])
+    # 详情 12 行（v1.20：10 内容行，自 row5 起）→ 并发连接标题行 = row17
+    check("N2k 并发连接面板（标题行 = 详情顶 + 12 行 = 第 17 行）",
+          "并发连接" in screen.display[17], true_row(screen, 17).strip()[:40])
 
     # N3 HTTP 任务（ubuntu）并发连接列 = 序号/下载速度/累计下载，无上传两列
     head_line = next((r for r in final_rows if "序号" in r and "下载速度" in r), None)

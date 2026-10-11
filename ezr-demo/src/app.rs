@@ -39,6 +39,7 @@
 //! 「等待中」任务须等槽位空出，按列表顺序（从上往下）依次获得槽位后开始下载。
 //! 开始/续传前进行磁盘空间预检（演示：tensorflow 首次获得槽位时预检失败一次）。
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -376,6 +377,44 @@ impl Rng {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 任务 ID 随机分配（v1.20 生产同步：u32 随机数 + 任务全集查重、0 保留，
+// 取代顺序自增 next_id；与模拟器 rng 隔离——独立熵源不扰动伪造数据序列；
+// 口径与唯一性论证同生产 model::idgen）
+// ---------------------------------------------------------------------------
+
+/// 进程内调用序号（同纳秒多次调用熵隔离）
+static ID_SEQ: AtomicU32 = AtomicU32::new(0);
+
+/// SplitMix64 黄金比例增量常数
+const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
+
+/// 分配一个与既有任务不冲突的随机任务 ID（SplitMix64；种子 = 系统时钟纳秒 ^
+/// 进程号 ^ 栈地址 ^ 调用序号；0 保留哨兵，冲突自动重试）
+fn alloc_task_id(tasks: &[Task]) -> u32 {
+    loop {
+        let stack_probe = 0u8;
+        // 取引用地址仅作熵源（不解引用；安全转换）
+        let addr = &stack_probe as *const u8 as usize as u64;
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let seq = ID_SEQ.fetch_add(1, Ordering::Relaxed) as u64;
+        let mut g =
+            (nanos ^ ((u64::from(std::process::id())) << 32) ^ addr ^ seq.wrapping_mul(GOLDEN)) | 1;
+        g = g.wrapping_add(GOLDEN);
+        let mut z = g;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        let cand = ((z ^ (z >> 31)) >> 32) as u32;
+        let cand = if cand == 0 { 1 } else { cand };
+        if !tasks.iter().any(|t| t.id == cand) {
+            return cand;
+        }
+    }
+}
+
 /// 校验算法表（添加对话框下拉选择）：（显示名，期望十六进制长度）
 pub const CHECKSUM_ALGOS: [(&str, usize); 7] = [
     ("MD5", 32),
@@ -480,7 +519,10 @@ pub struct App {
     pub quit: bool,
     pub toast: Option<String>,
     toast_until: Option<Instant>,
-    pub next_id: u32,
+    /// 添加对话框 URL 预填轮换序号（v1.20：沿用原 next_id 推进口径——
+    /// 每次确认添加 +1，首值 100 保持 verify_ezr.py 场景 C 首开 = Fedora；
+    /// 任务 ID 本身已改随机分配，本序号仅用于预填池轮换）
+    pub prefill_seq: u32,
     last_tick: Instant,
     /// 速度展示面上次采样时刻（每 SPEED_TICK=1s 采样一次；v1.15/FR-01-102）
     last_speed_tick: Instant,
@@ -554,7 +596,7 @@ impl App {
             quit: false,
             toast: Some("EZR Downloader Demo 就绪 · 数据为模拟数据".to_string()),
             toast_until: Some(Instant::now() + Duration::from_secs(4)),
-            next_id: 100,
+            prefill_seq: 100,
             last_tick: Instant::now(),
             last_speed_tick: Instant::now(),
             visible_rows: 6,
@@ -887,7 +929,8 @@ impl App {
                                     let piece = chunk_size(t.protocol);
                                     t.downloaded = 0;
                                     t.chunk_done = 0;
-                                    t.connections = make_chunk_conns(total, 0, n, piece, t.id as u64).0;
+                                    t.connections =
+                                        make_chunk_conns(total, 0, n, piece, t.id as u64).0;
                                     notices.push(format!(
                                         "⚠ 服务器内容已更新，断点已作废，{}s 后从头重新下载: {}",
                                         secs as u64, t.name
@@ -1000,12 +1043,7 @@ impl App {
                     // 上传数据面：瞬时速率按持有块的连接均摊抖动，推进累计与
                     // 采样窗口；展示面由下方每秒采样驱动（同下载口径）
                     let up_inst = 1_900_000.0 * rng.range(0.6, 1.5);
-                    let un = t
-                        .connections
-                        .iter()
-                        .filter(|c| c.cap() > 0)
-                        .count()
-                        .max(1) as f64;
+                    let un = t.connections.iter().filter(|c| c.cap() > 0).count().max(1) as f64;
                     for c in t.connections.iter_mut() {
                         if c.cap() > 0 {
                             let rate = (up_inst / un) * rng.range(0.88, 1.12);
@@ -1064,8 +1102,8 @@ impl App {
                             t.queued_since = None;
                             t.running_since = Some(now);
                             t.made_progress = false; // 新尝试开始：清空进展标记
-                            // 本次开始下载：各连接的累计上传/下载量清零
-                            //（重新排队/重试/新任务均经此路径；断点续传的已完成量不受影响）
+                                                     // 本次开始下载：各连接的累计上传/下载量清零
+                                                     //（重新排队/重试/新任务均经此路径；断点续传的已完成量不受影响）
                             for c in t.connections.iter_mut() {
                                 c.cum_down = 0;
                                 c.cum_up = 0;
@@ -1258,7 +1296,10 @@ impl App {
         }
         // 仅「下载中」/「做种中」状态存在可视并发明细：
         // 其余状态按 0 条处理（选中行与滚动自然归零）
-        let conns_visible = self.sel_task().map(|t| t.state.shows_conns()).unwrap_or(false);
+        let conns_visible = self
+            .sel_task()
+            .map(|t| t.state.shows_conns())
+            .unwrap_or(false);
         let clen = if conns_visible {
             self.sel_task().map(|t| t.connections.len()).unwrap_or(0)
         } else {
@@ -1686,8 +1727,9 @@ impl App {
             .parse::<usize>()
             .map(|v| v.clamp(1, 64))
             .unwrap_or_else(|_| default_conns(proto));
-        let id = self.next_id;
-        self.next_id += 1;
+        // v1.20 生产同步：任务 ID = u32 随机数 + 任务全集查重，不再顺序自增
+        let id = alloc_task_id(&self.tasks);
+        self.prefill_seq = self.prefill_seq.wrapping_add(1);
         let proxy = self.proxy_options[d.proxy_sel.min(self.proxy_options.len() - 1)].clone();
         let total = pseudo_total(&name);
         let save_path = format!("{}/{}", dir, name);
@@ -1775,7 +1817,9 @@ impl App {
     }
 
     pub fn open_add_dialog(&mut self) {
-        let prefill = ADD_POOL[(self.next_id as usize) % ADD_POOL.len()];
+        // 预填轮换沿用原 next_id 推进口径（prefill_seq：每次确认添加 +1，
+        // 首值 100 = verify_ezr.py 场景 C 首开 ADD_POOL[100 % 6] = Fedora）
+        let prefill = ADD_POOL[(self.prefill_seq as usize) % ADD_POOL.len()];
         // 默认并发数随预填 URL 的协议类型：HTTP 4 / BT 20（对话框中可修改）
         let (proto, _) = parse_url_task(prefill);
         self.dialog = Some(Dialog {
@@ -2019,10 +2063,7 @@ impl App {
         let Some(d) = self.dialog.as_mut() else {
             return;
         };
-        if !matches!(d.kind, DialogKind::Add | DialogKind::Modify)
-            || d.ck_open
-            || d.proxy_open
-        {
+        if !matches!(d.kind, DialogKind::Add | DialogKind::Modify) || d.ck_open || d.proxy_open {
             return;
         }
         let (kind, focus) = (d.kind, d.focus);
@@ -2265,7 +2306,11 @@ impl App {
         self.tasks[idx].queued_since = Some(Instant::now());
         self.tasks[idx].start_delay = 3.0;
         let name = self.tasks[idx].name.clone();
-        let label = if manual { "手动重试" } else { "重新排队" };
+        let label = if manual {
+            "手动重试"
+        } else {
+            "重新排队"
+        };
         self.set_toast(format!("↻ {label}（等待中）: {name}"));
     }
 

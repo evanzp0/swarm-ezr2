@@ -184,7 +184,8 @@ impl App {
         if let Some(dir) = std::path::Path::new(&self.registry_path).parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let reg = Registry::from_tasks(&self.tasks, self.next_id);
+        // v1.20：任务 ID 随机分配，注册表不再携带 next_id
+        let reg = Registry::from_tasks(&self.tasks);
         let _ = reg.save(&self.registry_path);
     }
 
@@ -235,7 +236,6 @@ mod tick_tests {
         t.id = 1;
         t.state = TaskState::Completed;
         a.tasks.push(t);
-        a.next_id = 2;
         a.save_registry();
         a.shutdown().await;
         let dir_a = std::path::Path::new(&a.registry_path)
@@ -455,7 +455,6 @@ mod tick_tests {
         t.total = 200;
         t.downloaded = 100;
         app.tasks.push(t);
-        app.next_id = 2;
         // 第一帧：越过 5s 窗口 → 周期保存落盘（基线）
         app.last_save = std::time::Instant::now() - std::time::Duration::from_secs(10);
         app.tick().await;
