@@ -64,3 +64,31 @@
 - **CRAP 复测（cargo-llvm-cov）是磁盘大户**：独立 target 目录（`target/llvm-cov-target`）
   带 debuginfo=2 全量重编，需 ~2-3G；跑前清空主 target、关增量（CARGO_INCREMENTAL=0），
   且勿与变异跑批同盘争食——曾出现 ENOSPC 半途爆盘。
+- **被中断轮次的 caught 不会自动并入 resume 账本**：SIGTERM/timeout 中断时「退出/迭代边界
+  并入」不会发生，已完成的 killed 判定只留在当轮 `caught.txt` 里——续跑前必须手动
+  `cat caught.txt >> previously_caught.txt && sort -u`，否则已杀灭突变体整批重测（实测一轮
+  损失 19 条判定）。与上条「手动合并」同一动作，此处补充的是**中断轮必然需要它**这一触发条件。
+
+## test-command 参数边界（假杀灭高发）
+
+- **`--` 之后全部参数逐字附加给 `cargo test`，工具自身选项放 `--` 之前**：`-o`/`-L`/`-t`
+  等落在 `--` 后会被当成测试命令参数；给测试二进制传参（`--skip`、`--test` 等）必须**连同
+  内层 `--` 一起**写入 CARGO_TEST_ARGS（如 `-- --bin ezr -- --skip property_tests::`——
+  外层 `--` 是 cargo-mutants 的分隔符，内层 `--` 是 cargo test 的）。放错位置 → 测试命令
+  usage error → 每个突变体都"测试失败" → **批量假 killed**（与 runner 聚合缺陷同效的另一
+  形态）。
+- **假杀灭的识别与外科处置**：抽查 killed 突变体日志（`mutants.out/log/*.log`）——真杀灭
+  必有 `test result: FAILED` 测试输出；只有 `unexpected argument`/usage 类命令错误而无测试
+  输出 = 假杀灭。处置按「作废重建」外科手术版：从 `previously_caught.txt` 与当轮
+  `caught.txt` 剔除涉事行，用正确命令整体重跑（判定只有补跑后才可采信）。
+
+## 双口径加速（phase-1 快杀 + phase-2 全量复核）
+
+- **单包多测试目标项目的构建税**：改动一个产品文件触发全部 `#[path]` 挂载测试 crate 重编
+  （构建 60-120s）+ 全量套件运行（~200-300s）= 每突变体 ~300s；而多数纯逻辑突变体死于
+  主 bin 自带测试（首个测试目标，~60s）。
+- **phase-1/phase-2 协议**：phase-1 用窄测试命令快杀（`-- --bin <主bin> -- --skip <属性>`，
+  实测 ~30-60s/突变体）；phase-1 的 killed 是终局判定（bin 内测试真实失败即是证据），
+  missed 只是"待复核"不是结论——幸存者名单再用默认全量命令 phase-2 复核（挂载测试 crate
+  的加固测试常能杀掉 bin 杀不掉的点）。正确性保持：killed 恒真、missed 必复核，无双口径
+  假阳性通道。
