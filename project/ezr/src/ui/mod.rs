@@ -18,7 +18,8 @@
 //! 删除任务(仅任务|任务和文件|取消)。
 
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::Color;
+use ratatui::style::{Color, Style};
+use ratatui::widgets::{Block, BorderType, Borders};
 use ratatui::Frame;
 
 use crate::app::App;
@@ -86,6 +87,15 @@ pub(super) fn state_color(s: TaskState) -> Color {
         .iter()
         .find(|(st, _)| *st == s)
         .map_or(DIM, |(_, c)| *c)
+}
+
+/// 圆角全边框面板（各面板共用样板，CPD tile 处置：coder cpd-tile-shared-helper 轮）：
+/// 边框前景色取入参；标题由调用方按需续链 `.title(...)`。
+pub(super) fn bordered_block(fg: Color) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(fg))
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +199,34 @@ mod ui_tests {
     fn state_color_covers_all_states() {
         for (st, c) in STATE_COLORS {
             assert_eq!(state_color(st), c, "{st:?}");
+        }
+    }
+
+    #[test]
+    fn bordered_block_renders_rounded_full_borders_with_fg() {
+        for c in [BORDER, ACCENT, RED] {
+            let mut term = Terminal::new(TestBackend::new(5, 3)).unwrap();
+            term.draw(|f| f.render_widget(bordered_block(c), f.area()))
+                .unwrap();
+            let buf = term.backend().buffer();
+            // 四角 = Rounded 圆角、四边齐全、前景色 = 入参色
+            for (x, y, sym) in [
+                (0, 0, "╭"),
+                (4, 0, "╮"),
+                (0, 2, "╰"),
+                (4, 2, "╯"),
+                (2, 0, "─"),
+                (2, 2, "─"),
+                (0, 1, "│"),
+                (4, 1, "│"),
+            ] {
+                let cell = buf.cell((x, y)).expect("网格坐标在界内");
+                assert_eq!(cell.symbol(), sym, "({x},{y}) 符号");
+                assert_eq!(cell.fg, c, "({x},{y}) 边框色");
+            }
+            // 内部未被绘制
+            let inner = buf.cell((2, 1)).expect("网格坐标在界内");
+            assert_eq!(inner.symbol(), " ", "内部应保持空白");
         }
     }
 

@@ -4,17 +4,14 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-use super::{ACCENT, BORDER, DIM, YELLOW};
+use super::{bordered_block, ACCENT, BORDER, DIM, YELLOW};
 use crate::app::App;
 
 pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(BORDER));
+    let block = bordered_block(BORDER);
     let inner = block.inner(area);
     f.render_widget(block, area);
 

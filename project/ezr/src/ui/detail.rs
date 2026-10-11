@@ -6,11 +6,11 @@
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use super::text::{fmt_size, pad_right, truncate, w};
-use super::{state_color, ACCENT, BORDER, DIM, FG, GREEN, LIGHT_BLUE, RED, YELLOW};
+use super::{bordered_block, state_color, ACCENT, BORDER, DIM, FG, GREEN, LIGHT_BLUE, RED, YELLOW};
 use crate::app::App;
 use crate::model::chunk::fmt_block_size;
 use crate::model::{Task, TaskState};
@@ -82,11 +82,8 @@ fn chunk_row(t: &Task) -> Vec<Span<'static>> {
 }
 
 pub(super) fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(BORDER))
-        .title(Span::styled(" 任务详情 ", Style::default().fg(ACCENT)));
+    let block =
+        bordered_block(BORDER).title(Span::styled(" 任务详情 ", Style::default().fg(ACCENT)));
     let inner = block.inner(area);
     f.render_widget(block, area);
 

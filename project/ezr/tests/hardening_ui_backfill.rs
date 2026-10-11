@@ -117,7 +117,11 @@ mod detail_fix {
     pub mod text {
         pub(crate) use crate::ui::{fmt_size, pad_right, truncate, w};
     }
+    // 面板样板单源转发（coder cpd-tile-shared-helper 轮：detail.rs 改用 ui 层 bordered_block，
+    // 壳内同手法转发真实现，与 text 转发同口径）
     use ratatui::style::Color;
+
+    pub(crate) use crate::ui::bordered_block;
     pub const ACCENT: Color = Color::Cyan;
     pub const BORDER: Color = Color::Rgb(56, 78, 86);
     pub const DIM: Color = Color::Rgb(126, 141, 147);

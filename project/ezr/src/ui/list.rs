@@ -3,11 +3,11 @@
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use super::task_lines::task_lines;
-use super::{ACCENT, BORDER, DIM, SEL_BG};
+use super::{bordered_block, ACCENT, BORDER, DIM, SEL_BG};
 use crate::app::{App, ITEM_HEIGHT};
 use crate::model::{slots, Task};
 
@@ -33,10 +33,7 @@ pub(super) fn render_task(
 // ---------------------------------------------------------------------------
 
 pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(BORDER))
+    let block = bordered_block(BORDER)
         .title(Line::from(vec![Span::styled(
             " 下载任务 ",
             Style::default().fg(ACCENT),

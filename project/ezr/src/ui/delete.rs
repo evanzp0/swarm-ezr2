@@ -3,26 +3,22 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
 
 use super::btn::{clip_wide_at_edges, dialog_rect, draw_button_row};
 use super::text::truncate;
-use super::{DIM, DIM2, RED};
+use super::{bordered_block, DIM, DIM2, RED};
 use crate::app::App;
 
 pub(super) fn draw_delete_dialog(f: &mut Frame, app: &mut App, area: Rect) {
     let dlg = dialog_rect(area, 66, 7);
     f.render_widget(Clear, dlg);
     clip_wide_at_edges(f, dlg);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(RED))
-        .title(Span::styled(
-            " 删除任务 ",
-            Style::default().fg(RED).add_modifier(Modifier::BOLD),
-        ));
+    let block = bordered_block(RED).title(Span::styled(
+        " 删除任务 ",
+        Style::default().fg(RED).add_modifier(Modifier::BOLD),
+    ));
     let inner = block.inner(dlg);
     f.render_widget(block, dlg);
     if inner.width < 40 || inner.height < 5 {

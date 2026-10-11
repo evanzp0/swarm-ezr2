@@ -3,13 +3,13 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
 
 use super::btn::{clip_wide_at_edges, dialog_rect, draw_button_row};
 use super::delete::draw_delete_dialog;
 use super::text::{pad_right, truncate, w};
-use super::{ACCENT, DIM, DIM2, FG, YELLOW};
+use super::{bordered_block, ACCENT, DIM, DIM2, FG, YELLOW};
 use crate::app::{App, DialogKind, CHECKSUM_ALGOS};
 
 /// 字段行显示值：空值显示占位提示；超宽显示尾部（…+末尾字符，便于核对校验码结尾）
@@ -65,14 +65,10 @@ fn dropdown_frame(
     let prect = dropdown_rect(area, inner, row_y, pw, ph);
     f.render_widget(Clear, prect);
     clip_wide_at_edges(f, prect);
-    let pblock = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(ACCENT))
-        .title(Span::styled(
-            title,
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        ));
+    let pblock = bordered_block(ACCENT).title(Span::styled(
+        title,
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+    ));
     let pinner = pblock.inner(prect);
     f.render_widget(pblock, prect);
     pinner
@@ -199,14 +195,10 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
     let dlg = dialog_rect(area, dw, dh);
     f.render_widget(Clear, dlg);
     clip_wide_at_edges(f, dlg);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(ACCENT))
-        .title(Span::styled(
-            title,
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        ));
+    let block = bordered_block(ACCENT).title(Span::styled(
+        title,
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+    ));
     let inner = block.inner(dlg);
     f.render_widget(block, dlg);
     let min_h = if is_add { 10 } else { 8 };

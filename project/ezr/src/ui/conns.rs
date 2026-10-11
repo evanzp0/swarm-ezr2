@@ -14,11 +14,11 @@
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use super::text::{fmt_size, fmt_speed, pad_left};
-use super::{ACCENT, BORDER, DIM, DIM2, FG, LIGHT_BLUE, SEL_BG};
+use super::{bordered_block, ACCENT, BORDER, DIM, DIM2, FG, LIGHT_BLUE, SEL_BG};
 use crate::app::App;
 
 pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
@@ -32,10 +32,7 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         }
         None => (0, true),
     };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(BORDER))
+    let block = bordered_block(BORDER)
         .title(Span::styled(" 并发连接 ", Style::default().fg(ACCENT)))
         .title(
             Line::from(Span::styled(

@@ -10,12 +10,12 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use super::chart::draw_chart;
 use super::text::{fmt_size, fmt_speed};
-use super::{ACCENT, BORDER, DIM, DIM2, FG, LIGHT_BLUE, MAGENTA, YELLOW};
+use super::{bordered_block, ACCENT, BORDER, DIM, DIM2, FG, LIGHT_BLUE, MAGENTA, YELLOW};
 use crate::app::{App, FILTERS};
 
 pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect, with_chart: bool) {
@@ -29,23 +29,19 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect, with_chart: bool
     let peak_ul = app.up_hist.iter().copied().max().unwrap_or(0);
     let conns_n = app.conns_display_total();
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(BORDER))
-        .title(Line::from(vec![
-            Span::styled(
-                " ◆ ",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "EZR Downloader",
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(format!("  v{}", crate::VERSION), Style::default().fg(DIM)),
-        ]));
+    let block = bordered_block(BORDER).title(Line::from(vec![
+        Span::styled(
+            " ◆ ",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "EZR Downloader",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("  v{}", crate::VERSION), Style::default().fg(DIM)),
+    ]));
 
     let inner = block.inner(area);
     f.render_widget(block, area);

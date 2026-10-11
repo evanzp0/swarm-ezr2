@@ -564,3 +564,11 @@ group_imports = "StdExternalCrate"
   `--minimum-tokens` 形成新 tile（实测 `Block::default()` 惯用样板在访问器提取轮 +1，
   4 文件拷贝中 2 处位于当轮触碰文件）。CPD 增量对账见 +1 时先核 tile 形态：全部拷贝均为
   惯用样板/夹具形态 → 登记既有形态移交，非真重复回归；勿据此回头拆样板。
+  操作者裁决拆样板时（移交 coder 执行），实证路径：差异点参数化成共享父模块 helper
+  （如 `fn bordered_block(fg: Color) -> Block<'static>`），各拷贝原地一行委托、后续
+  builder 链原样续接（builder 语义下调用次序不影响终态）；同 crate 内既有剥头副本
+  夹具壳须同步——壳内补 helper 真实现转发（非同值复刻）+ 按守卫口径重生成副本，否则
+  gen-drift 守卫红。验收三件套：全链测试/clippy/fmt/arch + CPD 复跑对账 + 独立 grep
+  单源计数（样板仅剩 helper 本体 1 处）。对账按族计不按登记条目计：单源化一并消解
+  同族全部部分配对 tile（实测 56→52，登记 2 个 + 未点名配对 2 个同时消失），且
+  src+tests 口径的夹具副本拷贝同步消失（115→111）。
