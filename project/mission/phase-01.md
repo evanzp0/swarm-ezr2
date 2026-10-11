@@ -37,6 +37,13 @@
 > `features/04-ui-conns.feature`（场景 09 修订）、`features/01-add-task.feature`（场景 18
 > 新增），QA 套件 `qa/04-ui-conns-qa.md`（QA-UC-09 同步）、`qa/01-add-task-qa.md`
 > （QA-01-18 新增）。
+> **v1.19 修订（操作者指令，会话外直判）**：①R 恢复路径退役——「已暂停（失败）」（FailedPaused）
+> 任务按 `R` 不再重新排队，仅走兜底提示（`R` 仅适用「已失败」态；空格为挂起态唯一恢复键），
+> 挂起 toast 引导文案与测试同步收窄（FR-01-92 修订、D25 注记；规格
+> `features/01-slots-queue.feature` 场景 15，QA 套件 `qa/01-slots-queue-qa.md` QA-SQ-15）；
+> ②FailedPaused 状态徽标色落账——状态配色 8→9 态，「已暂停（失败）」徽标 = 白色（与相邻
+> 「已暂停」同色），穷尽守卫测试堵配色表再犯（规格 `features/01-tui-display.feature` 场景 05
+> 七态，QA 套件 `qa/01-tui-display-qa.md` QA-TD-05）。
 > **v1.18 修订（操作者 20261009 第十六批指令，缺陷改判）**：清码重试零重传收尾——
 > 校验失败（Verify）型任务清空校验码按 `R`（FR-01-51 v1.17③/D34 路径）此前经
 > 「正常重新排队 → 引擎恢复盘上 sidecar」收尾，而引擎「全块完成 + 有校验值」完成臂
