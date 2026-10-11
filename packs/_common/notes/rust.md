@@ -191,6 +191,9 @@ group_imports = "StdExternalCrate"
   文件单文件即可产出 300+ 变异点（scan 模式 `cargo mutants --list` 直接统计，无需跑变异；
   27.x 起 `--list` 输出 `文件:行:列: 变异描述` 文本清单，需附 `--line-col=true`，旧
   `--line-counts` 已移除，按行首文件名聚合即得每文件计数）。
+  **线性近似只对产品代码行成立**：cfg(test) 模块（`tests` / `*_tests` 命名变体）被工具
+  整段跳过、不产点——测试侧膨胀的大文件（如 1400 行中仅 170 行产品代码的编排模块实测
+  仅 5 点）按总行数估算会严重高估，预判「>100 门槛」前先数产品区行数而非总行数。
   SKILL 的「>100 变异点做保持行为拆分」在模块边界上依赖 architect 裁决、验证依赖 e2e 套件
   （cleaner 不运行）时，不要强行拆——把每文件计数登记 handoff 移交，hardender 全量变异前
   由 architect 先收模块边界（`--file` 可按文件分块跑变异，拆分收益在 hardender 兑现）。
