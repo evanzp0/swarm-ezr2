@@ -154,9 +154,9 @@ Feature: 01-slots-queue 状态机 · 下载槽位与排队调度
       | file       |
       | retry1.bin |
 
-  Scenario: 01-slots-queue-15 Space 恢复已暂停失败任务重新排队（v1.6/FR-01-92）
+  Scenario: 01-slots-queue-15 Space 恢复已暂停失败任务重新排队（v1.6/FR-01-92；v1.19 R 收窄）
     Given 任务 "<file>" 处于「已暂停（失败）」态（01-slots-queue-14 之后）
-    When 按空格（或按 R）
+    When 按空格
     Then 任务重新排队（计数重置、断点续传口径同 01-slots-queue-12）
     And 获得槽位后从断点续传
 

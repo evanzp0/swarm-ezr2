@@ -235,6 +235,11 @@ group_imports = "StdExternalCrate"
   受限近似（如 CRAP 的 comp 代入）必须加 `--branch` 重新生成 lcov；"零发现"前先对已知
   多分支低覆盖函数做阳性对照（BRDA>0 才算数据在位），否则全 crate 函数 comp 都会
   塌缩成 1、CRAP 全绿假象。
+  **BRDA 有无由插桩期决定，不由导出期决定**：`llvm-cov export` 本身无分支开关（rust.md
+  「勿传 --branch」），profdata 生成时若未带 `--branch`（`-Z coverage-options=branch`
+  插桩），export 同样整条缺 BRDA——先验 profdata 含分支数据再写解析器；重跑 `cargo
+  llvm-cov --branch` 会因 RUSTFLAGS 变化触发全量重编译，磁盘预算先算（engineering.md
+  「重 scratch 工具开工前先做磁盘预算」）。
 - **BRDA 分支计数做 comp 近似的两个偏差方向**：① `?` 操作符不产生 BRDA——早退密集的
   入口胶水（main/run_tui 类）comp 被低估、CRAP 假性达标，登记偏差方向留 hardender 以
   变异为准；② 测试代码 `assert!` 宏展开为每个断言生成分支记录——测试函数 comp 虚增，
@@ -544,6 +549,9 @@ group_imports = "StdExternalCrate"
   重复记录（多 object 按映射交错输出）按线号去重取 max，BRDA 按（线号, block, branch）
   去重取 max（'-' 视 0）；③ 同一起始行跨 crate 副本 FNDA 取 max（list 语义；标量映射
   后写覆盖前写 → 命中数假 0，阳性对照应选「明显被大量测试调用的函数」核 FNDA>0）。
+  **SF 归一的稳健锚点取「最后一个 /src/」**：挂载副本路径形态跨环境漂移（`tests/../src/…`
+  与 `tests/src/…` 直拼形态均见，normpath 只解前者），按「最后一个 /src/」截取对两形态
+  均稳（产品文件不含嵌套 src/；tests 自身文件取「最后一个 /tests/」锚，仅用于展示分组）。
 - **lcov 函数级归属必须按「具名函数跨距」，不能按「下一起始行」**：闭包的 FN 记录无结束
   边界，按「起始行 ≤ 数据行 < 下一起始行」归属时，函数体内最后一个闭包会吞掉其后全部
   数据行（外层函数后半段的 DA/BRDA 全记到闭包头上，cov/comp 双双失真、闭包 FNDA 显示
@@ -558,12 +566,21 @@ group_imports = "StdExternalCrate"
   名形态不止 `tests`**——`cli_parse_tests`/`ui_v113_tests` 等 `*_tests` 段同为 cfg(test)
   模块，`assert!` 宏展开的 BRDA 虚增 comp，门禁须一并排除。两边界补齐前 78 条、补齐后
   72 条与上游精确一致（实测案例）；解析器每轮重建属常态，对账差异先归因口径再归因代码。
+  **跨环境对账还有第三处环境边界**：被测系统 spawn 的子进程二进制（fixture/代理 mock）
+  在部分环境会继承 LLVM_PROFILE_FILE 把自身覆盖并入 profdata，同一份解析器读到 fixture
+  函数的具数据覆盖（不再是 NO_DA 型）——NO_DA 口径随环境漂移，对账时先探 fixture 源文件
+  是否出现在 lcov 且 DA>0，再归因解析器或代码；测试 crate 自由函数（tests/ 下的 mock
+  helper，不在 *_tests 模块内）是否计入门禁也属口径选择，跨轮登记口径要写明。
 
 - **保持行为的机械等价改造可让既有惯用样板跨过 CPD 阈值形成新 tile**：提取/内联/移动不改
   变重复逻辑本身，但行号漂移会让某组样板行与另一文件的既有样板恰好凑足
   `--minimum-tokens` 形成新 tile（实测 `Block::default()` 惯用样板在访问器提取轮 +1，
-  4 文件拷贝中 2 处位于当轮触碰文件）。CPD 增量对账见 +1 时先核 tile 形态：全部拷贝均为
-  惯用样板/夹具形态 → 登记既有形态移交，非真重复回归；勿据此回头拆样板。
+  4 文件拷贝中 2 处位于当轮触碰文件）。**新增测试同样能制造 +1 tile**：新测试的
+  渲染/构造脚手架若与既有测试同形态（同尺寸 TestBackend + draw + to_string），会给
+  原本无配对的既有脚手架引入首个配对（实测 110×34 对话框金样脚手架轮 +1）——处置：
+  测试脚手架提取共享 helper（testfx 类模块）消解，产品样板收口路径不变。CPD 增量对账见
+  +1 时先核 tile 形态：全部拷贝均为惯用样板/夹具形态 → 登记既有形态移交，非真重复回归；
+  勿据此回头拆样板。
   操作者裁决拆样板时（移交 coder 执行），实证路径：差异点参数化成共享父模块 helper
   （如 `fn bordered_block(fg: Color) -> Block<'static>`），各拷贝原地一行委托、后续
   builder 链原样续接（builder 语义下调用次序不影响终态）；同 crate 内既有剥头副本

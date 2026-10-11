@@ -131,6 +131,19 @@ fn dropdown_item(
     rects.push((irect, i));
 }
 
+/// 下拉选择行值片段（cleaner v129 收口：校验/代理两同构臂共用——黄色加粗值 +
+/// ▾ 指针（聚焦黄/失焦灰）；渲染字节与原两处内联形态一致）
+fn push_selector_spans(spans: &mut Vec<Span<'static>>, label: &str, focused: bool) {
+    spans.push(Span::styled(
+        format!("{label} "),
+        Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::styled(
+        "▾",
+        Style::default().fg(if focused { YELLOW } else { DIM }),
+    ));
+}
+
 /// 下拉浮层整体渲染（architect v116 收口：校验算法/代理两处仅 (选项集, 宽,
 /// 标题, 选中项, 命中区域表) 不同——框架定位 + 逐项渲染 + 钳短裁剪收口为
 /// 单一函数，选项内容由调用方以 (主体文本, 可选后缀) 对传入）
@@ -289,27 +302,13 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         ];
         match row.kind {
             RowKind::CkSel => {
-                spans.push(Span::styled(
-                    format!("{} ", algo_name),
-                    Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
-                ));
-                spans.push(Span::styled(
-                    "▾",
-                    Style::default().fg(if focused { YELLOW } else { DIM }),
-                ));
+                push_selector_spans(&mut spans, algo_name, focused);
                 if focused {
                     spans.push(Span::styled("  Enter 选择算法", Style::default().fg(DIM2)));
                 }
             }
             RowKind::ProxySel => {
-                spans.push(Span::styled(
-                    format!("{} ", proxy_label),
-                    Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
-                ));
-                spans.push(Span::styled(
-                    "▾",
-                    Style::default().fg(if focused { YELLOW } else { DIM }),
-                ));
+                push_selector_spans(&mut spans, &proxy_label, focused);
             }
             RowKind::Text => {
                 spans.push(Span::styled(

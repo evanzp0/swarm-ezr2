@@ -63,6 +63,9 @@ fn state_color(s: TaskState) -> Color {
         TaskState::Queued => YELLOW,
         TaskState::Downloading | TaskState::Verifying | TaskState::PostProcessing => LIGHT_BLUE,
         TaskState::Paused => Color::White,
+        // 挂起（失败）：与暂停同色承载静置语义（生产 v1.19/FR-01-92 裁决同步；
+        // 失败警示由统计行红承载）
+        TaskState::FailedPaused => Color::White,
         TaskState::Completed => GREEN,
         TaskState::Failed => RED,
         TaskState::Seeding => MAGENTA,
@@ -324,6 +327,24 @@ fn task_lines(
             l3.push(Span::styled(retry, Style::default().fg(RED)));
             l3.push(Span::styled(" · ", Style::default().fg(RED)));
             l3.push(Span::styled(countdown, Style::default().fg(RED)));
+            l3.push(Span::styled(" · ", Style::default().fg(RED)));
+            l3.push(Span::styled(
+                format!("{}/{}", fmt_size(t.downloaded), fmt_size(t.total)),
+                Style::default().fg(RED),
+            ));
+        }
+        TaskState::FailedPaused => {
+            // 已暂停（失败）：重试计数 · 已暂停（不再自动重试）· 大小；
+            // 无倒计时片段（挂起时已清除）——生产 stat_failed_paused 同构
+            l3.push(Span::styled(
+                format!("重试 {}/{}", t.retries, t.max_retries),
+                Style::default().fg(RED),
+            ));
+            l3.push(Span::styled(" · ", Style::default().fg(RED)));
+            l3.push(Span::styled(
+                "已暂停（不再自动重试）".to_string(),
+                Style::default().fg(RED),
+            ));
             l3.push(Span::styled(" · ", Style::default().fg(RED)));
             l3.push(Span::styled(
                 format!("{}/{}", fmt_size(t.downloaded), fmt_size(t.total)),

@@ -30,7 +30,6 @@ pub(super) fn task_lines(
 /// 行 1：光标 + 名称 + 徽标 + 右对齐百分比
 fn title_row(t: &Task, sel: bool, width: usize) -> Vec<Span<'static>> {
     let state_c = state_color(t.state);
-    // ---- 行 1：光标 + 名称 + 徽标 + 右对齐百分比 ----
     // 等待中任务显示真实进度（可能持有断点进度）
     let pct_txt = format!("{:>5.1}%", t.progress() * 100.0);
     let proto_badge = format!("[{}]", t.protocol.label());
@@ -157,7 +156,6 @@ fn stat_row(t: &Task, queue_pos: usize) -> Vec<Span<'static>> {
 /// 已失败：已重试次数/上限 · 重试倒计时 · 已下载/需要下载
 fn stat_failed(t: &Task) -> Vec<Span<'static>> {
     let mut l3: Vec<Span<'static>> = vec![Span::raw("  ")];
-    // 已重试次数/上限 · 重试倒计时 · 已下载/需要下载
     let retry = format!("重试 {}/{}", t.retries, t.max_retries);
     let countdown = match t.retry_in {
         Some(s) => format!("{}s 后重试", s.ceil() as u64),
@@ -232,7 +230,6 @@ fn stat_queued(t: &Task, queue_pos: usize) -> Vec<Span<'static>> {
 /// 已完成：校验情况（按算法显示）+ 文件大小
 fn stat_completed(t: &Task) -> Vec<Span<'static>> {
     let mut l3: Vec<Span<'static>> = vec![Span::raw("  ")];
-    // 校验情况（按算法显示）+ 文件大小
     match (&t.checksum, t.verify_ok) {
         (Some(ck), Some(true)) => l3.push(Span::styled(
             format!("{} 校验成功", ck.algo),
@@ -252,7 +249,6 @@ fn stat_completed(t: &Task) -> Vec<Span<'static>> {
 /// 做种中：↑ 速度 · 种子/节点 · 已上传/需要下载 · 剩余做种时间
 fn stat_seeding(t: &Task) -> Vec<Span<'static>> {
     let mut l3: Vec<Span<'static>> = vec![Span::raw("  ")];
-    // ↑ 速度 · 种子/节点 · 已上传/需要下载 · 剩余做种时间
     l3.push(Span::styled(
         format!("↑ {}", fmt_speed(t.upload_speed)),
         Style::default().fg(MAGENTA),

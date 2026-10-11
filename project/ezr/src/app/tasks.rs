@@ -103,12 +103,12 @@ impl App {
                 });
                 let name = self.tasks[idx].name.clone();
                 self.set_toast(format!(
-                    "⏸ 已暂停（失败），不再自动重试；按空格或 R 恢复: {name}"
+                    "⏸ 已暂停（失败），不再自动重试；按空格恢复: {name}"
                 ));
             }
             TaskState::FailedPaused => {
-                // 已暂停（失败）→ 恢复 = 重新排队（计数重置、断点续传口径同 R；
-                // 校验失败型仍走重新校验路径）
+                // 已暂停（失败）→ 恢复 = 重新排队（计数重置、断点续传；
+                // 校验失败型仍走重新校验路径）。R 不适用本态（v1.19/FR-01-92）
                 self.requeue_failed(idx, false);
             }
             TaskState::Completed => self.set_toast("该任务已完成，无需操作"),
@@ -117,20 +117,17 @@ impl App {
     }
 
     /// R：失败任务手动重试（FR-01-34/D10：计数重置 1、断点续传、重新排队）；
-    /// v1.6/FR-01-92：「已暂停（失败）」同样可 R（= 恢复重新排队）
+    /// 「已暂停（失败）」不可 R——空格为唯一恢复键（v1.19/FR-01-92 收窄）
     pub fn retry(&mut self) {
         let Some(idx) = self.sel_idx() else { return };
-        if matches!(
-            self.tasks[idx].state,
-            TaskState::Failed | TaskState::FailedPaused
-        ) {
+        if matches!(self.tasks[idx].state, TaskState::Failed) {
             self.requeue_failed(idx, true);
         } else {
             self.set_toast("仅「已失败」的任务可以重试");
         }
     }
 
-    /// 失败任务重新排队（R/Space）：计数重置 1、回等待队列、断点续传；
+    /// 失败任务重新排队（R，或 Space 恢复挂起）：计数重置 1、回等待队列、断点续传；
     /// 校验失败（Verify）按 R = 重新校验（块全满、无数据重传，D10）。
     fn requeue_failed(&mut self, idx: usize, manual: bool) {
         let verify_fail = self.tasks[idx].fail_kind == Some(FailKind::Verify);

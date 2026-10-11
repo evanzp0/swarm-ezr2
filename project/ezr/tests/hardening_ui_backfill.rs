@@ -155,10 +155,6 @@ mod detail_fix {
 fn assert_fixture_matches(product: &str, fixture: &str) {
     let src = std::fs::read_to_string(product).unwrap_or_else(|e| panic!("read {product}: {e}"));
     let fix = std::fs::read_to_string(fixture).unwrap_or_else(|e| panic!("read {fixture}: {e}"));
-    let head = src
-        .lines()
-        .take_while(|l| l.starts_with("//!") || l.trim().is_empty() && !src.is_empty())
-        .count();
     // 头块 = 连续的 //! 行（从首行起）；其后可能有空行
     let mut n = 0;
     for l in src.lines() {
@@ -174,7 +170,6 @@ fn assert_fixture_matches(product: &str, fixture: &str) {
         expect, actual,
         "剥头副本漂移：{fixture} 与 {product} 不一致（重新生成）"
     );
-    let _ = head;
 }
 
 #[test]

@@ -53,7 +53,8 @@ pub(crate) use text::{
 };
 
 // ---------------------------------------------------------------------------
-// 调色板（语义状态色；下载中=淡蓝，暂停=白，等待=黄，失败=红，完成=绿，做种=粉）
+// 调色板（语义状态色；下载中=淡蓝，暂停=白，等待=黄，失败=红，完成=绿，做种=粉，
+// 挂起（失败）=白——v1.19/FR-01-92 裁决，与暂停同色承载静置语义）
 // ---------------------------------------------------------------------------
 
 pub(super) const BORDER: Color = Color::Rgb(56, 78, 86);
@@ -70,13 +71,18 @@ pub(super) const EMPTY: Color = Color::Rgb(54, 68, 74);
 /// 下载中/校验中/后期处理（淡蓝）
 pub(super) const LIGHT_BLUE: Color = Color::Rgb(122, 185, 242);
 
-/// 状态 → 语义色映射表（覆盖全部 6 态 + 2 预留态）
-const STATE_COLORS: [(TaskState, Color); 8] = [
+/// 状态 → 语义色映射表（9 态全显式映射。v1.19/FR-01-92 徽标色裁决：FailedPaused
+/// 映射白——与 Paused 同色承载「操作者主动静置」语义，失败警示由统计行红与
+/// 详情失败原因行承载；原 DIM 兜底系 v1.6 实现缺口，本轮裁决补齐。DIM 兜底
+/// 保留仅防御未来新增态漏配，由 state_color_covers_every_variant_without_fallback
+/// 穷尽守卫测试拦截）
+const STATE_COLORS: [(TaskState, Color); 9] = [
     (TaskState::Queued, YELLOW),
     (TaskState::Downloading, LIGHT_BLUE),
     (TaskState::Verifying, LIGHT_BLUE),
     (TaskState::PostProcessing, LIGHT_BLUE),
     (TaskState::Paused, Color::White),
+    (TaskState::FailedPaused, Color::White),
     (TaskState::Completed, GREEN),
     (TaskState::Failed, RED),
     (TaskState::Seeding, MAGENTA),
@@ -199,6 +205,41 @@ mod ui_tests {
     fn state_color_covers_all_states() {
         for (st, c) in STATE_COLORS {
             assert_eq!(state_color(st), c, "{st:?}");
+        }
+    }
+
+    /// 9 态全态入表守卫（match 空臂 = 编译期穷尽锚：TaskState 新增变体时本测试
+    /// 编译失败强制回看；DIM 兜底断言防漏配再犯——v1.6/FR-01-92 FailedPaused
+    /// 曾漏配落 DIM 的缺口教训）
+    #[test]
+    fn state_color_covers_every_variant_without_fallback() {
+        for s in [
+            TaskState::Queued,
+            TaskState::Downloading,
+            TaskState::Verifying,
+            TaskState::PostProcessing,
+            TaskState::Paused,
+            TaskState::FailedPaused,
+            TaskState::Completed,
+            TaskState::Failed,
+            TaskState::Seeding,
+        ] {
+            match s {
+                TaskState::Queued
+                | TaskState::Downloading
+                | TaskState::Verifying
+                | TaskState::PostProcessing
+                | TaskState::Paused
+                | TaskState::FailedPaused
+                | TaskState::Completed
+                | TaskState::Failed
+                | TaskState::Seeding => {}
+            }
+            assert_ne!(
+                state_color(s),
+                DIM,
+                "{s:?} 落 DIM 兜底（未入 STATE_COLORS 映射表）"
+            );
         }
     }
 
@@ -587,6 +628,15 @@ mod ui_tests {
             "错误信息保留可见"
         );
         assert!(app.toast.as_deref().is_some_and(|m| m.contains("已暂停")));
+        // v1.19/FR-01-92 收窄口径的引导文案断言：挂起引导只指空格，
+        // 不得回退「按空格或 R 恢复」旧文案（R 不适用本态）
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|m| m.contains("按空格恢复") && !m.contains("或 R")),
+            "挂起引导文案应只指空格（v1.19）: {:?}",
+            app.toast
+        );
 
         // tick 不推进挂起任务（FailedPaused 不参与 retry_in 到点重排）
         assert!(
@@ -600,13 +650,26 @@ mod ui_tests {
         assert_eq!(app.tasks[0].retries, 1, "重新排队计数重置");
         assert!(app.tasks[0].error.is_none());
 
-        // R 对 FailedPaused 同样有效
+        // R 对 FailedPaused 无效（v1.19/FR-01-92 收窄：空格为唯一恢复键）——
+        // 状态保持挂起、字段不动、仅给兜底提示
         app.tasks[0].state = TaskState::FailedPaused;
         app.tasks[0].retries = 4;
         app.tasks[0].error = Some("超时".to_string());
         app.retry();
-        assert_eq!(app.tasks[0].state, TaskState::Queued, "R 恢复挂起任务");
-        assert_eq!(app.tasks[0].retries, 1);
+        assert_eq!(
+            app.tasks[0].state,
+            TaskState::FailedPaused,
+            "R 不恢复挂起任务"
+        );
+        assert_eq!(app.tasks[0].retries, 4, "重试计数不被重置");
+        assert_eq!(app.tasks[0].error.as_deref(), Some("超时"), "错误信息保留");
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|m| m.contains("仅「已失败」的任务可以重试")),
+            "toast={:?}",
+            app.toast
+        );
         app.shutdown().await;
     }
 
@@ -793,6 +856,35 @@ mod ui_tests {
         );
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Modify 对话框渲染（FR-01-87；cleaner v129 补测：此前仅 Add/Delete 有渲染
+    /// 金样，Modify 渲染路径（is_add=false 分支族）无任何测试触达）。固化现状：
+    /// 标题/字段行/任务算法与代理选择/确定·取消钮/Modify 提示行（与 Add 相异文案）。
+    #[tokio::test]
+    async fn draw_modify_dialog_renders_fields_buttons_and_hint() {
+        let mut app = make_app("mdlg");
+        let mut t = task(7, "mod.bin", TaskState::Paused);
+        t.checksum = Some(crate::model::Checksum {
+            algo: "MD5",
+            value: "d41d8cd98f00b204e9800998ecf8427e".to_string(),
+        });
+        app.tasks.push(t);
+        app.selected = 0;
+        app.open_modify_dialog();
+        let s = super::testfx::render_frame_string(&mut app, 110, 34);
+        assert!(s.contains("修改任务"), "对话框标题: {s}");
+        assert!(s.contains("校验码"), "校验码字段行: {s}");
+        assert!(s.contains("MD5"), "校验行显示任务算法: {s}");
+        assert!(s.contains("直连"), "代理行显示当前选择: {s}");
+        assert!(s.contains("[ 确定 ]"), "确定按钮: {s}");
+        assert!(s.contains("[ 取消 ]"), "取消按钮: {s}");
+        assert!(
+            s.contains("确定后立即生效"),
+            "Modify 提示行（与 Add 提示相异文案）: {s}"
+        );
+        assert!(!s.contains("添加下载任务"), "不得渲染 Add 标题: {s}");
+        app.shutdown().await;
     }
 }
 
@@ -1260,6 +1352,13 @@ pub(crate) mod testfx {
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
         term.draw(|f| super::draw(f, app)).unwrap();
         term
+    }
+
+    /// 整帧渲染并返回缓冲区全文（对话框渲染金样脚手架单源，cleaner v129：
+    /// TestBackend 构造 + draw + to_string 三步在 ui_tests 多对话框金样测试重复，
+    /// 提取到 testfx 消解渲染脚手架 tile）。
+    pub(crate) fn render_frame_string(app: &mut App, w: u16, h: u16) -> String {
+        render_full(app, w, h).backend().to_string()
     }
 
     /// 逐行拼接缓冲区符号文本（CJK 续格自动并入，TestBackend::to_string 语义）
