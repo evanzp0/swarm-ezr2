@@ -46,6 +46,22 @@ class PersistenceConfigSuite(Suite):
         assert app.wait_for("已暂停", 5), "暂停后应显示已暂停"
 
     @staticmethod
+    def _wait_sidecar(app: EzrApp, sc: str, timeout: float = 15.0) -> None:
+        """等待 sidecar 首次周期落盘（2s 周期）。
+
+        Space 暂停不触发 sidecar 写（快路径暂停可发生在首个 2s 周期之前），
+        「Q 后 sidecar 保留」断言前必须等到底层已有周期落盘产物，否则
+        慢速门控下的退出窗口会落在首刷之前（v138 QA 会话实测）。
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            app.pump(0.2)
+            if file_bytes(sc) is not None:
+                return
+            time.sleep(0.1)
+        raise AssertionError(f"{timeout}s 内 sidecar 未落盘: {sc}")
+
+    @staticmethod
     def _quit_and_check(app: EzrApp, key: str) -> int:
         """按 key（q/esc/ctrl_c）优雅退出并回收退出码。"""
         app.send(key)
@@ -180,6 +196,20 @@ class PersistenceConfigSuite(Suite):
             except Exception:
                 app.graceful_quit()
                 raise
+            # ①' block_size_http = 256KB（v1.16/FR-01-104 钳制行）：生效值下限 1MB，
+            #    小于 1MB 一律按 1MB 生效（配置文件是用户可达入口，端到端口径不变）
+            env.write_config("block_size_http = 262144\n")
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                add_task_via_dialog(app, env,
+                                    env.fixture.url("two-m.bin?speed=900000"))
+                assert app.wait_for("下载中", 8)
+                assert_in("1 MB/块", detail_text(app),
+                          "256KB 应按 FR-01-104 下限钳制为 1MB 生效（v1.16）")
+                app.graceful_quit()
+            except Exception:
+                app.graceful_quit()
+                raise
             # ② download_slots = 0 → 5
             env.write_config("download_slots = 0\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
@@ -240,11 +270,16 @@ class PersistenceConfigSuite(Suite):
                 raise
 
     def _case_05(self):
-        """QA-PC-05 block_size_http=262144/2097152 下载 5MB：x/20·256KB/块 与 x/3·2MB/块。"""
+        """QA-PC-05 block_size_http=4MB/2MB 下载 5MB：x/2·4 MB/块 与 x/3·2 MB/块。
+
+        v1.16 同步（QA v138 会话）：原 256KB 行因 FR-01-104 生效值下限 1MB 改判
+        4MB（规程 01-persistence-config-qa.md 同轮已同步）。
+        """
         @self.case("QA-PC-05")
         def go(env: Env):
             # 每轮独立子目录：第二轮同 URL+同目录会被重复守卫拦截（QA-01-16）
-            for seq, (bs, expect) in enumerate(((262144, "20"), (2097152, "3"))):
+            for seq, (bs, expect, disp) in enumerate(
+                    ((4_194_304, "2", "4 MB/块"), (2_097_152, "3", "2 MB/块"))):
                 sub = os.path.join(env.save_dir, f"bs{seq}")
                 env.write_config(f"block_size_http = {bs}\n")
                 app = EzrApp(env.home, save_dir=env.save_dir)
@@ -257,7 +292,6 @@ class PersistenceConfigSuite(Suite):
                     assert m, f"详情应有分块行（bs={bs}）"
                     assert m.group(1) == expect, \
                         f"bs={bs} 分块总数应 {expect}: 得 {m.group(1)}"
-                    disp = "256 KB/块" if bs == 262144 else "2 MB/块"
                     assert_in(disp, detail_text(app), f"bs={bs} 块大小显示")
                     app.send("space")
                     app.wait_for("已暂停", 5)
@@ -324,10 +358,10 @@ class PersistenceConfigSuite(Suite):
             self._pause_at_progress(app, min_pct=30.0)
             app.send("space")
             assert app.wait_for("下载中", 5)
-            app.pump(0.5)
+            sc = os.path.join(env.save_dir, "five-m.bin.ezr")
+            self._wait_sidecar(app, sc)  # 等首个周期落盘，Q 时刻断点必然在盘
             code = self._quit_and_check(app, "q")
             assert code == 0, f"Q 优雅退出码 0，得到 {code}"
-            sc = os.path.join(env.save_dir, "five-m.bin.ezr")
             assert file_bytes(sc) is not None, "Q 后 sidecar 应保留断点"
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
@@ -353,10 +387,10 @@ class PersistenceConfigSuite(Suite):
                 self._pause_at_progress(app, min_pct=20.0)
                 app.send("space")
                 assert app.wait_for("下载中", 5)
-                app.pump(0.5)
+                sc = os.path.join(sub, "five-m.bin.ezr")
+                self._wait_sidecar(app, sc)  # 等首个周期落盘（同 PC-08 口径）
                 code = self._quit_and_check(app, key)
                 assert code == 0, f"{key} 优雅退出码应为 0，得到 {code}"
-                sc = os.path.join(sub, "five-m.bin.ezr")
                 assert file_bytes(sc) is not None, f"{key} 后 sidecar 应保留"
                 # 重启无花屏：画面正常渲染并可恢复下载（续传至完成）
                 app2 = EzrApp(env.home, save_dir=env.save_dir)

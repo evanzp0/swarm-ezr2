@@ -22,12 +22,16 @@
   每次新会话需从 `parse.sh` 全量 IR 重建（按 feature 序号取子集拼块）；块目录名与
   分块脚本内引用名要一致，断点续跑只补未完成块。
 - **沙箱后台进程不跨工具调用存活，验收块必须前台逐块跑**：setsid/nohup/disown 均
-  逃不过会话回收（实测探针分钟级即死）；块跑一半无声消失时优先怀疑此因。网关
+  逃不过会话回收（实测探针分钟级即死；v138 复证：setsid+nohup+timeout 包装同样在
+  跨调用后被回收，勿依赖任何 detach 形态）；块跑一半无声消失时优先怀疑此因。网关
   「context canceled」只代表调用回报丢失，runner 常已完赛——以日志 summary 与进程
   表核实现场再决定续跑，勿盲目整块重跑。注意网关故障有两种后果需区分：仅回报
   丢失（日志完整含 `== summary ==`，勿重跑）与前台 shell 被回收连带杀死 runner
   （日志截断无 summary，需补跑该轮；若死在场景中逃还会留下孤儿 daemon——
-  `pgrep -af 'ezr __daemon'` 是被杀中逃的铁证，续跑前先清场删 socket）。
+  `pgrep -af 'ezr __daemon'` 是被杀中逃的铁证，续跑前先清场删 socket）。长任务的
+  可靠形态不是后台化而是**可续跑分段**：把任务设计成幂等增量（跑块断点续跑、构建
+  工具的缓存累积开关如 `--no-clean`），前台窗口内做完多少算多少，进程被回收后产物
+  与缓存仍在，下一窗口从断点续（v138 llvm-cov 3.3G 全量插桩即此配方完成）。
 - **清场 pgrep/pkill 模式必须匹配真实命令行**：daemon 实例命令行是
   `<bin>/ezr __daemon-worker`（不含 `ezr-daemon` 字样），按 `ezr-daemon` 模式清场
   必漏；判定实例用 `pgrep -af ezr` + 固定 socket（`$HOME/.ezr/ezr.sock`）探测。

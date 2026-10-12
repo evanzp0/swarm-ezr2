@@ -13,3 +13,7 @@
   text/json 渲染器。
 - **Rust 必须显式 `-l rust`**：不带语言参数时默认只收 java，静默报 0（通用条款的
   阳性对照现场：先用一处已知重复验证过滤参数生效，再采信零发现）。
+- **发行 zip 用 python zipfile 解压会丢可执行位**：`pmd` 启动脚本报 Permission
+  denied 而文件在位时，先 `chmod +x <pmd>/bin/pmd` 再归因其他——`zipfile.extractall`
+  不保留 unix 权限位（unzip 原生解压则保留）；属「失败先归因」的阳性对照现场：
+  契约核对（shebang/执行位/依赖）先于工具怀疑。

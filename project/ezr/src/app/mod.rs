@@ -139,6 +139,11 @@ pub struct App {
     /// (任务, 连接) → 连接速度滑窗（1s，FR-01-102 数据面：与任务级 windows 同构，
     /// 以连接级累计读数推进；生命周期随连接账本，clear_conn_stats 一并清理）
     conn_windows: HashMap<(u32, usize), SpeedWindow>,
+    /// 连接级账本待重锚任务集（04-ui-conns-09 R 臂，QA v138 缺陷修复）：
+    /// 手动重试 = 新的一次下载、累计从零重计——账本清零后首个 Progress 观测
+    /// 的块内 done 含续传检查点偏移，直接入账会把偏移当本轮落盘量；置重锚
+    /// 标记后由 Progress 消费侧以当前观测重锚 conn_prev（该次增量 = 0）。
+    conn_rebase: std::collections::HashSet<u32>,
     /// 帧计数（转轮动画）
     pub frame: u64,
     /// 退出标志
@@ -243,6 +248,7 @@ impl App {
             conn_cum: HashMap::new(),
             conn_speed: HashMap::new(),
             conn_windows: HashMap::new(),
+            conn_rebase: std::collections::HashSet::new(),
             frame: 0,
             quit: false,
             toast: Some("EZR Downloader 就绪".to_string()),

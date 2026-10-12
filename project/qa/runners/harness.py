@@ -108,6 +108,9 @@ NAMED_KEYS = {
     "enter": b"\r", "esc": b"\x1b", "tab": b"\t", "space": b" ",
     "pgup": b"\x1b[5~", "pgdn": b"\x1b[6~", "home": b"\x1b[H", "end": b"\x1b[F",
     "bs": b"\x7f", "ctrl_c": b"\x03",
+    # Ctrl 组合键（04-ui-conns 并发明细交互，FR-01-97：Ctrl+↑↓ 选择、Ctrl+B 断开）
+    "ctrl_up": b"\x1b[1;5A", "ctrl_down": b"\x1b[1;5B",
+    "ctrl_b": b"\x02",
 }
 
 
@@ -286,6 +289,10 @@ class EzrApp:
         self.screen = _ScreenProxy(self._raw_screen)
         self.stream = pyte.ByteStream(self._raw_screen)
         self.exit_code: int | None = None
+        # 原始输出尾流（有界）：OSC 52 剪贴板序列断言用（04-ui-conns-18；
+        # 产品无图形会话回退 OSC 52，序列被 pyte 吞掉，只能从原始字节流捕获）
+        self._raw_tail = bytearray()
+        self._raw_tail_cap = 262144
         self._pump(0.3)  # 首帧渲染等待
 
     # -- 输出泵 ---------------------------------------------------------------
@@ -309,6 +316,25 @@ class EzrApp:
                 self._reap()
                 return
             self.stream.feed(data)
+            # 原始尾流有界追加（OSC 52 捕获；超限丢弃最老半量，摊还 O(1)）
+            self._raw_tail.extend(data)
+            if len(self._raw_tail) > self._raw_tail_cap:
+                del self._raw_tail[: self._raw_tail_cap // 2]
+
+    def osc52_payloads(self) -> list[str]:
+        """自原始尾流提取全部 OSC 52 剪贴板载荷（base64 解码，按序去重相邻重复）。"""
+        import base64
+        out: list[str] = []
+        for m in re.finditer(b"\\x1b]52;c;([A-Za-z0-9+/=]*)\x07", bytes(self._raw_tail)):
+            try:
+                out.append(base64.b64decode(m.group(1)).decode("utf-8", "replace"))
+            except Exception:
+                continue
+        dedup: list[str] = []
+        for v in out:
+            if not dedup or dedup[-1] != v:
+                dedup.append(v)
+        return dedup
 
     def _reap(self) -> None:
         """子进程已退出：回收 exit code。"""
@@ -371,6 +397,18 @@ class EzrApp:
             if needle not in self.text():
                 return True
         return False
+
+    # -- 终端尺寸 -------------------------------------------------------------
+
+    def resize(self, cols: int, rows: int) -> None:
+        """PTY 窗口尺寸变更（ioctl + pyte 同步 resize）。
+
+        pyte Screen 不随 PTY 自动缩放：只发 ioctl 会让 buffer 停留在旧宽度，
+        列空间断言（分隔符/图区定位）会读到旧帧残留列——必须同步 resize。
+        """
+        fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        self._raw_screen.resize(rows, cols)
+        self.cols, self.rows = cols, rows
 
     # -- 生命周期 -------------------------------------------------------------
 

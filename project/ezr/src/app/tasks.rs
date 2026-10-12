@@ -100,7 +100,12 @@ impl App {
 
     /// 重新排队公共字段重置（R 手动重试与空格恢复共用，v1.21 统一口径）：
     /// 转等待中、error/fail_kind/retry_in 清空、retries 重置 1、
-    /// 失效连击清零、进展标记清零、槽位释放
+    /// 进展标记清零、槽位释放。
+    /// 失效连击**不在**此处清（QA v138 会话缺陷修复，01-resume-sidecar-08 回归）：
+    /// v1.21 统一队列路径后空格恢复也经本函数，若在此清连击，「连续 3 次一致性
+    /// 失效转停等」（FR-01-22/RS-08）经暂停→恢复循环永不达成（每次恢复清零，
+    /// 服务器内容持续变化时无限从头重下）。连击清零是「操作者已知悉内容变化」
+    /// 语义（RS-09），归 R 手动重试路径（[`Self::requeue_failed`]）独有。
     fn requeue_reset(&mut self, idx: usize) {
         let t = &mut self.tasks[idx];
         t.state = TaskState::Queued;
@@ -109,9 +114,6 @@ impl App {
         t.fail_kind = None;
         t.retries = 1;
         t.made_progress = false;
-        // 失效计数重置（Gherkin 01-resume-sidecar-09「按 R 重置失效计数」：
-        // 手动恢复代表操作者已知悉内容变化，重新以最新内容为基准计数）
-        t.invalidation_streak = 0;
         t.has_slot = false;
     }
 
@@ -141,6 +143,10 @@ impl App {
 
     /// 失败任务手动重试（R，FR-01-34/D10）：公共重置 + 校验失败重校验分支；
     /// （旧「空格恢复」入参形态已随 v1.21 统一路径并入 [`Self::resume_paused`]）
+    /// R 臂连接级累计清零（04-ui-conns-09「重试开新一次下载后各连接累计量从零
+    /// 重新累计」，FR-01-99 ②）：重试 = 新的一次下载。已探测任务的引擎重启
+    /// 跳过探测（Probe 事件的 Queued 臂清零不触发），故在此显式清——与空格
+    /// 恢复臂（累计延续，不清零）形成两臂分立口径。
     fn requeue_failed(&mut self, idx: usize) {
         let verify_fail = self.tasks[idx].fail_kind == Some(FailKind::Verify);
         let id = self.tasks[idx].id;
@@ -149,6 +155,14 @@ impl App {
             self.requeue_verify_failed(idx, "手动重试", id);
             return;
         }
+        // 重锚标记：清账本后首个 Progress 观测以当前块内 done 重锚（增量 0），
+        // 续传检查点偏移不计入新一次下载的累计（04-ui-conns-09 R 臂口径）
+        self.conn_rebase.insert(id);
+        self.clear_conn_stats(id);
+        // 失效计数重置（Gherkin 01-resume-sidecar-09「按 R 重置失效计数」：
+        // 手动重试代表操作者已知悉内容变化，重新以最新内容为基准计数）——
+        // R 路径独有语义；空格恢复不清（见 requeue_reset 文档）
+        self.tasks[idx].invalidation_streak = 0;
         let name = self.tasks[idx].name.clone();
         self.set_toast(format!("↻ 手动重试（等待中）: {name}"));
     }
@@ -284,5 +298,84 @@ impl App {
             self.set_toast("没有可清理的已完成任务");
         }
         self.save_registry();
+    }
+}
+
+#[cfg(test)]
+mod requeue_conn_stats_tests {
+    //! R 臂连接级累计清零（04-ui-conns-09 R 臂 / FR-01-99 ②；QA v138 会话缺陷
+    //! 修复回归锚）：已探测任务的引擎重启跳过 Probe 事件（Queued 臂清零不
+    //! 触发），手动重试必须显式清连接级账本——R 后累计从零重计；空格恢复臂
+    //! （resume_paused）不清零（累计延续，两臂分立口径）。
+
+    use super::*;
+    use crate::model::config::Config;
+    use crate::model::{unix_now, Protocol};
+
+    #[tokio::test]
+    async fn retry_clears_conn_cum_resume_keeps() {
+        let reg = std::env::temp_dir().join(format!(
+            "ezr-qa-retry-cum-{}-{}.json",
+            std::process::id(),
+            unix_now()
+        ));
+        let mut a = App::new(Config::default(), reg.to_string_lossy().into_owned());
+        a.tasks.push(crate::model::Task::new_queued(
+            1,
+            "t.bin".to_string(),
+            Protocol::Http,
+            "http://example.com/t.bin".to_string(),
+            "/tmp".to_string(),
+            1 << 20,
+            4,
+            3,
+            None,
+            crate::model::ProxyChoice::Direct,
+            unix_now(),
+        ));
+        // 灌连接级账本（Progress 计量产物；字段模块私有，子模块测试可直填）
+        a.conn_cum.insert((1, 1), 123_456);
+        a.conn_prev.insert((1, 1), (0, 1 << 20));
+        a.selected = 0;
+        // R 臂：非校验失败 → 手动重试清账本
+        a.tasks[0].state = TaskState::Failed;
+        a.tasks[0].fail_kind = Some(FailKind::Fatal);
+        a.retry();
+        assert!(
+            !a.conn_cum.contains_key(&(1, 1)),
+            "R 后连接级累计应清零（重试 = 新的一次下载）"
+        );
+        assert!(
+            !a.conn_prev.contains_key(&(1, 1)),
+            "R 后连接级观测位应随账本一并清除"
+        );
+        assert!(
+            a.conn_rebase.contains(&1),
+            "R 后应置重锚标记（首个 Progress 观测以当前 done 重锚，不计检查点偏移）"
+        );
+        assert_eq!(
+            a.tasks[0].invalidation_streak, 0,
+            "R 重置失效连击（RS-09：手动重试 = 已知悉内容变化）"
+        );
+        // 恢复臂不清连击（RS-08：连续 3 次一致性失效经暂停→恢复循环可达成）
+        a.tasks[0].invalidation_streak = 2;
+        a.tasks[0].state = TaskState::Paused;
+        a.resume_paused(0);
+        assert_eq!(
+            a.tasks[0].invalidation_streak, 2,
+            "空格恢复不清失效连击（连击跨暂停→恢复累积，RS-08 口径）"
+        );
+        // 恢复臂：空格恢复不清账本（累计延续）
+        a.conn_cum.insert((1, 1), 123_456);
+        a.conn_prev.insert((1, 1), (0, 1 << 20));
+        a.tasks[0].state = TaskState::Paused;
+        a.tasks[0].fail_kind = None;
+        a.resume_paused(0);
+        assert_eq!(
+            a.conn_cum.get(&(1, 1)),
+            Some(&123_456),
+            "空格恢复连接级累计应延续（不清零臂）"
+        );
+        let _ = std::fs::remove_file(&reg);
     }
 }

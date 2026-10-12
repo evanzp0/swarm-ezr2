@@ -35,8 +35,9 @@ class TuiDisplaySuite(Suite):
     # -- 用例 -----------------------------------------------------------------
 
     def run(self) -> list[CaseResult]:
-        # 规程用例编号无 QA-TD-04（FR-01-81 修订二撤销明细表场景后编号跳空）
-        for i in (1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15):
+        # 规程用例编号无 QA-TD-04/16（FR-01-81 修订二撤销明细表场景后编号跳空）；
+        # v1.16 新增 QA-TD-17（任务速度实时口径，FR-01-105）
+        for i in (1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17):
             getattr(self, f"_case_{i:02d}")()
         return self.results
 
@@ -269,30 +270,29 @@ class TuiDisplaySuite(Suite):
                 app.graceful_quit()
 
     def _case_09(self):
-        """QA-TD-09 满槽 Space toast：出现清晰可读、数秒后消失无残留。
+        """QA-TD-09 toast 反馈自动消失：出现清晰可读、数秒后消失无残留。
 
-        触发口径（同 SQ-10）：已暂停任务在槽满时按 Space 继续 → 无空闲 toast。
+        触发路径同步（v1.21 QA v138 会话）：原「满槽 Space 继续」toast 已随
+        v1.21 满槽提示退役而不可达（01-tui-display-09 括号示例陈旧，规格偏差
+        已登记 handoff 待操作者裁决）——改用「任务已存在」重复添加 toast
+        （QA-01-16 同源路径，稳定可达）：出现、数秒后自动消失、无残留。
         """
         @self.case("QA-TD-09")
         def go(env: Env):
-            env.write_config("download_slots = 1\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
-                add_task_via_dialog(app, env, self._slow(env, "three-m.bin", 1))
-                assert app.wait_for("下载槽位 1/1", 10)
-                app.send("home")
-                app.pump(0.3)
-                app.send("space")
-                assert app.wait_for("已暂停", 5)
-                # 占满唯一槽位
-                add_task_via_dialog(app, env, self._slow(env, "three-m.bin", 2))
-                assert app.wait_for("下载槽位 1/1", 10)
-                # 已暂停任务（列表首位）按 Space → 无空闲 toast
-                app.send("home")
-                app.pump(0.3)
-                app.send("space")
-                assert app.wait_for("无空闲下载槽位", 8), "toast 应出现"
-                assert app.wait_gone("无空闲下载槽位", 12), "toast 应自动消失"
+                add_task_via_dialog(
+                    app, env, env.fixture.url("five-m.bin?speed=500000"))
+                assert app.wait_for("已添加任务", 6)
+                # 重复添加同 URL 同目录 → 「任务已存在」toast
+                app.send("A")
+                assert app.wait_for("添加下载任务", 3)
+                app.type_text(env.fixture.url("five-m.bin?speed=500000"))
+                app.send("tab")
+                app.type_text(env.save_dir)
+                app.send("enter")
+                assert app.wait_for("任务已存在", 5), "toast 应出现且清晰可读"
+                assert app.wait_gone("任务已存在", 12), "toast 应数秒后自动消失"
                 assert_not_in("◆ ⏳", app.text(), "toast 消失后无残留")
             finally:
                 app.graceful_quit()
@@ -505,6 +505,109 @@ class TuiDisplaySuite(Suite):
                 first, peak = climb[0], max(climb)
                 assert peak > 0 and first <= peak * 0.75, \
                     f"恢复后应平滑爬升而非跳满（首读 {first:.0f} vs 峰值 {peak:.0f}）"
+            finally:
+                app.graceful_quit()
+
+    # -- 任务速度实时口径（v1.16/FR-01-105，QA-TD-17）--------------------------
+
+    @staticmethod
+    def _conn_speeds(app: "EzrApp") -> list[float]:
+        """并发连接面板数据行的连接速度读数（B/s）。
+
+        行形态（ui/conns.rs）：序号(4) 空格 下载速度(8 右对齐) 空格 累计(8)；
+        待命连接速度列显示 "-"。区域锚定右栏（列 64 起）且自「并发连接」
+        标题行起、提示行止——只匹配含三段数据形态的行。
+        """
+        rows = app.screen.display
+        start = next((i for i, r in enumerate(rows) if "并发连接" in r), None)
+        if start is None:
+            return []
+        out: list[float] = []
+        for row in rows[start + 1:]:
+            seg = row[64:]
+            m = re.match(r"\s*\d+\s+([\d.]+ [KMG]?B/s|-)\s+[\d.]+ [KMG]?B", seg)
+            if not m:
+                continue
+            v = m.group(1)
+            out.append(0.0 if v == "-" else parse_speed(v))
+        return out
+
+    def _case_17(self):
+        """QA-TD-17 任务/全局/逐连接速度同源无块内归零（v1.16/FR-01-105）。
+
+        块内采样 3 次（间隔 ≥1s）：三者同步非零、同数量级——无「连接非 0 而
+        任务/全局 0 B/s」块内平台期；已下载字节逐样本持续推进；全程无零读数
+        （块完成瞬间速度连续，无归零闪现）。
+
+        观察窗核算（engineering.md 门控慢速场景先算观察窗下限）：默认块 1MB、
+        fixture ?speed=300000 为每请求口径——12 块文件 4 连接轮转领块，单块
+        ~3.4s、任务全程 ~10s；采样窗 3×1.15s + 就绪 ~2s 远小于全程，
+        且速度为块内实时口径（FR-01-105 修复后不依赖块边界）。
+        """
+        @self.case("QA-TD-17")
+        def go(env: Env):
+            def size_b(text: str) -> float:
+                m = re.match(r"([\d.]+) ([KMG]?)B", text)
+                assert m, f"无法解析大小: {text!r}"
+                mult = {"": 1.0, "K": 1e3, "M": 1e6, "G": 1e9}[m.group(2)]
+                return float(m.group(1)) * mult
+
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                add_task_via_dialog(
+                    app, env, self._slow(env, "twelve-m.bin", 17, rate=300000))
+                assert app.wait_for("下载中", 8)
+                assert app.wait_for("并发连接", 6)
+                # 就绪门：等首个非零任务速度（传输已开始的确定观察窗）
+                first = None
+                deadline = time.time() + 15.0
+                while time.time() < deadline and first is None:
+                    app.pump(0.1)
+                    v = self._task_speed_sample(app)
+                    if v and parse_speed(v) > 0:
+                        first = v
+                    else:
+                        time.sleep(0.3)
+                assert first is not None, "15s 内应出现非零任务速度"
+                samples: list[tuple[float, float, list[float], float]] = []
+                deadline = time.time() + 10.0
+                while time.time() < deadline and len(samples) < 3:
+                    app.pump(0.1)
+                    ts = self._task_speed_sample(app)
+                    m = re.search(r"全局\s+↓ (\d+(?:\.\d+)? [KMG]?B/s)", app.text())
+                    conns = self._conn_speeds(app)
+                    dm = re.search(r"↓ \d+(?:\.\d+)? [KMG]?B/s ([\d.]+ [KMG]?B)/",
+                                   app.text())
+                    if ts is None or m is None or not conns or dm is None:
+                        time.sleep(0.3)
+                        continue
+                    t = parse_speed(ts)
+                    g = parse_speed(m.group(1))
+                    if t <= 0:
+                        # 传输中的零读数即被测缺陷形态（块内平台期），直接入样定罪
+                        samples.append((0.0, g, conns,
+                                        size_b(dm.group(1))))
+                        break
+                    samples.append((t, g, conns, size_b(dm.group(1))))
+                    time.sleep(1.15)
+                assert len(samples) == 3, f"应采得 3 组样本，实得 {len(samples)}"
+                prev = -1.0
+                for i, (t, g, conns, dl) in enumerate(samples):
+                    assert t > 0 and g > 0, \
+                        f"样本{i} 任务/全局速度应非零（块内平台期即 v1.16 缺陷形态）: " \
+                        f"t={t:.0f} g={g:.0f}"
+                    assert any(c > 0 for c in conns), \
+                        f"样本{i} 应有活跃连接速度非零: {conns}"
+                    s_sum = sum(c for c in conns)
+                    assert s_sum > 0
+                    assert 0.4 <= t / s_sum <= 2.5, \
+                        f"样本{i} 任务速度应≈连接速度和（t={t:.0f} Σc={s_sum:.0f}）"
+                    assert 0.4 <= g / s_sum <= 2.5, \
+                        f"样本{i} 全局速度应≈连接速度和（g={g:.0f} Σc={s_sum:.0f}）"
+                    assert dl > prev, \
+                        f"样本{i} 已下载字节应持续推进（块内实时而非块边界跳变）: " \
+                        f"{prev:.0f} → {dl:.0f}"
+                    prev = dl
             finally:
                 app.graceful_quit()
 

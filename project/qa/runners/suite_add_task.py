@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """suite_add_task.py — QA 套件 · 01-add-task 任务添加（期号 01）。
 
-对应规程：project/qa/01-add-task-qa.md（17 用例）。
+对应规程：project/qa/01-add-task-qa.md（18 用例）。
 端到端 UI 层验证：只用用户可达入口（TUI 按键/鼠标、CLI 参数、磁盘产物观察），
 不进入项目内部 API。fixture 校验伴随文件按用例预置/清空。
 
 时序纪律：添加即建任务（等待中/下载中），详情断言经选中项详情面板；CLI 非法参数
 用普通 subprocess 捕获退出码与 stderr（无需 PTY）。
+
+v1.15 同步（QA v138 会话）：新增 QA-01-18（仅添加按钮，FR-01-103/D28/D29）——
+按钮行 [ 立即下载 ] [ 仅添加 ] [ 取消 ]（焦点 6/7/8，Add nfocus=9）；仅添加只建
+不下载（任务落「已暂停」、不占槽位），toast 钦定文案「已添加任务…已暂停，按空格
+开始下载」（D29）；校验链与立即下载一致。
 """
 
 from __future__ import annotations
@@ -50,7 +55,7 @@ class AddTaskSuite(Suite):
     # -- 用例 -----------------------------------------------------------------
 
     def run(self) -> list[CaseResult]:
-        for i in range(1, 18):
+        for i in range(1, 19):
             getattr(self, f"_case_{i:02d}")()
         return self.results
 
@@ -504,6 +509,85 @@ class AddTaskSuite(Suite):
             finally:
                 app.graceful_quit()
 
+    def _case_18(self):
+        """QA-01-18 仅添加按钮（FR-01-103/D28/D29）：按钮行、焦点序、落态、toast、校验链。
+
+        ①按钮行 [ 立即下载 ] [ 仅添加 ] [ 取消 ] 且提示行含 Enter 立即下载，
+        Tab 环绕可达三钮（焦点 6/7/8，Add nfocus=9）；②合法 URL 激活「仅添加」：
+        任务创建且状态「已暂停」、不占槽位不下载（下载槽位 0/5、目标文件与
+        .downloading 未落盘）、toast 含「已添加任务」与「已暂停，按空格开始下载」
+        （D29 钦定）；③空格后转「等待中/下载中」并开始传输；④非法 URL 激活
+        「仅添加」：toast 报错 URL 非法、对话框保持、无任务创建。
+
+        焦点序：从保存到字段（焦点 1）Tab×6 至仅添加钮（焦点 7）；落态为确定
+        性判据（Tab 数错则任务会立即下载，断言必红）。
+        """
+        @self.case("QA-01-18")
+        def go(env: Env):
+            # ① 按钮行与提示行
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                app.send("A")
+                assert app.wait_for("添加下载任务", 3)
+                text = app.text()
+                for btn in ("[ 立即下载 ]", "[ 仅添加 ]", "[ 取消 ]"):
+                    assert_in(btn, text, f"按钮行应含 {btn}（FR-01-103）")
+                assert_in("Enter 立即下载", text, "提示行应含 Enter 立即下载")
+                # Tab 环绕：焦点从 URL 起经全部字段与三钮后回到首字段
+                app.send(*(["tab"] * 9))
+                app.pump(0.2)
+                assert_in("添加下载任务", app.text(), "Tab×9 后应环绕回 URL 字段（对话框仍开）")
+                app.send("esc")
+                app.pump(0.3)
+                # ② 合法 URL + 仅添加
+                target = os.path.join(env.save_dir, "one-m.bin")
+                app.send("A")
+                assert app.wait_for("添加下载任务", 3)
+                app.type_text(env.fixture.url("one-m.bin?speed=200000"))
+                app.send("tab")
+                app.type_text(env.save_dir)
+                app.send(*(["tab"] * 6))  # 焦点 1（保存到）→ 7（仅添加）
+                app.send("enter")
+                assert app.wait_for("已添加任务", 6), "应 toast 已添加任务（D29）"
+                text = app.text()
+                assert_in("已暂停，按空格开始下载", text, "toast 应含 D29 钦定文案")
+                assert_in("one-m.bin", text, "任务应出现在列表")
+                assert_in("已暂停", text, "仅添加任务应落「已暂停」（D28）")
+                assert_in("下载槽位 0/5", text, "仅添加不占下载槽位")
+                assert file_bytes(target) is None, "目标文件不应落盘（未发起传输）"
+                assert file_bytes(target + ".downloading") is None, \
+                    ".downloading 不应落盘（未发起传输）"
+                # ③ 空格开始下载。恢复 toast 双臂在首个请求即时完成探测的场景
+                #    会被紧随的探测结果 toast 同帧覆盖（engineering.md 探针秒败
+                #    纪律：瞬时 toast 不可稳定观察）——锚定持久状态迁移证据：
+                #    任务离开已暂停（重新排队）→ 开始传输 → 落盘完整。
+                app.send("space")
+                assert app.wait_gone("[已暂停]", 6), \
+                    "空格后任务应离开已暂停（重新排队，v1.21）"
+                assert app.wait_for("下载中", 10), "空格后应开始传输"
+                wait_file_size(target, QA_FILE_SIZES["one-m.bin"], 60, app=app)
+                # 等完成终态（（无校验）+ 槽位释放）再退出：中途 Q 会按 sidecar
+                # 周期落盘口径恢复为重新下载（FR-01-22 合同行为），污染 ④ 的
+                # 「不应有任务获槽」断言基线。
+                assert app.wait_for("下载槽位 0/5", 15), "完成后应释放槽位"
+            finally:
+                app.graceful_quit()
+            # ④ 非法 URL + 仅添加：校验链与立即下载一致
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                app.send("A")
+                assert app.wait_for("添加下载任务", 3)
+                app.type_text("ftp://example.invalid/file.bin")
+                app.send(*(["tab"] * 6))
+                app.send("enter")
+                app.pump(0.5)
+                text = app.text()
+                assert_in("添加下载任务", text, "对话框应保持打开（校验拒绝不关闭）")
+                assert_in("仅支持 http", text, "应报仅支持 http/https（校验链与立即下载一致）")
+                assert_not_in("已添加任务", text, "不应创建任务")
+                assert_in("下载槽位 0/5", text, "不应有任务获槽")
+            finally:
+                app.graceful_quit()
 
 if __name__ == "__main__":
     suite = AddTaskSuite()

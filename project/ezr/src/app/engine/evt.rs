@@ -86,6 +86,14 @@ impl App {
                 t.downloaded = downloaded;
                 t.chunk_done = chunk_done;
                 t.connections = conns.iter().map(conn_from_view).collect();
+                // 重锚消费（04-ui-conns-09 R 臂，QA v138 缺陷修复）：重试重启后
+                // 首个观测的块内 done 为续传检查点偏移——以当前观测重锚上一观
+                // 测位（该次增量 = 0），其后增量只计新一次下载的真实落盘
+                if self.conn_rebase.remove(&id) {
+                    for c in &conns {
+                        self.conn_prev.insert((id, c.id), (c.block, c.done));
+                    }
+                }
                 update_conn_stats(
                     &mut self.conn_prev,
                     &mut self.conn_cum,

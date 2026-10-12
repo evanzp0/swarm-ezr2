@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """suite_integrity_check.py — QA 套件 · 01-integrity-check 完整性校验（期号 01）。
 
-对应规程：project/qa/01-integrity-check-qa.md（11 用例）。
+对应规程：project/qa/01-integrity-check-qa.md（12 用例）。
 端到端 UI 层验证：TUI 状态/校验文案断言 + 磁盘伴随文件预置 + CLI 参数 + fixture 日志。
 
 口径注记（QA-IC-06，已裁决）：多伴随文件并存按算法表声明顺序取最先；Gherkin 示例
@@ -73,7 +73,7 @@ class IntegrityCheckSuite(Suite):
     # -- 用例 -----------------------------------------------------------------
 
     def run(self) -> list[CaseResult]:
-        for i in range(1, 12):
+        for i in range(1, 13):
             getattr(self, f"_case_{i:02d}")()
         return self.results
 
@@ -337,6 +337,110 @@ class IntegrityCheckSuite(Suite):
             finally:
                 app.graceful_quit()
 
+
+    def _case_12(self):
+        """QA-IC-12 校验失败清码 R 直判收尾（v1.17/v1.18/FR-01-51+D34）与断点作废变体。
+
+        主相：校验失败停等 → m 清空校验码确定 → R → 不发校验指令、无块重传
+        （fixture 无新 Range 请求）；不经「等待中/下载中/校验中」过渡帧直接转
+        「已完成」且显示「无校验」；已下载文件保留（.downloading 去除）、sidecar
+        删除——原缺陷形态（R 后仍显示校验失败；进度回退重传尾巴）不复现。
+        变相（外部改动形态）：预置大小不符的 .downloading → R 落「等待中」重新
+        排队且 sidecar 删除、断点作废从头重下（fixture 出现 bytes=0- 新请求，
+        持久证据锚定；「等待中」瞬时态不可稳定观察，engineering.md 纪律）。
+        """
+        @self.case("QA-IC-12")
+        def go(env: Env):
+            # -- 主相：文件完整直判收尾 -------------------------------------
+            data = self._make_file(env, "ic12a.bin", 1_000_000)
+            # 场景前置：显式提供错误校验值（对话框字段），保存目录无任何伴随文件
+            # ——若预置伴随文件，R 的期望值解析走「伴随现值为准」分支（①），
+            # 永不进入清码直判分支（③），与本场景被测行为不符。
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            self._cur_app = app
+            try:
+                add_task_via_dialog(
+                    app, env, env.fixture.url("ic12a.bin?speed=900000"),
+                    ck_value="0" * 64)
+                assert app.wait_for("SHA-256 校验失败", 60), "错误期望值应校验失败"
+                assert file_bytes(
+                    os.path.join(env.save_dir, "ic12a.bin.sha256")) is None, \
+                    "场景前置：保存目录不应有伴随文件"
+                # 清空校验码：m → 焦点0(并发) Tab×2 → 焦点2(校验码) 清空 → Tab×2 确认
+                app.send("m")
+                assert app.wait_for("修改任务", 3)
+                app.send(*(["tab"] * 2))
+                for _ in range(130):
+                    app.send("bs", gap=0.01)
+                app.send(*(["tab"] * 2))
+                app.send("enter")
+                assert app.wait_for("任务参数已更新", 5), "清码修改应生效"
+                # R：无校验指令、无块重传（ts 后 fixture 无新 Range 请求）
+                ts_before = time.time()
+                app.send("r")
+                assert app.wait_for("直接完成", 6), \
+                    "R 后应文件完整性直判直接完成（v1.18/D34）"
+                reqs = [r for r in env.fixture.requests()
+                        if "ic12a.bin" in r["path"] and r["range"]
+                        and r["ts"] / 1000 >= ts_before - 1]
+                assert not reqs, f"清码 R 不应发生任何 Range 请求（含探测）: {reqs[:3]}"
+                assert app.wait_for("（无校验）", 8), "直判完成应显示无校验"
+                text = app.text()
+                assert_not_in("校验失败", text, "原缺陷形态：R 后仍显示校验失败")
+                target = os.path.join(env.save_dir, "ic12a.bin")
+                assert file_bytes(target) == len(data), "已下载文件应保留且大小一致"
+                assert file_bytes(target + ".downloading") is None, \
+                    ".downloading 后缀应去除"
+                assert file_bytes(target + ".ezr") is None, "sidecar 应删除"
+                assert_file_content(target, len(data))
+            finally:
+                app.graceful_quit()
+            # -- 变相：大小不符 → 断点作废从头重下 ---------------------------
+            # 同主相口径：显式校验值（无伴随文件）+ 外部截断 .downloading
+            self._make_file(env, "ic12b.bin", 1_000_000)
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            self._cur_app = app
+            try:
+                add_task_via_dialog(
+                    app, env, env.fixture.url("ic12b.bin?speed=900000"),
+                    ck_value="0" * 64,
+                    save_dir=os.path.join(env.save_dir, "v"))
+                assert app.wait_for("SHA-256 校验失败", 60)
+                app.send("m")
+                assert app.wait_for("修改任务", 3)
+                app.send(*(["tab"] * 2))
+                for _ in range(130):
+                    app.send("bs", gap=0.01)
+                app.send(*(["tab"] * 2))
+                app.send("enter")
+                assert app.wait_for("任务参数已更新", 5)
+                # 外部改动：截断 .downloading（台账与磁盘脱节形态）
+                dl = os.path.join(env.save_dir, "v", "ic12b.bin.downloading")
+                assert file_bytes(dl) is not None, "校验失败态应存在 .downloading"
+                with open(dl, "r+b") as f:
+                    f.truncate(500_000)
+                ts_before = time.time()
+                app.send("r")
+                # 作废 toast（「断点已作废」）会被紧随的引擎探测结果 toast 同帧
+                # 覆盖（单块文件 single_stream 探测 toast，engineering.md 探针
+                # 秒败纪律）——改锚持久证据链：任务转出已失败（作废重新排队）
+                # + fixture 出现 bytes=0- 从头重下请求。
+                assert app.wait_gone("[已失败]", 8), \
+                    "R 应作废断点（任务转出已失败，重新排队）"
+                # 持久证据：bytes=0- 从头重下请求（「等待中」瞬时态不锚定）
+                zero = []
+                deadline = time.time() + 20
+                while time.time() < deadline and not zero:
+                    app.pump(0.2)
+                    zero = [r for r in env.fixture.requests()
+                            if "ic12b.bin" in r["path"] and r.get("range") == "bytes=0-"
+                            and r["ts"] / 1000 >= ts_before - 1]
+                assert zero, "作废断点后应从头重下（fixture 出现 bytes=0- 新请求）"
+                target = os.path.join(env.save_dir, "v", "ic12b.bin")
+                wait_file_size(target, 1_000_000, 60, app=app)
+                assert_file_content(target, 1_000_000)
+            finally:
+                app.graceful_quit()
 
 if __name__ == "__main__":
     suite = IntegrityCheckSuite()

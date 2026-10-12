@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """suite_modify_task.py — QA 套件 · 03-modify-task 任务修改对话框（期号 01）。
 
-对应规程：project/qa/03-modify-task-qa.md（8 用例）。
+对应规程：project/qa/03-modify-task-qa.md（9 用例）。
 端到端 UI 层验证：按键驱动（m/Tab/Enter/bs）+ 头部活跃连接数观测 + fixture 代理日志
 + 重启续传；不使用项目内部 API。
-「立即生效」判定沿规程 D19 口径：不要求在途请求/在途块被打断重连；并发下调允许
-块级过渡延迟（默认块 1 MB 秒级）。
+「立即生效」判定沿规程 D19 口径：不要求在途请求/在途块被打断重连；**下调即时收缩
+（v1.16/D30 改判）**——确定后约 1 秒内连接数降至目标值（不等块边界）。
 焦点/字段口径（product dialogs.rs）：Add 六行 URL/保存到/并发/校验/校验码/代理
-（确认 6 取消 7）；Modify 四行 并发0/校验1/校验码2/代理3（确认 4 取消 5）；
+（立即下载 6 仅添加 7 取消 8）；Modify 四行 并发0/校验1/校验码2/代理3（确认 4 取消 5）；
 添加对话框校验算法默认 SHA-256（ck_type=3）。
+
+v1.17 同步（QA v138 会话）：新增 QA-MT-09（对话框粘贴，FR-01-06 v1.17 修订）——
+Add/Modify 文本字段同权接收 bracketed paste：校验码仅 hex ≤128 位（CAP_CK_HEX）、
+并发仅数字 ≤2 位（CAP_CONNS_DIGITS）、控制字符净化；下拉展开与按钮焦点粘贴被忽略。
 """
 
 from __future__ import annotations
@@ -110,7 +114,7 @@ class ModifyTaskSuite(Suite):
     # -- 用例 -----------------------------------------------------------------
 
     def run(self) -> list:
-        for i in range(1, 9):
+        for i in range(1, 10):
             getattr(self, f"_case_{i:02d}")()
         return self.results
 
@@ -184,7 +188,7 @@ class ModifyTaskSuite(Suite):
                 assert not drops, f"进度应单调不减，回退点 {drops[:3]}"
             finally:
                 app.graceful_quit()
-            # 相位 B：4→1（独立子目录避免重复守卫；下调允许块级过渡）
+            # 相位 B：4→1（独立子目录避免重复守卫；v1.16/D30：下调即时收缩）
             app = EzrApp(env.home, save_dir=env.save_dir)
             self._cur_app = app
             try:
@@ -197,8 +201,13 @@ class ModifyTaskSuite(Suite):
                 self._set_conns(app, "1")
                 _confirm(app)
                 assert app.wait_for("任务参数已更新", 3), "修改立即生效提示"
-                # 下调：块级过渡后活跃连接降至 ≤1 并保持；进度单调、不暂停
-                time.sleep(2.5)  # 过渡窗（1MB 块 @1.6MB/s ≈ 0.7s/块）
+                # v1.16/D30 即时收缩：确定后约 1 秒内（进度帧粒度）降至 ≤1，
+                # 不等块边界（1MB 块 @1.6MB/s ≈ 0.7s/块——若仍按块边界收缩，
+                # 超额读数会持续到下一块完成，必红）。超额读数只允许出现在
+                # 确认后 1.0s 宽限窗内（帧粒度 + 确认 toast 渲染延迟）；其后
+                # 连续低读数稳定，进度单调、不暂停。
+                confirm_t = time.time()
+                late_high = []      # 宽限窗外的 >1 读数（应为空）
                 low_streak, pcts, paused = 0, [], False
                 deadline = time.time() + 8.0
                 while time.time() < deadline:
@@ -208,6 +217,8 @@ class ModifyTaskSuite(Suite):
                         continue
                     if t > 1:
                         low_streak = 0
+                        if time.time() - confirm_t > 1.0:
+                            late_high.append((round(time.time() - confirm_t, 2), t))
                     else:
                         low_streak += 1
                     p = task_pct(app)
@@ -216,12 +227,14 @@ class ModifyTaskSuite(Suite):
                     if "已暂停" in app.text():
                         paused = True
                         break
-                    time.sleep(0.2)
+                    time.sleep(0.15)
                 assert not paused, "下调过程任务不应暂停"
+                assert not late_high, \
+                    f"下调应即时收缩（1s 内降至 ≤1，实测宽限窗外超额读数 {late_high[:4]}）"
                 assert low_streak >= 5, \
                     f"下调后活跃连接应稳定 ≤1（连续低读数 {low_streak}）"
                 drops = _monotonic(pcts)
-                assert not drops, f"进度应单调不减，回退点 {drops[:3]}"
+                assert not drops, f"进度应单调不减（被中断块块内已写字节保留），回退点 {drops[:3]}"
             finally:
                 app.graceful_quit()
 
@@ -477,6 +490,79 @@ class ModifyTaskSuite(Suite):
             finally:
                 stop_proxy(px)
 
+
+    def _case_09(self):
+        """QA-MT-09 修改对话框粘贴（v1.17/FR-01-06 修订）：字段过滤、容量钳制、门控忽略。
+
+        ①校验码字段粘贴含杂质长摘要（控制字符/非 hex 混入，>128 位）→ 仅接收
+        hex、容量钳 128 位（CAP_CK_HEX，与逐键过滤一致；显示为尾部截断口径）；
+        ②并发字段粘贴混合数字字母 → 仅接收数字 ≤2 位（CAP_CONNS_DIGITS）；
+        ③校验下拉展开时粘贴被忽略（字段无变化）；④按钮焦点粘贴被忽略、无副作用。
+        断言锚：字段渲染值（校验码尾部 10 位截断口径，QA-MT-01 同源）。
+        """
+        @self.case("QA-MT-09")
+        def go(env: Env):
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            self._cur_app = app
+            try:
+                add_task_via_dialog(
+                    app, env, env.fixture.url("five-m.bin?speed=300000"),
+                    conns="3")
+                assert app.wait_for("下载中", 8)
+                # ② 并发字段（焦点 0）粘贴混合数字字母：仅数字 ≤2 位
+                _open_modify(app)
+                os.write(app.fd, b"\x1b[200~" + b"4a9b2c" + b"\x1b[201~")
+                app.pump(0.4)
+                text = app.text()
+                assert re.search(r"并发\s*>\s*34\b", text), \
+                    f"并发粘贴应仅接收数字（3+4 → 34）: {text[:200]!r}"
+                # 粘贴继续追加受 2 位钳制：再粘 abc123 → 只收 1 位（2 位已满）
+                os.write(app.fd, b"\x1b[200~" + b"xyz12" + b"\x1b[201~")
+                app.pump(0.4)
+                text = app.text()
+                assert re.search(r"并发\s*>\s*34\b", text), \
+                    f"并发应钳制 2 位（34 不再追加）: {text[:200]!r}"
+                # ① 校验码字段（焦点 2）粘贴含杂质超长摘要：先清空再粘贴
+                self._edit_ck_value(app, "")
+                junk = ("中\t文\n" + "zz" + "a1B2c3D4" * 20)  # 控制字符+非hex+hex 160 位
+                os.write(app.fd, b"\x1b[200~" + junk.encode() + b"\x1b[201~")
+                app.pump(0.5)
+                # 净化+过滤+钳制：控制字符剔除、非 hex 剔除、hex 前 128 位
+                hex_only = "".join(c for c in junk if c.isascii()
+                                   and c.isalnum() and c in "0123456789abcdefABCDEF")
+                expect = hex_only[:128][-10:]
+                assert_in(expect, app.text(),
+                          f"校验码粘贴应仅收 hex ≤128 位（尾部 10 位 {expect}）")
+                assert_not_in("中文", app.text(), "控制字符/非 hex 不应进入字段")
+                # ③ 校验下拉展开时粘贴被忽略：焦点自校验码（2）上移至校验（1），
+                #    Enter 展开下拉；粘贴后下拉仍开、字段值不变（无副作用）。
+                #    （画面全屏对比不可用——对话框外列表速度行逐秒刷新，属合法变化）
+                app.send("up")     # 焦点 2（校验码）→ 1（校验）
+                app.pump(0.2)
+                app.send("enter")  # 展开校验下拉
+                assert app.wait_for("SHA-512", 3), "校验下拉应展开"
+                os.write(app.fd, b"\x1b[200~" + b"deadbeef9999" + b"\x1b[201~")
+                app.pump(0.4)
+                after = app.text()
+                assert_in("SHA-512", after, "粘贴后下拉应仍展开（忽略粘贴）")
+                assert_in(expect, after, "粘贴后校验码字段值不应变化（无副作用）")
+                app.send("esc")    # Esc 收起下拉（焦点不变）
+                app.pump(0.3)
+                # ④ 按钮焦点粘贴被忽略且无副作用：Tab×3 至确认钮（焦点 4），
+                #    粘贴不得触发按钮；随后 Esc 关闭（不生效改动，任务参数不变）
+                app.send(*(["tab"] * 3))  # 校验1 → 校验码2 → 代理3 → 确认4
+                app.pump(0.2)
+                os.write(app.fd, b"\x1b[200~" + b"9999ff" + b"\x1b[201~")
+                app.pump(0.4)
+                after = app.text()
+                assert_in("修改任务", after, "粘贴不得触发确认（对话框仍开）")
+                assert re.search(r"并发\s*>\s*34\b", after), \
+                    "按钮焦点粘贴不得改动并发字段值"
+                app.send("esc")    # Esc 关闭对话框（粘贴/改动不生效）
+                app.pump(0.4)
+                assert_in("下载中", app.text(), "任务应继续下载（改动未生效）")
+            finally:
+                app.graceful_quit()
 
 if __name__ == "__main__":
     suite = ModifyTaskSuite()
