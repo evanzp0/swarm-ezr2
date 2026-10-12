@@ -55,8 +55,9 @@ impl App {
                     t.etag = etag;
                     t.last_modified = last_modified;
                     if t.state == TaskState::Queued {
-                        // 进入下载 = 新的一次下载（首次启动 / 重试重新排队 / 失效重下）：
-                        // 连接级累计从零重计（FR-01-99 ②）
+                        // 进入下载 = 新的一次下载（首次启动 / 重试重新排队 /
+                        // 失效重下 / 暂停后恢复，v1.21 统一队列路径）：连接级
+                        // 累计从零重计（FR-01-99 ②）
                         t.state = TaskState::Downloading;
                         t.made_progress = false;
                         self.clear_conn_stats(id);
@@ -300,10 +301,12 @@ impl App {
         // 重试决策（FR-01-41/42/43）：连续性规则 + 退避/Retry-After + 分类，
         // 策略唯一来源在 model::retry（DRY）
         let (auto_retry, max_retries) = (self.cfg.auto_retry, t.max_retries);
-        // v1.6/FR-01-92：用户已手动挂起（FailedPaused）→ 迟到失败事件仅更新
-        // 错误信息，不得转回失败态或恢复自动重试（否则挂起语义被竞态覆盖）
-        if t.state == TaskState::FailedPaused {
-            t.error = Some(reason.clone());
+        // v1.6/FR-01-92；v1.21 合并口径：用户已手动挂起 → 迟到失败事件不得
+        // 转回失败态或恢复自动重试（否则挂起语义被竞态覆盖）；v1.23（操作者
+        // 20261012 bug 报告直判）：守卫扩为 Paused 全态且**整体忽略**——不写
+        // error（挂起时已重置 error=None/retries=1，写回会污染注册表快照，
+        // 违背「error=null」口径）
+        if t.state == TaskState::Paused {
             return;
         }
         let (new_retries, decision) = crate::model::retry::decide(

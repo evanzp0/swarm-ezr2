@@ -187,8 +187,9 @@ pub(super) fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
             fmt_size(t.total)
         )),
     ]));
-    // 失败原因（已失败与已暂停（失败）均保留可见，v1.6/FR-01-92）
-    if matches!(t.state, TaskState::Failed | TaskState::FailedPaused) {
+    // 失败原因：仅「已失败」态展示（v1.6/FR-01-92；v1.22/v1.23 操作者直判——
+    // 挂起态不再展示也不再持有错误信息，详情与普通已暂停完全一致）
+    if t.state == TaskState::Failed {
         lines.push(Line::from(vec![
             Span::raw(" "),
             dim_label("失败原因"),

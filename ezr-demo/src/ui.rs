@@ -63,10 +63,9 @@ fn state_color(s: TaskState) -> Color {
     match s {
         TaskState::Queued => YELLOW,
         TaskState::Downloading | TaskState::Verifying | TaskState::PostProcessing => LIGHT_BLUE,
+        // v1.22/v1.23 展示与数据统一同步：失败挂起由 Paused 承载（色同白），
+        // 徽标文案不细分——展示与普通「已暂停」一致（生产 v1.22 直判同步）
         TaskState::Paused => Color::White,
-        // 挂起（失败）：与暂停同色承载静置语义（生产 v1.19/FR-01-92 裁决同步；
-        // 失败警示由统计行红承载）
-        TaskState::FailedPaused => Color::White,
         TaskState::Completed => GREEN,
         TaskState::Failed => RED,
         TaskState::Seeding => MAGENTA,
@@ -244,6 +243,7 @@ fn task_lines(
     // 等待中任务显示真实进度（可能持有断点进度）
     let pct_txt = format!("{:>5.1}%", t.progress() * 100.0);
     let proto_badge = format!("[{}]", t.protocol.label());
+    // v1.22 展示统一同步：徽标文案 = 状态名单源，失败挂起不细分
     let state_badge = format!("[{}]", t.state.label());
     let cursor_w = 2usize;
     let badges_w = w(&proto_badge) + 1 + w(&state_badge) + 1;
@@ -328,24 +328,6 @@ fn task_lines(
             l3.push(Span::styled(retry, Style::default().fg(RED)));
             l3.push(Span::styled(" · ", Style::default().fg(RED)));
             l3.push(Span::styled(countdown, Style::default().fg(RED)));
-            l3.push(Span::styled(" · ", Style::default().fg(RED)));
-            l3.push(Span::styled(
-                format!("{}/{}", fmt_size(t.downloaded), fmt_size(t.total)),
-                Style::default().fg(RED),
-            ));
-        }
-        TaskState::FailedPaused => {
-            // 已暂停（失败）：重试计数 · 已暂停（不再自动重试）· 大小；
-            // 无倒计时片段（挂起时已清除）——生产 stat_failed_paused 同构
-            l3.push(Span::styled(
-                format!("重试 {}/{}", t.retries, t.max_retries),
-                Style::default().fg(RED),
-            ));
-            l3.push(Span::styled(" · ", Style::default().fg(RED)));
-            l3.push(Span::styled(
-                "已暂停（不再自动重试）".to_string(),
-                Style::default().fg(RED),
-            ));
             l3.push(Span::styled(" · ", Style::default().fg(RED)));
             l3.push(Span::styled(
                 format!("{}/{}", fmt_size(t.downloaded), fmt_size(t.total)),
@@ -903,7 +885,8 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
             fmt_size(t.total)
         )),
     ]));
-    // 失败原因（仅已失败）
+    // 失败原因：仅「已失败」态展示（生产 v1.22 直判同步——失败挂起不再展示，
+    // 详情与普通已暂停完全一致）
     if t.state == TaskState::Failed {
         lines.push(Line::from(vec![
             Span::raw(" "),

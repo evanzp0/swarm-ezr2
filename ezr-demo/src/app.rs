@@ -28,10 +28,10 @@
 //! - 重试计数连续性：连续失败（无进展）→ 累加、有进展 → 重置为 1；
 //!   达上限（默认 5）→ 停止自动重试、释放槽位、显示「已达上限」。
 //!
-//! 失败任务空格暂停（生产 v1.6/FR-01-92 + v1.19 同步）：失败任务按空格 =
-//! 暂停（挂起自动重试）——清倒计时、释放槽位、转「已暂停（失败）」；错误信息
-//! 与失败类别保留可见；再次按空格 = 恢复重新排队（计数重置、断点续传，校验
-//! 失败型走重新校验路径）。R 仅适用「已失败」态，空格为挂起态唯一恢复键
+//! 失败任务空格暂停（生产 v1.6/FR-01-92 + v1.19 同步 + v1.22/v1.23 展示与数据统一）：失败任务按空格 =
+//! 暂停（挂起自动重试）——清倒计时、释放槽位、转「已暂停」并即时重置 error/retries（v1.23：
+//! 数据层与普通暂停完全一致）；再次按空格 = 恢复重新排队（断点续传，校验失败型走重新校验路径）。
+//! R 仅适用「已失败」态，空格为挂起态唯一恢复键
 //! （v1.19 收窄；挂起态按 R 提示「仅『已失败』的任务可以重试」）。
 //!
 //! 下载槽位：同时可下载的任务数写死为 5（MAX_DOWNLOAD_SLOTS）。
@@ -109,10 +109,6 @@ pub enum TaskState {
     Completed,
     /// 已失败
     Failed,
-    /// 已暂停（失败）——失败任务按空格挂起自动重试（生产 v1.6/FR-01-92 同步）；
-    /// 错误信息与失败类别保留可见，不占下载槽位；空格恢复 = 重新排队，
-    /// 空格为唯一恢复键（生产 v1.19 R 收窄同步）
-    FailedPaused,
     /// 做种（BT）
     Seeding,
 }
@@ -142,7 +138,6 @@ impl TaskState {
             TaskState::PostProcessing => "后期处理中",
             TaskState::Completed => "已完成",
             TaskState::Failed => "已失败",
-            TaskState::FailedPaused => "已暂停（失败）",
             TaskState::Seeding => "做种中",
         }
     }
@@ -2159,40 +2154,26 @@ impl App {
                 self.set_toast(toast);
             }
             TaskState::Paused => {
-                // 继续下载：需要空闲下载槽位；槽位已满时转入「等待中」队列排队
-                if self.used_slots() >= MAX_DOWNLOAD_SLOTS {
-                    let used = self.used_slots();
-                    self.tasks[idx].state = TaskState::Queued;
-                    self.tasks[idx].has_slot = false;
-                    self.tasks[idx].queued_since = Some(Instant::now());
-                    self.tasks[idx].start_delay = 1.5;
-                    self.set_toast(format!(
-                        "⏳ 无空闲下载槽位（{}/{}），已进入等待队列: {}",
-                        used, MAX_DOWNLOAD_SLOTS, name
-                    ));
+                // 生产 v1.21/FR-01-33 修订同步（操作者 20261012 指令）：继续 =
+                // 一律重新排队——「有空闲槽直接开跑」路径废除，统一经等待队列
+                // 由槽位调度启动（磁盘预检/列表序公平分配/清零口径随队列单源）；
+                // v1.23 同步：失败挂起在挂起时即已重置 error/retries，恢复路径
+                // 数据上与普通暂停无差别；不支持续传的任务获槽启动时由 tick
+                // 从头下载（既有路径承接）
+                let resumable = self.tasks[idx].resumable;
+                let verify_fail = self.tasks[idx].fail_kind == Some(FailKind::Verify);
+                self.requeue_reset(idx);
+                self.tasks[idx].queued_since = Some(Instant::now());
+                self.tasks[idx].start_delay = 1.5;
+                if verify_fail {
+                    // 校验失败挂起的恢复：与 R 同分支（重新校验/直判）
+                    self.requeue_verify_branch(idx);
                     return;
                 }
-                // 继续下载：从断点直接恢复传输（无「连接中」状态）；
-                // 服务器不支持断点续传时，只能从头开始下载
-                let restart = !self.tasks[idx].resumable;
-                if restart {
-                    let total = self.tasks[idx].total;
-                    let n = self.tasks[idx].connections.len().max(1);
-                    let piece = chunk_size(self.tasks[idx].protocol);
-                    self.tasks[idx].downloaded = 0;
-                    self.tasks[idx].chunk_done = 0;
-                    self.tasks[idx].connections =
-                        make_chunk_conns(total, 0, n, piece, self.tasks[idx].id as u64).0;
-                }
-                self.tasks[idx].state = TaskState::Downloading;
-                self.tasks[idx].has_slot = true;
-                self.tasks[idx].queued_since = None;
-                self.tasks[idx].running_since = Some(Instant::now());
-                self.tasks[idx].made_progress = false; // 新尝试开始：清空进展标记
-                let toast = if restart {
-                    format!("⚠ 服务器不支持断点续传，已从头开始下载: {}", name)
+                let toast = if resumable {
+                    format!("▶ 继续下载（从断点恢复，已进入等待队列）: {name}")
                 } else {
-                    format!("▶ 继续下载（从断点恢复）: {}", name)
+                    format!("⚠ 服务器不支持断点续传，将从头下载（已进入等待队列）: {name}")
                 };
                 self.set_toast(toast);
             }
@@ -2213,22 +2194,18 @@ impl App {
                 self.set_toast(toast);
             }
             TaskState::Failed => {
-                // 生产 v1.6/FR-01-92 同步：失败任务按空格 = 暂停（挂起自动重试）——
-                // 清倒计时、释放槽位、转「已暂停（失败）」；错误信息与失败类别
-                // 保留可见（原「空格 = 立即重新排队」口径废止：同款缺陷——
-                // 自动重试循环无法停止，生产修复的同一问题）
-                self.tasks[idx].state = TaskState::FailedPaused;
+                // 生产 v1.6/FR-01-92 + v1.21 合并口径 + v1.22/v1.23 展示与数据统一同步：
+                // 失败任务按空格 = 暂停（挂起自动重试）——清倒计时、释放槽位、转「已暂停」
+                // 并即时重置 error=None、retries=1（v1.23 操作者 20261012 bug 报告直判：
+                // 数据层与普通暂停完全一致）；（原「空格 = 立即重新排队」口径废止）
+                self.tasks[idx].state = TaskState::Paused;
+                self.tasks[idx].error = None;
+                self.tasks[idx].retries = 1;
                 self.tasks[idx].retry_in = None;
                 self.tasks[idx].has_slot = false;
                 self.set_toast(format!(
                     "⏸ 已暂停（失败），不再自动重试；按空格恢复: {name}"
                 ));
-            }
-            TaskState::FailedPaused => {
-                // 已暂停（失败）→ 恢复 = 重新排队（计数重置、断点续传；
-                // 校验失败型仍走重新校验路径）。空格为唯一恢复键，R 不适用
-                // 本态（生产 v1.19/FR-01-92 收窄同步）
-                self.requeue_failed(idx, false);
             }
             TaskState::Seeding => {
                 // 做种中 → 暂停做种，进入「已完成」（并发连接明细清空、活跃 0/0）
@@ -2245,31 +2222,19 @@ impl App {
     pub fn retry(&mut self) {
         let Some(idx) = self.sel_idx() else { return };
         if self.tasks[idx].state == TaskState::Failed {
-            // 仅「已失败」可 R；「已暂停（失败）」不可 R（生产 v1.19/FR-01-92
-            // 收窄同步：空格为挂起态唯一恢复键，挂起态按 R 落兜底提示）。
-            // 手动重试 → 已重试次数重置为 1；校验失败任务按重校验/不校验
-            // 分支处理（生产 v1.17/FR-01-51 + D34 同步）；
-            // 原本持有槽位的（未达重试上限的）失败任务继续占用槽位，
-            // 已达上限/停等释放槽位的任务重新排队后等待新的空闲槽位
-            self.requeue_failed(idx, true);
+            // 仅「已失败」可 R；挂起态（Paused）不可 R（生产 v1.19/
+            // FR-01-92 收窄 + v1.21 合并口径同步：空格为唯一恢复键，挂起态按 R
+            // 落兜底提示）。手动重试 → 已重试次数重置为 1；校验失败任务按
+            // 重校验/不校验分支处理（生产 v1.17/FR-01-51 + D34 同步）
+            self.requeue_failed(idx);
         } else {
             self.set_toast("仅「已失败」的任务可以重试".to_string());
         }
     }
 
-    /// 失败任务重新排队（R 手动重试 / Space）。校验失败（fail_kind = Verify）
-    /// 按期望值分支解析（生产 v1.16/D10 + v1.17/FR-01-51 三分支同步；demo 无
-    /// 伴随文件 → 两分支）：
-    /// ① 任务显式校验值在 → **重新校验（无块重传）**：不重传数据、不 rebuild
-    ///    分块，落「校验中」（demo：verify_fail_once 已消费 → 本次校验通过）；
-    /// ② 校验码已清空（修改对话框清码确定）→ **不校验**：不重传、不重校验，
-    ///    落回正常重新排队尾（等待中）——下载已完成，获得槽位后立即收尾
-    ///    「已完成」（列表/详情「无校验」，生产 D34 钦定语义）。
-    /// 其余失败沿用断点续传（已下载块的字节保持有效）。
-    /// 原演示口径「校验失败清除断点从头重下」已废止（生产 v1.17 改判）。
-    fn requeue_failed(&mut self, idx: usize, manual: bool) {
-        let verify_fail = self.tasks[idx].fail_kind == Some(FailKind::Verify);
-        // 公共字段重置（与生产一致：错误/倒计时/失败类别清除、计数重置、让槽）
+    /// 重新排队公共字段重置（R 手动重试与空格恢复共用，生产 v1.21 同步）：
+    /// 转等待中、错误/倒计时/失败类别清除、计数重置、让槽
+    fn requeue_reset(&mut self, idx: usize) {
         self.tasks[idx].state = TaskState::Queued;
         self.tasks[idx].error = None;
         self.tasks[idx].retry_in = None;
@@ -2277,41 +2242,51 @@ impl App {
         self.tasks[idx].retries = 1;
         self.tasks[idx].made_progress = false;
         self.tasks[idx].has_slot = false;
-        if verify_fail {
-            // 分支①：显式校验值在 → 重新校验（无块重传）：不重置 downloaded/
-            // chunk_done/connections（生产 D10：全块已完成，重传只会丢弃
-            // 完好的已下载数据），直接落「校验中」占槽位
-            if self.tasks[idx].checksum.is_some() {
-                self.tasks[idx].state = TaskState::Verifying;
-                self.tasks[idx].has_slot = true;
-                self.tasks[idx].verify_started = Some(Instant::now());
-                let name = self.tasks[idx].name.clone();
-                self.set_toast(format!("↻ 重新校验（无块重传）: {name}"));
-                return;
-            }
-            // 分支②（校验码 = None）：v1.18 文件完整性直判（生产 FR-01-51 v1.18
-            // 同步）——校验失败时全块已完成、文件已 100% 落盘 → 不经引擎直接
-            // 收尾「已完成/无校验」（零排队零重传零进度回退；原「落回重新排队
-            // → 获槽后同帧完成」的等待过渡废止）。demo 无外部文件改动面，直判
-            // 恒命中（生产侧文件缺失/大小不符时作废断点从头重下，demo 不可达
-            // 不建模）
+    }
+
+    /// 校验失败重排分支（R 与空格恢复共用，生产 v1.16/D10 + v1.17/FR-01-51
+    /// 三分支同步；demo 无伴随文件 → 两分支）：
+    /// ① 任务显式校验值在 → **重新校验（无块重传）**；
+    /// ② 校验码已清空 → v1.18 文件完整性直判（生产 FR-01-51 v1.18 同步）。
+    fn requeue_verify_branch(&mut self, idx: usize) {
+        // 分支①：显式校验值在 → 重新校验（无块重传）：不重置 downloaded/
+        // chunk_done/connections（生产 D10：全块已完成，重传只会丢弃
+        // 完好的已下载数据），直接落「校验中」占槽位
+        if self.tasks[idx].checksum.is_some() {
+            self.tasks[idx].state = TaskState::Verifying;
+            self.tasks[idx].has_slot = true;
+            self.tasks[idx].verify_started = Some(Instant::now());
             let name = self.tasks[idx].name.clone();
-            self.tasks[idx].state = TaskState::Completed;
-            self.tasks[idx].verify_ok = None;
-            self.tasks[idx].speed = 0.0;
-            self.tasks[idx].connections.clear();
-            self.set_toast(format!("✓ 文件已完整，直接完成（无校验）: {name}"));
+            self.set_toast(format!("↻ 重新校验（无块重传）: {name}"));
+            return;
+        }
+        // 分支②（校验码 = None）：v1.18 文件完整性直判——校验失败时全块
+        // 已完成、文件已 100% 落盘 → 直接收尾「已完成/无校验」。demo 无外部
+        // 文件改动面，直判恒命中（生产侧文件缺失/大小不符时作废断点从头
+        // 重下，demo 不可达不建模）
+        let name = self.tasks[idx].name.clone();
+        self.tasks[idx].state = TaskState::Completed;
+        self.tasks[idx].verify_ok = None;
+        self.tasks[idx].speed = 0.0;
+        self.tasks[idx].connections.clear();
+        self.set_toast(format!("✓ 文件已完整，直接完成（无校验）: {name}"));
+    }
+
+    /// 失败任务手动重试（R，FR-01-34/D10；旧「空格恢复」入参形态已随生产
+    /// v1.21 统一路径并入 toggle_pause 的 Paused 臂）。其余失败沿用断点续传
+    /// （已下载块的字节保持有效）；原演示口径「校验失败清除断点从头重下」
+    /// 已废止（生产 v1.17 改判）。
+    fn requeue_failed(&mut self, idx: usize) {
+        let verify_fail = self.tasks[idx].fail_kind == Some(FailKind::Verify);
+        self.requeue_reset(idx);
+        if verify_fail {
+            self.requeue_verify_branch(idx);
             return;
         }
         self.tasks[idx].queued_since = Some(Instant::now());
         self.tasks[idx].start_delay = 3.0;
         let name = self.tasks[idx].name.clone();
-        let label = if manual {
-            "手动重试"
-        } else {
-            "重新排队"
-        };
-        self.set_toast(format!("↻ {label}（等待中）: {name}"));
+        self.set_toast(format!("↻ 手动重试（等待中）: {name}"));
     }
 
     pub fn clear_completed(&mut self) {

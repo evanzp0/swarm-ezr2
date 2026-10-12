@@ -42,7 +42,8 @@
 场景 H（两次运行，共 ~13s）：等待中任务 rust 按 Space → 已暂停（退出等待队列，
                         toast「已暂停（退出等待队列）」），imagenet 递补第 1 位、
                         tensorflow 第 2 位；再次运行：已暂停 rust 再按 Space（槽位满
-                        5/5）→ 回到等待中排队第 1 位，toast「无空闲下载槽位」。
+                        5/5，v1.8 有空槽也一样）→ 回到等待中排队第 1 位，toast
+                        「继续下载（从断点恢复，已进入等待队列）」（一律重新排队口径）。
 场景 I（16s 键盘）：    校验算法下拉框键盘流：Tab×3 → Enter 展开 → ↓ 选 SHA-384 →
                         输入非法校验码 → toast「需为 96 位（当前 4 位）」；切回 MD5、
                         输入合法 32 位校验码 → 确认建任务，详情出现「校验 MD5 ·…（完成后校验）」。
@@ -107,7 +108,7 @@ import unicodedata
 import pyte
 
 # 二进制路径：仓库内 release 构建（bin/ezr-tui-demo 为随包预编译副本）
-PROG = "/home/z/swarm-ezr2/ezr-demo/target/release/ezr-tui-demo"
+PROG = "/home/z/my-project/project/ezr-demo/target/release/ezr-tui-demo"
 YEL_HEX = "e4b23e"      # 黄 Rgb(228,178,62)
 
 PASS: list[str] = []
@@ -668,8 +669,8 @@ def scenario_h():
     check("H6 已暂停 rust 再按 Space（槽位满）回到等待中排队第 1 位",
           r_blk2 is not None and "[等待中]" in r_blk2 and "排队第 1 位" in r_blk2,
           r_blk2.replace("\n", " | ").strip()[:80] if r_blk2 else "not found")
-    check("H7 toast「无空闲下载槽位（5/5），已进入等待队列: rust-…」",
-          "无空闲下载槽位（5/5），已进入等待队列: rust-toolchain-nightly" in all_text2)
+    check("H7 toast「继续下载（从断点恢复，已进入等待队列）: rust-…」（v1.8 一律重新排队）",
+          "继续下载（从断点恢复，已进入等待队列）: rust-toolchain-nightly" in all_text2)
 
 
 def is_wide_ch(ch: str) -> bool:

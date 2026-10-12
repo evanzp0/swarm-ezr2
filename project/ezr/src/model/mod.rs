@@ -9,6 +9,19 @@
 //! 状态机口径（phase-01 FR-01-30）：01 实际出现 6 态——等待中/下载中/已暂停/
 //! 校验中/已失败/已完成；「后期处理中」与「做种中」为后续期预留（枚举与配色
 //! 保留、01 内无触发路径）。不存在「连接中」状态。
+//!
+//! v1.21（操作者 20261012 指令）：原「已暂停（失败）」（FailedPaused）独立状态
+//! 退役并入「已暂停」（v1.21 曾由 `has_error` 布尔承载挂起语义）。
+//!
+//! v1.22（操作者 20261012 bug 报告直判）：挂起态 UI 展示与普通「已暂停」
+//! 完全一致（徽标/列表统计行/详情失败原因行三处差异化展示退役），错误信息
+//! 仅在「已失败」态详情展示。
+//!
+//! v1.23（操作者 20261012 bug 报告直判）：失败挂起在数据层也与普通暂停完全
+//! 一致——Failed 按空格挂起时即重置 error=None、retries=1（注册表快照同
+//! 口径）；`has_error` 字段整体退役（迟到失败守卫改按 Paused 全态忽略、
+//! 恢复 toast 回归续传双臂），v1.21 产物注册表的多余 `has_error` 字段
+//! 反序列化时被忽略（零迁移）。
 
 pub mod checksum;
 pub mod chunk;
@@ -64,7 +77,7 @@ pub enum TaskState {
     Queued,
     /// 下载中
     Downloading,
-    /// 已暂停
+    /// 已暂停（v1.22 起挂起态展示不细分、v1.23 起数据层也不细分）
     Paused,
     /// 完整性校验中（占下载槽位，FR-01-31/D12）
     Verifying,
@@ -75,10 +88,6 @@ pub enum TaskState {
     Completed,
     /// 已失败
     Failed,
-    /// 已暂停（失败）——失败任务按空格挂起自动重试（v1.6/FR-01-92/D25）；
-    /// 错误信息与失败类型保留可见，不占下载槽位；空格恢复 = 重新排队
-    /// （v1.19 收窄：R 恢复路径退役，空格为唯一恢复键）
-    FailedPaused,
     /// 做种（BT，02+ 预留，01 无触发路径）
     #[allow(dead_code)]
     Seeding,
@@ -96,7 +105,6 @@ impl TaskState {
             TaskState::PostProcessing => "后期处理中",
             TaskState::Completed => "已完成",
             TaskState::Failed => "已失败",
-            TaskState::FailedPaused => "已暂停（失败）",
             TaskState::Seeding => "做种中",
         }
     }

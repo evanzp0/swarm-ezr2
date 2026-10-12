@@ -481,11 +481,14 @@ mod tests {
         assert_eq!(app.tab_counts(), [0, 0], "空表双零");
         app.tasks.push(task(1, "a.bin", TaskState::Downloading));
         app.tasks.push(task(2, "b.bin", TaskState::Queued));
-        app.tasks.push(task(3, "c.bin", TaskState::FailedPaused));
+        app.tasks.push(task(3, "c.bin", TaskState::Paused));
         app.tasks.push(task(4, "d.bin", TaskState::Completed));
         app.tasks.push(task(5, "e.bin", TaskState::Seeding));
         let counts = app.tab_counts();
-        assert_eq!(counts[0], 3, "未完成态 = 下载中/等待/暂停（失败）");
+        assert_eq!(
+            counts[0], 3,
+            "未完成态 = 下载中/等待/暂停（含挂起，v1.23 数据同普通暂停）"
+        );
         assert_eq!(counts[1], 2, "is_done = 已完成/做种");
         assert_eq!(counts[0] + counts[1], app.tasks.len(), "两页签不重不漏");
         // 状态翻转 → 计数随动（校验中属未完成页签）

@@ -72,7 +72,8 @@ pub struct Task {
     pub retry_in: Option<f64>,
     /// 最近一次失败的类别（决定「不自动重试/已达上限」行文案与 R 重试语义）
     pub fail_kind: Option<FailKind>,
-    /// 最近一次失败原因（详情「失败原因」行）
+    /// 最近一次失败原因（「已失败」态详情「失败原因」行；挂起态不再持有——
+    /// v1.23 起失败挂起时即重置，与普通暂停数据一致）
     pub error: Option<String>,
     /// 连续「续传一致性失效」次数（FR-01-22 防循环：连续 3 次转已失败停等）
     pub invalidation_streak: u32,

@@ -474,7 +474,7 @@ mod add_dialog_flow_tests {
 
     /// v1.15/FR-01-103（D28/D29）：仅添加按钮——校验与创建链路与立即下载一致，
     /// 唯一差异 = 任务落「已暂停」态（不占槽位、不自动启动）+ 钦定 toast；
-    /// 空格继续走既有 FR-01-33 链路（槽位空闲 → 直接下载）
+    /// 空格继续走既有 FR-01-33 链路（v1.21 修订：一律重新排队）
     #[tokio::test]
     async fn add_only_button_creates_paused_task() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-addonly");
@@ -510,13 +510,13 @@ mod add_dialog_flow_tests {
             "toast 钦定文案（D29）：{:?}",
             app.toast
         );
-        // 空格继续（FR-01-33 既有链路）：槽位空闲 → 直接下载
+        // 空格继续（FR-01-33 既有链路）：一律重新排队（v1.21 修订）
         app.selected = 0;
         app.toggle_pause();
         assert_eq!(
             app.tasks[0].state,
-            TaskState::Downloading,
-            "空格继续开始下载"
+            TaskState::Queued,
+            "空格继续 = 重新排队（统一路径，不检测空闲槽位）"
         );
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();

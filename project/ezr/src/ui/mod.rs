@@ -72,18 +72,18 @@ pub(super) const EMPTY: Color = Color::Rgb(54, 68, 74);
 /// 下载中/校验中/后期处理（淡蓝）
 pub(super) const LIGHT_BLUE: Color = Color::Rgb(122, 185, 242);
 
-/// 状态 → 语义色映射表（9 态全显式映射。v1.19/FR-01-92 徽标色裁决：FailedPaused
-/// 映射白——与 Paused 同色承载「操作者主动静置」语义，失败警示由统计行红与
-/// 详情失败原因行承载；原 DIM 兜底系 v1.6 实现缺口，本轮裁决补齐。DIM 兜底
+/// 状态 → 语义色映射表（8 态全显式映射。v1.19/FR-01-92 徽标色裁决：失败挂起
+/// 映射白——与 Paused 同色承载「操作者主动静置」语义；v1.21 合并口径：失败
+/// 挂起不再独立状态，数据与展示均同普通已暂停（v1.22/v1.23）；徽标文案
+/// 亦不细分（state.label() 单源），挂起态展示与普通已暂停完全一致。DIM 兜底
 /// 保留仅防御未来新增态漏配，由 state_color_covers_every_variant_without_fallback
 /// 穷尽守卫测试拦截）
-const STATE_COLORS: [(TaskState, Color); 9] = [
+const STATE_COLORS: [(TaskState, Color); 8] = [
     (TaskState::Queued, YELLOW),
     (TaskState::Downloading, LIGHT_BLUE),
     (TaskState::Verifying, LIGHT_BLUE),
     (TaskState::PostProcessing, LIGHT_BLUE),
     (TaskState::Paused, Color::White),
-    (TaskState::FailedPaused, Color::White),
     (TaskState::Completed, GREEN),
     (TaskState::Failed, RED),
     (TaskState::Seeding, MAGENTA),
@@ -209,9 +209,9 @@ mod ui_tests {
         }
     }
 
-    /// 9 态全态入表守卫（match 空臂 = 编译期穷尽锚：TaskState 新增变体时本测试
-    /// 编译失败强制回看；DIM 兜底断言防漏配再犯——v1.6/FR-01-92 FailedPaused
-    /// 曾漏配落 DIM 的缺口教训）
+    /// 8 态全态入表守卫（match 空臂 = 编译期穷尽锚：TaskState 新增变体时本测试
+    /// 编译失败强制回看；DIM 兜底断言防漏配再犯——v1.6/FR-01-92 失败挂起
+    /// 曾漏配落 DIM 的缺口教训；v1.21 合并后 FailedPaused 变体退役）
     #[test]
     fn state_color_covers_every_variant_without_fallback() {
         for s in [
@@ -220,7 +220,6 @@ mod ui_tests {
             TaskState::Verifying,
             TaskState::PostProcessing,
             TaskState::Paused,
-            TaskState::FailedPaused,
             TaskState::Completed,
             TaskState::Failed,
             TaskState::Seeding,
@@ -231,7 +230,6 @@ mod ui_tests {
                 | TaskState::Verifying
                 | TaskState::PostProcessing
                 | TaskState::Paused
-                | TaskState::FailedPaused
                 | TaskState::Completed
                 | TaskState::Failed
                 | TaskState::Seeding => {}
@@ -531,14 +529,14 @@ mod ui_tests {
         assert_eq!(app.tasks[0].speed, 0.0);
         assert!(!app.tasks[0].has_slot, "暂停释放槽位");
 
-        // 已暂停 → 继续：槽位满（另一任务占 1/1）→ 进等待队列
+        // 已暂停 → 继续：一律重新排队（v1.21/FR-01-33 修订；此处槽位满 1/1）
         app.tasks.push(task(2, "p2.bin", TaskState::Downloading));
         app.tasks[1].has_slot = true;
         app.toggle_pause(); // 选中仍是 0（p1 已暂停）
         assert_eq!(
             app.tasks[0].state,
             TaskState::Queued,
-            "无空闲槽位进等待队列"
+            "继续 = 重新排队（统一路径，不检测空闲槽位）"
         );
         assert!(!app.tasks[0].has_slot);
 
@@ -600,14 +598,17 @@ mod ui_tests {
         app.shutdown().await;
     }
 
-    /// v1.6/FR-01-92/D25：失败任务 Space 暂停（挂起自动重试）↔ 恢复重新排队；
-    /// R 对「已暂停（失败）」同样有效（= 恢复）
+    /// v1.6/FR-01-92/D25 + v1.21 合并口径：失败任务 Space 暂停（挂起自动重试）
+    /// ↔ 恢复重新排队；v1.23（操作者 20261012 bug 报告直判）：挂起时即重置
+    /// error=None、retries=1——数据层与普通暂停完全一致（注册表快照同口径）；
+    /// R 对挂起态同样无效
     #[tokio::test]
     async fn failed_pause_resume_flow() {
         let mut app = make_app("fpause");
         app.max_slots = 1;
 
-        // 失败（倒计时进行中）→ Space = 暂停：转 FailedPaused、清倒计时、释放槽位
+        // 失败（倒计时进行中）→ Space = 暂停：转 Paused、清倒计时、释放槽位，
+        // 并重置 error/retries（v1.23：数据层与普通暂停完全一致）
         app.tasks.push(task(1, "f1.bin", TaskState::Failed));
         app.tasks[0].retries = 2;
         app.tasks[0].retry_in = Some(5.0);
@@ -618,15 +619,23 @@ mod ui_tests {
         app.toggle_pause();
         assert_eq!(
             app.tasks[0].state,
-            TaskState::FailedPaused,
-            "失败按空格 = 暂停"
+            TaskState::Paused,
+            "失败按空格 = 暂停（v1.21 合并口径）"
+        );
+        assert_eq!(
+            app.tasks[0].state.label(),
+            "已暂停",
+            "徽标文案与普通暂停一致（v1.22 展示不细分）"
         );
         assert!(app.tasks[0].retry_in.is_none(), "倒计时清除，不再自动重试");
         assert!(!app.tasks[0].has_slot, "不占下载槽位");
+        assert!(
+            app.tasks[0].error.is_none(),
+            "错误信息挂起即重置（v1.23：error=null）"
+        );
         assert_eq!(
-            app.tasks[0].error.as_deref(),
-            Some("连接被重置"),
-            "错误信息保留可见"
+            app.tasks[0].retries, 1,
+            "重试计数挂起即重置（v1.23：retries=1）"
         );
         assert!(app.toast.as_deref().is_some_and(|m| m.contains("已暂停")));
         // v1.19/FR-01-92 收窄口径的引导文案断言：挂起引导只指空格，
@@ -639,35 +648,72 @@ mod ui_tests {
             app.toast
         );
 
-        // tick 不推进挂起任务（FailedPaused 不参与 retry_in 到点重排）
+        // tick 不推进挂起任务（Paused 不参与 retry_in 到点重排；v1.23 起迟到
+        // 失败事件亦被 Paused 全态守卫忽略，不写回 error）
         assert!(
             !app.tasks.iter().any(|t| t.state == TaskState::Queued),
             "挂起任务不重新排队"
         );
 
-        // 已暂停（失败）→ Space = 恢复：重新排队（计数重置、错误清空）
+        // 已暂停（失败挂起）→ Space = 恢复：重新排队（error/计数已随挂起重置，
+        // 恢复路径与普通暂停无差别）
         app.toggle_pause();
         assert_eq!(app.tasks[0].state, TaskState::Queued, "恢复 = 重新排队");
         assert_eq!(app.tasks[0].retries, 1, "重新排队计数重置");
         assert!(app.tasks[0].error.is_none());
 
-        // R 对 FailedPaused 无效（v1.19/FR-01-92 收窄：空格为唯一恢复键）——
-        // 状态保持挂起、字段不动、仅给兜底提示
-        app.tasks[0].state = TaskState::FailedPaused;
+        // R 对挂起态（Paused）无效（v1.19/FR-01-92 收窄：空格为唯一
+        // 恢复键）——状态保持、字段不动、仅给兜底提示
+        app.tasks[0].state = TaskState::Paused;
         app.tasks[0].retries = 4;
         app.tasks[0].error = Some("超时".to_string());
         app.retry();
-        assert_eq!(
-            app.tasks[0].state,
-            TaskState::FailedPaused,
-            "R 不恢复挂起任务"
-        );
+        assert_eq!(app.tasks[0].state, TaskState::Paused, "R 不恢复挂起任务");
         assert_eq!(app.tasks[0].retries, 4, "重试计数不被重置");
         assert_eq!(app.tasks[0].error.as_deref(), Some("超时"), "错误信息保留");
         assert!(
             app.toast
                 .as_deref()
                 .is_some_and(|m| m.contains("仅「已失败」的任务可以重试")),
+            "toast={:?}",
+            app.toast
+        );
+        app.shutdown().await;
+    }
+
+    /// v1.21/FR-01-33 修订（操作者 20261012 指令）：已暂停 → 继续 = 一律重新
+    /// 排队——「有空闲槽直接开跑（Downloading + Start）」路径废除，有空闲槽
+    /// 也进等待队列；断点数据不丢（获槽后从断点续传）
+    #[tokio::test]
+    async fn paused_resume_always_requeues_even_with_free_slot() {
+        let mut app = make_app("requeue");
+        app.max_slots = 5; // 全部空闲：旧行为会直接 Downloading + Start
+        app.tasks.push(task(1, "r1.bin", TaskState::Paused));
+        app.tasks[0].resumable = true;
+        app.selected = 0;
+        app.toggle_pause();
+        assert_eq!(
+            app.tasks[0].state,
+            TaskState::Queued,
+            "有空闲槽也一律重新排队（直开路径废除）"
+        );
+        assert!(!app.tasks[0].has_slot, "重新排队不占槽，待调度分配");
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|m| m.contains("已进入等待队列")),
+            "toast={:?}",
+            app.toast
+        );
+        // 不支持续传的任务同路径，toast 指明从头下载
+        app.tasks[0].state = TaskState::Paused;
+        app.tasks[0].resumable = false;
+        app.toggle_pause();
+        assert_eq!(app.tasks[0].state, TaskState::Queued);
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|m| m.contains("将从头下载") && m.contains("已进入等待队列")),
             "toast={:?}",
             app.toast
         );
@@ -801,46 +847,44 @@ mod ui_tests {
         app.shutdown().await;
     }
 
-    /// 已暂停 → 继续：空闲槽位直接恢复下载（FR-01-33 续传双文案臂 +
-    /// Completed 兜底臂；不可续传任务走「从头下载」提示）
+    /// 已暂停 → 继续：一律重新排队（v1.21/FR-01-33 修订，直开路径废除；
+    /// 续传双文案臂 + Completed 兜底臂；不可续传任务 toast 指明从头下载）
     #[tokio::test]
-    async fn resume_with_free_slot_direct_start() {
+    async fn resume_with_free_slot_also_requeues_and_completed_fallback() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-ui-resume2");
         let mut app = make_app("resume2");
         app.max_slots = 5;
         let mut t = task(1, "r1.bin", TaskState::Paused);
         t.resumable = true;
         t.save_dir = dir.to_string_lossy().into_owned();
-        // 指向立即拒绝的本机端口：Cmd::Start 会真实下发引擎，探测即刻失败，
-        // 不产生外网副作用（重试计时随测试运行器结束丢弃）
-        t.url = "http://127.0.0.1:9/r1.bin".to_string();
         app.tasks.push(t);
         app.selected = 0;
 
-        // 可续传：直接恢复 + 断点文案
+        // 可续传：重新排队 + 断点文案（不再直接 Downloading）
         app.toggle_pause();
         assert_eq!(
             app.tasks[0].state,
-            TaskState::Downloading,
-            "空闲槽位直接恢复"
+            TaskState::Queued,
+            "有空闲槽也一律重新排队（v1.21 直开路径废除）"
         );
-        assert!(app.tasks[0].has_slot, "恢复占槽位");
-        assert!(!app.tasks[0].made_progress, "恢复清 made_progress");
+        assert!(!app.tasks[0].has_slot, "重新排队不占槽，待调度分配");
         assert!(
             app.toast
                 .as_deref()
-                .is_some_and(|m| m.contains("从断点恢复")),
+                .is_some_and(|m| m.contains("从断点恢复") && m.contains("已进入等待队列")),
             "可续传文案: {:?}",
             app.toast
         );
 
-        // 不可续传：从头下载文案
+        // 不可续传：从头下载文案（同样重新排队）
         app.tasks[0].state = TaskState::Paused;
         app.tasks[0].resumable = false;
         app.toggle_pause();
-        assert_eq!(app.tasks[0].state, TaskState::Downloading);
+        assert_eq!(app.tasks[0].state, TaskState::Queued);
         assert!(
-            app.toast.as_deref().is_some_and(|m| m.contains("从头开始")),
+            app.toast
+                .as_deref()
+                .is_some_and(|m| m.contains("将从头下载")),
             "不可续传文案: {:?}",
             app.toast
         );

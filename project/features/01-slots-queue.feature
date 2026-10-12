@@ -102,20 +102,20 @@ Feature: 01-slots-queue 状态机 · 下载槽位与排队调度
       | file       | progress |
       | pause1.bin | 20%      |
 
-  Scenario: 01-slots-queue-09 Space 继续有空槽从断点续传
-    Given 任务 "<file>" 处于已暂停且存在空闲槽位
+  Scenario: 01-slots-queue-09 Space 继续一律重新排队（v1.21 修订，有空槽也不直开）
+    Given 任务 "<file>" 处于已暂停（存在空闲下载槽位）
     When 按 Space
-    Then 任务转「下载中」并从断点续传（进度不回退）
+    Then 任务转入等待中排队（不直接转「下载中」，直开路径已废除）
+    And 获得槽位后从断点续传（进度不回退）
 
     Examples:
       | file       |
       | pause1.bin |
 
-  Scenario: 01-slots-queue-10 Space 继续遇满槽提示并进入等待队列
+  Scenario: 01-slots-queue-10 Space 继续遇满槽进入等待队列（v1.21 修订：满槽提示语退役）
     Given 任务处于已暂停且下载槽位已满载
     When 按 Space
-    Then 出现「无空闲下载槽位（<slots>/<slots>）」toast
-    And 任务转入等待中并显示排队位次
+    Then 任务转入等待中并显示排队位次（不再出现「无空闲下载槽位（n/n）」toast）
 
     Examples:
       | slots |
@@ -143,21 +143,22 @@ Feature: 01-slots-queue 状态机 · 下载槽位与排队调度
     Then 两个任务均重新回到等待中排队
     And 获得槽位后从断点续传（不停留在失败态）
 
-  Scenario: 01-slots-queue-14 Space 暂停失败任务挂起自动重试（v1.6/FR-01-92）
+  Scenario: 01-slots-queue-14 Space 暂停失败任务挂起自动重试（v1.6/FR-01-92；v1.21 合并口径入 Paused；v1.22 展示统一；v1.23 数据统一）
     Given 任务 "<file>" 处于失败态且倒计时进行中（自动重试待发）
     When 按空格
-    Then 任务转为「已暂停（失败）」：自动重试倒计时清除，不再到点重发
-    And 错误信息保留可见（详情/列表错误行不因暂停丢失）
-    And 任务不占用下载槽位，重启后仍保持该状态
+    Then 任务转为「已暂停」（独立状态与挂起标记均已退役，v1.23 起数据同普通暂停）：自动重试倒计时清除，不再到点重发
+    And 展示与普通「已暂停」完全一致（v1.22 操作者直判）：徽标「已暂停」白色、统计行走中性行（无重试计数/「不再自动重试」红字）、详情无「失败原因」行
+    And 数据与普通「已暂停」完全一致（v1.23 操作者直判）：error 重置为 null、retries 重置为 1（注册表快照同口径，不再持久化挂起标记）
+    And 任务不占用下载槽位，重启后仍保持「已暂停」（迟到失败事件对该态整体忽略，不转态不写回错误信息）
 
     Examples:
       | file       |
       | retry1.bin |
 
-  Scenario: 01-slots-queue-15 Space 恢复已暂停失败任务重新排队（v1.6/FR-01-92；v1.19 R 收窄）
-    Given 任务 "<file>" 处于「已暂停（失败）」态（01-slots-queue-14 之后）
+  Scenario: 01-slots-queue-15 Space 恢复已暂停失败任务重新排队（v1.6/FR-01-92；v1.19 R 收窄；v1.23 数据统一后恢复路径与普通暂停无差别）
+    Given 任务 "<file>" 处于「已暂停」（失败挂起而来，01-slots-queue-14 之后；展示与数据均同普通已暂停）
     When 按空格
-    Then 任务重新排队（计数重置、断点续传口径同 01-slots-queue-12）
+    Then 任务重新排队（requeue 公共重置；error/retries 已随挂起重置；断点续传口径同 01-slots-queue-12；恢复 toast 走续传双臂同普通暂停）
     And 获得槽位后从断点续传
 
     Examples:

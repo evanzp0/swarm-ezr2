@@ -2,8 +2,8 @@
 //!
 //! 占用 = 「下载中」∪「校验中」（D12）∪「已失败」且将自动重试（未达上限且
 //! 属可自动重试类别）∪ 已获槽位的等待中任务；
-//! 释放 = 校验成功/完成转「已完成」、手动暂停、已暂停（失败）（v1.6/FR-01-92，
-//! 挂起自动重试）、达重试上限或停等失败、删除任务。
+//! 释放 = 校验成功/完成转「已完成」、手动暂停（含失败挂起，v1.21 合并口径，
+//! v1.23 起数据也与普通暂停一致）、达重试上限或停等失败、删除任务。
 
 use super::{Task, TaskState};
 
@@ -30,7 +30,7 @@ pub fn used(tasks: &[Task]) -> usize {
         .filter(|t| match t.state {
             TaskState::Downloading | TaskState::Verifying => true,
             TaskState::Failed => t.retry_in.is_some(),
-            // FailedPaused（v1.6/FR-01-92）：挂起自动重试，不占槽（_ 臂）
+            // 失败挂起（v1.21 合并口径入 Paused，v1.23 起数据同普通暂停）：不占槽（_ 臂）
             TaskState::Queued => t.has_slot,
             _ => false,
         })
@@ -105,20 +105,17 @@ mod tests {
         t
     }
 
-    /// v1.6/FR-01-92：已暂停（失败）不占下载槽位（挂起自动重试）
+    /// v1.21/FR-01-92 合并口径：失败挂起不占下载槽位（v1.23 起挂起数据与普通
+    /// 暂停一致，全 Paused 态不占槽的统一不变式）
     #[test]
-    fn failed_paused_holds_no_slot() {
-        let mut t = mk(1, TaskState::FailedPaused);
-        t.retry_in = Some(3.0);
+    fn paused_holds_no_slot() {
+        let mut t = mk(1, TaskState::Paused);
         t.has_slot = true; // 先前置位，验证不变式强制回收
         let mut tasks = vec![t];
         enforce_invariants(&mut tasks);
-        assert!(!tasks[0].has_slot, "FailedPaused 恒不持有槽位");
-        assert_eq!(used(&tasks), 0, "FailedPaused 不占槽");
-        assert!(
-            allocate(&mut tasks, 5).is_empty(),
-            "FailedPaused 不参与分配"
-        );
+        assert!(!tasks[0].has_slot, "暂停态（含失败挂起）恒不持有槽位");
+        assert_eq!(used(&tasks), 0, "暂停态不占槽");
+        assert!(allocate(&mut tasks, 5).is_empty(), "暂停态不参与分配");
     }
 
     #[test]

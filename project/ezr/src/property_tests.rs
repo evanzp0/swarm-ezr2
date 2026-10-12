@@ -1621,7 +1621,6 @@ proptest! {
         state in prop::sample::select(&[
             TaskState::Queued, TaskState::Paused, TaskState::Downloading,
             TaskState::Verifying, TaskState::Completed, TaskState::Failed,
-            TaskState::FailedPaused,
         ]),
         speed in -1.0f64..1e9,
         total in 0u64..(1 << 40),

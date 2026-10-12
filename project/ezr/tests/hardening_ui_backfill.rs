@@ -139,7 +139,6 @@ mod detail_fix {
             Completed => GREEN,
             Failed => RED,
             Seeding => Color::Rgb(214, 112, 214),
-            _ => DIM,
         }
     }
     pub mod detail {

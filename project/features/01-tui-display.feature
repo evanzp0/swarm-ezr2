@@ -74,7 +74,7 @@ Feature: 01-tui-display TUI 展示与交互（基线沿用 + 真实数据）
       | 等待中  | color1.bin  | HTTP   | 黄色  |
       | 下载中  | color2.bin  | HTTPS  | 淡蓝  |
       | 已暂停  | color3.bin  | HTTP   | 白色  |
-      | 已暂停（失败） | color7.bin | HTTP | 白色  |
+      | 已暂停（失败挂起而来，v1.22/v1.23 展示与数据同普通已暂停） | color7.bin | HTTP | 白色  |
       | 校验中  | color4.bin  | HTTP   | 淡蓝  |
       | 已失败  | color5.bin  | HTTP   | 红色  |
       | 已完成  | color6.bin  | HTTP   | 绿色  |

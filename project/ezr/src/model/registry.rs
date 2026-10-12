@@ -3,6 +3,13 @@
 //! 全部任务（含已完成/已失败历史）跨会话保留；启动时恢复任务列表与历史，
 //! 「下载中」任务重启后回到「等待中」按序排队（FR-01-23）。
 //!
+//! 兼容性（v1.23，操作者 20261012 指令）：`has_error` 快照字段退役——失败挂起
+//! 在数据层与普通暂停完全一致（挂起时即重置 error=None、retries=1）；v1.21
+//! 产物注册表的多余 `has_error` 字段反序列化时被忽略（零迁移，Paused 任务
+//! 按普通暂停处理）。
+//! 兼容性（v1.21，操作者 20261012 指令）：FailedPaused 独立状态退役并入
+//! Paused——**旧版注册表不兼容**：含 `"FailedPaused"` 状态值的旧 JSON 反序列化
+//! 失败 → 按全新注册表处理（操作者钦定不迁移）。
 //! 兼容性（v1.20，操作者 20261011 指令）：任务 ID 改随机 u32 分配
 //! （`model::idgen`），注册表不再持久化 `next_id`——旧版 JSON 的多余
 //! `next_id` 字段反序列化时被忽略（零迁移）；新文件缺该字段，旧版程序加载
@@ -313,19 +320,68 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// v1.6/FR-01-92：FailedPaused 状态往返保留（重启后仍挂起，不被重排）
+    /// v1.23（操作者 20261012 直判）：`has_error` 快照字段退役——新序列化不再
+    /// 写出该键；v1.21 产物注册表的多余 `has_error` 字段反序列化被忽略（零迁移，
+    /// Paused 任务按普通暂停处理，error/retries 随快照保留、恢复时重置）
     #[test]
-    fn failed_paused_state_roundtrip_preserved() {
+    fn legacy_has_error_field_is_ignored() {
         let mut t = sample_task();
-        t.state = TaskState::FailedPaused;
+        t.state = TaskState::Paused;
         t.retries = 3;
         t.error = Some("连接被重置".to_string());
         t.retry_in = None;
         let reg = Registry::from_tasks(&[t]);
-        let back = reg.restore_tasks();
-        assert_eq!(back[0].state, TaskState::FailedPaused, "挂起态跨会话保留");
-        assert_eq!(back[0].error.as_deref(), Some("连接被重置"));
-        assert_eq!(back[0].retries, 3);
+        let raw = serde_json::to_string(&reg).unwrap();
+        assert!(
+            !raw.contains("has_error"),
+            "新序列化不再写 has_error 键: {raw}"
+        );
+        // 模拟 v1.21 产物：同一快照注入多余 has_error 字段
+        let v121 = raw.replace(
+            "\"state\":\"Paused\"",
+            "\"state\":\"Paused\",\"has_error\":true",
+        );
+        assert!(v121.contains("has_error"), "v1.21 形态注入应生效");
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg-he-legacy");
+        let p = dir.join("registry.json");
+        std::fs::write(&p, v121).unwrap();
+        let loaded = Registry::load(p.to_str().unwrap())
+            .expect("v1.21 产物（含多余 has_error 字段）仍可加载");
+        let back = loaded.restore_tasks();
+        assert_eq!(
+            back[0].state,
+            TaskState::Paused,
+            "挂起态跨会话保留（按普通暂停处理）"
+        );
+        assert_eq!(
+            back[0].error.as_deref(),
+            Some("连接被重置"),
+            "error 随快照保留（恢复时重置；展示层仅 Failed 态消费）"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// v1.21（操作者钦定不迁移）：含旧版 FailedPaused 状态值的注册表反序列化
+    /// 失败 → `Registry::load` 返回 None → 按全新注册表处理（FR-01-70 崩溃恢复
+    /// 降级口径，与文件损坏同路径）
+    #[test]
+    fn legacy_failed_paused_variant_is_rejected() {
+        let mut t = sample_task();
+        t.state = TaskState::Paused;
+        t.error = Some("连接超时".to_string());
+        let reg = Registry::from_tasks(&[t]);
+        let raw = serde_json::to_string(&reg).unwrap();
+        // 模拟 v1.20 及更早产物：状态值回写为旧枚举名
+        let legacy = raw.replace("\"state\":\"Paused\"", "\"state\":\"FailedPaused\"");
+        assert!(legacy.contains("FailedPaused"), "旧值注入应生效");
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg-fp-legacy");
+        let p = dir.join("registry.json");
+        std::fs::write(&p, legacy).unwrap();
+        assert!(
+            Registry::load(p.to_str().unwrap()).is_none(),
+            "含 FailedPaused 的旧注册表不兼容（按全新注册表处理）"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// v1.6/FR-01-90：旧注册表 "global" 代理值加载映射直连（零迁移）。

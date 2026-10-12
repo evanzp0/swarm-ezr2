@@ -223,6 +223,24 @@ mod tick_tests {
         App::new(Config::default(), reg)
     }
 
+    /// 02-named-proxy-05：命名代理引用失效 → 直连 + toast 提醒一次
+    /// （v1.21 统一队列路径：resolve 调用点随启动移至 tick 获槽时，本测试
+    /// 锁定提醒的发射本身；hardening 侧锁定按键时刻不解析、提醒后发覆盖）
+    #[tokio::test]
+    async fn resolve_endpoint_missing_named_proxy_warns() {
+        let mut a = make_app("np-gone");
+        let ep = a.resolve_endpoint(&crate::model::ProxyChoice::Named("gone-proxy".into()));
+        assert!(ep.is_none(), "失效引用按直连（None = 无自定义端点）");
+        assert!(
+            a.toast
+                .as_deref()
+                .is_some_and(|m| m.contains("不存在") && m.contains("已按直连")),
+            "缺失引用提醒可见: {:?}",
+            a.toast
+        );
+        a.shutdown().await;
+    }
+
     /// 测试隔离回归（coder v116）：同 tag 两次 make_app 不得互相恢复。
     /// 旧方案 `ezr-tick-<tag>-<pid>` 目录测试后不清理，容器内 pid 复用时
     /// 后到进程的 App::new 经 Self::restore 恢复前到进程残留 registry
@@ -1393,20 +1411,33 @@ mod conn_stats_tests {
     }
 
     #[tokio::test]
-    async fn conn_cum_kept_across_resumable_resume() {
+    async fn conn_cum_reset_on_requeue_resume_probed() {
         let mut app = make_app("keep");
         app.tasks.push(seed(1, "k.bin", TaskState::Downloading));
         progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 500)]).await;
         assert_eq!(app.conn_cum_of(1, 1), 500);
-        // 暂停后直接继续（可续传）：同一次下载的延续，累计量保留
+        // 暂停 → 空格继续 = 重新排队（v1.21/FR-01-33 修订）：不直接开跑
         app.tasks[0].state = TaskState::Paused;
         app.tasks[0].resumable = true;
         app.selected = 0;
         app.toggle_pause();
-        assert_eq!(app.tasks[0].state, TaskState::Downloading, "恢复直接续传");
-        // 恢复后领新块继续传输：累计量在原值上延续（不清零）
+        assert_eq!(app.tasks[0].state, TaskState::Queued, "恢复 = 重新排队");
+        // 排队获槽启动 → Probed 转下载 = 新的一次下载：连接级累计清零
+        // （FR-01-99 ②，v1.21 统一队列路径后对暂停恢复同样生效）
+        app.on_evt(Evt::Probed {
+            id: 1,
+            name: "k.bin".to_string(),
+            final_url: "http://x/k.bin".to_string(),
+            total: 4000,
+            resumable: true,
+            etag: None,
+            last_modified: None,
+        })
+        .await;
+        assert_eq!(app.tasks[0].state, TaskState::Downloading, "Probed 转下载");
+        // 恢复后领新块继续传输：累计量从零重计（若未清零将误延至 750）
         progress(&mut app, 1, vec![cv(1, 1, 1000, 2000, 250)]).await;
-        assert_eq!(app.conn_cum_of(1, 1), 750, "续传保留累计并延续");
+        assert_eq!(app.conn_cum_of(1, 1), 250, "新一次下载从零重计");
         app.shutdown().await;
     }
 }

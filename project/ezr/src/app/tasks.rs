@@ -3,7 +3,7 @@
 use super::App;
 use crate::engine::Cmd;
 use crate::model::sidecar::Sidecar;
-use crate::model::{checksum, slots, FailKind, TaskState};
+use crate::model::{checksum, FailKind, TaskState};
 
 impl App {
     /// Space：暂停/继续（FR-01-33）
@@ -31,44 +31,13 @@ impl App {
                 self.set_toast(toast);
             }
             TaskState::Paused => {
-                // 已暂停 → 继续：需空闲槽位；满则进等待队列（FR-01-33）
-                if slots::used(&self.tasks) >= self.max_slots {
-                    let used = slots::used(&self.tasks);
-                    self.tasks[idx].state = TaskState::Queued;
-                    self.tasks[idx].has_slot = false;
-                    let n = self.max_slots;
-                    self.set_toast(format!(
-                        "⏳ 无空闲下载槽位（{used}/{n}），已进入等待队列: {name}"
-                    ));
-                    return;
-                }
-                // 直接继续（探测已做过；sidecar 断点由引擎加载）
-                self.tasks[idx].state = TaskState::Downloading;
-                self.tasks[idx].has_slot = true;
-                self.tasks[idx].made_progress = false;
-                let choice = self.tasks[idx].proxy.clone();
-                let id = self.tasks[idx].id;
-                self.windows.remove(&id);
-                let engine = self.engine.clone();
-                let was_resumable = self.tasks[idx].resumable;
-                if !was_resumable {
-                    // 不支持续传 = 从头下载 = 新的一次下载：连接级累计清零（FR-01-99 ②）
-                    self.clear_conn_stats(id);
-                }
-                let resume_toast = if was_resumable {
-                    format!("▶ 继续下载（从断点恢复）: {name}")
-                } else {
-                    format!("⚠ 服务器不支持断点续传，已从头开始下载: {name}")
-                };
-                // 恢复提示先行；引用缺失提醒（resolve_endpoint 内）在其后发出
-                // 时覆盖本提示 —— 缺失提醒必须可见（02-named-proxy-05：
-                // toast 提醒一次；toast 槽位单一，后发覆盖先发）
-                self.set_toast(resume_toast);
-                let endpoint = self.resolve_endpoint(&choice);
-                let spec = self.make_spec(&self.tasks[idx], endpoint);
-                tokio::spawn(async move {
-                    engine.send(Cmd::Start { spec }).await;
-                });
+                // 已暂停 → 继续 = 一律重新排队（v1.21/FR-01-33 修订，操作者
+                // 20261012 指令：「有空闲槽直接开跑（Downloading + Start）」
+                // 路径废除）——统一经等待队列由槽位调度启动（FR-01-32），
+                // 磁盘预检、列表序公平分配、连接级累计清零口径随队列路径单源；
+                // 失败挂起与普通暂停同路径，恢复即清错误信息与
+                // 计数（v1.21/FR-01-92 合并口径；v1.23 起挂起时即已重置）
+                self.resume_paused(idx);
             }
             TaskState::Queued => {
                 // 等待中 → 暂停并退出等待队列；已获槽位者取消引擎任务
@@ -91,9 +60,15 @@ impl App {
             }
             TaskState::Failed => {
                 // v1.6/FR-01-92/D25：失败任务按空格 = 暂停（挂起自动重试）——
-                // 清倒计时、转「已暂停（失败）」；错误信息与失败类型保留可见
+                // 清倒计时、转「已暂停」（v1.21 合并口径：独立 FailedPaused 状态
+                // 退役）。v1.23（操作者 20261012 bug 报告直判）：挂起时即重置
+                // error=None、retries=1——数据层与普通暂停完全一致（注册表快照
+                // 同口径：error=null/retries=1）；fail_kind 保留仅供校验失败型
+                // 恢复走重新校验分支（D10）
                 let id = self.tasks[idx].id;
-                self.tasks[idx].state = TaskState::FailedPaused;
+                self.tasks[idx].state = TaskState::Paused;
+                self.tasks[idx].error = None;
+                self.tasks[idx].retries = 1;
                 self.tasks[idx].retry_in = None;
                 self.tasks[idx].has_slot = false;
                 let engine = self.engine.clone();
@@ -106,53 +81,76 @@ impl App {
                     "⏸ 已暂停（失败），不再自动重试；按空格恢复: {name}"
                 ));
             }
-            TaskState::FailedPaused => {
-                // 已暂停（失败）→ 恢复 = 重新排队（计数重置、断点续传；
-                // 校验失败型仍走重新校验路径）。R 不适用本态（v1.19/FR-01-92）
-                self.requeue_failed(idx, false);
-            }
             TaskState::Completed => self.set_toast("该任务已完成，无需操作"),
             _ => self.set_toast("当前状态下不可暂停/继续"),
         }
     }
 
     /// R：失败任务手动重试（FR-01-34/D10：计数重置 1、断点续传、重新排队）；
-    /// 「已暂停（失败）」不可 R——空格为唯一恢复键（v1.19/FR-01-92 收窄）
+    /// 挂起态（Paused，v1.21 合并口径）不可 R——空格为唯一恢复键
+    /// （v1.19/FR-01-92 收窄；v1.22 起该态展示与普通已暂停一致）
     pub fn retry(&mut self) {
         let Some(idx) = self.sel_idx() else { return };
         if matches!(self.tasks[idx].state, TaskState::Failed) {
-            self.requeue_failed(idx, true);
+            self.requeue_failed(idx);
         } else {
             self.set_toast("仅「已失败」的任务可以重试");
         }
     }
 
-    /// 失败任务重新排队（R，或 Space 恢复挂起）：计数重置 1、回等待队列、断点续传；
-    /// 校验失败（Verify）按 R = 重新校验（块全满、无数据重传，D10）。
-    fn requeue_failed(&mut self, idx: usize, manual: bool) {
-        let verify_fail = self.tasks[idx].fail_kind == Some(FailKind::Verify);
-        let label = if manual {
-            "手动重试"
-        } else {
-            "重新排队"
-        };
-        let id = self.tasks[idx].id;
-        self.tasks[idx].state = TaskState::Queued;
-        self.tasks[idx].error = None;
-        self.tasks[idx].retry_in = None;
-        self.tasks[idx].fail_kind = None;
-        self.tasks[idx].retries = 1;
-        self.tasks[idx].made_progress = false;
+    /// 重新排队公共字段重置（R 手动重试与空格恢复共用，v1.21 统一口径）：
+    /// 转等待中、error/fail_kind/retry_in 清空、retries 重置 1、
+    /// 失效连击清零、进展标记清零、槽位释放
+    fn requeue_reset(&mut self, idx: usize) {
+        let t = &mut self.tasks[idx];
+        t.state = TaskState::Queued;
+        t.error = None;
+        t.retry_in = None;
+        t.fail_kind = None;
+        t.retries = 1;
+        t.made_progress = false;
         // 失效计数重置（Gherkin 01-resume-sidecar-09「按 R 重置失效计数」：
-        // 手动重试代表操作者已知悉内容变化，重新以最新内容为基准计数）
-        self.tasks[idx].invalidation_streak = 0;
-        self.tasks[idx].has_slot = false;
+        // 手动恢复代表操作者已知悉内容变化，重新以最新内容为基准计数）
+        t.invalidation_streak = 0;
+        t.has_slot = false;
+    }
+
+    /// 已暂停 → 继续（空格恢复统一路径，v1.21/FR-01-33 修订）：一律重新排队，
+    /// 字段重置同 [`Self::requeue_reset`]（v1.23 起失败挂起在挂起时即已重置
+    /// error/retries，恢复路径数据上与普通暂停无差别）；校验失败挂起走重新
+    /// 校验分支（D10）。toast 两臂按续传支持双臂（断点恢复 / 从头下载，
+    /// 均注明已进入等待队列）
+    fn resume_paused(&mut self, idx: usize) {
+        let resumable = self.tasks[idx].resumable;
+        let verify_fail = self.tasks[idx].fail_kind == Some(FailKind::Verify);
+        let id = self.tasks[idx].id;
+        self.requeue_reset(idx);
         if verify_fail {
-            self.requeue_verify_failed(idx, label, id);
+            // 校验失败挂起的恢复 = 重新校验路径（期望值解析三分支同 R 口径）
+            self.requeue_verify_failed(idx, "重新排队", id);
             return;
         }
         let name = self.tasks[idx].name.clone();
-        self.set_toast(format!("↻ {label}（等待中）: {name}"));
+        let toast = if resumable {
+            format!("▶ 继续下载（从断点恢复，已进入等待队列）: {name}")
+        } else {
+            format!("⚠ 服务器不支持断点续传，将从头下载（已进入等待队列）: {name}")
+        };
+        self.set_toast(toast);
+    }
+
+    /// 失败任务手动重试（R，FR-01-34/D10）：公共重置 + 校验失败重校验分支；
+    /// （旧「空格恢复」入参形态已随 v1.21 统一路径并入 [`Self::resume_paused`]）
+    fn requeue_failed(&mut self, idx: usize) {
+        let verify_fail = self.tasks[idx].fail_kind == Some(FailKind::Verify);
+        let id = self.tasks[idx].id;
+        self.requeue_reset(idx);
+        if verify_fail {
+            self.requeue_verify_failed(idx, "手动重试", id);
+            return;
+        }
+        let name = self.tasks[idx].name.clone();
+        self.set_toast(format!("↻ 手动重试（等待中）: {name}"));
     }
 
     /// 校验失败重排三分支（D10；v1.17 三分支修订，FR-01-51/D34）：期望值解析

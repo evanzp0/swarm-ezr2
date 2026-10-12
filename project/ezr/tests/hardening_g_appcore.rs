@@ -429,25 +429,36 @@ async fn clear_completed_none_toasts_hint() {
     shutdown(b).await;
 }
 
-/// 靶 tasks 82:13（v1.6/FR-01-92 行为变更登记）：Failed 任务按空格 = 暂停
-/// 挂起（转「已暂停（失败）」、清倒计时）；再按空格 = 恢复重新排队（原
-/// 「重新排队」口径由恢复动作承接，变异体仍落到兜底提示臂）
+/// 靶 tasks 82:13（v1.6/FR-01-92 行为变更登记；v1.21 合并口径；v1.23 数据
+/// 重置口径）：Failed 任务按空格 = 暂停挂起（转 Paused、清倒计时，error/retries
+/// 即时重置与普通暂停数据一致）；再按空格 = 恢复重新排队（原「重新排队」口径
+/// 由恢复动作承接，变异体仍落到兜底提示臂）
 #[tokio::test]
 async fn toggle_pause_on_failed_suspends_then_resume_requeues() {
     let mut a = mkapp("pause-failed");
     push_tasks(&mut a, 1);
     a.tasks[0].state = TaskState::Failed;
     a.tasks[0].retry_in = Some(8.0);
+    a.tasks[0].retries = 3;
+    a.tasks[0].error = Some("连接被重置".to_string());
     a.selected = 0;
     tap(&mut a, KeyCode::Char(' '));
     assert_eq!(
         a.tasks[0].state,
-        TaskState::FailedPaused,
-        "Failed + 空格 → 已暂停（失败）（FR-01-92）"
+        TaskState::Paused,
+        "Failed + 空格 → 已暂停（v1.21 合并口径，FR-01-92）"
     );
     assert!(a.tasks[0].retry_in.is_none(), "自动重试倒计时清除");
     assert!(!a.tasks[0].has_slot, "挂起不占槽位");
-    // 再按空格 = 恢复 → 重新排队（原 requeue 口径）
+    assert!(
+        a.tasks[0].error.is_none(),
+        "挂起即重置错误信息（v1.23：error=null）"
+    );
+    assert_eq!(
+        a.tasks[0].retries, 1,
+        "挂起即重置重试计数（v1.23：retries=1）"
+    );
+    // 再按空格 = 恢复 → 重新排队（原 requeue 口径承接）
     tap(&mut a, KeyCode::Char(' '));
     assert_eq!(
         a.tasks[0].state,
@@ -474,10 +485,11 @@ async fn toggle_pause_on_completed_hints() {
     shutdown(a).await;
 }
 
-/// 靶 tasks Paused 恢复臂（QA 终局轮 · 02-named-proxy-05 缺陷修复）：恢复时
-/// 引用的命名代理已不存在 → 提醒 toast「引用的代理不存在，已按直连」必须
-/// 可见，不得被同刻的「继续下载」提示同步覆盖。失败先行（TDD）：旧实现
-/// resolve 的提醒被恢复提示立即覆盖，端到端 NP-05 提醒不可见（假失败）。
+/// 靶 tasks Paused 恢复臂（QA 终局轮 · 02-named-proxy-05 缺陷修复；v1.21 统一
+/// 队列路径适配）：恢复 = 一律重新排队，按键时刻不再触发代理解析（resolve
+/// 随启动点移至 tick 获槽时）——缺失引用提醒的发射与可见性由产品树
+/// resolve_endpoint_missing_named_proxy_warns 锁定，时序为恢复提示先行、
+/// 提醒后发覆盖（02-named-proxy-05「提醒一次、后发覆盖先发」口径不变）
 #[tokio::test]
 async fn toggle_pause_resume_missing_named_proxy_warns() {
     let mut a = mkapp("pause-gone-proxy");
@@ -486,11 +498,19 @@ async fn toggle_pause_resume_missing_named_proxy_warns() {
     a.tasks[0].proxy = crate::model::config::ProxyChoice::Named("gone-proxy".into());
     a.selected = 0;
     tap(&mut a, KeyCode::Char(' '));
-    assert_eq!(a.tasks[0].state, TaskState::Downloading, "恢复直接续传");
+    assert_eq!(
+        a.tasks[0].state,
+        TaskState::Queued,
+        "恢复 = 重新排队（v1.21 统一路径）"
+    );
     let toast = a.toast.as_deref().unwrap_or_default();
     assert!(
-        toast.contains("不存在"),
-        "缺失引用提醒应可见（不得被恢复提示覆盖）: {toast}"
+        toast.contains("已进入等待队列"),
+        "恢复提示（普通暂停走续传双臂 + 排队口径）: {toast}"
+    );
+    assert!(
+        !toast.contains("不存在"),
+        "按键时刻不触发代理解析（提醒移至获槽启动时）: {toast}"
     );
     shutdown(a).await;
 }

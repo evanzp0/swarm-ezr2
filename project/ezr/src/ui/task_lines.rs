@@ -33,6 +33,8 @@ fn title_row(t: &Task, sel: bool, width: usize) -> Vec<Span<'static>> {
     // 等待中任务显示真实进度（可能持有断点进度）
     let pct_txt = format!("{:>5.1}%", t.progress() * 100.0);
     let proto_badge = format!("[{}]", t.protocol.label());
+    // v1.22/v1.23 口径（操作者 20261012 直判）：徽标文案 = 状态名单源，失败挂起
+    // 不再细分（展示与数据均与普通「已暂停」完全一致）
     let state_badge = format!("[{}]", t.state.label());
     let cursor_w = 2usize;
     let badges_w = w(&proto_badge) + 1 + w(&state_badge) + 1;
@@ -136,10 +138,10 @@ fn remaining_tail(t: &Task, downloading: bool) -> Vec<Span<'static>> {
 }
 
 /// 行 3：统计信息（不显示状态文案；缺失数值用 -）——按状态分派
+/// （v1.22 口径：挂起态不设守卫臂，与普通已暂停同走中性行）
 fn stat_row(t: &Task, queue_pos: usize) -> Vec<Span<'static>> {
     match t.state {
         TaskState::Failed => stat_failed(t),
-        TaskState::FailedPaused => stat_failed_paused(t),
         TaskState::Queued => stat_queued(t, queue_pos),
         TaskState::Completed => stat_completed(t),
         TaskState::Seeding => stat_seeding(t),
@@ -178,25 +180,6 @@ fn stat_failed(t: &Task) -> Vec<Span<'static>> {
         Style::default().fg(RED),
     ));
     l3
-}
-
-/// 已暂停（失败）（v1.6/FR-01-92/D25）：重试计数 · 已暂停（倒计时清除，
-/// 不再自动重试）· 已下载/需要下载；错误信息保留于详情页失败原因
-fn stat_failed_paused(t: &Task) -> Vec<Span<'static>> {
-    vec![
-        Span::raw("  "),
-        Span::styled(
-            format!("重试 {}/{}", t.retries, t.max_retries),
-            Style::default().fg(RED),
-        ),
-        Span::styled(" · ", Style::default().fg(RED)),
-        Span::styled("已暂停（不再自动重试）", Style::default().fg(RED)),
-        Span::styled(" · ", Style::default().fg(RED)),
-        Span::styled(
-            format!("{}/{}", fmt_size(t.downloaded), fmt_size(t.total)),
-            Style::default().fg(RED),
-        ),
-    ]
 }
 
 /// 等待中：槽位排队信息 + 大小（未探测显示未知）
@@ -369,18 +352,26 @@ mod tests {
         assert!(!text_of(&row).contains("校验"));
     }
 
-    /// v1.6/FR-01-92：已暂停（失败）行——重试计数 · 已暂停（不再自动重试）·
-    /// 大小；无倒计时片段（倒计时已清除）
+    /// v1.22/v1.23 口径（操作者 20261012 直判）：挂起态统计行与普通已暂停
+    /// 完全一致——同走中性行（HTTP rest 版式），不显示重试计数/
+    /// 「不再自动重试」等失败信息（差异展示随 v1.22 退役；v1.23 起挂起
+    /// 数据同普通暂停，error/retries 构造仅防御旧档遗留形态）
     #[test]
-    fn stat_failed_paused_shows_suspended_without_countdown() {
-        let mut x = mk(TaskState::FailedPaused, false);
-        x.retries = 2;
-        x.retry_in = Some(3.0); // 挂起路径会清；此处验证渲染不读倒计时
-        let s = text_of(&stat_failed_paused(&x));
-        assert!(s.contains("重试 2/3"), "{s}");
-        assert!(s.contains("已暂停"), "{s}");
-        assert!(!s.contains("后重试"), "不显示倒计时: {s}");
-        assert!(s.contains("/"), "保留已下载/需要下载大小");
+    fn stat_failed_paused_renders_like_plain_paused() {
+        let mut suspended = mk(TaskState::Paused, false);
+        suspended.retries = 2;
+        suspended.error = Some("连接超时".to_string());
+        let plain = mk(TaskState::Paused, false);
+        // 挂起态与普通暂停渲染逐字一致（同走中性行）
+        assert_eq!(
+            text_of(&stat_row(&suspended, 0)),
+            text_of(&stat_row(&plain, 0)),
+            "失败挂起与普通暂停统计行一致"
+        );
+        let s = text_of(&stat_row(&suspended, 0));
+        assert!(!s.contains("重试"), "不显示重试计数: {s}");
+        assert!(!s.contains("不再自动重试"), "不显示挂起话术: {s}");
+        assert!(!s.contains("已暂停（失败）"), "不显示细分状态文案: {s}");
     }
 
     #[test]
