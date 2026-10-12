@@ -30,6 +30,8 @@
 mod app;
 #[path = "../src/engine/mod.rs"]
 mod engine;
+#[path = "common/fixture.rs"]
+mod fixture;
 #[path = "../src/model/mod.rs"]
 mod model;
 
@@ -776,4 +778,107 @@ async fn retry_verify_failed_with_explicit_checksum_reverifies() {
     );
     shutdown(a).await;
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 靶 tasks.rs direct_finalize_or_discard 223:19（v137 hardender 轮）：intact
+/// 闭包的 `total > 0` 下界——total=0（大小未知）时磁盘上 len==0 的同名文件
+/// **不构成**「文件已完整」直判依据（`>=` 变异恒真会误判直判完成），必须走
+/// 作废断点从头重下的 fallback 臂。
+#[tokio::test]
+async fn direct_finalize_total_zero_empty_file_not_intact() {
+    let dir = crate::model::testenv::uniq_tmp_dir("ezr-hard-df-total0");
+    let mut a = mkapp("df-total0");
+    push_tasks(&mut a, 1);
+    a.tasks[0].state = TaskState::Failed;
+    a.tasks[0].fail_kind = Some(model::FailKind::Verify);
+    a.tasks[0].save_dir = dir.to_string_lossy().into_owned();
+    a.tasks[0].name = "df0.bin".into();
+    a.tasks[0].total = 0;
+    a.tasks[0].downloaded = 0;
+    a.tasks[0].checksum = None;
+    // 分支③前置：无伴随、无显式值（resolve_checksum → None）
+    let dl_path = format!("{}/df0.bin.downloading", dir.to_string_lossy());
+    std::fs::write(&dl_path, b"").expect("写入 len==0 的 .downloading 文件");
+    a.selected = 0;
+    a.retry();
+    assert_eq!(
+        a.tasks[0].state,
+        TaskState::Queued,
+        "total=0 时空文件不构成直判依据：保持等待中（作废断点从头重下）"
+    );
+    let fin = format!("{}/df0.bin", dir.to_string_lossy());
+    assert!(
+        !std::path::Path::new(&fin).exists(),
+        "未发生「文件已完整」改名收尾"
+    );
+    shutdown(a).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 靶 tasks.rs clear_completed 272:33（v137 hardender 轮）：removed 收集与
+/// retain 同口径（仅 Completed）——清理不得波及未完成任务的连接级账本
+/// （FR-01-99 连接级累计读数；`==`→`!=` 变异清错对象）。连接账本无直写
+/// 通道（仅引擎 Speed 事件填充），经 ezr-fixture 慢速门控真实下载自然
+/// 填充后，用 `conn_cum_of`（pub(crate) 公开观察点）断言保留。
+#[tokio::test]
+async fn clear_completed_spares_live_task_conn_ledger() {
+    let root = crate::model::testenv::uniq_tmp_dir("ezr-hard-cc-root");
+    let save = crate::model::testenv::uniq_tmp_dir("ezr-hard-cc-save");
+    std::fs::write(root.join("slow.bin"), vec![0u8; 200_000]).expect("写 fixture 文件");
+    let (_fx, port) = fixture::spawn_serve(&root);
+
+    let mut a = mkapp("clear-completed-ledger");
+    let mut done = crate::model::sample_task();
+    done.id = 1;
+    done.name = "done.bin".into();
+    done.state = TaskState::Completed;
+    let slow = Task::new_queued(
+        2,
+        "slow.bin".to_string(),
+        Protocol::Http,
+        format!("http://127.0.0.1:{port}/slow.bin?speed=20000"),
+        save.to_string_lossy().into_owned(),
+        1 << 16,
+        1,
+        3,
+        None,
+        crate::model::config::ProxyChoice::Direct,
+        unix_now(),
+    );
+    a.tasks.push(done);
+    a.tasks.push(slow);
+    a.selected = 0;
+
+    // 门控等待：tick 驱动授予→启动→Speed 事件 → 连接级累计 > 0
+    let mut populated = false;
+    for _ in 0..100 {
+        a.tick().await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if a.conn_cum_of(2, 1) > 0 {
+            populated = true;
+            break;
+        }
+        assert_ne!(
+            a.tasks[1].state,
+            TaskState::Failed,
+            "下载不应失败（fixture 可用）"
+        );
+    }
+    assert!(populated, "连接级累计未填充（fixture/引擎异常）");
+    assert_eq!(
+        a.tasks[1].state,
+        TaskState::Downloading,
+        "慢速门控下仍在下载"
+    );
+
+    a.clear_completed();
+    assert_eq!(a.tasks.len(), 1, "仅已完成任务被移出列表");
+    assert_eq!(a.tasks[0].id, 2, "未完成任务保留");
+    assert!(
+        a.conn_cum_of(2, 1) > 0,
+        "清理不得波及未完成任务的连接级累计账本"
+    );
+    shutdown(a).await;
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&save);
 }

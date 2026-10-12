@@ -92,3 +92,6 @@
   missed 只是"待复核"不是结论——幸存者名单再用默认全量命令 phase-2 复核（挂载测试 crate
   的加固测试常能杀掉 bin 杀不掉的点）。正确性保持：killed 恒真、missed 必复核，无双口径
   假阳性通道。
+
+- **`--in-place` 与 `-j` 互斥**（27.1.0 实测）：同时传入报 `the argument '--in-place' cannot be used with '--jobs'` 直接退出——in-place 模式固定单 worker（默认 -j1），省略 `-j` 即可，不是需要绕开的缺陷。
+- **重定向 stdout 是块缓冲的，进度判定以 mutants.out 台账为准**：输出重定向到文件时，逐突变体的 KILLED/MISSED 行积压在缓冲区、中断时只 flush 出最后几行（实测：stdout 仅见 1 条 MISSED，台账 caught.txt 已积累 20 条）——用 stdout tail 判断进度会系统性低估。每轮结束读 `caught.txt`/`missed.txt`/`outcomes.json`，中断轮按既定条款手工合并进 `previously_caught.txt`。

@@ -623,3 +623,5 @@ group_imports = "StdExternalCrate"
   （v136 展示统一轮 ezr-demo pty 回归实证）
 
 - serde 快照**字段删除 = 零迁移兼容**（v1.23 补全 v1.21 条目的另一半）：枚举变体删除是硬失败（反序列化遇未知值整体 None），而**结构体删字段**后旧档的多余键被 serde 静默忽略、`#[serde(default)]` 一并退役——旧档加载成功且按新语义处理。钉住手法：序列化文本断言不含旧键 + 旧形态注入（`raw.replace` 插入多余键）后 load 成功断言降级行为（registry `legacy_has_error_field_is_ignored`）。
+
+- **llvm-cov 函数级覆盖读数必须跨实例 MAX 归并，async fn 的行级 segments 会系统性低估**（v137 hardender 轮实证）：同一产品源经 `#[path]` 挂载进多个测试 crate（bin + 各 hardening_g_*），llvm-cov JSON 导出里同一源函数出现**多份 function 条目**（每编译实例一份，计数各不相同）——按任一单条目读数、或取 MIN、或「最后写入者」，都会把「在 A 套件执行过、在 B 套件未执行」的臂误判为未覆盖（假存活/假零发现）。正确口径：函数级覆盖 = 对该源函数的**全部实例条目**逐行取 MAX 归并；async fn 尤甚——`tokio::select!` 各臂闭包独立成 function 条目、文件级 `segments` 行读数与协程 poll 实际执行面脱节（实测：文件 segments 报 84/122 行覆盖，实例 regions 归并后实为 98/122）。`branches` 数组仅在 `cargo llvm-cov --branch` 下非空，用它做圈复杂度（comp = 1 + 分支区数）前先核对开关，否则全表 comp 恒 1、CRAP 恒 ≤ 2 的「全绿」是假绿。

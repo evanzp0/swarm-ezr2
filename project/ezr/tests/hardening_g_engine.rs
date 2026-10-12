@@ -32,6 +32,8 @@
 mod app;
 #[path = "../src/engine/mod.rs"]
 mod engine;
+#[path = "common/fixture.rs"]
+mod fixture;
 #[path = "../src/model/mod.rs"]
 mod model;
 
@@ -719,4 +721,183 @@ async fn reverify_reads_companion_checksum() {
     );
     a.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 靶 evt.rs handle_failure 340:13（v137 hardender 轮）：at_limit 决策臂——
+/// 达到重试上限的失败 toast 必须是「已达最大重试次数（n/m），停止自动重试，
+/// 按 R 手动重试」口径。删除该臂后落入 `_` 停等臂：状态效果相同
+/// （retry_in=None / has_slot=false），唯 toast 文案可区分 → 以真实下载
+/// （ezr-fixture 恒 503，Transient 自动重试）走满两次失败后断言。
+#[tokio::test]
+async fn failure_at_limit_toast_reports_exhausted_retries() {
+    let root = crate::model::testenv::uniq_tmp_dir("ezr-hard-al-root");
+    let save = crate::model::testenv::uniq_tmp_dir("ezr-hard-al-save");
+    std::fs::write(root.join("f503.bin"), vec![0u8; 1024]).expect("写 fixture 文件");
+    let (_fx, port) = fixture::spawn_serve(&root);
+
+    let mut a = mkapp("at-limit-toast");
+    let t = Task::new_queued(
+        1,
+        "f503.bin".into(),
+        Protocol::Http,
+        format!("http://127.0.0.1:{port}/f503.bin?status=503"),
+        save.to_string_lossy().into_owned(),
+        1 << 16,
+        1,
+        2, // max_retries = 2：首败自动重试，次败达上限
+        None,
+        crate::model::config::ProxyChoice::Direct,
+        unix_now(),
+    );
+    a.tasks.push(t);
+    a.selected = 0;
+
+    // 第一次失败：Transient（5xx）自动重试 → Failed 且持倒计时（toast 有
+    // 存续期，观察窗内先取证）
+    let toast1 = std::cell::RefCell::new(String::new());
+    pump(&mut a, 10, |x| {
+        if x.tasks[0].state == TaskState::Failed && x.tasks[0].retry_in.is_some() {
+            *toast1.borrow_mut() = x.toast.clone().unwrap_or_default();
+            return true;
+        }
+        false
+    })
+    .await;
+    assert_eq!(
+        a.tasks[0].state,
+        TaskState::Failed,
+        "503 → Transient：首次失败进入自动重试倒计时"
+    );
+    assert!(
+        toast1.borrow().contains("自动重试"),
+        "首次失败 toast = 自动重试口径: [{}]",
+        toast1.borrow()
+    );
+
+    // 倒计时到点自动重试 → 再次 503 → 达上限（at_limit 臂）：在落败瞬间
+    // 取证 toast（状态效果与停等臂相同，唯文案可区分）
+    let toast2 = std::cell::RefCell::new(String::new());
+    pump(&mut a, 25, |x| {
+        if x.tasks[0].state == TaskState::Failed && x.tasks[0].retry_in.is_none() {
+            *toast2.borrow_mut() = x.toast.clone().unwrap_or_default();
+            return true;
+        }
+        false
+    })
+    .await;
+    assert!(
+        toast2.borrow().contains("已达最大重试次数") && toast2.borrow().contains("停止自动重试"),
+        "达上限 toast = at_limit 臂口径（n/m + 停止自动重试）: [{}]",
+        toast2.borrow()
+    );
+    assert!(
+        toast2.borrow().contains("按 R 手动重试"),
+        "达上限 toast 指引手动重试入口: [{}]",
+        toast2.borrow()
+    );
+    assert!(
+        a.tasks[0].retry_in.is_none() && !a.tasks[0].has_slot,
+        "达上限：停等释放槽位"
+    );
+    a.shutdown().await;
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&save);
+}
+
+/// 靶 supervisor.rs block_worker 1054-1057/1060（v137 hardender 轮 · CRAP
+/// 残余处置）：多块路径整块完成——mark_done 与领块循环推进。既有套件全部
+/// 走单流路径（concurrency=1），block_worker 的块完成臂此前零覆盖。
+#[tokio::test]
+async fn block_worker_completes_multi_block_download() {
+    let root = crate::model::testenv::uniq_tmp_dir("ezr-hard-bw-root");
+    let save = crate::model::testenv::uniq_tmp_dir("ezr-hard-bw-save");
+    std::fs::write(root.join("f.bin"), vec![7u8; 3_000_000]).expect("写 fixture 文件");
+    let (_fx, port) = fixture::spawn_serve(&root);
+    let mut a = mkapp("block-complete");
+    // D31 块大小下限 1MB：1MB × 3 块（total_blocks > 1 才走块路径）
+    a.cfg.block_size_http = 1 << 20;
+    a.add_cli_task(
+        format!("http://127.0.0.1:{port}/f.bin"),
+        Some(save.to_string_lossy().into_owned()),
+        Some(4),
+        None,
+    );
+    pump(&mut a, 30, |x| x.tasks[0].state == TaskState::Completed).await;
+    assert_eq!(
+        a.tasks[0].state,
+        TaskState::Completed,
+        "多块下载必须整块完成（mark_done + 领块循环推进）"
+    );
+    assert_eq!(a.tasks[0].downloaded, 3_000_000, "多块路径字节守恒");
+    a.shutdown().await;
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&save);
+}
+
+/// 靶 supervisor.rs block_worker 1005-1007/1038-1039（v137 hardender 轮）：
+/// 在传块中收到停止信号（暂停）——在传块中止、块内已写字节经 mark_progress
+/// 保留（FR-01-13 部分块语义）。
+#[tokio::test]
+async fn block_worker_pause_mid_download_preserves_partial_block() {
+    let root = crate::model::testenv::uniq_tmp_dir("ezr-hard-bwp-root");
+    let save = crate::model::testenv::uniq_tmp_dir("ezr-hard-bwp-save");
+    std::fs::write(root.join("slow.bin"), vec![0u8; 3_000_000]).expect("写 fixture 文件");
+    let (_fx, port) = fixture::spawn_serve(&root);
+    let mut a = mkapp("block-pause-mid");
+    a.cfg.block_size_http = 1 << 20; // D31 下限口径 1MB × 3 块
+    a.add_cli_task(
+        format!("http://127.0.0.1:{port}/slow.bin?speed=20000"),
+        Some(save.to_string_lossy().into_owned()),
+        Some(4),
+        None,
+    );
+    // 门控：进入块路径下载并已写字节（在传窗口）
+    pump(&mut a, 15, |x| {
+        x.tasks[0].state == TaskState::Downloading && x.tasks[0].downloaded > 0
+    })
+    .await;
+    assert_eq!(a.tasks[0].state, TaskState::Downloading, "慢速门控下在传");
+    let before = a.tasks[0].downloaded;
+    a.selected = 0;
+    a.toggle_pause(); // Space：暂停 → 引擎停止信号 → 在传块中止
+    pump(&mut a, 15, |x| x.tasks[0].state == TaskState::Paused).await;
+    assert_eq!(a.tasks[0].state, TaskState::Paused, "暂停收尾");
+    assert!(
+        a.tasks[0].downloaded >= before,
+        "块内已写字节保留（不回退）"
+    );
+    a.shutdown().await;
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&save);
+}
+
+/// 靶 supervisor.rs block_worker 1033 + 中止臂（v137 hardender 轮）：传输
+/// 中途断连（?disconnect=N）→ chunk Err → classify_reqwest → 瞬时失败。
+#[tokio::test]
+async fn block_worker_mid_transfer_disconnect_fails_transient() {
+    let root = crate::model::testenv::uniq_tmp_dir("ezr-hard-bwd-root");
+    let save = crate::model::testenv::uniq_tmp_dir("ezr-hard-bwd-save");
+    std::fs::write(root.join("disc.bin"), vec![0u8; 3_000_000]).expect("写 fixture 文件");
+    let (_fx, port) = fixture::spawn_serve(&root);
+    let mut a = mkapp("block-disconnect");
+    a.cfg.block_size_http = 1 << 20; // D31 下限口径 1MB × 3 块
+    a.add_cli_task(
+        format!("http://127.0.0.1:{port}/disc.bin?disconnect=5000"),
+        Some(save.to_string_lossy().into_owned()),
+        Some(4),
+        None,
+    );
+    pump(&mut a, 20, |x| x.tasks[0].state == TaskState::Failed).await;
+    assert_eq!(
+        a.tasks[0].state,
+        TaskState::Failed,
+        "中途断连必须转失败（chunk Err → classify）"
+    );
+    assert!(
+        a.tasks[0].fail_kind == Some(model::FailKind::Transient),
+        "断连分类为瞬时（可自动重试）"
+    );
+    a.shutdown().await;
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&save);
 }
