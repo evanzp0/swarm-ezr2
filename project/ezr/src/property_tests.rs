@@ -1756,11 +1756,15 @@ proptest! {
 // ---------------------------------------------------------------------
 
 proptest! {
-    /// apply_chunk_snapshot 投影口径：connections 与直接调用 lease_snapshot
-    /// 同参投影一致；chunk_done 为**替换语义**（= max(快照完成数, 事件口径)，
-    /// 不与调用前旧值累加）且 ≥ 事件口径。写侧不按总块数钳制（存储账本
-    /// 保留事件口径原值；展示侧由 `chunk_info()` 读取时钳制——本属性一并
-    /// 锁定「存储越界、读取受控」两段口径）。生成域解耦（notes/rust.md
+    /// apply_chunk_snapshot 投影口径（v139 两段修订）：connections 与直接调用
+    /// lease_snapshot 同参投影一致（两段不变）；chunk_done 为**替换语义**
+    /// （不与调用前旧值累加），按路径两段合并——多块路径（可续传 ∧ 分块数
+    /// > 1）= 事件逐块真值权威：连续前缀快照在乱序完成 + 部分块零头合计越
+    /// 块界时高估完成数，不得盖过事件（操作者实证「error 显 13、恢复回退
+    /// 12」倒退缺陷的属性面锁定）；单流/单块路径 = max(快照, 事件口径)
+    /// （事件不带逐块记账，字节连续、前缀精确）。写侧不按总块数钳制（存储
+    /// 账本保留事件口径原值；展示侧由 `chunk_info()` 读取时钳制——本属性
+    /// 一并锁定「存储越界、读取受控」两段口径）。生成域解耦（notes/rust.md
     /// 资源维度条款）：先定块数 n_blocks ≤ 4096，total 由 (n-1)*piece + 余数
     /// 推导（顺带锁定 ceil 口径），内存有界。
     #[test]
@@ -1780,9 +1784,14 @@ proptest! {
         let (expect_conns, snap) =
             crate::model::chunk::lease_snapshot(total, done_bytes, 4, piece);
         prop_assert_eq!(&t.connections, &expect_conns, "连接视图 = lease_snapshot 同参投影");
-        prop_assert_eq!(t.chunk_done, snap.max(old_done), "chunk_done = max(快照, 事件口径)");
+        let y_count = crate::model::chunk::chunk_total(total, piece);
+        if t.resumable && y_count > 1 {
+            prop_assert_eq!(t.chunk_done, old_done, "多块路径 = 事件口径（前缀幻影不得盖过）");
+        } else {
+            prop_assert_eq!(t.chunk_done, snap.max(old_done), "单流/单块 = max(快照, 事件口径)");
+        }
         prop_assert!(t.chunk_done >= old_done, "不越事件口径");
-        let y = u64::from(crate::model::chunk::chunk_total(total, piece));
+        let y = u64::from(y_count);
         let (x, y_view, _) = t.chunk_info();
         prop_assert_eq!(y_view, y, "展示块数 = 分块数学");
         prop_assert!(u64::from(x) <= y, "读取侧钳制：展示完成数不越总块数（即便存储越界）");

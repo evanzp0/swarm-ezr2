@@ -231,12 +231,80 @@ impl Task {
     }
 
     /// 暂停/失败收尾的断点视图快照（详情页分块表）：按 total/downloaded/
-    /// concurrency/block_size 推导连接视图，`chunk_done` 取快照与事件口径较大值。
+    /// concurrency/block_size 推导连接视图。分块口径两段合并（v139 修订，
+    /// 操作者实证：error 时显示 13、恢复后回退 12 的倒退缺陷）：多块路径
+    /// （可续传 ∧ 分块数 > 1）事件逐块记账权威——连续前缀 x = done/piece
+    /// 在乱序完成 + 多个部分块零头合计越块界时高估完成数（幻影 +1），
+    /// 不得盖过事件口径；单流路径（不可续传/单块）Progress 事件不带逐块
+    /// 记账（chunk_done = 0），字节连续、前缀快照精确，维持两者较大值兜底。
     /// `downloaded` 由调用方显式传入（暂停/失败事件对「已下载」口径不同）。
     pub fn apply_chunk_snapshot(&mut self, downloaded: u64, chunk_done: u32) {
         let (conns, snap) =
             chunk::lease_snapshot(self.total, downloaded, self.concurrency, self.block_size);
         self.connections = conns;
-        self.chunk_done = snap.max(chunk_done);
+        let multi_block = self.resumable && chunk::chunk_total(self.total, self.block_size) > 1;
+        self.chunk_done = if multi_block {
+            chunk_done
+        } else {
+            snap.max(chunk_done)
+        };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// v139 回归（操作者实证 bug）：多块乱序完成 + 多个部分块零头合计越块界
+    /// 时，暂停/失败断点视图的连续前缀快照（x = done/piece）把未完成块计成
+    /// 完成（幻影 +1），经 max() 盖过事件逐块真值写入 task.chunk_done 并随
+    /// 注册表持久化；恢复后引擎事件回到逐块真值——详情「分块」计数倒退
+    /// 观感。多块路径（可续传 ∧ 分块数 > 1）事件口径权威：快照只投影连接
+    /// 视图，不得抬高完成数。
+    #[test]
+    fn chunk_snapshot_multi_block_event_truth_beats_prefix_phantom() {
+        let mut t = crate::model::sample_task();
+        t.total = 15_000_000;
+        t.block_size = 1_000_000;
+        t.resumable = true;
+        // 事件逐块真值：块 0-10 满 + 块 12 乱序完成（计 12），块 11/13 在传
+        // 部分块（0.6MB + 0.5MB）；合计 13.1MB → 前缀快照 floor(13.1) = 13
+        // > 真值 12（幻影 +1）
+        let downloaded = 11_000_000 + 600_000 + 1_000_000 + 500_000;
+        t.apply_chunk_snapshot(downloaded, 12);
+        assert_eq!(
+            t.chunk_done, 12,
+            "多块路径事件逐块真值权威，前缀幻影不得盖过"
+        );
+        let (x, y, piece) = t.chunk_info();
+        assert_eq!((x, y, piece), (12, 15, 1_000_000));
+        // 连接视图仍为前缀同参投影（展示面不变）
+        let (conns, _) = chunk::lease_snapshot(t.total, downloaded, t.concurrency, t.block_size);
+        assert_eq!(t.connections, conns);
+    }
+
+    /// 单流路径（不可续传）事件不带逐块记账（chunk_done = 0），字节连续、
+    /// 前缀快照精确：维持 max(快照, 事件) 兜底（v139 修订不改变单流口径）。
+    #[test]
+    fn chunk_snapshot_single_stream_keeps_prefix_fallback() {
+        let mut t = crate::model::sample_task();
+        t.total = 15_000_000;
+        t.block_size = 1_000_000;
+        t.resumable = false;
+        t.apply_chunk_snapshot(13_100_000, 0);
+        assert_eq!(t.chunk_done, 13, "单流路径前缀快照精确，维持较大值兜底");
+    }
+
+    /// 单块任务（分块数 = 1）即便可续传也走快照口径（块内连续、前缀精确）。
+    #[test]
+    fn chunk_snapshot_single_block_keeps_prefix_fallback() {
+        let mut t = crate::model::sample_task();
+        t.total = 1_000_000;
+        t.block_size = 1_000_000;
+        t.resumable = true;
+        t.apply_chunk_snapshot(600_000, 0);
+        assert_eq!(t.chunk_done, 0);
+        t.apply_chunk_snapshot(1_000_000, 0);
+        assert_eq!(t.chunk_done, 1);
     }
 }

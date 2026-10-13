@@ -1638,13 +1638,43 @@ impl App {
             t.proxy = proxy;
             if changed {
                 // 立即生效（v1.5/FR-01-87 demo 语义；v1.16/D30 同步）：按新并发
-                // 重建分块连接（沿用 make_chunk_conns，已下载字节按块进度重分配，
-                // 不丢进度）；幸存槽位展示速度沿用旧值（同槽位同 IP，收缩时
-                // 行数立即减少且幸存行速度不闪烁——与生产 D30 下调即时收缩观感一致）
+                // 重建分块连接。v1.11/REQ-15.1（生产 coder v139 缺陷修复同步，
+                // 操作者 20261013 指令）：已完成块数以 tick 逐块记账（chunk_done）
+                // 为权威，不做「已下载字节→前缀块数」投影——多连接乱序/部分块
+                // 在传时投影会把在传零头折成幻影已完成块，改并发瞬间分块 x
+                // 跳变（与生产修复前「error 13 → 恢复 12」同源：启发式投影
+                // 不得写入权威计数）。在传零头字节按新并发重摊到续传窗口
+                // [chunk_done, chunk_done+active)；并发收缩且零头超过新窗口
+                // 容量时，超出部分随队尾块回队重下（与中止块再领队列同口径）。
+                // 幸存槽位展示速度沿用旧值（同槽位同 IP，收缩时行数立即减少
+                // 且幸存行速度不闪烁——D30 下调即时收缩观感）
                 let old_speeds: Vec<f64> = t.connections.iter().map(|c| c.speed).collect();
                 let piece = chunk_size(t.protocol);
-                let (mut conns_new, x) =
-                    make_chunk_conns(t.total, t.downloaded, concurrency, piece, t.id as u64);
+                // 先按 tick 领块同口径结清「已完成未领块」的满块连接（暂停/改
+                // 并发可冻结在块完成与下一 tick 领块之间），再汇总在传零头；
+                // 待命连接（start=end=0）不持块不入账
+                let mut done_blocks = t.chunk_done as u64;
+                let mut rem: u64 = 0;
+                for c in t.connections.iter() {
+                    if c.cap() == 0 {
+                        continue;
+                    }
+                    if c.done >= c.cap() {
+                        done_blocks += 1;
+                    } else {
+                        rem += c.done;
+                    }
+                }
+                let y = chunk_total(t.total, piece) as u64;
+                let done_blocks = done_blocks.min(y);
+                let (mut conns_new, x) = make_chunk_conns_lease(
+                    t.total,
+                    done_blocks as u32,
+                    rem,
+                    concurrency,
+                    piece,
+                    t.id as u64,
+                );
                 for (i, c) in conns_new.iter_mut().enumerate() {
                     if let Some(s) = old_speeds.get(i) {
                         c.speed = *s;
@@ -1652,6 +1682,16 @@ impl App {
                 }
                 t.connections = conns_new;
                 t.chunk_done = x;
+                // 顶部读数同帧重述（ = x×块大小 + 在传零头，与 tick agg 同式）：
+                // 无容量溢出时字节守恒不变；收缩溢出时按模型口径显式回落，
+                // 避免恢复下载时 tick 重算出现二次跳变
+                let rem_new: u64 = t
+                    .connections
+                    .iter()
+                    .filter(|c| c.cap() > 0 && c.done < c.cap())
+                    .map(|c| c.done)
+                    .sum();
+                t.downloaded = (x as u64 * piece + rem_new).min(t.total);
             }
         }
         self.dialog = None;
@@ -2609,6 +2649,12 @@ fn spread_bytes(amount: u64, n: usize, cap: u64) -> Vec<u64> {
 
 /// 分块队列：为任务构建"当前持块"的连接列表（HTTP 与 BT 同模型，仅块大小不同）。
 ///
+/// v1.11/REQ-15.1（生产 coder v139 同步）：拆成双层——本函数是「字节→前缀
+/// 投影」薄壳，仅限**无逐块记账来源**的初始造数路径（`mk` 种子任务、断点
+/// 清零重建）兜底；有权威块记账的路径（修改任务并发热重建）一律走
+/// [`make_chunk_conns_lease`]，以 tick 逐块记账为口径，避免启发式投影把
+/// 在传零头折成幻影已完成块写入计数（生产 v139 修复的缺陷模式）。
+///
 /// 策略：
 /// - 块大小按协议写死（HTTP 1 MB / BT 256 KB），块数 y = ceil(total / 块大小)，
 ///   与并发数解耦；
@@ -2624,20 +2670,41 @@ fn make_chunk_conns(
     piece: u64,
     seed: u64,
 ) -> (Vec<Connection>, u32) {
+    let done = done_total.min(total);
+    make_chunk_conns_lease(total, (done / piece) as u32, done % piece, n, piece, seed)
+}
+
+/// 分块队列构建（权威口径内核）：已完成块数 `completed` 与在传零头 `rem`
+/// 由调用方按记账来源给出（见 [`make_chunk_conns`] 分层说明）。
+///
+/// 策略与投影薄壳一致：连接从块队列 [completed, completed+active) 连续领块，
+/// 实际并发 = min(最大并发, 未完成块数)；已完成字节达 total（校验/完成/做种）
+/// 时展示最后 min(n, y) 个满块。`rem` 超过新窗口容量（active×块大小）时
+/// [`spread_bytes`] 按块容量钳制，超出零头视为随队尾块回队重下（演示口径）。
+///
+/// 返回 (连接列表, 已完成块数 x)
+fn make_chunk_conns_lease(
+    total: u64,
+    completed: u32,
+    rem: u64,
+    n: usize,
+    piece: u64,
+    seed: u64,
+) -> (Vec<Connection>, u32) {
     let y = chunk_total(total, piece);
     if y == 0 {
         return (Vec::new(), 0);
     }
     let y64 = y as u64;
     let piece_end = |i: u64| if i + 1 == y64 { total } else { (i + 1) * piece };
-    let done = done_total.min(total);
+    let x0 = (completed as u64).min(y64);
+    let done = (x0 * piece + rem).min(total);
     let (x, lease_from, active, rem) = if done >= total {
         let a = (n.max(1) as u64).min(y64);
         (y64, y64 - a, a, 0u64)
     } else {
-        let x = done / piece;
-        let a = (n.max(1) as u64).min(y64 - x);
-        (x, x, a, done - x * piece)
+        let a = (n.max(1) as u64).min(y64 - x0);
+        (x0, x0, a, rem)
     };
     let partials = spread_bytes(rem, active as usize, piece);
     let conns = (0..active as usize)

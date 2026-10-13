@@ -107,8 +107,12 @@ import unicodedata
 
 import pyte
 
-# 二进制路径：仓库内 release 构建（bin/ezr-tui-demo 为随包预编译副本）
-PROG = "/home/z/my-project/project/ezr-demo/target/release/ezr-tui-demo"
+# 二进制路径：仓库内 release 构建（bin/ezr-tui-demo 为随包预编译副本）。
+# 以本脚本位置解析（脚本位于 <repo>/ezr-demo/scripts/，构建位于 <repo>/ezr-demo/target/release/），
+# 不再硬编码原仓库布局的绝对路径
+PROG = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "target", "release", "ezr-tui-demo"
+)
 YEL_HEX = "e4b23e"      # 黄 Rgb(228,178,62)
 
 PASS: list[str] = []
