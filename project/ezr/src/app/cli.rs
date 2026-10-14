@@ -29,12 +29,14 @@ impl App {
             .trim_end_matches('/')
             .to_string();
         let base_name = crate::model::namegen::derive_name(None, None, &url);
-        // 断点自动接续（FR-01-26）：同 URL 同路径的既有 sidecar → 沿用原名；
-        // 否则重名检测（任务表 + 盘上）自动追加序号（与对话框添加同用
-        // namegen::dedupe，口径一致）
+        // 断点自动接续（FR-01-26 v1.28 路径基）：保存目录存在与推导名同名的
+        // 有效 sidecar 即沿用原名（sidecar 不存储任何 URL，FR-01-20 v1.28——
+        // 不再做同 URL 校验；误接续由 FR-01-22 一致性检查兜底）；否则重名检测
+        // （任务表 + 盘上）自动追加序号（与对话框添加同用 namegen::dedupe，
+        // 口径一致）
         let resumed =
             crate::model::sidecar::Sidecar::load(&format!("{dir}/{base_name}{SIDECAR_EXT}"))
-                .is_some_and(|s| s.url == url);
+                .is_some();
         let name = if resumed {
             base_name.clone()
         } else {

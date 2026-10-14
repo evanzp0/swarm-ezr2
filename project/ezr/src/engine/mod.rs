@@ -76,8 +76,6 @@ pub enum Evt {
         id: u32,
         /// 探测后定稿的文件名（Content-Disposition 优先，FR-01-02）
         name: String,
-        /// 重定向后最终 URL
-        final_url: String,
         /// 文件总大小（无 Content-Length 时 0）
         total: u64,
         /// 是否支持断点续传

@@ -34,10 +34,13 @@ pub struct Task {
     pub name: String,
     /// 协议
     pub protocol: Protocol,
-    /// 原始 URL
+    /// 原始 URL（v1.28：任务级唯一 URL 权威，FR-01-14；探测/数据请求均从
+    /// 本 URL 独立发起并跟跳转，跳转落点不持久化）
     pub url: String,
-    /// 重定向后的最终 URL（探测后填；续传一致性比较用，FR-01-14/22）
-    pub final_url: Option<String>,
+    /// 任务名已随首次探测定稿（v1.28「首次探测已定名」标记；原
+    /// `final_url.is_some()` 口径的替身——首次 Probed 置位后不再重置，
+    /// 之后的一切重启沿用既有名，防止去重漂移，FR-01-22）
+    pub name_locked: bool,
     /// 保存目录（不含文件名）
     pub save_dir: String,
     /// 文件总大小（字节；探测前为 0，等待行显示「未知」）
@@ -131,7 +134,7 @@ impl Task {
             name,
             protocol,
             url,
-            final_url: None,
+            name_locked: false,
             save_dir,
             total: 0,
             downloaded: 0,

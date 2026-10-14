@@ -622,12 +622,12 @@ proptest! {
 // ---------------------------------------------------------------------
 
 proptest! {
-    /// check 特征化不变量：等同 → Valid；stored 缺 URL 或大小 → MissingStamp；
-    /// URL 或大小任一不同 → Invalidated；ETag/Last-Modified 缺失方向不对称按
-    /// 口径（stored 有而 probe 缺 → 失效；stored 无 → 宽容）；确定性（两遍同判）
+    /// check 特征化不变量（v1.28 三要素口径）：等同 → Valid；stored 缺大小 →
+    /// MissingStamp；ETag/大小任一不同 → Invalidated；ETag/Last-Modified 缺失
+    /// 方向不对称按口径（stored 有而 probe 缺 → 失效；stored 无 → 宽容）；
+    /// 确定性（两遍同判）
     #[test]
     fn prop_consistency_decision_rules(
-        url_a in "[a-z]{1,6}/[a-z]{1,6}",
         etag in "[a-z0-9]{1,6}",
         size in 0u64..(1u64 << 40),
         etag_probe_missing in prop::bool::ANY,
@@ -635,7 +635,6 @@ proptest! {
     ) {
         use crate::model::consistency::{check, Consistency, ServerStamp};
         let stored = ServerStamp {
-            final_url: Some(url_a.clone()),
             etag: if etag_stored_missing { None } else { Some(etag.clone()) },
             last_modified: Some("Wed, 01 Jan 2026 00:00:00 GMT".to_string()),
             size: Some(size),
@@ -644,26 +643,20 @@ proptest! {
         prop_assert_eq!(check(&stored, &stored), Consistency::Valid, "等同快照可续传");
         // 确定性
         prop_assert_eq!(check(&stored, &stored), check(&stored, &stored));
-        // URL 变化 → 失效
-        let probed_url = ServerStamp { final_url: Some(format!("{url_a}x")), ..stored.clone() };
-        prop_assert_eq!(check(&stored, &probed_url), Consistency::Invalidated);
         // 大小变化 → 失效
         let probed_size = ServerStamp { size: Some(size.wrapping_add(1)), ..stored.clone() };
         prop_assert_eq!(check(&stored, &probed_size), Consistency::Invalidated);
-        // stored 有 ETag 而 probe 缺失 → 失效；stored 无 ETag → 以 URL/大小为准
+        // stored 有 ETag 而 probe 缺失 → 失效；stored 无 ETag → 以大小为准
         let probed_no_etag = ServerStamp { etag: None, ..stored.clone() };
         if stored.etag.is_some() {
             prop_assert_eq!(check(&stored, &probed_no_etag), Consistency::Invalidated, "服务器不再返回 ETag → 失效");
         } else {
             prop_assert_eq!(check(&stored, &probed_no_etag), Consistency::Valid, "stored 未记录 → 宽容");
         }
-        // MissingStamp 判据：仅 stored 不完整时
+        // MissingStamp 判据（v1.28）：仅 stored 缺大小时
         let mut incomplete = stored.clone();
         incomplete.size = None;
         prop_assert_eq!(check(&incomplete, &stored), Consistency::MissingStamp);
-        let mut no_url = stored.clone();
-        no_url.final_url = None;
-        prop_assert_eq!(check(&no_url, &stored), Consistency::MissingStamp);
         // ETag 双侧存在但不同 → 失效（构造探针走 etag_probe_missing 面冗余覆盖）
         if !etag_stored_missing && !etag_probe_missing {
             let probed_diff = ServerStamp { etag: Some(format!("{etag}x")), ..stored.clone() };
@@ -677,12 +670,11 @@ proptest! {
 // ---------------------------------------------------------------------
 
 proptest! {
-    /// Sidecar JSON 往返：build → JSON → parse 全字段相等（含版本门与
-    /// downloaded 钳制口径不漂移）；stamp() 投影与服务端快照一致
+    /// Sidecar JSON 往返（v1.28：无 URL 字段）：build → JSON → parse 全字段相等
+    /// （含版本门与 downloaded 钳制口径不漂移）；stamp() 投影与服务端快照一致；
+    /// 序列化文本不含任何 URL 键（FR-01-20 v1.28「不存储任何 URL」）
     #[test]
     fn prop_sidecar_json_round_trip(
-        url in "http://[a-z]{1,8}/[a-z0-9]{1,8}",
-        final_url in proptest::option::of("http://[a-z]{1,8}/r"),
         etag in proptest::option::of("[a-z0-9]{1,8}"),
         last_modified in proptest::option::of("[A-Z][a-z]{2}, 01 Jan 2026 00:00:00 GMT"),
         size in 0u64..(1u64 << 40),
@@ -696,7 +688,6 @@ proptest! {
         use crate::model::consistency::ServerStamp;
         use crate::model::Checksum;
         let stamp = ServerStamp {
-            final_url: final_url.clone(),
             etag: etag.clone(),
             last_modified: last_modified.clone(),
             size: Some(size),
@@ -709,13 +700,13 @@ proptest! {
             concurrency: 4,
             protocol: proto,
         };
-        let sc = Sidecar::build(&url, &stamp, size, block_size, &blocks, non_resumable, expected.as_ref(), task);
+        let sc = Sidecar::build(&stamp, size, block_size, &blocks, non_resumable, expected.as_ref(), task);
         prop_assert_eq!(sc.version, crate::model::sidecar::SIDECAR_VERSION, "build 恒当前版本");
         let text = serde_json::to_string(&sc).unwrap();
+        prop_assert!(!text.contains("final_url"), "v1.28 序列化不得含 final_url 键: {text}");
         let loaded: Sidecar = serde_json::from_str(&text).unwrap();
         prop_assert_eq!(loaded, sc.clone(), "JSON 往返全字段保真");
         let st = sc.stamp();
-        prop_assert_eq!(st.final_url, final_url, "stamp 投影 final_url");
         prop_assert_eq!(st.etag, etag, "stamp 投影 etag");
         prop_assert_eq!(st.size, Some(size), "stamp 投影 size");
     }

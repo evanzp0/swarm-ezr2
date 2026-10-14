@@ -207,7 +207,7 @@ pub(crate) fn sample_task() -> Task {
         name: "f.bin".to_string(),
         protocol: Protocol::Http,
         url: "http://x/f.bin".to_string(),
-        final_url: None,
+        name_locked: false,
         save_dir: "/dl".to_string(),
         total: 0,
         downloaded: 0,

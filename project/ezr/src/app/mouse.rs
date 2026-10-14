@@ -98,10 +98,9 @@ impl App {
                 // 热区由 ui 层每帧回填（None = 无热区：无校验行 / 面板收起 / 窄终端）；
                 // 面板本身无提示信息，反馈仅在底部 toast（文案照录 demo 原文，D26 同口径）
                 if pointer_in(&self.detail_url_rect, m.column, m.row) {
-                    // D27：复制详情展示值（final_url 优先回退原始 url，FR-01-14 口径）
-                    let url = self
-                        .sel_task()
-                        .map(|t| t.final_url.clone().unwrap_or_else(|| t.url.clone()));
+                    // D27 v1.28：复制详情展示值 = 原始 URL 单值（任务级最终 URL
+                    // 已退役，FR-01-14 v1.28；「复制所见值」锚定不变）
+                    let url = self.sel_task().map(|t| t.url.clone());
                     if let Some(url) = url {
                         self.copy_to_clipboard(&url);
                         self.set_toast("已复制 url");
@@ -204,12 +203,12 @@ mod mouse_tests {
     }
 
     /// FR-01-101：详情字段名点击复制——URL/校验热区命中（toast 文案照录 demo 原文、
-    /// 复制内容含 final_url 口径与完整校验码）、无校验任务无热区、对话框分支消费优先
+    /// 复制内容 = 原始 URL 单值（D27 v1.28）与完整校验码）、无校验任务无热区、
+    /// 对话框分支消费优先
     #[tokio::test]
     async fn detail_label_click_copies_and_toasts() {
         let mut app = make_app("copy");
         let mut t = task(1, "copy.bin");
-        t.final_url = Some("http://final.example/copy.bin".to_string());
         t.checksum = Some(crate::model::Checksum {
             algo: "SHA-256",
             value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
@@ -230,13 +229,13 @@ mod mouse_tests {
             height: 1,
         });
 
-        // 点击「URL」字段名 → 复制详情展示值（final_url 优先）+ toast
+        // 点击「URL」字段名 → 复制详情展示值（原始 URL 单值，v1.28）+ toast
         app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 3, 7));
         assert_eq!(app.toast.as_deref(), Some("已复制 url"), "URL 点击 toast");
         assert_eq!(
             app.last_copied.as_deref(),
-            Some("http://final.example/copy.bin"),
-            "复制 final_url 展示值（D27）"
+            Some("http://example.com/copy.bin"),
+            "复制原始 URL 展示值（D27 v1.28 单值收敛）"
         );
 
         // 点击「校验」字段名 → 复制完整校验码（非 10 位截断）+ toast
@@ -263,6 +262,32 @@ mod mouse_tests {
             "无热区点击不改变复制内容"
         );
         assert_eq!(app.toast.as_deref(), Some("已复制 校验码"), "toast 不变");
+        app.shutdown().await;
+    }
+
+    /// D27 v1.28 修订（FR-01-80/D27，规格 01-download-engine-08）：详情「URL」
+    /// 展示与点击复制收敛为**原始 URL 单值**——任务级最终 URL 退役（FR-01-14
+    /// v1.28），「复制所见值」锚定不变，所见即原始 URL。旧口径 final_url 优先臂
+    /// 退役：即便会话内曾探测到跳转落点，复制的也必须是原始 URL。
+    #[tokio::test]
+    async fn detail_url_click_copies_original_url_single_source() {
+        let mut app = make_app("copyorig");
+        // v1.28：任务模型不再持有跳转落点——复制值只能来自原始 URL 单源；
+        // 本用例锚定「所见即所复制」：详情展示值（原始 URL）与点击复制值一致
+        app.tasks.push(task(1, "orig.bin"));
+        app.detail_url_rect = Some(Rect {
+            x: 1,
+            y: 7,
+            width: 9,
+            height: 1,
+        });
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 3, 7));
+        assert_eq!(app.toast.as_deref(), Some("已复制 url"), "URL 点击 toast");
+        assert_eq!(
+            app.last_copied.as_deref(),
+            Some("http://example.com/orig.bin"),
+            "复制原始 URL（v1.28 单值收敛，final_url 优先臂退役）"
+        );
         app.shutdown().await;
     }
 

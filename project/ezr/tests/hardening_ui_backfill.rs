@@ -592,8 +592,7 @@ async fn wheel_down_scrolls_task_list() {
 #[tokio::test]
 async fn detail_hot_rect_right_edge_exclusive() {
     let mut a = make_app_in("ezr-h118", "pedge");
-    let mut t = queued_task(1, "copy.bin", "http://example.com/copy.bin", "/tmp");
-    t.final_url = Some("http://final.example/copy.bin".to_string());
+    let t = queued_task(1, "copy.bin", "http://example.com/copy.bin", "/tmp");
     a.tasks.push(t);
     a.detail_url_rect = Some(Rect {
         x: 1,

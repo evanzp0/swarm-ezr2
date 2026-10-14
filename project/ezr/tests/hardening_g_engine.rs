@@ -568,8 +568,6 @@ async fn invalidated_resets_and_toasts() {
     std::fs::create_dir_all(&dir).unwrap();
     Sidecar {
         version: SIDECAR_VERSION,
-        url: format!("http://{addr}/f.bin"),
-        final_url: None,
         size: 1000,
         etag: None,
         last_modified: None,

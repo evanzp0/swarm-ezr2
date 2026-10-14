@@ -19,7 +19,6 @@ impl App {
             Evt::Probed {
                 id,
                 name,
-                final_url,
                 total,
                 resumable,
                 etag,
@@ -48,7 +47,10 @@ impl App {
                     if let Some(nn) = rename_to {
                         t.name = nn;
                     }
-                    t.final_url = Some(final_url);
+                    // v1.28：任务级最终 URL 退役（FR-01-14 ④）——Probed 置位
+                    // 「首次探测已定名」标记（keep_name 口径原 final_url.is_some()
+                    // 的替身；置位后不再重置，失效重下沿用既有名防漂移）
+                    t.name_locked = true;
                     t.total = total;
                     t.resumable = resumable;
                     t.probed = true;

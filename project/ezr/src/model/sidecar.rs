@@ -1,8 +1,12 @@
 //! sidecar — 断点续传元数据（FR-01-20/21：`<目标文件>.ezr` 伴随同名文件）
 //!
-//! 内容：原始/最终 URL、文件大小、ETag、Last-Modified、块大小、总块数、
+//! 内容（v1.28 URL 权威模型改版）：文件大小、ETag、Last-Modified、块大小、总块数、
 //! 各块状态（含部分下载块的块内字节）、已下载字节、不支持续传标记、校验期望值、
 //! 任务元信息（ID / 添加时间 / 保存路径 / 并发数）。
+//! **sidecar 不存储任何 URL**（AIR2 口径：控制文件根本不存 URL；持久化 URL 仅
+//! 任务注册表中的原始 URL，FR-01-70 承载；任务与 sidecar 的关联靠文件路径伴随
+//! 关系）。旧档（v1.27 及更早产物）的 `url`/`final_url` 键按多余字段反序列化忽略
+//! （零迁移，断点仍可续传——一致性改按 FR-01-22 v1.28 三要素判定）。
 //! **原子写**：先写临时文件再 rename，任意时刻断电不损坏。
 //! 任务转「已完成」时删除对应 sidecar（FR-01-20）。
 
@@ -14,15 +18,11 @@ use super::{Checksum, Protocol};
 /// sidecar 文件格式版本
 pub const SIDECAR_VERSION: u32 = 1;
 
-/// sidecar 元数据（JSON 持久化）
+/// sidecar 元数据（JSON 持久化；v1.28 起不含任何 URL 字段）
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Sidecar {
     /// 格式版本
     pub version: u32,
-    /// 原始 URL
-    pub url: String,
-    /// 最终 URL（重定向后；一致性比较用）
-    pub final_url: Option<String>,
     /// 文件总大小
     pub size: u64,
     /// ETag
@@ -91,10 +91,10 @@ pub struct SidecarTask {
 }
 
 impl Sidecar {
-    /// 从运行时块表与服务端快照构建
+    /// 从运行时块表与服务端快照构建（v1.28：不含任何 URL——任务与 sidecar 的
+    /// 关联靠文件路径伴随关系）
     #[must_use]
     pub fn build(
-        url: &str,
         stamp: &ServerStamp,
         size: u64,
         block_size: u64,
@@ -105,8 +105,6 @@ impl Sidecar {
     ) -> Sidecar {
         Sidecar {
             version: SIDECAR_VERSION,
-            url: url.to_string(),
-            final_url: stamp.final_url.clone(),
             size,
             etag: stamp.etag.clone(),
             last_modified: stamp.last_modified.clone(),
@@ -127,11 +125,10 @@ impl Sidecar {
         }
     }
 
-    /// 服务端快照（一致性检查输入）
+    /// 服务端快照（一致性检查输入；v1.28 三要素，无 URL）
     #[must_use]
     pub fn stamp(&self) -> ServerStamp {
         ServerStamp {
-            final_url: self.final_url.clone(),
             etag: self.etag.clone(),
             last_modified: self.last_modified.clone(),
             size: Some(self.size),
@@ -203,13 +200,11 @@ mod tests {
 
     fn sample() -> Sidecar {
         let stamp = ServerStamp {
-            final_url: Some("http://x/fin.bin".to_string()),
             etag: Some("abc123".to_string()),
             last_modified: Some("Mon, 09 Feb 2026 00:00:00 GMT".to_string()),
             size: Some(2_500_000),
         };
         Sidecar::build(
-            "http://x/f.bin",
             &stamp,
             2_500_000,
             1_000_000,
@@ -279,6 +274,54 @@ mod tests {
         assert!(Sidecar::remove("/nonexistent/x.ezr").is_ok());
     }
 
+    /// v1.28/FR-01-20 回归（规格 01-resume-sidecar-01）：sidecar 不再存储任何
+    /// URL——旧档（v1.27 及更早产物）的 `url`/`final_url` 键按多余字段反序列化
+    /// 忽略（零迁移，断点仍可续传），新序列化不再写回这两个键。
+    #[test]
+    fn legacy_url_fields_are_ignored_and_not_written_back() {
+        let dir = tmp_dir();
+        let p = format!("{dir}/legacy.ezr");
+        // v1.27 产物形态：含 url + final_url 两键的 sidecar JSON（原样构造，
+        // 不经现行结构体——两代字段集差异正是本测试的锚点）
+        let legacy = serde_json::json!({
+            "version": 1,
+            "url": "http://old.example/f.bin",
+            "final_url": "http://old.example/fin.bin",
+            "size": 2_500_000,
+            "etag": "abc123",
+            "last_modified": "Mon, 09 Feb 2026 00:00:00 GMT",
+            "block_size": 1_000_000,
+            "block_count": 3,
+            "blocks": [1_000_000, 400_000, 0],
+            "downloaded": 1_400_000,
+            "non_resumable": false,
+            "expected": null,
+            "task": {
+                "id": 7,
+                "added_at": 1_700_000_000,
+                "save_dir": "/dl",
+                "concurrency": 4,
+                "protocol": "Http"
+            }
+        });
+        std::fs::write(&p, legacy.to_string()).unwrap();
+        let sc = Sidecar::load(&p).expect("旧档含 url/final_url 键仍可加载（零迁移）");
+        assert_eq!(sc.size, 2_500_000, "断点数据随旧档保留");
+        assert_eq!(sc.downloaded, 1_400_000);
+        assert_eq!(sc.block_count, 3);
+        assert_eq!(sc.blocks, vec![1_000_000, 400_000, 0]);
+        // 重新落盘：新序列化不得写回任何 URL 键（FR-01-20 v1.28「不存储任何 URL」）
+        let p2 = format!("{dir}/rewritten.ezr");
+        sc.save(&p2).unwrap();
+        let text = std::fs::read_to_string(&p2).unwrap();
+        assert!(!text.contains("\"url\""), "新序列化不得含 url 键: {text}");
+        assert!(
+            !text.contains("final_url"),
+            "新序列化不得含 final_url 键: {text}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn checksum_compat_roundtrip() {
         let orig = Checksum {
@@ -301,7 +344,13 @@ mod tests {
     fn stamp_roundtrip() {
         let sc = sample();
         let s = sc.stamp();
-        assert_eq!(s.final_url.as_deref(), Some("http://x/fin.bin"));
         assert_eq!(s.size, Some(2_500_000));
+        assert_eq!(s.etag.as_deref(), Some("abc123"));
+        // v1.28：快照不含任何 URL 字段（结构层面无 final_url）
+        let text = serde_json::to_string(&sc).unwrap();
+        assert!(
+            !text.contains("final_url"),
+            "新序列化不得含 final_url: {text}"
+        );
     }
 }

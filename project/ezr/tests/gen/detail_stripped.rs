@@ -210,8 +210,9 @@ pub(super) fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     let mut url_line = vec![Span::raw(" ")];
     url_line.extend(link_label("URL"));
     url_line.push(val(truncate(
-        // 重定向后展示最终 URL（FR-01-14 / 规格 01-download-engine-08「详情 URL 显示最终 URL」）
-        t.final_url.as_deref().unwrap_or(&t.url),
+        // v1.28：详情 URL = 原始 URL 单值（任务级最终 URL 已退役，FR-01-14/80/D27
+        // v1.28「详情 URL 显示原始 URL」，规格 01-download-engine-08 修订）
+        &t.url,
         (inner.width as usize).saturating_sub(12),
     )));
     lines.push(Line::from(url_line));

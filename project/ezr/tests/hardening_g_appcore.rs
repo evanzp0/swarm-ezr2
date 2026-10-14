@@ -222,12 +222,10 @@ async fn restore_keeps_tasks_and_ids() {
     let _ = std::fs::remove_file(&reg);
 }
 
-/// 测试夹具：手写 Sidecar（字段全 pub；version 用产品常量）
-fn fixture_sidecar(url: &str, save_dir: &str, non_resumable: bool) -> Sidecar {
+/// 测试夹具：手写 Sidecar（字段全 pub；version 用产品常量；v1.28：无 URL 字段）
+fn fixture_sidecar(_url: &str, save_dir: &str, non_resumable: bool) -> Sidecar {
     Sidecar {
         version: SIDECAR_VERSION,
-        url: url.into(),
-        final_url: None,
         size: 1000,
         etag: None,
         last_modified: None,

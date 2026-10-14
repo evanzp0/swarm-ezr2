@@ -331,14 +331,14 @@ async fn download(
         );
     }
     let probed_stamp = ServerStamp {
-        final_url: Some(resp.url().as_str().to_string()),
         etag: head.etag.clone(),
         last_modified: head.last_modified.clone(),
         size: (head.total > 0).then_some(head.total),
     };
 
-    // 文件名定稿（FR-01-02：CD → 最终 URL 末段 → 原始 URL 末段 → 时间戳）；
-    // 断点接续（spec 带 sidecar）沿用既有任务名，避免另存新文件（FR-01-26）。
+    // 文件名定稿（FR-01-02：CD → 探测请求跳转落点末段（该次连接当前值）→
+    // 原始 URL 末段 → 时间戳）；断点接续（spec 带 sidecar）沿用既有任务名，
+    // 避免另存新文件（FR-01-26）。
     // 非接续路径定稿前做盘上去重（Gherkin 01-add-task-10：目标已存在时追加
     // 序号，防止下载覆盖既有文件；与 App 添加期去重同口径、结果一致）
     let name = if spec.sidecar.is_some() || spec.keep_name {
@@ -400,13 +400,13 @@ async fn download(
 
     let total_blocks = blocks.count();
     let multi_ok = head.status == 206 && head.total > 0;
-    // 探测完成（App 更新 final_url/total/resumable/probed 与大小显示）
+    // 探测完成（App 更新 total/resumable/probed/首探定名标记与大小显示；
+    // v1.28：事件不再携带最终 URL——任务级 URL 权威恒为原始 URL）
     if !emit(
         evt_tx,
         Evt::Probed {
             id: spec.id,
             name: name.clone(),
-            final_url: resp.url().as_str().to_string(),
             total: head.total,
             resumable: multi_ok,
             etag: head.etag.clone(),
@@ -445,10 +445,12 @@ async fn download(
     }
 
     // ---- 分块下载（FR-01-11/13）----
-    // 探测响应体（bytes=0- = 整文件流）在多块路径不再需要：取定最终 URL 后
-    // 立即释放探测连接——否则未读响应体钉死该连接（服务端阻塞在写体/连接
-    // 闲置），与 worker 的新建连接争用。单流路径（上方）仍移交 resp 续读。
-    let worker_url = resp.url().as_str().to_string();
+    // 探测响应体（bytes=0- = 整文件流）在多块路径不再需要：立即释放探测连接
+    // ——否则未读响应体钉死该连接（服务端阻塞在写体/连接闲置），与 worker
+    // 的新建连接争用。单流路径（上方）仍移交 resp 续读。
+    // v1.28（FR-01-14 ②）：worker 不再共享探测捕获的落点——各请求均从原始
+    // URL（spec.url）发起并独立跟跳转（reqwest Policy::limited(10) 按请求链
+    // 跳转），落点不缓存不复用。
     drop(resp);
     // 预分配稀疏文件（续传时文件可能已存在：open 不截断，set_len 保持内容）
     match tokio::fs::OpenOptions::new()
@@ -504,7 +506,7 @@ async fn download(
     // spawn 依赖单源（架构轮：12 参 spawn 表收敛为 WorkerDeps 参数对象——
     // 初始池与 Reconfigure 扩容两个调用点共用同一份克隆清单，防两处漂移）
     let deps = WorkerDeps {
-        url: worker_url.clone(),
+        url: spec.url.clone(),
         file_path: dl_path.clone(),
         blocks: blocks_shared.clone(),
         lease_next: lease_next.clone(),
@@ -720,7 +722,6 @@ fn build_sidecar(
             value: v.clone(),
         });
     Sidecar::build(
-        &spec.url,
         stamp,
         blocks.total,
         blocks.piece,
@@ -810,13 +811,13 @@ async fn single_stream(
         .await;
     }
     let mut resp = if resume {
-        // 续传需带块内偏移的新请求：探测连接（bytes=0-）丢弃；最终 URL
-        // 与分块 worker 同源（探测响应实长 URL，免重定向再跟一跳）
-        let worker_url = resp.url().as_str().to_string();
+        // 续传需带块内偏移的新请求：探测连接（bytes=0-）丢弃；v1.28（FR-01-14
+        // ②③）：续传请求同样从原始 URL 发起并独立跟跳转（不复用探测落点，
+        // 失败重试回滚原始 URL 重新跟跳转同口径）
         drop(resp);
         let client = shared.client_for(spec.proxy_endpoint.as_ref());
         let range = format!("bytes={}-{}", resumed, blocks.total - 1);
-        match req_with_identity(&client, &worker_url, Some(range))
+        match req_with_identity(&client, &spec.url, Some(range))
             .send()
             .await
         {
@@ -1020,7 +1021,8 @@ pub(crate) async fn verify(spec: VerifySpec, evt_tx: mpsc::Sender<Evt>) {
 /// 调用表收敛，防漂移单源）。字段全部 Clone，逐 worker 克隆后转移所有权。
 #[derive(Clone)]
 struct WorkerDeps {
-    /// 下载 URL（探测重定向后的最终地址）
+    /// 下载起点 URL（v1.28：原始输入 URL——各 worker 每个请求独立跟跳转，
+    /// 不复用探测落点，FR-01-14 ②）
     url: String,
     /// `.downloading` 目标文件路径
     file_path: PathBuf,
@@ -1382,6 +1384,51 @@ mod tests {
             }
         });
         format!("http://{addr}/f.bin")
+    }
+
+    /// 重定向服务器（v1.28 回归夹具）：对**每一个**请求回 302 → `target`，
+    /// 命中计数累入 `hits`。v1.28 口径下探测与全部数据请求各自从原始 URL
+    /// （本服务器）独立跟跳转——worker 每个分块请求都应产生一次命中；
+    /// 旧口径（探测捕获落点共享 worker 池）下仅探测命中 1 次。
+    fn redirect_server(target: String, hits: std::sync::Arc<AtomicU32>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            for conn in listener.incoming().flatten() {
+                let mut w = conn.try_clone().unwrap();
+                let mut r = BufReader::new(conn);
+                let mut line = String::new();
+                if r.read_line(&mut line).is_err() || line.is_empty() {
+                    continue;
+                }
+                loop {
+                    let mut h = String::new();
+                    if r.read_line(&mut h).is_err() || h.trim().is_empty() {
+                        break;
+                    }
+                }
+                hits.fetch_add(1, Ordering::Relaxed);
+                let _ = write!(
+                    w,
+                    "HTTP/1.1 302 Found\r\nLocation: {target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+            }
+        });
+        format!("http://{addr}/f.bin")
+    }
+
+    /// 消费事件至 DownloadDone（Failure/Invalidated 即 panic；redirect 用例共用事件泵）
+    async fn pump_until_done(rx: &mut mpsc::Receiver<Evt>, deadline: std::time::Instant) {
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::DownloadDone { .. })) => return,
+                Ok(Some(Evt::Invalidated { .. })) => panic!("重定向链路不应失效"),
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("重定向链路不应失败: {reason}"),
+                Err(_) => panic!("超时"),
+                _ => {}
+            }
+        }
+        panic!("超时");
     }
 
     fn spec_for(
@@ -1932,13 +1979,11 @@ mod tests {
         fill(&mut content, 0);
         std::fs::write(dir.join("f.bin.downloading"), &content).unwrap();
         let stamp = ServerStamp {
-            final_url: Some(url.clone()),
             etag: Some(format!("\"mock-{total}\"")),
             last_modified: Some("Mon, 09 Feb 2026 08:00:00 GMT".to_string()),
             size: Some(total),
         };
         let sc = Sidecar::build(
-            &url,
             &stamp,
             total,
             4096,
@@ -1997,13 +2042,11 @@ mod tests {
         let url = mock_server(total, vec![]);
         std::fs::write(dir.join("f.bin.downloading"), vec![0xAB; total as usize]).unwrap();
         let stamp = ServerStamp {
-            final_url: Some(url.clone()),
             etag: Some(format!("\"mock-{total}\"")),
             last_modified: Some("Mon, 09 Feb 2026 08:00:00 GMT".to_string()),
             size: Some(total),
         };
         let sc = Sidecar::build(
-            &url,
             &stamp,
             total,
             4096,
@@ -2055,13 +2098,11 @@ mod tests {
         let total: u64 = 2 * 4096;
         let url = mock_server(total, vec![]);
         let stamp = ServerStamp {
-            final_url: Some(url.clone()),
             etag: Some("\"stale\"".to_string()),
             last_modified: None,
             size: Some(total),
         };
         let sc = Sidecar::build(
-            &url,
             &stamp,
             total,
             4096,
@@ -2284,15 +2325,12 @@ mod tests {
     /// sidecar 已完成块数：部分写与零块不计入（Failed 事件汇总口径）
     #[test]
     fn completed_of_counts_full_blocks_only() {
-        let url = "http://127.0.0.1:1/x.bin".to_string();
         let stamp = ServerStamp {
-            final_url: Some(url.clone()),
             etag: None,
             last_modified: None,
             size: Some(4 * 4096),
         };
         let sc = Sidecar::build(
-            &url,
             &stamp,
             4 * 4096,
             4096,
@@ -2320,16 +2358,15 @@ mod tests {
     //   ③ 带断点重试的探测缺 Content-Length 被误判 Invalidated → 删 .ezr。
     // -----------------------------------------------------------------------
 
-    /// 预置 sidecar 落盘（stamp 与 mock 服务器响应头严格一致）
-    fn seed_sidecar(dir: &std::path::Path, url: &str, total: u64, piece: u64, written: &[u64]) {
+    /// 预置 sidecar 落盘（stamp 与 mock 服务器响应头严格一致；v1.28：sidecar
+    /// 不存储 URL，stamp 三要素）
+    fn seed_sidecar(dir: &std::path::Path, _url: &str, total: u64, piece: u64, written: &[u64]) {
         let stamp = ServerStamp {
-            final_url: Some(url.to_string()),
             etag: Some(format!("\"mock-{total}\"")),
             last_modified: Some("Mon, 09 Feb 2026 08:00:00 GMT".to_string()),
             size: Some(total),
         };
         let sc = Sidecar::build(
-            url,
             &stamp,
             total,
             piece,
@@ -2739,6 +2776,84 @@ mod tests {
         let mut expect = vec![0u8; total as usize];
         fill(&mut expect, 0);
         assert_eq!(data, expect, "恢复后文件字节完整");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// v1.28/FR-01-14 ②回归（规格 01-download-engine-08）：分块 worker 的每个
+    /// 数据请求均从**原始 URL** 独立发起并跟跳转——不得复用探测捕获的落点
+    /// （旧口径共享 worker_url：重定向服务器仅探测命中 1 次）。4 块 × 1 MB
+    /// （FR-01-104 块计划下限钳制后的真实多块形态）× 2 worker：重定向命中 =
+    /// 1 次探测 + 4 次分块请求 = 5；最终内容与直连一致。
+    #[tokio::test]
+    async fn workers_refollow_redirects_from_original_url() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-v128-redir-multi");
+        let total: u64 = 4 * 1024 * 1024; // 4 块 × 1 MB（块计划下限钳制后）
+        let file_url = mock_server(total, vec![]);
+        let hits = Arc::new(AtomicU32::new(0));
+        let origin = redirect_server(file_url.clone(), hits.clone());
+        let spec = spec_for(9, &origin, dir.to_str().unwrap(), 4096, 2, None);
+        let (_cmd_tx, mut rx, deadline) = launch_spec(spec);
+        pump_until_done(&mut rx, deadline).await;
+        let data = std::fs::read(dir.join("f.bin")).expect("完成文件在位");
+        let mut expect = vec![0u8; total as usize];
+        fill(&mut expect, 0);
+        assert_eq!(data, expect, "经重定向链路下载内容完整");
+        assert_eq!(
+            hits.load(Ordering::Relaxed),
+            5,
+            "重定向命中 = 探测 1 + 分块请求 4（每个数据请求都从原始 URL 独立跟跳转，v1.28）"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// v1.28/FR-01-14 ③回归（规格 01-resume-sidecar 场景 01/07 续传链路）：
+    /// 单流续传请求（Range 断点接续）同样从原始 URL 独立跟跳转——旧口径
+    /// 复用探测落点（重定向服务器仅 1 次命中）。单块 206 可续传：命中 =
+    /// 探测 1 + 续传 Range 请求 1 = 2，文件字节完整。
+    #[tokio::test]
+    async fn single_stream_resume_refollows_from_original_url() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-v128-redir-resume");
+        let total: u64 = 4096; // 单块（single_stream + 206 续传臂）
+        let file_url = mock_server(total, vec![]);
+        let hits = Arc::new(AtomicU32::new(0));
+        let origin = redirect_server(file_url.clone(), hits.clone());
+        // 盘上预写 .downloading（前 1904 字节真实内容）+ 一致 sidecar
+        let mut content = vec![0u8; total as usize];
+        fill(&mut content, 0);
+        std::fs::write(dir.join("f.bin.downloading"), &content).unwrap();
+        let stamp = ServerStamp {
+            etag: Some(format!("\"mock-{total}\"")),
+            last_modified: Some("Mon, 09 Feb 2026 08:00:00 GMT".to_string()),
+            size: Some(total),
+        };
+        let sc = Sidecar::build(
+            &stamp,
+            total,
+            4096,
+            &[1904],
+            false,
+            None,
+            SidecarTask {
+                id: 10,
+                added_at: 0,
+                save_dir: dir.to_str().unwrap().to_string(),
+                concurrency: 1,
+                protocol: Protocol::Http,
+            },
+        );
+        sc.save(dir.join("f.bin.ezr").to_str().unwrap()).unwrap();
+        let spec = sidecar_spec(10, &origin, &dir, 1);
+        let (_cmd_tx, mut rx, deadline) = launch_spec(spec);
+        pump_until_done(&mut rx, deadline).await;
+        let data = std::fs::read(dir.join("f.bin")).expect("完成文件在位");
+        let mut expect = vec![0u8; total as usize];
+        fill(&mut expect, 0);
+        assert_eq!(data, expect, "续传后文件字节完整");
+        assert_eq!(
+            hits.load(Ordering::Relaxed),
+            2,
+            "重定向命中 = 探测 1 + 续传请求 1（续传同样从原始 URL 独立跟跳转，v1.28）"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }

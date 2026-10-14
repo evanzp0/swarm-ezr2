@@ -1,7 +1,8 @@
 //! namegen — 目标文件名推导与落盘命名（FR-01-02 / FR-01-03 / FR-01-24 / FR-01-26）
 //!
 //! 推导优先级：`Content-Disposition: attachment` 的 `filename=` 到 `;` 间的
-//! 字符串 → 重定向后最终 URL 路径末段 → 原始 URL 路径末段 → `download-<时间戳>`。
+//! 字符串 → 探测请求跳转落点 URL 路径末段（该次连接的当前值，不持久化，
+//! FR-01-02 v1.28 述语）→ 原始 URL 路径末段 → `download-<时间戳>`。
 //! 目标文件已存在时自动追加序号 `.1` / `.2` …（不覆盖既有文件；断点自动接续
 //! FR-01-26 除外）。
 
@@ -73,9 +74,10 @@ pub fn from_url_path(url: &str) -> Option<String> {
     seg.filter(|s| !s.is_empty() && s != ".")
 }
 
-/// 目标文件名推导（三级优先 + 时间戳兜底，FR-01-02）：
+/// 目标文件名推导（三级优先 + 时间戳兜底，FR-01-02；v1.28 述语）：
 /// `cd_filename`（探测响应的 Content-Disposition 文件名，可 None）、
-/// `final_url`（重定向后最终 URL，可 None）、`url`（原始 URL）。
+/// `final_url`（**探测请求跳转落点 URL**——该次连接的当前值，不持久化，可
+/// None）、`url`（原始 URL）。
 #[must_use]
 pub fn derive_name(cd_filename: Option<&str>, final_url: Option<&str>, url: &str) -> String {
     if let Some(n) = cd_filename.map(str::trim).filter(|s| !s.is_empty()) {

@@ -3,6 +3,12 @@
 //! 全部任务（含已完成/已失败历史）跨会话保留；启动时恢复任务列表与历史，
 //! 「下载中」任务重启后回到「等待中」按序排队（FR-01-23）。
 //!
+//! 兼容性（v1.28，FR-01-14 ④）：`final_url` 快照字段退役——任务模型与注册表
+//! 不再持有/持久化跳转落点（原始 URL = 任务级唯一 URL 权威，AIR2 口径）；
+//! v1.27 及更早产物注册表的多余 `final_url` 键反序列化时被忽略（零迁移）。
+//! 新增 `name_locked`（首次探测已定名标记，`#[serde(default)]`：旧档缺省
+//! false，首个 Probed 后置位并随快照保留——接续原 `final_url.is_some()`
+//! 作为 keep_name 依据的口径）。
 //! 兼容性（v1.23，操作者 20261012 指令）：`has_error` 快照字段退役——失败挂起
 //! 在数据层与普通暂停完全一致（挂起时即重置 error=None、retries=1）；v1.21
 //! 产物注册表的多余 `has_error` 字段反序列化时被忽略（零迁移，Paused 任务
@@ -78,10 +84,11 @@ pub struct TaskSnapshot {
     pub name: String,
     /// 协议
     pub protocol: Protocol,
-    /// 原始 URL
+    /// 原始 URL（v1.28：唯一持久化 URL——任务级权威，FR-01-70）
     pub url: String,
-    /// 最终 URL
-    pub final_url: Option<String>,
+    /// 首次探测已定名标记（v1.28；旧档缺该字段 → 反序列化默认 false）
+    #[serde(default)]
+    pub name_locked: bool,
     /// 保存目录
     pub save_dir: String,
     /// 总大小
@@ -131,7 +138,7 @@ impl From<&Task> for TaskSnapshot {
             name: t.name.clone(),
             protocol: t.protocol,
             url: t.url.clone(),
-            final_url: t.final_url.clone(),
+            name_locked: t.name_locked,
             save_dir: t.save_dir.clone(),
             total: t.total,
             downloaded: t.downloaded,
@@ -162,7 +169,7 @@ impl From<&TaskSnapshot> for Task {
             name: s.name.clone(),
             protocol: s.protocol,
             url: s.url.clone(),
-            final_url: s.final_url.clone(),
+            name_locked: s.name_locked,
             save_dir: s.save_dir.clone(),
             total: s.total,
             downloaded: s.downloaded,
@@ -357,6 +364,38 @@ mod tests {
             back[0].error.as_deref(),
             Some("连接被重置"),
             "error 随快照保留（恢复时重置；展示层仅 Failed 态消费）"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// v1.28（FR-01-14 ④）：`final_url` 快照字段退役——任务模型与注册表不再
+    /// 持有/持久化跳转落点（原始 URL = 唯一权威）。v1.27 及更早产物注册表的
+    /// 多余 `final_url` 键反序列化忽略（零迁移），新序列化不再写出该键。
+    #[test]
+    fn legacy_final_url_field_is_ignored_and_not_written() {
+        let mut t = sample_task();
+        t.id = 5;
+        let reg = Registry::from_tasks(&[t]);
+        // 注入 v1.27 产物的 final_url 键（任务快照内，模拟旧档字段集；
+        // 紧凑序列化直写，与 has_error 兼容用例同口径）
+        let raw = serde_json::to_string(&reg).unwrap();
+        let legacy = raw.replace(
+            "\"url\":\"http://x/f.bin\"",
+            "\"url\":\"http://x/f.bin\",\"final_url\":\"http://old.example/fin.bin\"",
+        );
+        assert!(legacy.contains("final_url"), "旧形态注入应生效");
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg-fu-legacy");
+        let p = dir.join("registry.json");
+        std::fs::write(&p, legacy).unwrap();
+        let loaded =
+            Registry::load(p.to_str().unwrap()).expect("旧注册表（含 final_url）应兼容加载");
+        // 重新落盘：新序列化不得写回 final_url 键
+        let p2 = dir.join("rewritten.json");
+        loaded.save(p2.to_str().unwrap()).unwrap();
+        let text = std::fs::read_to_string(&p2).unwrap();
+        assert!(
+            !text.contains("final_url"),
+            "新序列化不得含 final_url 键: {text}"
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }

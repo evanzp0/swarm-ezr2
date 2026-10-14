@@ -182,11 +182,14 @@ impl App {
         let base_name = namegen::derive_name(None, None, &url);
         // v1.20：任务 ID = u32 随机数 + 任务全集查重（model::idgen），不再顺序自增
         let id = self.alloc_task_id();
-        // FR-01-26 断点自动接续：既有 sidecar 同 URL 同路径 → 接续原名
+        // FR-01-26 断点自动接续（v1.28 路径基）：保存目录存在与推导名同名的
+        // 有效 sidecar 即接续（sidecar 不存储任何 URL，FR-01-20 v1.28——不再
+        // 做「同 URL」校验；AIR2 口径：控制文件按路径关联，URI 由添加输入重供。
+        // 异 URL 同推导名的误接续由 FR-01-22 一致性检查兜底：探测后
+        // ETag/Last-Modified/大小不符 → 作废从头重下，规格 01-resume-sidecar-14）
         //（扩展名单源 namegen::SIDECAR_EXT，architect v116；join 语义保持本点
         // 历史口径：目录尾 '/' 已归一，'\\' 不归一）
-        let resumed = Sidecar::load(&format!("{dir}/{base_name}{SIDECAR_EXT}"))
-            .is_some_and(|sc| sc.url == url)
+        let resumed = Sidecar::load(&format!("{dir}/{base_name}{SIDECAR_EXT}")).is_some()
             || self.tasks.iter().any(|t| {
                 t.url == url
                     && t.save_dir == dir
@@ -558,6 +561,70 @@ mod add_dialog_flow_tests {
                 .is_some_and(|m| m.contains("发现有效断点") && m.contains("已暂停，按空格继续")),
             "接续 toast 钦定文案（D29）：{:?}",
             app.toast
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// v1.28/FR-01-26 回归（规格 01-resume-sidecar-14 前置）：断点接续匹配改
+    /// **路径基**——保存目录存在与推导名同名的有效 sidecar 即接续，**不再校验
+    /// 同 URL**（sidecar 不存储任何 URL，FR-01-20 v1.28）。异 URL 同推导名的
+    /// 误接续由 FR-01-22 一致性检查兜底（探测后三要素不符 → 作废从头下）。
+    /// 本用例用 v1.27 形态 sidecar（含旧 url 键、URL 与本次添加不同）锁定：
+    /// 接续照常发生、沿用推导原名（旧实现 sc.url == url 不符 → 拒接续 →
+    /// 盘上 sidecar 占用推导名 → 漂移 alias.bin.1）。
+    #[tokio::test]
+    async fn confirm_add_resumes_by_path_even_with_different_url() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-pathbase");
+        let mut app = App::new(
+            Config::default(),
+            dir.join("registry.json").to_string_lossy().into_owned(),
+        );
+        app.dialog = Some(Dialog {
+            kind: DialogKind::Add,
+            url: "http://example.com/alias.bin".to_string(),
+            dir: dir.to_string_lossy().into_owned(),
+            conns: String::new(),
+            conns_edited: false,
+            ck_type: 3,
+            ck_value: String::new(),
+            ck_open: false,
+            ck_sel: 3,
+            proxy_sel: 0,
+            proxy_open: false,
+            focus: 7,
+            task_name: String::new(),
+            task_id: None,
+        });
+        // 预置 v1.27 形态 sidecar（含 url 键，URL 与本次添加不同——路径基下仍接续）
+        let legacy = serde_json::json!({
+            "version": 1,
+            "url": "http://other.example/alias.bin",
+            "final_url": null,
+            "size": 1000,
+            "etag": null,
+            "last_modified": null,
+            "block_size": 1_048_576,
+            "block_count": 1,
+            "blocks": [0],
+            "downloaded": 0,
+            "non_resumable": false,
+            "expected": null,
+            "task": {
+                "id": 99,
+                "added_at": 0,
+                "save_dir": dir.to_string_lossy(),
+                "concurrency": 4,
+                "protocol": "Http"
+            }
+        });
+        std::fs::write(dir.join("alias.bin.ezr"), legacy.to_string()).unwrap();
+        app.dlg_confirm_add();
+        assert!(app.dialog.is_none(), "确认后关闭");
+        assert_eq!(app.tasks.len(), 1);
+        assert_eq!(
+            app.tasks[0].name, "alias.bin",
+            "路径基接续沿用推导原名（不做同 URL 校验，v1.28/FR-01-26）"
         );
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();

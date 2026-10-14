@@ -124,12 +124,13 @@ impl App {
             expected_value: t.checksum.as_ref().map(|c| c.value.clone()),
             sidecar,
             sidecar_path: sc_path,
-            // 任务名已随首次探测定稿（final_url 已知 → 命名规则已走完）：
-            // 之后的一切重启（失效重下/续传/重试）沿用既有名。失效重启若重新
-            // 去重，会因残留 .downloading 文件漂移新名（m.bin → m.bin.1…），
-            // 使 sidecar 落盘名与任务名错位、下轮续传一致性检查被跳过
-            // （FR-01-22 违例），故必须钉住。
-            keep_name: t.final_url.is_some(),
+            // 任务名已随首次探测定稿（v1.28「首次探测已定名」标记 name_locked，
+            // 原 final_url.is_some() 口径——Probed 置位且不随失效重置）：之后的
+            // 一切重启（失效重下/续传/重试）沿用既有名。失效重启若重新去重，
+            // 会因残留 .downloading 文件漂移新名（m.bin → m.bin.1…），使
+            // sidecar 落盘名与任务名错位、下轮续传一致性检查被跳过（FR-01-22
+            // 违例），故必须钉住。
+            keep_name: t.name_locked,
             added_at: t.added_at,
             proxy_endpoint,
         }
@@ -624,7 +625,6 @@ mod evt_tests {
         app.on_evt(Evt::Probed {
             id: 9,
             name: "x.bin".to_string(),
-            final_url: "http://x/x.bin".to_string(),
             total: 10,
             resumable: true,
             etag: None,
@@ -647,7 +647,6 @@ mod evt_tests {
         app.on_evt(Evt::Probed {
             id: 1,
             name: "b.bin".to_string(),
-            final_url: "http://x/b.bin".to_string(),
             total: 10,
             resumable: true,
             etag: None,
@@ -670,7 +669,6 @@ mod evt_tests {
         app.on_evt(Evt::Probed {
             id: 1,
             name: "b.bin".to_string(),
-            final_url: "http://x/b.bin".to_string(),
             total: 10,
             resumable: true,
             etag: None,
@@ -694,7 +692,6 @@ mod evt_tests {
         app.on_evt(Evt::Probed {
             id: 1,
             name: "b.bin".to_string(),
-            final_url: "http://x/b.bin".to_string(),
             total: 10,
             resumable: true,
             etag: None,
@@ -718,7 +715,6 @@ mod evt_tests {
         app.on_evt(Evt::Probed {
             id: 1,
             name: "f.bin".to_string(),
-            final_url: "http://final/f.bin".to_string(),
             total: 1234,
             resumable: false,
             etag: Some("\"e1\"".to_string()),
@@ -727,7 +723,7 @@ mod evt_tests {
         .await;
         let t = &app.tasks[0];
         assert!(t.probed, "探测标记置位");
-        assert_eq!(t.final_url.as_deref(), Some("http://final/f.bin"));
+        assert!(t.name_locked, "首次探测置位「已定名」标记（v1.28）");
         assert_eq!(t.total, 1234);
         assert!(!t.resumable);
         assert_eq!(t.etag.as_deref(), Some("\"e1\""));
@@ -750,7 +746,6 @@ mod evt_tests {
         app.on_evt(Evt::Probed {
             id: 1,
             name: "f.bin".to_string(),
-            final_url: "http://final/f.bin".to_string(),
             total: 5,
             resumable: true,
             etag: None,
@@ -1490,7 +1485,6 @@ mod conn_stats_tests {
         app.on_evt(Evt::Probed {
             id: 1,
             name: "n.bin".to_string(),
-            final_url: "http://x/n.bin".to_string(),
             total: 4000,
             resumable: true,
             etag: None,
@@ -1519,7 +1513,6 @@ mod conn_stats_tests {
         app.on_evt(Evt::Probed {
             id: 1,
             name: "k.bin".to_string(),
-            final_url: "http://x/k.bin".to_string(),
             total: 4000,
             resumable: true,
             etag: None,

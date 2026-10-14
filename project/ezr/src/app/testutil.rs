@@ -35,9 +35,7 @@ pub(crate) fn dialog(kind: DialogKind, focus: usize) -> Dialog {
 /// sidecar 落 `dir/r.bin.ezr`。
 pub(crate) fn preset_resume_sidecar(dir: &std::path::Path) {
     let sc = crate::model::sidecar::Sidecar::build(
-        "http://example.com/r.bin",
         &crate::model::consistency::ServerStamp {
-            final_url: None,
             etag: None,
             last_modified: None,
             size: Some(1000),
