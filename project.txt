@@ -1,0 +1,20 @@
+1. git clone https://github.com/evanzp0/swarm-ezr2.git ，阅读 CONSTITUTION.md 掌握这套工具的用方法
+2. six-pack/architect
+3. 完成后 bin/swarm complete,并将产物复制到当前目录
+
+https://dlcdn.apache.org/tomcat/tomcat-11/v11.0.26/bin/apache-tomcat-11.0.26.zip
+
+d5994ebbc654fb401c1dfc8521000fee8deea811c5a9bbefca4178a26ec87c9024757274c80120c607148b6133b7427d35500c14e021d33aec7b8ed79d66105a *apache-tomcat-11.0.26.zip
+
+https://downloads.apache.org/tomcat/tomcat-11/v11.0.26/bin/apache-tomcat-11.0.26.zip.sha512
+
+https://dl.360scdn.com/pclianmeng/s/3__3112987__3f7372633d6c6d266c733d6e30663439316433316134__68616f2e3336302e636f6d__0cd1.exe
+
+magnet:?xt=urn:btih:0D55B39A3D31CD7A986A80EED429607F5E8FD858
+
+bug:
+https://github.com/neovim/neovim/releases/download/v0.12.6/nvim-linux-x86_64.tar.gz
+
+4个并发，几次连接超后，重试变成 10/5(自动重试能超过 5次重试上限？还是bug导致计算出问题了？)，
+并且原先下载的分块和字节数以及进度全部清零，重新下载，但是类型还是显示 https.支持断点续传.
+另外，当前下载任务还是在‘已失败’中，‘重试 1/5 不自动重试’，没有并发在下载，可是红色的进度条一直在增长。
