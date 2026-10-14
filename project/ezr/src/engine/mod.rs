@@ -426,6 +426,14 @@ fn start_task(
         });
     }
     let (tx, rx) = mpsc::channel::<TaskCmd>(8);
+    // 单写者不变式（v1.25 注记）：同任务 id 重复 Start 时，`insert` 以新句柄
+    // **替换**旧句柄——旧句柄被丢弃即该任务通道的全部 sender 消失，存活旧
+    // supervisor 在下一次 cmd 消费点（探测 select / 监督循环 / 单流 select）
+    // recv 得 None → Flow::Cancelled → 回报 Evt::Cancelled，与新 supervisor
+    // 错开写盘（探测期即时、在传期 ≤1 个进度帧）。历史缺陷：探测阶段不消费
+    // 命令，慢探测的旧 supervisor 不受替换影响——探测失败补发迟到 Failed
+    // （重试计数冲破上限）、探测成功孵化幽灵 worker 并发写盘（进度回退），
+    // 已由探测 select 修复。
     tasks.insert(spec.id, tx.clone());
     tokio::spawn(supervisor::run(spec, shared.clone(), rx, evt_tx.clone()));
 }

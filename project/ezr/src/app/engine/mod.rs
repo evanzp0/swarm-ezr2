@@ -415,6 +415,93 @@ mod tick_tests {
         std::fs::remove_dir_all(&save).ok();
     }
 
+    /// v1.25 缺陷回归（操作者实证：重试 10/5 / 进度清零 / 已失败红条增长）：
+    /// 4a/4b 经 send_retry_start 补发 Start 后 probed 必须清 false——残留 true
+    /// 时任务在「探测在途」窗口（慢/超时服务器可达 15s 连接超时）保持
+    /// Queued+has_slot+probed 形态，4b 每 100ms 重发 Start，引擎为同一任务
+    /// 孵化成群幽灵 supervisor（重复 Failed 计数冲破上限、进度回退、已失败
+    /// 态进度条被幽灵 Progress 持续推高）。Probed 事件到达时自然置回 true
+    /// （state 同时转下载中），此处只锁补发时刻的清零与单轮单计数。
+    #[tokio::test]
+    async fn retry_resend_clears_probed_flag() {
+        let mut app = make_app("retry-probed");
+        app.add_cli_task(
+            "http://127.0.0.1:1/none.bin".to_string(),
+            None,
+            Some(1),
+            None,
+        );
+        app.tasks[0].state = TaskState::Failed;
+        app.tasks[0].retry_in = Some(0.05);
+        app.tasks[0].probed = true;
+        app.tasks[0].has_slot = true;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        pump_until(&mut app, deadline, |a| {
+            a.tasks[0].state == TaskState::Failed
+                && a.tasks[0].retry_in.is_some()
+                && a.tasks[0].retries >= 1
+        })
+        .await;
+        assert!(
+            !app.tasks[0].probed,
+            "补发 Start 后 probed 必须清 false（探测在途窗口 4b 不得重发）"
+        );
+        assert_eq!(
+            app.tasks[0].retries, 1,
+            "一轮重试恰好计一次失败（无幽灵重复计数）"
+        );
+        app.shutdown().await;
+    }
+
+    /// v1.25 缺陷回归（操作者实证：已失败任务重试计数 10/5 冲破上限）：
+    /// 任务已处「已失败」态时，迟到/重复的 Failed 事件整体忽略——不重复
+    /// 推进重试计数、不重挂倒计时、不改写已下载字节与断点视图、不覆盖错误
+    /// 信息。新一轮尝试（4a 到点重排/R 手动重试后）的失败发生在
+    /// Queued/Downloading 态，不受此守卫影响（FR-01-41 连续性规则语义不变）。
+    #[tokio::test]
+    async fn duplicate_failed_event_on_failed_task_is_ignored() {
+        let mut app = make_app("dup-failed");
+        app.add_cli_task(
+            "http://127.0.0.1:1/none.bin".to_string(),
+            None,
+            Some(1),
+            None,
+        );
+        {
+            let t = &mut app.tasks[0];
+            t.state = TaskState::Failed;
+            t.fail_kind = Some(crate::model::FailKind::Transient);
+            t.retries = 3;
+            t.retry_in = Some(8.0);
+            t.error = Some("连接超时".to_string());
+            t.downloaded = 5000;
+            t.chunk_done = 4;
+        }
+        let id = app.tasks[0].id;
+        app.on_evt(Evt::Failed {
+            id,
+            kind: crate::model::FailKind::Transient,
+            reason: "幽灵迟到失败".to_string(),
+            retry_after: None,
+            made_progress: false,
+            downloaded: 999_999,
+            chunk_done: 0,
+        })
+        .await;
+        let t = &app.tasks[0];
+        assert_eq!(t.retries, 3, "重复失败不得推进计数");
+        assert_eq!(t.retry_in, Some(8.0), "重复失败不得重挂倒计时");
+        assert_eq!(t.downloaded, 5000, "重复失败不得改写已下载字节");
+        assert_eq!(t.chunk_done, 4, "重复失败不得覆盖断点视图");
+        assert_eq!(
+            t.error.as_deref(),
+            Some("连接超时"),
+            "错误信息保持首次失败原值"
+        );
+        assert_eq!(t.state, TaskState::Failed, "状态保持已失败");
+        app.shutdown().await;
+    }
+
     /// 全局速度历史窗口上限（180 点、KB/s 采样）与 toast 过期清理
     #[tokio::test]
     async fn push_hist_caps_length_and_toast_expires() {
@@ -1391,10 +1478,15 @@ mod conn_stats_tests {
     #[tokio::test]
     async fn conn_cum_resets_on_new_download_run() {
         let mut app = make_app("newrun");
-        app.tasks.push(seed(1, "n.bin", TaskState::Queued));
+        // v1.25 幽灵进度防线后 Progress 仅在「下载中」被记账（生产流中
+        // supervisor 的 Progress 必然先经 Probed 置下载中）——账本 seeding
+        // 相应在下载中态构建，再翻转等待中以锁定 Probed 清账本语义
+        app.tasks.push(seed(1, "n.bin", TaskState::Downloading));
         progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 500)]).await;
         assert_eq!(app.conn_cum_of(1, 1), 500);
-        // Probed 使任务 Queued → Downloading = 新的一次下载：账本清零
+        // 重排回等待（比照 4a/R 重排形态）；Probed 使任务 Queued → Downloading
+        // = 新的一次下载：账本清零
+        app.tasks[0].state = TaskState::Queued;
         app.on_evt(Evt::Probed {
             id: 1,
             name: "n.bin".to_string(),

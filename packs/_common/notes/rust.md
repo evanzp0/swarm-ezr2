@@ -650,3 +650,19 @@ group_imports = "StdExternalCrate"
 - **SOCKS5 RFC 1929 帧序**：认证子协商为 `ver(1) ulen(1) uname plen(1) passwd`——server 侧
   先读 ver 再读 ulen，漏读 ver 会把 ver 当 ulen 整体错位挂死（v140 实测：python 探针在
   auth 应答处超时）。方法协商 `ver(5) nmethods methods[]` 中 0xFF 表示无可接受方法。
+- **reqwest 的 `RequestBuilder` 不可 `Clone`**（新版仅 `try_clone() -> Option<Self>`，
+  请求体不可克隆时返回 None）：`select!` 循环里「命令打断后重试请求」直接在循环体内
+  重建 builder（`loop { select! { r = make_req(..).send() => .., cmd = rx.recv() => .. } }`），
+  不要 `.clone()`——编译失败或退化为 Option 解包都徒增噪音；builder 构建成本可忽略。
+- **`tokio::select!` 多分支同时就绪时随机选择**：依赖「某事件必先于另一事件被处理」的
+  确定性测试不能建立在分支顺序上（如预入队取消 + 立即可读的响应头，两者就绪顺序
+  50/50）。要么让被断言的事件只有一个就绪来源，要么把顺序敏感断言放宽为集合式断言
+  （只断言「二者都到达 + 禁止项未出现」），不要用 sleep 对齐赌调度。
+- **HTTP/1.1 响应缺 `Content-Length` 且无 `Transfer-Encoding` 时 body 以连接关闭定界**：
+  reqwest `chunk()` 正常产出字节流直到 Err——「降级服务器」（过载网关/错误页）常以
+  无 CL 响应出现；客户端侧 CL 头解析得 0 ≠ 传输失败，两条路径必须分别处置（头部缺 CL
+  → 探测不可靠；连接提前关闭 → 传输中断）。mock 门控造该形态：发头后按需截断写体即可
+  （Connection: close），无需 chunked 编码。
+- **按连接序号门控 mock（`dropseq=N`）**：在既有 droponce（首连接半途断连）之外的
+  请求臂失败形态——「探测成功、续传 Range 请求即断」需要第 N 个连接不回任何响应直接
+  断开；连接级计数 + `continue`（不写响应直接落到底部关闭）即可，无需特殊 HTTP 状态。

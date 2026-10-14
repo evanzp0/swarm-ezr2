@@ -76,6 +76,15 @@ impl App {
                     self.speed_display.remove(&id);
                     return;
                 };
+                // v1.25 幽灵进度防线：非「下载中」任务的 Progress 一律忽略——
+                // 迟到/重复回报不得改写已下载字节、连接视图与断点数（历史
+                // 缺陷：已失败任务的存活幽灵 supervisor 持续发 Progress，
+                // 红色进度条无并发增长；多幽灵基线不一导致进度回退跳变）。
+                // 正常路径不受影响：同一 supervisor 的事件按通道序先于其
+                // Failed/PausedDone 到达；Probed 先于首个 Progress 置下载中。
+                if t.state != TaskState::Downloading {
+                    return;
+                }
                 if let Some(w) = self.windows.get_mut(&id) {
                     w.push(Instant::now(), downloaded);
                 } else {
@@ -302,6 +311,20 @@ impl App {
         let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else {
             return;
         };
+        // v1.6/FR-01-92；v1.21 合并口径：用户已手动挂起 → 迟到失败事件不得
+        // 转回失败态或恢复自动重试（否则挂起语义被竞态覆盖）；v1.23（操作者
+        // 20261012 bug 报告直判）：守卫扩为 Paused 全态且**整体忽略**——不写
+        // error（挂起时已重置 error=None/retries=1，写回会污染注册表快照，
+        // 违背「error=null」口径）；v1.25（操作者 bug 报告：重试 10/5）：
+        // 守卫再扩为 Paused ∪ Failed 且前置到一切字段写入之前——任务已失败
+        // 后的迟到/重复失败事件（同一尝试的重复回报或幽灵 supervisor 的迟到
+        // 回报）整体忽略：不重复推进重试计数（冲破上限观感）、不重挂倒计时、
+        // 不改写已下载字节/断点视图/错误信息；新一轮尝试的失败必然发生在
+        // Queued/Downloading 态（4a 到点重排/R 手动重试后），不受此守卫影响
+        // （FR-01-41 语义不变）
+        if matches!(t.state, TaskState::Paused | TaskState::Failed) {
+            return;
+        }
         if downloaded > 0 {
             t.downloaded = downloaded.max(t.downloaded);
         }
@@ -309,14 +332,6 @@ impl App {
         // 重试决策（FR-01-41/42/43）：连续性规则 + 退避/Retry-After + 分类，
         // 策略唯一来源在 model::retry（DRY）
         let (auto_retry, max_retries) = (self.cfg.auto_retry, t.max_retries);
-        // v1.6/FR-01-92；v1.21 合并口径：用户已手动挂起 → 迟到失败事件不得
-        // 转回失败态或恢复自动重试（否则挂起语义被竞态覆盖）；v1.23（操作者
-        // 20261012 bug 报告直判）：守卫扩为 Paused 全态且**整体忽略**——不写
-        // error（挂起时已重置 error=None/retries=1，写回会污染注册表快照，
-        // 违背「error=null」口径）
-        if t.state == TaskState::Paused {
-            return;
-        }
         let (new_retries, decision) = crate::model::retry::decide(
             kind,
             made_progress,

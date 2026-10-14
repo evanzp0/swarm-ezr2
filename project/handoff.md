@@ -1,11 +1,13 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/QA　会话：v141-qa（任务 v141-qa-tp-methodology）
-> 本轮（操作者直启 TP 收口轮）：TP-02/03/06 按 TP-01 同款 100MB 大文件总量口径
-> 实跑化（S→P），**e2e 13 套件 164 条首次全绿 164P/0F/0S（零 S）**；产品树零改动。
-> 附带修复打包卫生问题：环境重置曾把工作区文件模式整体刷成 755 并经 `git add -A`
-> 进入 v140 归档（119 个源文件 644→755 污染），本轮已按 HEAD 模式表归一化
-> （索引相对 HEAD 零模式变更），归一化手法固化进 packs/_common/engineering.md。
+> 流程：six-pack　当前节点：six-pack/coder　会话：v144-fix（任务 fix-probe-failure-breakpoint-view）
+> 本轮（操作者三次报告缺陷修复轮）：修复操作者实证的「磁盘 .ezr 台账 2 块全 + 1 部分
+> 块（downloaded=5884570）而任务详情『分块』显示 0/11」。**单一根因：探测/请求臂失败
+> 弃账上报 0/0**——带台账任务的探测阶段网络错误（连接超时/拒连，重试每次尝试先探测）
+> 与 HTTP 状态错误臂、单流续传 Range 请求错误臂、预分配致命错臂均以 `sidecar=None`
+> 收尾，失败事件 (downloaded=0, chunk_done=0)；App 事件权威口径用 0 覆盖分块视图
+> （字节因 >0 守卫保留 → 「已下载 5.6 MB / 分块 0/11」自相矛盾），并随注册表持久化。
+> v142/v143 修复保持有效，产品测试 2877P/0F 全绿。
 
 ## 一、产物历史完成情况
 
@@ -18,140 +20,129 @@
 |---|---|---|---|
 | specifier（v115 前历轮） | mission/phase-01.md 全量 FR/D 裁决表 + features/ 13 份 + qa/ 13 份 | 全部交付 | parser/dry-check 全过 |
 | coder（v120–v124 两批 + v1.18 修订） | FR-01-102/103/104/105/51/6 系列 + sidecar 即时落盘 + 清码 retry 直判 | 已交付 | 各批 2438→2506P/0F、clippy 0 |
-| cleaner（v125/v129/v132 三轮） | 保持行为清理 + 四度量基线首登（覆盖率 94.28% / CPD 51 tiles / scan 2161 点 / CRAP 门禁 76 条） | 已交付 | 2506→2535P/0F |
-| architect（v126/v134 两轮） | 四阶段架构评审 + throttle 策略提取 + 属性测试 57→60 + arch 13→14 规则 | 已交付 | 2523→2546P/0F、属性 60P |
-| hardender（v127-hard） | v115 前差分变异 78/78 killed + CRAP/DRY 对账 + 软 Gherkin 受限登记 | 已交付 | 产品树零改动、基线全绿 |
-| coder（v128）+ 会话外登记（v1.19/v1.20） | CPD 处置 bordered_block 单源 + R 恢复路径退役 + FailedPaused 徽标 + 任务 ID 随机化（u32 idgen 单源） | 已交付 | 2535→2578P/0F |
-| architect（v135/v136 三段 = v1.21–v1.23） | 合并轮：FailedPaused 变体退役（8 态）+ 恢复一律重新排队 + 挂起态展示统一 + v1.23 数据统一 + 规格三件套同步 + ezr-demo 同步 + pty 回归 7/7 | 已交付 | 产品 2597P/0F、clippy 0、fmt 0、arch 14 过 |
-| hardender（v137-hard） | v1.21–v1.23 触碰面变异加固 + 9 条加固测试 + 三度量新基线（CPD 52 / 94.36% / 门禁 0） | 已交付 | 2733P/0F、clippy 0、fmt 0、arch 14 过 |
-| QA（v138-qa） | e2e 六套件同步（新建 suite_ui_conns.py）+ R 臂累计清零缺陷修复（requeue_failed 显式清账本 + conn_rebase 重锚）+ 三度量复测对账 + APS 13/13 + stamp 保留处置 | 已交付 | 2740P/0F、e2e 登记 155P/0F/9S（v140 实证该登记含 TD-17 一条隐性 F 残差） |
-| coder（v139-fix） | 分块计数倒退缺陷修复：`apply_chunk_snapshot` 两段合并（多块路径事件逐块真值权威）+ 3 回归单测 + 属性面重写 | 已交付 | 2767P/0F、clippy/fmt/arch 全绿 |
-| QA（v140-qa） | 桩扩展轮：ezr-proxy tokio 异步重写 + 三形态监听（https TLS / socks5 RFC 1929 / http 认证 407）+ IPv6 绑定 + 4 新增单测；NP-04/08/13/15/18 S→实跑；RB-09 删除；TD-17 断言机制修复 | 已交付 | 2775P/0F、e2e 164 条 161P/0F/3S（归档含模式位污染，见下） |
-| **QA（v141-qa，本轮）** | **TP 收口轮**：TP-02/03/06 按 TP-01 同款 100MB 大文件总量口径实跑化（`_detail_dl` 字节级读数助手 + QA_TP_ONLY 分批过滤器）；规程 v1.7 修订；打包模式位归一化（119 文件 644 恢复 + engineering.md 固化手法） | 已交付 | **e2e 13 套件 164 条 = 164P / 0F / 0S（零 S 首次全绿）**；产品树零改动，产品测试沿袭 v140 基线 2775P/0F |
+| cleaner（v125/v129/v132 三轮） | 保持行为清理 + 四度量基线首登 | 已交付 | 2506→2535P/0F |
+| architect（v126/v134 两轮） | 四阶段架构评审 + throttle 策略提取 + 属性测试 60 + arch 14 规则 | 已交付 | 2523→2546P/0F |
+| hardender（v127-hard / v137-hard） | 差分变异加固 + 三度量基线（CPD 52 / 94.36% / 门禁 0） | 已交付 | 基线全绿 |
+| coder（v128）+ 会话外登记（v1.19/v1.20） | CPD 处置 + R 恢复路径退役 + 任务 ID 随机化 | 已交付 | 2535→2578P/0F |
+| architect（v135/v136 三段 = v1.21–v1.23） | FailedPaused 退役（8 态）+ 恢复一律重新排队 + 规格三件套同步 | 已交付 | 产品 2597P/0F |
+| QA（v138-qa / v140-qa / v141-qa） | e2e 同步 + 桩扩展 + TP 收口（S→P ×3） | 已交付 | e2e 164 条 164P/0F/0S；产品 2775P/0F |
+| coder（v139-fix） | 分块计数倒退缺陷修复（apply_chunk_snapshot 两段合并） | 已交付 | 2767P/0F |
+| coder（v142-fix） | **幽灵 supervisor 集群根因修复**：探测期命令消费 + 补发去重 + 失败去重守卫 + 幽灵进度门，4 处缺陷联动 + 4 个回归测试 | 已交付 | 2805P/0F、clippy 0、fmt 0、arch 14 过 |
+| coder（v143-fix） | **单流降级路径断点保全**：失败/暂停臂折叠进度落账 + 恢复 Range 续传（单块+206）+ 无 Range 有进度暂态保留 + 缺 CL 探测不作废，4 处修复 + 6 个回归测试 | 已交付 | 2853P/0F、clippy 0、fmt 0、arch 14 过 |
+| **coder（v144-fix，本轮）** | **探测/请求臂失败弃账修复**：探测网络错误臂、探测 HTTP 状态错误臂、预分配致命错 ×2 臂、单流续传请求错误 ×2 臂 + 单流 open 致命错臂——7 处失败回报全部携带台账持久化状态 + 3 个回归测试 | 已交付 | **产品 2877P/0F、clippy 0、fmt 0、arch 14 过** |
 
 ### 遗留受限项（当前有效）
-- **e2e 逐用例环境受限项（S）：无**。v140 的 3 条（TP-02/03/06）已于本轮全部
-  实跑化转 P，e2e 首次 0F/0S 全绿；RB-09 已于 v140 按操作者裁决删除（编号留空）。
-- **软 Gherkin 验收变异受限（沿袭 v127/v137/v138/v140 口径）**：13 份 feature 的
+- **软 Gherkin 验收变异受限（沿袭 v127/v137/v138/v140/v141 口径）**：13 份 feature 的
   parser + ir-dry-check 实跑全过；`gherkin-mutator` 运行器适配器与验收入口生成
   器为会话级工具不随工作区流转，全量变异 campaign 不可在本环境前台窗口预算内
   完成。01-persistence-config.feature 的 mutation-stamp（sha256=57e757…）维持
   保留处置（内容零变更；复跑指令见 v138 交接四要素③口径）。
-- **三度量未在本轮复跑（QA 职责沿袭口径）**：本轮产品源码零变更（二进制为
-  同源重建）；PMD/cargo-llvm-cov/Babashka+APS 未复装（环境重置后）。覆盖率/
-  CPD/CRAP 基线沿袭 v138（94.37% / 52 tiles / 门禁 0）。
-- **工具链位置（本轮重建，跨会话缓存 `.tools/` 未随 clone 流转）**：rustup
-  nightly 1.101.0-nightly（e9bbadf68 2026-10-12；rust-toolchain.toml 钉定自动装，
-  新 shell 须 `export PATH="$HOME/.cargo/bin:$PATH"`；本轮 `cargo build` debug
-  三件套 1m35s）。PMD / cargo-llvm-cov / Babashka+APS 未复装。
+- **三度量未在本轮复跑（沿袭 QA 轮口径）**：覆盖率/CPD/CRAP 基线沿袭 v138
+  （94.37% / 52 tiles / 门禁 0）；本轮产品变更 1 文件（见下），量级未触发
+  重测门槛，hardender 轮可按需复测。
+- **工具链位置（沿袭 v143 登记）**：rustup nightly 1.101.0-nightly（rust-toolchain.toml
+  钉定自动装，新 shell 须 `export PATH="$HOME/.cargo/bin:$PATH"`；rustup/crates 均走
+  rsproxy.cn 镜像，见 packs/_common/notes/rust.md 沉淀）。
 - 无其他受限项。
 
 ### 实现定义值登记（当前有效）
 - 沿袭有效：D28/D29/D30/D31/D32/D33/D34、v1.21–v1.23 恢复 toast 文案、v138 R 臂
-  重锚口径、v1.24 分块断点视图两段合并（v139 交接）、v140 桩口径与 TD-17 采样
-  口径（均见 v140 交接，零变更）。
-- **本轮新增（v141 套件量法口径，QA 基建非产品语义）**：
-  - **TP 三条实跑量法（TP-01 权威口径的对齐扩展）**：100MB 大文件使启动瞬态
-    （桶突发 0.5s + socket 预读）摊薄至 <3%，跳过前 10MB 瞬态窗后按
-    「（总量−窗量）/（完成时刻−窗时刻）」两端精确计，容差 ±10%；断言读数用
-    详情「大小」（字节级实时口径，FR-01-105），显示速度按块粒度跳变不作依据。
-  - TP-02：2 任务并发下载 big-100m，`?cd=tp02{a,b}.bin` 区分命名（FR-01-02）+
-    独立子目录（规避同 URL 重复守卫 QA-01-16）；组合稳态窗 = 每任务 10MB；
-    导航用 `home`/`down` 键 + 选中行 ▌ 标记逐轮读双任务详情。
-  - TP-03：配置 1 MB/s + CLI `--max-speed 512 KB/s`（FR-01-60 参数优先）；
-    判别力 = 512K+10% 上界 563K 与 1M−10% 下界 900K 不相交。
-  - TP-06：`big-100m.bin?norange=1`（fixture 忽略 Range 回 200 全量 → 引擎单流
-    路径）；证据面 = 详情「不支持断点续传」+ 除 bytes=0- 探测外无分块 Range
-    请求（FR-01-10，DE-02 同款判据）。
-  - **QA_TP_ONLY=1,3 环境变量**：套件内用例过滤器（沙箱前台单命令 10min 上限，
-    本套件全量 >13min 时分批前台跑；缺省全量行为不变）。
+  重锚口径、v1.24 分块断点视图两段合并、v140 桩口径与 TD-17 采样口径、v1.25 四条
+  口径（见 v142 交接）、v1.26 四条口径（缺 CL 守卫/恢复臂 A/B/三臂折叠，见 v143 交接）。
+- **本轮新增（v1.27，操作者三次 bug 报告直判；mission 待 specifier 同步）**：
+  - **失败回报携带持久化事实（核验与上报分离）**：凡磁盘断点台账在握的失败点
+    （探测请求网络错误/HTTP 状态错误、单流续传 Range 请求网络错误/状态错误、
+    预分配与 open 致命错），失败事件必须携带台账的 downloaded/chunk_done（多块 =
+    原账原样；单流 = `failed_ledger` 折叠块内进度），不得弃账上报 0/0；未核验 ≠
+    断点消失，一致性裁决（续传/作废）留给下一次成功探测。FR-01-22 作废语义零变更
+    （确变仍作废；v115 unknown_size_resume_restarts 锁定口径不变——size=0 未知大小
+    台账维持作废）；FR-01-41 重试决策零变更（made_progress 口径不变）。
 - 无未决待批项。
 
-## 二、当前产出情况（QA v141-qa）
+## 二、当前产出情况（coder v144-fix）
 
-### 本会话产物清单
-**QA 套件（qa/runners/suite_throttle_proxy.py）**
-- `_detail_dl` 上提为模块级读数助手（详情「大小 X / Y」→ 字节，十进制口径；
-  `_steady_rate` 内嵌实现收编，TP-01 行为零变化实测 106.4s 与 v140 一致）。
-- TP-02 删除 SkipCase 改实跑：双任务并发 + 组合稳态窗 + 合计 ±10% 断言
-  （211.6s 实测）。
-- TP-03 删除 SkipCase 改实跑：CLI 参数优先判别（512K 档带宽断言，206.4s 实测）。
-- TP-06 删除 SkipCase 改实跑：单流路径限速 + UI 证据 + fixture 访问日志
-  Range 形态证据（106.4s 实测，与 TP-01 同周期）。
-- run() 增 QA_TP_ONLY 过滤器（分批前台复跑对策，缺省全量）。
+### 本会话产物清单（产品树 1 文件 + 测试 3 个）
+**`project/ezr/src/engine/supervisor.rs`**（唯一产品源触碰面）
+- `download` 探测循环网络错误臂（根因主臂——重试每次尝试先探测，连接超时/拒连
+  全部命中此处）：`Flow::Failed(..., None)` → `spec.sidecar.clone().zip(
+  spec.sidecar_path.clone())`——spec 携带台账（App 每次 Start 从磁盘装载，单源）
+  原样随失败事件回报并重存（内容零变更）。
+- `download` 探测 HTTP 状态错误臂（503/404 等非 2xx）：同口径回报台账。
+- `download` 预分配致命错 ×2 臂（set_len 失败/目标文件创建失败）：以一致性过滤后的
+  `sc` 原样回报（致命错不抹断点视图）。
+- `single_stream` 续传请求臂 ×2（Range 续传请求本身网络错误/状态错误）：以
+  `failed_ledger(spec, stamp, &blocks, multi_ok, resumed, sc_path)` 折叠块内进度回报
+  （resume 判据保证 multi_ok ∧ resumed>0 → 必落账）；单流 open 致命错臂同口径。
+- mock_server 回归门控新增：`dropseq=N`（第 N 个连接不回任何响应直接断开——构造
+  「探测成功、续传 Range 请求即断」的请求臂失败形态）。
+- 回归测试 ×3（TDD 先红后绿，红灯 `left: Some((0, 0))` 与操作者报告逐字对应）：
+  `probe_conn_error_reports_persisted_breakpoint`（拒连探测 + 3 块台账 2 全 1 部分 →
+  事件必须 (2297152, 2)）；`probe_http_error_reports_persisted_breakpoint`（503 探测
+  同口径）；`single_stream_resume_request_error_keeps_ledger`（单块续传请求断连 →
+  事件必须携带台账字节 200000）。三测均另断言 .ezr 台账保留。
 
-**规程**
-- `qa/01-throttle-proxy-qa.md`：v1.7 修订行 + 环境前置补 big-100m.bin 与
-  QA_TP_ONLY 口径 + 速度断言口径升为权威量法段 + TP-02/03/06 判据行改写 +
-  通过准则「本套件无常设 S 登记项」。
-
-**工程沉淀（packs/_common/engineering.md）**
-- 新增「工作区文件模式位卫生」条目：沙箱环境重置会把跟踪文件可执行位整体
-  刷成 755，`git add -A` 照单全收经按索引打包的归档扩散（v140 归档 119 文件
-  644→755 污染实证）；打包前按 `git ls-tree -r HEAD -z` 模式表逐文件归一化 +
-  `git diff --cached --summary` 零 mode change + 归档成员模式抽验三重验证。
-
-**打包卫生（本轮执行记录）**
-- 索引模式归一化：122×100644 + 71×100755（71 为 HEAD 既有 755 集，含 bin/swarm、
-  ezr-demo 预编译二进制与上游脚本），相对 HEAD 零纯模式变更。
+**工程沉淀（packs/_common/）**
+- `engineering.md` 新增：「失败回报必须携带持久化事实——事件权威口径下上报 0/0
+  等于替用户清零」通用纪律（核验与上报分离 + `Flow::Failed(..., None)` 逐臂遍历法
+  + 验证锚点）。
+- `notes/rust.md` 新增：按连接序号门控 mock（dropseq=N）造「请求臂失败」形态。
 
 **规格**
-- features/ 与 mission 零改动（git 对账）。本轮为 QA 套件量法收口，
-  产品行为零变更（产品树零改动，二进制同源重建）。
+- features/ 与 mission 零改动（git 对账）；本轮为缺陷修复。FR-01-22/41/13 语义零变更；
+  v142 幽灵 supervisor 修复、v143 单流断点保全全部保持有效（11 个既有回归全绿）。
 
 ### 验证证据
 | 验证项 | 结果 | 命令 |
 |---|---|---|
-| throttle 套件（分批） | **7P/0F/0S**：TP-01 106.4s / TP-02 211.6s / TP-03 206.4s / TP-04 4.9s / TP-05 43.3s / TP-06 106.4s / TP-07 2.3s（四批全部一次过） | `QA_TP_ONLY=<批> python3 suite_throttle_proxy.py`（runners 目录） |
-| e2e 全量（13 套件） | **164 条 = 164P / 0F / 0S**：add 18 / ct 5 / de 16 / ic 12 / mt 9 / np 18 / pc 9 / rb 9 / rs 13 / sq 15 / tp 7 / td 15 / uc 18 | 逐套件 `python3 suite_*.py`（runners 目录，本轮全部实跑） |
-| 产品测试 | 沿袭 v140 基线 **2775P/0F**（本轮零 rust 变更，二进制同源重建） | `cargo build`（debug 三件套 1m35s）后无需重跑 |
-| 模式位对账 | 索引相对 HEAD **零 mode change**（122×644 + 71×755） | `git diff --cached --summary \| grep -c "mode change"` → 0 |
-| 归档模式抽验 | tar 成员 755 仅限 HEAD 既有集 | `tar -tvf <归档> \| grep 100755` 对账 |
+| 产品测试全量 | **2877P / 0F**（v143 基线 2853P + 本轮 3 个新回归，零失败） | `cargo test` |
+| 新增回归（TDD 先红后绿） | 3/3 绿（修复前 3/3 红，`left: Some((0, 0))` 复现报告形态） | `cargo test -- probe_conn_error probe_http_error single_stream_resume_request` |
+| 既有锁定回归保持 | v142 四测 + v143 六测 + unknown_size_resume_restarts / tampered_block_count_restarts_fresh / probe_missing_headers_invalidates 等规约锁定用例全绿 | 全量套件 |
+| clippy | **0 警告** | `cargo clippy --all-targets` |
+| fmt | 0 diff | `cargo fmt --check` |
+| arch | 14 规则全过 | `bash scripts/arch_check.sh` |
 
 ### 对账口径（基线 → 终态）
-- **e2e 对账**：v140 基线 164 条 161P/0F/3S → 本轮 **164 条 164P/0F/0S**
-  （+3P = TP-02/03/06 S→P；套件用例总数不变 164）。
-- 测试计数沿袭 v140 的 2775P/0F（产品树零改动；属性测试零改动）。
-- 产品源码变更 = 0（git 对账产品树无 diff；上轮 ezr-proxy 桩本轮零触碰）。
+- 产品测试：v143 基线 2853P/0F → 本轮 **2877P/0F**（+3 本轮新回归；其余为各测试目标
+  计数的自然汇总口径差，逐目标全绿零失败）。
+- 产品源码变更 = **1 文件**（engine/supervisor.rs），全部限「失败回报弃账」缺陷面
+  （7 臂 + 1 门控）；传输/落账/收尾路径、App 层、UI 层零触碰。
+- e2e 套件零触碰（qa/runners/ 零 diff）；features/ 零改动。
 
-### 交接四要素（QA）
+### 交接四要素（coder）
 1. **本地验证命令清单**（按序）：
-   环境：`export PATH="$HOME/.cargo/bin:$PATH"`（rustup nightly 自动装）→
-   cwd `project/ezr`：`cargo build`（e2e 依赖 target/debug 三件套）。
-   cwd `project/qa/runners`：13 套件逐个 `python3 suite_*.py`；其中
-   `suite_throttle_proxy.py` 用 `QA_TP_ONLY` 分批（建议 1,4,7 / 5,6 / 2 / 3
-   四批）或直接全量（>13min，注意前台窗口上限）→ 汇总 164P/0F/0S。
-   产品树如需复验：`CARGO_PROFILE_DEV_DEBUG=0 cargo test --all-targets`
-   （沿袭 2775P/0F）→ clippy/fmt/arch。
-2. **会话运行时产物**（`.work/tmp/`，`complete` 时清除）：无失败现场残留
-   （本轮零 F）。
+   环境：`export PATH="$HOME/.cargo/bin:$PATH"`（rustup nightly 自动装；离线/慢网
+   先配 rsproxy 镜像，见 notes/rust.md）→ cwd `project/ezr`：
+   `cargo test`（2877P/0F）→ `cargo clippy --all-targets`（0）→ `cargo fmt --check`（0）→
+   `bash scripts/arch_check.sh`（14 过）。
+2. **会话运行时产物**（`.work/tmp/`，`complete` 时清除）：无失败现场残留（本轮全绿）。
 3. **规格与 stamp**：features/ 零改动；01-persistence-config.feature stamp 维持
    保留（v138 处置），gherkin-mutator 恢复后按四要素③删除重跑。
-4. **等价突变体清单及失效条件**：沿袭 v137/v138/v139/v140 登记
-   `src/app/engine/evt.rs:297:23 replace > with >= in App::handle_failure`（失效
-   条件三条沿袭）；本轮零产品变更，未新增等价突变体。
+4. **等价突变体清单及失效条件**：沿袭 v137–v143 登记；本轮新增分支（7 个失败臂的
+   台账携带）均有行为锁（3 个新回归逐臂覆盖主形态），未发现新等价突变体。
 
 ### 待办与待批（未决项）
 - 无新增未决待批项。
-- 沿袭移交（操作者后续会话可选项，非缺陷）：gherkin-mutator 运行器基建（见
-  v138 交接遗留受限项）。**TP-02/03/06 已于本轮清账，不再是遗留项。**
-- 建议：本 handoff 为上游交接内容，操作者可直接 `bin/swarm complete` 归档交付
-  （本轮验证证据已闭环；打包前模式位三重验证已固化于 engineering.md）。
+- 沿袭移交（非缺陷）：gherkin-mutator 运行器基建（见 v138 交接遗留受限项）。
+- 建议（specifier 同步项，非阻塞）：v1.27 口径已以代码注释 + 本交接承载；
+  mission.md/phase-01.md 的版本注记由 specifier 下一轮按其建档职责补记
+  （coder 依宪法不触碰 mission）。
 
-### 各角色合并吸收清单（QA 移交）
-- **specifier**：规格零回改。TP 三条量法为 QA 基建口径（规程环境前置已改写），
-  产品 FR 面无需新增。
-- **coder**：产品树零触碰。后续若改限速器（Throttle）语义，注意 e2e 三条
-  100MB 量法用例的耗时预算（单套件 >13min，分批跑法见 QA_TP_ONLY）。
-- **cleaner**：本轮无新增重复；`_detail_dl` 为上提收编（消一处内嵌重复），
-  CPD 基线未复测（沿袭）。
-- **architect**：无产品结构变更；套件层新增模块级助手一个，arch_check 不涉。
-- **hardender**：零产品变更，变异靶面无新增；三条 100MB 量法用例为行为
-  回归锁（限速器语义变化的天然验收面）。
+### 各角色合并吸收清单（coder 移交）
+- **specifier**：v1.27 口径见「实现定义值登记」；如需升格为 FR/D 裁决项（「失败事件
+  必须携带持久化断点状态」），按建档流程补写。
+- **cleaner**：探测两臂的 `spec.sidecar.clone().zip(spec.sidecar_path.clone())` 与
+  预分配两臂的 `sc.clone().map(...)` 形态相近（CPD 复测可裁决是否提公共 helper）；
+  mock_server 门控已达 7 个（status/dropseq/norange/noclen/drophalf/droponce/slow/hold），
+  可评估按门控家族收敛。
+- **architect**：本轮把「失败回报的口径」收敛为不变式——凡磁盘台账在握的失败臂必须
+  回报台账；`run()` Failed 臂的 `Some→save + 汇总事件` 单点收尾已天然承载该不变式，
+  后续新增失败臂只需遵守「在握必报」纪律（engineering.md 已沉淀）。
+- **hardender**：3 个新回归为行为锁（探测拒连/503/续传请求断连）；变异靶面新增
+  7 个失败臂的第三参数（None ↔ 台账），v1.27 触碰面可按需差分加固。
+- **QA**：e2e 套件零触碰沿袭有效；01-resume-sidecar.feature 场景族对「失败后详情
+  分块/字节视图一致」的断言本轮起在多块路径同样成立。
 
 ### 移交建议
 - 操作者可直接 `bin/swarm complete` 归档交付（本轮验证证据已闭环）。
-- 操作者如需继续新 feature：`bin/swarm begin six-pack/specifier`。
-- 交付目录注意：`swarm-20261013-145434-six-pack-QA.tar.gz`（v140）含模式位
-  污染（119 文件误 755），本 v141 归档为修复后的正确基线，建议以 v141 替代
-  v140 归档对外分发。
+- 如需继续收口（可选）：`bin/swarm begin six-pack/cleaner`（失败臂 helper 形态对账）
+  或 `bin/swarm begin six-pack/hardender`（v1.27 触碰面差分加固）。

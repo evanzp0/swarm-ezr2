@@ -253,7 +253,14 @@ impl App {
     }
 
     /// 重试补发 Start 并清进展标记（FR-01-41：新一轮尝试的连续性判定从零起算；
-    /// 4a 到点重试与 4b 重排补发共用，未知 id 静默跳过）
+    /// 4a 到点重试与 4b 重排补发共用，未知 id 静默跳过）。
+    /// v1.25 同帧清 probed（与 tick ② tick_grant_and_start 的获槽口径一致）：
+    /// Start 已发、探测在途，任务处于「Queued+has_slot」等待窗——若 probed
+    /// 残留 true，4b 的过滤形态（Queued ∧ has_slot ∧ probed）每 100ms 命中并
+    /// 重发 Start，引擎为同一任务孵化成群幽灵 supervisor（慢/超时服务器窗口
+    /// 可达 15s）：重复 Failed 计数冲破重试上限（观测 10/5）、幽灵写盘进度
+    /// 回退、已失败态红条被幽灵 Progress 推高。Probed 事件到达时自然置回
+    /// true（state 同时转下载中）。
     async fn send_retry_start(&mut self, id: u32) {
         let Some(idx) = self.tasks.iter().position(|t| t.id == id) else {
             return;
@@ -264,6 +271,7 @@ impl App {
         self.engine.send(Cmd::Start { spec }).await;
         if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
             t.made_progress = false;
+            t.probed = false;
         }
     }
 }

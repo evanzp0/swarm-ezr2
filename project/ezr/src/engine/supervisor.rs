@@ -288,20 +288,46 @@ async fn download(
     evt_tx: &mpsc::Sender<Evt>,
 ) -> Flow {
     // ---- 探测（FR-01-10；探测与下载同走任务级代理端点，FR-01-86）----
+    // v1.25：探测请求与任务命令同 select（修复：探测在途不消费命令）——
+    // 慢探测（连接超时 15s）期间 Pause/Cancel/替换即时生效；重复 Start
+    // 替换时存活旧 supervisor 立即停机（句柄替换后全部 sender 丢弃，
+    // recv 返回 None），探测失败不再补发迟到 Failed（App 侧重试计数被
+    // 幽灵事件重复推进、冲破上限的根因），探测成功不再孵化幽灵 worker
+    // 与新 supervisor 并发写盘（进度回退根因）。探测期无已写进度，
+    // 按 Cancelled 收尾时盘上 sidecar 维持前值（暂停恢复语义不变）。
     let probe_client = shared.client_for(spec.proxy_endpoint.as_ref());
-    let resp = match req_with_identity(&probe_client, &spec.url, Some("bytes=0-".into()))
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => return Flow::Failed(classify_reqwest(&e), false, None),
+    let resp = loop {
+        tokio::select! {
+            r = req_with_identity(&probe_client, &spec.url, Some("bytes=0-".into())).send() => match r {
+                Ok(r) => break r,
+                // v1.27：探测失败 = 未核验 ≠ 断点消失——spec 携带的台账是唯一
+                // 持久化事实，随失败事件回报（0/0 会让 App 的事件口径覆盖
+                // 分块视图 →「已下载 5.6 MB / 分块 0/11」自相矛盾，操作者
+                // 实证缺陷）；台账原样重存（内容不变），核验留给下次探测
+                Err(e) => {
+                    return Flow::Failed(
+                        classify_reqwest(&e),
+                        false,
+                        spec.sidecar.clone().zip(spec.sidecar_path.clone()),
+                    )
+                }
+            },
+            // Reconfigure 探测期无热调语义（spec 已快照，并发/代理改动随
+            // 下次 Start 生效）：继续探测；Pause/Cancel/通道关闭（替换或
+            // 删除）→ 一律按取消收尾
+            cmd = cmd_rx.recv() => match cmd {
+                Some(TaskCmd::Reconfigure { .. }) => {}
+                _ => return Flow::Cancelled,
+            },
+        }
     };
     let head = probe_head(&resp);
     if !(200..=299).contains(&head.status) {
+        // v1.27：同探测网络错误——状态错误未核验内容，台账原样回报
         return Flow::Failed(
             EngineFailure::http(head.status, head.retry_after),
             false,
-            None,
+            spec.sidecar.clone().zip(spec.sidecar_path.clone()),
         );
     }
     let probed_stamp = ServerStamp {
@@ -327,10 +353,27 @@ async fn download(
     };
 
     // ---- 续传一致性检查（FR-01-22/D11；sidecar 名与推导名一致才可接续）----
+    // sc_path 提前推导（D3 守卫与后续单流/分块路径共用单源）
+    let sc_path = sidecar_path(&spec.save_dir, &name);
     let sc = spec.sidecar.clone().filter(|_| {
         name == spec.name || spec.sidecar.as_ref().is_some_and(|s| s.task.id == spec.id)
     });
     let blocks = if let Some(sidecar) = &sc {
+        // v1.26（操作者实证「.ezr 中途被删 + 进度清零」）：探测响应缺失
+        // Content-Length（超时型/降级服务器的典型形态）≠「大小变化」确证
+        // ——probed.size=None 与台账比对恒 false 会被误判 Invalidated 删账
+        // 重下。台账已知大小（size>0）→ 按探测不可靠处理：暂态失败保留
+        // 断点；未知大小台账（size=0）维持作废重下（不可核验，v115
+        // unknown_size_resume_restarts 锁定口径）。
+        if head.total == 0 && sidecar.size > 0 {
+            return Flow::Failed(
+                EngineFailure::network(
+                    "探测响应缺少 Content-Length，暂无法核验断点，保留断点稍后重试",
+                ),
+                false,
+                Some((sidecar.clone(), sc_path.clone())),
+            );
+        }
         match consistency::check(&sidecar.stamp(), &probed_stamp) {
             Consistency::Valid => {
                 let expected_blocks = chunk_total(sidecar.size, sidecar.block_size);
@@ -381,7 +424,6 @@ async fn download(
     let _ = tokio::fs::create_dir_all(&dir).await;
     let dl_path = dir.join(format!("{name}{DOWNLOADING_EXT}"));
     let final_path = dir.join(&name);
-    let sc_path = sidecar_path(&spec.save_dir, &name);
 
     // 单流路径：不支持 Range（200）或单块（total_blocks <= 1）
     if !multi_ok || total_blocks <= 1 {
@@ -390,6 +432,7 @@ async fn download(
             shared,
             resp,
             blocks,
+            multi_ok,
             &dl_path,
             &final_path,
             &sc_path,
@@ -420,7 +463,8 @@ async fn download(
                 return Flow::Failed(
                     EngineFailure::fatal(format!("无法预分配文件（{e}）")),
                     false,
-                    None,
+                    // v1.27：致命错不抹断点视图——台账原样回报
+                    sc.clone().map(|s| (s, sc_path.clone())),
                 );
             }
         }
@@ -428,7 +472,7 @@ async fn download(
             return Flow::Failed(
                 EngineFailure::fatal(format!("无法创建目标文件（{e}）")),
                 false,
-                None,
+                sc.clone().map(|s| (s, sc_path.clone())),
             )
         }
     }
@@ -633,6 +677,24 @@ fn failed_flow(
     )
 }
 
+/// 单流失败臂的断点台账（206 可续传流型折叠块内进度；无 Range 流型按
+/// FR-01-12 不可续传不落账——与暂停臂口径一致）
+fn failed_ledger(
+    spec: &TaskSpec,
+    stamp: &ServerStamp,
+    blocks: &Blocks,
+    multi_ok: bool,
+    downloaded: u64,
+    sc_path: &str,
+) -> Option<(Sidecar, String)> {
+    if !multi_ok || downloaded == 0 {
+        return None;
+    }
+    let mut b = blocks.clone();
+    b.mark_progress(0, downloaded);
+    Some((build_sidecar(spec, stamp, &b, false), sc_path.to_string()))
+}
+
 /// 块区间与已写字节视图（block_worker 重领臂与新领臂两处同构收敛，
 /// PMD CPD 52tok；`block_range` 无解时区间落 (0, 0)、已写量落 0）
 fn block_span(b: &Blocks, idx: u32) -> (u64, u64, u64) {
@@ -675,13 +737,18 @@ fn build_sidecar(
     )
 }
 
-/// 单流下载路径（不支持 Range 或单块；FR-01-12 降级：从头整体下载）
+/// 单流下载路径（不支持 Range 或单块计划；FR-01-12 降级）。
+/// v1.26 断点保全：单流 ≠ 不可续传——服务器支持 Range（206）时单块计划
+/// 同样按块内偏移 Range 续传（FR-01-13）；仅当服务器本次未响应 Range 而
+/// 台账已有进度时按暂态失败保留断点（不再静默截断重下——操作者实证：
+/// 几次连接超时后分块/字节/进度清零）。
 #[allow(clippy::too_many_arguments)]
 async fn single_stream(
     spec: &TaskSpec,
     shared: &Arc<super::EngineShared>,
-    mut resp: reqwest::Response,
+    resp: reqwest::Response,
     blocks: Blocks,
+    multi_ok: bool,
     dl_path: &Path,
     final_path: &Path,
     sc_path: &str,
@@ -690,15 +757,101 @@ async fn single_stream(
     cmd_rx: &mut mpsc::Receiver<TaskCmd>,
     evt_tx: &mpsc::Sender<Evt>,
 ) -> Flow {
-    let _ = emit(
-        evt_tx,
-        Evt::Toast(format!("⚠ 服务器不支持断点续传，单线程下载: {name}")),
-    )
-    .await;
+    let resumed = blocks.written.first().copied().unwrap_or(0);
+    let has_progress = blocks.written.iter().any(|&w| w > 0);
+    let single_block = block_range(blocks.total, blocks.piece, 1).is_none();
+
+    // 恢复臂 A：服务器本次未支持 Range 且台账有进度 → 暂态失败保留断点
+    // （不截断 .downloading、不作废台账；FR-01-22 作废语义仅限内容确变）
+    if !multi_ok && has_progress {
+        return Flow::Failed(
+            EngineFailure::network("服务器本次未支持断点续传（Range），保留断点稍后重试"),
+            false,
+            Some((
+                build_sidecar(spec, stamp, &blocks, false),
+                sc_path.to_string(),
+            )),
+        );
+    }
+
+    // 恢复臂 B：单块计划 + Range 可用 + 有块内进度 → Range 续传
+    let resume = multi_ok && single_block && resumed > 0;
+    if resume && resumed >= blocks.total {
+        // 全块完成台账（校验等待窗中断等）：直判文件实况收尾（D34 口径）
+        if std::fs::metadata(dl_path).is_ok_and(|m| m.len() == blocks.total) {
+            if spec.expected_algo.is_none() {
+                let _ = tokio::fs::rename(dl_path, final_path).await;
+                let _ = Sidecar::remove(sc_path);
+            } else {
+                // 校验等待窗：落全块完成终态台账（与多块完成臂同款），
+                // 由 App 校验流程收尾
+                let _ = Sidecar::save(&build_sidecar(spec, stamp, &blocks, false), sc_path);
+            }
+            let _ = emit(
+                evt_tx,
+                Evt::DownloadDone {
+                    id: spec.id,
+                    total: blocks.total,
+                },
+            )
+            .await;
+            return Flow::Completed;
+        }
+        // 台账与磁盘脱节：作废断点从头重下（FR-01-22 同源语义）
+        return Flow::Invalidated;
+    }
+
+    // 降级提示仅对真实不可续传（无 Range）流型发（206 单块计划可续传，不误报）
+    if !multi_ok {
+        let _ = emit(
+            evt_tx,
+            Evt::Toast(format!("⚠ 服务器不支持断点续传，单线程下载: {name}")),
+        )
+        .await;
+    }
+    let mut resp = if resume {
+        // 续传需带块内偏移的新请求：探测连接（bytes=0-）丢弃；最终 URL
+        // 与分块 worker 同源（探测响应实长 URL，免重定向再跟一跳）
+        let worker_url = resp.url().as_str().to_string();
+        drop(resp);
+        let client = shared.client_for(spec.proxy_endpoint.as_ref());
+        let range = format!("bytes={}-{}", resumed, blocks.total - 1);
+        match req_with_identity(&client, &worker_url, Some(range))
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => r,
+            Ok(r) => {
+                let status = r.status().as_u16();
+                let ra = parse_retry_after_header(
+                    r.headers().get("retry-after").and_then(|v| v.to_str().ok()),
+                );
+                let _ = r.bytes().await;
+                // v1.27：续传请求臂失败不得弃账（旧实现 None → 失败事件 0/0，
+                // 台账块内进度在 UI 双失真）；按失败台账口径回报块内进度
+                return Flow::Failed(
+                    EngineFailure::http(status, ra),
+                    false,
+                    failed_ledger(spec, stamp, &blocks, multi_ok, resumed, sc_path),
+                );
+            }
+            Err(e) => {
+                return Flow::Failed(
+                    classify_reqwest(&e),
+                    false,
+                    failed_ledger(spec, stamp, &blocks, multi_ok, resumed, sc_path),
+                )
+            }
+        }
+    } else {
+        resp
+    };
+    let mut downloaded: u64 = if resume { resumed } else { 0 };
     let mut file = match tokio::fs::OpenOptions::new()
         .write(true)
         .create(true)
-        .truncate(true)
+        // 恢复臂保留已写前缀；全新流截断重建
+        .truncate(!resume)
         .open(dl_path)
         .await
     {
@@ -707,20 +860,30 @@ async fn single_stream(
             return Flow::Failed(
                 EngineFailure::fatal(format!("无法创建目标文件（{e}）")),
                 false,
-                None,
+                failed_ledger(spec, stamp, &blocks, multi_ok, resumed, sc_path),
             )
         }
     };
-    let mut downloaded: u64 = 0;
+    if resume {
+        // 续传写位 = 块内已写偏移（FR-01-13；与分块 worker seek 语义一致）
+        let _ = file.seek(std::io::SeekFrom::Start(resumed)).await;
+    }
     // 单流进度上报节流（FR-01-17/81：不支持续传的任务同样需要真实进度/速度/连接数）
     let mut last_emit = std::time::Instant::now();
     loop {
         tokio::select! {
             cmd = cmd_rx.recv() => match cmd {
                 Some(TaskCmd::Pause) => {
-                    let sidecar = build_sidecar(spec, stamp, &blocks, true);
+                    // v1.26：206 可续传流型折叠块内进度（旧实现恒落全零台账
+                    // + 不可续传标记，恢复必从头重下）；无 Range 流型维持
+                    // FR-01-12 不可续传口径
+                    let mut ledger = blocks.clone();
+                    if multi_ok {
+                        ledger.mark_progress(0, downloaded);
+                    }
+                    let sidecar = build_sidecar(spec, stamp, &ledger, !multi_ok);
                     return Flow::Paused(PausedState {
-                        blocks,
+                        blocks: ledger,
                         sidecar,
                         sidecar_path: sc_path.to_string(),
                     });
@@ -734,7 +897,11 @@ async fn single_stream(
                 Ok(Some(bytes)) => {
                     shared.throttle.acquire(bytes.len() as u64).await;
                     if file.write_all(&bytes).await.is_err() {
-                        return Flow::Failed(EngineFailure::fatal("磁盘写入失败"), downloaded > 0, None);
+                        return Flow::Failed(
+                            EngineFailure::fatal("磁盘写入失败"),
+                            downloaded > 0,
+                            failed_ledger(spec, stamp, &blocks, multi_ok, downloaded, sc_path),
+                        );
                     }
                     downloaded += bytes.len() as u64;
                     // 单流连接视图：仅 1 个活跃连接（FR-01-12），周期上报进度
@@ -768,14 +935,26 @@ async fn single_stream(
                                 retry_after: None,
                             },
                             downloaded > 0,
-                            None,
+                            failed_ledger(spec, stamp, &blocks, multi_ok, downloaded, sc_path),
                         );
                     }
                     let final_total = if blocks.total == 0 { downloaded } else { blocks.total };
+                    // v1.26：可续传流型折叠块内进度（终态台账与收尾口径一致）
+                    let mut ledger = blocks.clone();
+                    if multi_ok {
+                        ledger.mark_progress(0, downloaded);
+                    }
                     if spec.expected_algo.is_none() {
                         // 无校验值直接完成：收尾（FR-01-24/20）
                         let _ = tokio::fs::rename(dl_path, final_path).await;
                         let _ = Sidecar::remove(sc_path);
+                    } else {
+                        // v1.18 修订 A 对齐（多块完成臂同款）：完成前落全块
+                        // 完成终态台账——「校验中」退出重启按台账直判收尾
+                        let _ = Sidecar::save(
+                            &build_sidecar(spec, stamp, &ledger, false),
+                            sc_path,
+                        );
                     }
                     let _ = emit(evt_tx, Evt::DownloadDone {
                         id: spec.id,
@@ -784,7 +963,11 @@ async fn single_stream(
                     return Flow::Completed;
                 }
                 Err(e) => {
-                    return Flow::Failed(classify_reqwest(&e), downloaded > 0, None);
+                    return Flow::Failed(
+                        classify_reqwest(&e),
+                        downloaded > 0,
+                        failed_ledger(spec, stamp, &blocks, multi_ok, downloaded, sc_path),
+                    );
                 }
             },
         }
@@ -1082,8 +1265,12 @@ mod tests {
     fn mock_server(total: u64, opts: Vec<(String, String)>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
+        // 连接序号计数（droponce 门控：仅首个连接半途断连，后续正常——
+        // 同一 URL 内构造「首轮断连、重试恢复」的用户故障形态）
+        let conn_seq = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         std::thread::spawn(move || {
             for conn in listener.incoming().flatten() {
+                let seq = conn_seq.fetch_add(1, Ordering::Relaxed);
                 let mut w = conn.try_clone().unwrap();
                 let mut r = BufReader::new(conn);
                 let mut line = String::new();
@@ -1110,7 +1297,22 @@ mod tests {
                     let _ = write!(w, "HTTP/1.1 {code} Injected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                     continue;
                 }
+                // v1.27 回归门控：dropseq = 第 N 个连接不回任何响应直接断开
+                // （构造「探测成功、续传 Range 请求即断」的请求臂失败形态）
+                if opts
+                    .iter()
+                    .find(|(k, _)| k == "dropseq")
+                    .and_then(|(_, v)| v.parse::<u32>().ok())
+                    .is_some_and(|n| seq == n)
+                {
+                    continue;
+                }
                 let norange = opts.iter().any(|(k, _)| k == "norange");
+                // v1.26 回归门控：noclen = 响应缺 Content-Length（超时型/降级
+                // 服务器的典型形态）；drophalf = 传输半途断连（连接超时故障形态）
+                let noclen = opts.iter().any(|(k, _)| k == "noclen");
+                let drophalf = opts.iter().any(|(k, _)| k == "drophalf");
+                let droponce = opts.iter().any(|(k, _)| k == "droponce");
                 let (start, end, status) = match range_header
                     .as_deref()
                     .and_then(|v| v.strip_prefix("bytes="))
@@ -1128,9 +1330,14 @@ mod tests {
                     _ => (0, total - 1, 200),
                 };
                 let len = end - start + 1;
+                let cl = if noclen {
+                    String::new()
+                } else {
+                    format!("Content-Length: {len}\r\n")
+                };
                 let _ = write!(
                     w,
-                    "HTTP/1.1 {status} OK\r\nAccept-Ranges: bytes\r\nETag: \"mock-{total}\"\r\nLast-Modified: Mon, 09 Feb 2026 08:00:00 GMT\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n"
+                    "HTTP/1.1 {status} OK\r\nAccept-Ranges: bytes\r\nETag: \"mock-{total}\"\r\nLast-Modified: Mon, 09 Feb 2026 08:00:00 GMT\r\n{cl}Connection: close\r\n\r\n"
                 );
                 let slow = opts.iter().any(|(k, _)| k == "slow");
                 // 挂起门控（v1.17 计划外对齐，同轮扩面）：头部照发、正文永不应答
@@ -1165,6 +1372,11 @@ mod tests {
                         // 慢速门控：8 KB/15ms ≈ 0.53 MB/s，1 MB 块约 1.9 s——
                         // 构造跨多个进度帧的块内观察窗（FR-01-105/FR-01-87 测试用）
                         std::thread::sleep(std::time::Duration::from_millis(15));
+                    }
+                    if (drophalf || (droponce && seq == 0)) && pos - start >= len / 2 {
+                        // 半途断连：读写句柄随循环作用域关闭（abrupt close，
+                        // 客户端读到截断体 → 传输中断错误）；droponce 仅首个连接
+                        break;
                     }
                 }
             }
@@ -1527,8 +1739,11 @@ mod tests {
         let shared = throttle_free();
         let (cmd_tx, cmd_rx) = mpsc::channel::<TaskCmd>(4);
         let spec = spec_for(9, &url, dir.to_str().unwrap(), 4096, 4, None);
-        // 取消命令先于 run 入队：探测后首个 select 轮询即命中取消
-        //（当前线程 runtime 下 worker 尚未被轮询，杜绝完成/进度竞态）
+        // 取消命令先于 run 入队：v1.25 探测 select 消费命令后，取消在探测
+        // 在途即命中（即时停机）或在探测完成后的首个监督轮询命中——两者
+        // 顺序均合法（loopback 头部到达与取消命令的就绪竞速为 50/50），
+        // 本测试不锁定 Probed 是否先到，只锁定取消语义：Cancelled 必到、
+        // 无幽灵进度、无完成、无产物
         cmd_tx.send(TaskCmd::Cancel).await.unwrap();
         tokio::spawn(run(spec, shared, cmd_rx, tx));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -1557,7 +1772,7 @@ mod tests {
         }
         assert!(!done, "取消后不应完成下载");
         assert!(!ghost, "取消后不应再有进度事件");
-        assert!(probed, "未收到探测事件");
+        let _ = probed; // 探测事件与取消事件的先后不锁定（见上）
         assert!(cancelled, "未收到取消确认事件（Evt::Cancelled）");
         // Flow::Cancelled 路径不 finalize、不写 sidecar：最终文件与 .ezr 都不应出现
         assert!(!dir.join("f.bin").exists(), "取消不应产出最终文件");
@@ -1873,6 +2088,199 @@ mod tests {
         panic!("应回报一致性失效");
     }
 
+    /// v1.25 缺陷回归（引擎单写者不变式；操作者实证：重试 10/5 / 进度清零 /
+    /// 已失败红条增长）：同任务 id 重复 Start 时，引擎必须先取消存活旧
+    /// supervisor 再孵化新 supervisor。历史缺陷：旧句柄被静默覆盖、双
+    /// supervisor 并发写同一 `.downloading` 文件与 sidecar——重复 Failed
+    /// 计数冲破重试上限、进度回退、已失败态进度条被幽灵事件推高。
+    /// 观察点：第二个 Start 后旧 supervisor 被取消（收到 Evt::Cancelled），
+    /// 替换后的新 supervisor 独自跑完下载（恰好一个 DownloadDone）。
+    #[tokio::test]
+    async fn engine_start_replaces_live_supervisor() {
+        let total: u64 = 3 * 1024 * 1024; // 3 块 × 1 MB；slow 门控拉长在传窗口
+        let url = mock_server(total, vec![("slow".into(), String::new())]);
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-replace");
+        let shared = throttle_free();
+        let mut tasks: std::collections::HashMap<u32, mpsc::Sender<TaskCmd>> =
+            std::collections::HashMap::new();
+        let (evt_tx, mut evt_rx) = mpsc::channel::<Evt>(256);
+        let mut spec = spec_for(
+            7,
+            &url,
+            dir.to_str().unwrap(),
+            crate::model::chunk::MIN_HTTP_BLOCK_SIZE,
+            1,
+            None,
+        );
+        // 钉住任务名（比照真实重试路径 make_spec 的 keep_name 口径）
+        spec.keep_name = true;
+        crate::engine::start_task(&mut tasks, spec.clone(), &shared, &evt_tx);
+        // 首个 supervisor 越过探测进入在传窗口（slow ≈ 1.9s/块）
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        crate::engine::start_task(&mut tasks, spec, &shared, &evt_tx);
+        // 旧 supervisor 必须被取消（Cancelled 事件）；deadline 内未到即失败
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut cancelled = false;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), evt_rx.recv()).await {
+                Ok(Some(Evt::Cancelled { id: 7 })) => {
+                    cancelled = true;
+                    break;
+                }
+                Ok(Some(_)) => {}
+                _ => break,
+            }
+        }
+        assert!(
+            cancelled,
+            "同任务 id 重复 Start：存活旧 supervisor 必须被替换取消"
+        );
+        // 替换后的新 supervisor 独自跑完下载：恰好一个 DownloadDone
+        let done_deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut done_count = 0usize;
+        while std::time::Instant::now() < done_deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), evt_rx.recv()).await {
+                Ok(Some(Evt::DownloadDone { id: 7, .. })) => done_count += 1,
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("替换后不应失败: {reason}"),
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => {} // 静默窗：继续等待
+            }
+        }
+        assert_eq!(
+            done_count, 1,
+            "替换后恰好一个 supervisor 完成（无双开双完成）"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 探测期专用服务器：首个连接延迟应答 503（慢探测失败注入），后续连接
+    /// 按 Range 正常 206 服务。线程 detach（engineering.md 口径）。
+    fn slow_first_fail_server(total: u64, delay_ms: u64) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            let mut first = true;
+            for conn in listener.incoming().flatten() {
+                let mut w = conn.try_clone().unwrap();
+                let mut r = BufReader::new(conn);
+                let mut line = String::new();
+                if r.read_line(&mut line).is_err() || line.is_empty() {
+                    continue;
+                }
+                let mut range_header = None;
+                loop {
+                    let mut h = String::new();
+                    if r.read_line(&mut h).is_err() || h.trim().is_empty() {
+                        break;
+                    }
+                    if let Some((k, v)) = h.split_once(':') {
+                        if k.trim().eq_ignore_ascii_case("range") {
+                            range_header = Some(v.trim().to_string());
+                        }
+                    }
+                }
+                if first {
+                    first = false;
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                    let _ = write!(
+                        w,
+                        "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    continue;
+                }
+                let (start, end) = match range_header
+                    .as_deref()
+                    .and_then(|v| v.strip_prefix("bytes="))
+                {
+                    Some(rv) => {
+                        let (a, b) = rv.split_once('-').unwrap();
+                        let s = a.parse::<u64>().unwrap_or(0);
+                        let e = if b.is_empty() {
+                            total - 1
+                        } else {
+                            b.parse::<u64>().unwrap_or(total - 1).min(total - 1)
+                        };
+                        (s, e)
+                    }
+                    _ => (0, total - 1),
+                };
+                let len = end - start + 1;
+                let _ = write!(
+                    w,
+                    "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nETag: \"mock-{total}\"\r\nLast-Modified: Mon, 09 Feb 2026 08:00:00 GMT\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n"
+                );
+                let mut buf = vec![0u8; 8192];
+                let mut pos = start;
+                while pos <= end {
+                    let n = (end - pos + 1).min(8192) as usize;
+                    fill(&mut buf[..n], pos);
+                    if w.write_all(&buf[..n]).is_err() {
+                        break;
+                    }
+                    pos += n as u64;
+                }
+            }
+        });
+        format!("http://{addr}/f.bin")
+    }
+
+    /// v1.25 缺陷回归（探测期替换；操作者实证「重试 10/5」的引擎侧根因）：
+    /// 历史 supervisor 探测阶段不消费任务命令——重复 Start 替换时，慢探测的
+    /// 存活旧 supervisor 不受句柄替换影响，探测失败后补发**迟到 Failed**
+    ///（App 侧重试计数被幽灵事件重复推进，冲破 5 次上限观测 10/5）；探测
+    /// 成功则孵化幽灵 worker 与新 supervisor 并发写盘（进度回退/已失败态
+    /// 红条增长）。修复后探测请求与命令同 select：替换即停机（Cancelled
+    /// 事件），不再有迟到 Failed，新 supervisor 独自完成。
+    #[tokio::test]
+    async fn probe_phase_replace_never_yields_late_failed() {
+        let total: u64 = 256 * 1024;
+        let url = slow_first_fail_server(total, 2_000);
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-probe-replace");
+        let shared = throttle_free();
+        let mut tasks: std::collections::HashMap<u32, mpsc::Sender<TaskCmd>> =
+            std::collections::HashMap::new();
+        let (evt_tx, mut evt_rx) = mpsc::channel::<Evt>(256);
+        let mut spec = spec_for(
+            9,
+            &url,
+            dir.to_str().unwrap(),
+            crate::model::chunk::MIN_HTTP_BLOCK_SIZE,
+            1,
+            None,
+        );
+        spec.keep_name = true;
+        // Start#1：旧 supervisor 进入 2s 慢探测（连接 1 排队 503 注入）
+        crate::engine::start_task(&mut tasks, spec.clone(), &shared, &evt_tx);
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        // Start#2：替换——旧 supervisor 必须立即停机（探测 select 消费命令）
+        crate::engine::start_task(&mut tasks, spec, &shared, &evt_tx);
+        // 泵事件至新 supervisor 完成（连接 2 起正常服务）；迟到 Failed 即违例
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let (mut cancelled, mut done) = (false, false);
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), evt_rx.recv()).await {
+                Ok(Some(Evt::Cancelled { id: 9 })) => cancelled = true,
+                Ok(Some(Evt::DownloadDone { id: 9, .. })) => {
+                    done = true;
+                    break;
+                }
+                Ok(Some(Evt::Failed { id: 9, reason, .. })) => {
+                    panic!("替换后的存活旧 supervisor 不得补发迟到 Failed: {reason}")
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => {} // 静默窗（慢探测注入期）：继续等待
+            }
+        }
+        assert!(done, "替换后的新 supervisor 应完成下载");
+        assert!(
+            cancelled,
+            "探测期替换必须即时取消旧 supervisor（Cancelled 事件）"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// sidecar 已完成块数：部分写与零块不计入（Failed 事件汇总口径）
     #[test]
     fn completed_of_counts_full_blocks_only() {
@@ -1902,5 +2310,435 @@ mod tests {
             },
         );
         assert_eq!(completed_of(&sc), 2, "部分写块与零块不计入完成");
+    }
+
+    // -----------------------------------------------------------------------
+    // v1.26（操作者 20261014 二次报告）：单流路径三缺陷 —— 「几次连接超时后
+    // 分块/字节/进度全部清零重新下载 + .ezr 控制文件中途被删」。三缺陷：
+    //   ① 单流失败臂不落 sidecar（206 可续传流型的块内进度全弃，重试从零）；
+    //   ② 单流入口无视恢复进度一律截断重下（单块计划 + 206 本可 Range 续传）；
+    //   ③ 带断点重试的探测缺 Content-Length 被误判 Invalidated → 删 .ezr。
+    // -----------------------------------------------------------------------
+
+    /// 预置 sidecar 落盘（stamp 与 mock 服务器响应头严格一致）
+    fn seed_sidecar(dir: &std::path::Path, url: &str, total: u64, piece: u64, written: &[u64]) {
+        let stamp = ServerStamp {
+            final_url: Some(url.to_string()),
+            etag: Some(format!("\"mock-{total}\"")),
+            last_modified: Some("Mon, 09 Feb 2026 08:00:00 GMT".to_string()),
+            size: Some(total),
+        };
+        let sc = Sidecar::build(
+            url,
+            &stamp,
+            total,
+            piece,
+            written,
+            false,
+            None,
+            SidecarTask {
+                id: 1,
+                added_at: 0,
+                save_dir: dir.to_string_lossy().into_owned(),
+                concurrency: 4,
+                protocol: Protocol::Http,
+            },
+        );
+        sc.save(dir.join("f.bin.ezr").to_str().unwrap()).unwrap();
+    }
+
+    /// ① 单流（单块计划 + 206 可续传）半途断连：失败必须落可续传台账
+    /// （旧实现失败臂 sidecar=None，块内进度全弃 → 重试从零）
+    #[tokio::test]
+    async fn single_stream_failure_saves_resumable_sidecar() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-ss-fail");
+        let total: u64 = 512 * 1024; // ≤ 1MB 下限 → 单块计划 → 单流路径
+        let url = mock_server(total, vec![("drophalf".into(), String::new())]);
+        let spec = spec_for(
+            1,
+            &url,
+            dir.to_str().unwrap(),
+            crate::model::chunk::MIN_HTTP_BLOCK_SIZE,
+            4,
+            None,
+        );
+        let (_cmd_tx, mut rx, deadline) = launch_spec(spec);
+        let mut failed: Option<u64> = None;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::Failed { downloaded, .. })) => {
+                    failed = Some(downloaded);
+                    break;
+                }
+                Ok(Some(Evt::Invalidated { .. })) => panic!("断连应按失败而非作废收尾"),
+                _ => {}
+            }
+        }
+        let downloaded = failed.expect("半途断连应回报 Failed");
+        assert!(
+            downloaded > 0 && downloaded < total,
+            "失败事件应携带真实进度（{downloaded}/{total}）"
+        );
+        let sc = Sidecar::load(dir.join("f.bin.ezr").to_str().unwrap())
+            .expect("断点台账应落盘（旧实现失败臂 sidecar=None 全弃）");
+        assert_eq!(sc.downloaded, downloaded, "台账字节 = 失败事件字节");
+        assert!(!sc.non_resumable, "206 流型失败台账可续传");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// ② 断点续传全程：断连失败 → 台账 → 恢复 Range 续传不回退直至完成
+    /// （同一 URL 内构造「首轮断连、重试恢复」；旧实现恢复即截断重下）
+    #[tokio::test]
+    async fn single_stream_failure_then_retry_resumes_without_restart() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-ss-resume");
+        let total: u64 = 512 * 1024;
+        // droponce：首个连接（探测+复用流）半途断连，后续连接正常
+        let url = mock_server(total, vec![("droponce".into(), String::new())]);
+        let spec1 = spec_for(
+            1,
+            &url,
+            dir.to_str().unwrap(),
+            crate::model::chunk::MIN_HTTP_BLOCK_SIZE,
+            4,
+            None,
+        );
+        let (_tx, mut rx, deadline) = launch_spec(spec1);
+        let mut resumed_at = 0u64;
+        while std::time::Instant::now() < deadline {
+            if let Ok(Some(Evt::Failed { downloaded, .. })) =
+                tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await
+            {
+                resumed_at = downloaded;
+                break;
+            }
+        }
+        assert!(
+            resumed_at > 0 && resumed_at < total,
+            "第一轮应半途失败（{resumed_at}/{total}）"
+        );
+        // 第二轮：同一 URL 重试 + 断点接续
+        let spec2 = sidecar_spec(1, &url, &dir, 4);
+        let (_tx2, mut rx2, deadline2) = launch_spec(spec2);
+        let mut done = false;
+        let mut first_progress = true;
+        while std::time::Instant::now() < deadline2 {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx2.recv()).await {
+                Ok(Some(Evt::Progress { downloaded, .. })) => {
+                    if first_progress {
+                        assert!(
+                            downloaded >= resumed_at,
+                            "续传首个进度不得回退（{downloaded} < {resumed_at}；旧实现截断重下）"
+                        );
+                        first_progress = false;
+                    }
+                }
+                Ok(Some(Evt::DownloadDone { .. })) => {
+                    done = true;
+                    break;
+                }
+                Ok(Some(Evt::Invalidated { .. })) => panic!("一致台账不应作废"),
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("续传不应失败: {reason}"),
+                _ => {}
+            }
+        }
+        assert!(done, "断点续传应完成");
+        let data = std::fs::read(dir.join("f.bin")).expect("完成文件在位");
+        assert_eq!(data.len() as u64, total);
+        let mut expect = vec![0u8; total as usize];
+        fill(&mut expect, 0);
+        assert_eq!(data, expect, "续传后文件字节完整（不重不漏）");
+        assert!(!dir.join("f.bin.ezr").exists(), "完成后台账删除");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// ②-补：服务器本次未支持 Range 且台账有进度 → 暂态失败保留断点
+    /// （不得静默截断重下；.downloading 与 .ezr 均保持原样）
+    #[tokio::test]
+    async fn resume_entry_without_range_preserves_progress() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-ss-norange");
+        let total: u64 = 2 * 1024 * 1024; // 2 块 × 1MB
+        let url = mock_server(total, vec![("norange".into(), String::new())]);
+        seed_sidecar(&dir, &url, total, 1024 * 1024, &[1024 * 1024, 200_000]);
+        std::fs::write(dir.join("f.bin.downloading"), vec![0u8; total as usize]).unwrap();
+        let spec = sidecar_spec(1, &url, &dir, 4);
+        let (_tx, mut rx, deadline) = launch_spec(spec);
+        let mut reason: Option<String> = None;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::Failed { reason: r, .. })) => {
+                    reason = Some(r);
+                    break;
+                }
+                Ok(Some(Evt::DownloadDone { .. })) => {
+                    panic!("有断点时 200 探测不得静默截断重下（旧实现行为）");
+                }
+                Ok(Some(Evt::Invalidated { .. })) => panic!("服务端戳一致不得作废"),
+                _ => {}
+            }
+        }
+        let reason = reason.expect("应暂态失败保留断点");
+        assert!(
+            reason.contains("Range"),
+            "失败原因应说明 Range 未支持: {reason}"
+        );
+        assert!(dir.join("f.bin.ezr").exists(), "台账保留");
+        assert_eq!(
+            std::fs::metadata(dir.join("f.bin.downloading"))
+                .unwrap()
+                .len(),
+            total,
+            "半成品文件不得被截断"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// ③ 带断点重试的探测缺 Content-Length → 暂态失败保留断点
+    /// （不得判 Invalidated 删 .ezr——操作者实证「.ezr 中途被删」根因）
+    #[tokio::test]
+    async fn resume_probe_without_content_length_keeps_sidecar() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-ss-noclen");
+        let total: u64 = 1024 * 1024;
+        let url = mock_server(total, vec![("noclen".into(), String::new())]);
+        seed_sidecar(&dir, &url, total, 1024 * 1024, &[400_000]);
+        let spec = sidecar_spec(1, &url, &dir, 4);
+        let (_tx, mut rx, deadline) = launch_spec(spec);
+        let mut failed = false;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::Failed { .. })) => {
+                    failed = true;
+                    break;
+                }
+                Ok(Some(Evt::Invalidated { .. })) => {
+                    panic!("缺 Content-Length 的降级探测不得作废断点（旧实现删 .ezr）");
+                }
+                _ => {}
+            }
+        }
+        assert!(failed, "缺 Content-Length 探测应按暂态失败保留断点");
+        assert!(dir.join("f.bin.ezr").exists(), "台账保留");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// ④ v1.27 回归（操作者实证：详情「分块 0/11」而磁盘 .ezr 台账 2 块全 +
+    /// 1 部分块）：带断点台账的任务在**探测阶段**网络错误（连接超时/拒连——
+    /// 重试的每次尝试都先探测）时，失败事件不得把台账弃成 None 上报 0/0——
+    /// 多块路径事件口径权威，App apply_chunk_snapshot 会用 0 覆盖分块视图
+    /// （字节因 >0 守卫保留，详情页「已下载 2.2 MB / 分块 0/3」自相矛盾，
+    /// 注册表随之持久化错误快照）。探测失败 = 未核验 ≠ 断点消失：上报台账
+    /// 的持久化状态（不确变、不删账）。
+    #[tokio::test]
+    async fn probe_conn_error_reports_persisted_breakpoint() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-probe-conn");
+        let total: u64 = 3 * 1024 * 1024; // 3 块 × 1MB
+                                          // 拒连端口：bind 后立即 drop（探测请求必网络错误，无响应可用）
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        drop(l);
+        let url = format!("http://{addr}/f.bin");
+        seed_sidecar(
+            &dir,
+            &url,
+            total,
+            1024 * 1024,
+            &[1_048_576, 1_048_576, 200_000],
+        );
+        let spec = sidecar_spec(1, &url, &dir, 4);
+        let (_tx, mut rx, deadline) = launch_spec(spec);
+        let mut got: Option<(u64, u32)> = None;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::Failed {
+                    downloaded,
+                    chunk_done,
+                    ..
+                })) => {
+                    got = Some((downloaded, chunk_done));
+                    break;
+                }
+                Ok(Some(Evt::Invalidated { .. })) => panic!("无响应探测不得作废断点"),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            got,
+            Some((1_048_576 + 1_048_576 + 200_000, 2)),
+            "失败事件应携带台账持久化状态（旧实现上报 0/0 → 详情分块清零）"
+        );
+        assert!(dir.join("f.bin.ezr").exists(), "台账保留");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// ⑤ 同 ④：探测期 HTTP 状态错误（503）同口径——失败事件携带台账状态。
+    #[tokio::test]
+    async fn probe_http_error_reports_persisted_breakpoint() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-probe-http");
+        let total: u64 = 3 * 1024 * 1024;
+        let url = mock_server(total, vec![("status".into(), "503".into())]);
+        seed_sidecar(
+            &dir,
+            &url,
+            total,
+            1024 * 1024,
+            &[1_048_576, 1_048_576, 200_000],
+        );
+        let spec = sidecar_spec(1, &url, &dir, 4);
+        let (_tx, mut rx, deadline) = launch_spec(spec);
+        let mut got: Option<(u64, u32)> = None;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::Failed {
+                    downloaded,
+                    chunk_done,
+                    ..
+                })) => {
+                    got = Some((downloaded, chunk_done));
+                    break;
+                }
+                Ok(Some(Evt::Invalidated { .. })) => panic!("状态错误探测不得作废断点"),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            got,
+            Some((1_048_576 + 1_048_576 + 200_000, 2)),
+            "失败事件应携带台账持久化状态（旧实现上报 0/0）"
+        );
+        assert!(dir.join("f.bin.ezr").exists(), "台账保留");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// ⑥ 单流续传请求臂（Range 续传请求本身网络错误）同口径：单块台账
+    /// 块内部分进度（无完整块 → chunk_done=0 属实），失败事件必须携带台账
+    /// 字节（旧实现 None → 「已下载」清零观感，字节与分块双失真）。
+    #[tokio::test]
+    async fn single_stream_resume_request_error_keeps_ledger() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-ss-resume-err");
+        let total: u64 = 512 * 1024; // 单块计划 → 单流路径
+                                     // dropseq=1：连接 0 = 探测（206 全量头），连接 1 = Range 续传请求 → 直接断开
+        let url = mock_server(total, vec![("dropseq".into(), "1".into())]);
+        seed_sidecar(&dir, &url, total, 1024 * 1024, &[200_000]);
+        let spec = sidecar_spec(1, &url, &dir, 4);
+        let (_tx, mut rx, deadline) = launch_spec(spec);
+        let mut got: Option<u64> = None;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::Failed { downloaded, .. })) => {
+                    got = Some(downloaded);
+                    break;
+                }
+                Ok(Some(Evt::Invalidated { .. })) => panic!("一致台账不得作废"),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            got,
+            Some(200_000),
+            "续传请求失败应携带台账字节（旧实现上报 0 → 已下载清零观感）"
+        );
+        assert!(dir.join("f.bin.ezr").exists(), "台账保留");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// ②-补2：全块完成台账（校验等待窗中断）恢复 → 直判收尾不重传
+    /// （旧实现截断后阻塞在 hold 体上；台账与磁盘脱节才作废重下）
+    #[tokio::test]
+    async fn full_ledger_resume_finalizes_without_retransfer() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-ss-full");
+        let total: u64 = 512 * 1024;
+        // hold 门控：有头无体——全块台账直判收尾不需要响应体
+        let url = mock_server(total, vec![("hold".into(), String::new())]);
+        seed_sidecar(&dir, &url, total, 1024 * 1024, &[total]);
+        std::fs::write(dir.join("f.bin.downloading"), vec![7u8; total as usize]).unwrap();
+        let spec = sidecar_spec(1, &url, &dir, 4);
+        let (_tx, mut rx, deadline) = launch_spec(spec);
+        let mut done = false;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::DownloadDone { total: t, .. })) => {
+                    assert_eq!(t, total);
+                    done = true;
+                    break;
+                }
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("全块台账应直判收尾: {reason}"),
+                _ => {}
+            }
+        }
+        assert!(
+            done,
+            "全块完成台账恢复应直接收尾（旧实现截断后阻塞在 hold 体上）"
+        );
+        assert!(!dir.join("f.bin.ezr").exists(), "收尾后台账删除");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// ①-补：206 单流暂停臂折叠块内进度（旧实现恒落全零台账 + 不可续传
+    /// 标记，恢复必从头重下）；恢复 Range 接续至完成
+    #[tokio::test]
+    async fn single_block_pause_folds_progress_into_ledger() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-ss-pause");
+        let total: u64 = 1024 * 1024; // 1 块（慢速门控留出暂停窗）
+        let url = mock_server(total, vec![("slow".into(), String::new())]);
+        let spec = spec_for(
+            1,
+            &url,
+            dir.to_str().unwrap(),
+            crate::model::chunk::MIN_HTTP_BLOCK_SIZE,
+            1,
+            None,
+        );
+        let (cmd_tx, mut rx, deadline) = launch_spec(spec);
+        let mut paused_at = 0u64;
+        let mut pause_sent = false;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::Progress { downloaded, .. }))
+                    if !pause_sent && downloaded >= 64 * 1024 =>
+                {
+                    let _ = cmd_tx.send(TaskCmd::Pause).await;
+                    pause_sent = true;
+                }
+                Ok(Some(Evt::PausedDone { downloaded, .. })) => {
+                    paused_at = downloaded;
+                    break;
+                }
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("慢速流不应失败: {reason}"),
+                _ => {}
+            }
+        }
+        assert!(
+            paused_at > 0 && paused_at < total,
+            "暂停应折叠真实进度（{paused_at}/{total}）"
+        );
+        let sc = Sidecar::load(dir.join("f.bin.ezr").to_str().unwrap()).expect("暂停台账落盘");
+        assert!(!sc.non_resumable, "206 单流暂停台账可续传（旧实现恒 true）");
+        assert_eq!(sc.downloaded, paused_at, "台账字节 = PausedDone 字节");
+        // 恢复：同一 URL Range 接续至完成
+        let spec2 = sidecar_spec(1, &url, &dir, 1);
+        let (_tx2, mut rx2, deadline2) = launch_spec(spec2);
+        let mut done = false;
+        let mut first = true;
+        while std::time::Instant::now() < deadline2 {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx2.recv()).await {
+                Ok(Some(Evt::Progress { downloaded, .. })) => {
+                    if first {
+                        assert!(downloaded >= paused_at, "恢复进度不得回退");
+                        first = false;
+                    }
+                }
+                Ok(Some(Evt::DownloadDone { .. })) => {
+                    done = true;
+                    break;
+                }
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("恢复不应失败: {reason}"),
+                _ => {}
+            }
+        }
+        assert!(done, "暂停恢复应完成");
+        let data = std::fs::read(dir.join("f.bin")).expect("完成文件在位");
+        let mut expect = vec![0u8; total as usize];
+        fill(&mut expect, 0);
+        assert_eq!(data, expect, "恢复后文件字节完整");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
