@@ -120,6 +120,27 @@
 > `"retries": 1`）；`has_error` 字段整体退役（迟到失败守卫改 Paused 全态整体忽略、恢复 toast
 > 回归续传双臂、快照不再持久化挂起标记；v1.21 产物快照多余字段反序列化忽略零迁移）。
 > 规格、QA 与 ezr-demo 同步（见 phase-01 v1.23 注记）。
+> v1.24–v1.27 补记（coder 会话外缺陷修复轮实现定义值，specifier v1.28 轮按 v144-fix handoff
+> 台账口径补记；FR 语义零变更）：v1.24 = apply_chunk_snapshot 两段合并（分块计数倒退修复）；
+> v1.25 = 幽灵 supervisor 根因修复（探测期命令消费/补发去重/失败去重守卫/幽灵进度门）；
+> v1.26 = 单流降级路径断点保全（折叠落账/Range 续传/暂态保留/缺 CL 探测不作废）；
+> v1.27 = 失败回报携带持久化事实（核验与上报分离，不弃账上报 0/0）。
+> v1.28（操作者指令，与 phase-01 v1.28 同步）：**URL 权威模型改版（AIR2 口径）**——全程以
+> 「原始输入 URL」为任务级唯一权威，跳转后 URL 降格为每条连接内部的「当前值」（不持久化、
+> 不跨连接共享、不作任务状态）：①探测与全部数据请求（分块 worker、单流续传）各自从原始 URL
+> 独立发起并跟随重定向（上限 10 次/请求链不变，FR-01-14 重写），失败重试/续传回滚原始 URL
+> 重新跟跳转；②sidecar 不再存储任何 URL（原始/最终 URL 键退役，FR-01-20 修订；旧 sidecar
+> 多余键反序列化忽略零迁移；AIR2 口径：控制文件根本不存 URL，持久化 URL 仅任务注册表中的
+> 原始 URL）；③续传一致性比较由「最终 URL/ETag/Last-Modified/大小」收敛为
+> 「ETag/Last-Modified/大小」（FR-01-22 修订）；④FR-01-26 断点接续匹配改「保存目录 + 推导
+> 同名 sidecar」路径基（不再做同 URL 校验，误接续由 FR-01-22 一致性兜底，新增
+> 01-resume-sidecar-14）；⑤详情「URL」行展示与点击复制收敛为原始 URL 单值（FR-01-80/D27
+> 修订，最终 URL 优先臂退役）；⑥任务级 `final_url` 状态与注册表持久化字段退役（旧注册表
+> 多余键忽略，零迁移）。规格 `features/01-download-engine.feature`（场景 08 重写）、
+> `features/01-resume-sidecar.feature`（场景 01/07 修订、场景 14 新增）、
+> `features/01-add-task.feature`（场景 08/09 述语对齐）、QA 套件同步
+>（qa/01-download-engine-qa.md QA-DE-08、qa/01-resume-sidecar-qa.md QA-RS-01/07/14、
+> qa/01-add-task-qa.md QA-01-08）。
 
 
 ---

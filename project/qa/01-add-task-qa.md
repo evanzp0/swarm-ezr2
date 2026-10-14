@@ -22,7 +22,7 @@
 | QA-01-05 | 01-add-task-05 | ①校验码留空确认；②输入大写 MD5 码确认 | ①详情显示「无校验」；②校验行前缀为小写 `d869db7f` |
 | QA-01-06 | 01-add-task-06 | 并发字段分别输入：留空/0/65/abc | 四种输入均建任务成功且头部数据面字段显示「并发 4」（v1.13 数据面口径） |
 | QA-01-07 | 01-add-task-07 | URL 分别输入：无协议/ftp:///本地路径 | 三种输入均 toast 报错且列表不新增任务 |
-| QA-01-08 | 01-add-task-08 | fixture 分别提供：CD filename= / 仅最终 URL 末段 / 最终末段为空 | 目标文件名依次为 report.pdf / dataset.tar.gz / archive.iso |
+| QA-01-08 | 01-add-task-08 | fixture 分别提供：CD filename= / 仅跳转落点 URL 末段（v1.28 述语，原「最终 URL 末段」）/ 落点末段为空 | 目标文件名依次为 report.pdf / dataset.tar.gz / archive.iso |
 | QA-01-09 | 01-add-task-09 | CD 缺失且两级 URL 末段均空 | 文件名匹配 `download-<数字时间戳>` 格式 |
 | QA-01-10 | 01-add-task-10 | 预置同名文件后添加同名任务 | 新目标为 `report.pdf.1`，原文件字节未变 |
 | QA-01-11 | 01-add-task-11 | 组合：配置 download_dir±留空±目录不存在 | 解析顺序=输入>配置>用户主目录下载目录；目录自动创建 |

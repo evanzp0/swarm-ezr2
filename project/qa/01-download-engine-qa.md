@@ -21,7 +21,7 @@
 | QA-DE-05 | 01-download-engine-05 | 12MB 并发 4 / 3MB 并发 8 下载 | 完成分块行 `12/12`·`3/3` · 1 MB/块；请求日志多路不同起始 Range（动态领块、乱序完成） |
 | QA-DE-06 | 01-download-engine-06 | 2MB（2 块）并发 4 | 任务级分块行 2/2 · 1 MB/块；详情无连接级明细、画面无「待命」（FR-01-81 修订二：明细表整体移除）；最终完成 |
 | QA-DE-07 | 01-download-engine-07 | 8MB 下到 40% 暂停→继续（区间日志） | 续传请求区间与已完成块零交集；最终字节完整 |
-| QA-DE-08 | 01-download-engine-08 | 添加 2 跳重定向 URL | 经重定向完成；详情 URL 为最终 URL |
+| QA-DE-08 | 01-download-engine-08 | 添加 2 跳重定向 URL（请求日志开） | 经重定向完成；详情 URL 为原始 URL（v1.28/FR-01-14）；fixture 日志显示每个分块请求均从原始 URL 独立发起并跟跳转（无共享探测落点） |
 | QA-DE-09 | 01-download-engine-09 | 添加 11 跳重定向 URL | 失败「重定向次数超限」；「不自动重试」；不占槽 |
 | QA-DE-10 | 01-download-engine-10 | 添加重定向至 ftp:// 的 URL | 失败「不支持的重定向协议」；「不自动重试」 |
 | QA-DE-11 | 01-download-engine-11 | 自签 HTTPS URL | 失败原因含 TLS 证书错误；无跳过校验开关 |

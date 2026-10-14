@@ -6,7 +6,7 @@
 #   01-download-engine-05 多连接动态领块乱序完成
 #   01-download-engine-06 队列临近结束多余连接转待命
 #   01-download-engine-07 续传不重写已下载块
-#   01-download-engine-08 重定向跟随至最终 URL 完成下载
+#   01-download-engine-08 重定向跟随完成下载（原始 URL 唯一权威，各连接独立跟跳转）
 #   01-download-engine-09 重定向超过 10 次停等
 #   01-download-engine-10 重定向目标非 http(s) 停等
 #   01-download-engine-11 HTTPS 证书错误按任务失败处理
@@ -19,6 +19,9 @@ Feature: 01-download-engine HTTP 下载内核（探测 · 分块 · 重定向 ·
 
   期号 01。依据 project/mission/phase-01.md FR-01-10~17、FR-01-82 与本会话澄清决定
   （等待任务不预取、重定向边界停等）。块大小默认 1 MB（可配置），AIR2 分块队列模型。
+  v1.28 修订（操作者 URL 权威模型改版，FR-01-14）：原始输入 URL 为任务级唯一权威，
+  跳转后 URL 仅为每条连接内部的当前值；各连接（探测与分块）各自从原始 URL 独立跟跳转；
+  详情 URL 显示原始 URL（场景 08 重写，原「详情 URL 显示最终 URL」退役）。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
@@ -98,14 +101,15 @@ Feature: 01-download-engine HTTP 下载内核（探测 · 分块 · 重定向 ·
       | file_size | progress |
       | 8 MB      | 40%      |
 
-  Scenario: 01-download-engine-08 重定向跟随至最终 URL 完成下载
-    Given fixture 提供从 "<origin_url>" 重定向（<redirects> 次）至 "<final_url>" 的下载链
+  Scenario: 01-download-engine-08 重定向跟随完成下载（原始 URL 唯一权威，各连接独立跟跳转）
+    Given fixture 提供从 "<origin_url>" 重定向（<redirects> 次）至 "<landing_url>" 的下载链
     When 添加 origin URL 的下载任务并等待开始
     Then 下载经重定向最终完成且文件字节完整
-    And 详情 URL 显示最终 URL
+    And 详情 URL 显示原始 URL "<origin_url>"（任务级唯一权威；跳转落点不进任务详情、不持久化，v1.28/FR-01-14）
+    And fixture 记录的每个分块请求均以原始 URL 为起点独立跟随重定向（非共享探测落点）
 
     Examples:
-      | origin_url                              | redirects | final_url                             |
+      | origin_url                              | redirects | landing_url                          |
       | http://fixture.local/r/jump/a.bin       | 2         | http://fixture.local/files/a.bin      |
 
   Scenario: 01-download-engine-09 重定向超过 10 次停等

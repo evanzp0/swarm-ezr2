@@ -113,7 +113,7 @@ Feature: 01-add-task 任务添加（对话框与 CLI）
       | /local/path/file.bin       |
 
   Scenario: 01-add-task-08 文件名推导优先级
-    Given fixture 提供下载项 "<case>"：Content-Disposition "<disposition>"、最终 URL 路径末段 "<final_segment>"、原始 URL 路径末段 "<origin_segment>"
+    Given fixture 提供下载项 "<case>"：Content-Disposition "<disposition>"、探测请求跳转落点 URL 路径末段 "<final_segment>"（该次连接的当前值，不持久化，v1.28/FR-01-02）、原始 URL 路径末段 "<origin_segment>"
     When 按对话框添加该下载项并确认
     Then 目标文件名为 "<expected_filename>"
 
@@ -124,7 +124,7 @@ Feature: 01-add-task 任务添加（对话框与 CLI）
       | 3    | （无）                               | （末段为空）  | archive.iso    | archive.iso       |
 
   Scenario: 01-add-task-09 文件名无法推导回退 download-<时间戳>
-    Given fixture 提供下载项：Content-Disposition 缺失、最终与原始 URL 路径末段均为空
+    Given fixture 提供下载项：Content-Disposition 缺失、探测跳转落点与原始 URL 路径末段均为空
     When 按对话框添加该下载项并确认
     Then 目标文件名匹配 download-<数字时间戳> 格式
 

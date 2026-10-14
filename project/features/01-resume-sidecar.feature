@@ -12,10 +12,13 @@
 #   01-resume-sidecar-11 仅删除任务保留文件与 sidecar
 #   01-resume-sidecar-12 删除任务和文件全部删除
 #   01-resume-sidecar-13 重加同 URL 同路径任务自动接续断点
+#   01-resume-sidecar-14 重加同路径异 URL 任务由一致性检查兜底
 Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
 
   期号 01。依据 project/mission/phase-01.md FR-01-20~26 与 D10/D11 定案。sidecar 文件为
-  伴随目标文件的 <目标文件>.ezr，原子写；续传一致性以最终 URL/ETag/Last-Modified/大小为准。
+  伴随目标文件的 <目标文件>.ezr，原子写；续传一致性以 ETag/Last-Modified/大小为准
+  （v1.28 修订：原「最终 URL/ETag/Last-Modified/大小」四要素随 sidecar 去 URL 收敛为三要素，
+  FR-01-20/22/26 v1.28；sidecar 不存任何 URL，断点接续匹配改路径基）。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
@@ -24,8 +27,9 @@ Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
   Scenario: 01-resume-sidecar-01 sidecar 伴随目标文件创建且内容齐全
     When 添加支持续传的文件 "<file>" 并开始下载
     Then 目标文件旁存在 sidecar 文件 "<file>.ezr"
-    And sidecar 内容涵盖：原始与最终 URL、文件大小、ETag、Last-Modified、块大小、总块数、
+    And sidecar 内容涵盖：文件大小、ETag、Last-Modified、块大小、总块数、
       各块状态（含部分下载块块内字节）、已下载字节、校验期望值（如有）与任务元信息
+    And sidecar 不含任何 URL 字段（原始/最终 URL 键退役，持久化 URL 仅任务注册表中的原始 URL，v1.28/FR-01-20）
 
     Examples:
       | file       |
@@ -98,7 +102,6 @@ Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
       | 30%      | ETag            |
       | 30%      | Last-Modified   |
       | 30%      | 文件大小        |
-      | 30%      | 最终 URL        |
       | 30%      | 全部一致性头（服务器不再返回）|
 
   Scenario: 01-resume-sidecar-08 一致性连续 3 次失效转停等
@@ -161,3 +164,14 @@ Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
     Examples:
       | url                                | dir       | progress |
       | http://fixture.local/files/resume.bin | /tmp/qadl | 30%      |
+
+  Scenario: 01-resume-sidecar-14 重加同路径异 URL 任务由一致性检查兜底
+    Given 保存目录已存在 URL "<old_url>" 任务的推导同名 sidecar（已下载至进度 ≥ <progress>）且任务已被「仅删除任务」移除
+    When 按对话框重新添加推导名相同但内容不同的异 URL "<new_url>" 与相同保存目录
+    Then 任务按路径基接续沿用既有名与 sidecar（无「同 URL」校验门，v1.28/FR-01-26）
+    And 探测后一致性检查发现 ETag/Last-Modified/大小不符 → 出现「服务器内容已更新，已从头重新下载」toast
+    And 原 sidecar 作废且任务从头重新下载（不计失败、不占重试计数，FR-01-22 兜底臂）
+
+    Examples:
+      | old_url                                 | new_url                                 | progress |
+      | http://fixture.local/files/alias.bin    | http://fixture.local/other/alias.bin    | 30%      |
