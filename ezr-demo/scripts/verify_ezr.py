@@ -90,8 +90,16 @@
                         明细恢复（rust 递补，生产 FR-01-34：R 让槽队首递补）；
                         做种中（arch）明细显示
                         （BT 五列、首列掩码 IP、活跃 1）。
+场景 R（v1.28 同步）：  生产同步轮八（URL 权威模型交互同步）两段运行：
+                        R1 正路径——同 URL 同目录重复添加被拒（toast「任务已存在」、
+                        对话框保持打开）；「仅删除任务（保留文件）」后异 URL 同
+                        推导名再添加 → 路径基断点接续（v1.28/FR-01-26：toast
+                        「发现有效断点，将自动接续」、沿用推导原名无 .1 后缀、
+                        等待中带断点分块进度 x>0 非从零）；
+                        R2 反路径——「删除任务及本地文件」后同名 URL 再添加
+                        → 无接续（toast 无断点字样，普通添加）。
 
-用法：python3 scripts/verify_ezr.py [场景集合，默认 abcdefhjklmnop；g 为 150s 长跑可单独运行]
+用法：python3 scripts/verify_ezr.py [场景集合，默认 abcdefhjklmnopqr；g 为 150s 长跑可单独运行]
 """
 
 import fcntl
@@ -145,8 +153,11 @@ def key_bytes(k: str) -> bytes:
     return k.encode()
 
 
-def run(cols, lines, duration, keys=None, key_delay_frac=0.45, watch=None):
-    """运行 TUI。samples: [(t, rows_tuple)]；watch(t, rows, screen) 每帧回调（实时取色）。"""
+def run(cols, lines, duration, keys=None, key_delay_frac=0.45, watch=None,
+        key_interval=0.22):
+    """运行 TUI。samples: [(t, rows_tuple)]；watch(t, rows, screen) 每帧回调（实时取色）。
+
+    key_interval：相邻按键发送间隔秒（场景 R 键盘流较长，以 0.05s 加速）。"""
     keys = keys or []
     pid, fd = pty.fork()
     if pid == 0:
@@ -162,7 +173,7 @@ def run(cols, lines, duration, keys=None, key_delay_frac=0.45, watch=None):
     key_start = t0 + duration * key_delay_frac
     sent = 0
     while time.time() < deadline:
-        if sent < len(keys) and time.time() >= key_start + sent * 0.22:
+        if sent < len(keys) and time.time() >= key_start + sent * key_interval:
             os.write(fd, key_bytes(keys[sent]))
             sent += 1
         r, _, _ = select.select([fd], [], [], 0.05)
@@ -1054,8 +1065,74 @@ def scenario_p():
           act7.strip()[:50] if act7 else "not found")
 
 
+def scenario_r():
+    print("\n== 场景 R：v1.28 生产同步轮八（重复拒绝 + 路径基断点接续）==")
+
+    def clear_and_type(url: str) -> list:
+        """清空预填 URL（130 次退格覆盖最长预填）后逐键输入 url。"""
+        return ["bs"] * 130 + list(url)
+
+    # 预填池轮换：首开 ADD_POOL[100%6]=Fedora（99 字符）、次开 magnet、三开 cuda，
+    # 130 次退格均可清空后再输入目标 URL；目标文件名 = URL 路径末段（同推导名）
+    url_a = "http://a.io/alpha-release.bin"  # 推导名 alpha-release.bin
+    url_b = "https://cdn.other.org/files/alpha-release.bin"  # 异 URL，同推导名
+
+    # ---- R1 正路径：重复拒绝 + 保留文件删除 → 异 URL 同名接续 ----
+    keys = (
+        ["a"] + clear_and_type(url_a) + ["enter"]  # 添加任务（等待中）
+        + ["a"] + clear_and_type(url_a) + ["enter"]  # 同 URL 同目录重复添加 → 拒绝
+        + ["esc"]  # 关闭保持打开的对话框
+        + ["d", "1"]  # 仅删除任务（保留文件）→ 模拟盘 sidecar 残留
+        + ["a"] + clear_and_type(url_b) + ["enter"]  # 异 URL 同推导名 → 路径基接续
+    )
+    dur = 4.0 + len(keys) * 0.05 + 8.0
+    samples1, _screen1 = run(120, 44, dur, keys=keys, key_delay_frac=0.03,
+                             key_interval=0.05)
+    all_text1 = "\n".join("\n".join(rows) for _, rows in samples1)
+
+    check("R1-1 添加任务 alpha-release.bin 成功",
+          "已添加任务 #" in all_text1 and "alpha-release.bin" in all_text1)
+    check("R1-2 同 URL 同目录重复添加被拒（toast「任务已存在」）",
+          "任务已存在" in all_text1)
+    dup_open = any(
+        "任务已存在" in "\n".join(rows) and "添加下载任务" in "\n".join(rows)
+        for _, rows in samples1)
+    check("R1-3 拒绝后对话框保持打开（与其他校验失败一致）", dup_open)
+    check("R1-4 仅删除任务（保留文件）",
+          "已删除任务（保留文件）: alpha-release.bin" in all_text1)
+    check("R1-5 异 URL 同推导名 → 路径基接续 toast（v1.28/FR-01-26）",
+          "alpha-release.bin（发现有效断点，将自动接续）" in all_text1)
+    resumed_partial = False
+    for _, rows in samples1:
+        if "发现有效断点，将自动接续" in "\n".join(rows):
+            if any((m := CHUNK_RE.search(r)) and int(m.group(1)) > 0 for r in rows):
+                resumed_partial = True
+                break
+    check("R1-6 接续任务带断点进度（等待中帧分块 x>0，非从零开始）", resumed_partial)
+    check("R1-7 接续沿用推导原名（无 .1 序号后缀）",
+          "alpha-release.bin.1" not in all_text1)
+
+    # ---- R2 反路径：删除任务及本地文件 → 同名 URL 再添加不接续 ----
+    keys2 = (
+        ["a"] + clear_and_type(url_a) + ["enter"]  # 添加
+        + ["d", "2"]  # 删除任务及本地文件（sidecar 一并清理）
+        + ["a"] + clear_and_type(url_a) + ["enter"]  # 再添加 → 无断点可接续
+    )
+    dur2 = 4.0 + len(keys2) * 0.05 + 8.0
+    samples2, _screen2 = run(120, 44, dur2, keys=keys2, key_delay_frac=0.03,
+                             key_interval=0.05)
+    all_text2 = "\n".join("\n".join(rows) for _, rows in samples2)
+
+    check("R2-1 删除任务及本地文件",
+          "已删除任务及本地文件: alpha-release.bin" in all_text2)
+    check("R2-2 删除文件后同名 URL 再添加不接续（全程无「发现有效断点」）",
+          "发现有效断点" not in all_text2)
+    check("R2-3 再添加成功（普通添加，沿用推导名）",
+          "alpha-release.bin" in all_text2 and "已添加任务 #" in all_text2)
+
+
 if __name__ == "__main__":
-    only = sys.argv[1] if len(sys.argv) > 1 else "abcdefhjklmnop"
+    only = sys.argv[1] if len(sys.argv) > 1 else "abcdefhjklmnopqr"
     if "a" in only:
         scenario_a()
     if "b" in only:
@@ -1088,6 +1165,8 @@ if __name__ == "__main__":
         scenario_o()
     if "p" in only:
         scenario_p()
+    if "r" in only:
+        scenario_r()
     print(f"\n通过 {len(PASS)} 项 / 失败 {len(FAIL)} 项")
     if FAIL:
         print("失败项:")

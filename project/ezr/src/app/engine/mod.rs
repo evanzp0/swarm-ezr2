@@ -1330,6 +1330,59 @@ mod evt_tests {
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[tokio::test]
+    async fn progress_on_non_downloading_task_is_ignored() {
+        // v1.25 幽灵进度防线：非「下载中」任务的 Progress 一律忽略——
+        // 迟到/重复回报不得改写已下载字节、连接视图与断点数
+        let mut app = make_app("progress-paused");
+        app.tasks.push(seed_task(1, "f.bin"));
+        app.tasks[0].state = TaskState::Paused;
+        app.on_evt(Evt::Progress {
+            id: 1,
+            downloaded: 500,
+            conns: vec![],
+            chunk_done: 1,
+        })
+        .await;
+        assert_eq!(app.tasks[0].downloaded, 0, "非下载中：进度不被采纳");
+        assert_eq!(app.tasks[0].state, TaskState::Paused);
+        assert!(!app.windows.contains_key(&1), "不产生幽灵速度窗");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn failure_at_retry_limit_stops_auto_retry() {
+        // FR-01-41：无进展重试计数累加至 max_retries → at_limit——停等、
+        // 释放槽位、不挂倒计时，toast 引导按 R 手动重试
+        let mut app = make_app("retry-limit");
+        app.tasks.push(seed_task(1, "f.bin"));
+        app.tasks[0].state = TaskState::Downloading;
+        app.tasks[0].retries = app.tasks[0].max_retries - 1;
+        app.on_evt(Evt::Failed {
+            id: 1,
+            kind: crate::model::FailKind::Transient,
+            reason: "连接被重置".to_string(),
+            retry_after: None,
+            made_progress: false,
+            downloaded: 100,
+            chunk_done: 1,
+        })
+        .await;
+        assert_eq!(app.tasks[0].state, TaskState::Failed);
+        assert_eq!(app.tasks[0].retries, app.tasks[0].max_retries);
+        assert!(
+            app.tasks[0].retry_in.is_none(),
+            "达上限：不再挂自动重试倒计时"
+        );
+        assert!(!app.tasks[0].has_slot, "达上限：释放槽位");
+        let toast = app.toast.as_deref().unwrap_or_default();
+        assert!(
+            toast.contains("已达最大重试次数") && toast.contains("按 R 手动重试"),
+            "toast: {toast}"
+        );
+        app.shutdown().await;
+    }
 }
 
 #[cfg(test)]

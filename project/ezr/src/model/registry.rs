@@ -531,4 +531,66 @@ mod tests {
         assert_eq!(loaded.tasks[0].downloaded, 150, "内容漂移后保存必须落盘");
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    #[test]
+    fn proxy_choice_compat_default_is_direct() {
+        assert_eq!(ProxyChoiceCompat::default().0, "direct");
+    }
+
+    #[test]
+    fn proxy_choice_compat_legacy_global_maps_to_direct() {
+        // v1.6/FR-01-90：旧 "global" 值（全局键已退役）映射直连（零迁移）
+        assert_eq!(
+            ProxyChoice::from(ProxyChoiceCompat("global".to_string())),
+            ProxyChoice::Direct
+        );
+    }
+
+    #[test]
+    fn proxy_choice_compat_unknown_falls_back_to_direct() {
+        // 反序列化遇未知形态一律回退 direct（容错口径同注册表其余字段）
+        assert_eq!(
+            ProxyChoice::from(ProxyChoiceCompat("bogus".to_string())),
+            ProxyChoice::Direct
+        );
+        assert_eq!(
+            ProxyChoice::from(ProxyChoiceCompat("namedx".to_string())),
+            ProxyChoice::Direct
+        );
+    }
+
+    #[test]
+    fn registry_default_is_empty() {
+        assert!(Registry::default().tasks.is_empty());
+    }
+
+    #[test]
+    fn load_rejects_version_mismatch() {
+        // 版本不符 → None，按全新注册表处理（FR-01-23）
+        let reg = Registry::from_tasks(&[sample_task()]);
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg-version");
+        let p = dir.join("registry.json");
+        reg.save(p.to_str().unwrap()).unwrap();
+        let mut v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        v["version"] = serde_json::json!(REGISTRY_VERSION + 1);
+        std::fs::write(&p, serde_json::to_string(&v).unwrap()).unwrap();
+        assert!(
+            Registry::load(p.to_str().unwrap()).is_none(),
+            "版本不符应返回 None"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn restore_resets_unverified_checksum_result() {
+        // 「下载中」重启 → 等待中；校验结果非 Some(true) 一律重置为未定
+        // （重启时校验结果视为未定，重新校验/续传后重判）
+        let mut t = sample_task();
+        t.state = TaskState::Downloading;
+        t.verify_ok = Some(false);
+        let restored = Registry::from_tasks(&[t]).restore_tasks();
+        assert_eq!(restored[0].state, TaskState::Queued);
+        assert_eq!(restored[0].verify_ok, None);
+    }
 }

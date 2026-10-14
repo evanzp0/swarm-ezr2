@@ -1361,6 +1361,30 @@ mod ui_v114_tests {
         assert!(app.detail_ck_rect.is_none(), "窄终端 → 校验热区清空");
         app.shutdown().await;
     }
+
+    /// v1.6/FR-01-92（v1.22/v1.23 直判维持）：失败原因行仅「已失败」态展示——
+    /// 挂起态与普通已暂停完全一致（不再持有也不再展示错误信息）
+    #[tokio::test]
+    async fn detail_shows_failure_reason_only_for_failed_state() {
+        // 已失败：失败原因行 + 错误文本
+        let mut app = make_app("detail-fail-reason");
+        let mut t = task(1, "failed.bin", TaskState::Failed);
+        t.error = Some("连接被重置".to_string());
+        app.tasks.push(t);
+        let term = render_detail(&mut app, 110, 24);
+        let s = term.backend().to_string();
+        assert!(s.contains("失败原因"), "已失败态展示失败原因行: {s}");
+        assert!(s.contains("连接被重置"), "失败原因文本: {s}");
+        app.shutdown().await;
+
+        // 挂起（普通已暂停，error=None）：不展示失败原因行
+        let mut app2 = make_app("detail-paused-no-reason");
+        app2.tasks.push(task(2, "paused.bin", TaskState::Paused));
+        let term2 = render_detail(&mut app2, 110, 24);
+        let s2 = term2.backend().to_string();
+        assert!(!s2.contains("失败原因"), "非失败态不展示失败原因行: {s2}");
+        app2.shutdown().await;
+    }
 }
 
 /// 测试基建单源（DRY：三处 cfg(test) 模块的 make_app/task/渲染/行文本助手收口于此）。

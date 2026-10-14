@@ -265,4 +265,22 @@ mod tests {
         assert_eq!(join_path("/dl", "f"), "/dl/f");
         assert_eq!(join_path("", "f"), "f");
     }
+
+    #[test]
+    fn derive_name_falls_back_to_original_url_when_landing_has_no_path() {
+        // v1.28 述语：落点 URL 为该次连接当前值，可为无可推导路径形态（根路径）
+        // ——回退原始 URL 路径推导（第二参不持久化，行为与 v1.27 可观察面不变）
+        assert_eq!(
+            derive_name(None, Some("http://f/"), "http://o/orig.bin"),
+            "orig.bin"
+        );
+    }
+
+    #[test]
+    fn dedupe_falls_back_to_timestamp_when_all_taken() {
+        // 1..10_000 全被占用 → 时间戳兑底（FR-01-02；时间源为系统时钟）
+        let name = dedupe("f.bin", |_| true);
+        assert!(name.starts_with("f.bin."), "got {name}");
+        assert_ne!(name, "f.bin");
+    }
 }

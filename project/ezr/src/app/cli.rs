@@ -100,4 +100,44 @@ mod cli_add_tests {
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[tokio::test]
+    async fn cli_add_rejects_non_http_url_with_toast() {
+        // FR-01-05：URL 校验口径单源 model::is_http_url——非法 scheme 不建任务
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-cli-bad-url");
+        let reg = dir.join("registry.json").to_string_lossy().to_string();
+        let mut app = App::new(Config::default(), reg);
+        app.add_cli_task("ftp://example.com/f.bin".to_string(), None, None, None);
+        assert!(app.tasks.is_empty(), "非法 URL 不建任务");
+        let toast = app.toast.as_deref().unwrap_or_default();
+        assert!(
+            toast.contains("仅支持 http:// 或 https://"),
+            "toast 提示: {toast}"
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn cli_add_resumes_by_path_sidecar_keeps_name() {
+        // FR-01-26 v1.28 路径基：保存目录存在与推导名同名的有效 sidecar
+        // 即沿用原名自动接续（sidecar 不存储 URL，无同 URL 校验）
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-cli-resume");
+        let reg = dir.join("registry.json").to_string_lossy().to_string();
+        let save = dir.to_string_lossy().to_string();
+        crate::app::testutil::preset_resume_sidecar(&dir);
+        let mut app = App::new(Config::default(), reg);
+        app.add_cli_task(
+            "http://example.com/r.bin".to_string(),
+            Some(save),
+            None,
+            None,
+        );
+        assert_eq!(app.tasks.len(), 1);
+        assert_eq!(app.tasks[0].name, "r.bin", "路径基接续沿用推导原名");
+        let toast = app.toast.as_deref().unwrap_or_default();
+        assert!(toast.contains("自动接续"), "接续 toast: {toast}");
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

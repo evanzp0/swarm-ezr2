@@ -353,4 +353,14 @@ mod tests {
             "新序列化不得含 final_url: {text}"
         );
     }
+
+    #[test]
+    fn remove_missing_sidecar_is_ok() {
+        // 幂等清理：文件不存在（NotFound）按成功处理——收尾清理可重入
+        // （完成/作废双臂重复调用不报错）
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-sc-remove");
+        let p = dir.join("absent.bin.ezr");
+        assert!(Sidecar::remove(p.to_str().unwrap()).is_ok());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

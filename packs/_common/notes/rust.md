@@ -523,6 +523,11 @@ group_imports = "StdExternalCrate"
   script 产物，常达 GB 级）只服务主 target——删它不影响 llvm-cov/mutants 的增量性，
   反之删 llvm-cov-target 则下次需 2.5G+ 全量重建、磁盘紧张沙箱直接放不下。清缓存前
   按「下一步要跑什么工具」决定归属，别按目录名直觉。
+  **同会话多阶段的时间预算排布（10G 级沙箱实证）**：llvm-cov 与主 debug 目标并存
+  预算不足时，按「主 target 先 clean → llvm-cov 一次跑完并提取度量（lcov.out 等
+  解析产物落 `.work/tmp/`）→ 立即删 llvm-cov-target 还盘 → 终验走主 target 增量」
+  排布——度量解析产物与构建目录分离，删除构建目录不损失已提取数据；跳过此排布
+  会让终验在链接期 `cc failed`（磁盘满的典型症状，非测试失败），先查 df 再归因。
 
 - **PMD 7 的 cpd 子命令用 `--dir`（`--files` 已废弃）**：`pmd cpd -l rust
   --minimum-tokens 50 --dir <src>`；退出码 4 = 发现重复（正常语义，不是失败），
@@ -639,6 +644,12 @@ group_imports = "StdExternalCrate"
 - **llvm 导出 JSON 的 name 是 v0 mangled，跨 crate 实例归并要剥 crate 段留模块尾**（v138 QA 轮实证，衔接上条 MAX 归并口径）：形如 `_RNvNtNtCs<hash>_<len><crate_name><len><seg>…`——正则取 `Cs[A-Za-z0-9]+_` 之后的 `<len>` 数字，按其长度跳过 crate 名 token，余下模块尾（如 `3app5mouse10pointer_in`）+ 规范化文件路径（剥 `tests/../`、归一 `/src/` 后取 `src/…`）作分组键，才能把 `#[path]` 挂载产生的多 crate 实例 MAX 归并成单函数行；闭包/泛型实例后缀（`.s<n>_`、`0s<n>_`、泛型参数段）不剥离则各自成行（小行数、comp=1，CRAP ≤ 2 的噪声行，不碍门禁但读数时须知）。
 
 - **`#[path]` 挂载点的测试计数对账法：1 条新测试按挂载点数重复计入全量**（v138 QA 轮实证）：产品源内嵌 `#[cfg(test)]` 测试经 `#[path]` 收编进独立测试 crate 时，同一测试在「bin 单测 + 每个挂载该树的测试 crate」各计 1 次——全量计数对账公式 = 静态 `#[test]`/`#[tokio::test]` 属性计数 ×（1 + 挂载该树的 crate 数）；对账用 `cargo test --all-targets -- --list` 的编译期总数与逐 crate 分项核对（实测：1 条 tasks.rs 新测试在 bin + 5 个挂载 app 树的 hardening_* crate 共计 6 次）。上轮交接总数差 ±1 这类残差，先走此法再怀疑漏改。
+  **静态挂载图推导后必须抽点实证校准**（v128 cleaner 轮实证）：顶层 `tests/*.rs` 的
+  `#[path]` grep 会漏掉**壳层再挂载**——挂载壳文件（如 `tests/hardening/namegen_hard.rs`）
+  内部再 `#[path = "../../src/model/namegen.rs"]` 收编产品源，该源的内嵌测试在壳宿
+  crate 也复制一份，顶层 grep 扫不到。校准手法：对每条新测试用
+  `cargo test --test <crate> -- <测试名>` 逐 crate 数命中（每个编译语境恰 1 次），
+  实测计数 ≠ 静态推导时以实测为准重画挂载图，再对总分对账。
 
 - **tokio 异步化网络型 fixture（std 线程版迁移）三坑（v140 QA 轮实证，ezr-proxy 重写）**：①
   新版 tokio `TcpStream::from_std` 注册前必须显式 `set_nonblocking(true)`（否则 panic

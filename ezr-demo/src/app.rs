@@ -39,6 +39,7 @@
 //! 「等待中」任务须等槽位空出，按列表顺序（从上往下）依次获得槽位后开始下载。
 //! 开始/续传前进行磁盘空间预检（演示：tensorflow 首次获得槽位时预检失败一次）。
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -560,6 +561,14 @@ pub struct App {
     pub default_proxy_sel: usize,
     /// 系统剪贴板实例（修订-7：懒初始化并复用，避免每次点击重建 X11/桌面连接）
     clipboard: Option<arboard::Clipboard>,
+    /// 模拟盘 sidecar 台账（v1.28 生产同步轮八，FR-01-26 路径基接续）：
+    /// 键 = (保存目录, 推导名)，代表模拟盘上存在的 `<目录>/<名>.ezr` 有效断点。
+    /// demo 无真实文件系统，由删除对话框「保留文件」臂登记残留（生产 FR-01-25：
+    /// 仅删任务时文件与 sidecar 全保留）；「删除文件」臂移除；任务转「已完成」
+    /// 后其名下条目在下次添加判定前同步清除（生产 FR-01-20/24：完成即删 sidecar）。
+    /// 接续判定仅按路径匹配、不做同 URL 校验（v1.28：异 URL 同推导名也接续，
+    /// 误接续由生产续传一致性检查兜底，demo 无一致性环节故直接演示接续）。
+    pub sim_sidecars: HashSet<(String, String)>,
 }
 
 impl App {
@@ -592,6 +601,7 @@ impl App {
             toast: Some("EZR Downloader Demo 就绪 · 数据为模拟数据".to_string()),
             toast_until: Some(Instant::now() + Duration::from_secs(4)),
             prefill_seq: 100,
+            sim_sidecars: HashSet::new(),
             last_tick: Instant::now(),
             last_speed_tick: Instant::now(),
             visible_rows: 6,
@@ -1715,6 +1725,8 @@ impl App {
         let conns_raw = d.conns.trim().to_string();
         let ck_raw = d.ck_value.trim().to_string();
         let ck_type = d.ck_type;
+        // 代理选择一并先读出（借用收窄：后续 sync_sim_sidecars 需要 &mut self）
+        let proxy_sel = d.proxy_sel.min(self.proxy_options.len() - 1);
 
         // 校验码验证：非空时必须是纯十六进制且长度与算法匹配
         let checksum = if ck_raw.is_empty() {
@@ -1749,14 +1761,49 @@ impl App {
             dir_raw.trim_end_matches('/').to_string()
         };
 
-        let (proto, mut name) = parse_url_task(&url);
-        // 目标文件重名：自动追加序号 .1 / .2 …（不覆盖既有条目，FR-M1-02）
-        let base = name.clone();
-        let mut seq = 1u32;
-        while self.tasks.iter().any(|t| t.name == name) {
-            name = format!("{}.{}", base, seq);
-            seq += 1;
+        // v1.28 生产同步（生产 01-add-task-16 同构）：重复任务拒绝——同 URL 同保存
+        // 目录已在列表 → toast 提示，不创建新任务（对话框保持打开，与其他校验失败一致）
+        if self
+            .tasks
+            .iter()
+            .any(|t| t.url == url && save_dir_of(&t.save_path) == dir)
+        {
+            self.set_toast("⚠ 任务已存在");
+            return;
         }
+        self.sync_sim_sidecars();
+        let (proto, base_name) = parse_url_task(&url);
+        // v1.28/FR-01-26 断点自动接续（路径基）：保存目录存在与「原始 URL 路径
+        // 推导名」同名的有效 sidecar（模拟盘：删除任务「保留文件」臂登记的残留，
+        // 生产 FR-01-25）即接续——沿用推导原名（不追加序号），且**不做同 URL
+        // 校验**（v1.28：异 URL 同推导名也接续；任务列表内同 URL 同目录同名
+        // 非完成腿与生产同构保留，实际多被前置的重复拒绝短路，防御性）；
+        // demo 无续传一致性环节，误接续（异 URL 同名）由生产 FR-01-22 兜底，
+        // 此处直接演示路径基接续的可观察面：同名接续 + 断点进度 + 钦定 toast
+        let resumed = self.sim_sidecars.contains(&(dir.clone(), base_name.clone()))
+            || self.tasks.iter().any(|t| {
+                t.url == url
+                    && save_dir_of(&t.save_path) == dir
+                    && t.name == base_name
+                    && !matches!(t.state, TaskState::Completed | TaskState::Seeding)
+            });
+        let name = if resumed {
+            base_name.clone()
+        } else {
+            // 重名检测：同目录域内自动追加序号 .1 / .2 …（与生产 namegen::dedupe
+            // 口径对齐：以保存目录为域判「任务表 + 盘上」重名，FR-M1-02）
+            let mut seq = 1u32;
+            let mut n = base_name.clone();
+            while self
+                .tasks
+                .iter()
+                .any(|t| t.name == n && save_dir_of(&t.save_path) == dir)
+            {
+                n = format!("{}.{}", base_name, seq);
+                seq += 1;
+            }
+            n
+        };
         // 并发数：取对话框输入（钳制 1-64）；留空或非法时用协议默认（HTTP 4 / BT 20）
         let conns = conns_raw
             .parse::<usize>()
@@ -1765,9 +1812,13 @@ impl App {
         // v1.20 生产同步：任务 ID = u32 随机数 + 任务全集查重，不再顺序自增
         let id = alloc_task_id(&self.tasks);
         self.prefill_seq = self.prefill_seq.wrapping_add(1);
-        let proxy = self.proxy_options[d.proxy_sel.min(self.proxy_options.len() - 1)].clone();
+        let proxy = self.proxy_options[proxy_sel].clone();
         let total = pseudo_total(&name);
         let save_path = format!("{}/{}", dir, name);
+        // 路径基接续（v1.28）：模拟盘 sidecar 中的已下载字节以确定性部分进度
+        // （按任务 ID 取 25%–59% 档）预置到新任务——「接续」的可观察观感 =
+        // 列表/详情直接从断点进度继续，而非从零开始
+        let done = if resumed { resumed_done(id, total) } else { 0 };
         let base = 5_000_000.0 + (id as f64 * 1.37e6) % 7_000_000.0;
         let mut t = mk(
             id,
@@ -1781,7 +1832,7 @@ impl App {
             } else {
                 TaskState::Queued
             },
-            0,
+            done,
             conns,
             base,
             "刚刚",
@@ -1804,10 +1855,23 @@ impl App {
         if flen > 0 {
             self.selected = flen - 1;
         }
-        // toast（D29 钦定文案）：立即下载路径维持原两态；仅添加 ⏸ + 空格引导
+        // toast（D29 钦定文案 + v1.28 接续两臂）：立即下载/仅添加 × 有无断点
+        // 四态；接续两臂文案与生产 dlg_finish_add 逐字对齐
         if paused {
+            if resumed {
+                self.set_toast(format!(
+                    "⏸ 已添加任务 #{}: {}（发现有效断点，已暂停，按空格继续）",
+                    id, name
+                ));
+            } else {
+                self.set_toast(format!(
+                    "⏸ 已添加任务 #{}: {}（已暂停，按空格开始下载）",
+                    id, name
+                ));
+            }
+        } else if resumed {
             self.set_toast(format!(
-                "⏸ 已添加任务 #{}: {}（已暂停，按空格开始下载）",
+                "✓ 已添加任务 #{}: {}（发现有效断点，将自动接续）",
                 id, name
             ));
         } else {
@@ -1824,19 +1888,50 @@ impl App {
         }
     }
 
+    /// 模拟盘 sidecar 台账同步（v1.28 生产同步轮八）：任务转「已完成/做种」
+    /// 后其名下 (目录, 名) 从模拟盘移除（生产 FR-01-20/24：任务转入「已完成」
+    /// 时删除对应 sidecar——无论有无校验值）。添加链路做接续判定前调用，
+    /// 保证路径基匹配读到与生产等价的磁盘口径。
+    fn sync_sim_sidecars(&mut self) {
+        let live: HashSet<(String, String)> = self
+            .tasks
+            .iter()
+            .filter(|t| matches!(t.state, TaskState::Completed | TaskState::Seeding))
+            .map(|t| (save_dir_of(&t.save_path), t.name.clone()))
+            .collect();
+        self.sim_sidecars.retain(|k| !live.contains(k));
+    }
+
     fn dlg_activate_delete(&mut self, btn: usize) {
         let Some(idx) = self.sel_idx() else {
             self.dialog = None;
             return;
         };
-        let name = self.tasks[idx].name.clone();
+        let (name, dir, has_sidecar) = {
+            let t = &self.tasks[idx];
+            (
+                t.name.clone(),
+                save_dir_of(&t.save_path),
+                // 生产 FR-01-20/24：sidecar 存续于非完成任务（转「已完成」即删）
+                !matches!(t.state, TaskState::Completed | TaskState::Seeding),
+            )
+        };
         match btn {
             0 => {
+                // v1.28 生产同步（FR-01-25 同构）：仅删除任务——文件与 sidecar 全保留。
+                // 非完成任务在模拟盘登记 sidecar 残留：之后添加任何推导出同名文件的
+                // URL（异 URL 亦可）到同目录，即路径基断点接续（v1.28/FR-01-26）
+                if has_sidecar {
+                    self.sim_sidecars.insert((dir, name.clone()));
+                }
                 self.tasks.remove(idx);
                 self.dialog = None;
                 self.set_toast(format!("🗑 已删除任务（保留文件）: {}", name));
             }
             1 => {
+                // 删除任务和文件：目标文件/.downloading/.ezr 一并清理（FR-01-25）——
+                // 模拟盘 sidecar 残留同步移除，之后再添加同名 URL 不再接续
+                self.sim_sidecars.remove(&(dir, name.clone()));
                 self.tasks.remove(idx);
                 self.dialog = None;
                 self.set_toast(format!("🗑 已删除任务及本地文件: {}", name));
@@ -2460,6 +2555,22 @@ fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, text: &str) -
 // ---------------------------------------------------------------------------
 // 工具函数
 // ---------------------------------------------------------------------------
+
+/// 由 save_path 取保存目录（demo save_path 恒为 `<目录>/<名>`，文件名不含 '/'；
+/// 生产侧为独立字段 Task.save_dir，demo 以路径反提保持同口径比较）
+fn save_dir_of(save_path: &str) -> String {
+    match save_path.rsplit_once('/') {
+        Some((d, _)) => d.to_string(),
+        None => String::new(),
+    }
+}
+
+/// 断点接续的模拟已下载字节（v1.28 生产同步轮八）：按任务 ID 取 25%–59%
+/// 确定性档位，模拟 sidecar 中记录的断点进度（生产按 sidecar 实际字节续传）
+fn resumed_done(id: u32, total: u64) -> u64 {
+    let pct = 25 + (id as u64) % 35;
+    total * pct / 100
+}
 
 /// 从 URL 解析协议与文件名
 fn parse_url_task(url: &str) -> (Protocol, String) {

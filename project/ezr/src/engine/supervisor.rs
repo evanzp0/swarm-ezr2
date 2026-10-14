@@ -204,6 +204,56 @@ fn req_with_identity(
     rb
 }
 
+/// 请求臂失败分类收口（多块 worker / 单流续传共用，PMD CPD 同构收敛）：
+/// 2xx → 响应；非 2xx → 读尽响应体后 `EngineFailure::http`（含 Retry-After
+/// 解析）；传输错误 → `classify_reqwest`。失败分类单源，v1.27「失败回报
+/// 携带持久化事实」的口径由调用方各自接续。
+async fn req_checked(
+    client: &reqwest::Client,
+    url: &str,
+    range: Option<String>,
+) -> Result<reqwest::Response, EngineFailure> {
+    match req_with_identity(client, url, range).send().await {
+        Ok(r) if r.status().is_success() => Ok(r),
+        Ok(r) => {
+            let status = r.status().as_u16();
+            let ra = parse_retry_after_header(
+                r.headers().get("retry-after").and_then(|v| v.to_str().ok()),
+            );
+            let _ = r.bytes().await;
+            Err(EngineFailure::http(status, ra))
+        }
+        Err(e) => Err(classify_reqwest(&e)),
+    }
+}
+
+/// 完成收尾单源（多块聚合完成臂 / 单流全块台账直判臂共用，PMD CPD 同构收敛）：
+/// 无校验值 → 改名清台账直判完成（FR-01-24/20）；有校验值 → 落全块完成
+/// 终态台账（校验等待窗中断重启按台账直判收尾，v1.18 修订 A），再发
+/// DownloadDone。两臂差异仅台账变量与 total 来源，行为由既有测试锁定。
+async fn finalize_completed(
+    spec: &TaskSpec,
+    stamp: &ServerStamp,
+    blocks: &Blocks,
+    sc_path: &str,
+    dl_path: &Path,
+    final_path: &Path,
+    total: u64,
+    evt_tx: &mpsc::Sender<Evt>,
+) -> Flow {
+    if spec.expected_algo.is_none() {
+        // 无校验值直接完成：收尾（FR-01-24/20）
+        let _ = tokio::fs::rename(dl_path, final_path).await;
+        let _ = Sidecar::remove(sc_path);
+    } else {
+        // 校验等待窗：落全块完成终态台账（与多块完成臂同款），
+        // 由 App 校验流程收尾
+        let _ = Sidecar::save(&build_sidecar(spec, stamp, blocks, false), sc_path);
+    }
+    let _ = emit(evt_tx, Evt::DownloadDone { id: spec.id, total }).await;
+    Flow::Completed
+}
+
 /// 探测响应头快照
 struct ProbeHead {
     status: u16,
@@ -780,23 +830,17 @@ async fn single_stream(
     if resume && resumed >= blocks.total {
         // 全块完成台账（校验等待窗中断等）：直判文件实况收尾（D34 口径）
         if std::fs::metadata(dl_path).is_ok_and(|m| m.len() == blocks.total) {
-            if spec.expected_algo.is_none() {
-                let _ = tokio::fs::rename(dl_path, final_path).await;
-                let _ = Sidecar::remove(sc_path);
-            } else {
-                // 校验等待窗：落全块完成终态台账（与多块完成臂同款），
-                // 由 App 校验流程收尾
-                let _ = Sidecar::save(&build_sidecar(spec, stamp, &blocks, false), sc_path);
-            }
-            let _ = emit(
+            return finalize_completed(
+                spec,
+                stamp,
+                &blocks,
+                sc_path,
+                dl_path,
+                final_path,
+                blocks.total,
                 evt_tx,
-                Evt::DownloadDone {
-                    id: spec.id,
-                    total: blocks.total,
-                },
             )
             .await;
-            return Flow::Completed;
         }
         // 台账与磁盘脱节：作废断点从头重下（FR-01-22 同源语义）
         return Flow::Invalidated;
@@ -817,31 +861,16 @@ async fn single_stream(
         drop(resp);
         let client = shared.client_for(spec.proxy_endpoint.as_ref());
         let range = format!("bytes={}-{}", resumed, blocks.total - 1);
-        match req_with_identity(&client, &spec.url, Some(range))
-            .send()
-            .await
-        {
-            Ok(r) if r.status().is_success() => r,
-            Ok(r) => {
-                let status = r.status().as_u16();
-                let ra = parse_retry_after_header(
-                    r.headers().get("retry-after").and_then(|v| v.to_str().ok()),
-                );
-                let _ = r.bytes().await;
-                // v1.27：续传请求臂失败不得弃账（旧实现 None → 失败事件 0/0，
-                // 台账块内进度在 UI 双失真）；按失败台账口径回报块内进度
+        match req_checked(&client, &spec.url, Some(range)).await {
+            Ok(r) => r,
+            // v1.27：续传请求臂失败不得弃账（旧实现 None → 失败事件 0/0，
+            // 台账块内进度在 UI 双失真）；按失败台账口径回报块内进度
+            Err(f) => {
                 return Flow::Failed(
-                    EngineFailure::http(status, ra),
+                    f,
                     false,
                     failed_ledger(spec, stamp, &blocks, multi_ok, resumed, sc_path),
                 );
-            }
-            Err(e) => {
-                return Flow::Failed(
-                    classify_reqwest(&e),
-                    false,
-                    failed_ledger(spec, stamp, &blocks, multi_ok, resumed, sc_path),
-                )
             }
         }
     } else {
@@ -945,23 +974,17 @@ async fn single_stream(
                     if multi_ok {
                         ledger.mark_progress(0, downloaded);
                     }
-                    if spec.expected_algo.is_none() {
-                        // 无校验值直接完成：收尾（FR-01-24/20）
-                        let _ = tokio::fs::rename(dl_path, final_path).await;
-                        let _ = Sidecar::remove(sc_path);
-                    } else {
-                        // v1.18 修订 A 对齐（多块完成臂同款）：完成前落全块
-                        // 完成终态台账——「校验中」退出重启按台账直判收尾
-                        let _ = Sidecar::save(
-                            &build_sidecar(spec, stamp, &ledger, false),
-                            sc_path,
-                        );
-                    }
-                    let _ = emit(evt_tx, Evt::DownloadDone {
-                        id: spec.id,
-                        total: final_total,
-                    }).await;
-                    return Flow::Completed;
+                    return finalize_completed(
+                        spec,
+                        stamp,
+                        &ledger,
+                        sc_path,
+                        dl_path,
+                        final_path,
+                        final_total,
+                        evt_tx,
+                    )
+                    .await;
                 }
                 Err(e) => {
                     return Flow::Failed(
@@ -1160,20 +1183,10 @@ async fn block_worker(wid: usize, shared: Arc<super::EngineShared>, deps: Worker
         // 代理切换后新连接即新代理；在途请求持旧 client 自然完成
         let ep = ep_rx.borrow_and_update().clone();
         let client = shared.client_for((*ep).as_ref());
-        let resp = req_with_identity(&client, &url, Some(range)).send().await;
-        let mut resp = match resp {
-            Ok(r) if r.status().is_success() => r,
-            Ok(r) => {
-                let status = r.status().as_u16();
-                let ra = parse_retry_after_header(
-                    r.headers().get("retry-after").and_then(|v| v.to_str().ok()),
-                );
-                let _ = r.bytes().await;
-                *failure.lock().await = Some(EngineFailure::http(status, ra));
-                return;
-            }
-            Err(e) => {
-                *failure.lock().await = Some(classify_reqwest(&e));
+        let mut resp = match req_checked(&client, &url, Some(range)).await {
+            Ok(r) => r,
+            Err(f) => {
+                *failure.lock().await = Some(f);
                 return;
             }
         };
