@@ -515,17 +515,32 @@ class TuiDisplaySuite(Suite):
         """并发连接面板数据行的连接速度读数（B/s）。
 
         行形态（ui/conns.rs）：序号(4) 空格 下载速度(8 右对齐) 空格 累计(8)；
-        待命连接速度列显示 "-"。区域锚定右栏（列 64 起）且自「并发连接」
-        标题行起、提示行止——只匹配含三段数据形态的行。
+        待命连接速度列显示 "-"。右栏定位走 buffer 单元格列空间（v140 修订：
+        pyte display 串因左栏 CJK 宽字符收缩错位，row[64:] 会切进右栏边框
+        ——沿 04-ui-conns `_right_text` 同口径），自「并发连接」标题行起、
+        面板底框止，只匹配含三段数据形态的行。
         """
-        rows = app.screen.display
-        start = next((i for i, r in enumerate(rows) if "并发连接" in r), None)
+        cols = app.screen.columns
+        lines_n = app.screen.lines
+
+        def row_text(y: int, x0: int) -> str:
+            return "".join(app.screen.buffer[y][x].data
+                           for x in range(x0, cols)
+                           if app.screen.buffer[y][x].data)
+
+        start = next((y for y in range(lines_n)
+                      if "并发连接" in row_text(y, 0)), None)
         if start is None:
             return []
+        # 面板左边框列 = 标题行 ╭（右栏箱体左上角）所在列
+        x0 = next((x for x in range(cols)
+                   if app.screen.buffer[start][x].data == "╭"), 64)
         out: list[float] = []
-        for row in rows[start + 1:]:
-            seg = row[64:]
-            m = re.match(r"\s*\d+\s+([\d.]+ [KMG]?B/s|-)\s+[\d.]+ [KMG]?B", seg)
+        for y in range(start + 1, lines_n):
+            t = row_text(y, x0 + 1)
+            if t.startswith("╰"):
+                break
+            m = re.match(r"\s*\d+\s+([\d.]+ [KMG]?B/s|-)\s+[\d.]+ [KMG]?B", t)
             if not m:
                 continue
             v = m.group(1)
@@ -539,10 +554,12 @@ class TuiDisplaySuite(Suite):
         任务/全局 0 B/s」块内平台期；已下载字节逐样本持续推进；全程无零读数
         （块完成瞬间速度连续，无归零闪现）。
 
-        观察窗核算（engineering.md 门控慢速场景先算观察窗下限）：默认块 1MB、
-        fixture ?speed=300000 为每请求口径——12 块文件 4 连接轮转领块，单块
-        ~3.4s、任务全程 ~10s；采样窗 3×1.15s + 就绪 ~2s 远小于全程，
-        且速度为块内实时口径（FR-01-105 修复后不依赖块边界）。
+        观察窗核算（engineering.md 门控慢速场景先算观察窗下限；v140 修订：采样
+        启动对齐实测需 ~4s，300KB/s 全程 ~10s 余量不足致 3 组难采满——改
+        rate=200000 拉长全程至 ~15s）：默认块 1MB、fixture ?speed=200000 为
+        每请求口径——12 块文件 4 连接轮转领块，任务全程 ~15s；采样窗
+        3×1.05s + 就绪 ~4s 远小于全程，且速度为块内实时口径（FR-01-105
+        修复后不依赖块边界）。
         """
         @self.case("QA-TD-17")
         def go(env: Env):
@@ -555,7 +572,7 @@ class TuiDisplaySuite(Suite):
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(
-                    app, env, self._slow(env, "twelve-m.bin", 17, rate=300000))
+                    app, env, self._slow(env, "twelve-m.bin", 17, rate=200000))
                 assert app.wait_for("下载中", 8)
                 assert app.wait_for("并发连接", 6)
                 # 就绪门：等首个非零任务速度（传输已开始的确定观察窗）
@@ -570,13 +587,13 @@ class TuiDisplaySuite(Suite):
                         time.sleep(0.3)
                 assert first is not None, "15s 内应出现非零任务速度"
                 samples: list[tuple[float, float, list[float], float]] = []
-                deadline = time.time() + 10.0
+                deadline = time.time() + 15.0
                 while time.time() < deadline and len(samples) < 3:
                     app.pump(0.1)
                     ts = self._task_speed_sample(app)
                     m = re.search(r"全局\s+↓ (\d+(?:\.\d+)? [KMG]?B/s)", app.text())
                     conns = self._conn_speeds(app)
-                    dm = re.search(r"↓ \d+(?:\.\d+)? [KMG]?B/s ([\d.]+ [KMG]?B)/",
+                    dm = re.search(r"↓ \d+(?:\.\d+)? [KMG]?B/s\s+([\d.]+ [KMG]?B)/",
                                    app.text())
                     if ts is None or m is None or not conns or dm is None:
                         time.sleep(0.3)
@@ -589,7 +606,7 @@ class TuiDisplaySuite(Suite):
                                         size_b(dm.group(1))))
                         break
                     samples.append((t, g, conns, size_b(dm.group(1))))
-                    time.sleep(1.15)
+                    time.sleep(1.05)
                 assert len(samples) == 3, f"应采得 3 组样本，实得 {len(samples)}"
                 prev = -1.0
                 for i, (t, g, conns, dl) in enumerate(samples):

@@ -633,3 +633,20 @@ group_imports = "StdExternalCrate"
 - **llvm 导出 JSON 的 name 是 v0 mangled，跨 crate 实例归并要剥 crate 段留模块尾**（v138 QA 轮实证，衔接上条 MAX 归并口径）：形如 `_RNvNtNtCs<hash>_<len><crate_name><len><seg>…`——正则取 `Cs[A-Za-z0-9]+_` 之后的 `<len>` 数字，按其长度跳过 crate 名 token，余下模块尾（如 `3app5mouse10pointer_in`）+ 规范化文件路径（剥 `tests/../`、归一 `/src/` 后取 `src/…`）作分组键，才能把 `#[path]` 挂载产生的多 crate 实例 MAX 归并成单函数行；闭包/泛型实例后缀（`.s<n>_`、`0s<n>_`、泛型参数段）不剥离则各自成行（小行数、comp=1，CRAP ≤ 2 的噪声行，不碍门禁但读数时须知）。
 
 - **`#[path]` 挂载点的测试计数对账法：1 条新测试按挂载点数重复计入全量**（v138 QA 轮实证）：产品源内嵌 `#[cfg(test)]` 测试经 `#[path]` 收编进独立测试 crate 时，同一测试在「bin 单测 + 每个挂载该树的测试 crate」各计 1 次——全量计数对账公式 = 静态 `#[test]`/`#[tokio::test]` 属性计数 ×（1 + 挂载该树的 crate 数）；对账用 `cargo test --all-targets -- --list` 的编译期总数与逐 crate 分项核对（实测：1 条 tasks.rs 新测试在 bin + 5 个挂载 app 树的 hardening_* crate 共计 6 次）。上轮交接总数差 ±1 这类残差，先走此法再怀疑漏改。
+
+- **tokio 异步化网络型 fixture（std 线程版迁移）三坑（v140 QA 轮实证，ezr-proxy 重写）**：①
+  新版 tokio `TcpStream::from_std` 注册前必须显式 `set_nonblocking(true)`（否则 panic
+  「Registering a blocking socket ... unsupported」）；② 测试里客户端用阻塞 std I/O 时
+  runtime 必须 `new_multi_thread`（current_thread 下阻塞调用饿死 spawn 的分派任务 →
+  表现为读超时）；③ 隧道类双向中继直接 `tokio::io::copy_bidirectional`（替代手工双线程
+  try_clone，TLS 流不可 clone 的问题随之消解）。
+- **reqwest(rustls-tls-native-roots) 测试信任链注入零产品改动手法**：rustls-native-certs
+  0.8 经 openssl-probe 优先读 `SSL_CERT_FILE` 环境变量 → 测试进程注入桩自签证书 PEM 即可。
+  两个硬约束：① 证书必须是规范终端实体形态（`BasicConstraints CA:FALSE` + `serverAuth`
+  EKU + IP SAN）——自签 CA:TRUE 叶子 openssl s_client 判 OK 但 webpki 拒绝（严格度差异，
+  报错只会泛化为「证书校验失败」，先比对 openssl 再怀疑注入）；② reqwest 仅在「有解析
+  错误且零有效」时报错，空文件/无 PEM 块文件静默当空信任库——用垃圾文件判别 env 是否生效
+  不可靠，直接看 `/proc/<pid>/environ`。
+- **SOCKS5 RFC 1929 帧序**：认证子协商为 `ver(1) ulen(1) uname plen(1) passwd`——server 侧
+  先读 ver 再读 ulen，漏读 ver 会把 ver 当 ulen 整体错位挂死（v140 实测：python 探针在
+  auth 应答处超时）。方法协商 `ver(5) nmethods methods[]` 中 0xFF 表示无可接受方法。

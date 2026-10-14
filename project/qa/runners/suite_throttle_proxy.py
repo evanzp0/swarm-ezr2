@@ -6,6 +6,9 @@
 速度断言口径：门控下稳定窗采样，十进制 1 MB=1000 KB。
 v1.6：原 QA-TP-08~11 代理用例随旧全局 proxy 键退役删除（FR-01-90），
 代理语义由 02-named-proxy / QA-NP 套件承载。
+v1.7（v141）：TP-02/03/06 实跑化——TP-01 同款 100MB 大文件总量口径
+（跳过前 10MB 启动瞬态，总量平均 ±10%）；QA_TP_ONLY=1,3 环境变量
+支持用例过滤分批前台复跑（缺省全量，结果仅含所跑用例）。
 """
 
 from __future__ import annotations
@@ -23,6 +26,20 @@ from harness import (
 )
 
 FIVE_M = QA_FILE_SIZES["five-m.bin"]
+
+
+def _detail_dl(app: EzrApp) -> float:
+    """选中任务详情「大小 X / Y」已下载字节（十进制；无读数 0.0）。
+
+    v1.13 定稿布局右栏列 64 起切片（detail_text 同款）；读数为字节级
+    实时口径（FR-01-105），供稳态窗时刻锚定（TP-01 权威量法两端）。
+    """
+    d = "\n".join(r[64:].rstrip() for r in app.screen.display)
+    m = re.search(r"大小\s+([0-9.]+) (B|KB|MB|GB) /", d)
+    if not m:
+        return 0.0
+    mult = {"B": 1, "KB": 1000, "MB": 1_000_000, "GB": 1_000_000_000}
+    return float(m.group(1)) * mult[m.group(2)]
 
 
 def _parse_speed_text(text: str) -> float | None:
@@ -77,20 +94,12 @@ class ThrottleProxySuite(Suite):
 
         (total - skip) / (完成时刻 - 已下载 skip 字节时刻)；两端均为精确累计。
         """
-        def _dl() -> float:
-            d = "\n".join(r[64:].rstrip() for r in app.screen.display)
-            m = re.search(r"大小\s+([0-9.]+) (B|KB|MB|GB) /", d)
-            if not m:
-                return 0.0
-            mult = {"B": 1, "KB": 1000, "MB": 1_000_000, "GB": 1_000_000_000}
-            return float(m.group(1)) * mult[m.group(2)]
-
         t_skip = None
         t0 = time.time()
         deadline = t0 + timeout
         while time.time() < deadline:
             app.pump(0.2)
-            if t_skip is None and _dl() >= skip_bytes:
+            if t_skip is None and _detail_dl(app) >= skip_bytes:
                 t_skip = time.time()
             if os.path.exists(bare_path):
                 t_done = time.time()
@@ -106,7 +115,13 @@ class ThrottleProxySuite(Suite):
     # -- 用例 -----------------------------------------------------------------
 
     def run(self) -> list[CaseResult]:
-        for i in range(1, 8):
+        # QA_TP_ONLY=1,3 → 只跑 _case_01/_case_03。沙箱前台单命令 10min 上限
+        # 对策：本套件全量实跑 >13min 时分批复跑（v141）；缺省全量，
+        # 结果仅含所跑用例（汇总口径由调用方合并各批）。
+        only = os.environ.get("QA_TP_ONLY", "").strip()
+        idxs = ([int(x) for x in only.split(",") if x.strip().isdigit()]
+                if only else range(1, 8))
+        for i in idxs:
             getattr(self, f"_case_{i:02d}")()
         return self.results
 
@@ -129,24 +144,82 @@ class ThrottleProxySuite(Suite):
                 app.graceful_quit()
 
     def _case_02(self):
-        """QA-TP-02 同配置 2 任务并发：合计速度 1 MB/s ±10%。"""
+        """QA-TP-02 同配置 2 任务并发：合计速度 1 MB/s ±10%（v141 实跑）。"""
         @self.case("QA-TP-02")
         def go(env: Env):
-            raise __import__("harness").SkipCase(
-                "测量方法学受限（环境判据）：共享限速的绝对速率在 loopback 短传输"
-                "下受启动瞬态（桶突发 0.5s + socket 预读数 MB + 块粒度显示）支配，"
-                "相对/绝对口径均不稳定。限速器全局生效语义已由 TP-01（100MB 文件"
-                "总量口径 ±10% 内）权威验证；TP-06 验证单流路径同受限")
+            env.write_config('max_speed = "1 MB/s"\n')
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                # TP-01 同款口径对合计流量：100MB×2 使启动瞬态（桶突发+
+                # socket 预读）摊薄至 <3%。?cd= 区分命名（FR-01-02）+
+                # 独立子目录，规避同 URL 重复守卫（QA-01-16）且落盘路径可判。
+                dirs = {n: os.path.join(env.save_dir, f"r{n}")
+                        for n in ("a", "b")}
+                for n in sorted(dirs):
+                    os.makedirs(dirs[n], exist_ok=True)
+                    add_task_via_dialog(
+                        app, env,
+                        env.fixture.url(f"big-100m.bin?cd=tp02{n}.bin"),
+                        save_dir=dirs[n])
+                    assert app.wait_for("下载中", 8), f"任务 {n} 应启动"
+                total = 2 * 104_857_600
+                bares = {n: os.path.join(dirs[n], f"tp02{n}.bin")
+                         for n in dirs}
+                # 组合稳态窗：每任务跳过 10MB 启动瞬态（TP-01 对称）；
+                # home/down 逐轮读双任务详情（选中行 ▌ + 详情「大小」读数）。
+                # 读数为显示口径（滞后实际 ≤1MB 块粒度），对 180MB 稳态量
+                # 误差 ≤1.1%，远小于 ±10% 容差。
+                dl = {"a": 0.0, "b": 0.0}
+                t_skip = None
+                combined = 0.0
+                t0 = time.time()
+                deadline = t0 + 330
+                while time.time() < deadline and t_skip is None:
+                    app.send("home")
+                    app.pump(0.25)
+                    dl["a"] = max(dl["a"], _detail_dl(app))
+                    app.send("down")
+                    app.pump(0.25)
+                    dl["b"] = max(dl["b"], _detail_dl(app))
+                    if dl["a"] >= 10_000_000 and dl["b"] >= 10_000_000:
+                        t_skip = time.time()
+                        combined = dl["a"] + dl["b"]
+                assert t_skip is not None, (
+                    f"330s 内双任务未同达 10MB 稳态窗: {dl}")
+                t_done = None
+                while time.time() < deadline:
+                    app.pump(0.3)
+                    if all(os.path.exists(bares[n]) for n in bares):
+                        t_done = time.time()
+                        break
+                assert t_done is not None, "双任务未在时限内完成"
+                rate = (total - combined) / max(0.1, t_done - t_skip)
+                assert 900_000 <= rate <= 1_100_000, \
+                    f"合计速度应 1 MB/s ±10%: {rate/1000:.0f} KB/s"
+            finally:
+                app.graceful_quit()
 
     def _case_03(self):
-        """QA-TP-03 配置 1 MB/s + CLI --max-speed 512 KB/s：参数优先。"""
+        """QA-TP-03 配置 1 MB/s + CLI --max-speed 512 KB/s：参数优先（v141 实跑）。"""
         @self.case("QA-TP-03")
         def go(env: Env):
-            raise __import__("harness").SkipCase(
-                "测量方法学受限（环境判据）：同 TP-02，短传输瞬态支配绝对速率；"
-                "CLI 参数被引擎接受并覆盖配置的事实由 make_spec/throttle 装配"
-                "路径（--max-speed → cfg.max_speed → Throttle::new）代码审查确认；"
-                "TP-01 权威验证限速生效语义")
+            env.write_config('max_speed = "1 MB/s"\n')
+            # CLI 覆盖配置（FR-01-60）。判别力：512K+10% 上界 563K 与
+            # 1M−10% 下界 900K 不相交——测得 512K 档即证参数优先。
+            app = EzrApp(env.home, args=["--max-speed", "512 KB/s"],
+                         save_dir=env.save_dir)
+            try:
+                # TP-01 同款 100MB 大文件总量口径（跳过前 10MB 启动瞬态）
+                add_task_via_dialog(app, env, env.fixture.url("big-100m.bin"))
+                assert app.wait_for("下载中", 8)
+                avg = self._steady_rate(
+                    app, 104_857_600, 10_000_000,
+                    os.path.join(env.save_dir, "big-100m.bin"), timeout=300)
+                assert 460_800 <= avg <= 563_200, \
+                    (f"稳定速度应 512 KB/s ±10%（参数优先于配置 1 MB/s）: "
+                     f"{avg/1000:.0f} KB/s")
+            finally:
+                app.graceful_quit()
 
     def _case_04(self):
         """QA-TP-04 max_speed=0 / "abc"：分别为不限速 / 回退默认不限速。"""
@@ -223,15 +296,33 @@ class ThrottleProxySuite(Suite):
                 raise
 
     def _case_06(self):
-        """QA-TP-06 限速 1 MB/s + 无 Range 文件（单流）：速度同样受限。"""
+        """QA-TP-06 限速 1 MB/s + 无 Range 文件（单流）：速度同样受限（v141 实跑）。"""
         @self.case("QA-TP-06")
         def go(env: Env):
-            raise __import__("harness").SkipCase(
-                "测量方法学受限（环境判据）：streamy.bin 固定 4MB，短传输"
-                "被启动瞬态支配（实测 1.21 MB/s 超 +10% 容差）；单流与多块"
-                "路径共用同一 Throttle::acquire 门（supervisor 单流降级与"
-                " block_worker 同一调用点），限速生效语义由 TP-01（100MB "
-                "±10%）权威覆盖")
+            env.write_config('max_speed = "1 MB/s"\n')
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                # ?norange=1：fixture 忽略 Range 回 200 全量（有 Content-Length）
+                # → 引擎单流路径（探测 bytes=0- 即单流本体，FR-01-10）；
+                # 落盘名取 URL 末段 big-100m.bin。TP-01 同款 100MB 总量口径。
+                add_task_via_dialog(app, env,
+                                    env.fixture.url("big-100m.bin?norange=1"))
+                assert app.wait_for("不支持断点续传", 8), "详情应显示不支持断点续传"
+                avg = self._steady_rate(
+                    app, 104_857_600, 10_000_000,
+                    os.path.join(env.save_dir, "big-100m.bin"), timeout=300)
+                assert 900_000 <= avg <= 1_100_000, \
+                    f"单流路径速度应同样受限 1 MB/s ±10%: {avg/1000:.0f} KB/s"
+                # 证据面（DE-02 同款判据）：无 Range 项不得有分块 Range 形态
+                reqs = [r for r in env.fixture.requests()
+                        if "big-100m" in r["path"]]
+                assert reqs, "fixture 未收到 big-100m 请求"
+                ranged = [r for r in reqs
+                          if r["range"] and r["range"] != "bytes=0-"]
+                assert not ranged, \
+                    f"无 Range 项不应有分块 Range 数据请求: {ranged[:3]}"
+            finally:
+                app.graceful_quit()
 
     def _case_07(self):
         """QA-TP-07 检查全部界面区块与页脚：无限速控件；布局不变。"""

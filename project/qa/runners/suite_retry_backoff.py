@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """suite_retry_backoff.py — QA 套件 · 01-retry-backoff 失败重试与退避（期号 01）。
 
-对应规程：project/qa/01-retry-backoff-qa.md（10 用例）。
+对应规程：project/qa/01-retry-backoff-qa.md（9 用例；v140 修订删除 RB-09——
+受限目录磁盘预检用例：沙箱无 mount/配额权限且无 docker，环境不可搭建，
+预检路径由代码审查 + 单测覆盖，操作者裁决删除，编号留空不对齐）。
 端到端 UI 层验证：TUI 状态/列表行文案断言 + fixture 故障注入 + 配置文件控制。
 
 时序纪律：倒计时断言采「秒级读数」——失败后立即读显示值，不等满时长。
@@ -38,7 +40,8 @@ class RetryBackoffSuite(Suite):
     # -- 用例 -----------------------------------------------------------------
 
     def run(self) -> list[CaseResult]:
-        for i in range(1, 11):
+        # v140 修订：RB-09 删除（编号留空，见模块 docstring）
+        for i in [i for i in range(1, 11) if i != 9]:
             getattr(self, f"_case_{i:02d}")()
         return self.results
 
@@ -207,15 +210,6 @@ class RetryBackoffSuite(Suite):
                 except Exception:
                     app.graceful_quit()
                     raise
-
-    def _case_09(self):
-        """QA-RB-09 受限目录下载 100MB：磁盘预检失败「磁盘空间不足」停等。"""
-        @self.case("QA-RB-09")
-        def go(env: Env):
-            raise __import__("harness").SkipCase(
-                "需 64MB 受限目录（tmpfs/配额）：沙箱无 mount/配额权限，"
-                "磁盘预检路径（app.rs disk_precheck fs2 avail < need）已由"
-                "代码审查与单测覆盖，环境满足时以受限目录实测")
 
     def _case_10(self):
         """QA-RB-10 auto_retry=false + 网络错误：直接停等不自动重试；R 可重试。"""

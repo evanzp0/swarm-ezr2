@@ -4,20 +4,23 @@
 对应规程：project/qa/02-named-proxy-qa.md（18 用例，QA-NP-01..18 连续编号）。
 端到端 UI 层验证：对话框交互 + ezr-proxy 日志逐请求核对 + 启动 toast + 注册表观察；
 不使用项目内部 API。
-受限项（沿规程环境前置与遗留受限项口径）：ezr-proxy 现仅支持 http 监听
-（绑定 127.0.0.1），https（代理自身 TLS）/ socks5（含认证）/ IPv6 回环三类监听
-依赖 ezr-proxy 扩展 —— NP-08 https+socks5 相位、NP-13 https 相位、NP-15、NP-18
-下载相位按 S 登记（其余可观测相位先行断言）。
+v140 起 ezr-proxy 支持 http（匿名/认证强制）/ https（代理自身 TLS，内嵌自签证书）
+/ socks5（RFC 1929 认证）三形态监听与 --bind IPv6，NP-04/08/13/15/18 下载相位实跑
+（含 407 质询与错凭证拒绝负例）；产品零改动——https 相位证书信任经 SSL_CERT_FILE
+注入产品进程（reqwest rustls-tls-native-roots 经 rustls-native-certs 0.8 读取）。
 """
 
 from __future__ import annotations
 
+import base64
 import os
+import socket
+import ssl
 import time
 
 from harness import (
-    Env, EzrApp, SkipCase, Suite, TMP_ROOT, assert_file_content, assert_in,
-    assert_not_in, proxy_reqs, start_proxy, stop_proxy, wait_file_size,
+    Env, EzrApp, PROXY_CA_PEM, SkipCase, Suite, TMP_ROOT, assert_file_content,
+    assert_in, assert_not_in, proxy_reqs, start_proxy, stop_proxy, wait_file_size,
     QA_FILE_SIZES,
 )
 
@@ -60,10 +63,55 @@ class NamedProxySuite(Suite):
 
     # -- 公共操作 -------------------------------------------------------------
 
-    def _new_app(self, env: Env, save_dir: str | None = None) -> EzrApp:
-        app = EzrApp(env.home, save_dir=save_dir or env.save_dir)
+    def _new_app(self, env: Env, save_dir: str | None = None,
+                 env_extra: dict[str, str] | None = None) -> EzrApp:
+        app = EzrApp(env.home, save_dir=save_dir or env.save_dir,
+                     env_extra=env_extra)
         self._cur_app = app
         return app
+
+    # -- 桩级探针（v140 ezr-proxy 认证强制形态的负例/正例直测）---------------
+
+    @staticmethod
+    def _b64(s: str) -> str:
+        return base64.b64encode(s.encode()).decode()
+
+    @staticmethod
+    def _probe_http_status(port: int, url: str, auth: str | None = None,
+                           tls: bool = False, ca: str | None = None) -> str:
+        """发绝对 URI GET（tls=True 时经 TLS，ca 指定信任链），返回判定行。"""
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as raw:
+            c = raw
+            if tls:
+                ctx = ssl.create_default_context(cafile=ca)
+                c = ctx.wrap_socket(raw, server_hostname="localhost")
+            head = f"GET {url} HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+            if auth is not None:
+                head += f"Proxy-Authorization: Basic {auth}\r\n"
+            c.sendall((head + "\r\n").encode())
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = c.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+        text = data.decode(errors="replace")
+        return " | ".join(
+            l for l in text.splitlines()
+            if l.startswith("HTTP/") or l.startswith("Proxy-Authenticate"))
+
+    @staticmethod
+    def _probe_socks5_auth(port: int, user: str, password: str) -> int:
+        """裸 socket 走 SOCKS5 + RFC 1929 握手至认证应答，返回状态字节。"""
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as c:
+            c.sendall(bytes([5, 1, 0x02]))
+            m = c.recv(2)
+            assert m == bytes([5, 0x02]), f"方法协商异常: {m.hex()}"
+            c.sendall(bytes([1, len(user)]) + user.encode()
+                      + bytes([len(password)]) + password.encode())
+            a = c.recv(2)
+            assert a[:1] == bytes([1]), f"认证应答异常: {a.hex()}"
+            return a[1]
 
     @staticmethod
     def _dropdown_options(app: EzrApp) -> str:
@@ -248,11 +296,26 @@ class NamedProxySuite(Suite):
                 stop_proxy(px)
 
     def _case_04(self):
-        """QA-NP-04 http 认证代理下载：成功 + 全界面/日志无凭证明文。"""
+        """QA-NP-04 http 认证代理下载：407 质询子判据 + 成功 + 全界面/日志无凭证明文。"""
         @self.case("QA-NP-04")
         def go(env: Env):
-            pa = start_proxy(env, "proxy-auth", self._next_port())
+            pa = start_proxy(env, "proxy-auth", self._next_port(),
+                             scheme="http", user="bob", password="pw-secret")
             try:
+                # 代理侧强制认证子判据（v140 桩扩展后实跑）：
+                # ① 无凭证 → 407 + Proxy-Authenticate: Basic 质询
+                r = self._probe_http_status(pa["port"], env.fixture.url("one-m.bin"))
+                assert "407" in r and "Proxy-Authenticate: Basic" in r, \
+                    f"无凭证应 407 质询: {r}"
+                # ② 错凭证 → 407
+                r = self._probe_http_status(pa["port"], env.fixture.url("one-m.bin"),
+                                            auth=self._b64("bob:wrong"))
+                assert "407" in r, f"错凭证应 407: {r}"
+                # ③ 正凭证 → 放行（200 经上游回传）
+                r = self._probe_http_status(pa["port"], env.fixture.url("one-m.bin"),
+                                            auth=self._b64("bob:pw-secret"))
+                assert "200" in r, f"正凭证应放行: {r}"
+                # 产品相位：认证配置下载成功（强制模式下成功 ⇒ 凭证被代理接受）
                 env.write_config(proxies_toml([
                     {"name": "auth-http", "type": "http", "ip": "127.0.0.1",
                      "port": pa["port"], "username": "bob", "password": "pw-secret"},
@@ -266,15 +329,16 @@ class NamedProxySuite(Suite):
                     assert_not_in("pw-secret", text, "界面无密码明文")
                 finally:
                     app.graceful_quit()
-                for r in proxy_reqs(pa):
+                reqs = proxy_reqs(pa)
+                for r in reqs:
                     blob = str(r)
                     assert "bob" not in blob and "pw-secret" not in blob, \
                         f"代理日志无凭证明文: {blob[:120]}"
-                # ezr-proxy 无认证要求模式（遗留扩展受限项）：「代理侧强制认证
-                # 子判据」（407 质询 → 认证握手成功在案）不可测，按 S 登记
-                raise SkipCase(
-                    "已验：经认证配置代理下载成功 + 全界面/代理日志无凭证明文；"
-                    "代理侧强制认证子判据依赖 ezr-proxy 认证要求模式（遗留扩展受限项）")
+                # 质询与放行事件在案（凭证正确性由桩侧判定，日志不含明文）
+                assert any(r["kind"] == "http-auth-denied" for r in reqs), \
+                    "407 质询事件应在案"
+                assert any(r["kind"] == "http-auth-ok" for r in reqs), \
+                    "认证成功事件应在案"
             finally:
                 stop_proxy(pa)
 
@@ -365,21 +429,25 @@ class NamedProxySuite(Suite):
                 app.graceful_quit()
 
     def _case_08(self):
-        """QA-NP-08 type=http/https/socks5：下拉标注 + http 相位连接形态在案。"""
+        """QA-NP-08 type=http/https/socks5：三值标注 + 三形态连接逐相位在案。"""
         @self.case("QA-NP-08")
         def go(env: Env):
             pa = start_proxy(env, "p-http", self._next_port())
+            ph = start_proxy(env, "p-https", self._next_port(), scheme="https")
+            ps = start_proxy(env, "p-socks5", self._next_port(), scheme="socks5",
+                             user="u8", password="p8")
             try:
                 env.write_config(proxies_toml([
                     {"name": "px-http", "type": "http",
                      "ip": "127.0.0.1", "port": pa["port"]},
                     {"name": "px-https", "type": "https",
-                     "ip": "127.0.0.1", "port": self._next_port()},
+                     "ip": "127.0.0.1", "port": ph["port"]},
                     {"name": "px-socks5", "type": "socks5",
-                     "ip": "127.0.0.1", "port": self._next_port(),
-                     "username": "u", "password": "p"},
+                     "ip": "127.0.0.1", "port": ps["port"],
+                     "username": "u8", "password": "p8"},
                 ]))
-                app = self._new_app(env)
+                # SSL_CERT_FILE：产品经 native-roots 信任桩自签证书（https 相位用）
+                app = self._new_app(env, env_extra={"SSL_CERT_FILE": PROXY_CA_PEM})
                 try:
                     text = self._dropdown_options(app)
                     for label in ("px-http（http）", "px-https（https）",
@@ -390,14 +458,29 @@ class NamedProxySuite(Suite):
                     assert app.wait_for("（无校验）", 30), "http 相位下载成功"
                     assert any("one-m" in r["target"] for r in proxy_reqs(pa)), \
                         "http 相位：代理日志在案"
+                    # https 相位：代理自身 TLS 监听，TLS 会话内 http 代理形态
+                    sub = os.path.join(env.save_dir, "ph-https")
+                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}"),
+                                        2, save_dir=sub)
+                    assert app.wait_for("（无校验）", 45), "https 相位下载成功"
+                    assert any(r["kind"] == "http" and "one-m" in r["target"]
+                               for r in proxy_reqs(ph)), "https 相位：TLS 内 http 在案"
+                    # socks5 相位：RFC 1929 认证 + 隧道（reqwest socks）
+                    sub = os.path.join(env.save_dir, "ph-socks5")
+                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}"),
+                                        3, save_dir=sub)
+                    assert app.wait_for("（无校验）", 45), "socks5 相位下载成功"
+                    preqs = proxy_reqs(ps)
+                    assert any(r["kind"] == "socks5-auth-ok" for r in preqs), \
+                        "socks5 相位：认证成功在案"
+                    assert any(r["kind"] == "socks5" for r in preqs), \
+                        "socks5 相位：隧道目标在案"
                 finally:
                     app.graceful_quit()
-                raise SkipCase(
-                    "已验：下拉三值标注 + http 相位下载成功且日志在案；"
-                    "https（代理自身 TLS）与 socks5 监听形态依赖 ezr-proxy 扩展"
-                    "（遗留受限项，规程环境前置口径）")
             finally:
                 stop_proxy(pa)
+                stop_proxy(ph)
+                stop_proxy(ps)
 
     def _case_09(self):
         """QA-NP-09 type 缺失（ip/port 在位）：作废 + 警告；合法条目可用。"""
@@ -468,30 +551,38 @@ class NamedProxySuite(Suite):
                 stop_proxy(px)
 
     def _case_13(self):
-        """QA-NP-13 http/https 匿名条目：无凭证警告；请求经代理；代理侧无认证记录。"""
+        """QA-NP-13 http/https 匿名条目：无凭证警告；经代理；代理侧无认证记录。"""
         @self.case("QA-NP-13")
         def go(env: Env):
             pa = start_proxy(env, "anon-http", self._next_port())
+            ph = start_proxy(env, "anon-https", self._next_port(), scheme="https")
             try:
                 env.write_config(proxies_toml([
                     {"name": "anon", "type": "http",
                      "ip": "127.0.0.1", "port": pa["port"]},
+                    {"name": "anon-hs", "type": "https",
+                     "ip": "127.0.0.1", "port": ph["port"]},
                 ]))
-                app = self._new_app(env)
+                app = self._new_app(env, env_extra={"SSL_CERT_FILE": PROXY_CA_PEM})
                 try:
-                    assert_not_in("凭证", app.text(), "http 匿名无凭证警告")
+                    assert_not_in("凭证", app.text(), "匿名条目无凭证警告")
+                    # http 匿名相位
                     self._add_via_proxy(app, env, env.fixture.url("one-m.bin"), 1)
                     assert app.wait_for("（无校验）", 30), "匿名 http 代理下载成功"
-                    for r in proxy_reqs(pa):
-                        assert set(r.keys()) <= {"ts", "proxy", "kind", "target"}, \
-                            f"代理日志无认证记录字段: {r}"
+                    # https 匿名相位（TLS 会话内匿名）
+                    sub = os.path.join(env.save_dir, "ph-https")
+                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}"),
+                                        2, save_dir=sub)
+                    assert app.wait_for("（无校验）", 45), "匿名 https 代理下载成功"
                 finally:
                     app.graceful_quit()
-                raise SkipCase(
-                    "已验：http 匿名相位（无凭证警告 + 经代理 + 日志无认证记录）；"
-                    "https 匿名相位依赖 ezr-proxy https 监听扩展（遗留受限项）")
+                for h in (pa, ph):
+                    for r in proxy_reqs(h):
+                        assert set(r.keys()) <= {"ts", "proxy", "kind", "target"}, \
+                            f"代理日志无认证记录字段: {r}"
             finally:
                 stop_proxy(pa)
+                stop_proxy(ph)
 
     def _case_14(self):
         """QA-NP-14 http/https 半填凭证（4 相位）：作废 + 成对警告；合法条目可用。"""
@@ -532,28 +623,59 @@ class NamedProxySuite(Suite):
                 stop_proxy(px)
 
     def _case_15(self):
-        """QA-NP-15 socks5/https 带正确凭证下载：认证按类型生效（监听未就绪 → S）。"""
+        """QA-NP-15 socks5/https 带正确凭证下载：认证按类型生效（v140 实跑）。"""
         @self.case("QA-NP-15")
         def go(env: Env):
-            env.write_config(proxies_toml([
-                {"name": "socks-auth", "type": "socks5", "ip": "127.0.0.1",
-                 "port": 1080, "username": "u15", "password": "p15"},
-                {"name": "tls-auth", "type": "https", "ip": "127.0.0.1",
-                 "port": 8443, "username": "u15", "password": "p15"},
-            ]))
-            app = self._new_app(env)
+            ps = start_proxy(env, "socks5-auth", self._next_port(),
+                             scheme="socks5", user="u15", password="p15")
+            pt = start_proxy(env, "tls-auth", self._next_port(),
+                             scheme="https", user="u15", password="p15")
             try:
-                assert app.wait_for("EZR Downloader", 6)
-                text = self._dropdown_options(app)
-                assert_in("socks-auth（socks5）", text, "凭证齐备条目在下拉")
-                assert_in("tls-auth（https）", text, "https 条目在下拉")
-                assert_not_in("u15", text, "选项文案不含凭证")
+                env.write_config(proxies_toml([
+                    {"name": "socks-auth", "type": "socks5", "ip": "127.0.0.1",
+                     "port": ps["port"], "username": "u15", "password": "p15"},
+                    {"name": "tls-auth", "type": "https", "ip": "127.0.0.1",
+                     "port": pt["port"], "username": "u15", "password": "p15"},
+                ]))
+                app = self._new_app(env, env_extra={"SSL_CERT_FILE": PROXY_CA_PEM})
+                try:
+                    assert app.wait_for("EZR Downloader", 6)
+                    text = self._dropdown_options(app)
+                    assert_in("socks-auth（socks5）", text, "凭证齐备条目在下拉")
+                    assert_in("tls-auth（https）", text, "https 条目在下拉")
+                    assert_not_in("u15", text, "选项文案不含凭证")
+                    # socks5 + RFC 1929 认证相位
+                    self._add_via_proxy(app, env, env.fixture.url("one-m.bin"), 1)
+                    assert app.wait_for("（无校验）", 30), "socks5 认证代理下载成功"
+                    # https + TLS 会话内 basic auth 相位
+                    sub = os.path.join(env.save_dir, "ph-tls")
+                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}"),
+                                        2, save_dir=sub)
+                    assert app.wait_for("（无校验）", 45), "https 认证代理下载成功"
+                finally:
+                    app.graceful_quit()
+                # 代理侧认证成功在案；全日志无凭证明文
+                preqs = proxy_reqs(ps)
+                assert any(r["kind"] == "socks5-auth-ok" for r in preqs), "socks5 认证在案"
+                assert any(r["kind"] == "socks5" for r in preqs), "socks5 隧道在案"
+                treqs = proxy_reqs(pt)
+                assert any(r["kind"] == "http-auth-ok" for r in treqs), "https 认证在案"
+                assert any(r["kind"] == "http" for r in treqs), "https 转发在案"
+                for h in (ps, pt):
+                    for r in proxy_reqs(h):
+                        blob = str(r)
+                        assert "u15" not in blob and "p15" not in blob, \
+                            f"代理日志无凭证明文: {blob[:120]}"
+                # 代理侧强制认证负例：socks5 错凭证 0x01 / https 错凭证 407
+                assert self._probe_socks5_auth(ps["port"], "u15", "wrong") == 0x01, \
+                    "socks5 错凭证应 0x01 拒绝"
+                r = self._probe_http_status(pt["port"], env.fixture.url("one-m.bin"),
+                                            auth=self._b64("u15:wrong"),
+                                            tls=True, ca=PROXY_CA_PEM)
+                assert "407" in r, f"https 错凭证应 407: {r}"
             finally:
-                app.graceful_quit()
-            raise SkipCase(
-                "已验：两类型条目正常加载（下拉标注一致，文案不含凭证）；"
-                "认证生效判定依赖 socks5+认证与 https（TLS 会话内 basic auth）监听"
-                "——ezr-proxy 扩展未就绪（规程环境前置登记口径）")
+                stop_proxy(ps)
+                stop_proxy(pt)
 
     def _case_16(self):
         """QA-NP-16 ip 缺失/空串/纯空白（3 相位）：作废 + 警告；合法条目可用。"""
@@ -586,25 +708,31 @@ class NamedProxySuite(Suite):
             ["no-port", "str-port", "zero-port", "big-port", "neg-port"])
 
     def _case_18(self):
-        """QA-NP-18 ip="::1" IPv6 字面量：条目正常加载；下载经 IPv6 代理（监听受限 → S）。"""
+        """QA-NP-18 ip="::1" IPv6 字面量：条目加载 + 经 IPv6 回环代理下载。"""
         @self.case("QA-NP-18")
         def go(env: Env):
-            env.write_config(proxies_toml([
-                {"name": "s6-proxy", "type": "http", "ip": "::1", "port": 1},
-            ]))
-            app = self._new_app(env)
+            p6 = start_proxy(env, "s6-live", self._next_port(), bind="::1")
             try:
-                assert app.wait_for("EZR Downloader", 6)
-                assert_not_in("已忽略", app.text(), "IPv6 字面量条目合法加载")
-                text = self._dropdown_options(app)
-                assert_in("s6-proxy（http）", text, "条目正常加载（下拉标注）")
-                assert_not_in("异常", text, "无因 ip 含冒号的异常文案")
+                env.write_config(proxies_toml([
+                    {"name": "s6-proxy", "type": "http", "ip": "::1",
+                     "port": p6["port"]},
+                ]))
+                app = self._new_app(env)
+                try:
+                    assert app.wait_for("EZR Downloader", 6)
+                    assert_not_in("已忽略", app.text(), "IPv6 字面量条目合法加载")
+                    text = self._dropdown_options(app)
+                    assert_in("s6-proxy（http）", text, "条目正常加载（下拉标注）")
+                    assert_not_in("异常", text, "无因 ip 含冒号的异常文案")
+                    # 下载相位：经 ::1 代理（v140 桩支持 IPv6 绑定后实跑）
+                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}"), 1)
+                    assert app.wait_for("（无校验）", 45), "经 IPv6 代理下载成功"
+                    assert any("one-m" in r["target"] for r in proxy_reqs(p6)), \
+                        "IPv6 相位：代理日志在案"
+                finally:
+                    app.graceful_quit()
             finally:
-                app.graceful_quit()
-            raise SkipCase(
-                "已验：IPv6 字面量条目正常加载（下拉标注一致、无异常文案）；"
-                "经 ::1 代理下载判定依赖 IPv6 回环监听——ezr-proxy 绑定 127.0.0.1"
-                "（遗留扩展受限项，规程登记口径）")
+                stop_proxy(p6)
 
 
 if __name__ == "__main__":

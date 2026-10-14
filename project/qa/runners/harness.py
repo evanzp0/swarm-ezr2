@@ -95,6 +95,10 @@ PROJECT_EZR = os.path.abspath(os.path.join(QA_DIR, "..", "..", "ezr"))
 EZR_BIN = os.path.join(PROJECT_EZR, "target", "debug", "ezr")
 FIXTURE_BIN = os.path.join(PROJECT_EZR, "target", "debug", "ezr-fixture")
 PROXY_BIN = os.path.join(PROJECT_EZR, "target", "debug", "ezr-proxy")
+# ezr-proxy 内嵌自签证书的 PEM 形态（v140 扩展）：供 SSL_CERT_FILE 注入产品进程
+# （reqwest rustls-tls-native-roots 经 rustls-native-certs 0.8 / openssl-probe
+# 读取该环境变量；SAN：IP 127.0.0.1 / IP ::1 / DNS localhost）
+PROXY_CA_PEM = os.path.join(PROJECT_EZR, "src", "bin", "ezr-proxy-certs", "ca.pem")
 TMP_ROOT = os.path.abspath(os.path.join(QA_DIR, "..", "..", "..", ".work", "tmp", "qa-run"))
 
 MB = 1024 * 1024
@@ -489,27 +493,44 @@ def write_checksum_sidecar(save_dir: str, filename: str, algo: str, hexval: str)
 # ---------------------------------------------------------------------------
 
 
-def start_proxy(env: "Env", name: str, port: int) -> dict:
+def start_proxy(env: "Env", name: str, port: int, *, scheme: str | None = None,
+                user: str | None = None, password: str | None = None,
+                bind: str | None = None) -> dict:
     """启动 ezr-proxy 实例并返回句柄（进程 + 日志路径 + 端口）。
 
-    日志落 env.home（用例隔离目录，随用例清理）。正向探测：端口就绪窗口。
+    v140 扩展：scheme（http 缺省 / https 代理自身 TLS / socks5+RFC 1929）、
+    user/password（http/https 认证强制模式；socks5 凭证必填）、bind（缺省
+    127.0.0.1，IPv6 回环传 "::1"）。缺省形态与旧版逐参数兼容。
+    日志落 env.home（用例隔离目录，随用例清理）。正向探测：端口就绪窗口
+    （探活按 bind 地址连接；TLS/socks5 形态下裸 TCP 连接即达标，桩容忍探活
+    连接即断）。
     """
     log = os.path.join(env.home, f"{name}.jsonl")
-    proc = subprocess.Popen(
-        [PROXY_BIN, "serve", "--port", str(port), "--name", name, "--log", log],
+    args = [PROXY_BIN, "serve", "--port", str(port), "--name", name, "--log", log]
+    if scheme:
+        args += ["--scheme", scheme]
+    if user is not None:
+        args += ["--user", user]
+    if password is not None:
+        args += ["--password", password]
+    if bind:
+        args += ["--bind", bind]
+    proc = subprocess.Popen(args,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     import socket
+    probe_host = bind or "127.0.0.1"
     deadline = time.time() + 5.0
     while time.time() < deadline:
         try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+            with socket.create_connection((probe_host, port), timeout=0.2):
                 break
         except OSError:
             time.sleep(0.05)
     else:
         proc.kill()
         raise RuntimeError(f"ezr-proxy {name} 端口 {port} 5s 未就绪")
-    return {"proc": proc, "log": log, "port": port, "name": name}
+    return {"proc": proc, "log": log, "port": port, "name": name,
+            "scheme": scheme or "http", "bind": bind or "127.0.0.1"}
 
 
 def proxy_reqs(handle: dict) -> list[dict]:
