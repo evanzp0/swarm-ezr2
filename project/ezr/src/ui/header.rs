@@ -23,10 +23,11 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect, with_chart: bool
     // 应用层策略——全局 ↓↑ 合计与并发 N 总数原内联在本函数）
     let dl = app.global_dl_speed();
     let ul = app.global_ul_speed();
-    // 会话内峰值（速度历史为 KB/s）与全局并发连接数（下载中/做种中任务的连接总数，
-    // FR-01-94 ②/FR-01-96 数据面口径）
-    let peak_dl = app.speed_hist.iter().copied().max().unwrap_or(0);
-    let peak_ul = app.up_hist.iter().copied().max().unwrap_or(0);
+    // 会话内峰值（头部「峰值 ↓↑」口径；architect v145：提取为 App 访问器，
+    // 与全局 ↓↑ 同法——KB/s 采样历史的 B/s 还原收口应用层）与全局并发连接数
+    // （下载中/做种中任务的连接总数，FR-01-94 ②/FR-01-96 数据面口径）
+    let dlp_val = app.peak_dl_speed();
+    let ulp_val = app.peak_ul_speed();
     let conns_n = app.conns_display_total();
 
     let block = bordered_block(BORDER).title(Line::from(vec![
@@ -73,8 +74,8 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect, with_chart: bool
 
     let dls = format!("↓ {}", fmt_speed(dl));
     let uls = format!("↑ {}", fmt_speed(ul));
-    let dlp = format!("↓ {}", fmt_speed(peak_dl as f64 * 1024.0));
-    let ulp = format!("↑ {}", fmt_speed(peak_ul as f64 * 1024.0));
+    let dlp = format!("↓ {}", fmt_speed(dlp_val));
+    let ulp = format!("↑ {}", fmt_speed(ulp_val));
     let sess = fmt_size(app.session_bytes);
 
     // 字段行（内容行 1）：单行排列，顺序固定：并发 → 会话已下载 → 全局 → 峰值

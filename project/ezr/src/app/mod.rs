@@ -451,6 +451,22 @@ impl App {
         [doing, self.tasks.len() - doing]
     }
 
+    /// 会话下载峰值（B/s；头部「峰值 ↓」口径：速度历史窗口内的最大采样，
+    /// architect v145 自渲染路径提取——原 header 内联 max 聚合无直接单测面，
+    /// 与「全局 ↓↑」提取同法）。速度历史存储口径为 KB/s 采样（见
+    /// `speed_hist` 写入侧换算），此处负责 KB/s → B/s 还原，展示层零换算。
+    #[must_use]
+    pub fn peak_dl_speed(&self) -> f64 {
+        self.speed_hist.iter().copied().max().unwrap_or(0) as f64 * 1024.0
+    }
+
+    /// 会话上传峰值（B/s；头部「峰值 ↑」口径，同 [`App::peak_dl_speed`]；
+    /// 01 期 BT 未启用上传，历史恒 0）
+    #[must_use]
+    pub fn peak_ul_speed(&self) -> f64 {
+        self.up_hist.iter().copied().max().unwrap_or(0) as f64 * 1024.0
+    }
+
     /// 清空指定任务的连接级账本（新一次下载开始 / 任务移除 / 收尾时调用，FR-01-99）
     pub(super) fn clear_conn_stats(&mut self, task_id: u32) {
         self.conn_prev.retain(|(tid, _), _| *tid != task_id);
@@ -500,6 +516,27 @@ mod tests {
         // 状态翻转 → 计数随动（校验中属未完成页签）
         app.tasks[2].state = TaskState::Completed;
         assert_eq!(app.tab_counts(), [2, 3]);
+        app.shutdown().await;
+    }
+
+    /// 会话峰值访问器（architect v145 提取）：速度历史窗口内最大采样的
+    /// B/s 还原口径——空/零历史恒 0，写入侧 KB/s 采样 ×1024 还原
+    #[tokio::test]
+    async fn peak_speeds_max_of_history_in_bytes() {
+        let mut app = make_app("peak");
+        assert_eq!(app.peak_dl_speed(), 0.0, "零历史峰值 0");
+        assert_eq!(app.peak_ul_speed(), 0.0, "上传历史恒 0（01 期无 BT）");
+        app.speed_hist = vec![0, 12, 340, 5];
+        app.up_hist = vec![0, 0, 0];
+        assert_eq!(
+            app.peak_dl_speed(),
+            340.0 * 1024.0,
+            "最大采样 ×1024 还原 B/s"
+        );
+        assert_eq!(app.peak_ul_speed(), 0.0);
+        // 历史回缩（tick 窗口滑动剔除旧峰）→ 峰值随动（展示口径随窗口）
+        app.speed_hist = vec![1, 2];
+        assert_eq!(app.peak_dl_speed(), 2.0 * 1024.0);
         app.shutdown().await;
     }
 }

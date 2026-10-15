@@ -1,10 +1,12 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/cleaner　会话：v128-clean（任务 ezr-v128-clean）
-> 本轮（上游交接：coder v128-impl 的 v1.28 URL 权威模型全量实现）：v1.28 落地后保持行为清理
-> + 四度量差分复测——supervisor 两处产品区重复单源化（`req_checked` / `finalize_completed`）、
-> 14 个纯追加测试补齐触碰面覆盖缺口；
-> **产品 3040P/0F、clippy 0、fmt 0、arch 14 规则全过；CPD 产品区 tile 17→15**。
+> 流程：six-pack　当前节点：six-pack/architect　会话：v145-arch（任务 ezr-v145-arch）
+> 本轮（上游交接：cleaner v128-clean 的 v1.28 保持行为清理）：v1.28 清理后架构评审
+> 与属性测试覆盖——四阶段评审（UI/核心分离、依赖规则、信息隐藏、局部代码质量 +
+> 渲染聚合逐点检查）零违规；**supervisor.rs 114 变异点目录化拆分**（上游登记的
+> architect 裁决项闭环，六文件全低于 100 阈值、点数总和守恒 = 纯移动）；header
+> 会话峰值聚合提取为 App 访问器；属性测试 60→62；arch 规则 14→15。
+> **产品 3049P/0F、clippy 0、fmt 0、arch 15 规则全过**。
 
 ## 一、产物历史完成情况
 
@@ -26,44 +28,28 @@
 | coder（v139-fix / v142-fix / v143-fix / v144-fix） | 分块计数倒退 + 幽灵 supervisor + 单流断点保全 + 失败弃账 四轮缺陷修复 | 已交付 | 产品 2877P/0F、clippy 0、fmt 0、arch 14 过 |
 | specifier（v128-spec） | v1.28 URL 权威模型改版规格落账 + v1.24–v1.27 版本注记补记 | 已交付 | parser 3/3 实跑过、dry-check 0 增量错误级 |
 | coder（v128-impl） | v1.28 URL 权威模型全量实现（七处触碰面 + name_locked 替身 + 6 个新回归测试） | 已交付 | 产品 2925P/0F、clippy 0、fmt 0、arch 14 过 |
-| **cleaner（v128-clean，本轮）** | **保持行为清理：supervisor 失败分类/完成收尾两处单源化 + 14 个纯追加测试** | 已交付 | **产品 3040P/0F、clippy 0、fmt 0、arch 14 过；CPD 产品区 17→15** |
+| cleaner（v128-clean） | supervisor 失败分类/完成收尾两处单源化 + 14 个纯追加测试 | 已交付 | 产品 3040P/0F、clippy 0、fmt 0、arch 14 过；CPD 产品区 17→15 |
+| **architect（v145-arch，本轮）** | **supervisor 目录化拆分（114 点 → 6 文件）+ header 峰值访问器 + 属性测试 62 + arch 规则 15** | 已交付 | **产品 3049P/0F、clippy 0、fmt 0、arch 15 过；supervisor 六文件 33/28/21/16/11/5 全低于 100** |
 
 ### 遗留受限项（当前有效）
-- **环境重建（本轮实况）**：本轮为全新沙箱（上轮工具链不入档，本体丢失）——nightly
-  1.101.0-nightly（2026-10-13）按 rust-toolchain.toml 钉定重装（rustup minimal +
-  clippy/rustfmt/llvm-tools；rsproxy.cn 镜像）；lld 桥接 `~/.local/bin/ld.lld` → 工具链
-  rust-lld（PATH 需含 `~/.cargo/bin` 与 `~/.local/bin`）；crates 镜像 `~/.cargo/config.toml`
-  rsproxy-sparse。度量工具：cargo-llvm-cov 0.9.1、cargo-mutants 27.1.0（`~/.cargo/bin`）、
-  PMD 7.28.0（`swarm/.tools/pmd-bin-7.28.0`，ghfast.top 镜像下载；GitHub 直链 403）。
-- **三度量口径与基线对账（本轮实测）**：
-  - 覆盖率：llvm-cov `--branch --lcov` 一次性产出；src 全域（含 `src/bin/*` 外壳）
-    **94.06%**（13390/14236 行），剔除 bin 外壳口径 ≈94.78%。与上游 94.36/94.37%
-    不可直接对比（口径/树态/nightly 版本差异）；本轮编辑后未复测（磁盘预算受限，
-    见下），增量可由 14 个新测试的覆盖行推定。触碰面实测：consistency/task/
-    testenv/testutil 100%、sidecar 99.5%、registry 96.2%、namegen 95.8%、evt 95.1%、
-    dialogs 94.3%、mouse 95.9%、detail 91.5%、cli 90.9%、supervisor 88.3%（深水区为
-    错误/重试/回滚路径）。
-  - CRAP：受限近似（lcov BRDA 口径 comp=BRDA 记录数+1；排除 closure/测试模块/
-    tests 目录；NO_DA=0）原始门禁 **82 条**。触碰面逐函数源码核验：多条件短路链
-    （consistency::check 源码 comp≈4 等）属 rust.md 已知假阳性；supervisor
-    spawn（BRDA comp=199）/download/single_stream、dialogs/mouse/detail 分发核心
-    为 select!/match 臂固有分支数——**登记口径移交**，不据此硬拆（SKILL 杠杆顺序
-    末条）；「门禁 0」沿袭解读 = 登记清单外零漂移。
-  - DRY：PMD 7.28 `-l rust --minimum-tokens 50 --dir src` 全量 **89 tiles**
-    （17→**15 产品区** + 74 测试区）。上游基线 52 不可复现（内嵌测试脚手架随
-    v1.24–v1.28 各轮增长；阈值扫描 70→31/100→6 亦无匹配）——**产品区 tile 数
-    为跨轮对账稳定口径**（17→15 本轮净 −2）。残余产品区 tile 全部为登记形态：
-    dialogs↔testutil（夹具↔产品构造器同构）、property_tests 自重复×2（整文件
-    测试代码）、其余均非本轮触碰面（clipboard/proxy/fixture/main/tick/task_lines）。
-- **变异点 >100 文件（移交 architect）**：cargo-mutants 27.1 `--list --line-col=true`
-  scan 口径全仓 2302 点；**supervisor.rs 114（触碰面）**、ezr-proxy.rs 127（非触碰，
-  代理外壳）。按 rust.md：模块边界拆分依赖 architect 裁决、验证依赖 e2e（cleaner
-  不运行）——登记移交，hardender 全量变异前由 architect 先收模块边界。
-- **APS 工具链**：bb + APS 未安装（本轮未运行 Gherkin 验收——cleaner 职责边界）；
-  gherkin-mutator 全量 campaign 沿袭受限。01-persistence-config.feature 的
-  mutation-stamp（sha256=57e757…）维持保留处置。
-- **磁盘预算（本轮实况）**：10G 级沙箱，llvm-cov 插桩全量构建 ≈3.5G；覆盖率复测
-  受磁盘预算限制未跑（度量解析产物 lcov.out 已落盘 `.work/tmp/` 可复用）。
+- **环境重建（本轮实况）**：全新沙箱——nightly 1.101.0-nightly（2026-10-13）按
+  rust-toolchain.toml 钉定重装（rustup minimal + clippy/rustfmt/llvm-tools；
+  rsproxy.cn 镜像）；lld 桥接 `~/.local/bin/ld.lld` → 工具链 rust-lld（PATH 需含
+  `~/.cargo/bin` 与 `~/.local/bin`）；crates 镜像 `~/.cargo/config.toml`
+  rsproxy-sparse。度量工具：cargo-mutants 27.1.0（`~/.cargo/bin`，本轮装妥并跑
+  `--list` 扫描）。
+- **本轮未装度量工具（影响面登记）**：cargo-llvm-cov 未装（覆盖率未复测——上游
+  94.06% 口径沿袭有效；本轮产品行变化小：+2 访问器/−内联聚合，增量可由新测试
+  覆盖行推定）；PMD 未装（CPD 未复跑——上游 89 tiles/15 产品区基线沿袭有效，
+  本轮 supervisor 拆分不改重复形态：拆分文件内部无跨文件拷贝新增，产品区 tile
+  数预期不变或微降，由下一轮 cleaner/hardender 按同口径复核）；bb + APS 未装
+  （本轮未运行 Gherkin 验收——architect 职责边界）。01-persistence-config.feature
+  的 mutation-stamp（sha256=57e757…）维持保留处置。
+- **ezr-proxy.rs 127 变异点（本轮裁决：维持不拆）**：独立代理外壳 bin（测试基建，
+  15 个单测），非 ezr 产品触碰面；拆分无 hardender 变异收益（变异 campaign 聚焦
+  产品 crate），登记维持上游「非触碰」判定。
+- **磁盘预算**：10G 级沙箱（本轮实测余 2.7G）；llvm-cov 插桩全量构建 ≈3.5G——
+  覆盖率复测前先清理 `project/ezr/target` 或评估预算。
 - 无其他受限项。
 
 ### 实现定义值登记（当前有效）
@@ -71,62 +57,79 @@
   v140 桩口径与 TD-17 采样口径、v1.28 三条后果性推论（一致性三要素化 / 路径基匹配 +
   兜底 / 详情与复制收敛原始 URL）、v1.28 实现定义值（name_locked 替身语义 /
   derive_name 三参签名 / sidecar 版本号维持 1）。
-- **本轮新增：无**（纯清理 + 测试追加，产品契约零变更；两处单源化行为等价由全量
-  测试锁定）。
+- **本轮新增：无**（纯重构 + 测试追加，产品契约零变更；supervisor 拆分行为等价由
+  全量测试 + 变异点守恒双重锁定；header 峰值访问器为同口径搬运——展示值逐字节
+  等价由既有 UI 测试锁定）。
 - 无未决待批项。
 
-## 二、当前产出情况（cleaner v128-clean）
+## 二、当前产出情况（architect v145-arch）
 
-### 本会话产物清单（产品源码 1 文件修改 + 测试 6 文件纯追加；规格/QA/mission 零触碰）
-- `src/engine/supervisor.rs`（**产品区唯一修改文件**，行为保持）：
-  - 提取 `req_checked(client, url, range)`：请求臂失败分类收口（2xx → Response；
-    非 2xx → 读尽响应体后 `EngineFailure::http`；传输错误 → `classify_reqwest`），
-    多块 worker 与单流续传两调用点委托（消解 CPD 82tok 产品区 tile；v1.27 失败
-    回报口径由调用方各自接续，行为等价）；
-  - 提取 `finalize_completed(spec, stamp, blocks, …)`：完成收尾单源（无校验 → 改名
-    清台账直判完成；有校验 → 落全块完成终态台账）+ DownloadDone，多块聚合完成臂
-    与单流全块台账直判臂委托（消解 CPD 53tok 产品区 tile）。
-- 测试纯追加（只追加于既有测试模块末尾，不改产品行为、不改构建配置）14 个：
-  - `src/model/namegen.rs` ×2：落点 URL 无路径回退原始 URL 推导、dedupe 时间戳兜底；
-  - `src/model/registry.rs` ×6：ProxyChoiceCompat::default、旧 "global" 映射直连、
-    未知形态回退 direct、Registry::default、load 版本不符 → None、restore 重置
-    未定校验结果；
-  - `src/model/sidecar.rs` ×1：remove 缺失 sidecar 幂等 Ok；
-  - `src/app/cli.rs` ×2：非法 URL toast 拒绝、路径基 sidecar 接续沿用原名；
-  - `src/app/engine/mod.rs`（evt_tests）×2：非下载中 Progress 早退（不产生幽灵速度
-    窗）、重试达上限停等（释放槽位 + 引导 R）；
-  - `src/ui/mod.rs`（ui_v114_tests）×1：失败原因行仅「已失败」态展示（挂起态不展示）。
+### 本会话产物清单（产品源重组 6 新 1 删 + 测试 3 文件 + 脚本 1 + 工具侧沉淀 1）
+- `src/engine/supervisor/`（**产品区唯一重组**：supervisor.rs 2872 行 → 目录模块，
+  纯移动零行为变化；测试模块原地保留于 mod.rs）：
+  - `mod.rs`：域类型（TaskSpec/VerifySpec/Flow/PausedState）、入口 run/verify、
+    emit/sidecar_path/completed_of 小 helper + 测试模块（原 27 测试零改动）；
+  - `http.rs`：req_with_identity / req_checked（请求臂失败分类收口）/
+    ProbeHead/probe_head（探测头解析）；
+  - `finalize.rs`：finalize_completed（完成收尾单源）/ build_sidecar / flush_sidecar /
+    failed_flow / failed_ledger / block_span（sidecar 记账面）；
+  - `workers.rs`：WorkerDeps / block_worker / stop_workers / prune_finished /
+    fill_workers（worker 池面）；
+  - `download.rs`：download() 多块监督主流程 + PROGRESS_TICK/SIDECAR_FLUSH 常量；
+  - `single.rs`：single_stream() 单流降级路径。
+- `src/ui/header.rs` + `src/app/mod.rs`：会话峰值聚合提取（architect v116/v126 同法
+  延伸）——`App::peak_dl_speed()/peak_ul_speed()`（速度历史 max 采样 KB/s→B/s 还原
+  收口应用层）+ 无头单测 `peak_speeds_max_of_history_in_bytes`；header 渲染改消费
+  访问器，展示值等价。
+- `src/property_tests.rs`：属性测试 60→62（文末独立 proptest! 块 + 头注登记）——
+  `prop_derive_name_fallback_chain`（derive_name 三级优先 + 时间戳兜底契约：非空 /
+  输出已卫生化 / 优先级链逐级回退）、`prop_alloc_task_id_fresh_nonzero_unique`
+  （v1.20 随机 ID 分配契约：非 0 / 不与占用集命中 / 连续分配互不相同）。
+- `scripts/arch_check.sh`：新增规则 15——supervisor 实现子模块保持私有（pub(super)
+  暴露纪律；`pub mod` 出现即窄接口破坏）；阳性对照实测命中（临时 `pub mod finalize;`
+  → FAIL → 移除复归全过）。
+- `packs/_common/notes/rust.md`（工具侧经验沉淀）：「拆大文件」条增补两件低成本佐证
+  （mutants --list 点数守恒 = 纯移动强信号；测试补导入清单以编译器 unused 警告为准，
+  grep 预判被注释/全路径引用高估）；「单文件升级为目录模块」三机械点扩为四
+  （④ 路径深度不对称：mod.rs 保持 `super::X`、孙层一律 `super::super::X`，按编译
+  错误清单收敛，勿批量直觉替换）。
 
 ### 验证证据
 | 验证项 | 结果 | 命令 |
 |---|---|---|
-| 全量测试（单元+集成+属性） | **3040P / 0F**（14 目标；基线 2925P + 115 增量） | `cargo test`（ezr crate 根） |
-| clippy | 0 警告（nightly 1.101.0-nightly） | `cargo clippy --all-targets` |
-| 格式 | 干净（已应用 fmt） | `cargo fmt --check` |
-| 架构边界 | 14/14 规则过 | `bash scripts/arch_check.sh` |
-| 新测试定向 | 14/14 绿（bin 语境单跑） | `cargo test --bin ezr -- <新测试名…>` |
-| CPD 复跑 | 89 tiles（15 产品区 + 74 测试区），触碰面产品区 tile −2 | `pmd cpd -l rust --minimum-tokens 50 --dir src` |
-| 变异点扫描 | supervisor 114 / ezr-proxy 127 / 全仓 2302（scan，未跑变异） | `cargo mutants --list --line-col=true` |
-| 覆盖率/CRAP | 94.06% src 全域 / 门禁原始 82 条（口径见遗留受限项） | `cargo llvm-cov --branch --lcov` + `.work/tmp/crap_analyze.py` |
+| 全量测试（单元+集成+属性） | **3049P / 0F**（+9 = 峰值访问器测试 ×7 编译语境 + 属性测试 ×2 bin 语境） | `cargo test`（ezr crate 根） |
+| 属性测试（独立口径） | 62P / 0F（60 沿袭 + 2 新增） | `cargo test --bin ezr -- property_tests::` |
+| clippy | 0 警告（nightly 1.101.0-nightly，--all-targets 产品+测试双面） | `cargo clippy --all-targets` |
+| 格式 | 干净 | `cargo fmt --check` |
+| 架构边界 | 15/15 规则过（+规则 15，阳性对照实测） | `bash scripts/arch_check.sh` |
+| 变异点扫描 | 全仓 2312 点；**supervisor 拆分后六文件 33/28/21/16/11/5（总和 114 = 拆分前单文件数，守恒）**；ezr-proxy 127（维持不拆） | `cargo mutants --list --line-col=true` |
+| 新测试定向 | 3/3 绿（bin 语境单跑） | `cargo test --bin ezr -- peak_speeds prop_derive prop_alloc` |
 
 ### 对账口径（基线 → 终态）
-- 测试计数：2925P → **3040P（+115）**，逐 target 实测闭环：14 个新测试 × 各自编译
-  语境数（namegen ×2 → 10 语境〔bin + 8 个挂载 model 树 crate + hardening 经
-  namegen_hard 壳层再挂载〕= 20；registry ×6 → 9 语境 = 54；sidecar ×1 → 9 = 9；
-  cli ×2 → 7 = 14；evt ×2 → 7 = 14；detail ×1 → 4 = 4；合计 115）。
-- `git diff --stat`：产品 1 文件 + 测试 6 文件（supervisor 净 −34 产品行：两臂去重
-  大于 helper 本体；新增测试 +230 行）。
-- CPD：产品区 17 → 15 tiles（−2 = supervisor 两处单源化）；测试区 74 不变。
-- 规格 / QA / mission 文件：零 diff（本轮纯清理轮）。
+- 测试计数：3040P → **3049P（+9）**，逐 target 实测复算自洽：本轮新增测试 3 个——
+  `peak_speeds_max_of_history_in_bytes`（app/mod.rs 测试区）随 app 树挂载语境 ×7 =
+  产品 bin + 6 个挂载 app 的 hardening crate（实测 +1：engine_backfill 353→354、
+  g_appcore 330→331、g_engine 325→326、g_supervisor 299→300、ui_backfill 382→383、
+  v115 377→378）；2 个属性测试（property_tests.rs 仅产品 bin 语境，bin 单测 435→438）。
+  合计 7 + 2 = 9。不挂载 app 的语境计数不变（g_throttle_err 206、g_main 2、
+  g_proxy 16、g_slots 144、hardening.rs 126、fixture 30、proxy 15）。
+- `git diff --cached --stat`：supervisor.rs 删除（2872 行）→ supervisor/ 六文件
+  （mod.rs 保留测试区，五子文件 1132 行产品区）+ app/mod.rs +37（2 访问器 + 1 测试）
+  + header.rs 13 行改写 + property_tests.rs +71 + arch_check.sh +15。
+- 变异点：全仓 2302（上游 scan）→ 2312（+10 = 峰值访问器产品行产点，本轮唯一
+  产品逻辑面增量）；supervisor 114 守恒拆分（33/28/21/16/11/5），hardender 可
+  `cargo mutants --file` 按文件分块跑差分变异。
+- 规格 / QA / mission 文件：零 diff（本轮纯架构轮）。
 
 ### 待办与待批（未决项）
 - 无阻塞项、无待批项。
-- 沿袭移交（非缺陷）：gherkin-mutator 运行器基建、覆盖率/CRAP 复测（architect/QA
-  轮按本会话口径跑）、supervisor/ezr-proxy 变异点拆分裁决（architect）。
+- 沿袭移交（非缺陷）：覆盖率/CRAP 复测（下游轮按上游口径补跑，本轮未装
+  cargo-llvm-cov）、CPD 复跑（PMD 未装，下游 cleaner/hardender 口径见上游移交）、
+  gherkin-mutator 运行器基建。
 
 ### 移交建议
-- 下一步建议 `bin/swarm begin six-pack/architect`（v1.28 清理后按惯例收架构边界与
-  属性测试覆盖；并裁决 supervisor 114 变异点的模块边界拆分）；或按需直启
-  `six-pack/hardender`（三度量已差分复测，可直接差分变异）/ `six-pack/QA`
-  （QA 轮需按 v1.28 移交项改造 e2e runner：QA-RS-07 变体三要素化改造、QA-RS-14
-  新 runner 场景、suite_download_engine.py 补「各分块请求 origin 命中」断言）。
+- 下一步建议 `bin/swarm begin six-pack/hardender`（supervisor 模块边界已收口，
+  六文件全部低于 100 阈值——`--file` 分块差分变异的前提已就绪；三度量基线沿袭
+  上游口径 + 本轮 mutants scan 已实测）；或按需直启 `six-pack/QA`（QA 轮需按
+  v1.28 移交项改造 e2e runner：QA-RS-07 变体三要素化改造、QA-RS-14 新 runner
+  场景、suite_download_engine.py 补「各分块请求 origin 命中」断言）。

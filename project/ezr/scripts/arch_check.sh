@@ -7,7 +7,9 @@
 # architect 第四轮：新增规则 11——model 纯同步逻辑护栏，阳性对照实测本轮会话；
 # architect v116：新增规则 12——ui 层 IO 框架导入禁令，阳性对照实测本轮会话；
 # architect v126：新增规则 13——app 层零 ui 依赖（组装根在 main.rs）；
-# 规则 14——ui 渲染路径对 App 写操作只允许回填字段白名单，阳性对照实测本轮会话）
+# 规则 14——ui 渲染路径对 App 写操作只允许回填字段白名单，阳性对照实测本轮会话；
+# architect v145：新增规则 15——supervisor 目录化后实现子模块保持私有
+# （pub(super) 暴露纪律），阳性对照实测本轮会话）
 #
 # 分层基线（依赖方向：低层指向高层，model 为最内层纯逻辑）：
 #   main.rs → app → engine → model；ui → app + model；model → ∅
@@ -171,6 +173,17 @@ if [ -n "$hit" ]; then
   echo "[FAIL] ui 渲染路径改写非回填 App 字段（写面只限 rect/area/visible 回填）:"; echo "$hit"; fails=$((fails+1))
 else
   echo "[ OK ] ui 渲染路径只回填 rect/area/visible 字段"
+fi
+
+# 规则 15【窄接口】supervisor 实现子模块保持私有（architect v145：supervisor
+# 自单文件目录化为 mod/http/finalize/workers/download/single 后，内部文件仅以
+# pub(super) 暴露给 supervisor 子树——`pub mod` 出现即窄接口破坏，app/ui 将能
+# reach 下载监督者内部；与规则 9（engine 门面）同法的 supervisor 层延伸）
+hit=$(grep -rnE '^[[:space:]]*pub[[:space:]]+mod[[:space:]]+' src/engine/supervisor/ --include='*.rs' || true)
+if [ -n "$hit" ]; then
+  echo "[FAIL] supervisor 实现子模块被 pub mod（窄接口破坏，应为私有 mod + pub(super) 暴露）:"; echo "$hit"; fails=$((fails+1))
+else
+  echo "[ OK ] supervisor 实现子模块私有（内部仅 pub(super) 暴露）"
 fi
 
 if [ "$fails" -gt 0 ]; then

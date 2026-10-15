@@ -36,6 +36,12 @@
 //! - `registry` 持久化往返：from_tasks → JSON → load 全量保真 + 任务 ID
 //!   随快照保留（v1.20：无 next_id，ID 随机分配随快照持久化）；快照投影
 //!   往返 TaskSnapshot → Task → TaskSnapshot 保真。
+//!
+//! architect v145 追加（v1.28 清理后复核批次，文末独立 proptest! 块）：
+//! - `namegen::derive_name` 三级优先 + 时间戳兜底的契约属性（非空 / 输出
+//!   已卫生化 / 优先级链逐级回退）；
+//! - `idgen::alloc_task_id` 随机分配契约（非 0 / 不与占用集命中 / 连续
+//!   分配互不相同）。
 
 use crossterm::event::KeyCode;
 use proptest::prelude::*;
@@ -49,9 +55,10 @@ use crate::model::chunk::{
     block_range, chunk_total, fmt_block_size, lease_snapshot, spread_bytes, Blocks,
 };
 use crate::model::config::ProxyChoice;
+use crate::model::idgen::alloc_task_id;
 use crate::model::namegen::{
-    dedupe, from_content_disposition, from_url_path, join_path, sanitize_name, sidecar_path_of,
-    DOWNLOADING_EXT, SIDECAR_EXT,
+    dedupe, derive_name, from_content_disposition, from_url_path, join_path, sanitize_name,
+    sidecar_path_of, DOWNLOADING_EXT, SIDECAR_EXT,
 };
 use crate::model::retry::{backoff_secs, classify_http_status, decide};
 use crate::model::slots::{queue_pos, queue_positions};
@@ -1831,5 +1838,71 @@ proptest! {
             })
             .count();
         prop_assert_eq!(t.thread_count(), expected, "thread_count 数据面口径");
+    }
+}
+
+// ---------------------------------------------------------------------
+// architect v145 追加——此前未覆盖的纯逻辑面（与常规单测对账隔离）
+// ---------------------------------------------------------------------
+
+proptest! {
+    /// derive_name 三级优先 + 时间戳兜底（FR-01-02/v1.28 述语）的契约属性：
+    /// ①结果恒非空；②输出已卫生化（再 sanitize 幂等——无路径分隔符/控制字符，
+    /// 不越目录写入）；③优先级链逐级回退——CD（trim 后非空）> 跳转落点路径段
+    /// > 原始 URL 路径段 > `download-<ts>` 兜底。生成域：CD 为任意字符串
+    /// （含空白/空——回退分支的合法输入形态）；URL 段为非空文件名字符
+    /// （生成域 ⊆ 规格域：路径段语义由「http://h/<seg>」拼装保证，逐段合法
+    /// 即整体合法，notes/rust.md「复合结构属性生成」）。
+    #[test]
+    fn prop_derive_name_fallback_chain(
+        cd in prop::option::of(prop::collection::vec(any::<char>(), 0..24)),
+        seg_a in "[a-zA-Z0-9._\\-]{0,12}",
+        seg_b in "[a-zA-Z0-9._\\-]{0,12}",
+        with_final in prop::bool::ANY,
+    ) {
+        let cd: Option<String> = cd.map(|v| v.into_iter().collect());
+        let final_url = with_final.then(|| format!("http://f.io/{seg_a}"));
+        let url = format!("http://o.io/{seg_b}");
+        let name = derive_name(cd.as_deref(), final_url.as_deref(), &url);
+
+        // ①恒非空（时间戳兜底存在性）
+        prop_assert!(!name.is_empty(), "derive_name 恒产出非空名");
+        // ②输出已卫生化（sanitize 幂等点：再处理一次不变）
+        prop_assert_eq!(name.clone(), sanitize_name(&name), "输出不含路径分隔符/控制字符");
+
+        // ③优先级链（oracle 按契约逐级复述）
+        let cd_pick = cd.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        if let Some(n) = cd_pick {
+            prop_assert_eq!(name, sanitize_name(n), "CD 非空时最高优先");
+        } else if let Some(f) = final_url.as_deref().and_then(from_url_path) {
+            prop_assert_eq!(name, sanitize_name(&f), "落点路径段次优先");
+        } else if let Some(o) = from_url_path(&url) {
+            prop_assert_eq!(name, sanitize_name(&o), "原始 URL 路径段再次之");
+        } else {
+            prop_assert!(name.starts_with("download-"), "全空时时间戳兜底");
+        }
+    }
+
+    /// 任务 ID 分配（v1.20 u32 随机模型）的契约属性：对任意占用集——
+    /// ①分配结果恒非 0（保留哨兵不得分配）；②不与占用集命中（查重分配）；
+    /// ③连续多次分配互不相同（每次分配即占用，查重面随动增长）。
+    /// 占用集规模 ≤ 4k（4.29e9 取值空间下重试链概率可忽略，测试无挂死面；
+    /// 资源维度直接作为有界采样参数，notes/rust.md「生成域与资源分配解耦」）。
+    #[test]
+    fn prop_alloc_task_id_fresh_nonzero_unique(
+        seed in prop::collection::vec(any::<u32>(), 0..4096),
+        rounds in 1usize..8,
+    ) {
+        let mut used: std::collections::HashSet<u32> = seed.into_iter().collect();
+        used.insert(0); // 显式占用 0：分配必须绕开保留哨兵
+        let mut seen = Vec::new();
+        for _ in 0..rounds {
+            let id = alloc_task_id(|c| used.contains(&c));
+            prop_assert_ne!(id, 0, "0 为保留哨兵，不得分配");
+            prop_assert!(!used.contains(&id), "分配结果不得与占用集命中");
+            prop_assert!(!seen.contains(&id), "同轮连续分配互不相同");
+            seen.push(id);
+            used.insert(id);
+        }
     }
 }
