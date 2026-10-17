@@ -141,6 +141,18 @@
 > `features/01-add-task.feature`（场景 08/09 述语对齐）、QA 套件同步
 >（qa/01-download-engine-qa.md QA-DE-08、qa/01-resume-sidecar-qa.md QA-RS-01/07/14、
 > qa/01-add-task-qa.md QA-01-08）。
+> v1.29（操作者指令，两批需求，与 phase-01 v1.29 同步）：①**P 键 pieces 分块弹窗**（FR-01-106）
+> ——任务列表按 `P` 打开当前选中任务的分块（piece）状态弹窗，**功能门槛 = 仅支持分块下载的
+> 任务**：BT 任务恒支持（phase-02 预留，01 期不触发）、HTTP(S) 需服务器支持断点续传，不支持
+> 续传（单流整段下载）的任务按 `P` toast 拒绝且弹窗不打开，空内容/未选中/未探测（D35）同拒；
+> 窗口形态（64×21 居中、可拖拽）、四态色块（🟩 已下载/🟦 正在下载/🟨 部分下载/⬜ 未下载）、
+> 下载前沿定位、滚动/模态/关闭（P/Esc/Q 先关窗不退出）、鼠标滚轮/拖拽移动/点击外部关闭均照录
+> ezr-demo 定稿 §6.4 与 demo 源码；页脚快捷键行新增 `P 分块`。②**并发面板底部提示行随任务
+> 协议自适应**（FR-01-96 v1.29 修订）——底部提示行仅在任务为 BT 时显示 `Ctrl+B 断开` 段
+> （BT = `Ctrl+↑↓ 选择 · Ctrl+B 断开`、非 BT = `Ctrl+↑↓ 选择`），原恒显文案的「（仅 BT）」
+> 标注退役；01 期全部任务为 HTTP(S) → 实际显示恒为 `Ctrl+↑↓ 选择`。规格
+> `features/05-ui-pieces.feature`（新增 8 场景）、`features/04-ui-conns.feature`（场景 08 修订），
+> QA 套件 `qa/05-ui-pieces-qa.md`（QA-UP-01..08 新增）、`qa/04-ui-conns-qa.md`（QA-UC-08 同步）。
 
 
 ---
