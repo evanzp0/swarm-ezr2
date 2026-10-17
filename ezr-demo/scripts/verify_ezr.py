@@ -98,8 +98,20 @@
                         等待中带断点分块进度 x>0 非从零）；
                         R2 反路径——「删除任务及本地文件」后同名 URL 再添加
                         → 无接续（toast 无断点字样，普通添加）。
+场景 S（pieces 弹窗）：P 快捷键分块状态弹窗（仅支持分块下载的任务：
+                        BT / 支持断点续传的 HTTP(S)）：
+                        ubuntu（下载中）按 P → 弹窗标题「分块状态」/任务名/
+                        元信息（HTTPS · 块大小 1 MB · x/y 块 · 并发 8；
+                        无图例计数行、无任务状态、无分页/总块数提示），
+                        网格含 🟩/🟦/⬜，🟦 数 = 并发 8；Esc 关闭回列表；
+                        blender（已暂停）→ 网格含 🟨、无 🟦
+                        （非「下载中」不显示 🟦 口径）；
+                        media-assets（服务器不支持断点续传）→ P 拒绝
+                        （无弹窗 + toast「不支持分块下载」）；
+                        sintel（BT 下载中）→ 块大小 256 KB、含 🟦；
+                        再按 P 关闭（toggle）；End 跳末页（末页全 ⬜）。
 
-用法：python3 scripts/verify_ezr.py [场景集合，默认 abcdefhjklmnopqr；g 为 150s 长跑可单独运行]
+用法：python3 scripts/verify_ezr.py [场景集合，默认 abcdefhjklmnopqrs；g 为 150s 长跑可单独运行]
 """
 
 import fcntl
@@ -946,8 +958,10 @@ def scenario_o():
           act.strip()[:50] if act else "not found")
     check("O6 断开后任务仍正常下载（sintel [下载中]）",
           any("[下载中]" in r and "sintel-4k-2160p" in r for r in final_rows))
-    check("O7 面板提示行显示快捷键（Ctrl+↑↓ 选择 · Ctrl+B 断开）",
-          any("Ctrl+↑↓ 选择" in r and "Ctrl+B" in r for r in final_rows))
+    hint_row = next((r for r in final_rows if "Ctrl+↑↓ 选择" in r), "")
+    check("O7 BT 面板提示行显示 Ctrl+B 断开（无「仅 BT」标注）",
+          "Ctrl+B 断开" in hint_row and "仅 BT" not in hint_row,
+          hint_row.strip()[:50])
 
     # 第二段：ubuntu（HTTP）按 Ctrl+B → 拒绝（toast + 行数不变）
     samples2, screen2 = run(120, 44, 5.0, keys=["c-b"], key_delay_frac=0.4)
@@ -957,6 +971,10 @@ def scenario_o():
     serials2 = [int(s) for s, _ in conns_data_rows(screen2, px2)] if px2 is not None else []
     check("O8 HTTP 任务 Ctrl+B 被拒绝（toast 提示）",
           "仅 BT 任务支持断开并发连接" in all_text2)
+    hint2 = next((r for r in final_rows2 if "Ctrl+↑↓ 选择" in r), "")
+    check("O8b HTTP 面板提示行不含 Ctrl+B（断开提示仅 BT 显示）",
+          "Ctrl+B" not in hint2,
+          hint2.strip()[:50])
     check("O9 HTTP 任务明细行数不变（序号 1..8）", serials2 == list(range(1, 9)), str(serials2))
 
     # 第三段：顶部再按 Ctrl+↑ → 选中保持第 1 条（边界钳制）
@@ -1131,8 +1149,91 @@ def scenario_r():
           "alpha-release.bin" in all_text2 and "已添加任务 #" in all_text2)
 
 
+def scenario_s():
+    print("\n== 场景 S：P pieces 分块弹窗（四态色块 / 功能门槛 / 滚动 / 关闭）==")
+
+    # 第一段：ubuntu（HTTPS 支持续传，下载中，8 并发）按 P → 弹窗打开
+    samples1, _ = run(120, 44, 6.0, keys=["p"], key_delay_frac=0.3)
+    rows1 = samples1[-1][1]
+    text1 = "\n".join(rows1)
+    check("S1 P 打开 pieces 弹窗（标题「分块状态」）",
+          "分块状态" in text1)
+    check("S2 弹窗含任务名（ubuntu）", "ubuntu-24.04.2" in text1)
+    meta1 = next((r for r in rows1 if "块大小" in r), "")
+    check("S3 元信息（HTTPS · 块大小 1 MB · x/y 块 · 并发 8）",
+          "HTTPS" in meta1 and "块大小 1 MB" in meta1
+          and re.search(r"\d+/\d+ 块", meta1) is not None
+          and "并发 8" in meta1,
+          meta1.strip()[:60])
+    check("S4 图例计数行已删除（无「已完成 N」计数样式）",
+          re.search(r"已完成 \d+", text1) is None)
+    check("S5 网格含 🟩 已下载块", "🟩" in text1)
+    check("S6 下载中任务含 🟦（分配了并发下载）", "🟦" in text1)
+    check("S7 网格含 ⬜ 未下载块", "⬜" in text1)
+    n_act1 = text1.count("🟦")
+    check("S8 正在下载块数 = 并发持块连接数（8）", n_act1 == 8, f"🟦×{n_act1}")
+    check("S9 提示行保留滚动/关闭快捷键",
+          "Esc/P 关闭" in text1 and "滚动" in text1)
+    check("S9b 底部分页数/总块数提示已删除",
+          re.search(r"第 \d+–\d+ 块", text1) is None
+          and re.search(r"共 \d+ 块", text1) is None)
+
+    # 第二段：p → esc 关闭回列表
+    samples2, _ = run(120, 44, 4.0, keys=["p", "esc"], key_delay_frac=0.2)
+    rows2 = samples2[-1][1]
+    text2 = "\n".join(rows2)
+    check("S10 Esc 关闭弹窗回列表（任务列表可见）",
+          "分块状态" not in text2 and "[HTTPS]" in text2)
+
+    # 第三段：blender（已暂停，支持续传，冻结零头；正在下载页签序位 3）→ P：
+    # 🟨 有、🟦 无（非「下载中」状态任何块都不显示 🟦）
+    samples3, _ = run(120, 44, 5.0, keys=["down"] * 3 + ["p"], key_delay_frac=0.12)
+    rows3 = samples3[-1][1]
+    text3 = "\n".join(rows3)
+    check("S11 已暂停任务弹窗（blender）",
+          "blender-4.5" in text3 and "分块状态" in text3)
+    check("S12 已暂停任务网格无 🟦（非下载中不显示正在下载）", "🟦" not in text3)
+    check("S13 冻结在传零头显示 🟨（部分下载）", "🟨" in text3)
+    meta3 = next((r for r in rows3 if "块大小" in r), "")
+    check("S14 元信息行不含任务状态（「· 已暂停」已删除）",
+          "已暂停" not in meta3
+          and re.search(r"\d+/\d+ 块", meta3) is not None,
+          meta3.strip()[:60])
+
+    # 第四段：media-assets（HTTP 服务器不支持断点续传）→ P 拒绝：无弹窗 + toast
+    samples4, _ = run(120, 44, 5.0, keys=["down", "p"], key_delay_frac=0.2)
+    text4_all = "\n".join("\n".join(rows) for _, rows in samples4)
+    rows4 = samples4[-1][1]
+    check("S16 不支持续传任务拒绝（无弹窗）",
+          "分块状态" not in "\n".join(rows4))
+    check("S17 toast「不支持分块下载（服务器不支持断点续传）」",
+          "不支持分块下载" in text4_all and "断点续传" in text4_all)
+
+    # 第五段：sintel（BT 下载中）→ 块大小 256 KB、含 🟦
+    samples5, _ = run(120, 44, 6.0, keys=["down"] * 10 + ["p"], key_delay_frac=0.12)
+    rows5 = samples5[-1][1]
+    text5 = "\n".join(rows5)
+    check("S18 BT 任务弹窗（sintel）",
+          "sintel-4k" in text5 and "分块状态" in text5)
+    check("S19 BT 块大小 256 KB", "块大小 256 KB" in text5,
+          next((r.strip()[:60] for r in rows5 if "块大小" in r), "not found"))
+    check("S20 BT 下载中含 🟦", "🟦" in text5)
+
+    # 第六段：再按 P 关闭（toggle 语义，q/Q 同为关闭）
+    samples6, _ = run(120, 44, 4.0, keys=["p", "p"], key_delay_frac=0.2)
+    check("S21 再次按 P 关闭弹窗",
+          "分块状态" not in "\n".join(samples6[-1][1]))
+
+    # 第七段：End 跳末页（提示行分页/总块数已删——以网格内容验证：
+    # ubuntu 末页远离下载前沿，整屏应只剩 ⬜ 未下载块）
+    samples7, _ = run(120, 44, 5.0, keys=["p", "end"], key_delay_frac=0.15)
+    text7 = "\n".join(samples7[-1][1])
+    check("S22 End 跳到末页（末页远离前沿：全 ⬜、无 🟩/🟦/🟨）",
+          "⬜" in text7 and not any(c in text7 for c in ("🟩", "🟦", "🟨")))
+
+
 if __name__ == "__main__":
-    only = sys.argv[1] if len(sys.argv) > 1 else "abcdefhjklmnopqr"
+    only = sys.argv[1] if len(sys.argv) > 1 else "abcdefhjklmnopqrs"
     if "a" in only:
         scenario_a()
     if "b" in only:
@@ -1167,6 +1268,8 @@ if __name__ == "__main__":
         scenario_p()
     if "r" in only:
         scenario_r()
+    if "s" in only:
+        scenario_s()
     print(f"\n通过 {len(PASS)} 项 / 失败 {len(FAIL)} 项")
     if FAIL:
         print("失败项:")

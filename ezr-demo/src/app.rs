@@ -158,6 +158,24 @@ impl TaskState {
     }
 }
 
+/// 分块（piece）四态——pieces 弹窗（P 快捷键）展示口径，色块字符与状态一一对应：
+/// Empty ⬜ 未下载 · Done 🟩 已下载 · Partial 🟨 部分下载 · Active 🟦 正在下载。
+/// Active 仅当任务处于「下载中」且该块已分配并发连接时出现（「分配了并发下载」
+/// 即算，块内零头多少不影响）；同一块「部分下载」且「正在下载」时只显示
+/// Active（🟦 优先于 🟨）——任务非「下载中」时任何块都不会出现 🟦。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PieceState {
+    /// 未下载（⬜）
+    Empty,
+    /// 已下载（🟩）
+    Done,
+    /// 部分下载（🟨）：块内有已落盘零头，但未分配并发下载
+    /// （暂停/等待/失败等状态下沉时冻结的持块连接）
+    Partial,
+    /// 正在下载（🟦）：已分配并发连接（仅「下载中」任务）
+    Active,
+}
+
 /// 单个并发连接（分块）状态：一段连续的 byte range 由一个线程负责
 #[derive(Clone)]
 pub struct Connection {
@@ -339,6 +357,61 @@ impl Task {
         let piece = chunk_size(self.protocol);
         let y = chunk_total(self.total, piece);
         (self.chunk_done.min(y), y, piece)
+    }
+
+    /// 是否支持分块下载（pieces 弹窗 P 快捷键的功能门槛）：
+    /// BT 恒分块；HTTP(S) 需服务器支持断点续传（Range）——不支持续传时只能
+    /// 单线程整段下载、无分块概念；FTP 同不支持。
+    pub fn supports_pieces(&self) -> bool {
+        if self.protocol.is_bt() {
+            return true;
+        }
+        !matches!(self.protocol, Protocol::Ftp) && self.resumable
+    }
+
+    /// 全量分块状态（pieces 弹窗展示口径，块序 = 字节序）。
+    ///
+    /// 口径（与 [`PieceState`] 文档一致）：
+    /// - 块号 < chunk_done → Done（已下载）；
+    /// - 块被并发连接持有（分块队列按块边界整块领块，连接 start 恒对齐块边界）：
+    ///   任务「下载中」→ Active（分配了并发下载；即使块内进度为 0 也算——
+    ///   「部分下载」且「正在下载」时只显示 Active）；任务非「下载中」
+    ///   （暂停/等待/失败等状态下沉冻结的持块连接）→ 有零头 Partial、
+    ///   零头为 0 → Empty；
+    /// - 其余 → Empty（未下载）。
+    ///
+    /// 空/极小文件：y=0（无分块）返回空表。
+    pub fn pieces(&self) -> Vec<PieceState> {
+        let piece = chunk_size(self.protocol);
+        let y = chunk_total(self.total, piece) as usize;
+        if y == 0 {
+            return Vec::new();
+        }
+        let mut v = vec![PieceState::Empty; y];
+        let x = (self.chunk_done as usize).min(y);
+        for s in v.iter_mut().take(x) {
+            *s = PieceState::Done;
+        }
+        let downloading = self.state == TaskState::Downloading;
+        for c in &self.connections {
+            if c.cap() == 0 {
+                continue; // 待命连接（start=end=0）不持块
+            }
+            let idx = (c.start / piece) as usize;
+            if idx >= y {
+                continue; // 防御：越界租约不计
+            }
+            v[idx] = if c.done >= c.cap() {
+                PieceState::Done
+            } else if downloading {
+                PieceState::Active
+            } else if c.done > 0 {
+                PieceState::Partial
+            } else {
+                PieceState::Empty
+            };
+        }
+        v
     }
 }
 
@@ -542,6 +615,21 @@ pub struct App {
     conns_scroll_for: usize,
     /// 是否显示右侧任务详情 / 并发连接面板（`G` 切换；头部流量图始终显示、不受影响）
     pub show_panes: bool,
+    /// pieces 分块弹窗（P 快捷键）是否打开
+    pub pieces_open: bool,
+    /// pieces 弹窗网格滚动偏移（以“网格行”为单位，每行 cols 块；
+    /// 上限由渲染层按实际总行数钳制）
+    pub pieces_scroll: usize,
+    /// 打开 pieces 弹窗时定位到下载前沿（由 ui 层按实际列数消费一次，
+    /// 此后滚动完全由用户控制，不自动跟随）
+    pub pieces_follow: bool,
+    /// pieces 弹窗区域（由 ui 层每帧回填；滚轮滚动/点击关闭/拖拽的命中测试）
+    pub pieces_area: Option<Rect>,
+    /// pieces 弹窗左上角位置（鼠标拖拽移动记忆；None = 打开时居中，
+    /// 由渲染层首帧回填；渲染时钳制在终端内）
+    pub pieces_pos: Option<(u16, u16)>,
+    /// pieces 弹窗拖拽中的抓取偏移（指针相对弹窗左上角；Some = 左键拖拽进行中）
+    pub pieces_drag: Option<(u16, u16)>,
     /// 当前打开的对话框（None = 无）
     pub dialog: Option<Dialog>,
     /// 对话框按钮的可点击区域（由 ui 层每帧回填）
@@ -614,6 +702,12 @@ impl App {
             visible_conns_rows: 8,
             conns_scroll_for: 0,
             show_panes: true,
+            pieces_open: false,
+            pieces_scroll: 0,
+            pieces_follow: false,
+            pieces_area: None,
+            pieces_pos: None,
+            pieces_drag: None,
             dialog: None,
             dlg_btn_rects: Vec::new(),
             dlg_field_rects: Vec::new(),
@@ -1345,6 +1439,25 @@ impl App {
             self.on_dialog_key(code);
             return;
         }
+        // pieces 分块弹窗打开时进入模态：按键仅用于滚动与关闭
+        //（q/Q 同为关闭而非退出——弹窗内先关窗，避免误触直接退出应用）
+        if self.pieces_open {
+            match code {
+                KeyCode::Esc
+                | KeyCode::Char('p')
+                | KeyCode::Char('P')
+                | KeyCode::Char('q')
+                | KeyCode::Char('Q') => self.close_pieces(),
+                KeyCode::Up => self.pieces_scroll_by(-1),
+                KeyCode::Down => self.pieces_scroll_by(1),
+                KeyCode::PageUp => self.pieces_scroll_by(-8),
+                KeyCode::PageDown => self.pieces_scroll_by(8),
+                KeyCode::Home => self.pieces_scroll = 0,
+                KeyCode::End => self.pieces_scroll = usize::MAX, // 渲染层钳制到末页
+                _ => {}
+            }
+            return;
+        }
         match code {
             KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
             KeyCode::Down => self.move_sel(1),
@@ -1362,6 +1475,8 @@ impl App {
             KeyCode::BackTab => self.filter = (self.filter + FILTERS.len() - 1) % FILTERS.len(),
             KeyCode::Char(' ') => self.toggle_pause(),
             KeyCode::Char('r') | KeyCode::Char('R') => self.retry(),
+            // P：查看选中任务的 pieces 分块弹窗（仅支持分块下载的任务）
+            KeyCode::Char('p') | KeyCode::Char('P') => self.open_pieces(),
             KeyCode::Char('a') | KeyCode::Char('A') => self.open_add_dialog(),
             KeyCode::Char('m') | KeyCode::Char('M') => self.open_modify_dialog(),
             KeyCode::Char('d') | KeyCode::Char('D') => self.open_delete_dialog(),
@@ -2051,6 +2166,40 @@ impl App {
     // -----------------------------------------------------------------------
 
     pub fn on_mouse(&mut self, m: MouseEvent) {
+        // pieces 弹窗最上层（模态）：滚轮滚动分块网格；左键按住弹窗内任意
+        // 位置拖拽移动窗口；点击弹窗外部关闭
+        if self.pieces_open {
+            match m.kind {
+                MouseEventKind::ScrollUp => self.pieces_scroll_by(-2),
+                MouseEventKind::ScrollDown => self.pieces_scroll_by(2),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if Self::pointer_in(&self.pieces_area, m.column, m.row) {
+                        // 开始拖拽：记录指针相对弹窗左上角的抓取偏移
+                        if let Some(r) = self.pieces_area {
+                            self.pieces_drag = Some((
+                                m.column.saturating_sub(r.x),
+                                m.row.saturating_sub(r.y),
+                            ));
+                        }
+                    } else {
+                        // 点击弹窗外部 = 关闭
+                        self.close_pieces();
+                    }
+                }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    // 拖拽移动：弹窗左上角 = 指针 - 抓取偏移（渲染层钳制在终端内）
+                    if let Some((dx, dy)) = self.pieces_drag {
+                        self.pieces_pos = Some((
+                            m.column.saturating_sub(dx),
+                            m.row.saturating_sub(dy),
+                        ));
+                    }
+                }
+                MouseEventKind::Up(MouseButton::Left) => self.pieces_drag = None,
+                _ => {}
+            }
+            return;
+        }
         // 对话框优先：下拉框展开时只认选项点击（点外部收起）；否则字段行聚焦 / 按钮激活
         if self.dialog.is_some() {
             if let MouseEventKind::Down(MouseButton::Left) = m.kind {
@@ -2432,6 +2581,55 @@ impl App {
             self.set_toast(format!("已清理 {} 个已完成任务", n));
         } else {
             self.set_toast("没有可清理的已完成任务".to_string());
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // pieces 分块弹窗（P 快捷键）
+    // -----------------------------------------------------------------------
+
+    /// 打开选中任务的 pieces 分块弹窗（P）。
+    ///
+    /// 功能门槛（仅支持分块下载的任务才有）：BT 恒分块；HTTP(S) 需服务器
+    /// 支持断点续传（Range）——不支持续传时只能单线程整段下载、无分块概念，
+    /// toast 拒绝（demo 中 media-assets 即此类）。空内容（total=0）无分块，
+    /// 同样不打开。
+    pub fn open_pieces(&mut self) {
+        let Some(t) = self.sel_task() else {
+            self.set_toast("未选中任务，无法查看分块");
+            return;
+        };
+        if !t.supports_pieces() {
+            self.set_toast("该任务不支持分块下载（服务器不支持断点续传），无 pieces 信息");
+            return;
+        }
+        if t.total == 0 {
+            self.set_toast("任务内容为空，无分块信息");
+            return;
+        }
+        self.pieces_open = true;
+        self.pieces_follow = true; // 首帧由渲染层按实际列数定位到下载前沿
+        self.pieces_scroll = 0;
+        self.pieces_pos = None; // 打开时居中（渲染层首帧回填）
+        self.pieces_drag = None;
+    }
+
+    /// 关闭 pieces 弹窗
+    pub fn close_pieces(&mut self) {
+        self.pieces_open = false;
+        self.pieces_area = None;
+        self.pieces_pos = None;
+        self.pieces_drag = None;
+    }
+
+    /// pieces 网格滚动（行单位；上限由渲染层按实际总行数钳制）
+    fn pieces_scroll_by(&mut self, delta: i32) {
+        if delta < 0 {
+            self.pieces_scroll = self
+                .pieces_scroll
+                .saturating_sub(delta.unsigned_abs() as usize);
+        } else {
+            self.pieces_scroll = self.pieces_scroll.saturating_add(delta as usize);
         }
     }
 }

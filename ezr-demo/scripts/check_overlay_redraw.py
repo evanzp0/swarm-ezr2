@@ -12,7 +12,8 @@
   2. 关闭对话框（Esc）        -> 同上
   3. 再次打开（A）+ 展开下拉（Tab*3 + Enter）-> 同上
   4. 收起下拉（Esc）          -> 同上
-  5. 浮层稳定期间（无翻转）   -> 不应出现多余的 \\x1b[2J（避免无谓闪屏）
+  5. pieces 分块弹窗（P）打开/关闭 -> 同上
+  6. 浮层稳定期间（无翻转）   -> 不应出现多余的 \\x1b[2J（避免无谓闪屏）
 
 用法: python3 scripts/check_overlay_redraw.py [程序路径]
 """
@@ -102,7 +103,11 @@ def main() -> None:
         step("D  打开删除对话框", b"d", True)
         step("Esc 关闭删除对话框", b"\x1b", True)
 
-        print("场景 4：浮层稳定期不应反复清屏")
+        print("场景 4：pieces 分块弹窗（P）打开/关闭")
+        step("P  打开 pieces 弹窗", b"p", True)
+        step("P  关闭 pieces 弹窗", b"p", True)
+
+        print("场景 5：浮层稳定期不应反复清屏")
         step("A  打开添加对话框", b"a", True)
         stable = read_window(fd, 1.0)
         check("稳定期 1s 无清屏", stable, False, results)

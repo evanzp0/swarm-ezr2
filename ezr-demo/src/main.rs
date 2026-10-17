@@ -86,11 +86,17 @@ async fn run(
     // clear() 先清空终端网格并重置内部前后缓冲，下一帧全量输出：从左到右
     // 连续打印，宽字符打印后游标自然推进两格，与网格位置严格同步，
     // 彻底避免半格覆盖问题。
-    fn overlay_sig(app: &App) -> u8 {
-        match app.dialog.as_ref() {
-            None => 0,
-            Some(d) => 1 | ((d.ck_open as u8) << 1),
-        }
+    fn overlay_sig(app: &App) -> u32 {
+        let dlg = match app.dialog.as_ref() {
+            None => 0u32,
+            Some(d) => 1 | ((d.ck_open as u32) << 1),
+        };
+        // pieces 分块弹窗（P）同属浮层：开/关帧同样全量重绘（位 2）；
+        // 位 8..23 编码弹窗左上角位置——鼠标拖拽移动时位置逐帧变化，
+        // 每帧都触发全量重绘，避免增量 diff 覆盖宽字符半格造成残影
+        //（与浮层开/关同口径）
+        let (px, py) = app.pieces_pos.unwrap_or((0, 0));
+        dlg | ((app.pieces_open as u32) << 2) | ((px as u32) << 8) | ((py as u32) << 16)
     }
     let mut last_overlay = overlay_sig(app);
 

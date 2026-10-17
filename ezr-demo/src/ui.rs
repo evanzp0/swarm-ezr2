@@ -16,28 +16,35 @@
 //! ——面积首尾相接、无断列、无间隔、无盲文点阵。
 //! 每个任务条目 3 行：标题行(名称+协议/状态徽标+百分比)、整体进度条(不分块)、统计行。
 //! 协议徽标 [HTTP/HTTPS/BT] 统一黄色；详情页分块以文字显示 x/y（已完成/总块数）与块大小 N/块。
+//! pieces 分块弹窗（P）支持鼠标左键拖拽移动（按住弹窗内任意位置拖动）。
 //! 分块策略：块大小按协议写死（HTTP 1 MB / BT 256 KB），块数与并发数解耦。
 //! 并发连接面板：BT 任务列序 = 对端 IP(掩码)/下载速度/累计下载/上传速度/累计上传，
 //! HTTP 任务列序 = 序号/下载速度/累计下载（无上传两列）；BT 首列对端 IP 以
 //! 「IPv4 首段.*.末端（如 192.*.100）/ IPv6 首段:*:末端（如 2001:*:7334）」掩码显示；
-//! Ctrl+↑/↓ 选中行高亮，Ctrl+B 断开选中连接（仅 BT）。
+//! Ctrl+↑/↓ 选中行高亮，Ctrl+B 断开选中连接（底部断开提示仅 BT 任务显示）。
 //! 累计均为当前任务本次开始下载后的累计量（重新排队/重试时清零）；
 //! 仅「下载中」与「做种中」状态显示并发明细，其余状态（等待中/已暂停/校验中/
 //! 后期处理中/已失败/已完成）明细为空、活跃 0/0。
 //! 对话框：添加任务(URL+目录+并发+校验算法下拉+校验码+代理下拉) /
 //! 修改任务(并发+校验+校验码+代理，v1.5/FR-01-87 同步) / 删除任务(仅任务|任务和文件|取消)。
+//! pieces 分块弹窗（P）：分块（piece）状态一览——🟩 已下载 / 🟦 正在下载（分配了
+//! 并发下载）/ 🟨 部分下载 / ⬜ 未下载；同一块「部分下载」且「正在下载」时只显示
+//! 🟦；仅支持分块下载的任务可打开（BT / 支持断点续传的 HTTP(S)）。
 
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph},
+    widgets::{
+        Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState,
+    },
     Frame,
 };
 
 use crate::app::{
-    chunk_size_label, App, DialogKind, FailKind, Task, TaskState, CHECKSUM_ALGOS, FILTERS,
-    ITEM_HEIGHT, MAX_DOWNLOAD_SLOTS,
+    chunk_size_label, App, DialogKind, FailKind, PieceState, Task, TaskState, CHECKSUM_ALGOS,
+    FILTERS, ITEM_HEIGHT, MAX_DOWNLOAD_SLOTS,
 };
 
 // ---------------------------------------------------------------------------
@@ -1047,7 +1054,8 @@ fn draw_chart(f: &mut Frame, app: &App, area: Rect) {
 /// 累计上传/下载均为当前任务本次开始下载后的累计量（重试/重新排队开新一次下载时清零）；
 /// 仅「下载中」与「做种中」状态的任务有明细，其余状态明细为空、活跃 0/0
 /// （面板为空时滚轮穿透滚任务列表，Ctrl+↑↓/Ctrl+B 给出状态提示 toast）。
-/// Ctrl+↑/↓ 选中行高亮（跟随滚动），Ctrl+B 断开选中连接（仅 BT）。
+/// Ctrl+↑/↓ 选中行高亮（跟随滚动），Ctrl+B 断开选中连接（提示行仅 BT
+/// 任务显示断开快捷键）。
 /// 连接数超出面板高度时滚轮/Ctrl+↑↓ 滚动（指针悬停于本面板时滚轮滚动这里而非任务列表）。
 fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     // 修订-3：标题仅展示活跃并发数（原「活跃 x/y」中的上限 y 已移除）
@@ -1212,8 +1220,13 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         lines.push(Line::from(spans));
     }
 
-    // 提示行（修订-4：恒定显示快捷键提示；「共 x 条 · 滚轮翻看」总数提示已删除）
-    let hint = "Ctrl+↑↓ 选择 · Ctrl+B 断开（仅 BT）".to_string();
+    // 提示行（修订-4：恒定显示快捷键提示；「共 x 条 · 滚轮翻看」总数提示已删除；
+    // 「Ctrl+B 断开」仅 BT 任务显示——HTTP 任务无断开概念，行为层本就拒绝）
+    let hint = if is_bt {
+        "Ctrl+↑↓ 选择 · Ctrl+B 断开".to_string()
+    } else {
+        "Ctrl+↑↓ 选择".to_string()
+    };
     f.render_widget(
         Paragraph::new(Span::styled(hint, Style::default().fg(DIM2))),
         Rect {
@@ -1253,6 +1266,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         desc(" 暂停/继续  "),
         key("R"),
         desc(" 重试  "),
+        key("P"),
+        desc(" 分块  "),
         key("A"),
         desc(" 添加  "),
         key("D"),
@@ -1840,6 +1855,188 @@ fn draw_delete_dialog(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 // ---------------------------------------------------------------------------
+// pieces 分块弹窗（P 快捷键；仅支持分块下载的任务）
+// ---------------------------------------------------------------------------
+
+/// piece 状态色块 span：同状态连续 n 块合并为一个 span（色块字符 emoji 自带
+/// 语义色，fg 兜底供无彩色 emoji 字体的终端降级显示）
+fn piece_span(st: PieceState, n: usize) -> Span<'static> {
+    let (ch, color) = match st {
+        PieceState::Done => ('🟩', GREEN),
+        PieceState::Active => ('🟦', LIGHT_BLUE),
+        PieceState::Partial => ('🟨', YELLOW),
+        PieceState::Empty => ('⬜', EMPTY),
+    };
+    Span::styled(ch.to_string().repeat(n), Style::default().fg(color))
+}
+
+/// pieces 弹窗固定尺寸（宽×高，含边框）
+const PIECES_W: u16 = 64;
+const PIECES_H: u16 = 21;
+
+/// pieces 分块弹窗（P）：展示选中任务分块（piece）状态一览。
+///
+/// 展示口径（色块字符 = 状态，见 app::PieceState）：
+/// 🟩 已下载 · 🟦 正在下载（分配了并发下载，仅「下载中」任务出现）·
+/// 🟨 部分下载（状态下沉冻结的持块连接内已落盘零头）· ⬜ 未下载；
+/// 同一块「部分下载」且「正在下载」时只显示 🟦。
+///
+/// 布局：任务名 / 元信息（协议 · 块大小 · x/y 块 · 并发）/
+/// 分块网格（每块一个宽 2 列的色块字符；块数超出可视范围时
+/// 滚动翻看 + 右缘滚动条）/ 快捷键提示行。
+/// 弹窗支持鼠标左键拖拽移动（按住弹窗内任意位置拖动，位置钳制在终端内；
+/// 打开时居中，位置记忆至关闭）。打开时定位到下载前沿（第一块未完成块
+/// 所在行滚动至网格垂直居中），此后滚动完全由用户控制，不自动跟随。
+fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
+    // 先取快照（owned）再回填 app（滚动定位/热区），避免借用冲突
+    let (name, proto, conc, x, y, states) = {
+        let snap = app.sel_task().map(|t| {
+            let (x, y, _piece) = t.chunk_info();
+            (t.name.clone(), t.protocol, t.concurrency, x, y, t.pieces())
+        });
+        let Some(snap) = snap else {
+            app.close_pieces();
+            return;
+        };
+        snap
+    };
+    let y = y as usize;
+
+    // 弹窗尺寸 64×21（内框 62×19：名称/元信息/提示各 1 行 + 网格 16 行；
+    // 每行 31 块 → 一屏 496 块）；位置优先取记忆的拖拽位置（钳制在终端内），
+    // 打开首帧居中并记忆；小终端钳制尺寸，网格行数随内框收缩
+    let rect = match app.pieces_pos {
+        Some((px, py)) => {
+            let dw = PIECES_W.min(area.width);
+            let dh = PIECES_H.min(area.height);
+            Rect {
+                x: px.min(area.width.saturating_sub(dw)),
+                y: py.min(area.height.saturating_sub(dh)),
+                width: dw,
+                height: dh,
+            }
+        }
+        None => {
+            let r = dialog_rect(area, PIECES_W, PIECES_H);
+            app.pieces_pos = Some((r.x, r.y));
+            r
+        }
+    };
+    f.render_widget(Clear, rect);
+    // 浮层边界 CJK 宽字符切割处理（残影根治点，与对话框同口径）
+    clip_wide_at_edges(f, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(BORDER))
+        .title(Span::styled(
+            " 分块状态 ",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    app.pieces_area = Some(rect);
+
+    let cols = (inner.width as usize / 2).max(1); // 每块占 2 列
+    let rows = Layout::vertical([
+        Constraint::Length(1), // 任务名
+        Constraint::Length(1), // 元信息
+        Constraint::Min(1),    // 分块网格
+        Constraint::Length(1), // 快捷键提示行
+    ])
+    .split(inner);
+    let grid = rows[2];
+    let grid_h = grid.height as usize;
+
+    let total_rows = y.div_ceil(cols);
+    // 打开首帧：以第一块未完成块所在行为中心定位（下载前沿可见：
+    // 上方 🟩、前沿 🟦/🟨、下方 ⬜，一眼读出整体进度形态）
+    if app.pieces_follow {
+        app.pieces_follow = false;
+        let frontier = x as usize / cols;
+        app.pieces_scroll = frontier.saturating_sub(grid_h / 2);
+    }
+    app.pieces_scroll = app
+        .pieces_scroll
+        .min(total_rows.saturating_sub(grid_h));
+    let start_row = app.pieces_scroll;
+
+    // 行 1：任务名（超宽截尾）
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!(" {}", truncate(&name, inner.width as usize)),
+            Style::default().fg(FG).add_modifier(Modifier::BOLD),
+        ))),
+        rows[0],
+    );
+
+    // 行 2：元信息 = 协议 · 块大小 · x/y 块（x=已下载块数，与详情面板分块行
+    // 同口径）· 并发上限
+    let meta = Span::styled(
+        format!(
+            " {} · 块大小 {} · {}/{} 块 · 并发 {}",
+            proto.label(),
+            chunk_size_label(proto),
+            x,
+            y,
+            conc
+        ),
+        Style::default().fg(DIM),
+    );
+    f.render_widget(Paragraph::new(Line::from(vec![meta])), rows[1]);
+
+    // 行 3：分块网格（仅构建可视行；同状态连续块合并为单 span）
+    let mut lines: Vec<Line> = Vec::with_capacity(grid_h);
+    for r in 0..grid_h {
+        let s = (start_row + r) * cols;
+        if s >= y {
+            break;
+        }
+        let e = (s + cols).min(y);
+        let mut spans: Vec<Span> = Vec::new();
+        let mut run = states[s];
+        let mut run_at = s;
+        for (off, st) in states[s..e].iter().enumerate() {
+            let i = s + off;
+            if *st != run {
+                spans.push(piece_span(run, i - run_at));
+                run = *st;
+                run_at = i;
+            }
+        }
+        spans.push(piece_span(run, e - run_at));
+        lines.push(Line::from(spans));
+    }
+    f.render_widget(Paragraph::new(lines), grid);
+
+    // 行 4：快捷键提示（分页数/总块数提示已删；本帧无 emoji，w() 计宽安全）
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            " ↑↓/PgUp/PgDn 滚动 · Esc/P 关闭",
+            Style::default().fg(DIM2),
+        ))),
+        rows[3],
+    );
+
+    // 右缘滚动条（块数超出一屏时；画在弹窗右边框列，不与网格内容重叠）
+    if total_rows > grid_h {
+        let mut sb_state = ScrollbarState::new(total_rows)
+            .position(start_row)
+            .viewport_content_length(grid_h);
+        f.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(None)
+                .style(Style::default().fg(DIM2))
+                .thumb_style(Style::default().fg(ACCENT)),
+            rect,
+            &mut sb_state,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 总入口
 // ---------------------------------------------------------------------------
 
@@ -1893,5 +2090,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // 对话框最后绘制（覆盖层）
     if app.dialog.is_some() {
         draw_dialogs(f, app, area);
+    }
+
+    // pieces 分块弹窗最后绘制（最上层覆盖；与对话框互斥——按键层已保证）
+    if app.pieces_open {
+        draw_pieces(f, app, area);
     }
 }

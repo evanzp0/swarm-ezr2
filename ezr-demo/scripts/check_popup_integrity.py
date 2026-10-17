@@ -7,7 +7,8 @@
   1. 添加对话框 (112x36 下居中于 x19,y12 74x12) 四边边框字符完整、无缺格
   2. 删除确认对话框 (x23,y14 66x7) 四边边框完整
   3. 校验算法下拉浮层 (x28,y18 24x9) 四边边框完整
-  4. 浮层区域内不得出现底层列表文本穿透（「等待空闲」「排队第」等字样）
+  4. pieces 分块弹窗（P，x24,y7 64x21，网格为连续宽字符色块）四边边框完整
+  5. 浮层区域内不得出现底层列表文本穿透（「等待空闲」「排队第」等字样）
 
 能检出两类问题：
   - 增量 diff 局部补丁：覆盖 CJK 宽字符半格时部分终端残留（真实终端问题，
@@ -32,6 +33,10 @@ import unicodedata
 COLS, ROWS = 112, 36
 CONT = "\u0000"  # 宽字符的右半格占位
 PENETRATE_WORDS = ("等待空闲", "排队第")
+# pieces 弹窗四个色块字符：unicode-width 0.2（ratatui 同源）按 emoji presentation
+# 计宽 2（真实终端同样推进 2 格），Python unicodedata EAW 为 N/否则 1——
+# 理想终端模型需与 ratatui 口径一致，否则网格行内连续色块会错位
+PIECE_WIDE = ("⬜", "🟩", "🟨", "🟦")
 
 
 def rects_for(cols: int):
@@ -46,7 +51,9 @@ def rects_for(cols: int):
     dele = (dx, 14, 66, 7)
     # 下拉浮层挂在对话框内校验字段行下方：px = dlg.x + 1(边框) + 8
     drop = (ax + 9, 18, 24, 9)
-    return add, dele, drop
+    # pieces 分块弹窗（P）：64x21 居中（dialog_rect 同口径）
+    pieces = ((cols - 64) // 2, (ROWS - 21) // 2, 64, 21)
+    return add, dele, drop, pieces
 
 
 class MiniTerm:
@@ -69,6 +76,8 @@ class MiniTerm:
 
     @staticmethod
     def cw(ch: str) -> int:
+        if ch in PIECE_WIDE:
+            return 2
         return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
 
     def put(self, ch: str) -> None:
@@ -131,7 +140,8 @@ V_BORDERS = {"│", "╭", "╮", "╰", "╯"}
 H_BORDERS = {"─", "╭", "╮", "╰", "╯"}
 
 
-def check_box(term: MiniTerm, rect, name: str, results: list, title_w: int) -> None:
+def check_box(term: MiniTerm, rect, name: str, results: list, title_w: int,
+              right_extra: tuple = ()) -> None:
     x, y, w, h = rect
     x1, y1 = x + w - 1, y + h - 1
     bad = []
@@ -141,7 +151,8 @@ def check_box(term: MiniTerm, rect, name: str, results: list, title_w: int) -> N
     for yy in range(y + 1, y1):
         if term.cell(x, yy) != "│":
             bad.append(f"左边框@({x},{yy})={term.cell(x, yy)!r}")
-        if term.cell(x1, yy) != "│":
+        # right_extra：合法覆盖右边框的字符（如 pieces 弹窗滚动条滑块 █）
+        if term.cell(x1, yy) != "│" and term.cell(x1, yy) not in right_extra:
             bad.append(f"右边框@({x1},{yy})={term.cell(x1, yy)!r}")
     # 水平边：title 文字（含其合法半格）之外的区域不得是宽字符半格（错位特征）
     for xx in range(x + 1 + title_w, x1):
@@ -184,9 +195,9 @@ def main() -> None:
     ghost = "--ideal" not in a
     prog = [x for x in a if not x.startswith("--")]
     program = prog[0] if prog else "./target/release/ezr-tui-demo"
-    add_dlg, del_dlg, dropdown = rects_for(cols)
+    add_dlg, del_dlg, dropdown, pieces_dlg = rects_for(cols)
     print(f"模式: {'问题终端（半格写入产生残影）' if ghost else '理想终端'} · 终端 {cols}x{ROWS}")
-    print(f"浮层矩形: 添加={add_dlg} 删除={del_dlg} 下拉={dropdown}")
+    print(f"浮层矩形: 添加={add_dlg} 删除={del_dlg} 下拉={dropdown} pieces={pieces_dlg}")
     pid, fd = pty.fork()
     if pid == 0:
         os.environ["TERM"] = "xterm-256color"
@@ -221,6 +232,16 @@ def main() -> None:
         os.write(fd, b"\r")
         read(term, fd, 1.0)
         check_box(term, dropdown, "下拉浮层四边边框完整 + 无穿透", results, title_w=10)
+        os.write(fd, b"\x1b")  # 收起下拉
+        read(term, fd, 0.4)
+        os.write(fd, b"\x1b")  # 关闭添加对话框（恢复列表，p 才能作用于选中任务）
+        read(term, fd, 0.5)
+
+        print("场景 4：pieces 分块弹窗（P，网格全宽字符色块）")
+        os.write(fd, b"p")
+        read(term, fd, 1.5)
+        check_box(term, pieces_dlg, "pieces 弹窗四边边框完整 + 无穿透", results,
+                  title_w=19, right_extra=("█",))
     finally:
         try:
             os.kill(pid, 9)
