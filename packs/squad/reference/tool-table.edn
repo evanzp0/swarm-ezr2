@@ -1,0 +1,88 @@
+{:tools
+ {"clj-mutate" {:source "github.com/unclebob/clj-mutate"
+                :version "latest"
+                :purpose "mutation"
+                :install "git clone the source repo into swarm/.tools/ and follow its README; invoke Babashka tools from inside the tool repo directory: (cd <repo> && bb <task> ...) (see packs/_common/engineering.md APS section)"}
+  "crap4clj" {:source "github.com/unclebob/crap4clj"
+              :version "latest"
+              :purpose "CRAP"
+              :install "git clone the source repo into swarm/.tools/ and follow its README; invoke Babashka tools from inside the tool repo directory: (cd <repo> && bb <task> ...) (see packs/_common/engineering.md APS section)"}
+  "dry4clj" {:source "github.com/unclebob/dry4clj"
+             :version "latest"
+             :purpose "DRY"
+             :install "git clone the source repo into swarm/.tools/ and follow its README; invoke Babashka tools from inside the tool repo directory: (cd <repo> && bb <task> ...) (see packs/_common/engineering.md APS section)"}
+  "gherkin-parser" {:source "github.com/unclebob/Acceptance-Pipeline-Specification"
+                    :version "latest"
+                    :purpose "APS parsing"
+                    :install "git clone the source repo into swarm/.tools/ and follow its README; invoke Babashka tools from inside the tool repo directory: (cd <repo> && bb <task> ...) (see packs/_common/engineering.md APS section)"}
+  "gherkin-mutator" {:source "github.com/unclebob/Acceptance-Pipeline-Specification"
+                     :version "latest"
+                     :purpose "Gherkin mutation"
+                     :install "git clone the source repo into swarm/.tools/ and follow its README; invoke Babashka tools from inside the tool repo directory: (cd <repo> && bb <task> ...) (see packs/_common/engineering.md APS section)"}
+  "gherkin-ir-dry-checker" {:source "github.com/unclebob/Acceptance-Pipeline-Specification"
+                    :version "latest"
+                    :purpose "IR DRY"
+                    :install "git clone the source repo into swarm/.tools/ and follow its README; invoke Babashka tools from inside the tool repo directory: (cd <repo> && bb <task> ...) (see packs/_common/engineering.md APS section)"}
+  "dependency-checker" {:source "github.com/unclebob/dependency-checker"
+                        :version "latest"
+                        :purpose "component dependency boundaries"
+                        :install "git clone the source repo into swarm/.tools/ and follow its README; invoke Babashka tools from inside the tool repo directory: (cd <repo> && bb <task> ...) (see packs/_common/engineering.md APS section)"}}
+ :roles
+ {"implementer" {:required-tools ["dependency-checker"]
+                 :verification-prerequisites
+                 ["When features/ exists, ensure a working APS acceptance path (`bb acceptance` or project equivalent) before treating the story as done."
+                  "If features/ exists and `bb acceptance` exits with ACCEPTANCE_BLOCKER (missing runner), implement APS project components (acceptance/runner.clj + step handlers) or hand back a blocker — do not ship units-only as complete when Gherkin is accepted."
+                  "Prefer standard product scaffolding: root bb.edn acceptance/coverage tasks plus acceptance/runner.clj."]
+                 :required-evidence
+                 [{:header "unit_tests" :description "Unit test command and pass/fail"}
+                  {:header "acceptance_suite" :description "Full acceptance command (e.g. bb acceptance) and result, or explicit N/A with reason if no features yet"}]}
+  "cleaner" {:required-tools ["crap4clj" "dry4clj" "dependency-checker"]
+             :verification-prerequisites
+             ["Before crap4clj: run project coverage (`bb coverage` or `clj -M:cov`) so target/coverage/lcov.info exists and is fresh."
+              "Do not treat CRAP scores as valid without LCOV."
+              "If coverage cannot run, hand back a blocker — do not invent coverage numbers."]
+             :required-evidence
+             [{:header "coverage" :description "Path to LCOV or coverage summary used before CRAP"}
+              {:header "crap" :description "CRAP tool summary after real coverage"}]}
+  "hardener" {:required-tools ["clj-mutate" "crap4clj" "dry4clj"
+                               "gherkin-parser" "gherkin-mutator"
+                               "dependency-checker"]
+              :verification-prerequisites
+              ["Before crap4clj or clj-mutate: run project coverage (`bb coverage` or `clj -M:cov`) so target/coverage/lcov.info exists. Prefer clj-mutate --reuse-lcov only after a successful coverage refresh."
+               "If clj-mutate reports all sites covered solely because LCOV is missing, treat that as invalid — fix coverage or hand back a blocker."
+               "When features/ exists: run the full acceptance suite (`bb acceptance`) and pass before handoff."
+               "When features/ exists: run gherkin-mutator with --runner-worker \"bb acceptance-worker\" (NDJSON worker). Do not use bare `bb acceptance` as --runner-worker (that is the human suite and causes Stream closed). If the worker is missing, hand back ACCEPTANCE_BLOCKER."
+               "Quality bar before handoff (or explicit blocker): CRAP ≤ 6 after real LCOV; kill all in-scope code mutants (clj-mutate); kill Gherkin mutants (not mass errors/empty manifests); reduce DRY duplication within scope."
+               "Do not edit root bb.edn/deps.edn unless the assignment requires tooling for coverage/APS."]
+              :required-evidence
+              [{:header "coverage" :description "LCOV path produced before CRAP/mutation"}
+               {:header "acceptance_suite" :description "Full acceptance suite command and pass result (or blocker)"}
+               {:header "gherkin_mutation" :description "gherkin-mutator --runner-worker bb acceptance-worker; killed/survived/errors (survivors=0 or blocker)"}
+               {:header "code_mutation" :description "clj-mutate with real LCOV; killed/survived (survivors=0 or blocker)"}
+               {:header "crap" :description "CRAP after real coverage; all reported scores ≤ 6 or blocker with residuals"}
+               {:header "dry" :description "DRY tool summary: candidates found, reduced, residual justified or blocker"}]}
+  "architect" {:required-tools ["dependency-checker"]
+               :verification-prerequisites
+               ["Before handoff: run the full acceptance suite when features/ exist (`bb acceptance` or project equivalent) and record the result in the review/handoff. Architectural acceptance does not replace this check."
+                "If acceptance cannot run (missing APS runner), note ACCEPTANCE_BLOCKER and prefer changes-requested or an explicit blocker rather than silent skip."]
+               :required-evidence
+               [{:header "acceptance_suite" :description "Full acceptance suite command and result, or blocker reason"}]}
+  "code-reviewer" {:required-tools ["dependency-checker"]}
+  "senior-implementer" {:required-tools ["dependency-checker"]
+                        :verification-prerequisites
+                        ["Before handoff: run the full verification suite including unit tests and, when features/ exist, the full acceptance suite (`bb acceptance`)."
+                         "Record exact commands and results in the handoff."]
+                        :required-evidence
+                        [{:header "unit_tests" :description "Unit test command and result"}
+                         {:header "acceptance_suite" :description "Full acceptance suite command and result, or N/A if no features"}]}
+  "qa" {:required-tools ["crap4clj" "dry4clj"]
+        :verification-prerequisites
+        ["Before crap4clj: run project coverage (`bb coverage` or `clj -M:cov`) so target/coverage/lcov.info exists."
+         "Before handoff: run the full acceptance suite when features/ exist (`bb acceptance`) plus unit tests and accepted QA procedures."
+         "Do not treat unit tests + hand-written transcript harness alone as a full Gherkin acceptance suite when features/ exist."]
+        :required-evidence
+        [{:header "coverage" :description "LCOV path used before CRAP"}
+         {:header "acceptance_suite" :description "Full acceptance suite command and result"}
+         {:header "unit_tests" :description "Unit test command and result"}
+         {:header "crap" :description "CRAP tool summary after real coverage"}]}
+  "gherkin-writer" {:required-tools ["gherkin-parser" "gherkin-ir-dry-checker"]}}}
