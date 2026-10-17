@@ -50,7 +50,7 @@ impl App {
         let ts = unix_now();
         // v1.20：任务 ID = u32 随机数 + 任务全集查重（model::idgen），不再顺序自增
         let id = self.alloc_task_id();
-        let t = Task::new_queued(
+        let mut t = Task::new_queued(
             id,
             name.clone(),
             protocol,
@@ -63,6 +63,11 @@ impl App {
             crate::model::config::ProxyChoice::Direct,
             ts,
         );
+        // 接续任务名随接续定稿（同 dialogs.rs 添加入口口径：失效重下钉名，
+        // 防残留 .downloading 去重漂移 <name>.1，规格 01-resume-sidecar-14）
+        if resumed {
+            t.name_locked = true;
+        }
         self.tasks.push(t);
         if resumed {
             self.set_toast(format!(
@@ -135,6 +140,10 @@ mod cli_add_tests {
         );
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(app.tasks[0].name, "r.bin", "路径基接续沿用推导原名");
+        assert!(
+            app.tasks[0].name_locked,
+            "接续任务名随接续定稿（首探前失效重下不得去重漂移，QA-RS-14）"
+        );
         let toast = app.toast.as_deref().unwrap_or_default();
         assert!(toast.contains("自动接续"), "接续 toast: {toast}");
         app.shutdown().await;

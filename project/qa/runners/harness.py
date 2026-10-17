@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import base64
 import fcntl
 import json
 import os
@@ -100,6 +101,30 @@ PROXY_BIN = os.path.join(PROJECT_EZR, "target", "debug", "ezr-proxy")
 # 读取该环境变量；SAN：IP 127.0.0.1 / IP ::1 / DNS localhost）
 PROXY_CA_PEM = os.path.join(PROJECT_EZR, "src", "bin", "ezr-proxy-certs", "ca.pem")
 TMP_ROOT = os.path.abspath(os.path.join(QA_DIR, "..", "..", "..", ".work", "tmp", "qa-run"))
+
+
+def _ensure_proxy_ca_pem() -> None:
+    """保证 PROXY_CA_PEM 在位：缺失时由内嵌证书 server.der 派生（fixture 自足）。
+
+    ca.pem 是 ezr-proxy 内嵌自签证书（server.der）的 PEM 形态（同名同义，
+    规程 02-named-proxy-qa.md 环境前置与 ezr-proxy.rs 模块注释声明口径）——
+    派生文件不入库，fresh 环境重建工作区后缺失，https 相位用例会因产品
+    不信任桩证书而全数失败。此处按 create-new 语义补齐（已存在不重写），
+    派生是 DER→PEM 的无损编码转换，信任锚与桩实际出示证书逐字节一致。
+    server.der 也缺失时直接报错（fail-loud，不静默降级）。
+    """
+    if os.path.exists(PROXY_CA_PEM):
+        return
+    der_path = os.path.join(os.path.dirname(PROXY_CA_PEM), "server.der")
+    der = open(der_path, "rb").read()  # 缺失即抛错：证书是桩的组成部分
+    b64 = base64.b64encode(der).decode("ascii")
+    lines = "\n".join(b64[i:i + 64] for i in range(0, len(b64), 64))
+    pem = f"-----BEGIN CERTIFICATE-----\n{lines}\n-----END CERTIFICATE-----\n"
+    with open(PROXY_CA_PEM, "x", encoding="ascii") as f:
+        f.write(pem)
+
+
+_ensure_proxy_ca_pem()
 
 MB = 1024 * 1024
 

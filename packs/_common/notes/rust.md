@@ -266,8 +266,10 @@ group_imports = "StdExternalCrate"
 - **BRDA 分支计数做 comp 近似的两个偏差方向**：① `?` 操作符不产生 BRDA——早退密集的
   入口胶水（main/run_tui 类）comp 被低估、CRAP 假性达标，登记偏差方向留 hardender 以
   变异为准；② 测试代码 `assert!` 宏展开为每个断言生成分支记录——测试函数 comp 虚增，
-  CRAP 门禁按 mangled 名含 `testss_` 排除测试模块（带前缀的 `cli_parse_tests` 等测试
-  模块同样命中，勿只匹配 `mod tests`）。
+  CRAP 门禁按 mangled 名排除测试模块，且测试模块在 lcov 里有**两种 mangled 形态**：
+  `…tests` 后接 `s<n>_` 消歧（形如 `cli_add_testss_31…`）与长度前缀段 `5tests<len><名>`
+  （形如 `…5tests11mock_server…`）——只匹配 `testss_` 会漏掉第二种（实测 supervisor
+  测试模块漏网），须双形态（`testss_` ∪ `5tests\d`）排除（勿只匹配 `mod tests`）。
 - **PMD 7.x 的获取与调用**：Maven Central 上 `pmd-dist` 只有 maven jar（无 bin zip），
   bin 发行包在 GitHub releases（tag 形如 `pmd_releases/<版本>`，资产
   `pmd-dist-<版本>-bin.zip`）；GitHub API 限流时按已知 tag 拼直链下载，勿据 404 误判

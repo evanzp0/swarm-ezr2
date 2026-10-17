@@ -255,28 +255,44 @@ class DownloadEngineSuite(Suite):
                 app.graceful_quit()
 
     def _case_08(self):
-        """QA-DE-08 2 跳重定向：经重定向完成；详情 URL 为最终 URL。"""
+        """QA-DE-08 2 跳重定向：经重定向完成；详情 URL 为原始 URL（v1.28/FR-01-14）；
+
+        探测与分块请求各自从原始 URL 独立发起并跟跳转（无共享探测落点）。
+        """
         @self.case("QA-DE-08")
         def go(env: Env):
-            # 短路径 t：最终 URL（http://127.0.0.1:P/t?redirect=0）= 35 字符，
+            # 短路径 t：原始 URL（http://127.0.0.1:P/t?redirect=2）= 35 字符，
             # 需完整落入详情 URL 栏可用宽度 36（超宽被 demo 基线 truncate 截尾；
-            # 首轮实测 t.bin 形态 40 字符被截尾为「…?redire…」，QA 口径修正）
+            # 首轮实测 t.bin 形态 40 字符被截尾为「…?redire…」，QA 口径修正）。
+            # 3MB（3 块）触发多块路径：1MB 文件在 1MB 块下限下收敛单块，
+            # 单流路径复用探测响应直接流 body、无独立分块请求，
+            # 「各请求独立跟跳转」不可观察（engineering.md 门控盲区条目）
             with open(os.path.join(env.fixture_root, "t"), "wb") as f:
-                f.write(expected_content(1_000_000))
+                f.write(expected_content(3_000_000))
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 self._add_via_dialog(app, env,
                                      env.fixture.url("t?redirect=2"))
                 target = os.path.join(env.save_dir, "t")
-                wait_file_size(target, 1_000_000, 60, app=app)
-                # 完成后经「已完成」页签详情断言最终 URL（避免瞬态窗口竞速）
-                found = self._select_completed(app, ["redirect=0"])
-                assert found == {"redirect=0"}, \
-                    f"详情 URL 应为最终 URL（redirect=0）detail={self._detail_text(app)[:400]}"
+                wait_file_size(target, 3_000_000, 60, app=app)
+                # v1.28/FR-01-14：任务级 URL 权威恒为原始输入 URL——完成后经
+                # 「已完成」页签详情断言原始 URL（避免瞬态窗口竞速）；最终
+                # URL 降格为连接内部当前值，不进任务详情、不持久化
+                found = self._select_completed(app, ["redirect=2"])
+                assert found == {"redirect=2"}, \
+                    f"详情 URL 应为原始 URL（redirect=2）detail={self._detail_text(app)[:400]}"
                 reqs = [r for r in env.fixture.requests() if "redirect" in r["path"]]
                 hops = {r["path"].split("redirect=")[-1].split("&")[0] for r in reqs}
                 assert {"2", "1", "0"} <= hops, f"应逐跳经过 2→1→0: {hops}"
-                assert_file_content(target, 1_000_000)
+                # 无共享探测落点（v1.28）：探测与分块请求各自从原始 URL（入口跳
+                # redirect=2）发起——入口行带 Range 头的请求数 ≥ 2；若分块复用
+                # 探测落点则入口行仅剩探测 1 条
+                origin_rows = [r for r in reqs
+                               if r["path"].split("redirect=")[-1].split("&")[0] == "2"
+                               and r.get("range")]
+                assert len(origin_rows) >= 2, \
+                    f"探测与分块请求均应从原始 URL 独立发起: {len(origin_rows)}"
+                assert_file_content(target, 3_000_000)
             finally:
                 app.graceful_quit()
 

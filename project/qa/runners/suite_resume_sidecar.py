@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """suite_resume_sidecar.py — QA 套件 · 01-resume-sidecar 断点续传与 sidecar（期号 01）。
 
-对应规程：project/qa/01-resume-sidecar-qa.md（13 用例）。
+对应规程：project/qa/01-resume-sidecar-qa.md（14 用例）。
 端到端 UI 层验证：TUI 状态 + 磁盘产物（目标文件/.ezr sidecar/注册表）+ kill/重启操作
 + fixture 不变量控制。只经用户可达入口（TUI 按键 / CLI 参数 / 磁盘文件），不进入项目内部 API。
 
@@ -184,12 +184,12 @@ class ResumeSidecarSuite(Suite):
     # -- 用例 -----------------------------------------------------------------
 
     def run(self) -> list[CaseResult]:
-        for i in range(1, 14):
+        for i in range(1, 15):
             getattr(self, f"_case_{i:02d}")()
         return self.results
 
     def _case_01(self):
-        """QA-RS-01 下载 8MB 至中段：sidecar 存在且含 URL/大小/ETag/LM/块状态。"""
+        """QA-RS-01 下载 8MB 至中段：sidecar 存在、内容齐全且不含任何 URL（v1.28）。"""
         @self.case("QA-RS-01")
         def go(env: Env):
             app = EzrApp(env.home, save_dir=env.save_dir)
@@ -202,12 +202,17 @@ class ResumeSidecarSuite(Suite):
                 assert app.wait_for("下载中", 8)
                 sc = self._wait_sidecar(env, "eight-m.bin", timeout=8, app=app)
                 text = read_file(sc).decode("utf-8", "replace")
-                assert "eight-m.bin" in text, "sidecar 应含 URL/文件标识"
                 assert "8000000" in text, f"sidecar 应含大小 8000000: {text[:300]}"
                 assert "rs01-etag" in text, "sidecar 应含 ETag"
                 assert "last_modified" in text.lower() or "09 Feb 2026" in text, \
                     "sidecar 应含 Last-Modified"
                 assert "blocks" in text, "sidecar 应含块状态表"
+                # v1.28/FR-01-20：sidecar 不含任何 URL 字段（原始/最终 URL 键退役，
+                # 持久化 URL 仅任务注册表中的原始 URL）。URL 字段检测查 URL 形态
+                # 值与 *url* 键名，不含 "http" 裸子串（"protocol": "http" 为合法枚举值）
+                assert "http://" not in text.lower(), f"sidecar 不应含 URL 值: {text[:300]}"
+                assert "https://" not in text.lower(), f"sidecar 不应含 URL 值: {text[:300]}"
+                assert "url" not in text.lower(), f"sidecar 不应含 URL 键: {text[:300]}"
                 # 优雅暂停收尾，保留 sidecar
                 app.send("space")
                 assert app.wait_for("已暂停", 5)
@@ -380,10 +385,12 @@ class ResumeSidecarSuite(Suite):
                 app.graceful_quit()
 
     def _case_07(self):
-        """QA-RS-07 暂停后分别变更 ETag/LM/大小/最终 URL/头缺失→继续：失效从头。
+        """QA-RS-07 暂停后分别变更 ETag/LM/大小/头缺失→继续：失效从头（v1.28 三要素）。
 
         Gherkin 为 Scenario Outline：每个变体行独立成例 → 每变体用独立任务，
         避免同任务连续失效触发 3 次停等（场景 08 语义，属正确产品行为）。
+        v1.28：一致性三要素 ETag/Last-Modified/大小，无 URL 腿（最终 URL 变更
+        变体随 sidecar 去 URL 退役）。
         """
         @self.case("QA-RS-07")
         def go(env: Env):
@@ -392,9 +399,6 @@ class ResumeSidecarSuite(Suite):
             try:
                 app = EzrApp(env.home, save_dir=env.save_dir)
                 try:
-                    # 最终 URL 变更变体：go4.bin 经 302 → m4.bin；变更后 go4.bin 直出
-                    mut.redirect_path = "go4.bin"
-                    mut.redirect_to = mut.url("m4.bin")
                     variants = [
                         ("ETag 变更", "m1.bin",
                          lambda: setattr(mut, "etag", '"v2-changed"')),
@@ -402,8 +406,6 @@ class ResumeSidecarSuite(Suite):
                          lambda: setattr(mut, "lm", "Tue, 10 Feb 2027 09:00:00 GMT")),
                         ("大小变更", "m3.bin",
                          lambda: setattr(mut, "size", 2_500_000)),
-                        ("最终 URL 变更", "go4.bin",
-                         lambda: setattr(mut, "redirect_path", None)),
                         ("全部头缺失", "m5.bin",
                          lambda: setattr(mut, "send_headers", False)),
                     ]
@@ -642,6 +644,63 @@ class ResumeSidecarSuite(Suite):
                            and r["range"] != "bytes=0-"]
                 assert resumed, "应从断点续传（存在非 0 起点 Range）"
                 assert_file_content(target, EIGHT_M)
+            finally:
+                app.graceful_quit()
+
+    def _case_14(self):
+        """QA-RS-14 仅删任务后重加同推导名异 URL+目录：路径基接续、一致性兜底。
+
+        v1.28/FR-01-26：断点接续匹配为「保存目录 + 推导同名 sidecar」路径基
+        （无同 URL 校验门）；异 URL 探测后一致性失效（ETag/LM/大小不符）→
+        「服务器内容已更新」toast → sidecar 作废从头重下、不计失败（FR-01-22
+        兜底臂）。异路径同推导名文件由用例自足写入 fixture 根（规程环境前置
+        「异路径同推导名文件」能力；内容模式与 ezr-fixture gen 同一 i%251
+        口径，仅大小不同）。
+        """
+        @self.case("QA-RS-14")
+        def go(env: Env):
+            old_rel, new_rel = "files/alias.bin", "other/alias.bin"
+            old_size, new_size = 3_000_000, 2_000_000
+            old_p = os.path.join(env.fixture_root, *old_rel.split("/"))
+            new_p = os.path.join(env.fixture_root, *new_rel.split("/"))
+            os.makedirs(os.path.dirname(old_p), exist_ok=True)
+            os.makedirs(os.path.dirname(new_p), exist_ok=True)
+            with open(old_p, "wb") as f:
+                f.write(expected_content(old_size))
+            with open(new_p, "wb") as f:
+                f.write(expected_content(new_size))
+            name = "alias.bin"
+            target = os.path.join(env.save_dir, name)
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            add_task_via_dialog(app, env, env.fixture.url(f"{old_rel}?speed=800000"))
+            self._pause_at_progress(app, min_pct=30.0)
+            app.send("D")
+            assert app.wait_for("删除任务", 3)
+            app.send("enter")  # 仅删除任务
+            assert app.wait_for("已删除任务（保留文件）", 6)
+            self._wait_sidecar(env, name, timeout=5)  # 超时即断言失败：sidecar 应保留
+            # 重加同推导名异 URL + 相同保存目录
+            app.send("A")
+            assert app.wait_for("添加下载任务", 3)
+            app.type_text(env.fixture.url(f"{new_rel}?speed=800000"))
+            app.send("tab")
+            app.type_text(env.save_dir)
+            app.send("enter")
+            app.pump(0.5)
+            try:
+                # 接续 toast（「发现有效断点」）为单槽位瞬时提示且被后续失效 toast
+                # 后发覆盖（本地探测毫秒级完成，同刻双 toast 仅最后一次可见），
+                # 不可稳定观察 → 改锚失效 toast：它能出现本身就证明重加任务
+                # 按路径基拾取了既有 sidecar（无同 URL 校验门，v1.28/FR-01-26）
+                assert file_bytes(os.path.join(env.save_dir, f"{name}.1")) is None, \
+                    "应沿用原名，不追加 .1 序号"
+                # 探测后一致性失效（新文件 ETag/LM/大小全不符）→ 从头重下不计失败
+                assert app.wait_for("服务器内容已更新", 8), \
+                    "异 URL 探测后应 toast 服务器内容已更新（路径基拾取 sidecar 的证据）"
+                assert app.wait_for("下载中", 20), \
+                    "sidecar 作废后应从头重新下载（不计失败）"
+                wait_file_size(target, new_size, 120, app=app)
+                assert_file_content(target, new_size)
             finally:
                 app.graceful_quit()
 

@@ -232,6 +232,13 @@ impl App {
         if paused {
             t.state = TaskState::Paused;
         }
+        // v1.28/FR-01-26：路径基接续的任务名随接续定稿（沿用既有名）——
+        // 首探前的一致性失效重下不得重新去重（TaskSpec.keep_name 钉名；
+        // 否则残留 .downloading 会把任务名漂移成 <name>.1，违反规格
+        // 01-resume-sidecar-14「沿用既有名」，QA-RS-14 实证）
+        if resumed {
+            t.name_locked = true;
+        }
         self.tasks.push(t);
         self.dialog = None;
         self.filter = 0;
@@ -554,6 +561,10 @@ mod add_dialog_flow_tests {
         app.dlg_activate_add(7);
         assert!(app.dialog.is_none(), "仅添加后关闭");
         assert_eq!(app.tasks[0].name, "r.bin", "断点接续沿用原名");
+        assert!(
+            app.tasks[0].name_locked,
+            "接续任务名随接续定稿（失效重下钉名）"
+        );
         assert_eq!(app.tasks[0].state, TaskState::Paused, "接续任务同样落暂停");
         assert!(
             app.toast
@@ -625,6 +636,10 @@ mod add_dialog_flow_tests {
         assert_eq!(
             app.tasks[0].name, "alias.bin",
             "路径基接续沿用推导原名（不做同 URL 校验，v1.28/FR-01-26）"
+        );
+        assert!(
+            app.tasks[0].name_locked,
+            "接续任务名随接续定稿（首探前失效重下不得去重漂移，QA-RS-14）"
         );
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
