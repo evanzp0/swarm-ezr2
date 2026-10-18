@@ -1,4 +1,5 @@
-//! list — 任务列表区渲染（条目三行 + 列表块）
+//! list — 任务列表区渲染（条目三行 + 列表块；v1.30/FR-01-108 聚焦边框 +
+//! FR-01-109 右缘 lazygit 式滚动条）
 
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Style;
@@ -7,8 +8,10 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use super::task_lines::task_lines;
-use super::{bordered_block, ACCENT, BORDER, DIM, SEL_BG};
-use crate::app::{App, ITEM_HEIGHT};
+use super::{
+    lazy_scrollbar, panel_border_style, panel_title_style, BORDER, DIM, FOCUS_BORDER, SEL_BG,
+};
+use crate::app::{App, Panel, ITEM_HEIGHT};
 use crate::model::{slots, Task};
 
 pub(super) fn render_task(
@@ -33,10 +36,15 @@ pub(super) fn render_task(
 // ---------------------------------------------------------------------------
 
 pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
-    let block = bordered_block(BORDER)
+    // 聚焦边框（v1.30/FR-01-108）：列表聚焦且无浮层 → 绿色加粗，否则暗色
+    let focused = app.focus == Panel::List && !app.overlay_open();
+    let block = ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        .border_style(panel_border_style(focused))
         .title(Line::from(vec![Span::styled(
             " 下载任务 ",
-            Style::default().fg(ACCENT),
+            panel_title_style(focused),
         )]))
         .title(
             Line::from(Span::styled(
@@ -87,4 +95,12 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
     app.visible_rows = max_items;
     app.list_area = Some(inner);
+
+    // 右缘滚动条（v1.30/FR-01-109：total > page 且面板高 ≥ 5 且可绘行 ≥ 3；
+    // 滑块色随面板焦点：聚焦 = 聚焦绿加粗、未聚焦 = 暗色）
+    let total = idxs.len();
+    if total > rows {
+        let thumb = if focused { FOCUS_BORDER } else { BORDER };
+        lazy_scrollbar(f, area, total, app.scroll, rows, thumb);
+    }
 }

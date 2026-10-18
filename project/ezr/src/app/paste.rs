@@ -7,7 +7,8 @@ use super::{App, Dialog, DialogKind};
 impl App {
     /// bracketed paste 事件入口（FR-01-06）：Add/Modify 两对话框的文本字段接收
     /// 粘贴；算法/代理下拉任一展开、Delete 对话框、无对话框时忽略（避免粘贴
-    /// 触发按钮/导航）。
+    /// 触发按钮/导航）。URL 字段粘贴后同步默认并发（v1.30/FR-01-01：未手动
+    /// 改过并发时回填协议默认，与逐键/退格入口同口径）。
     pub fn on_paste(&mut self, text: &str) {
         let Some(d) = self.dialog.as_mut() else {
             return;
@@ -18,6 +19,9 @@ impl App {
         let focus = d.focus;
         let kind = d.kind;
         dlg_apply_paste(kind, d, focus, text);
+        if kind == DialogKind::Add && focus == 0 {
+            self.sync_default_conns_after_url_change();
+        }
     }
 }
 

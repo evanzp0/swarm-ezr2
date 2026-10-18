@@ -1,35 +1,41 @@
-//! pieces — 分块状态弹窗（`P` 快捷键，FR-01-106）渲染层：64×21 圆角浮层
-//! （小终端钳制）、四段内容（任务名/元信息/分块网格/快捷键提示）、
+//! pieces — 分块状态弹窗（`P` 快捷键，FR-01-106）渲染层：64×19 圆角浮层
+//!（小终端钳制）、四段内容（任务名/元信息/分块网格/四色图例）、
 //! 下载前沿定位、右缘滚动条、CJK 宽字符边界切割（与对话框同口径）。
 //!
-//! 口径（FR-01-106 ②④⑤⑧，对齐 ezr-demo 源码 draw_pieces）：
-//! - 固定 64×21（含圆角边框；内框 62×19：名称/元信息/提示各 1 行 +
-//!   网格 16 行，每行 31 块 → 一屏 496 块）；打开时终端内居中，拖拽位置
+//! 口径（FR-01-106 ②④⑤⑧，v1.30 修订对齐 ezr-demo 重构版 draw_pieces）：
+//! - 固定 64×19（含圆角边框；内框 62×17：名称/元信息/图例各 1 行 +
+//!   网格 14 行，每行 31 块 → 一屏 434 块；v1.30：64×21 → 64×19——底部
+//!   快捷键提示行改四色图例行，高度 −2）；打开时终端内居中，拖拽位置
 //!   优先（钳制在终端内），关闭不保留；
+//! - 模态弹窗恒定绿色加粗边框/标题（与主面板聚焦色统一，v1.30/FR-01-108）；
 //! - 网格每块占宽 2 列、同状态连续块合并为单 span；块序 = 字节序；
 //! - 打开首帧定位下载前沿（第一块未完成块所在行滚动至网格垂直居中），
 //!   此后滚动完全由用户控制、不自动跟随；
 //! - 滚动上限按实际总行数钳制（`End` 置 `usize::MAX` 在此收敛到末页）；
-//! - 块数超一屏时右缘（右边框列）滚动条；
+//! - 块数超一屏时右缘（右边框列）lazygit 式滚动条（▲│█▼，滑块恒聚焦绿，
+//!   v1.30/FR-01-109）；
 //! - 打开/关闭/拖拽帧全量重绘由 main.rs overlay_sig 保证（浮层翻转检测）。
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
 
 use super::btn::{clip_wide_at_edges, dialog_rect};
 use super::text::truncate;
-use super::{bordered_block, ACCENT, BORDER, DIM, DIM2, EMPTY, FG, GREEN, LIGHT_BLUE, YELLOW};
+use super::{
+    lazy_scrollbar, panel_border_style, panel_title_style, EMPTY, FG, FOCUS_BORDER, GREEN,
+    LIGHT_BLUE, YELLOW,
+};
 use crate::app::App;
 use crate::model::chunk::fmt_block_size;
 use crate::model::PieceState;
 
-/// pieces 弹窗固定尺寸（宽×高，含边框）
+/// pieces 弹窗固定尺寸（宽×高，含边框；v1.30：64×21 → 64×19）
 const PIECES_W: u16 = 64;
 /// pieces 弹窗固定高度（含边框）
-const PIECES_H: u16 = 21;
+const PIECES_H: u16 = 19;
 
 /// piece 状态色块 span：同状态连续 n 块合并为一个 span（色块字符 emoji 自带
 /// 语义色，fg 兜底供无彩色 emoji 字体的终端降级显示）
@@ -66,8 +72,8 @@ pub(super) fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let y = y as usize;
 
-    // 弹窗尺寸 64×21（内框 62×19：名称/元信息/提示各 1 行 + 网格 16 行；
-    // 每行 31 块 → 一屏 496 块）；位置优先取记忆的拖拽位置（钳制在终端内），
+    // 弹窗尺寸 64×19（内框 62×17：名称/元信息/图例各 1 行 + 网格 14 行；
+    // 每行 31 块 → 一屏 434 块）；位置优先取记忆的拖拽位置（钳制在终端内），
     // 打开首帧居中并记忆；小终端钳制尺寸，网格行数随内框收缩
     let rect = match app.pieces_pos {
         Some((px, py)) => {
@@ -89,10 +95,13 @@ pub(super) fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Clear, rect);
     // 浮层边界 CJK 宽字符切割处理（残影根治点，与对话框同口径）
     clip_wide_at_edges(f, rect);
-    let block = bordered_block(BORDER).title(Span::styled(
-        " 分块状态 ",
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-    ));
+    let block = ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        // 模态弹窗恒定高亮边框（与主面板聚焦色统一的绿+粗；
+        // 与底层面板降级暗边框形成对比，v1.30/FR-01-108）
+        .border_style(panel_border_style(true))
+        .title(Span::styled(" 分块状态 ", panel_title_style(true)));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     app.pieces_area = Some(rect);
@@ -102,7 +111,7 @@ pub(super) fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
         Constraint::Length(1), // 任务名
         Constraint::Length(1), // 元信息
         Constraint::Min(1),    // 分块网格
-        Constraint::Length(1), // 快捷键提示行
+        Constraint::Length(1), // 四色图例行（v1.30：替代快捷键提示行，P3）
     ])
     .split(inner);
     let grid = rows[2];
@@ -135,7 +144,7 @@ pub(super) fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
             " {} · 块大小 {} · {}/{} 块 · 并发 {}",
             proto_label, bsize, x, y, conc
         ),
-        Style::default().fg(DIM),
+        Style::default().fg(super::DIM),
     );
     f.render_widget(Paragraph::new(Line::from(vec![meta])), rows[1]);
 
@@ -163,30 +172,27 @@ pub(super) fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
     }
     f.render_widget(Paragraph::new(lines), grid);
 
-    // 行 4：快捷键提示（无图例计数行/状态行/分页提示；本帧无 emoji，计宽安全）
+    // 行 4：四色图例（v1.30/FR-01-106：底部状态说明替代原快捷键提示行——
+    // 色块字符与网格同源，字色兜底同 piece_span）
     f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            " ↑↓/PgUp/PgDn 滚动 · Esc/P 关闭",
-            Style::default().fg(DIM2),
-        ))),
+        Paragraph::new(Line::from(vec![
+            Span::styled(" ", Style::default()),
+            Span::styled("🟩", Style::default().fg(GREEN)),
+            Span::styled(" 已下载   ", Style::default().fg(FG)),
+            Span::styled("🟦", Style::default().fg(LIGHT_BLUE)),
+            Span::styled(" 正在下载   ", Style::default().fg(FG)),
+            Span::styled("🟨", Style::default().fg(YELLOW)),
+            Span::styled(" 部分下载   ", Style::default().fg(FG)),
+            Span::styled("⬜", Style::default().fg(EMPTY)),
+            Span::styled(" 未下载", Style::default().fg(FG)),
+        ])),
         rows[3],
     );
 
-    // 右缘滚动条（块数超出一屏时；画在弹窗右边框列，不与网格内容重叠）
+    // 右缘滚动条（块数超出一屏时；画在弹窗右边框列，不与网格内容重叠；
+    // 滑块恒聚焦绿，v1.30/FR-01-109）
     if total_rows > grid_h {
-        let mut sb_state = ScrollbarState::new(total_rows)
-            .position(start_row)
-            .viewport_content_length(grid_h);
-        f.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(None)
-                .end_symbol(None)
-                .track_symbol(None)
-                .style(Style::default().fg(DIM2))
-                .thumb_style(Style::default().fg(ACCENT)),
-            rect,
-            &mut sb_state,
-        );
+        lazy_scrollbar(f, rect, total_rows, start_row, grid_h, FOCUS_BORDER);
     }
 }
 
@@ -200,13 +206,12 @@ mod tests {
     use ratatui::Terminal;
 
     use crate::app::App;
-    use crate::model::config::Config;
     use crate::model::{Connection, Task, TaskState};
 
     fn make_app(tag: &str) -> App {
         let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-upieces-{tag}"));
         let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        App::new(Config::default(), reg)
+        App::new(crate::model::config::Config::default(), reg)
     }
 
     fn dl_task(id: u32, name: &str, total: u64) -> Task {
@@ -238,8 +243,8 @@ mod tests {
         assert!(app.pieces_open);
     }
 
-    /// ①②窗口形态：120×34 下 64×21 居中（x=28,y=6）、圆角边框、标题
-    /// 「分块状态」、四段齐全（任务名/元信息/网格/提示行）
+    /// ①②窗口形态：120×34 下 64×19 居中（x=28,y=7）、圆角边框、标题
+    /// 「分块状态」、四段齐全（任务名/元信息/网格/四色图例行，v1.30）
     #[tokio::test]
     async fn popup_geometry_and_four_sections() {
         let mut app = make_app("geom");
@@ -247,33 +252,49 @@ mod tests {
         app.selected = 0;
         open_popup(&mut app);
         let rows = render_rows(&mut app, 120, 34);
-        // 边框：x=28,y=6 起 64×21（行 6 顶边框 + 标题、行 26 底边框）
-        assert!(rows[6].contains('╭'), "圆角顶边框：{}", rows[6]);
-        assert!(rows[6].contains("分块状态"), "标题：{}", rows[6]);
-        assert!(rows[26].contains('╰'), "圆角底边框：{}", rows[26]);
-        // 四段：任务名（行 7）/ 元信息（行 8）/ 网格（行 9）/ 提示行（行 25）
-        assert!(rows[7].contains("piece-dl8.bin"), "任务名：{}", rows[7]);
+        // 边框：x=28,y=7 起 64×19（行 7 顶边框 + 标题、行 25 底边框）
+        assert!(rows[7].contains('╭'), "圆角顶边框：{}", rows[7]);
+        assert!(rows[7].contains("分块状态"), "标题：{}", rows[7]);
+        assert!(rows[25].contains('╰'), "圆角底边框：{}", rows[25]);
+        // 四段：任务名（行 8）/ 元信息（行 9）/ 网格（行 10）/ 图例行（行 24）
+        assert!(rows[8].contains("piece-dl8.bin"), "任务名：{}", rows[8]);
         assert!(
-            rows[8].contains("HTTP · 块大小 1 MB · 0/5 块 · 并发 4"),
+            rows[9].contains("HTTP · 块大小 1 MB · 0/5 块 · 并发 4"),
             "元信息行：{}",
-            rows[8]
+            rows[9]
         );
-        assert!(rows[9].contains('⬜'), "网格行含未下载块：{}", rows[9]);
+        assert!(rows[10].contains('⬜'), "网格行含未下载块：{}", rows[10]);
+        // v1.30：四色图例行（替代快捷键提示行）
         assert!(
-            rows[25].contains("↑↓/PgUp/PgDn 滚动 · Esc/P 关闭"),
-            "提示行：{}",
-            rows[25]
+            rows[24].contains("已下载") && rows[24].contains("正在下载"),
+            "图例行：{}",
+            rows[24]
+        );
+        assert!(
+            rows[24].contains("部分下载") && rows[24].contains("未下载"),
+            "图例四色齐全：{}",
+            rows[24]
+        );
+        // 原快捷键提示行退役
+        assert!(
+            !rows.iter().any(|r| r.contains("PgUp/PgDn 滚动")),
+            "快捷键提示行已退役"
         );
         // 居中：弹窗左缘 28 列、右缘 91 列（顶/底边框逐格验证，QA-UP-01 逐格口径）
         let mut term = Terminal::new(TestBackend::new(120, 34)).unwrap();
         term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         let buf = term.backend().buffer();
-        assert_eq!(buf.cell((28, 6)).unwrap().symbol(), "╭", "居中 x=28");
-        assert_eq!(buf.cell((91, 6)).unwrap().symbol(), "╮", "右缘 x=91");
-        assert_eq!(buf.cell((28, 26)).unwrap().symbol(), "╰", "底边框 y=26");
-        assert_eq!(buf.cell((91, 26)).unwrap().symbol(), "╯", "右下角圆角");
-        // 弹窗外主界面仍完整渲染（页脚仍在）
-        assert!(rows[31].contains("退出"), "页脚快捷键行不被破坏");
+        assert_eq!(buf.cell((28, 7)).unwrap().symbol(), "╭", "居中 x=28");
+        assert_eq!(buf.cell((91, 7)).unwrap().symbol(), "╮", "右缘 x=91");
+        assert_eq!(buf.cell((28, 25)).unwrap().symbol(), "╰", "底边框 y=25");
+        assert_eq!(buf.cell((91, 25)).unwrap().symbol(), "╯", "右下角圆角");
+        // 弹窗外主界面仍完整渲染（页脚仍在：页脚 3 行 = y31 边框 + y32 内容 + y33 边框）
+        assert!(
+            rows[32].contains("退出"),
+            "页脚收敛行不被破坏: {}",
+            rows[32]
+        );
+        app.shutdown().await;
     }
 
     /// ③四态色块：已完成前缀 🟩 + 未下载 ⬜（非下载中无 🟦）；在传块 🟦
@@ -290,11 +311,11 @@ mod tests {
         open_popup(&mut app);
         let rows = render_rows(&mut app, 120, 34);
         assert!(
-            rows[9].contains("🟩🟩🟩⬜⬜"),
+            rows[10].contains("🟩🟩🟩⬜⬜"),
             "网格 = 前 3 🟩 + 后 2 ⬜（同状态连续）：{}",
-            rows[9]
+            rows[10]
         );
-        assert!(!rows[9].contains('🟦'), "非下载中无 🟦");
+        assert!(!rows[10].contains('🟦'), "非下载中无 🟦");
 
         // 下载中任务：块 3/4 被连接持有（块 3 有零头）→ 🟦（🟦 优先于 🟨）
         let mut app = make_app("color2");
@@ -319,18 +340,18 @@ mod tests {
         open_popup(&mut app);
         let rows = render_rows(&mut app, 120, 34);
         assert!(
-            rows[9].contains("🟩🟩🟩🟦🟦"),
+            rows[10].contains("🟩🟩🟩🟦🟦"),
             "下载中：前 3 🟩 + 2 在传 🟦（分配即算）：{}",
-            rows[9]
+            rows[10]
         );
 
         // 同任务空格暂停：在传连接冻结 → 块 3 有零头转 🟨、块 4 转 ⬜
         app.tasks[0].state = TaskState::Paused;
         let rows = render_rows(&mut app, 120, 34);
         assert!(
-            rows[9].contains("🟩🟩🟩🟨⬜"),
+            rows[10].contains("🟩🟩🟩🟨⬜"),
             "暂停后：零头冻结块转 🟨、无零头转 ⬜：{}",
-            rows[9]
+            rows[10]
         );
     }
 
@@ -346,13 +367,14 @@ mod tests {
         open_popup(&mut app);
         assert!(app.pieces_follow);
         let _rows = render_rows(&mut app, 120, 34);
-        // frontier = 300/31 = 9；grid_h = 16；scroll = 9 - 8 = 1
-        assert_eq!(app.pieces_scroll, 1, "前沿行居中定位");
+        // frontier = 300/31 = 9；grid_h = 14（v1.30：19 - 5）；scroll = 9 - 7 = 2
+        assert_eq!(app.pieces_scroll, 2, "前沿行居中定位");
         assert!(!app.pieces_follow, "follow 首帧消费一次");
         // 下载推进（chunk_done 增长）后再渲染：滚动不变（不自动跟随）
         app.tasks[0].chunk_done = 500;
         let _rows = render_rows(&mut app, 120, 34);
-        assert_eq!(app.pieces_scroll, 1, "打开后不自动跟随下载前沿");
+        assert_eq!(app.pieces_scroll, 2, "打开后不自动跟随下载前沿");
+        app.shutdown().await;
     }
 
     /// ②小终端钳制：56×16 下弹窗钳制 56×16、四段完整、网格行随内框收缩
@@ -381,13 +403,15 @@ mod tests {
         );
         assert!(rows[3].contains('⬜'), "网格存在（内框收缩后仍 Min 1 行）");
         assert!(
-            rows[14].contains("↑↓/PgUp/PgDn 滚动 · Esc/P 关闭"),
-            "提示行"
+            rows[14].contains("已下载") && rows[14].contains("未下载"),
+            "四色图例行"
         );
         assert!(rows[15].contains('╰'), "底边框贴边");
+        app.shutdown().await;
     }
 
-    /// ②块数超一屏：右缘（右边框列）出现滚动条滑块
+    /// ②块数超一屏：右缘（右边框列）出现滚动条滑块（v1.30：lazygit 字形，
+    /// 滑块恒聚焦绿）
     #[tokio::test]
     async fn popup_shows_scrollbar_when_overflow() {
         let mut app = make_app("sbar");
@@ -397,21 +421,23 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(120, 34)).unwrap();
         term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         let buf = term.backend().buffer();
-        // 弹窗 x=28、宽 64 → 右边框列 x=91；总 20 行 > 网格 16 行 → 有滑块
-        let thumb = (6..26).any(|y| {
+        // 弹窗 x=28、宽 64 → 右边框列 x=91；总 20 行 > 网格 14 行 → 有滑块
+        //（v1.30：滑块恒聚焦绿）
+        let thumb = (8..25).any(|y| {
             buf.cell((91, y))
-                .map(|c| c.symbol() == "█")
+                .map(|c| c.symbol() == "█" && c.fg == super::FOCUS_BORDER)
                 .unwrap_or(false)
         });
-        assert!(thumb, "右缘滚动条滑块出现");
+        assert!(thumb, "右缘滚动条滑块出现（聚焦绿）");
         // 不超一屏（5 块）→ 无滚动条
         let mut app2 = make_app("nosbar");
         app2.tasks.push(dl_task(1, "small.bin", 5_242_880));
         app2.selected = 0;
         app2.open_pieces();
         let rows = render_rows(&mut app2, 120, 34);
-        let no_thumb = (6..26).all(|y| !rows[y].contains('█'));
+        let no_thumb = (7..25).all(|y| !rows[y].contains('█'));
         assert!(no_thumb, "不超一屏无滚动条");
+        app.shutdown().await;
     }
 
     /// ⑤滚动钳制：`End` 置 usize::MAX 后渲染收敛到末页（总行数 - 网格行数）
@@ -426,8 +452,9 @@ mod tests {
         assert!(!app.pieces_follow, "首帧已消费 follow");
         app.pieces_scroll = usize::MAX; // 模拟 End 键
         let _rows = render_rows(&mut app, 120, 34);
-        // 总行数 = ceil(600 块 / 31 块每行) = 20；末页首行 = 20 - 16 = 4
-        assert_eq!(app.pieces_scroll, 4, "End 钳制到末页首行");
+        // 总行数 = ceil(600 块 / 31 块每行) = 20；末页首行 = 20 - 14 = 6（v1.30 网格 14 行）
+        assert_eq!(app.pieces_scroll, 6, "End 钳制到末页首行");
+        app.shutdown().await;
     }
 
     /// 弹窗打开期间选中任务消失（任务被清）→ 渲染层自动关窗（demo 同构）
@@ -438,5 +465,6 @@ mod tests {
         app.pieces_open = true;
         let _rows = render_rows(&mut app, 120, 34);
         assert!(!app.pieces_open, "无选中任务渲染时自动关闭");
+        app.shutdown().await;
     }
 }

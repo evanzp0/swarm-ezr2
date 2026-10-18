@@ -175,8 +175,9 @@ fn print_help() {
            -h, --help                显示本帮助\n\
            -V, --version             显示版本\n\
          \n\
-         快捷键（TUI 内）: A 添加 / Space 暂停·继续 / R 重试 / D 删除 / U·J 调序 /\n\
-         C 清已完成 / G 图表 / Tab 切页签 / Q·Esc 退出"
+         快捷键（TUI 内）: Tab 切面板 / ]·[·T 切页签 / A 添加 / Space 暂停·继续 /\n\
+         R 重试 / D 删除 / U·J 调序 / C 清已完成 / G 收起右栏 / P 分块 /\n\
+         B 断开（仅 BT）/ H 帮助 / Q 退出（Esc 仅关闭浮层）"
     );
 }
 
@@ -355,19 +356,28 @@ async fn run_tui(app: &mut App) -> std::io::Result<()> {
     result
 }
 
-/// 覆盖层翻转检测（沿用 demo：对话框/下拉浮层/pieces 弹窗出现或消失那一帧
-/// 全量重绘；弹窗拖拽移动逐帧位置变化同样全量重绘）
-fn overlay_sig(app: &App) -> u32 {
-    let dlg = match app.dialog.as_ref() {
-        None => 0u32,
-        Some(d) => 1 | ((d.ck_open as u32) << 1),
+/// 覆盖层翻转检测（沿用 demo：对话框/下拉浮层/pieces 弹窗/帮助窗口出现或消失
+/// 那一帧全量重绘；浮层拖拽移动逐帧位置变化同样全量重绘）
+fn overlay_sig(app: &App) -> u64 {
+    // 位 0..1 = 对话框（含下拉），位 2 = pieces，位 3 = 帮助（v1.30/FR-01-107
+    // 帮助窗口并入）。三类浮层模态互斥（任一打开时其余不可达：互开的按键
+    // 均在主界面路由，被浮层模态消费），故位 8 起的 4 × 14 位位置段按「当前
+    // 打开的浮层」编码其左上角——鼠标拖拽移动时位置逐帧变化，每帧都触发
+    // 全量重绘，避免增量 diff 覆盖宽字符半格造成残影（FR-01-106 ⑧；
+    // 14 位 = 16383，终端尺寸上限内无损）。v133/D38：对话框拖拽并入
+    //（对话框打开时 pieces/help 恒关，位置段让渡无歧义）。
+    let (dlg_bits, pos) = if app.help_open {
+        (1u64 << 3, app.help_pos.unwrap_or((0, 0)))
+    } else if app.pieces_open {
+        (1u64 << 2, app.pieces_pos.unwrap_or((0, 0)))
+    } else {
+        match app.dialog.as_ref() {
+            None => (0u64, (0, 0)),
+            Some(d) => (1 | ((d.ck_open as u64) << 1), app.dlg_pos.unwrap_or((0, 0))),
+        }
     };
-    // pieces 分块弹窗（P）同属浮层：开/关帧同样全量重绘（位 2）；
-    // 位 8..23 编码弹窗左上角位置——鼠标拖拽移动时位置逐帧变化，
-    // 每帧都触发全量重绘，避免增量 diff 覆盖宽字符半格造成残影
-    //（与浮层开/关同口径，FR-01-106 ⑧）
-    let (px, py) = app.pieces_pos.unwrap_or((0, 0));
-    dlg | ((app.pieces_open as u32) << 2) | ((px as u32) << 8) | ((py as u32) << 16)
+    let (x, y) = pos;
+    dlg_bits | (((x as u64) & 0x3fff) << 8) | (((y as u64) & 0x3fff) << 22)
 }
 
 async fn run(

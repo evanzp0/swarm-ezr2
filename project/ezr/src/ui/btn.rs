@@ -21,6 +21,23 @@ pub(super) fn dialog_rect(area: Rect, dw: u16, dh: u16) -> Rect {
     }
 }
 
+/// 浮层矩形（v133/D38 对话框拖拽）：拖拽位置优先（钳制终端内），None =
+/// 居中。调用方负责首帧位置记忆回填（None → 居中后写回）与区域热区回填
+///（与 pieces/help 渲染同口径）。
+pub(super) fn overlay_rect(area: Rect, dw: u16, dh: u16, pos: Option<(u16, u16)>) -> Rect {
+    let w = dw.min(area.width);
+    let h = dh.min(area.height);
+    match pos {
+        Some((px, py)) => Rect {
+            x: px.min(area.width.saturating_sub(w)),
+            y: py.min(area.height.saturating_sub(h)),
+            width: w,
+            height: h,
+        },
+        None => dialog_rect(area, dw, dh),
+    }
+}
+
 /// 浮层边界与 CJK 宽字符的切割处理（残影 bug 的根治点）。
 ///
 /// 浮层（对话框/下拉）居中后，左/右边界列可能恰好切在底层 CJK 宽字符的

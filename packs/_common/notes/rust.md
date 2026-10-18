@@ -17,6 +17,17 @@
   （`sparse+https://rsproxy.cn/index/`）后索引秒级可编译。注意区分"脚本卡在下载
   installer"与"本体已装"：`pgrep -af rustup` + `~/.cargo/bin` 目录探针归因，别对空目录
   重复 install。
+  **镜像按源择优组合、dist 服务器要另探 manifest 完整性**（2026-10 重装轮实证）：
+  各镜像同一源不同端点速率差两个数量级（实测 rustup-init 直链 rsproxy 33MB/s ≫
+  USTC 6.7MB/s ≫ tuna/aliyun 低于可用），逐端点 `curl -r 0-3000000 -w %{speed_download}`
+  探速后择快下载 rustup-init；但 **dist 服务器（RUSTUP_DIST_SERVER）与 rustup-init 下载
+  是两个独立源**——rsproxy 的 dist nightly channel manifest 可损坏（rustup-init 报
+  `Malformed manifest date: ""` panic），换 USTC（`RUSTUP_DIST_SERVER=
+  https://mirrors.ustc.edu.cn/rust-static` +
+  `RUSTUP_UPDATE_ROOT=https://mirrors.ustc.edu.cn/rust-static/rustup`）即装成；
+  先 `curl -sw '%{http_code}' <dist>/dist/<日期>/channel-rust-nightly.toml` 探 200 再跑
+  安装。安装脚本失败先看输出（nohup 重定向到 0 字节日志 = 进程被沙箱回收，换
+  前台 `</dev/null` 暴露真实报错）。
 - **PATH 注入不跨会话持久**：会话恢复/新 shell 中 `cargo` 会 not found（工具链本体
   完好，丢的是注入）。任何 cargo 命令前先 `command -v cargo` 探测；失败则
   `export PATH="$HOME/.cargo/bin:$PATH"` 补注入，再 `cargo --version` 复核在位。
@@ -44,6 +55,16 @@
   询问是否安装 `llvm-tools-preview`，非交互会话表现为"600s 超时零产出"。装工具阶段先
   `rustup component add llvm-tools-preview`，或统一 `< /dev/null` 暴露错误
   （engineering.md「失败先归因」的挂起类形态）。
+- **rustup-init 直链 ELF 二进制直接执行，`sh` 仅适用 .sh 包装脚本**：官方
+  `sh rustup-init.sh -y …` 单行配方针对脚本包装形态；直链下载的 rustup-init
+  是 ELF 二进制，`sh rustup-init -y …` 报 `ELF: not found`（sh 当脚本解析）——
+  chmod +x 后直接执行。
+- **`url::Url::parse` 归一化协议默认端口，端口保真断言用 `port_or_known_default()`**：
+  `http://[::1]:80` 解析后 `port()` 返回 `None`（默认端口被归一化剥除）——
+  属性测试对端口 1..=65535 全域断言 `port() == Some(p)` 会在 p=80（http）/443
+  （https）等默认端口上假失败（proptest 反例固化前表现为低概率偶发，疑似
+  flake；固化后确定性失败）。产品无错时改断言为 `port_or_known_default() ==
+  Some(p)`，生成域全域成立。
 - **`rust-toolchain.toml` 钉 `channel = "nightly"` 时无法用日期版工具链做别名桥接**：
   `rustup toolchain link nightly <已装目录>` 被拒绝（`nightly` 是保留通道名），装好
   `nightly-<日期>` 后项目内 cargo 命令仍会按 toolchain 文件自动安装 floating
@@ -688,6 +709,9 @@ group_imports = "StdExternalCrate"
   crate 也复制一份，顶层 grep 扫不到。校准手法：对每条新测试用
   `cargo test --test <crate> -- <测试名>` 逐 crate 数命中（每个编译语境恰 1 次），
   实测计数 ≠ 静态推导时以实测为准重画挂载图，再对总分对账。
+
+- **剥头副本（gen-stripped fixture）再生成必须用 Rust `lines()` 语义且排在 `cargo fmt` 之后**（v132 coder 轮实证）：gen-drift 守卫按「产品源去掉 `//!` 头块后逐字比对」校验 `tests/gen/*_stripped.rs`，再生成脚本若用 Python `read().split('\n')` 计算剥头起点会在文件尾多算一个空元素（Rust `lines()` 不含 EOF 换行后的空元素），写出的副本多一个尾空行、比对恒红——用 `splitlines()`（与 `lines()` 同语义）拼回。时序上 `cargo fmt` 会重排 import（单行 `use super::{…}` 超宽折多行），fmt 后未再生成的副本即刻漂移——**副本再生成是产品源定稿（含 fmt）后的最后一步**，别在 fmt 前生成。
+- **全局布局行数变化会让硬编码行号的渲染金样断言整体移位**（v132 coder 轮实证）：改 `Constraint::Length`（如页脚 4→3 行）后，布局求解器在受限终端（如 100×24 下 `Length(12)+Min(6)>可用`）的分派比例随之变化，测试里 `rows[N]`/`cell((x,y))` 形态的硬编码行号断言（含 `#[path]` 挂载的 hardening 套件）整体错一行——症状是「并发面板表头出现在原数据行位置」。改布局行数后先 `rg "rows\[[0-9]+\]|cell\(\(" tests/ src/` 清点行号锚点逐一重算，或把单行断言改为数据行区间扫描（区间任一命中即达标，对变异守卫同样有效）。
 
 - **tokio 异步化网络型 fixture（std 线程版迁移）三坑（v140 QA 轮实证，ezr-proxy 重写）**：①
   新版 tokio `TcpStream::from_std` 注册前必须显式 `set_nonblocking(true)`（否则 panic

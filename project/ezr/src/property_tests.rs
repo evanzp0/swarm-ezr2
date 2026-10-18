@@ -1572,7 +1572,11 @@ proptest! {
         let parsed = url::Url::parse(&url);
         prop_assert!(parsed.is_ok(), "全 8 段方括号形态可被 url 解析: {url}");
         if let Ok(parsed) = parsed {
-            prop_assert_eq!(parsed.port(), Some(port), "端口保真");
+            // v133 归因（操作者轮全量回归偶发后固化反例）：url crate 解析时
+            // 归一化掉协议默认端口（http 显式 :80 → port() = None），产品
+            // 无错——端口保真断言用 port_or_known_default()（默认端口归一
+            // 化后仍取回协议默认值），生成域 1..=65535 全域成立
+            prop_assert_eq!(parsed.port_or_known_default(), Some(port), "端口保真");
         }
     }
 

@@ -19,6 +19,12 @@ impl App {
     /// 拒绝臂顺序固定（逐臂 toast 且弹窗不打开，文案照录 demo 定稿 §6.5
     /// 与 D35）：未选中任务 → 任务未探测（D35）→ 不支持分块下载（HTTP
     /// 不可续传）→ 空内容（total = 0）。
+    ///
+    /// 未探测臂（D35，v133 收窄）：立臂理由是「探测前大小未知」——故该臂
+    /// 只在大小未知态（`!probed && total == 0`）命中。恢复（继续）后的重探
+    /// 窗口（获槽清 probed、Probed 事件未至；操作者 v133 实证：此时按 P
+    /// 被误拒）任务大小已知，不属「未知态」，落入正常三臂可开窗。臂序与
+    /// 文案不变（D35 操作者裁决：保留现方案）。
     pub fn open_pieces(&mut self) {
         // 先取门槛快照再分派（借用收窄：sel_task 的 &self 借用与 set_toast
         // 的 &mut self 不重叠，notes/rust.md「路径敏感借用」纪律）
@@ -29,7 +35,7 @@ impl App {
             self.set_toast("未选中任务，无法查看分块");
             return;
         };
-        if !probed {
+        if !probed && total == 0 {
             self.set_toast("任务尚未探测，暂无分块信息");
             return;
         }
@@ -113,6 +119,47 @@ mod tests {
             app.toast.as_deref(),
             Some("任务尚未探测，暂无分块信息"),
             "未探测臂（D35）先于不支持分块/空内容两臂"
+        );
+        app.shutdown().await;
+    }
+
+    /// v133 收窄回归（操作者实证：恢复后重探窗口按 P 被误拒）：probed 在
+    /// 获槽时清 false、Probed 事件未至，但任务大小已知（total > 0）——
+    /// 不属 D35「探测前大小未知态」，未探测臂不得命中，可续传时直接开窗。
+    #[tokio::test]
+    async fn open_pieces_reprobe_window_with_known_size_opens() {
+        let mut app = make_app("gate-reprobe");
+        let mut t = openable(1, "rp.bin");
+        t.probed = false; // 获槽重探窗口（tick_grant_and_start 清标记）
+                          // total/resumable 保持持久化真值（5 MB、可续传）
+        app.tasks.push(t);
+        app.selected = 0;
+        app.open_pieces();
+        assert!(app.pieces_open, "大小已知的重探窗口不得误拒");
+        assert_ne!(
+            app.toast.as_deref(),
+            Some("任务尚未探测，暂无分块信息"),
+            "未探测臂不得命中（toast 停留启动欢迎语）"
+        );
+        app.shutdown().await;
+    }
+
+    /// v133 收窄补臂：重探窗口 + 不可续传 → 未探测臂不命中，落「不支持
+    /// 分块」臂（文案照录，序不变）
+    #[tokio::test]
+    async fn open_pieces_reprobe_window_non_resumable_hits_support_arm() {
+        let mut app = make_app("gate-reprobe-nr");
+        let mut t = openable(1, "rp-nr.bin");
+        t.probed = false;
+        t.resumable = false;
+        app.tasks.push(t);
+        app.selected = 0;
+        app.open_pieces();
+        assert!(!app.pieces_open);
+        assert_eq!(
+            app.toast.as_deref(),
+            Some("该任务不支持分块下载（服务器不支持断点续传），无 pieces 信息"),
+            "重探窗口大小已知 → 正常三臂口径"
         );
         app.shutdown().await;
     }

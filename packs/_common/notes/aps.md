@@ -66,3 +66,18 @@
   目录用 `bb run <task> <in> <out>`**（bb 靠 cwd 探测 bb.edn；`bb --project <dir> run ...` 在该版
   本会把 `--project` 当任务参数漏进 CLI 报 File does not exist）。解析器要求恰好 2 参数
   （feature 路径、JSON 输出路径），异常退出码 2=参数错、1=解析失败，输出为 JSON（不是 EDN）。
+- **Babashka 静态二进制安装配方（v1.13.226 实证，2026-10）**：GitHub release
+  资产文件名**不带 `v` 前缀**（tag `v1.13.226` → 资产
+  `babashka-1.13.226-linux-amd64-static.tar.gz`，按 tag 名拼 URL 会 404）。
+  发布资产 CDN 在受限网络可慢至 ~15KB/s 但**支持断点续传**：`curl -sSL -C -`
+  循环续传即可完成，完整性判据用 `tar -tzf`（exit 0 = 流完整）——**不要用
+  Content-Length 推算总大小做完成判断**，跨多次续传窗口的数学合计会算错。
+  APS 工具仓本体 `git clone` 被 TLS 掐断（GnuTLS -110）时，用 codeload tarball
+  替代：`https://codeload.github.com/<owner>/<repo>/tar.gz/refs/heads/<branch>`
+  （分支名先经 GitHub API `default_branch` 查证，勿臆测 master）。
+- **dry-checker `duplicate-in-scenario`（high）有两类合法重复形态**：①两段式
+  场景——同场景内「操作 → 确认 → 验证」执行两轮（如留空/带值各确认一次），
+  `按 Enter 确认` 类步骤天然重复；②逐臂同断言——枚举多个等价路径（如 q/Q/Esc
+  各关一次窗）后每臂重复同一条 Then 断言，重复即场景意图。复核到这两类属
+  正常规格形态，不修改规格文本；除此之外的 exact-duplicate 才是复制粘贴漂移
+  疑似项。

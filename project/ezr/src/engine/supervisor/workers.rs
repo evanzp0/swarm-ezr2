@@ -133,8 +133,12 @@ async fn block_worker(wid: usize, shared: Arc<super::super::EngineShared>, deps:
         }
         // 并发下调（v1.5/FR-01-87；下调臂 v1.16/D30 改判即时收缩——内层
         // select 配额臂中止在传块，块交还再领队列）：超出目标配额的 worker
-        // 立即退出；槽位 freed 后由 Reconfigure/进度 tick 在扩容时复用
+        // 立即退出；槽位 freed 后由 Reconfigure/进度 tick 在扩容时复用。
+        // v133（操作者实证：缩容后面板残留无效连接行）：块边界退出也须
+        // 清自身连接行——上一块租约遗留的行仍留在共享视图，不清则面板
+        // 多出超额槽位的僵死条目
         if wid > *quota_rx.borrow_and_update() {
+            conns.lock().await.retain(|c| c.id != wid);
             return;
         }
         // 领块：优先消费配额中止块的再领队列（v1.16/D30——单调游标不回退，

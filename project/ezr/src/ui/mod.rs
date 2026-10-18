@@ -18,7 +18,7 @@
 //! 对话框：添加任务(URL+目录+并发+校验算法下拉+校验码+代理下拉) / 修改任务 /
 //! 删除任务(仅任务|任务和文件|取消)。
 
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, BorderType, Borders};
 use ratatui::Frame;
@@ -34,6 +34,7 @@ mod detail;
 mod dialog;
 mod footer;
 mod header;
+mod help;
 mod list;
 mod pieces;
 mod task_lines;
@@ -48,6 +49,7 @@ use detail::draw_detail;
 use dialog::draw_dialogs;
 use footer::draw_footer;
 use header::draw_header;
+use help::draw_help;
 use list::draw_list;
 use pieces::draw_pieces;
 #[cfg(test)]
@@ -73,6 +75,106 @@ pub(super) const MAGENTA: Color = Color::Rgb(214, 112, 214);
 pub(super) const EMPTY: Color = Color::Rgb(54, 68, 74);
 /// 下载中/校验中/后期处理（淡蓝）
 pub(super) const LIGHT_BLUE: Color = Color::Rgb(122, 185, 242);
+
+/// 聚焦面板边框色（lazygit 主题默认 activeBorderColor = green + bold，
+/// v1.30/FR-01-108）
+pub(super) const FOCUS_BORDER: Color = Color::Green;
+
+/// 是否存在浮层（对话框/pieces 弹窗/帮助窗口）：浮层打开时底层面板全部
+/// 降级为暗边框，焦点面板不再高亮（视觉焦点让位给模态浮层，FR-01-107/108）
+pub(super) fn overlay_open(app: &crate::app::App) -> bool {
+    app.overlay_open()
+}
+
+/// 面板边框样式：聚焦 = 绿色加粗（lazygit activeBorderColor 口径），
+/// 未聚焦/浮层打开 = 暗色（inactiveBorderColor 口径，v1.30/FR-01-108）
+pub(super) fn panel_border_style(focused: bool) -> Style {
+    if focused {
+        Style::default()
+            .fg(FOCUS_BORDER)
+            .add_modifier(ratatui::style::Modifier::BOLD)
+    } else {
+        Style::default().fg(BORDER)
+    }
+}
+
+/// 面板标题样式：聚焦 = 绿色加粗，未聚焦/浮层打开 = 暗灰（v1.30/FR-01-108）
+pub(super) fn panel_title_style(focused: bool) -> Style {
+    if focused {
+        Style::default()
+            .fg(FOCUS_BORDER)
+            .add_modifier(ratatui::style::Modifier::BOLD)
+    } else {
+        Style::default().fg(DIM)
+    }
+}
+
+/// lazygit 式滚动条（右侧边框列：▲/▼ 上下箭头 + │ 轨道 + █ 滑块，
+/// v1.30/FR-01-109）。
+///
+/// * `panel`：面板完整区域（含边框）——滚动条画在右边框列、上下角之间的行；
+/// * `total`/`page`：内容总项数 / 可视项数（total <= page 时不绘制）；
+/// * `position`：滚动偏移（内部钳制到 0..=total-page）；
+/// * `thumb`：滑块颜色（跟随便属面板边框色：聚焦面板/弹窗均为高亮绿）。
+///
+/// 显示条件：total > page 且面板高 ≥ 5 且可绘行数 ≥ 3。
+/// 滑块位置口径同 lazygit gocui scrollbar.go：顶/底端吸附，中间按比例取整、
+/// 末页前不吸底（ceil 保证下滑即移动，-1 预留行程）；滑块长度下取整
+/// （规格 FR-01-109：以代码为准 = floor）。
+pub(super) fn lazy_scrollbar(
+    f: &mut Frame,
+    panel: Rect,
+    total: usize,
+    position: usize,
+    page: usize,
+    thumb: Color,
+) {
+    if page == 0 || total <= page || panel.height < 5 || panel.width == 0 {
+        return;
+    }
+    let col = panel.x + panel.width - 1; // 右边框列
+    let top = panel.y + 1; // 上角之下
+    let bottom = panel.y + panel.height - 1; // 下角（不含）
+    let h = (bottom.saturating_sub(top)) as usize; // 可绘行数（▲+轨道+▼）
+    if h < 3 {
+        return;
+    }
+    let track = h - 2; // 轨道行数（扣除上下箭头）
+    let thumb_h = ((((page as f64) / (total as f64)) * track as f64) as usize).clamp(1, track);
+    let max_pos = total - page;
+    let position = position.min(max_pos);
+    let thumb_y = if position >= max_pos {
+        track - thumb_h
+    } else {
+        (((position as f64 / max_pos as f64) * (track - thumb_h - 1) as f64).ceil()) as usize
+    }
+    .min(track.saturating_sub(thumb_h));
+    // 字形全部取格内居中（▲ │ █ ▼ 同列垂直对齐）：滑块用全块 █ 而非
+    // 左对齐的半块 ▐——半块贴左缘会与居中的轨道/箭头错位（对齐修复）
+    let arrow_style = Style::default().fg(DIM);
+    let track_style = Style::default().fg(DIM2);
+    let thumb_style = Style::default()
+        .fg(thumb)
+        .add_modifier(ratatui::style::Modifier::BOLD);
+    for (i, y) in (top..bottom).enumerate() {
+        let (sym, style) = if i == 0 {
+            ("▲", arrow_style)
+        } else if i == h - 1 {
+            ("▼", arrow_style)
+        } else {
+            let t = i - 1; // 轨道行下标 0..track
+            if t >= thumb_y && t < thumb_y + thumb_h {
+                ("█", thumb_style)
+            } else {
+                ("│", track_style)
+            }
+        };
+        if let Some(cell) = f.buffer_mut().cell_mut((col, y)) {
+            cell.set_symbol(sym);
+            cell.set_style(style);
+        }
+    }
+}
 
 /// 状态 → 语义色映射表（8 态全显式映射。v1.19/FR-01-92 徽标色裁决：失败挂起
 /// 映射白——与 Paused 同色承载「操作者主动静置」语义；v1.21 合并口径：失败
@@ -120,11 +222,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let outer = Layout::vertical([
         Constraint::Length(5), // 顶部带：头部仪表面板通栏全宽 5 行（FR-01-94）
         Constraint::Min(8),    // 主区：任务列表 | 任务详情 + 并发连接面板
-        Constraint::Length(4), // 页脚
+        Constraint::Length(3), // 页脚：单行 H 帮助 · Q 退出 + toast（v1.30/FR-01-107）
     ])
     .split(area);
 
     let wide = area.width >= 100;
+    // 焦点钳制（v1.30/FR-01-108 ④）：详情/并发面板未渲染（紧凑布局 G /
+    // 窄终端 <100 列）时焦点只允许落在任务列表（与 G 键处理同口径，双保险）
+    if !wide || !app.show_panes {
+        app.focus = crate::app::Panel::List;
+    }
     if wide {
         // 头部仪表面板：通栏全宽；字段行 + 分割线 + 页签行，右侧内嵌无边框
         // 单色面积流量图（占内容区全高、20% 宽）。FR-01-98：流量图常显，
@@ -146,18 +253,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             // 并发连接面板，任务列表占满整行
             app.conns_area = None;
             app.visible_conns_rows = 0;
-            // FR-01-101：详情字段名热区随面板收起清空（点击无动作）
+            // FR-01-101：详情字段名热区随面板收起清空（点击无动作）；
+            // 详情面板区域同步清空（点击聚焦失效，v1.30/FR-01-108）
             app.detail_url_rect = None;
             app.detail_ck_rect = None;
+            app.detail_area = None;
             draw_list(f, app, outer[1]);
         }
     } else {
         // 窄终端（< 100 列）：头部面板无图（分割线与页签行贯通全宽），任务列表占满整行
         app.conns_area = None;
         app.visible_conns_rows = 0;
-        // FR-01-101：详情不渲染 → 字段名热区清空
+        // FR-01-101：详情不渲染 → 字段名热区清空；详情面板区域同步清空
         app.detail_url_rect = None;
         app.detail_ck_rect = None;
+        app.detail_area = None;
         draw_header(f, app, outer[0], false);
         draw_list(f, app, outer[1]);
     }
@@ -169,10 +279,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_dialogs(f, app, area);
     }
 
-    // pieces 分块弹窗最后绘制（最上层覆盖；与对话框互斥——按键层已保证，
-    // FR-01-106 ②；打开/关闭/拖拽帧全量重绘由 main.rs overlay_sig 保证）
+    // pieces 分块弹窗（覆盖层；与对话框互斥——按键层已保证，FR-01-106 ②；
+    // 打开/关闭/拖拽帧全量重绘由 main.rs overlay_sig 保证）
     if app.pieces_open {
         draw_pieces(f, app, area);
+    }
+
+    // 帮助窗口（最上层覆盖，v1.30/FR-01-107；模态：打开时底层面板暗框）
+    if app.help_open {
+        draw_help(f, app, area);
     }
 }
 
@@ -744,23 +859,44 @@ mod ui_tests {
         assert!(app.quit, "Ctrl+C 退出");
         app.quit = false;
 
-        // q / Esc 退出
+        // q 退出；Esc 主界面无操作（v1.30/FR-01-80：Esc 仅用于关闭浮层）
         app.on_key(KeyCode::Char('q'), KeyModifiers::NONE);
         assert!(app.quit);
         app.quit = false;
         app.on_key(KeyCode::Esc, KeyModifiers::NONE);
-        assert!(app.quit);
-        app.quit = false;
+        assert!(!app.quit, "Esc 主界面无操作（v1.30）");
+        assert!(!app.help_open && !app.pieces_open && app.dialog.is_none());
 
-        // Tab/BackTab 页签循环
+        // Tab/BackTab 面板焦点循环（v1.30/FR-01-108；页签切换由 ]/[/T 承接）
         app.on_key(KeyCode::Tab, KeyModifiers::NONE);
-        assert_eq!(app.filter, 1, "Tab 到已完成页签");
+        assert_eq!(app.focus, crate::app::Panel::Detail, "Tab → 详情");
+        assert_eq!(app.filter, 0, "Tab 不切页签（v1.30 改版）");
         app.on_key(KeyCode::Tab, KeyModifiers::NONE);
-        assert_eq!(app.filter, 0, "两页签循环回首");
+        assert_eq!(app.focus, crate::app::Panel::Conns, "Tab → 并发");
+        app.on_key(KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(app.focus, crate::app::Panel::List, "Tab 环回列表");
         app.on_key(KeyCode::BackTab, KeyModifiers::NONE);
-        assert_eq!(app.filter, 1, "BackTab 环绕到末尾");
+        assert_eq!(app.focus, crate::app::Panel::Conns, "BackTab 反向");
         app.on_key(KeyCode::BackTab, KeyModifiers::NONE);
+        assert_eq!(app.focus, crate::app::Panel::Detail, "BackTab → 详情");
+        app.on_key(KeyCode::BackTab, KeyModifiers::NONE);
+        assert_eq!(app.focus, crate::app::Panel::List, "BackTab 环回列表");
+
+        // 页签键：] / [ / T（v1.30/FR-01-80）
+        app.on_key(KeyCode::Char(']'), KeyModifiers::NONE);
+        assert_eq!(app.filter, 1, "] 到已完成页签");
+        app.on_key(KeyCode::Char('['), KeyModifiers::NONE);
+        assert_eq!(app.filter, 0, "[ 回首");
+        app.on_key(KeyCode::Char('T'), KeyModifiers::NONE);
+        assert_eq!(app.filter, 1, "T 循环");
+        app.on_key(KeyCode::Char('T'), KeyModifiers::NONE);
         assert_eq!(app.filter, 0);
+
+        // H 帮助窗口开/关（v1.30/FR-01-107）
+        app.on_key(KeyCode::Char('h'), KeyModifiers::NONE);
+        assert!(app.help_open, "H 打开帮助");
+        app.on_key(KeyCode::Char('h'), KeyModifiers::NONE);
+        assert!(!app.help_open, "H 再按关闭");
 
         // 选择移动：Down/Up/PageUp/PageEnd/Home/End 钳制
         // filter=0 视图含 k1（k2 已完成被过滤）
@@ -932,9 +1068,10 @@ mod ui_tests {
         assert!(s.contains("直连"), "代理行显示当前选择: {s}");
         assert!(s.contains("[ 确定 ]"), "确定按钮: {s}");
         assert!(s.contains("[ 取消 ]"), "取消按钮: {s}");
+        // v1.30/FR-01-107：底部操作提示行退役（P3 收敛，交互说明收敛帮助窗口）
         assert!(
-            s.contains("确定后立即生效"),
-            "Modify 提示行（与 Add 提示相异文案）: {s}"
+            !s.contains("确定后立即生效"),
+            "Modify 提示行退役（v1.30）: {s}"
         );
         assert!(!s.contains("添加下载任务"), "不得渲染 Add 标题: {s}");
         app.shutdown().await;
@@ -1102,11 +1239,10 @@ mod ui_v113_tests {
         assert!(s.contains("活跃 0"), "待命连接速度 0 → 活跃 0");
         assert!(s.contains("序号"), "HTTP 表头 序号 列");
         assert!(s.contains("下载速度") && s.contains("累计下载"), "数据列");
-        // v1.29/FR-01-96 修订：提示行随任务协议自适应——HTTP 任务仅
-        // `Ctrl+↑↓ 选择`（原「（仅 BT）」标注退役，spec 04-ui-conns-08）
-        assert!(s.contains("Ctrl+↑↓ 选择"), "提示行（HTTP 任务）");
-        assert!(!s.contains("Ctrl+B"), "HTTP 任务无断开段（v1.29）");
-        assert!(!s.contains("（仅 BT）"), "「（仅 BT）」标注退役（v1.29）");
+        // v1.30/FR-01-107：提示行整体退役（P3 收敛，交互说明收敛帮助窗口）
+        assert!(!s.contains("Ctrl+↑↓"), "提示行退役（v1.30）");
+        assert!(!s.contains("Ctrl+B"), "Ctrl+B 提示退役（v1.30）");
+        assert!(!s.contains("（仅 BT）"), "「（仅 BT）」标注退役");
         assert!(
             rows.iter()
                 .any(|r| r.trim().contains(" 1 ") && r.contains('-')),

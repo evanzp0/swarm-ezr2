@@ -188,10 +188,15 @@ async fn engine_conn_ledger_kills() {
         "速度 EMA 已立起（窗口速率经每秒采样）"
     );
     let mid_rows = ui::testfx::row_strings(&ui::testfx::render_full(&mut a, 100, 24));
+    // v1.30/FR-01-107 页脚收敛（4 行 → 3 行）后 100×24 紧凑布局行位整体上移
+    // 一行：并发面板内框 y=16..21，表头 y=16、数据行 y=17..20（提示行退役，
+    // 数据行 = 内框高 - 表头 1 行）。数据行区间任一行含速度数值即达标
+    //（mutant 恒 '-' 时区间内零命中）。
+    let speed_visible = mid_rows[17..=20].iter().any(|r| r.contains("B/s"));
     assert!(
-        mid_rows[16].contains("B/s"),
+        speed_visible,
         "下载中并发明细数据行速度列应显数值（mutant 恒 '-'）：{:?}",
-        mid_rows[16]
+        &mid_rows[15..=21]
     );
     // ③ 靶 active_conn_count 6 点：cap×speed 合成矩阵（单速度账本连接 1；
     //    real=1 对全部 mutant {0,0,0,3} 唯一）

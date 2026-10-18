@@ -9,6 +9,14 @@ use crate::model::{
 };
 
 impl App {
+    /// 打开对话框单源入口（v133/D38）：置入对话框状态并重置拖拽/位置——
+    /// 每次打开重新居中（与 pieces 弹窗同口径），上个会话遗留的拖拽态不清场。
+    pub(crate) fn set_dialog(&mut self, d: Dialog) {
+        self.dialog = Some(d);
+        self.dlg_pos = None;
+        self.dlg_drag = None;
+        self.dlg_area = None;
+    }
     /// 校验码输入共识（Add/Modify 共用，DRY 收敛）：空 = 清除（None）；
     /// 非空按算法合法性校验，合法构造 Checksum；非法 → toast 提示并
     /// 聚焦回校验码字段（Add focus 4 / Modify focus 2），返回 None 表示
@@ -336,7 +344,7 @@ impl App {
 
     /// 打开添加对话框（空预填；URL/目录留空由用户输入）
     pub fn open_add_dialog(&mut self) {
-        self.dialog = Some(Dialog {
+        self.set_dialog(Dialog {
             kind: DialogKind::Add,
             url: String::new(),
             dir: String::new(),
@@ -391,7 +399,7 @@ impl App {
                 self.proxy_options.len() - 1
             }
         };
-        self.dialog = Some(Dialog {
+        self.set_dialog(Dialog {
             kind: DialogKind::Modify,
             url: String::new(),
             dir: String::new(),
@@ -415,7 +423,7 @@ impl App {
             self.set_toast("没有选中的任务");
             return;
         };
-        self.dialog = Some(Dialog {
+        self.set_dialog(Dialog {
             kind: DialogKind::Delete,
             url: String::new(),
             dir: String::new(),

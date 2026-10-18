@@ -216,7 +216,9 @@ impl App {
     }
 
     /// tick ⑧⑨ 选中项 / 滚动钳制 + 并发明细选择 / 滚动钳制（FR-01-97：
-    /// 切换选中任务后复位，选中行越界钳制到有效范围）
+    /// 切换选中任务后复位，选中行越界钳制到有效范围；v1.30/FR-01-109 防锁死：
+    /// 仅当选中项真的变化（last_selected ≠ selected）才把视口拉回选中项——
+    /// 滚轮自由滚动不被逐帧归位；末页不空滚钳制仍每帧生效）
     fn tick_clamp_selection(&mut self) {
         let flen = self.filtered().len();
         if flen == 0 {
@@ -226,16 +228,23 @@ impl App {
             if self.selected >= flen {
                 self.selected = flen - 1;
             }
+            // 视口跟随仅在选中项变化时生效（变化检测，v1.30/FR-01-109 ⑤；
+            // 键盘选择路径已在 move_sel/页签切换即时跟随，此处为总数钳制与
+            // 兕底臂）
+            let selection_changed = self.last_selected != self.selected;
             let vis = self.visible_rows.max(1);
-            if self.scroll > self.selected {
-                self.scroll = self.selected;
-            }
-            if self.selected >= self.scroll + vis {
-                self.scroll = self.selected + 1 - vis;
+            if selection_changed {
+                if self.scroll > self.selected {
+                    self.scroll = self.selected;
+                }
+                if self.selected >= self.scroll + vis {
+                    self.scroll = self.selected + 1 - vis;
+                }
             }
             let max_scroll = flen.saturating_sub(vis);
             self.scroll = self.scroll.min(max_scroll);
         }
+        self.last_selected = self.selected;
         if self.conns_scroll_for != self.selected {
             self.conns_scroll_for = self.selected;
             self.conns_scroll = 0;

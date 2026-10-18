@@ -190,10 +190,11 @@ async fn add_dialog_field_rows_exact_geometry() {
 // ui/dialog.rs —— 按钮行与提示行几何（330:17/26 ×3、351:24 ×2、352:33 ×2）
 // ---------------------------------------------------------------------------
 
-/// 按钮行 y = inner.y + n_rows + 2 = 15+6+2 = 23；提示行 y = inner.y + n_rows + 3 = 24，
-/// x = inner.x + 1 = 25（提示文本以空格开头、'E' 在 x=26）。
-/// v1.15/FR-01-103：三钮 [ 立即下载 ] [ 仅添加 ] [ 取消 ]——y 几何与提示行锚点不变，
-/// 按钮文案锚点随改名「确认 → 立即下载」同步。
+/// 按钮行 y = inner.y + n_rows + 2 = 15+6+2 = 23（v1.30 对话框 74×11：dlg.y=14、
+/// inner.y=15，按钮行 y 几何不变）。
+/// v1.15/FR-01-103：三钮 [ 立即下载 ] [ 仅添加 ] [ 取消 ]——按钮文案锚点随
+/// 改名「确认 → 立即下载」同步；v1.30/FR-01-107：底部提示行退役（原 y=24
+/// `Enter 立即下载…` 不再渲染，负向断言钉住）。
 #[tokio::test]
 async fn add_dialog_button_and_hint_rows_exact_geometry() {
     let (mut a, reg) = app_with_add_dialog();
@@ -210,9 +211,12 @@ async fn add_dialog_button_and_hint_rows_exact_geometry() {
         !row_text(&buf, 27, 120).contains("立"),
         "按钮不得下移（n_rows*2 变异）"
     );
-    assert_eq!(cell(&buf, 25, 24), " ", "提示行起始于 x=25（首字符为空格）");
-    assert_eq!(cell(&buf, 26, 24), "E", "提示文本 Enter 的 E 在 x=26");
-    assert!(row_text(&buf, 24, 120).contains("Enter"), "提示行 y=24");
+    // v1.30/FR-01-107：提示行退役——原 y=24 提示行不再渲染
+    assert!(
+        !row_text(&buf, 24, 120).contains("Enter"),
+        "底部提示行退役（v1.30）: {:?}",
+        row_text(&buf, 24, 120)
+    );
     a.shutdown().await;
     let _ = std::fs::remove_file(&reg);
 }

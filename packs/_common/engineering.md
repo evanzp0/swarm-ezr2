@@ -32,6 +32,12 @@
   - Go：`go install` 安装；变异测试 `github.com/unclebob/mutate4go`，CRAP `github.com/unclebob/crap4go`，DRY `github.com/unclebob/dry4go`。
   - Clojure：Clojure CLI/deps.edn 安装；变异测试 `github.com/unclebob/clj-mutate`，CRAP `github.com/unclebob/crap4clj`，DRY `github.com/unclebob/dry4clj`。
   - Java：Maven（`mvn`）安装；变异测试 `github.com/unclebob/mutate4java`，CRAP `github.com/unclebob/crap4java`，DRY `github.com/unclebob/dry4java`。
+- **git clone 被掐时用 codeload tarball 替代**：`git clone` 报 GnuTLS
+  `recv error (-110)` / TLS non-properly terminated 而网页与 API 可达时，是
+  git 传输通道被掐而非仓库不可达——改拉
+  `https://codeload.github.com/<owner>/<repo>/tar.gz/refs/heads/<branch>` 直链
+  tar.gz 后解包（分支名先经 GitHub API `default_branch` 字段查证；解包后重命名
+  为 `<仓库名>/` 以符合 .tools 布局）。
 - **工具安装位置**：clone/构建后的工具仓库统一放在 `swarm/.tools/<仓库名>/`（工具缓存，跨会话复用；不进归档包、不随会话清除）。会话缓存不随工作区流转：每会话先确认所需工具在位，缺则按上文重建，安装位置与选型理由写入 `project/handoff.md`。APS 仓库名为 `Acceptance-Pipeline-Specification`。
 - **上游钉死路径的兼容桥接**：上游脚本/文档钉死的工具路径（如对 `.tools/bin/bb` 的
   硬编码）与实际安装位置不一致时，优先在钉死位置补**符号链接**桥接到真实位置，不要改

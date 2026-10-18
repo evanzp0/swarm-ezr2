@@ -117,13 +117,12 @@ mod detail_fix {
     pub mod text {
         pub(crate) use crate::ui::{fmt_size, pad_right, truncate, w};
     }
-    // 面板样板单源转发（coder cpd-tile-shared-helper 轮：detail.rs 改用 ui 层 bordered_block，
-    // 壳内同手法转发真实现，与 text 转发同口径）
+    // 面板样板单源转发（coder cpd-tile-shared-helper 轮：detail.rs 改用 ui 层
+    // 聚焦边框样板——v1.30 起为 panel_border_style/panel_title_style，壳内同手法
+    // 转发真实现，与 text 转发同口径）
     use ratatui::style::Color;
 
-    pub(crate) use crate::ui::bordered_block;
-    pub const ACCENT: Color = Color::Cyan;
-    pub const BORDER: Color = Color::Rgb(56, 78, 86);
+    pub(crate) use crate::ui::{panel_border_style, panel_title_style};
     pub const DIM: Color = Color::Rgb(126, 141, 147);
     pub const FG: Color = Color::Rgb(198, 208, 212);
     pub const GREEN: Color = Color::Green;
@@ -902,15 +901,17 @@ async fn conns_panel_draws_data_rows() {
     a.tasks.push(t);
     a.selected = 0;
     let rows = row_strings(&render_full(&mut a, 100, 24));
+    // v1.30/FR-01-107 页脚 4→3 行 + 提示行退役：100×24 下并发面板内框
+    // y=16..21，表头 y=16、数据行 y=17 起（连接 1/2 → rows[17]/rows[18]）
     assert!(
-        rows[16].contains("   1"),
+        rows[17].contains("   1"),
         "连接 1 数据行存在（mutant end=start*rows 后无数据行）: {:?}",
-        rows[16]
+        rows[17]
     );
     assert!(
-        rows[17].contains("   2"),
+        rows[18].contains("   2"),
         "连接 2 数据行存在: {:?}",
-        rows[17]
+        rows[18]
     );
     a.shutdown().await;
 }

@@ -6,10 +6,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
 
-use super::btn::{clip_wide_at_edges, dialog_rect, draw_button_row};
+use super::btn::{clip_wide_at_edges, draw_button_row, overlay_rect};
 use super::delete::draw_delete_dialog;
 use super::text::{pad_right, truncate, w};
-use super::{bordered_block, ACCENT, DIM, DIM2, FG, YELLOW};
+use super::{panel_border_style, panel_title_style, ACCENT, DIM, DIM2, FG, YELLOW};
 use crate::app::{App, DialogKind, CHECKSUM_ALGOS};
 
 /// 字段行显示值：空值显示占位提示；超宽显示尾部（…+末尾字符，便于核对校验码结尾）
@@ -65,10 +65,11 @@ fn dropdown_frame(
     let prect = dropdown_rect(area, inner, row_y, pw, ph);
     f.render_widget(Clear, prect);
     clip_wide_at_edges(f, prect);
-    let pblock = bordered_block(ACCENT).title(Span::styled(
-        title,
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-    ));
+    let pblock = ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        .border_style(panel_border_style(true))
+        .title(Span::styled(title, panel_title_style(true)));
     let pinner = pblock.inner(prect);
     f.render_widget(pblock, prect);
     pinner
@@ -193,28 +194,42 @@ struct Row {
     kind: RowKind,
 }
 
-/// 添加/修改任务对话框统一渲染（v1.5/FR-01-86/87；v1.15/FR-01-103 三钮）：字段行
-/// + 按钮行 + 提示行 + 算法/代理下拉浮层。
+/// 添加/修改任务对话框统一渲染（v1.5/FR-01-86/87；v1.15/FR-01-103 三钮；
+/// v1.30 修订）：字段行 + 按钮行 + 算法/代理下拉浮层。
+/// v1.30（FR-01-01/FR-01-107）：对话框 74×11（Add）/ 74×9（Modify）；
+/// 底部快捷键提示行删除（原提示行位于 n_rows + 3；下拉框操作提示同步移除，
+/// 交互说明统一收敛到 H 帮助窗口【弹窗】组）；模态浮层恒定绿色加粗边框。
 ///
 /// * Add —— URL/保存到/并发/校验/校验码/代理（立即下载 6 仅添加 7 取消 8）
 /// * Modify —— 并发/校验/校验码/代理（确定 4 取消 5）
 fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) {
     let is_add = kind == DialogKind::Add;
     let (title, dw, dh) = if is_add {
-        (" 添加下载任务 ", 74u16, 12u16)
+        (" 添加下载任务 ", 74u16, 11u16)
     } else {
-        (" 修改任务 ", 74, 10)
+        (" 修改任务 ", 74, 9)
     };
-    let dlg = dialog_rect(area, dw, dh);
+    let dlg = {
+        // v133/D38：拖拽位置优先（钳制终端内），首帧居中并记忆；区域热区
+        // 同步回填（鼠标非交互区拖拽起点命中测试）
+        let r = overlay_rect(area, dw, dh, app.dlg_pos);
+        if app.dlg_pos.is_none() {
+            app.dlg_pos = Some((r.x, r.y));
+        }
+        app.dlg_area = Some(r);
+        r
+    };
     f.render_widget(Clear, dlg);
     clip_wide_at_edges(f, dlg);
-    let block = bordered_block(ACCENT).title(Span::styled(
-        title,
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-    ));
+    // 模态浮层恒定绿色加粗边框/标题（与主面板聚焦色统一，v1.30/FR-01-108）
+    let block = ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        .border_style(panel_border_style(true))
+        .title(Span::styled(title, panel_title_style(true)));
     let inner = block.inner(dlg);
     f.render_widget(block, dlg);
-    let min_h = if is_add { 10 } else { 8 };
+    let min_h = if is_add { 9 } else { 7 };
     if inner.width < 24 || inner.height < min_h {
         return;
     }
@@ -348,25 +363,8 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
     };
     draw_button_row(f, app, inner, inner.y + n_rows + 2, &buttons, focus);
 
-    // 提示行（下拉框展开时切换为列表操作提示）
-    let hint = if ck_open {
-        " ↑↓ 选择算法 · Enter 确认选择 · Esc 关闭列表"
-    } else if proxy_open {
-        " ↑↓ 选择代理 · Enter 确认选择 · Esc 关闭列表"
-    } else if is_add {
-        " Enter 立即下载 · Tab/↑↓ 切换 · Esc 取消 · 校验码留空 = 不校验"
-    } else {
-        " Enter 确定 · Tab/↑↓ 切换 · Esc 取消 · 确定后立即生效"
-    };
-    f.render_widget(
-        Paragraph::new(Span::styled(hint, Style::default().fg(DIM2))),
-        Rect {
-            x: inner.x + 1,
-            y: inner.y + n_rows + 3,
-            width: inner.width.saturating_sub(2),
-            height: 1,
-        },
-    );
+    // v1.30/FR-01-107：底部快捷键提示行删除（P3 原则——原提示行位于
+    // n_rows + 3；下拉框操作提示同步移除，交互说明统一收敛 H 帮助窗口）
 
     // 校验算法下拉框（浮层最后绘制，覆盖对话框与下层内容；架构轮单源的
     // dropdown_frame/dropdown_item + architect v116 整体渲染收口 draw_dropdown）
@@ -509,5 +507,50 @@ mod helper_tests {
         };
         let r = dropdown_rect(wide, inner, 15, 24, 9);
         assert_eq!((r.width, r.height), (24, 9));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! v133/D38 对话框拖拽渲染：首帧居中并记忆（dlg_pos/dlg_area 回填）、
+    //! 拖拽位置优先渲染与终端钳制（位置记忆保留原始拖拽点，绘制矩形钳制）。
+
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    use super::super::testfx;
+
+    #[tokio::test]
+    async fn dialog_first_frame_centers_and_backfills() {
+        let mut app = testfx::make_app_in("ezr-dlgc", "center");
+        app.open_add_dialog();
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        // 74×11 居中于 100×30：x=(100−74)/2=13、y=(30−11)/2=9
+        assert_eq!(app.dlg_pos, Some((13, 9)), "首帧居中并记忆");
+        let a = app.dlg_area.expect("dlg_area 回填");
+        assert_eq!((a.x, a.y, a.width, a.height), (13, 9, 74, 11));
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn dialog_dragged_position_wins_and_clamps() {
+        let mut app = testfx::make_app_in("ezr-dlgp", "drag");
+        app.open_add_dialog();
+        // 越界拖拽点（90, 26）：绘制矩形钳制在终端内（74×11 → x≤26、y≤19），
+        // 位置记忆保留原始拖拽点（与 pieces 渲染同口径）
+        app.dlg_pos = Some((90, 26));
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        assert_eq!(app.dlg_pos, Some((90, 26)), "位置记忆保留原始拖拽点");
+        let a = app.dlg_area.expect("dlg_area 回填");
+        assert_eq!(
+            (a.x, a.y, a.width, a.height),
+            (26, 19, 74, 11),
+            "绘制矩形钳制终端内"
+        );
+        let s = term.backend().to_string();
+        assert!(s.contains("添加下载任务"), "拖拽位置渲染: {s}");
+        app.shutdown().await;
     }
 }

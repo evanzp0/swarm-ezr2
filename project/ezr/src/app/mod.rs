@@ -53,6 +53,46 @@ pub(crate) use dialog_keys::{
 /// 每个任务在列表中占用的行高（3 行内容 + 1 行空行分隔）
 pub const ITEM_HEIGHT: u16 = 4;
 
+// ---------------------------------------------------------------------------
+// 面板焦点（lazygit 式聚焦显示，v1.30/FR-01-108，对齐 ezr-demo 重构版）
+// ---------------------------------------------------------------------------
+
+/// 可聚焦面板：Tab/BackTab 循环切换；当前面板边框绿色高亮、
+/// 其余面板暗边框（lazygit activeBorderColor/inactiveBorderColor 口径）。
+/// 默认 = 任务列表（应用启动与焦点钳制基线）。
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum Panel {
+    /// 任务列表（头部页签随本面板聚焦而高亮；默认聚焦）
+    #[default]
+    List,
+    /// 任务详情
+    Detail,
+    /// 并发连接
+    Conns,
+}
+
+impl Panel {
+    /// Tab：下一个面板（列表 → 详情 → 并发 → 列表）
+    #[must_use]
+    pub fn next(self) -> Self {
+        match self {
+            Panel::List => Panel::Detail,
+            Panel::Detail => Panel::Conns,
+            Panel::Conns => Panel::List,
+        }
+    }
+
+    /// BackTab：上一个面板
+    #[must_use]
+    pub fn prev(self) -> Self {
+        match self {
+            Panel::List => Panel::Conns,
+            Panel::Detail => Panel::List,
+            Panel::Conns => Panel::Detail,
+        }
+    }
+}
+
 /// 列表页签（仅两个）
 pub const FILTERS: [&str; 2] = ["正在下载", "已完成"];
 
@@ -121,6 +161,8 @@ pub struct App {
     pub scroll: usize,
     /// 页签下标（对应 FILTERS）
     pub filter: usize,
+    /// 当前聚焦面板（lazygit 式，v1.30/FR-01-108；窄终端/紧凑模式钳制 List）
+    pub focus: Panel,
     /// 全局下载速度历史（KB/s 采样）
     pub speed_hist: Vec<u64>,
     /// 全局上传速度历史（KB/s 采样；01 恒 0，BT 二期启用）
@@ -152,6 +194,22 @@ pub struct App {
     /// toast 文案
     pub toast: Option<String>,
     toast_until: Option<Instant>,
+    /// 上一帧选中下标（tick 兜底跟随的变化检测：仅选中项真的变化才拉回
+    /// 视口——滚轮自由滚动不被逐帧归位，滚动条不锁死，v1.30/FR-01-109 ⑤）
+    last_selected: usize,
+    /// 帮助窗口（H 快捷键，v1.30/FR-01-107）是否打开
+    pub help_open: bool,
+    /// 帮助窗口内容滚动偏移（以「行」为单位；渲染层按内容高度钳制）
+    pub help_scroll: usize,
+    /// 帮助窗口左上角位置（鼠标拖拽移动记忆；None = 打开时居中。
+    /// 帮助窗口位置跨次打开记忆——关闭不清除，与 pieces 关闭即清不同）
+    pub help_pos: Option<(u16, u16)>,
+    /// 帮助窗口拖拽中的抓取偏移（指针相对窗口左上角）
+    pub help_drag: Option<(u16, u16)>,
+    /// 帮助窗口区域（由 ui 层每帧回填；拖拽/滚轮/点击外部关闭的命中测试）
+    pub help_area: Option<Rect>,
+    /// 头部页签命中矩形（ui 层每帧回填；鼠标点击页签切换，v1.30/FR-01-80）
+    pub tab_rects: Vec<(Rect, usize)>,
     /// 下载槽位上限（配置 `download_slots`，默认 5，D13）
     pub max_slots: usize,
     /// 引擎句柄
@@ -186,9 +244,10 @@ pub struct App {
     /// 是否显示右栏两面板（任务详情 / 并发连接面板；`G` 切换，FR-01-98；
     /// 头部流量图常显不受影响）
     pub show_panes: bool,
-    /// 并发连接面板滚动偏移（连接行单位；滚轮 / Ctrl+↑↓ 滚动，FR-01-96）
+    /// 并发连接面板滚动偏移（连接行单位；滚轮 / ↑↓（面板聚焦时）滚动，FR-01-96/97）
     pub conns_scroll: usize,
-    /// 并发连接面板当前选中行（连接下标 0 基；Ctrl+↑↓ 移动，Ctrl+B 断开目标，FR-01-97）
+    /// 并发连接面板当前选中行（连接下标 0 基；↑↓ 移动（面板聚焦时），B 断开目标，
+    /// FR-01-97 v1.30）
     pub conns_sel: usize,
     /// 并发连接面板内框区域（ui 层回填；滚轮命中；空明细时 None = 穿透）
     pub conns_area: Option<Rect>,
@@ -196,6 +255,8 @@ pub struct App {
     pub detail_url_rect: Option<Rect>,
     /// 任务详情面板「校验」字段名热区（ui 层每帧回填；点击复制校验码值，FR-01-101）
     pub detail_ck_rect: Option<Rect>,
+    /// 任务详情面板完整区域（ui 层每帧回填；点击面板任意处聚焦，v1.30/FR-01-108）
+    pub detail_area: Option<Rect>,
     /// 系统剪贴板实例（FR-01-101：懒初始化并复用，避免每次点击重建桌面连接）
     clipboard: Option<arboard::Clipboard>,
     /// 最近一次复制的内容（FR-01-101 诊断与测试断言复制内容用）
@@ -214,6 +275,13 @@ pub struct App {
     pub dlg_ck_rects: Vec<(Rect, usize)>,
     /// 代理下拉选项命中区域（v1.5/FR-01-86；鼠标点击选择）
     pub dlg_proxy_rects: Vec<(Rect, usize)>,
+    /// 对话框完整区域（ui 层每帧回填；拖拽起点命中测试，v133/D38）
+    pub dlg_area: Option<Rect>,
+    /// 对话框左上角位置（鼠标拖拽移动记忆；None = 打开时居中，渲染层
+    /// 首帧回填；关闭不保留，再次打开重新居中，v133/D38 与 pieces 同口径）
+    pub dlg_pos: Option<(u16, u16)>,
+    /// 对话框拖拽中的抓取偏移（指针相对窗口左上角；Some = 左键拖拽进行中）
+    pub dlg_drag: Option<(u16, u16)>,
     /// pieces 分块弹窗（`P` 快捷键，FR-01-106）是否打开
     pub pieces_open: bool,
     /// pieces 弹窗网格滚动偏移（网格行单位；上限由渲染层按实际总行数钳制）
@@ -255,6 +323,8 @@ impl App {
             selected: 0,
             scroll: 0,
             filter: 0,
+            focus: Panel::List,
+            last_selected: 0,
             speed_hist: vec![0; 90],
             up_hist: vec![0; 90],
             session_bytes: 0,
@@ -266,8 +336,9 @@ impl App {
             conn_rebase: std::collections::HashSet::new(),
             frame: 0,
             quit: false,
+            // 启动欢迎语 4 秒（v1.30/FR-01-107：toast 一般 3 秒、欢迎语 4 秒）
             toast: Some("EZR Downloader 就绪".to_string()),
-            toast_until: Some(Instant::now() + std::time::Duration::from_secs(3)),
+            toast_until: Some(Instant::now() + std::time::Duration::from_secs(4)),
             max_slots: cfg.download_slots,
             engine,
             evt_rx,
@@ -286,6 +357,7 @@ impl App {
             conns_area: None,
             detail_url_rect: None,
             detail_ck_rect: None,
+            detail_area: None,
             clipboard: None,
             last_copied: None,
             visible_conns_rows: 8,
@@ -295,12 +367,21 @@ impl App {
             dlg_field_rects: Vec::new(),
             dlg_ck_rects: Vec::new(),
             dlg_proxy_rects: Vec::new(),
+            dlg_area: None,
+            dlg_pos: None,
+            dlg_drag: None,
             pieces_open: false,
             pieces_scroll: 0,
             pieces_follow: false,
             pieces_area: None,
             pieces_pos: None,
             pieces_drag: None,
+            help_open: false,
+            help_scroll: 0,
+            help_pos: None,
+            help_drag: None,
+            help_area: None,
+            tab_rects: Vec::new(),
             proxy_options,
             proxy_labels,
             default_proxy_sel,
@@ -357,6 +438,13 @@ impl App {
     #[must_use]
     pub fn queue_pos_of(&self, task_id: u32) -> Option<usize> {
         slots::queue_pos(&self.tasks, task_id)
+    }
+
+    /// 是否存在浮层（对话框/pieces 弹窗/帮助窗口，v1.30/FR-01-107）。
+    /// 浮层打开时底层面板全部降级暗边框、页签高亮不再使用反色底。
+    #[must_use]
+    pub fn overlay_open(&self) -> bool {
+        self.dialog.is_some() || self.pieces_open || self.help_open
     }
 
     /// 过滤后的任务下标视图（页签 0 = 正在下载，1 = 已完成）

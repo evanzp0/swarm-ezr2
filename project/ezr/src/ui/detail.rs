@@ -11,8 +11,10 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use super::text::{fmt_size, pad_right, truncate, w};
-use super::{bordered_block, state_color, ACCENT, BORDER, DIM, FG, GREEN, LIGHT_BLUE, RED, YELLOW};
-use crate::app::App;
+use super::{
+    panel_border_style, panel_title_style, state_color, DIM, FG, GREEN, LIGHT_BLUE, RED, YELLOW,
+};
+use crate::app::{App, Panel};
 use crate::model::chunk::fmt_block_size;
 use crate::model::{Task, TaskState};
 
@@ -83,10 +85,17 @@ fn chunk_row(t: &Task) -> Vec<Span<'static>> {
 }
 
 pub(super) fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
-    let block =
-        bordered_block(BORDER).title(Span::styled(" 任务详情 ", Style::default().fg(ACCENT)));
+    // 聚焦边框（v1.30/FR-01-108）：详情聚焦且无浮层 → 绿色加粗，否则暗色
+    let focused = app.focus == Panel::Detail && !app.overlay_open();
+    let block = ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        .border_style(panel_border_style(focused))
+        .title(Span::styled(" 任务详情 ", panel_title_style(focused)));
     let inner = block.inner(area);
     f.render_widget(block, area);
+    // 详情面板完整区域（点击任意处聚焦，v1.30/FR-01-108 ⑤）
+    app.detail_area = Some(area);
 
     let Some(t) = app.sel_task() else {
         // 无选中任务：字段名热区清空（FR-01-101）

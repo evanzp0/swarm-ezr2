@@ -15,10 +15,12 @@ use ratatui::Frame;
 
 use super::chart::draw_chart;
 use super::text::{fmt_size, fmt_speed};
-use super::{bordered_block, ACCENT, BORDER, DIM, DIM2, FG, LIGHT_BLUE, MAGENTA, YELLOW};
+use super::{
+    bordered_block, overlay_open, ACCENT, BORDER, DIM, DIM2, FG, LIGHT_BLUE, MAGENTA, YELLOW,
+};
 use crate::app::{App, FILTERS};
 
-pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect, with_chart: bool) {
+pub(super) fn draw_header(f: &mut Frame, app: &mut App, area: Rect, with_chart: bool) {
     // 头部聚合口径单源 App 访问器（architect v116：自渲染路径提取为可无头单测的
     // 应用层策略——全局 ↓↑ 合计与并发 N 总数原内联在本函数）
     let dl = app.global_dl_speed();
@@ -116,27 +118,51 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect, with_chart: bool
     }
 
     // 内容行 3：页签行（原「任务队列」面板并入，FR-01-94 ④）：正在下载 (n) │
-    // 已完成 (n) │ 下载槽位 x/y（槽位内联左对齐；已满黄色加粗：等待任务需排队）
+    // 已完成 (n) │ 下载槽位 x/y（槽位内联左对齐；已满黄色加粗：等待任务需排队）。
+    // v1.30/FR-01-108：页签高亮跟随列表焦点——列表聚焦且无浮层 → 黑字青底加粗；
+    // 否则（焦点在其他面板 / 浮层打开）青字加粗无底色，非当前页签 FG。
+    // 每帧回填页签命中矩形 tab_rects（CJK 计宽），供鼠标点击切换（FR-01-80 v1.30）
     if inner.height >= 3 {
         // 页签计数口径在应用层访问器（architect v126 提取，无头单测面）
         let counts = app.tab_counts();
         let row_y = inner.y + 2;
         let mut spans: Vec<Span> = Vec::new();
         let mut tabs_w: u16 = 0;
+        // 页签高亮：列表聚焦且无浮层时反色底，否则青字加粗
+        let tab_active = !overlay_open(app) && app.focus == crate::app::Panel::List;
+        app.tab_rects.clear();
         for (i, label) in FILTERS.iter().enumerate() {
+            let text = format!(" {} ({}) ", label, counts[i]);
+            let tab_x = inner.x + tabs_w;
+            // 显示宽经 Span::width 计算（CJK 计宽；unicode-width 非直接依赖）
+            let text_w = Span::raw(text.as_str()).width() as u16;
             let span = Span::styled(
-                format!(" {} ({}) ", label, counts[i]),
+                text.clone(),
                 if i == app.filter {
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(ACCENT)
-                        .add_modifier(Modifier::BOLD)
+                    if tab_active {
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(ACCENT)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+                    }
                 } else {
                     Style::default().fg(FG)
                 },
             );
-            tabs_w += span.width() as u16;
+            tabs_w += text_w;
             spans.push(span);
+            // 回填页签命中矩形（显示宽经 Span::width CJK 计宽）
+            app.tab_rects.push((
+                Rect {
+                    x: tab_x,
+                    y: row_y,
+                    width: text_w,
+                    height: 1,
+                },
+                i,
+            ));
             if i + 1 < FILTERS.len() {
                 let dv = Span::styled("│", Style::default().fg(DIM2));
                 tabs_w += dv.width() as u16;

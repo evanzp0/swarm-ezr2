@@ -283,6 +283,11 @@ pub(super) async fn download(
                     let q = concurrency.clamp(1, 64);
                     let _ = ep_tx.send(Arc::new(endpoint));
                     let _ = quota_tx.send(q);
+                    // v133（操作者实证：缩容 20→4 后面板残留 16 条无效连接）：
+                    // 即时回收超额槽位的连接行——待命行（无租约即退出的 worker）
+                    // 与块边界退出遗留行都由本条收敛，不等下一进度帧；存活
+                    // worker（id ≤ q）行保持
+                    deps.conns.lock().await.retain(|c| c.id <= q);
                     prune_finished(&mut handles);
                     fill_workers(&mut handles, &deps, shared, q);
                 }

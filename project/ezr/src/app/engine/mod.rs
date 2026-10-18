@@ -363,6 +363,156 @@ mod tick_tests {
         std::fs::remove_dir_all(&save).ok();
     }
 
+    /// Range 滴流桩（206， honors Range 从请求偏移起持续小步发送）：分块
+    /// 下载中暂停场景专用——传输慢到可稳定在「在飞块带落盘零头」时刻暂停。
+    fn stub_206_range_trickle(total: u64) -> std::net::SocketAddr {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for c in listener.incoming().flatten() {
+                let mut c = c;
+                let mut r = BufReader::new(c.try_clone().unwrap());
+                let mut line = String::new();
+                let mut range_start: u64 = 0;
+                while r.read_line(&mut line).unwrap_or(0) > 0 {
+                    if let Some(rest) = line.strip_prefix("Range: bytes=") {
+                        range_start = rest
+                            .split('-')
+                            .next()
+                            .and_then(|v| v.trim().parse().ok())
+                            .unwrap_or(0);
+                    }
+                    if line == "\r\n" {
+                        break;
+                    }
+                    line.clear();
+                }
+                let remain = total.saturating_sub(range_start);
+                let head = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Length: {remain}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n"
+                );
+                let _ = c.write_all(head.as_bytes());
+                let _ = c.flush();
+                // 滴流：4KB / 5ms ≈ 800KB/s，1MB 块约 1.3s——暂停窗口稳定
+                let mut sent: u64 = 0;
+                while sent < remain {
+                    let n = 4096usize.min((remain - sent) as usize);
+                    if c.write_all(&vec![7u8; n]).is_err() {
+                        break;
+                    }
+                    let _ = c.flush();
+                    sent += n as u64;
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                drop(c);
+            }
+        });
+        addr
+    }
+
+    /// 操作者 v133 实证缺陷回归：下载中（在飞块含部分零头）暂停后按 `P`
+    /// 必须打开分块弹窗（05-ui-pieces-03：暂停后原在传块按落盘零头转 🟨
+    /// 或无零头转 ⬜——门槛三条件 probed/resumable/total 均不受暂停影响）。
+    #[tokio::test]
+    async fn paused_task_with_partial_blocks_still_opens_pieces() {
+        let addr = stub_206_range_trickle(2_000_000); // 2 块 × 1MB，并发 4
+        let mut app = make_app("pause-pieces");
+        let save = crate::model::testenv::uniq_tmp_dir("ezr-tick-save-pp");
+        app.add_cli_task(
+            format!("http://{addr}/stub-pp.bin"),
+            Some(save.to_string_lossy().into_owned()),
+            Some(4),
+            None,
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        // 泵到下载中（滴流桩保证此时在飞块带落盘零头；引擎传输中不落
+        // 部分块账——partial_blocks 由暂停收尾 PausedDone 终态快照重铺）
+        pump_until(&mut app, deadline, |a| {
+            a.tasks[0].state == TaskState::Downloading
+        })
+        .await;
+        assert_eq!(
+            app.tasks[0].state,
+            TaskState::Downloading,
+            "滴流桩应处于下载中"
+        );
+        // 暂停（UI 即时转已暂停 + 引擎 PausedDone 收尾重铺终态部分块）
+        app.toggle_pause();
+        pump_until(&mut app, deadline, |a| {
+            a.tasks[0].state == TaskState::Paused && !a.tasks[0].partial_blocks.is_empty()
+        })
+        .await;
+        assert_eq!(app.tasks[0].state, TaskState::Paused);
+        assert!(app.tasks[0].probed, "暂停不得清探测标记");
+        assert!(app.tasks[0].resumable, "暂停不得改判续传能力");
+        assert!(app.tasks[0].total > 0, "暂停不得清内容大小");
+        app.open_pieces();
+        assert!(
+            app.pieces_open,
+            "暂停后按 P 必须打开分块弹窗（toast={:?}）",
+            app.toast
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&save).ok();
+    }
+
+    /// 操作者 v133 实证缺陷回归：并发下调（4→2）后并发面板不得残留超额
+    /// 槽位的无效连接行——Reconfigure 即时回收（id > q）+ 块边界退出清行，
+    /// 面板只剩存活 worker（id ≤ 2）的条目。
+    #[tokio::test]
+    async fn reconfigure_shrink_prunes_stale_conn_rows() {
+        let addr = stub_206_range_trickle(6_000_000); // 6 块 × 1MB，并发 4
+        let mut app = make_app("shrink-conns");
+        let save = crate::model::testenv::uniq_tmp_dir("ezr-tick-save-sc");
+        app.add_cli_task(
+            format!("http://{addr}/stub-sc.bin"),
+            Some(save.to_string_lossy().into_owned()),
+            Some(4),
+            None,
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        pump_until(&mut app, deadline, |a| {
+            a.tasks[0].state == TaskState::Downloading
+        })
+        .await;
+        assert_eq!(app.tasks[0].state, TaskState::Downloading);
+        // 等到 4 条连接全部在位（4 worker 都领到块）
+        pump_until(&mut app, deadline, |a| a.tasks[0].connections.len() >= 4).await;
+        assert!(
+            app.tasks[0].connections.iter().any(|c| c.id >= 3),
+            "缩容前应有槽位 3/4 的连接行"
+        );
+        // 修改并发 4→2（走 Modify 确认同款 Reconfigure 命令）
+        app.engine
+            .send(crate::engine::Cmd::Reconfigure {
+                id: app.tasks[0].id,
+                concurrency: 2,
+                endpoint: None,
+            })
+            .await;
+        // 泵若干进度帧：超额槽位行必须消失且不再出现
+        for _ in 0..20 {
+            app.tick().await;
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        }
+        assert!(
+            app.tasks[0].connections.iter().all(|c| c.id <= 2),
+            "缩容后只允许槽位 1/2 的连接行，实际 = {:?}",
+            app.tasks[0]
+                .connections
+                .iter()
+                .map(|c| c.id)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            app.tasks[0].state == TaskState::Downloading,
+            "缩容不打断下载"
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&save).ok();
+    }
+
     /// 退避到点自动重试（tick 4a → send_retry_start）：retry_in 到点转等待中、
     /// 补发 Start 并清进展标记，重试一轮后计数递增（FR-01-41）
     #[tokio::test]

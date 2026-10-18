@@ -24,6 +24,27 @@ pub(super) const CAP_CONNS_DIGITS: usize = 2;
 pub(super) const CAP_CK_HEX: usize = 128;
 
 impl super::App {
+    /// URL 变化后同步默认并发（v1.30/FR-01-01 修订：URL 输入自动回填默认并发）。
+    /// 仅当并发字段未被手动改过（conns_edited = false）时回填；协议默认并发：
+    /// HTTP/HTTPS = 配置 `http_concurrency`（默认 4，与提交回退口径同源）、
+    /// BT = 20（phase-02 预留，01 期不触发）。逐键输入 / 退格 / 粘贴三个
+    /// URL 变化入口共用（DRY 单源）。
+    pub(super) fn sync_default_conns_after_url_change(&mut self) {
+        let Some(d) = self.dialog.as_mut() else {
+            return;
+        };
+        if d.conns_edited {
+            return;
+        }
+        let proto = crate::model::protocol_of_url(d.url.trim());
+        let def = if proto.is_bt() {
+            20
+        } else {
+            self.cfg.http_concurrency
+        };
+        d.conns = def.to_string();
+    }
+
     pub(super) fn on_dialog_key(&mut self, code: KeyCode) {
         let (kind, focus) = match &self.dialog {
             Some(d) => (d.kind, d.focus),
@@ -68,6 +89,10 @@ impl super::App {
             KeyCode::Backspace => {
                 if let Some(d) = self.dialog.as_mut() {
                     text_backspace(kind, d, focus);
+                }
+                // URL 变化时同步默认并发数（用户未手动修改过时，v1.30/FR-01-01）
+                if kind == DialogKind::Add && focus == 0 {
+                    self.sync_default_conns_after_url_change();
                 }
             }
             KeyCode::Char(c) => match kind {
@@ -129,6 +154,10 @@ impl super::App {
                 if let Some(d) = self.dialog.as_mut() {
                     text_char(kind_add(), d, focus, c);
                 }
+            }
+            // URL 变化时同步默认并发数（用户未手动修改过时，v1.30/FR-01-01）
+            if focus == 0 {
+                self.sync_default_conns_after_url_change();
             }
         } else if focus == 3 {
             if c == ' ' {
