@@ -21,7 +21,8 @@
 //! 并发连接面板：BT 任务列序 = 对端 IP(掩码)/下载速度/累计下载/上传速度/累计上传，
 //! HTTP 任务列序 = 序号/下载速度/累计下载（无上传两列）；BT 首列对端 IP 以
 //! 「IPv4 首段.*.末端（如 192.*.100）/ IPv6 首段:*:末端（如 2001:*:7334）」掩码显示；
-//! Ctrl+↑/↓ 选中行高亮，Ctrl+B 断开选中连接（底部断开提示仅 BT 任务显示）。
+//! 聚焦本面板后 ↑/↓ 选中行高亮（lazygit 式统一列表选择），B 断开选中连接
+//! （底部断开提示仅 BT 任务显示；非聚焦时提示 Tab 聚焦口径）。
 //! 累计均为当前任务本次开始下载后的累计量（重新排队/重试时清零）；
 //! 仅「下载中」与「做种中」状态显示并发明细，其余状态（等待中/已暂停/校验中/
 //! 后期处理中/已失败/已完成）明细为空、活跃 0/0。
@@ -35,16 +36,13 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{
-        Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,
-        ScrollbarState,
-    },
+    widgets::{Block, BorderType, Borders, Clear, Paragraph},
     Frame,
 };
 
 use crate::app::{
-    chunk_size_label, App, DialogKind, FailKind, PieceState, Task, TaskState, CHECKSUM_ALGOS,
-    FILTERS, ITEM_HEIGHT, MAX_DOWNLOAD_SLOTS,
+    chunk_size_label, App, DialogKind, FailKind, Panel, PieceState, Task, TaskState,
+    CHECKSUM_ALGOS, FILTERS, ITEM_HEIGHT, MAX_DOWNLOAD_SLOTS,
 };
 
 // ---------------------------------------------------------------------------
@@ -65,6 +63,99 @@ const EMPTY: Color = Color::Rgb(54, 68, 74);
 /// 下载中/校验中/后期处理（淡蓝；亦为流量图唯一用色——REQ-8.5 单色面积图，
 /// 与「峰值 ↓」图例同色）
 const LIGHT_BLUE: Color = Color::Rgb(122, 185, 242);
+
+// ---------------------------------------------------------------------------
+// lazygit 式聚焦显示：当前面板边框高亮 + 非当前面板暗边框
+// ---------------------------------------------------------------------------
+
+/// 聚焦面板边框色（lazygit 主题默认 activeBorderColor = green + bold）
+const FOCUS_BORDER: Color = Color::Green;
+
+/// 是否存在浮层（对话框/pieces 弹窗/帮助窗口）：浮层打开时底层面板全部
+/// 降级为暗边框，焦点面板不再高亮（视觉焦点让位给模态浮层）
+fn overlay_open(app: &App) -> bool {
+    app.dialog.is_some() || app.pieces_open || app.help_open
+}
+
+/// 面板边框样式：聚焦 = 绿色加粗（lazygit activeBorderColor 口径），
+/// 未聚焦/浮层打开 = 暗色（inactiveBorderColor 口径）
+fn panel_border_style(focused: bool) -> Style {
+    if focused {
+        Style::default()
+            .fg(FOCUS_BORDER)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(BORDER)
+    }
+}
+
+/// 面板标题样式：聚焦 = 绿色加粗，未聚焦/浮层打开 = 暗灰
+fn panel_title_style(focused: bool) -> Style {
+    if focused {
+        Style::default()
+            .fg(FOCUS_BORDER)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(DIM)
+    }
+}
+
+/// lazygit 式滚动条（右侧边框列：▲/▼ 上下箭头 + │ 轨道 + █ 滑块）。
+///
+/// * `panel`：面板完整区域（含边框）——滚动条画在右边框列、上下角之间的行；
+/// * `total`/`page`：内容总项数 / 可视项数（total <= page 时不绘制）；
+/// * `position`：滚动偏移（内部钳制到 0..=total-page）；
+/// * `thumb`：滑块颜色（跟随便属面板边框色：聚焦面板/弹窗均为高亮绿）。
+///
+/// 滑块位置口径同 lazygit gocui scrollbar.go：顶/底端吸附，中间按比例取整、
+/// 末页前不吸底（ceil 保证下滑即移动，-1 预留行程）。
+fn lazy_scrollbar(f: &mut Frame, panel: Rect, total: usize, position: usize, page: usize, thumb: Color) {
+    if page == 0 || total <= page || panel.height < 5 || panel.width == 0 {
+        return;
+    }
+    let col = panel.x + panel.width - 1; // 右边框列
+    let top = panel.y + 1; // 上角之下
+    let bottom = panel.y + panel.height - 1; // 下角（不含）
+    let h = (bottom.saturating_sub(top)) as usize; // 可绘行数（▲+轨道+▼）
+    if h < 3 {
+        return;
+    }
+    let track = h - 2; // 轨道行数（扣除上下箭头）
+    let thumb_h = ((((page as f64) / (total as f64)) * track as f64) as usize).clamp(1, track);
+    let max_pos = total - page;
+    let position = position.min(max_pos);
+    let thumb_y = if position >= max_pos {
+        track - thumb_h
+    } else {
+        (((position as f64 / max_pos as f64)
+            * (track - thumb_h - 1) as f64)
+            .ceil()) as usize
+    }
+    .min(track.saturating_sub(thumb_h));
+    // 字形全部取格内居中（▲ │ █ ▼ 同列垂直对齐）：滑块用全块 █ 而非
+    // 左对齐的半块 ▐——半块贴左缘会与居中的轨道/箭头错位（对齐修复）
+    let arrow_style = Style::default().fg(DIM);
+    let track_style = Style::default().fg(DIM2);
+    let thumb_style = Style::default().fg(thumb).add_modifier(Modifier::BOLD);
+    for (i, y) in (top..bottom).enumerate() {
+        let (sym, style) = if i == 0 {
+            ("▲", arrow_style)
+        } else if i == h - 1 {
+            ("▼", arrow_style)
+        } else {
+            let t = i - 1; // 轨道行下标 0..track
+            if t >= thumb_y && t < thumb_y + thumb_h {
+                ("█", thumb_style)
+            } else {
+                ("│", track_style)
+            }
+        };
+        if let Some(cell) = f.buffer_mut().cell_mut((col, y)) {
+            cell.set_symbol(sym);
+            cell.set_style(style);
+        }
+    }
+}
 
 fn state_color(s: TaskState) -> Color {
     match s {
@@ -486,7 +577,7 @@ fn render_task(f: &mut Frame, t: &Task, area: Rect, sel: bool, spinner: char, qu
 // 各区块渲染
 // ---------------------------------------------------------------------------
 
-fn draw_header(f: &mut Frame, app: &App, area: Rect, with_chart: bool) {
+fn draw_header(f: &mut Frame, app: &mut App, area: Rect, with_chart: bool) {
     let dl: f64 = app
         .tasks
         .iter()
@@ -600,27 +691,48 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect, with_chart: bool) {
 
     // 行 3：页签行（原「任务队列」面板内容并入）：正在下载 (n) │ 已完成 (n) │
     // 下载槽位 x/y（槽位内联左对齐；已满黄色加粗：等待任务需排队）
+    // 页签高亮跟随任务列表面板焦点（lazygit 式）：列表聚焦时当前页签
+    // 黑字青底加粗；焦点在别的面板/浮层打开时页签全部不高亮（当前页签
+    // 仅青字加粗保留可辨识度）
     if inner.height >= 3 {
         let doing = app.tasks.iter().filter(|t| !t.state.is_done()).count();
         let done = app.tasks.len() - doing;
         let counts = [doing, done];
         let row_y = inner.y + 2;
+        let list_hot = app.focus == Panel::List && !overlay_open(app);
+        // 页签可点击区域（需求修订：鼠标点击切换页签）：每帧重建，
+        // 记录各页签 span 的命中矩形（不含分隔符）
+        app.tab_rects.clear();
         let mut spans: Vec<Span> = Vec::new();
         let mut tabs_w: u16 = 0;
         for (i, label) in FILTERS.iter().enumerate() {
+            let text = format!(" {} ({}) ", label, counts[i]);
+            let tab_rect = Rect {
+                x: inner.x + tabs_w,
+                y: row_y,
+                width: w(&text) as u16,
+                height: 1,
+            };
             let span = Span::styled(
-                format!(" {} ({}) ", label, counts[i]),
+                text,
                 if i == app.filter {
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(ACCENT)
-                        .add_modifier(Modifier::BOLD)
+                    if list_hot {
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(ACCENT)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                            .fg(ACCENT)
+                            .add_modifier(Modifier::BOLD)
+                    }
                 } else {
                     Style::default().fg(FG)
                 },
             );
             tabs_w += span.width() as u16;
             spans.push(span);
+            app.tab_rects.push((tab_rect, i));
             if i + 1 < FILTERS.len() {
                 let dv = Span::styled("│", Style::default().fg(DIM2));
                 tabs_w += dv.width() as u16;
@@ -681,11 +793,12 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect, with_chart: bool) {
 }
 
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
+    let focused = app.focus == Panel::List && !overlay_open(app);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(BORDER))
-        .title(Span::styled(" 下载任务 ", Style::default().fg(ACCENT)))
+        .border_style(panel_border_style(focused))
+        .title(Span::styled(" 下载任务 ", panel_title_style(focused)))
         .title(
             Line::from(Span::styled(
                 format!(" {}/{} 项 ", app.selected + 1, app.filtered().len()),
@@ -749,18 +862,27 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         render_task(f, t, row_area, ti == app.selected, spinner, qpos[ti]);
     }
 
+    // lazygit 式滚动条（任务数超出一屏时；画在面板右边框列）
+    if idxs.len() > rows {
+        let thumb = if focused { FOCUS_BORDER } else { BORDER };
+        lazy_scrollbar(f, area, idxs.len(), app.scroll, rows, thumb);
+    }
+
     app.visible_rows = max_items;
     app.list_area = Some(inner);
 }
 
 fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
+    let focused = app.focus == Panel::Detail && !overlay_open(app);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(BORDER))
-        .title(Span::styled(" 任务详情 ", Style::default().fg(ACCENT)));
+        .border_style(panel_border_style(focused))
+        .title(Span::styled(" 任务详情 ", panel_title_style(focused)));
     let inner = block.inner(area);
     f.render_widget(block, area);
+    // 详情面板内框（鼠标点击聚焦本面板；需求修订-1）
+    app.detail_area = Some(inner);
 
     let Some(t) = app.sel_task() else {
         // 无选中任务：字段名热区清空（修订-5）
@@ -1080,11 +1202,13 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         }
         None => (false, 0, 0, true),
     };
+    // 聚焦状态（并发连接面板边框/标题/选中行高亮跟随；滚轮滚动不受影响）
+    let focused = app.focus == Panel::Conns && !overlay_open(app);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(BORDER))
-        .title(Span::styled(" 并发连接 ", Style::default().fg(ACCENT)))
+        .border_style(panel_border_style(focused))
+        .title(Span::styled(" 并发连接 ", panel_title_style(focused)))
         .title(
             Line::from(Span::styled(
                 format!("活跃 {} ", active),
@@ -1096,9 +1220,8 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(block, area);
     app.conns_area = Some(inner);
 
-    // 面板结构：表头 1 行 + 数据行 + 提示行 1 行（提示行恒定显示选择方式提示，修订-2）
-    let rows = (inner.height as usize).saturating_sub(2);
-    let hint_row = inner.y + inner.height.saturating_sub(1);
+    // 面板结构：表头 1 行 + 数据行（提示行已删除，全部空间让给数据）
+    let rows = (inner.height as usize).saturating_sub(1);
 
     let Some(t) = app.sel_task() else {
         app.visible_conns_rows = 0;
@@ -1155,7 +1278,9 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
 
     for (i, c) in t.connections[start..end].iter().enumerate() {
         let i = start + i;
-        let sel = i == app.conns_sel;
+        // 选中行高亮仅在本面板聚焦时显示（lazygit 式：非聚焦面板不显示
+        // 内部选中态，视觉焦点唯一）；任务选中不受影响（主列表恒定高亮）
+        let sel = focused && i == app.conns_sel;
         // 选中行：深青背景高亮（同任务列表选中色）
         let bg = if sel { SEL_BG } else { Color::Reset };
         let up_on = c.up_speed > 0.0;
@@ -1220,22 +1345,18 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         lines.push(Line::from(spans));
     }
 
-    // 提示行（修订-4：恒定显示快捷键提示；「共 x 条 · 滚轮翻看」总数提示已删除；
-    // 「Ctrl+B 断开」仅 BT 任务显示——HTTP 任务无断开概念，行为层本就拒绝）
-    let hint = if is_bt {
-        "Ctrl+↑↓ 选择 · Ctrl+B 断开".to_string()
-    } else {
-        "Ctrl+↑↓ 选择".to_string()
-    };
-    f.render_widget(
-        Paragraph::new(Span::styled(hint, Style::default().fg(DIM2))),
-        Rect {
-            x: inner.x,
-            y: hint_row,
-            width: inner.width,
-            height: 1,
-        },
-    );
+    // lazygit 式滚动条（连接数超出一屏时；画在面板右边框列）
+    if t.connections.len() > data_rows {
+        let thumb = if focused { FOCUS_BORDER } else { BORDER };
+        lazy_scrollbar(
+            f,
+            area,
+            t.connections.len(),
+            app.conns_scroll,
+            data_rows,
+            thumb,
+        );
+    }
 
     app.visible_conns_rows = data_rows;
     f.render_widget(Paragraph::new(lines), inner);
@@ -1249,9 +1370,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(inner);
-
-    // 快捷键行
+    // 单行页脚（需求修订：仅保留 H 帮助 / Q 退出提示 + toast）。
+    // 完整分类说明见 H 帮助窗口。
     let key = |s: &str| {
         Span::styled(
             s.to_string(),
@@ -1260,53 +1380,18 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     };
     let desc = |s: &str| Span::styled(s.to_string(), Style::default().fg(DIM));
     let mut l1 = vec![
-        key(" ↑↓"),
-        desc(" 选择  "),
-        key("Space"),
-        desc(" 暂停/继续  "),
-        key("R"),
-        desc(" 重试  "),
-        key("P"),
-        desc(" 分块  "),
-        key("A"),
-        desc(" 添加  "),
-        key("D"),
-        desc(" 删除  "),
-        key("U/J"),
-        desc(" 上移/下移  "),
-        key("C"),
-        desc(" 清已完成  "),
-        key("Tab"),
-        desc(" 页签  "),
-        key("G"),
-        desc(" 面板  "),
-        key("Q"),
-        desc(" 退出"),
-    ];
-    // 窄屏精简
-    if inner.width < 100 {
-        l1.truncate(9);
-    }
-    if inner.width < 86 {
-        l1.truncate(7);
-    }
-    if inner.width < 72 {
-        l1.truncate(5);
-    }
-    f.render_widget(Paragraph::new(Line::from(l1)), rows[0]);
-
-    // 鼠标提示 + toast
-    let mut l2 = vec![
-        Span::styled(" 鼠标 ", Style::default().fg(DIM)),
-        Span::styled("点击选中 · 滚轮滚动   ", Style::default().fg(DIM)),
+        key(" H"),
+        desc(" 帮助  ·  "),
+        key(" Q"),
+        desc(" 退出  "),
     ];
     if let Some(msg) = &app.toast {
-        l2.push(Span::styled(
+        l1.push(Span::styled(
             format!("◆ {}", msg),
             Style::default().fg(YELLOW),
         ));
     }
-    f.render_widget(Paragraph::new(Line::from(l2)), rows[1]);
+    f.render_widget(Paragraph::new(Line::from(l1)), inner);
 }
 
 // ---------------------------------------------------------------------------
@@ -1321,6 +1406,24 @@ fn dialog_rect(area: Rect, dw: u16, dh: u16) -> Rect {
         y: area.y + (area.height.saturating_sub(dh)) / 2,
         width: dw,
         height: dh,
+    }
+}
+
+/// 对话框定位：有记忆位置（拖拽过/首帧已回填）则用之（钳制在终端内），
+/// 否则居中。同 pieces 弹窗口径——打开时居中并记忆，拖拽后位置保持。
+fn dialog_rect_at(area: Rect, pos: Option<(u16, u16)>, dw: u16, dh: u16) -> Rect {
+    match pos {
+        Some((px, py)) => {
+            let dw = dw.min(area.width);
+            let dh = dh.min(area.height);
+            Rect {
+                x: px.min(area.width.saturating_sub(dw)),
+                y: py.min(area.height.saturating_sub(dh)),
+                width: dw,
+                height: dh,
+            }
+        }
+        None => dialog_rect(area, dw, dh),
     }
 }
 
@@ -1443,7 +1546,8 @@ struct Row {
     kind: RowKind,
 }
 
-/// 添加/修改任务对话框统一渲染（v1.5/FR-01-86/87 同步）：字段行 + 按钮行 + 提示行
+/// 添加/修改任务对话框统一渲染（v1.5/FR-01-86/87 同步）：字段行 + 按钮行
+/// （需求修订：底部快捷键提示行已删除，高度相应缩短 1 行；完整说明见 H 帮助）
 /// + 算法/代理下拉浮层。
 ///
 /// * Add —— URL/保存到/并发/校验/校验码/代理（立即下载 6 · 仅添加 7 · 取消 8）
@@ -1451,24 +1555,27 @@ struct Row {
 fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) {
     let is_add = kind == DialogKind::Add;
     let (title, dw, dh) = if is_add {
-        (" 添加下载任务 ", 74u16, 12u16)
+        (" 添加下载任务 ", 74u16, 11u16)
     } else {
-        (" 修改任务 ", 74, 10)
+        (" 修改任务 ", 74, 9)
     };
-    let dlg = dialog_rect(area, dw, dh);
+    // 可拖拽定位：记忆位置优先（钳制在终端内），首帧居中并回填位置/热区
+    let dlg = dialog_rect_at(area, app.dialog_pos, dw, dh);
+    if app.dialog_pos.is_none() {
+        app.dialog_pos = Some((dlg.x, dlg.y));
+    }
+    app.dialog_area = Some(dlg);
     f.render_widget(Clear, dlg);
     clip_wide_at_edges(f, dlg);
+    // 弹窗高亮边框与主面板聚焦色统一（绿+粗；一致性修复）
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(ACCENT))
-        .title(Span::styled(
-            title,
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        ));
+        .border_style(panel_border_style(true))
+        .title(Span::styled(title, panel_title_style(true)));
     let inner = block.inner(dlg);
     f.render_widget(block, dlg);
-    let min_h = if is_add { 10 } else { 8 };
+    let min_h = if is_add { 9 } else { 7 };
     if inner.width < 24 || inner.height < min_h {
         return;
     }
@@ -1645,25 +1752,8 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         bx += bw + 2;
     }
 
-    // 提示行（下拉框展开时切换为列表操作提示）
-    let hint = if ck_open {
-        " ↑↓ 选择算法 · Enter 确认选择 · Esc 关闭列表"
-    } else if proxy_open {
-        " ↑↓ 选择代理 · Enter 确认选择 · Esc 关闭列表"
-    } else if is_add {
-        " Enter 立即下载 · Tab/↑↓ 切换 · Esc 取消 · 校验码留空 = 不校验"
-    } else {
-        " Enter 确定 · Tab/↑↓ 切换 · Esc 取消 · 确定后立即生效"
-    };
-    f.render_widget(
-        Paragraph::new(Span::styled(hint, Style::default().fg(DIM2))),
-        Rect {
-            x: inner.x + 1,
-            y: inner.y + n_rows + 3,
-            width: inner.width.saturating_sub(2),
-            height: 1,
-        },
-    );
+    // 需求修订：底部快捷键提示行已删除（原提示行位于 n_rows + 3；
+    // 下拉框操作提示同步移除，交互说明统一收敛到 H 帮助窗口）
 
     // 校验算法下拉框（浮层最后绘制，覆盖对话框与下层内容）
     if ck_open {
@@ -1676,11 +1766,8 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         let pblock = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(ACCENT))
-            .title(Span::styled(
-                " 校验算法 ",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-            ));
+            .border_style(panel_border_style(true))
+            .title(Span::styled(" 校验算法 ", panel_title_style(true)));
         let pinner = pblock.inner(prect);
         f.render_widget(pblock, prect);
         for (i, (name, need)) in items.iter().enumerate() {
@@ -1730,11 +1817,8 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         let pblock = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(ACCENT))
-            .title(Span::styled(
-                " 选择代理 ",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-            ));
+            .border_style(panel_border_style(true))
+            .title(Span::styled(" 选择代理 ", panel_title_style(true)));
         let pinner = pblock.inner(prect);
         f.render_widget(pblock, prect);
         for (i, name) in items.iter().enumerate() {
@@ -1771,17 +1855,20 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
 }
 
 fn draw_delete_dialog(f: &mut Frame, app: &mut App, area: Rect) {
-    let dlg = dialog_rect(area, 66, 7);
+    // 可拖拽定位：记忆位置优先（钳制在终端内），首帧居中并回填位置/热区
+    let dlg = dialog_rect_at(area, app.dialog_pos, 66, 7);
+    if app.dialog_pos.is_none() {
+        app.dialog_pos = Some((dlg.x, dlg.y));
+    }
+    app.dialog_area = Some(dlg);
     f.render_widget(Clear, dlg);
     clip_wide_at_edges(f, dlg);
+    // 删除框边框同样统一为高亮绿（危险语义由正文警示文案/按钮色承载）
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(RED))
-        .title(Span::styled(
-            " 删除任务 ",
-            Style::default().fg(RED).add_modifier(Modifier::BOLD),
-        ));
+        .border_style(panel_border_style(true))
+        .title(Span::styled(" 删除任务 ", panel_title_style(true)));
     let inner = block.inner(dlg);
     f.render_widget(block, dlg);
     if inner.width < 40 || inner.height < 5 {
@@ -1870,9 +1957,10 @@ fn piece_span(st: PieceState, n: usize) -> Span<'static> {
     Span::styled(ch.to_string().repeat(n), Style::default().fg(color))
 }
 
-/// pieces 弹窗固定尺寸（宽×高，含边框）
+/// pieces 弹窗固定尺寸（宽×高，含边框；高度较初版缩短 2 行：
+/// 底部快捷键提示行改为图例行，网格区域同步收紧）
 const PIECES_W: u16 = 64;
-const PIECES_H: u16 = 21;
+const PIECES_H: u16 = 19;
 
 /// pieces 分块弹窗（P）：展示选中任务分块（piece）状态一览。
 ///
@@ -1883,7 +1971,7 @@ const PIECES_H: u16 = 21;
 ///
 /// 布局：任务名 / 元信息（协议 · 块大小 · x/y 块 · 并发）/
 /// 分块网格（每块一个宽 2 列的色块字符；块数超出可视范围时
-/// 滚动翻看 + 右缘滚动条）/ 快捷键提示行。
+/// 滚动翻看 + 右缘滚动条）/ 图例行（四色说明，需求修订：替代原快捷键提示行）。
 /// 弹窗支持鼠标左键拖拽移动（按住弹窗内任意位置拖动，位置钳制在终端内；
 /// 打开时居中，位置记忆至关闭）。打开时定位到下载前沿（第一块未完成块
 /// 所在行滚动至网格垂直居中），此后滚动完全由用户控制，不自动跟随。
@@ -1902,8 +1990,8 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let y = y as usize;
 
-    // 弹窗尺寸 64×21（内框 62×19：名称/元信息/提示各 1 行 + 网格 16 行；
-    // 每行 31 块 → 一屏 496 块）；位置优先取记忆的拖拽位置（钳制在终端内），
+    // 弹窗尺寸 64×19（内框 62×17：名称/元信息/图例各 1 行 + 网格 14 行；
+    // 每行 31 块 → 一屏 434 块）；位置优先取记忆的拖拽位置（钳制在终端内），
     // 打开首帧居中并记忆；小终端钳制尺寸，网格行数随内框收缩
     let rect = match app.pieces_pos {
         Some((px, py)) => {
@@ -1928,11 +2016,10 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(BORDER))
-        .title(Span::styled(
-            " 分块状态 ",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        ));
+        // 模态弹窗恒定高亮边框（与主面板聚焦色统一的绿+粗；
+        // 与底层面板降级暗边框形成对比）
+        .border_style(panel_border_style(true))
+        .title(Span::styled(" 分块状态 ", panel_title_style(true)));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     app.pieces_area = Some(rect);
@@ -1942,7 +2029,7 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
         Constraint::Length(1), // 任务名
         Constraint::Length(1), // 元信息
         Constraint::Min(1),    // 分块网格
-        Constraint::Length(1), // 快捷键提示行
+        Constraint::Length(1), // 图例行（四色说明；需求修订：替代快捷键提示）
     ])
     .split(inner);
     let grid = rows[2];
@@ -2009,30 +2096,151 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
     }
     f.render_widget(Paragraph::new(lines), grid);
 
-    // 行 4：快捷键提示（分页数/总块数提示已删；本帧无 emoji，w() 计宽安全）
+    // 行 4：图例（需求修订：底部分块状态说明，替代原快捷键提示行——
+    // 色块字符与网格同源，字色兜底同 piece_span）
     f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            " ↑↓/PgUp/PgDn 滚动 · Esc/P 关闭",
-            Style::default().fg(DIM2),
-        ))),
+        Paragraph::new(Line::from(vec![
+            Span::styled(" ", Style::default()),
+            Span::styled("🟩", Style::default().fg(GREEN)),
+            Span::styled(" 已下载   ", Style::default().fg(FG)),
+            Span::styled("🟦", Style::default().fg(LIGHT_BLUE)),
+            Span::styled(" 正在下载   ", Style::default().fg(FG)),
+            Span::styled("🟨", Style::default().fg(YELLOW)),
+            Span::styled(" 部分下载   ", Style::default().fg(FG)),
+            Span::styled("⬜", Style::default().fg(EMPTY)),
+            Span::styled(" 未下载", Style::default().fg(FG)),
+        ])),
         rows[3],
     );
 
-    // 右缘滚动条（块数超出一屏时；画在弹窗右边框列，不与网格内容重叠）
+    // 右缘滚动条（块数超出一屏时；lazygit 式：▲▼箭头 + │轨道 + █滑块，
+    // 画在弹窗右边框列，不与网格内容重叠）
     if total_rows > grid_h {
-        let mut sb_state = ScrollbarState::new(total_rows)
-            .position(start_row)
-            .viewport_content_length(grid_h);
-        f.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(None)
-                .end_symbol(None)
-                .track_symbol(None)
-                .style(Style::default().fg(DIM2))
-                .thumb_style(Style::default().fg(ACCENT)),
-            rect,
-            &mut sb_state,
-        );
+        lazy_scrollbar(f, rect, total_rows, start_row, grid_h, FOCUS_BORDER);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 帮助窗口（H 快捷键）
+// ---------------------------------------------------------------------------
+
+/// 帮助窗口固定尺寸（宽×高，含边框）
+const HELP_W: u16 = 70;
+const HELP_H: u16 = 24;
+
+/// 分类帮助内容（需求修订：按 panel / 窗口分组的交互说明）。
+/// 每帧重建（行数小、无状态）；键名列用 CJK 感知宽度对齐。
+fn help_lines() -> Vec<Line<'static>> {
+    /// 分组标题
+    fn sec(t: &str) -> Line<'static> {
+        Line::from(Span::styled(
+            format!(" 【{}】", t),
+            Style::default()
+                .fg(FOCUS_BORDER)
+                .add_modifier(Modifier::BOLD),
+        ))
+    }
+    /// 键位 + 说明（键列 16 显示宽，CJK 感知对齐）
+    fn kd(k: &str, d: &str) -> Line<'static> {
+        Line::from(vec![
+            Span::styled("   ", Style::default()),
+            Span::styled(
+                pad_right(k, 16),
+                Style::default()
+                    .fg(ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(d.to_string(), Style::default().fg(FG)),
+        ])
+    }
+    /// 补充说明（暗色）
+    fn note(s: &str) -> Line<'static> {
+        Line::from(Span::styled(s.to_string(), Style::default().fg(DIM)))
+    }
+    vec![
+        sec("全局"),
+        kd("Tab / BackTab", "切换面板（任务列表 → 详情 → 并发连接）"),
+        kd("鼠标左键", "点击面板聚焦；点击任务/连接选中明细"),
+        kd("H", "打开 / 关闭本帮助窗口"),
+        kd("G", "收起/展开 任务详情 + 并发连接面板"),
+        kd("Esc", "关闭弹窗"),
+        kd("Q", "退出程序（主界面；弹窗内先关窗）"),
+        sec("页签"),
+        kd("] / [", "右/左切换页签（正在下载 ⇄ 已完成）"),
+        kd("鼠标点击页签", "切换到该页签"),
+        kd("T", "循环切换页签（与 ] 等效）"),
+        sec("任务列表"),
+        kd("↑ / ↓", "选择上/下一个任务"),
+        kd("PgUp / PgDn", "翻页选择（Home / End 跳首/尾）"),
+        kd("鼠标滚轮", "滚动列表（视口自由浏览全表）"),
+        kd("A / M / D", "添加 / 修改 / 删除任务"),
+        kd("Space / R", "暂停·继续 / 重试"),
+        kd("U / J", "上移 / 下移任务"),
+        kd("C", "清除已完成任务"),
+        kd("P", "查看分块状态（仅分块下载任务）"),
+        sec("任务详情"),
+        kd("鼠标点击", "URL / 校验 字段名复制对应值"),
+        sec("并发连接"),
+        kd("↑ / ↓", "选择连接明细"),
+        kd("B", "阻塞并移除选中连接（仅 BT 任务）"),
+        sec("弹窗（添加/修改/删除/pieces/帮助）"),
+        kd("Tab / ↑↓", "切换字段/焦点（下拉框内选择选项）"),
+        kd("Enter", "确认"),
+        kd("Esc", "取消/关闭"),
+        kd("鼠标拖拽", "按住弹窗内任意位置拖动移动窗口"),
+        sec("pieces 分块弹窗"),
+        kd("↑↓ / PgUp·PgDn", "滚动分块网格（Home / End 跳首/尾）"),
+        kd("Esc / P", "关闭弹窗"),
+        note(""),
+        note(" ↑↓/滚轮 滚动本页 · Esc/H 关闭"),
+    ]
+}
+
+/// 帮助窗口（H）：模态浮层——打开时底层面板降级暗框；绿色高亮边框（与
+/// 主面板聚焦色统一）；分类交互说明；内容超窗时 ↑↓/PgUp/PgDn/滚轮滚动 +
+/// 右缘 lazygit 式滚动条；支持鼠标拖拽移动（位置记忆）、点击外部关闭。
+fn draw_help(f: &mut Frame, app: &mut App, area: Rect) {
+    // 可拖拽定位：记忆位置优先（钳制在终端内），首帧居中并回填
+    let rect = match app.help_pos {
+        Some((px, py)) => {
+            let dw = HELP_W.min(area.width);
+            let dh = HELP_H.min(area.height);
+            Rect {
+                x: px.min(area.width.saturating_sub(dw)),
+                y: py.min(area.height.saturating_sub(dh)),
+                width: dw,
+                height: dh,
+            }
+        }
+        None => {
+            let r = dialog_rect(area, HELP_W, HELP_H);
+            app.help_pos = Some((r.x, r.y));
+            r
+        }
+    };
+    f.render_widget(Clear, rect);
+    // 浮层边界 CJK 宽字符切割处理（残影根治点，与对话框同口径）
+    clip_wide_at_edges(f, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(panel_border_style(true))
+        .title(Span::styled(" 帮助 ", panel_title_style(true)));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    app.help_area = Some(rect);
+
+    let lines = help_lines();
+    let view_h = inner.height as usize;
+    let max_scroll = lines.len().saturating_sub(view_h);
+    app.help_scroll = app.help_scroll.min(max_scroll);
+    let start = app.help_scroll;
+    let shown: Vec<Line> = lines.iter().skip(start).take(view_h).cloned().collect();
+    f.render_widget(Paragraph::new(shown), inner);
+
+    // 右缘滚动条（内容超窗时；▲▼ + │轨道 + █滑块）
+    if lines.len() > view_h && view_h > 0 {
+        lazy_scrollbar(f, rect, lines.len(), start, view_h, FOCUS_BORDER);
     }
 }
 
@@ -2045,11 +2253,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let outer = Layout::vertical([
         Constraint::Length(5), // 顶部区：头部仪表面板（标题边框 + 字段/分割线/页签 3 内容行 + 底边框）
         Constraint::Min(8),    // 主区：任务列表 | 任务详情 + 并发连接面板
-        Constraint::Length(4), // 页脚
+        Constraint::Length(3), // 页脚（单行：Q/H 提示 + toast）
     ])
     .split(area);
 
     let wide = area.width >= 100;
+    // 焦点钳制：详情/并发面板未渲染（紧凑布局 G / 窄终端 <100 列）时
+    // 焦点只允许落在任务列表（与 G 键处理同口径，双保险）
+    if !wide || !app.show_panes {
+        app.focus = Panel::List;
+    }
     if wide {
         // 头部仪表面板：通栏全宽（右缘 = 屏幕右缘 = 任务详情面板右缘）；字段行 +
         // 分割线 + 页签行，右侧内嵌无边框像素级流量图（占内容区全高、20% 宽）。
@@ -2092,8 +2305,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_dialogs(f, app, area);
     }
 
-    // pieces 分块弹窗最后绘制（最上层覆盖；与对话框互斥——按键层已保证）
+    // pieces 分块弹窗（最上层覆盖；与对话框互斥——按键层已保证）
     if app.pieces_open {
         draw_pieces(f, app, area);
+    }
+
+    // 帮助窗口（最上层；H 打开，模态：打开时底层面板暗框）
+    if app.help_open {
+        draw_help(f, app, area);
     }
 }

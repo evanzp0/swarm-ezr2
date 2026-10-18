@@ -79,16 +79,17 @@
                         无完整地址泄露、互不重复、IPv4/IPv6 混合）；
                         已完成任务（godot）明细为空、活跃 0/0；
                         下载中任务并发明细速度不闪烁（采样 5s 无「-」闪现）。
-场景 O（键盘）：        Ctrl+↓/↑ 选中并发明细行（高亮跟随）；BT 任务 Ctrl+B 断开
+场景 O（键盘）：        Tab×2 聚焦并发连接面板 → ↑/↓ 选中并发明细行（高亮跟随，
+                        统一列表选择交互）；BT 任务 B 阻塞并移除（断开）
                         选中连接（行移除、掩码 IP 互不重复、活跃总数 -1、toast
-                        含被断开的掩码 IP）；HTTP 任务 Ctrl+B 被拒绝（toast、
+                        含被断开的掩码 IP）；HTTP 任务 B 被拒绝（toast、
                         序号列行数不变）。
 场景 P（明细门槛）：    仅「下载中」/「做种中」任务有并发明细：已暂停（blender）、
                         等待中（rust）、已失败（win11）、校验中（gpt4all）、
                         后期处理中（neovim）均明细空、活跃 0；无明细状态
-                        Ctrl+↓/Ctrl+B 给出提示 toast；win11 按 R 重试开始下载后
-                        明细恢复（rust 递补，生产 FR-01-34：R 让槽队首递补）；
-                        做种中（arch）明细显示
+                        ↑↓/B 给出提示 toast（并发面板聚焦后）；win11 按 R
+                        重试开始下载后明细恢复（rust 递补，生产 FR-01-34：
+                        R 让槽队首递补）；做种中（arch）明细显示
                         （BT 五列、首列掩码 IP、活跃 1）。
 场景 R（v1.28 同步）：  生产同步轮八（URL 权威模型交互同步）两段运行：
                         R1 正路径——同 URL 同目录重复添加被拒（toast「任务已存在」、
@@ -153,15 +154,15 @@ def key_bytes(k: str) -> bytes:
         "enter": b"\r", "esc": b"\x1b", "tab": b"\t", "space": b" ",
         "pgup": b"\x1b[5~", "pgdn": b"\x1b[6~", "home": b"\x1b[H", "end": b"\x1b[F",
         "bs": b"\x7f", "backtab": b"\x1b[Z",
-        # Ctrl 组合键：Ctrl+↑/↓（xterm 修饰键编码）与 Ctrl+B（0x02）
-        "c-up": b"\x1b[1;5A", "c-down": b"\x1b[1;5B", "c-b": b"\x02",
     }
     if k in named:
         return named[k]
     # SGR 鼠标事件注入（与 capture.py 同口径，1 基列/行）：mclick:列:行
+    # 完整点击 = 按下（M）+ 释放（m）两个事件（TUI 点击在 Up 触发，
+    # 与窗口拖拽共用左键：按下开始拖拽、未移动松开 = 点击）
     if k.startswith("mclick:"):
         _, x, y = k.split(":")
-        return f"\x1b[<0;{x};{y}M".encode()
+        return f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m".encode()
     return k.encode()
 
 
@@ -437,7 +438,8 @@ def scenario_e():
     check("E4 校验码占位为 64 位十六进制（可留空）", "64 位十六进制（可留空）" in dlg_text)
     check("E5 并发字段预填默认值 4", re.search(r"并发\s*>\s*4", dlg_text) is not None,
           next((r.strip()[:40] for r in dialog_rows if "并发" in r and ">" in r), ""))
-    check("E6 提示行含校验码留空说明", "Enter 立即下载" in final and "校验码留空 = 不校验" in final)
+    check("E6 底部提示行已删除（需求修订：说明收敛到 H 帮助）",
+          "Enter 立即下载" not in final and "校验码留空 = 不校验" not in final)
     check("E7 代理行默认「直连」下拉指示", re.search(r"代理\s*>\s*直连 ▾", dlg_text) is not None,
           next((r.strip()[:44] for r in dialog_rows if "代理" in r and ">" in r), ""))
     check("E8 三按钮齐全（立即下载/仅添加/取消，v1.15/FR-01-103）",
@@ -914,8 +916,8 @@ def scenario_n():
           and not re.search(r"\d+\.\d+\.\d+\.\d+", " ".join(bt_tokens)),
           str(bt_tokens))
 
-    # 第三段：end → tab 切到已完成页签（自动选中 godot）→ 明细为空、活跃 0/0
-    samples3, _ = run(120, 44, 5.0, keys=["end", "tab"], key_delay_frac=0.35)
+    # 第三段：end → T 切到已完成页签（自动选中 godot）→ 明细为空、活跃 0/0
+    samples3, _ = run(120, 44, 5.0, keys=["end", "t"], key_delay_frac=0.35)
     rows3 = samples3[-1][1]
     final3 = "\n".join(rows3)
     act = next((r for r in rows3 if "活跃" in r and "并发连接" in r), None)
@@ -926,10 +928,11 @@ def scenario_n():
 
 
 def scenario_o():
-    print("\n== 场景 O：Ctrl+↑/↓ 选中并发明细 + Ctrl+B 断开连接（BT 生效 / HTTP 拒绝）==")
+    print("\n== 场景 O：Tab 聚焦并发面板 + ↑/↓ 选中明细 + B 断开连接（BT 生效 / HTTP 拒绝）==")
 
-    # 第一段：end 选中 sintel（BT，12 条连接）→ Ctrl+↓×3 → Ctrl+↑ → Ctrl+B 断开
-    keys = ["end", "c-down", "c-down", "c-down", "c-up", "c-b"]
+    # 第一段：end 选中 sintel（BT，12 条连接）→ tab×2 聚焦并发面板
+    # → ↓×3 ↑ → B 断开（统一列表选择交互：聚焦后 ↑↓ 选明细）
+    keys = ["end", "tab", "tab", "down", "down", "down", "up", "b"]
     samples, screen = run(120, 44, 9.0, keys=keys, key_delay_frac=0.35)
     all_text = "\n".join("".join(rows) for _, rows in samples)
     final_rows = samples[-1][1]
@@ -938,17 +941,17 @@ def scenario_o():
     if px is None:
         return
 
-    # Ctrl+↓×3 → Ctrl+↑ 后选中第 3 条（掩码 IP）；Ctrl+B 断开后选中第 3 条原位置
+    # ↓×3 → ↑ 后选中第 3 条（掩码 IP）；B 断开后选中第 3 条原位置
     sel = selected_conn_ident(screen, px)
     tokens = [s for s, _ in conns_data_rows(screen, px)]
-    check("O2 Ctrl+↓×3 + Ctrl+↑ 选中第 3 条（高亮）",
+    check("O2 ↓×3 + ↑ 选中第 3 条（高亮）",
           bool(tokens) and len(tokens) >= 3 and sel is not None and sel == tokens[2],
           f"选中={sel} 第3条={tokens[2] if len(tokens) >= 3 else None}")
-    check("O3 Ctrl+B 断开后明细行移除（12→11 条掩码 IP，格式合规且互不重复）",
+    check("O3 B 断开后明细行移除（12→11 条掩码 IP，格式合规且互不重复）",
           len(tokens) == 11
           and all(CONN_TOKEN_RE.match(s) for s in tokens)
           and len(set(tokens)) == len(tokens), str(tokens))
-    check("O4 Ctrl+B toast 出现「已断开连接」+ 被断开的掩码 IP",
+    check("O4 B toast 出现「已断开连接」+ 被断开的掩码 IP",
           "已断开连接" in all_text
           and re.search(r"已断开连接 \S+（剩余 \d+ 条）", all_text) is not None,
           str([l for l in all_text.splitlines() if "已断开连接" in l][:1]))
@@ -958,40 +961,40 @@ def scenario_o():
           act.strip()[:50] if act else "not found")
     check("O6 断开后任务仍正常下载（sintel [下载中]）",
           any("[下载中]" in r and "sintel-4k-2160p" in r for r in final_rows))
-    hint_row = next((r for r in final_rows if "Ctrl+↑↓ 选择" in r), "")
-    check("O7 BT 面板提示行显示 Ctrl+B 断开（无「仅 BT」标注）",
-          "Ctrl+B 断开" in hint_row and "仅 BT" not in hint_row,
-          hint_row.strip()[:50])
+    hint_row = next((r for r in final_rows if "↑↓ 选择连接" in r), None)
+    check("O7 BT 面板提示行已删除（快捷键说明收敛到帮助窗口）",
+          hint_row is None,
+          hint_row.strip()[:50] if hint_row else "not found")
 
-    # 第二段：ubuntu（HTTP）按 Ctrl+B → 拒绝（toast + 行数不变）
-    samples2, screen2 = run(120, 44, 5.0, keys=["c-b"], key_delay_frac=0.4)
+    # 第二段：ubuntu（HTTP，列表聚焦）按 B → 拒绝（toast + 行数不变）
+    samples2, screen2 = run(120, 44, 5.0, keys=["b"], key_delay_frac=0.4)
     all_text2 = "\n".join("".join(rows) for _, rows in samples2)
     final_rows2 = samples2[-1][1]
     px2 = conns_panel_left(screen2)
     serials2 = [int(s) for s, _ in conns_data_rows(screen2, px2)] if px2 is not None else []
-    check("O8 HTTP 任务 Ctrl+B 被拒绝（toast 提示）",
-          "仅 BT 任务支持断开并发连接" in all_text2)
-    hint2 = next((r for r in final_rows2 if "Ctrl+↑↓ 选择" in r), "")
-    check("O8b HTTP 面板提示行不含 Ctrl+B（断开提示仅 BT 显示）",
-          "Ctrl+B" not in hint2,
-          hint2.strip()[:50])
+    check("O8 HTTP 任务 B 被拒绝（toast 提示）",
+          "仅 BT 任务支持断开并发连接（B）" in all_text2)
+    hint2 = next((r for r in final_rows2 if "Tab 聚焦后" in r), None)
+    check("O8b HTTP 面板提示行已删除（无 Tab 聚焦后提示）",
+          hint2 is None,
+          hint2.strip()[:50] if hint2 else "not found")
     check("O9 HTTP 任务明细行数不变（序号 1..8）", serials2 == list(range(1, 9)), str(serials2))
 
-    # 第三段：顶部再按 Ctrl+↑ → 选中保持第 1 条（边界钳制）
-    samples3, screen3 = run(120, 44, 4.0, keys=["end", "c-up"], key_delay_frac=0.4)
+    # 第三段：顶部再按 ↑ → 选中保持第 1 条（边界钳制）
+    samples3, screen3 = run(120, 44, 4.0, keys=["end", "tab", "tab", "up"], key_delay_frac=0.4)
     px3 = conns_panel_left(screen3)
     tokens3 = [s for s, _ in conns_data_rows(screen3, px3)] if px3 is not None else []
     sel3 = selected_conn_ident(screen3, px3) if px3 is not None else None
-    check("O10 顶部 Ctrl+↑ 边界钳制（选中保持第 1 条）",
+    check("O10 顶部 ↑ 边界钳制（选中保持第 1 条）",
           bool(tokens3) and sel3 == tokens3[0], f"选中={sel3} 首行={tokens3[0] if tokens3 else None}")
 
 
 def scenario_p():
     print("\n== 场景 P：仅「下载中」/「做种中」有并发明细（其余状态空、活跃 0/0）+ 交互守卫 ==")
 
-    # 第一段：↓↓↓ 选中 blender（已暂停）→ 明细空；Ctrl+↓ 提示无明细可选
+    # 第一段：↓↓↓ 选中 blender（已暂停）→ 明细空；tab×2 聚焦并发面板后 ↓ 提示无明细可选
     samples, screen = run(120, 44, 8.0,
-                          keys=["down", "down", "down", "c-down"], key_delay_frac=0.3)
+                          keys=["down", "down", "down", "tab", "tab", "down"], key_delay_frac=0.3)
     all_text = "\n".join("".join(rows) for _, rows in samples)
     rows = samples[-1][1]
     final = "\n".join(rows)
@@ -1000,12 +1003,12 @@ def scenario_p():
     check("P2 已暂停任务明细为空（无并发连接）", "（无并发连接）" in final)
     check("P3 已暂停任务活跃 0（修订-3 同口径）", act is not None and "活跃 0 " in act,
           act.strip()[:50] if act else "not found")
-    check("P4 已暂停任务 Ctrl+↓ 提示无明细", "当前状态无并发明细" in all_text)
+    check("P4 已暂停任务 ↓ 提示无明细", "当前状态无并发明细" in all_text)
     px = conns_panel_left(screen)
     serials = [s for s, _ in conns_data_rows(screen, px)] if px is not None else []
     check("P5 已暂停任务无明细数据行", serials == [], str(serials))
-    # 第二段：↓↓ 选中 rust（等待中）→ 明细空；Ctrl+B 提示无可断开连接
-    samples2, _ = run(120, 44, 5.0, keys=["down", "down", "c-b"], key_delay_frac=0.35)
+    # 第二段：↓↓ 选中 rust（等待中）→ 明细空；B 提示无可断开连接
+    samples2, _ = run(120, 44, 5.0, keys=["down", "down", "b"], key_delay_frac=0.35)
     all_text2 = "\n".join("".join(rows) for _, rows in samples2)
     rows2 = samples2[-1][1]
     final2 = "\n".join(rows2)
@@ -1014,7 +1017,7 @@ def scenario_p():
     check("P7 等待中任务明细为空 + 活跃 0",
           "（无并发连接）" in final2 and act2 is not None and "活跃 0 " in act2,
           act2.strip()[:50] if act2 else "not found")
-    check("P8 等待中任务 Ctrl+B 提示无可断开连接", "当前状态无可断开的并发连接" in all_text2)
+    check("P8 等待中任务 B 提示无可断开连接", "当前状态无可断开的并发连接" in all_text2)
 
     # 第三段：↓↓↓↓↓↓ 选中 win11（已失败）→ 明细空
     samples3, _ = run(120, 44, 4.5, keys=["down"] * 6, key_delay_frac=0.35)
@@ -1064,8 +1067,8 @@ def scenario_p():
             break
     check("P16 后期处理中任务选中且明细为空 + 活跃 0（neovim 采样帧）", hit6)
 
-    # 第七段：Tab → 已完成页签选中 arch（做种中）→ 明细显示（BT 五列、掩码 IP、活跃 1/1）
-    samples7, screen7 = run(120, 44, 5.0, keys=["tab"], key_delay_frac=0.4)
+    # 第七段：T → 已完成页签选中 arch（做种中）→ 明细显示（BT 五列、掩码 IP、活跃 1/1）
+    samples7, screen7 = run(120, 44, 5.0, keys=["t"], key_delay_frac=0.4)
     rows7 = samples7[-1][1]
     final7 = "\n".join(rows7)
     head7 = next((r for r in rows7 if "下载速度" in r and "累计上传" in r), None)
@@ -1170,10 +1173,12 @@ def scenario_s():
     check("S5 网格含 🟩 已下载块", "🟩" in text1)
     check("S6 下载中任务含 🟦（分配了并发下载）", "🟦" in text1)
     check("S7 网格含 ⬜ 未下载块", "⬜" in text1)
-    n_act1 = text1.count("🟦")
+    # 图例行含 1 处 🟦：统计时排除图例行（以「未下载」文字标识）
+    n_act1 = sum(r.count("🟦") for r in rows1 if "未下载" not in r)
     check("S8 正在下载块数 = 并发持块连接数（8）", n_act1 == 8, f"🟦×{n_act1}")
-    check("S9 提示行保留滚动/关闭快捷键",
-          "Esc/P 关闭" in text1 and "滚动" in text1)
+    check("S9 底部图例行替代快捷键提示（需求修订）",
+          "已下载" in text1 and "未下载" in text1
+          and "Esc/P 关闭" not in text1)
     check("S9b 底部分页数/总块数提示已删除",
           re.search(r"第 \d+–\d+ 块", text1) is None
           and re.search(r"共 \d+ 块", text1) is None)
@@ -1192,7 +1197,10 @@ def scenario_s():
     text3 = "\n".join(rows3)
     check("S11 已暂停任务弹窗（blender）",
           "blender-4.5" in text3 and "分块状态" in text3)
-    check("S12 已暂停任务网格无 🟦（非下载中不显示正在下载）", "🟦" not in text3)
+    # 图例行含四色色块：网格断言需排除图例行（以「未下载」文字标识）
+    grid3 = [r for r in rows3 if "未下载" not in r]
+    check("S12 已暂停任务网格无 🟦（非下载中不显示正在下载）",
+          not any("🟦" in r for r in grid3))
     check("S13 冻结在传零头显示 🟨（部分下载）", "🟨" in text3)
     meta3 = next((r for r in rows3 if "块大小" in r), "")
     check("S14 元信息行不含任务状态（「· 已暂停」已删除）",
@@ -1224,12 +1232,14 @@ def scenario_s():
     check("S21 再次按 P 关闭弹窗",
           "分块状态" not in "\n".join(samples6[-1][1]))
 
-    # 第七段：End 跳末页（提示行分页/总块数已删——以网格内容验证：
-    # ubuntu 末页远离下载前沿，整屏应只剩 ⬜ 未下载块）
+    # 第七段：End 跳末页（以网格内容验证：ubuntu 末页远离下载前沿，
+    # 整屏应只剩 ⬜ 未下载块；图例行含四色块，排除后仅看网格）
     samples7, _ = run(120, 44, 5.0, keys=["p", "end"], key_delay_frac=0.15)
     text7 = "\n".join(samples7[-1][1])
+    grid7 = [r for r in samples7[-1][1] if "未下载" not in r]
     check("S22 End 跳到末页（末页远离前沿：全 ⬜、无 🟩/🟦/🟨）",
-          "⬜" in text7 and not any(c in text7 for c in ("🟩", "🟦", "🟨")))
+          "⬜" in text7 and not any(
+              c in r for r in grid7 for c in ("🟩", "🟦", "🟨")))
 
 
 if __name__ == "__main__":

@@ -66,6 +66,48 @@ const SPEED_TICK: Duration = Duration::from_secs(1);
 const SPEED_EMA_ALPHA: f64 = 0.2;
 
 // ---------------------------------------------------------------------------
+// 面板焦点（lazygit 式聚焦显示）
+// ---------------------------------------------------------------------------
+
+/// 可聚焦面板：Tab/BackTab 循环切换；当前面板边框绿色高亮、
+/// 其余面板暗边框（lazygit activeBorderColor/inactiveBorderColor 口径）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Panel {
+    /// 任务列表（头部页签随本面板聚焦而高亮）
+    List,
+    /// 任务详情
+    Detail,
+    /// 并发连接
+    Conns,
+}
+
+impl Default for Panel {
+    fn default() -> Self {
+        Panel::List
+    }
+}
+
+impl Panel {
+    /// Tab：下一个面板（列表 → 详情 → 并发 → 列表）
+    pub fn next(self) -> Self {
+        match self {
+            Panel::List => Panel::Detail,
+            Panel::Detail => Panel::Conns,
+            Panel::Conns => Panel::List,
+        }
+    }
+
+    /// BackTab：上一个面板
+    pub fn prev(self) -> Self {
+        match self {
+            Panel::List => Panel::Conns,
+            Panel::Detail => Panel::List,
+            Panel::Conns => Panel::Detail,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 基础模型
 // ---------------------------------------------------------------------------
 
@@ -570,6 +612,9 @@ pub struct App {
     pub tasks: Vec<Task>,
     /// 当前页签视图中的选中序号
     pub selected: usize,
+    /// 上一帧选中序号：用于区分「选中项变化」（需视口跟随）与
+    /// 「鼠标滚动」（仅移视口不动选中项，若同样跟随则滚动条被锁死）
+    last_selected: usize,
     /// 列表滚动偏移（以"任务条目"为单位）
     pub scroll: usize,
     /// 页签下标（对应 FILTERS）
@@ -599,9 +644,25 @@ pub struct App {
     pub visible_rows: usize,
     /// 列表内框区域（由 ui 层回填，用于鼠标命中测试）
     pub list_area: Option<Rect>,
-    /// 并发连接面板滚动偏移（以"连接行"为单位，滚轮/Ctrl+↑↓ 滚动）
+    /// 当前聚焦面板（Tab/BackTab 循环；边框高亮与 ↑↓ 列表选择跟随）
+    pub focus: Panel,
+    /// 帮助窗口（H 快捷键）是否打开
+    pub help_open: bool,
+    /// 帮助窗口内容滚动偏移（以“行”为单位；渲染层按内容高度馴制）
+    pub help_scroll: usize,
+    /// 帮助窗口左上角位置（鼠标拖拽移动记忆；None = 打开时居中）
+    pub help_pos: Option<(u16, u16)>,
+    /// 帮助窗口拖拽中的抓取偏移（指针相对窗口左上角）
+    pub help_drag: Option<(u16, u16)>,
+    /// 帮助窗口区域（由 ui 层每帧回填；拖拽/滚轮/点击外部关闭的命中测试）
+    pub help_area: Option<Rect>,
+    /// 头部页签可点击区域（由 ui 层每帧回填；鼠标点击切换页签）
+    pub tab_rects: Vec<(Rect, usize)>,
+    /// 任务详情面板内框区域（由 ui 层回填；鼠标点击聚焦本面板）
+    pub detail_area: Option<Rect>,
+    /// 并发连接面板滚动偏移（以"连接行"为单位，滚轮/↑↓ 滚动）
     pub conns_scroll: usize,
-    /// 并发连接面板当前选中行（以连接序号 0 基下标；Ctrl+↑↓ 移动，Ctrl+B 断开）
+    /// 并发连接面板当前选中行（以连接序号 0 基下标；聚焦本面板后 ↑↓ 移动，B 断开）
     pub conns_sel: usize,
     /// 并发连接面板内框区域（由 ui 层回填，用于鼠标滚轮命中测试）
     pub conns_area: Option<Rect>,
@@ -632,6 +693,16 @@ pub struct App {
     pub pieces_drag: Option<(u16, u16)>,
     /// 当前打开的对话框（None = 无）
     pub dialog: Option<Dialog>,
+    /// 对话框左上角位置（鼠标拖拽移动记忆；None = 打开时居中，
+    /// 由渲染层首帧回填；渲染时钳制在终端内）
+    pub dialog_pos: Option<(u16, u16)>,
+    /// 对话框拖拽中的抓取偏移（指针相对弹窗左上角；Some = 左键拖拽进行中）
+    pub dialog_drag: Option<(u16, u16)>,
+    /// 对话框拖拽期间指针是否实际移动过（Up 时区分「点击」与「拖拽」：
+    /// 未移动 = 点击 → 聚焦字段行/激活按钮；移动过 = 拖拽 → 不触发点击）
+    pub dialog_drag_moved: bool,
+    /// 对话框区域（由 ui 层每帧回填；拖拽抓取与点击的命中测试）
+    pub dialog_area: Option<Rect>,
     /// 对话框按钮的可点击区域（由 ui 层每帧回填）
     pub dlg_btn_rects: Vec<(Rect, usize)>,
     /// 对话框输入行/选择行的可点击区域（由 ui 层每帧回填；点击聚焦，
@@ -675,6 +746,7 @@ impl App {
         App {
             tasks: demo_tasks(),
             selected: 0,
+            last_selected: 0,
             scroll: 0,
             filter: 0,
             // 速度历史不预填（每秒采样一个样本，暖机 ~2s 后图区开始绘制；
@@ -686,6 +758,13 @@ impl App {
             rng: Rng::new(seed),
             frame: 0,
             quit: false,
+            help_open: false,
+            help_scroll: 0,
+            help_pos: None,
+            help_drag: None,
+            help_area: None,
+            tab_rects: Vec::new(),
+            detail_area: None,
             toast: Some("EZR Downloader Demo 就绪 · 数据为模拟数据".to_string()),
             toast_until: Some(Instant::now() + Duration::from_secs(4)),
             prefill_seq: 100,
@@ -694,6 +773,7 @@ impl App {
             last_speed_tick: Instant::now(),
             visible_rows: 6,
             list_area: None,
+            focus: Panel::List,
             conns_scroll: 0,
             conns_sel: 0,
             conns_area: None,
@@ -709,6 +789,10 @@ impl App {
             pieces_pos: None,
             pieces_drag: None,
             dialog: None,
+            dialog_pos: None,
+            dialog_drag: None,
+            dialog_drag_moved: false,
+            dialog_area: None,
             dlg_btn_rects: Vec::new(),
             dlg_field_rects: Vec::new(),
             dlg_ck_rects: Vec::new(),
@@ -814,6 +898,27 @@ impl App {
         }
         let cur = self.selected as i32;
         self.selected = cur.saturating_add(delta).clamp(0, flen as i32 - 1) as usize;
+        // 视口即时跟随选中项（不依赖下一帧 tick，避免一帧延迟）
+        self.scroll_to_selection();
+    }
+
+    /// 页签切换（delta = ±1，环形）；切换后视口定位到选中项
+    fn cycle_filter(&mut self, delta: i32) {
+        let n = FILTERS.len() as i32;
+        self.filter = ((self.filter as i32 + delta).rem_euclid(n)) as usize;
+        self.scroll_to_selection();
+    }
+
+    /// 将视口滚动到选中项可见（选中项变化 / 页签切换后调用；
+    /// 鼠标滚动不调用——视口自由移动正是滚动条不锁死的前提）
+    fn scroll_to_selection(&mut self) {
+        let vis = self.visible_rows.max(1);
+        if self.scroll > self.selected {
+            self.scroll = self.selected;
+        }
+        if self.selected >= self.scroll + vis {
+            self.scroll = self.selected + 1 - vis;
+        }
     }
 
     /// 上移/下移选中任务（在当前页签内交换位置）
@@ -1376,16 +1481,16 @@ impl App {
             if self.selected >= flen {
                 self.selected = flen - 1;
             }
-            let vis = self.visible_rows.max(1);
-            if self.scroll > self.selected {
-                self.scroll = self.selected;
+            // 仅当选中项变化时保持其可见（键盘选择 / 末尾钳制后视口跟随）；
+            // 鼠标滚动只移视口不动选中项，若同样跟随则视口每帧被拉回
+            // 选中行——滚动条锁死无法浏览全表（滚动锁死修复）
+            if self.last_selected != self.selected {
+                self.scroll_to_selection();
             }
-            if self.selected >= self.scroll + vis {
-                self.scroll = self.selected + 1 - vis;
-            }
-            let max_scroll = flen.saturating_sub(vis);
+            let max_scroll = flen.saturating_sub(self.visible_rows.max(1));
             self.scroll = self.scroll.min(max_scroll);
         }
+        self.last_selected = self.selected;
 
         // 并发连接面板：选中任务变化时重置滚动与选中行，并按连接数与可视行数钳制
         if self.conns_scroll_for != self.selected {
@@ -1420,18 +1525,9 @@ impl App {
         if mods.contains(KeyModifiers::CONTROL) {
             if code == KeyCode::Char('c') {
                 self.quit = true;
-                return;
             }
-            // 并发连接面板快捷键（对话框打开时不响应）：
-            // Ctrl+↑/↓ 上下选择连接明细，Ctrl+B 断开选中连接（仅 BT 任务）
-            if self.dialog.is_none() {
-                match code {
-                    KeyCode::Up => self.move_conn_sel(-1),
-                    KeyCode::Down => self.move_conn_sel(1),
-                    KeyCode::Char('b') | KeyCode::Char('B') => self.disconnect_conn(),
-                    _ => {}
-                }
-            }
+            // 其余 Ctrl 组合键不再占用（原 Ctrl+↑↓/Ctrl+B 并发面板快捷键已
+            // 统一进面板焦点模型：聚焦面板后 ↑↓ 选择、B 断开）
             return;
         }
         // 对话框打开时，按键优先交给对话框
@@ -1458,21 +1554,90 @@ impl App {
             }
             return;
         }
-        match code {
-            KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
-            KeyCode::Down => self.move_sel(1),
-            KeyCode::Up => self.move_sel(-1),
-            KeyCode::PageDown => self.move_sel(4),
-            KeyCode::PageUp => self.move_sel(-4),
-            KeyCode::Home => self.selected = 0,
-            KeyCode::End => {
-                let flen = self.filtered().len();
-                if flen > 0 {
-                    self.selected = flen - 1;
-                }
+        // 帮助窗口模态：滚动翻阅分类帮助；Esc/H/q 关闭（q 同 pieces 口径：
+        // 先关窗不退出）
+        if self.help_open {
+            match code {
+                KeyCode::Esc
+                | KeyCode::Char('h')
+                | KeyCode::Char('H')
+                | KeyCode::Char('q')
+                | KeyCode::Char('Q') => self.help_open = false,
+                KeyCode::Up => self.help_scroll = self.help_scroll.saturating_sub(1),
+                KeyCode::Down => self.help_scroll += 1, // 渲染层钳制
+                KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(8),
+                KeyCode::PageDown => self.help_scroll += 8,
+                KeyCode::Home => self.help_scroll = 0,
+                KeyCode::End => self.help_scroll = usize::MAX,
+                _ => {}
             }
-            KeyCode::Tab => self.filter = (self.filter + 1) % FILTERS.len(),
-            KeyCode::BackTab => self.filter = (self.filter + FILTERS.len() - 1) % FILTERS.len(),
+            return;
+        }
+        match code {
+            // Q/q：退出程序（需求修订：退出键统一为 Q，Esc 仅用于关闭弹窗，
+            // 主界面下按 Esc 无操作——避免想关弹窗时误触退出）
+            KeyCode::Char('q') | KeyCode::Char('Q') => self.quit = true,
+            // Tab/BackTab：面板焦点循环（lazygit 式聚焦；当前面板边框高亮 +
+            // 页签高亮 + ↑↓ 作用于本面板列表）。页签循环已挪到 T 键。
+            KeyCode::Tab => self.focus = self.focus.next(),
+            KeyCode::BackTab => self.focus = self.focus.prev(),
+            // T：页签循环（正在下载 ⇄ 已完成；与 ] 等效，保留兼容）。
+            // 切换后 filtered 列表已变，显式将视口定位到选中项（可见）
+            KeyCode::Char('t') | KeyCode::Char('T') => self.cycle_filter(1),
+            // ] / [：页签右/左切换（需求修订：中括号键 + 鼠标点击两种方式）
+            KeyCode::Char(']') | KeyCode::Char('}') => self.cycle_filter(1),
+            KeyCode::Char('[') | KeyCode::Char('{') => self.cycle_filter(-1),
+            // H：帮助窗口（分类交互说明；Esc/H/q 关闭）
+            KeyCode::Char('h') | KeyCode::Char('H') => {
+                self.help_open = true;
+                self.help_scroll = 0;
+                // help_pos 保留上次拖拽位置；None = 渲染层首帧居中并回填
+            }
+            // ↑/↓：统一列表选择交互——聚焦任务列表 = 选任务；聚焦并发连接 =
+            // 选连接明细（原 Ctrl+↑↓ 语义，修订：移除 Ctrl 组合键方式）
+            KeyCode::Down => match self.focus {
+                Panel::List => self.move_sel(1),
+                Panel::Conns => self.move_conn_sel(1),
+                Panel::Detail => {}
+            },
+            KeyCode::Up => match self.focus {
+                Panel::List => self.move_sel(-1),
+                Panel::Conns => self.move_conn_sel(-1),
+                Panel::Detail => {}
+            },
+            KeyCode::PageDown => match self.focus {
+                Panel::Conns => self.move_conn_sel(self.visible_conns_rows.max(1) as i32),
+                _ => self.move_sel(4),
+            },
+            KeyCode::PageUp => match self.focus {
+                Panel::Conns => self.move_conn_sel(-(self.visible_conns_rows.max(1) as i32)),
+                _ => self.move_sel(-4),
+            },
+            KeyCode::Home => match self.focus {
+                Panel::Conns => {
+                    let n = self.conn_count();
+                    if n > 0 {
+                        self.move_conn_sel(-(n as i32));
+                    }
+                }
+                _ => self.selected = 0,
+            },
+            KeyCode::End => match self.focus {
+                Panel::Conns => {
+                    let n = self.conn_count();
+                    if n > 0 {
+                        self.move_conn_sel(n as i32);
+                    }
+                }
+                _ => {
+                    let flen = self.filtered().len();
+                    if flen > 0 {
+                        self.selected = flen - 1;
+                    }
+                }
+            },
+            // B：阻塞并移除（断开）选中的并发连接——仅 BT 任务（原 Ctrl+B 语义）
+            KeyCode::Char('b') | KeyCode::Char('B') => self.disconnect_conn(),
             KeyCode::Char(' ') => self.toggle_pause(),
             KeyCode::Char('r') | KeyCode::Char('R') => self.retry(),
             // P：查看选中任务的 pieces 分块弹窗（仅支持分块下载的任务）
@@ -1481,12 +1646,26 @@ impl App {
             KeyCode::Char('m') | KeyCode::Char('M') => self.open_modify_dialog(),
             KeyCode::Char('d') | KeyCode::Char('D') => self.open_delete_dialog(),
             KeyCode::Char('c') | KeyCode::Char('C') => self.clear_completed(),
-            // 修订-1：G 仅切换任务详情 / 并发连接面板（紧凑布局），流量图始终显示
-            KeyCode::Char('g') | KeyCode::Char('G') => self.show_panes = !self.show_panes,
+            // 修订-1：G 仅切换任务详情 / 并发连接面板（紧凑布局），流量图始终显示；
+            // 收起后详情/并发面板不可见，焦点强制回任务列表
+            KeyCode::Char('g') | KeyCode::Char('G') => {
+                self.show_panes = !self.show_panes;
+                if !self.show_panes {
+                    self.focus = Panel::List;
+                }
+            }
             KeyCode::Char('u') | KeyCode::Char('U') => self.move_task(-1),
             KeyCode::Char('j') | KeyCode::Char('J') => self.move_task(1),
             _ => {}
         }
+    }
+
+    /// 当前选中任务的并发明细条数（仅「下载中」/「做种中」任务有明细）
+    fn conn_count(&self) -> usize {
+        self.sel_task()
+            .filter(|t| t.state.shows_conns())
+            .map(|t| t.connections.len())
+            .unwrap_or(0)
     }
 
     // -----------------------------------------------------------------------
@@ -2067,6 +2246,10 @@ impl App {
         let prefill = ADD_POOL[(self.prefill_seq as usize) % ADD_POOL.len()];
         // 默认并发数随预填 URL 的协议类型：HTTP 4 / BT 20（对话框中可修改）
         let (proto, _) = parse_url_task(prefill);
+        // 打开时居中（位置不跨次记忆；拖拽位置由渲染层首帧回填）
+        self.dialog_pos = None;
+        self.dialog_drag = None;
+        self.dialog_drag_moved = false;
         self.dialog = Some(Dialog {
             kind: DialogKind::Add,
             url: prefill.to_string(),
@@ -2120,6 +2303,10 @@ impl App {
                 self.proxy_options.len() - 1
             }
         };
+        // 打开时居中（同 open_add_dialog）
+        self.dialog_pos = None;
+        self.dialog_drag = None;
+        self.dialog_drag_moved = false;
         self.dialog = Some(Dialog {
             kind: DialogKind::Modify,
             url: String::new(),
@@ -2139,10 +2326,18 @@ impl App {
     }
 
     pub fn open_delete_dialog(&mut self) {
-        let Some(t) = self.sel_task() else {
-            self.set_toast("没有选中的任务");
-            return;
+        // 先克隆任务名并结束借用（后续要写 dialog_pos 等字段）
+        let name = match self.sel_task() {
+            Some(t) => t.name.clone(),
+            None => {
+                self.set_toast("没有选中的任务");
+                return;
+            }
         };
+        // 打开时居中（同 open_add_dialog）
+        self.dialog_pos = None;
+        self.dialog_drag = None;
+        self.dialog_drag_moved = false;
         self.dialog = Some(Dialog {
             kind: DialogKind::Delete,
             url: String::new(),
@@ -2156,7 +2351,7 @@ impl App {
             proxy_sel: 0,
             proxy_open: false,
             focus: 0,
-            task_name: t.name.clone(),
+            task_name: name,
             task_id: None,
         });
     }
@@ -2166,6 +2361,41 @@ impl App {
     // -----------------------------------------------------------------------
 
     pub fn on_mouse(&mut self, m: MouseEvent) {
+        // 帮助窗口最上层（模态）：滚轮滚动帮助内容；左键按住窗口内任意
+        // 位置拖拽移动；点击窗口外部关闭
+        if self.help_open {
+            match m.kind {
+                MouseEventKind::ScrollUp => {
+                    self.help_scroll = self.help_scroll.saturating_sub(1);
+                }
+                MouseEventKind::ScrollDown => self.help_scroll += 1, // 渲染层馴制
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if Self::pointer_in(&self.help_area, m.column, m.row) {
+                        // 开始拖拽：记录指针相对窗口左上角的抓取偏移
+                        if let Some(r) = self.help_area {
+                            self.help_drag = Some((
+                                m.column.saturating_sub(r.x),
+                                m.row.saturating_sub(r.y),
+                            ));
+                        }
+                    } else {
+                        // 点击窗口外部 = 关闭（与 pieces 弹窗同口径）
+                        self.help_open = false;
+                    }
+                }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    if let Some((dx, dy)) = self.help_drag {
+                        self.help_pos = Some((
+                            m.column.saturating_sub(dx),
+                            m.row.saturating_sub(dy),
+                        ));
+                    }
+                }
+                MouseEventKind::Up(MouseButton::Left) => self.help_drag = None,
+                _ => {}
+            }
+            return;
+        }
         // pieces 弹窗最上层（模态）：滚轮滚动分块网格；左键按住弹窗内任意
         // 位置拖拽移动窗口；点击弹窗外部关闭
         if self.pieces_open {
@@ -2200,83 +2430,129 @@ impl App {
             }
             return;
         }
-        // 对话框优先：下拉框展开时只认选项点击（点外部收起）；否则字段行聚焦 / 按钮激活
+        // 对话框优先：支持左键拖拽移动窗口（按住弹窗内任意位置拖动，位置
+        // 钳制在终端内）；下拉框展开时只认选项点击（点外部收起）；未拖动时
+        // 松开左键视为点击（聚焦字段行 / 激活按钮，修订：点击在 Up 触发，
+        // 与拖拽共用左键互不干扰）
         if self.dialog.is_some() {
-            if let MouseEventKind::Down(MouseButton::Left) = m.kind {
-                let kind = self.dialog.as_ref().map(|d| d.kind);
-                let ck_open = self.dialog.as_ref().is_some_and(|d| d.ck_open);
-                let proxy_open = self.dialog.as_ref().is_some_and(|d| d.proxy_open);
-                let hit = |rects: &[(Rect, usize)]| {
-                    rects
-                        .iter()
-                        .find(|(r, _)| {
-                            m.column >= r.x
-                                && m.column < r.x.saturating_add(r.width)
-                                && m.row >= r.y
-                                && m.row < r.y.saturating_add(r.height)
-                        })
-                        .map(|(_, i)| *i)
-                };
-                if ck_open {
-                    let ck_rects = self.dlg_ck_rects.clone();
-                    if let Some(i) = hit(&ck_rects) {
-                        let d = self.dialog.as_mut().unwrap();
-                        d.ck_type = i;
-                        d.ck_sel = i;
-                        d.ck_open = false;
-                    } else if let Some(d) = self.dialog.as_mut() {
-                        // 点击下拉框外部：仅收起下拉框
-                        d.ck_open = false;
+            match m.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let ck_open = self.dialog.as_ref().is_some_and(|d| d.ck_open);
+                    let proxy_open = self.dialog.as_ref().is_some_and(|d| d.proxy_open);
+                    if ck_open {
+                        let hit = |rects: &[(Rect, usize)]| {
+                            rects
+                                .iter()
+                                .find(|(r, _)| {
+                                    m.column >= r.x
+                                        && m.column < r.x.saturating_add(r.width)
+                                        && m.row >= r.y
+                                        && m.row < r.y.saturating_add(r.height)
+                                })
+                                .map(|(_, i)| *i)
+                        };
+                        let ck_rects = self.dlg_ck_rects.clone();
+                        if let Some(i) = hit(&ck_rects) {
+                            let d = self.dialog.as_mut().unwrap();
+                            d.ck_type = i;
+                            d.ck_sel = i;
+                            d.ck_open = false;
+                        } else if let Some(d) = self.dialog.as_mut() {
+                            // 点击下拉框外部：仅收起下拉框
+                            d.ck_open = false;
+                        }
+                        return;
                     }
-                    return;
-                }
-                // 代理下拉（v1.5/FR-01-86）：点击选项选择；点外关闭
-                if proxy_open {
-                    let proxy_rects = self.dlg_proxy_rects.clone();
-                    if let Some(i) = hit(&proxy_rects) {
-                        let d = self.dialog.as_mut().unwrap();
-                        d.proxy_sel = i;
-                        d.proxy_open = false;
-                    } else if let Some(d) = self.dialog.as_mut() {
-                        d.proxy_open = false;
+                    if proxy_open {
+                        let hit = |rects: &[(Rect, usize)]| {
+                            rects
+                                .iter()
+                                .find(|(r, _)| {
+                                    m.column >= r.x
+                                        && m.column < r.x.saturating_add(r.width)
+                                        && m.row >= r.y
+                                        && m.row < r.y.saturating_add(r.height)
+                                })
+                                .map(|(_, i)| *i)
+                        };
+                        let proxy_rects = self.dlg_proxy_rects.clone();
+                        if let Some(i) = hit(&proxy_rects) {
+                            let d = self.dialog.as_mut().unwrap();
+                            d.proxy_sel = i;
+                            d.proxy_open = false;
+                        } else if let Some(d) = self.dialog.as_mut() {
+                            d.proxy_open = false;
+                        }
+                        return;
                     }
-                    return;
-                }
-                let field_rects = self.dlg_field_rects.clone();
-                let btn_rects = self.dlg_btn_rects.clone();
-                if let Some(i) = hit(&field_rects) {
-                    // 点击输入/选择行：聚焦；下拉行（Add 校验=3/Modify 校验=1、
-                    // 代理恒为末二：Add 5/Modify 3）再次点击展开下拉框
-                    let ck_i = if kind == Some(DialogKind::Add) { 3 } else { 1 };
-                    let proxy_i = if kind == Some(DialogKind::Add) { 5 } else { 3 };
-                    let d = self.dialog.as_mut().unwrap();
-                    d.focus = i;
-                    if i == ck_i {
-                        d.ck_open = true;
-                        d.ck_sel = d.ck_type;
-                    } else if i == proxy_i {
-                        d.proxy_open = true;
-                    }
-                } else if let Some(btn) = hit(&btn_rects) {
-                    if let Some(d) = self.dialog.as_mut() {
-                        d.focus = btn;
-                    }
-                    match kind {
-                        Some(DialogKind::Add) => self.dlg_activate_add(btn),
-                        Some(DialogKind::Modify) => self.dlg_activate_modify(btn),
-                        Some(DialogKind::Delete) => self.dlg_activate_delete(btn),
-                        None => {}
+                    // 弹窗内按下：开始拖拽（记录抓取偏移；是否算点击在 Up 判定）；
+                    // 弹窗外按下：忽略
+                    if Self::pointer_in(&self.dialog_area, m.column, m.row) {
+                        if let Some(r) = self.dialog_area {
+                            self.dialog_drag = Some((
+                                m.column.saturating_sub(r.x),
+                                m.row.saturating_sub(r.y),
+                            ));
+                            self.dialog_drag_moved = false;
+                        }
                     }
                 }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    // 拖拽移动：弹窗左上角 = 指针 - 抓取偏移（渲染层钳制在终端内）
+                    if let Some((dx, dy)) = self.dialog_drag {
+                        let new = (m.column.saturating_sub(dx), m.row.saturating_sub(dy));
+                        if self.dialog_pos != Some(new) {
+                            self.dialog_pos = Some(new);
+                            self.dialog_drag_moved = true;
+                        }
+                    }
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    if self.dialog_drag.is_some() {
+                        let moved = self.dialog_drag_moved;
+                        self.dialog_drag = None;
+                        self.dialog_drag_moved = false;
+                        if !moved {
+                            // 未拖动 = 点击：聚焦字段行 / 激活按钮（原有 Down 语义）
+                            self.dialog_click(m);
+                        }
+                    }
+                }
+                _ => {}
             }
             return;
         }
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                // 鼠标点击选择面板（需求修订）：点击头部页签切换页签并聚焦
+                // 任务列表；点击详情/并发/列表任意处聚焦该面板；点任务/连接
+                // 行同时选中明细
+                let in_rect = |r: Rect| {
+                    m.column >= r.x
+                        && m.column < r.x.saturating_add(r.width)
+                        && m.row >= r.y
+                        && m.row < r.y.saturating_add(r.height)
+                };
+                let tab_hit = self
+                    .tab_rects
+                    .iter()
+                    .find(|(r, _)| in_rect(*r))
+                    .map(|(_, i)| *i);
+                if let Some(i) = tab_hit {
+                    if i != self.filter {
+                        self.filter = i;
+                        self.scroll_to_selection();
+                    }
+                    // 页签归属任务列表面板：点击页签同时聚焦列表
+                    self.focus = Panel::List;
+                    return;
+                }
                 // 修订-5/7：任务详情面板点击字段名复制——URL → url 值、校验 → 校验码值；
                 // 系统剪贴板（arboard）优先，无图形会话回退 OSC 52；
                 // 反馈仅在底部提示（toast），面板本身无提示信息
+                // （点击复制同时聚焦详情面板）
                 if Self::pointer_in(&self.detail_url_rect, m.column, m.row) {
+                    self.focus = Panel::Detail;
                     if let Some(t) = self.sel_task() {
                         let url = t.url.clone();
                         self.copy_to_clipboard(&url);
@@ -2285,6 +2561,7 @@ impl App {
                     return;
                 }
                 if Self::pointer_in(&self.detail_ck_rect, m.column, m.row) {
+                    self.focus = Panel::Detail;
                     if let Some(t) = self.sel_task() {
                         if let Some(ck) = &t.checksum {
                             let v = ck.value.clone();
@@ -2294,10 +2571,37 @@ impl App {
                     }
                     return;
                 }
+                // 详情面板任意处点击 = 聚焦
+                if Self::pointer_in(&self.detail_area, m.column, m.row) {
+                    self.focus = Panel::Detail;
+                    return;
+                }
+                // 并发连接面板点击 = 聚焦 + 选行（表头 1 行之下为数据行）
+                if let Some(a) = self.conns_area {
+                    let in_x = m.column >= a.x && m.column < a.x.saturating_add(a.width);
+                    let in_y = m.row >= a.y && m.row < a.y.saturating_add(a.height);
+                    if in_x && in_y {
+                        self.focus = Panel::Conns;
+                        let data_top = a.y + 1; // 表头行之下
+                        if m.row >= data_top {
+                            let idx = (m.row - data_top) as usize;
+                            if idx < self.visible_conns_rows {
+                                let n = self.conn_count();
+                                let ci = self.conns_scroll + idx;
+                                if ci < n {
+                                    self.conns_sel = ci;
+                                }
+                            }
+                        }
+                        return;
+                    }
+                }
                 if let Some(a) = self.list_area {
                     let in_x = m.column >= a.x && m.column < a.x.saturating_add(a.width);
                     let in_y = m.row >= a.y && m.row < a.y.saturating_add(a.height);
                     if in_x && in_y {
+                        // 点击列表面板 = 聚焦列表 + 选中任务
+                        self.focus = Panel::List;
                         let idx = (m.row - a.y) as usize / ITEM_HEIGHT as usize;
                         let ti = self.scroll + idx;
                         if ti < self.filtered().len() {
@@ -2333,6 +2637,48 @@ impl App {
         matches!(area, Some(a) if x >= a.x && x < a.x.saturating_add(a.width) && y >= a.y && y < a.y.saturating_add(a.height))
     }
 
+    /// 对话框左键点击（拖拽未移动的 Up 事件）：字段行聚焦 / 按钮激活。
+    /// 下拉行（Add 校验=3/Modify 校验=1、代理恒为末二：Add 5/Modify 3）
+    /// 点击时展开下拉框。
+    fn dialog_click(&mut self, m: MouseEvent) {
+        let kind = self.dialog.as_ref().map(|d| d.kind);
+        let hit = |rects: &[(Rect, usize)]| {
+            rects
+                .iter()
+                .find(|(r, _)| {
+                    m.column >= r.x
+                        && m.column < r.x.saturating_add(r.width)
+                        && m.row >= r.y
+                        && m.row < r.y.saturating_add(r.height)
+                })
+                .map(|(_, i)| *i)
+        };
+        let field_rects = self.dlg_field_rects.clone();
+        let btn_rects = self.dlg_btn_rects.clone();
+        if let Some(i) = hit(&field_rects) {
+            let d = self.dialog.as_mut().unwrap();
+            d.focus = i;
+            let ck_i = if kind == Some(DialogKind::Add) { 3 } else { 1 };
+            let proxy_i = if kind == Some(DialogKind::Add) { 5 } else { 3 };
+            if i == ck_i {
+                d.ck_open = true;
+                d.ck_sel = d.ck_type;
+            } else if i == proxy_i {
+                d.proxy_open = true;
+            }
+        } else if let Some(btn) = hit(&btn_rects) {
+            if let Some(d) = self.dialog.as_mut() {
+                d.focus = btn;
+            }
+            match kind {
+                Some(DialogKind::Add) => self.dlg_activate_add(btn),
+                Some(DialogKind::Modify) => self.dlg_activate_modify(btn),
+                Some(DialogKind::Delete) => self.dlg_activate_delete(btn),
+                None => {}
+            }
+        }
+    }
+
     /// bracketed paste 事件入口（FR-01-06 v1.17 同步）：粘贴覆盖 Add 与
     /// Modify 两对话框的文本字段（Add：URL/目录/并发/校验码；Modify：并发/
     /// 校验码），与逐键输入同口径；算法/代理下拉展开、Delete 对话框、
@@ -2349,7 +2695,7 @@ impl App {
         dlg_apply_paste(kind, d, focus, text);
     }
 
-    /// Ctrl+↑/↓：在并发连接明细中上下移动选中行（跟随滚动保持可见）
+    /// ↑/↓（并发连接面板聚焦时）：在并发明细中上下移动选中行（跟随滚动保持可见）
     fn move_conn_sel(&mut self, delta: i32) {
         let Some(idx) = self.sel_idx() else { return };
         // 仅「下载中」/「做种中」任务有并发明细可选
@@ -2373,7 +2719,7 @@ impl App {
         }
     }
 
-    /// Ctrl+B：断开当前选中的并发连接（仅 BT 任务），明细行从屏幕移除。
+    /// B：断开（阻塞并移除）当前选中的并发连接（仅 BT 任务），明细行从屏幕移除。
     /// 断开时未传完的块按「由其他节点补完」记入已完成块数（演示口径，
     /// 保证块队列持续推进、任务仍可正常完成；进度前跳不超过一个块）。
     fn disconnect_conn(&mut self) {
@@ -2384,7 +2730,7 @@ impl App {
             return;
         }
         if !self.tasks[idx].protocol.is_bt() {
-            self.set_toast("仅 BT 任务支持断开并发连接（Ctrl+B）");
+            self.set_toast("仅 BT 任务支持断开并发连接（B）");
             return;
         }
         if self.tasks[idx].connections.is_empty() {

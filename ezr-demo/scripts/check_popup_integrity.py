@@ -47,13 +47,15 @@ def rects_for(cols: int):
     """
     ax = (cols - 74) // 2
     dx = (cols - 66) // 2
-    add = (ax, 12, 74, 12)
-    dele = (dx, 14, 66, 7)
+    add = (ax, (ROWS - 11) // 2, 74, 11)
+    dele = (dx, (ROWS - 7) // 2, 66, 7)
     # 下拉浮层挂在对话框内校验字段行下方：px = dlg.x + 1(边框) + 8
     drop = (ax + 9, 18, 24, 9)
-    # pieces 分块弹窗（P）：64x21 居中（dialog_rect 同口径）
-    pieces = ((cols - 64) // 2, (ROWS - 21) // 2, 64, 21)
-    return add, dele, drop, pieces
+    # pieces 分块弹窗（P）：64x19 居中（需求修订：高度 21→19）
+    pieces = ((cols - 64) // 2, (ROWS - 19) // 2, 64, 19)
+    # 帮助窗口（H）：70x24 居中（内容超窗，右缘滚动条覆盖边框）
+    help_dlg = ((cols - 70) // 2, (ROWS - 24) // 2, 70, 24)
+    return add, dele, drop, pieces, help_dlg
 
 
 class MiniTerm:
@@ -151,7 +153,8 @@ def check_box(term: MiniTerm, rect, name: str, results: list, title_w: int,
     for yy in range(y + 1, y1):
         if term.cell(x, yy) != "│":
             bad.append(f"左边框@({x},{yy})={term.cell(x, yy)!r}")
-        # right_extra：合法覆盖右边框的字符（如 pieces 弹窗滚动条滑块 █）
+        # right_extra：合法覆盖右边框的字符（pieces 弹窗 lazygit 式滚动条：
+        # ▲▼ 上下箭头 + █ 滑块 + │ 轨道，与边框同列绘制）
         if term.cell(x1, yy) != "│" and term.cell(x1, yy) not in right_extra:
             bad.append(f"右边框@({x1},{yy})={term.cell(x1, yy)!r}")
     # 水平边：title 文字（含其合法半格）之外的区域不得是宽字符半格（错位特征）
@@ -195,7 +198,7 @@ def main() -> None:
     ghost = "--ideal" not in a
     prog = [x for x in a if not x.startswith("--")]
     program = prog[0] if prog else "./target/release/ezr-tui-demo"
-    add_dlg, del_dlg, dropdown, pieces_dlg = rects_for(cols)
+    add_dlg, del_dlg, dropdown, pieces_dlg, help_dlg = rects_for(cols)
     print(f"模式: {'问题终端（半格写入产生残影）' if ghost else '理想终端'} · 终端 {cols}x{ROWS}")
     print(f"浮层矩形: 添加={add_dlg} 删除={del_dlg} 下拉={dropdown} pieces={pieces_dlg}")
     pid, fd = pty.fork()
@@ -237,11 +240,21 @@ def main() -> None:
         os.write(fd, b"\x1b")  # 关闭添加对话框（恢复列表，p 才能作用于选中任务）
         read(term, fd, 0.5)
 
-        print("场景 4：pieces 分块弹窗（P，网格全宽字符色块）")
+        print("场景 4：pieces 分块弹窗（P，网格全宽字符色块 + 图例行）")
         os.write(fd, b"p")
         read(term, fd, 1.5)
-        check_box(term, pieces_dlg, "pieces 弹窗四边边框完整 + 无穿透", results,
-                  title_w=19, right_extra=("█",))
+        check_box(term, pieces_dlg, "pieces 弹窗四边边框完整 + 无穿透",
+                  results, title_w=19, right_extra=("▲", "▼", "█"))
+        os.write(fd, b"\x1b")
+        read(term, fd, 0.5)
+
+        print("场景 5：帮助窗口（H，分类说明 + 右缘滚动条）")
+        os.write(fd, b"h")
+        read(term, fd, 1.5)
+        check_box(term, help_dlg, "帮助窗口四边边框完整 + 无穿透",
+                  results, title_w=9, right_extra=("▲", "▼", "█"))
+        os.write(fd, b"\x1b")
+        read(term, fd, 0.5)
     finally:
         try:
             os.kill(pid, 9)

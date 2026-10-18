@@ -86,17 +86,36 @@ async fn run(
     // clear() 先清空终端网格并重置内部前后缓冲，下一帧全量输出：从左到右
     // 连续打印，宽字符打印后游标自然推进两格，与网格位置严格同步，
     // 彻底避免半格覆盖问题。
-    fn overlay_sig(app: &App) -> u32 {
-        let dlg = match app.dialog.as_ref() {
-            None => 0u32,
-            Some(d) => 1 | ((d.ck_open as u32) << 1),
+    fn overlay_sig(app: &App) -> u64 {
+        // FNV-1a 混合（替代旧位域打包：浮层增至三个后 64 位不再够用）。
+        // 任一浮层开关 / 拖拽态 / 位置变化 → sig 变化 → terminal.clear()
+        // 全量重绘，根除增量 diff 覆盖宽字符半格造成的残影
+        const FNV_OFF: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut h = FNV_OFF;
+        fn mix(h: &mut u64, v: u64) {
+            for b in 0..8 {
+                *h = (*h ^ ((v >> (b * 8)) & 0xFF)).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        let (dlg, ck, proxy) = match app.dialog.as_ref() {
+            None => (0u64, 0u64, 0u64),
+            Some(d) => (1, d.ck_open as u64, d.proxy_open as u64),
         };
-        // pieces 分块弹窗（P）同属浮层：开/关帧同样全量重绘（位 2）；
-        // 位 8..23 编码弹窗左上角位置——鼠标拖拽移动时位置逐帧变化，
-        // 每帧都触发全量重绘，避免增量 diff 覆盖宽字符半格造成残影
-        //（与浮层开/关同口径）
+        mix(&mut h, dlg | (ck << 1) | (proxy << 2));
+        mix(
+            &mut h,
+            (app.pieces_open as u64)
+                | ((app.dialog_drag.is_some() as u64) << 1)
+                | ((app.help_open as u64) << 2)
+                | ((app.help_drag.is_some() as u64) << 3),
+        );
         let (px, py) = app.pieces_pos.unwrap_or((0, 0));
-        dlg | ((app.pieces_open as u32) << 2) | ((px as u32) << 8) | ((py as u32) << 16)
+        mix(&mut h, ((px as u64) & 0xFFFF) | (((py as u64) & 0xFFFF) << 16));
+        let (dx, dy) = app.dialog_pos.unwrap_or((0, 0));
+        mix(&mut h, ((dx as u64) & 0xFFFF) | (((dy as u64) & 0xFFFF) << 16));
+        let (hx, hy) = app.help_pos.unwrap_or((0, 0));
+        mix(&mut h, ((hx as u64) & 0xFFFF) | (((hy as u64) & 0xFFFF) << 16));
+        h
     }
     let mut last_overlay = overlay_sig(app);
 

@@ -70,14 +70,14 @@ total_bad += smoke("主界面（详情精简）", [b"\x1b[B"] * 6, lambda t: [
     ("详情含失败原因", "失败原因" in t),
     ("详情含分块行", "分块     " in t),
     ("列表标题无鼠标提示", "鼠标: 点击选中" not in t),
-    ("页脚仍含鼠标提示", "鼠标 " in t),
+    ("页脚单行含帮助/退出提示（需求修订）", "H 帮助" in t and "Q 退出" in t),
 ])
 
 total_bad += smoke("添加对话框 6 字段", [b"a"], lambda t: [
     ("对话框打开", "添加下载任务" in t),
     ("代理行 直连 ▾", "代理" in t and "直连 ▾" in t),
     ("校验行 SHA-256 ▾", "SHA-256 ▾" in t),
-    ("提示行", "校验码留空 = 不校验" in t),
+    ("底部提示行已删除（需求修订）", "校验码留空 = 不校验" not in t),
 ])
 
 total_bad += smoke("代理下拉", [b"a", b"\t", b"\t", b"\t", b"\t", b"\t", b"\r"],
@@ -91,17 +91,17 @@ total_bad += smoke("修改对话框", [b"m"], lambda t: [
     ("标题「修改任务」", "修改任务" in t),
     ("并发预填 8", "并发" in t and "> 8" in t),
     ("代理回显命名代理", "办公网代理（http）" in t),
-    ("提示「确定后立即生效」", "确定后立即生效" in t),
+    ("底部提示已删除（需求修订）", "确定后立即生效" not in t),
 ])
 
-total_bad += smoke("清已完成（状态级）", [b"\t", b"c"], lambda t: [
+total_bad += smoke("清已完成（状态级）", [b"t", b"c"], lambda t: [
     ("ffmpeg 已被清理", "ffmpeg-master" not in t),
     ("做种任务保留（C 只清已完成）", "archlinux" in t and "做种中" in t),
 ])
 
 # 空态引导：正在下载页签逐个删除后（借 D 对话框路径太长，此处直验渲染分支文案已在代码内），
 # 改验「区域过小」之外的空态文案——已完成页签仅剩做种任务时不清空，跳过该路径。
-total_bad += smoke("修改对话框·已完成拒绝", [b"\t", b"\x1b[B", b"m"], lambda t: [
+total_bad += smoke("修改对话框·已完成拒绝", [b"t", b"\x1b[B", b"m"], lambda t: [
     ("已完成任务按 m → toast 拒绝", "已完成任务不可修改" in t or "修改任务" not in t),
 ])
 
