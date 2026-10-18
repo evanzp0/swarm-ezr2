@@ -16,7 +16,8 @@
 #   01-add-task-15 CLI 多 URL 部分非法全部拒绝
 #   01-add-task-16 重复任务拒绝并提示
 #   01-add-task-17 对话框支持粘贴长文本
-#   01-add-task-18 仅添加按钮：只添加任务不下载
+#   01-add-task-18 仅添加按钮：只添加任务不下载（v1.30 修订：对话框无提示行，P3/FR-01-107）
+#   01-add-task-19 URL 输入自动回填默认并发与 Esc 取消（v1.30 新增，对齐 ezr-demo 重构版 §6.1）
 Feature: 01-add-task 任务添加（对话框与 CLI）
 
   期号 01。依据 project/mission/phase-01.md FR-01-01~06 与本会话澄清决定（重复任务拒绝、
@@ -24,13 +25,16 @@ Feature: 01-add-task 任务添加（对话框与 CLI）
   http_concurrency，v1.5 自 default_concurrency 改名，FR-01-88）。UI 交互基线沿用
   ezr-tui-demo 定稿。
   v1.15 增补：场景 18（仅添加按钮，FR-01-103/D28/D29，操作者第十二批指令）。
+  v1.30 修订（操作者指令，对齐 ezr-demo 重构版）：对话框 74×11、无底部操作提示行
+  （P3 原则/FR-01-107，交互说明收敛帮助窗口）；按钮激活 = Enter/空格/鼠标点击；
+  URL 输入自动回填默认并发（未手动改过并发时，HTTP 4 / BT 20 预留）。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
     And 本地 fixture 服务器已启动且根目录含测试文件
 
   Scenario: 01-add-task-01 对话框五字段创建任务
-    When 按 A 打开「添加下载任务」对话框
+    When 按 A 打开「添加下载任务」对话框（74×11 圆角边框浮层、终端内居中，v1.30）
     And 在 URL 字段输入 "<url>"
     And 在保存目录字段输入 "<dir>"
     And 在并发数字段输入 "<concurrency>"
@@ -43,6 +47,15 @@ Feature: 01-add-task 任务添加（对话框与 CLI）
     Examples:
       | url                                          | dir            | concurrency | checksum                                                          | filename   | scheme |
       | http://fixture.local/files/big-one.bin       | /tmp/qadl      | 4           | d869db7fe62fb06d1c488a04d5e68e93a4f0c0e0e0c0a1b2c3d4e5f60718293a | big-one.bin | HTTP   |
+
+  Scenario: 01-add-task-19 URL 输入自动回填默认并发与 Esc 取消（v1.30 新增）
+    When 按 A 打开「添加下载任务」对话框且并发字段留空
+    And 在 URL 字段逐字输入 http(s) URL
+    Then 并发字段自动回填该协议默认并发 4（HTTP；BT 20 为 phase-02 预留；v1.30/FR-01-01 注记）
+    When 手动将并发改为 "6" 后继续修改 URL
+    Then 并发字段保持 "6" 不再被回填（仅未手动改过时自动同步）
+    When 按 Esc 取消
+    Then 对话框关闭且无任务创建（Esc 取消语义，v1.30）
 
   Scenario: 01-add-task-02 校验算法下拉七选一
     When 按 A 打开「添加下载任务」对话框
@@ -215,7 +228,8 @@ Feature: 01-add-task 任务添加（对话框与 CLI）
   Scenario: 01-add-task-18 仅添加按钮：只添加任务不下载
     When 按 A 打开「添加下载任务」对话框
     Then 按钮行显示 [ 立即下载 ] [ 仅添加 ] [ 取消 ]（原「确认」钮已改名「立即下载」，FR-01-103）
-    And 焦点经 Tab/↑↓ 环绕可达三钮（序 6/7/8）且提示行含 "Enter 立即下载"
+    And 焦点经 Tab/↑↓ 环绕可达三钮（序 6/7/8）
+    And 对话框无底部操作提示行（v1.30/FR-01-107 P3：交互说明收敛帮助窗口【弹窗】组；按钮激活 = Enter/空格/鼠标点击）
     When 输入合法 URL "<url>" 后激活「仅添加」（Enter 或空格或鼠标点击）
     Then 对话框关闭且任务列表出现任务 "<filename>" 且状态为「已暂停」
     And 下载槽位未被占用（下载槽位 x/5 中 x 不含该任务）且任务不开始下载

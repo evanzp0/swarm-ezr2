@@ -8,6 +8,9 @@
 #   03-modify-task-07 已完成任务按 m 拒绝（toast 提示）
 #   03-modify-task-08 修改后注册表立即落盘（重启保留新参数）
 #   03-modify-task-09 修改对话框支持粘贴（校验码/并发字段，v1.17 新增）
+# v1.30 同步注（操作者指令，对齐 ezr-demo 重构版）：修改对话框 74×9、无底部提示行（P3/FR-01-107）——
+# 本文件仅场景 07 toast 文案逐字校准（`⚠ 已完成任务不可修改`）与 D20 适用范围口径不变；
+# 对话框通用语义（Tab/Enter/Esc、下拉、拖拽、点击外部忽略）见 01-tui-display-19 与帮助窗口【弹窗】组。
 Feature: 03-modify-task 任务修改对话框（并发/校验/代理热生效）
 
   期号 01。依据 project/mission/phase-01.md FR-01-87（v1.5 操作者指令）与 D19/D20：
@@ -97,7 +100,7 @@ Feature: 03-modify-task 任务修改对话框（并发/校验/代理热生效）
   Scenario: 03-modify-task-07 已完成任务按 m 拒绝（toast 提示）
     Given 列表存在一个「已完成」任务
     When 选中它按 m
-    Then 不弹对话框；toast 提示已完成任务不可修改
+    Then 不弹对话框；toast 逐字显示 "⚠ 已完成任务不可修改"（v1.30 逐字校准，对齐 ezr-demo 重构版源码）
 
     Examples:
       | file       |

@@ -162,7 +162,7 @@ Feature: 01-download-engine HTTP 下载内核（探测 · 分块 · 重定向 ·
 
   Scenario: 01-download-engine-14 速度按 1 秒滑动窗口驱动显示
     When 下载任务处于「下载中」
-    Then 列表行速度、头部全局 ↓ 速度与 Sparkline 面板随下载持续每秒更新且数值来自真实传输
+    Then 列表行速度、头部全局 ↓ 速度与头部内嵌单色面积流量图随下载持续每秒更新且数值来自真实传输（v1.30 术语校准：Sparkline 面板已由 FR-01-95 流量图取代）
     And 下载完成后列表与详情速度归零或显示完成态
 
   Scenario: 01-download-engine-15 等待下载槽位的任务不预取文件大小

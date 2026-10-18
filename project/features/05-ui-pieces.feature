@@ -1,17 +1,19 @@
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
-#   05-ui-pieces-01 P 键打开分块弹窗与窗口形态
-#   05-ui-pieces-02 四态色块与元信息行口径（非下载中）
+#   05-ui-pieces-01 P 键打开分块弹窗与窗口形态（v1.30 修订：64×21→64×19、提示行→图例行）
+#   05-ui-pieces-02 四态色块与元信息行口径（非下载中）（v1.30 修订：图例行恒显）
 #   05-ui-pieces-03 下载中任务的 🟦 在传块与 🟦 优先
-#   05-ui-pieces-04 打开定位下载前沿与滚动
-#   05-ui-pieces-05 弹窗模态与关闭
+#   05-ui-pieces-04 打开定位下载前沿与滚动（v1.30 修订：滚动条字形 ▲│█▼、滑块恒绿）
+#   05-ui-pieces-05 弹窗模态与关闭（v1.30 修订：回归键 Ctrl+↑↓/Ctrl+B 改 ↑↓/B）
 #   05-ui-pieces-06 功能门槛拒绝臂
 #   05-ui-pieces-07 鼠标滚轮/拖拽/点击外部
-#   05-ui-pieces-08 页脚 P 分块 提示
-Feature: 05-ui-pieces P 键 pieces 分块弹窗（FR-01-106，对齐 ezr-demo 定稿 §6.3/§6.4）
+#   （08 已随 v1.30 页脚收敛（P3/FR-01-107）退役：页脚 P 分块 提示项不复存在，序号留空不重排）
+Feature: 05-ui-pieces P 键 pieces 分块弹窗（FR-01-106，对齐 ezr-demo 重构版 §6.5）
 
-  期号 01。依据 project/mission/phase-01.md v1.29（FR-01-106、D35，操作者指令两批需求之一）。
-  权威参照：ezr-demo/docs/UI交互需求文档-定稿.md v1.4 §6.3/§6.4/§6.5 与 ezr-demo 源码
-  （open_pieces / draw_pieces / on_mouse pieces 分支）。
+  期号 01。依据 project/mission/phase-01.md v1.29（FR-01-106、D35，操作者指令两批需求之一）；
+  v1.30 修订（操作者指令，对齐 ezr-demo 重构版）：窗口 64×21→64×19（底部快捷键提示行改四色
+  图例行）、滚动条滑块恒聚焦绿、模态优先级按 FR-01-107（帮助窗口 > pieces > 对话框 > 主界面）。
+  权威参照：ezr-demo/docs/ezr-demo UI界面及交互设计规范.md §6.5 与 ezr-demo 源码
+  （open_pieces / draw_pieces / on_mouse pieces 分支；v1.29 权威参照 = docs/UI交互需求文档-定稿.md）。
   功能门槛：仅支持分块下载的任务才有此功能——BT 任务恒支持（phase-02 预留，01 期不触发）；
   HTTP(S) 任务需服务器支持断点续传，不支持续传（单流整段下载）按 P toast 拒绝且弹窗不打开。
   端到端口径：全部断言作用于伪终端用户可见画面，不进入项目内部 API。
@@ -24,18 +26,18 @@ Feature: 05-ui-pieces P 键 pieces 分块弹窗（FR-01-106，对齐 ezr-demo �
   Scenario: 05-ui-pieces-01 P 键打开分块弹窗与窗口形态
     Given 下载中的任务 "<file>"（并发 <conns>，fixture 慢速门控维持观察窗）被选中
     When 按 P
-    Then 弹窗打开且为固定 <w>×<h> 圆角边框浮层、在终端内居中
+    Then 弹窗打开且为固定 <w>×<h> 圆角边框浮层、在终端内居中（v1.30：64×19）
     And 弹窗标题为「分块状态」且加粗青色
-    And 弹窗内容自上而下四段：任务名行（超宽截尾白色加粗）/ 元信息行 / 分块网格 / 快捷键提示行
+    And 弹窗内容自上而下四段：任务名行（超宽截尾白色加粗）/ 元信息行 / 分块网格 / 四色图例行（v1.30：图例行替代原快捷键提示行，P3/FR-01-107）
     And 元信息行 = " <protocol> · 块大小 <bsize> · {x}/{y} 块 · 并发 <conns> "（{x}/{y} = 该任务已完成/总块数，与详情面板「分块」行同口径同值）
-    And 快捷键提示行为 " ↑↓/PgUp/PgDn 滚动 · Esc/P 关闭"
+    And 图例行为 "🟩 已下载   🟦 正在下载   🟨 部分下载   ⬜ 未下载"（色块字符与网格同源，v1.30）
     And 弹窗下方主界面仍完整渲染（浮层覆盖、打开/关闭帧全量重绘无宽字符残影）
     When 按 Esc 关闭后将终端尺寸调整为 <small_cols>×<small_rows> 再按 P
     Then 弹窗尺寸钳制到终端内且网格行数随内框收缩、四段内容完整不溢出
 
     Examples:
       | file          | conns | w  | h  | protocol | bsize | small_cols | small_rows |
-      | piece-dl8.bin | 4     | 64 | 21 | HTTP     | 1 MB  | 56         | 16         |
+      | piece-dl8.bin | 4     | 64 | 19 | HTTP     | 1 MB  | 56         | 16         |
 
   Scenario: 05-ui-pieces-02 四态色块与元信息行口径（非下载中）
     Given 状态为 "<state>" 的任务 "<file>"（并发 <conns>）被选中且已完成 <done> 块、另有 <partial> 个部分块与 0 个在传块
@@ -45,7 +47,7 @@ Feature: 05-ui-pieces P 键 pieces 分块弹窗（FR-01-106，对齐 ezr-demo �
     And 网格内不出现 🟦（任务非「下载中」）
     And 有已落盘零头的未完成块显示 🟨（状态下沉冻结的持块连接）
     And 其余块显示 ⬜
-    And 弹窗内无图例计数行、无任务状态行、无分页/总块数提示行
+    And 底部图例行恒显示四色说明（🟩🟦🟨⬜，v1.30：图例行随窗口形态恒在，与状态无关）
 
     Examples:
       | state  | file            | conns | done | partial |
@@ -69,7 +71,7 @@ Feature: 05-ui-pieces P 键 pieces 分块弹窗（FR-01-106，对齐 ezr-demo �
     Given 下载中的任务 "<file>"（约 <pct>% 进度、总块数超过一屏）被选中
     When 按 P
     Then 打开首帧定位到下载前沿：第一块未完成块所在行滚动至网格垂直居中（上方 🟩、前沿行含 🟦/🟨、下方 ⬜）
-    And 块数超一屏时弹窗右缘（右边框列）出现滚动条且滑块位置与滚动偏移一致
+    And 块数超一屏时弹窗右缘（右边框列）出现滚动条：▲ 顶部箭头（暗灰）、轨道 = 边框线、█ 滑块（恒聚焦绿加粗）、▼ 底部箭头（暗灰），且滑块位置与滚动偏移一致（v1.30/FR-01-109）
     When 连续观察 <secs> 秒下载推进
     Then 网格滚动位置不变（打开后不自动跟随下载前沿）
     When 按 ↓ ×<rows> 再按 PgDn 再按 End
@@ -89,15 +91,15 @@ Feature: 05-ui-pieces P 键 pieces 分块弹窗（FR-01-106，对齐 ezr-demo �
     And 依次按 Space、R、A、D、M、C、Tab、G、U、J（P/Esc/Q 与弹窗滚动键除外）
     Then 全部按键被弹窗消费为主界面无动作：任务不暂停/不重试/不增删、无对话框打开、页签不切换、右栏不收起、任务列表选择不动
     When 按 q
-    Then 弹窗关闭且应用未退出（主界面恢复完整渲染）
+    Then 弹窗关闭且应用未退出（主界面恢复完整渲染；q/Q 先关窗不退出，v1.30 语义不变）
     When 再按 P 重新打开后按 Q
     Then 弹窗关闭且应用未退出
     When 再按 P 重新打开后按 Esc
     Then 弹窗关闭且应用未退出
     When 再按 P 打开弹窗后按 Ctrl+C
     Then 应用退出且终端恢复正常（哨兵复原）
-    When 重启 ezr 并选中下载中任务后按 Ctrl+↓
-    Then Ctrl+↑↓/Ctrl+B 在弹窗未打开时行为不变（FR-01-97 既有口径回归）
+    When 重启 ezr、选中下载中任务、按 Tab 聚焦并发面板后按 ↓，再选中下载中任务按 B
+    Then ↑↓ 明细选择与 B 断开在弹窗未打开时行为不变（v1.30 修订：原 Ctrl+↑↓/Ctrl+B 回归口径随 FR-01-97 v1.30 改键）
 
     Examples:
       | file          | conns |
@@ -125,16 +127,10 @@ Feature: 05-ui-pieces P 键 pieces 分块弹窗（FR-01-106，对齐 ezr-demo �
     When 左键按住弹窗内任意空白位置拖动 <dx>,<dy> 后松开
     Then 弹窗随指针移动且新位置始终钳制在终端内
     When 按 P 关闭后再按 P 重新打开
-    Then 弹窗重新在终端内居中（上次拖拽位置不保留）
+    Then 弹窗重新在终端内居中（上次拖拽位置不保留——pieces 关闭即清位置，与帮助窗口跨次记忆不同，v1.30）
     When 左键点击弹窗外部（任务列表区域）
     Then 弹窗关闭且该次点击不选中任何任务（弹窗打开期间鼠标事件全部由弹窗分支消费）
 
     Examples:
       | file          | notches | dx | dy |
       | piece-big.bin | 3       | 10 | 4  |
-
-  Scenario: 05-ui-pieces-08 页脚 P 分块 提示
-    When 观察页脚快捷键行
-    Then 快捷键行含 "P" 与 " 分块 " 项且位于「R 重试」与「A 添加」之间（式样与其他项一致：键名青色加粗、说明暗灰）
-    When 终端尺寸调整为 80×34
-    Then 窄屏精简后 "P 分块" 项仍在快捷键行可见（截断位次口径不变）
