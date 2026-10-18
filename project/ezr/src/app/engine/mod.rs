@@ -487,6 +487,7 @@ mod tick_tests {
             made_progress: false,
             downloaded: 999_999,
             chunk_done: 0,
+            partial_blocks: Vec::new(),
         })
         .await;
         let t = &app.tasks[0];
@@ -770,6 +771,8 @@ mod evt_tests {
             downloaded: 100,
             conns: vec![conn_view(1, 0, 100, 100)],
             chunk_done: 1,
+            done_blocks: vec![0],
+            partial_blocks: Vec::new(),
         })
         .await;
         assert!(
@@ -791,12 +794,15 @@ mod evt_tests {
             downloaded: 500,
             conns: vec![conn_view(2, 0, 1000, 500)],
             chunk_done: 3,
+            done_blocks: vec![0, 1, 2],
+            partial_blocks: Vec::new(),
         })
         .await;
         assert!(app.windows.contains_key(&1), "首次进度为任务建速度滑窗");
         let t = &app.tasks[0];
         assert_eq!(t.downloaded, 500);
         assert_eq!(t.chunk_done, 3);
+        assert_eq!(t.done_blocks, vec![0, 1, 2], "逐块完成集合随 Progress 重铺");
         assert_eq!(t.connections.len(), 1, "连接视图按 ConnView 直传适配");
         assert_eq!(t.connections[0].id, 2);
         assert_eq!(t.connections[0].done, 500);
@@ -815,10 +821,102 @@ mod evt_tests {
             downloaded: 0,
             conns: vec![],
             chunk_done: 0,
+            done_blocks: vec![],
+            partial_blocks: Vec::new(),
         })
         .await;
         assert!(!app.tasks[0].made_progress, "零字节进度不算进展");
         assert!(app.windows.contains_key(&1), "窗口仍然建立（观测后续速率）");
+        app.shutdown().await;
+    }
+
+    /// 逐块完成集合：Progress 全量重铺（乱序完成安全）；失效重下
+    /// （Invalidated）同步清空——断点作废后不得残留旧集合虚标 🟩。
+    #[tokio::test]
+    async fn progress_updates_done_blocks_and_invalidated_clears() {
+        let mut app = make_app("progress-done-blocks");
+        let mut t = seed_task(1, "f.bin");
+        t.state = TaskState::Downloading;
+        app.tasks.push(t);
+        app.on_evt(Evt::Progress {
+            id: 1,
+            downloaded: 500,
+            conns: vec![],
+            chunk_done: 2,
+            done_blocks: vec![2, 5],
+            partial_blocks: Vec::new(),
+        })
+        .await;
+        assert_eq!(
+            app.tasks[0].done_blocks,
+            vec![2, 5],
+            "Progress 携带逐块完成集合（乱序位置）"
+        );
+        app.on_evt(Evt::Invalidated { id: 1 }).await;
+        assert!(app.tasks[0].done_blocks.is_empty(), "失效重下清空逐块集合");
+        app.shutdown().await;
+    }
+
+    /// 逐块部分集合（v131）：Progress 全量重铺、PausedDone/Failed 终态快照
+    /// 重铺（收尾与最后 tick 间的尾部字节不缺）、失效重下（Invalidated）
+    /// 同步清空——pieces 🟨 数据通道三事件一致性。
+    #[tokio::test]
+    async fn partial_blocks_relaid_by_progress_paused_done_and_failed() {
+        let mut app = make_app("partial-blocks-relay");
+        let mut t = seed_task(1, "f.bin");
+        t.state = TaskState::Downloading;
+        app.tasks.push(t);
+        app.on_evt(Evt::Progress {
+            id: 1,
+            downloaded: 500,
+            conns: vec![],
+            chunk_done: 1,
+            done_blocks: vec![0],
+            partial_blocks: vec![1, 3],
+        })
+        .await;
+        assert_eq!(
+            app.tasks[0].partial_blocks,
+            vec![1, 3],
+            "Progress 携带逐块部分集合"
+        );
+        // 暂停收尾：终态快照重铺（stop_workers 后引擎 Blocks 真值）
+        app.on_evt(Evt::PausedDone {
+            id: 1,
+            downloaded: 500,
+            chunk_done: 1,
+            partial_blocks: vec![1, 3, 4],
+        })
+        .await;
+        assert_eq!(
+            app.tasks[0].partial_blocks,
+            vec![1, 3, 4],
+            "PausedDone 终态快照重铺"
+        );
+        // 失败收尾：终态快照重铺（守卫后写入；Failed 前 App 重置为下载中）
+        app.tasks[0].state = TaskState::Downloading;
+        app.on_evt(Evt::Failed {
+            id: 1,
+            kind: FailKind::Transient,
+            reason: "连接被重置".to_string(),
+            retry_after: None,
+            made_progress: false,
+            downloaded: 500,
+            chunk_done: 1,
+            partial_blocks: vec![1, 4],
+        })
+        .await;
+        assert_eq!(
+            app.tasks[0].partial_blocks,
+            vec![1, 4],
+            "Failed 台账终态快照重铺"
+        );
+        // 失效重下：同步清空（与 done_blocks 同口径）
+        app.on_evt(Evt::Invalidated { id: 1 }).await;
+        assert!(
+            app.tasks[0].partial_blocks.is_empty(),
+            "失效重下清空部分集合"
+        );
         app.shutdown().await;
     }
 
@@ -839,6 +937,7 @@ mod evt_tests {
             id: 1,
             downloaded: 50,
             chunk_done: 2,
+            partial_blocks: Vec::new(),
         })
         .await;
         let t = &app.tasks[0];
@@ -864,6 +963,7 @@ mod evt_tests {
             id: 1,
             downloaded: 50,
             chunk_done: 0,
+            partial_blocks: Vec::new(),
         })
         .await;
         assert_eq!(
@@ -892,6 +992,7 @@ mod evt_tests {
             made_progress: false,
             downloaded: 400,
             chunk_done: 1,
+            partial_blocks: Vec::new(),
         })
         .await;
         let t = &app.tasks[0];
@@ -926,6 +1027,7 @@ mod evt_tests {
             made_progress: true,
             downloaded: 0,
             chunk_done: 0,
+            partial_blocks: Vec::new(),
         })
         .await;
         let t = &app.tasks[0];
@@ -952,6 +1054,7 @@ mod evt_tests {
             made_progress: false,
             downloaded: 0,
             chunk_done: 0,
+            partial_blocks: Vec::new(),
         })
         .await;
         assert!(app.tasks.is_empty());
@@ -1343,6 +1446,8 @@ mod evt_tests {
             downloaded: 500,
             conns: vec![],
             chunk_done: 1,
+            done_blocks: vec![0],
+            partial_blocks: Vec::new(),
         })
         .await;
         assert_eq!(app.tasks[0].downloaded, 0, "非下载中：进度不被采纳");
@@ -1367,6 +1472,7 @@ mod evt_tests {
             made_progress: false,
             downloaded: 100,
             chunk_done: 1,
+            partial_blocks: Vec::new(),
         })
         .await;
         assert_eq!(app.tasks[0].state, TaskState::Failed);
@@ -1426,6 +1532,8 @@ mod conn_stats_tests {
             downloaded,
             conns,
             chunk_done: 0,
+            done_blocks: Vec::new(),
+            partial_blocks: Vec::new(),
         })
         .await;
     }

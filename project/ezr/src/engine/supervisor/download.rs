@@ -328,6 +328,8 @@ pub(super) async fn download(
                 }
                 let b = blocks_shared.lock().await;
                 let chunk_done = b.completed();
+                let done_blocks = b.done_indices();
+                let partial_blocks = b.partial_indices();
                 let conns_now = conns.lock().await.clone();
                 drop(b);
                 // v1.16/FR-01-105：任务级实时口径（基线 + 本轮累计写入）；
@@ -339,6 +341,8 @@ pub(super) async fn download(
                     downloaded,
                     conns: conns_now,
                     chunk_done,
+                    done_blocks,
+                    partial_blocks,
                 }).await {
                     return Flow::Cancelled;
                 }

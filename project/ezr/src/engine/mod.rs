@@ -95,6 +95,13 @@ pub enum Evt {
         conns: Vec<ConnView>,
         /// 已完成块数
         chunk_done: u32,
+        /// 已完成块号集合（升序，引擎 Blocks 逐块真值）：多并发乱序完成时
+        /// 计数前缀错位（已完成块不在前缀、连接已移走），App 端 pieces
+        /// 弹窗以集合为准标 🟩（操作者实证缺陷修复）
+        done_blocks: Vec<u32>,
+        /// 部分下载块号集合（升序，引擎 Blocks 逐块真值：块内已有字节未达
+        /// 块长）：pieces 弹窗以集合为准标 🟨（v131 操作者实证缺陷修复）
+        partial_blocks: Vec<u32>,
     },
     /// 暂停完成（sidecar 已写；App 转已暂停并更新断点视图）
     PausedDone {
@@ -104,6 +111,8 @@ pub enum Evt {
         downloaded: u64,
         /// 已完成块数
         chunk_done: u32,
+        /// 部分下载块号集合（升序，引擎 Blocks 终态快照逐块真值；v131）
+        partial_blocks: Vec<u32>,
     },
     /// 任务已停止运行（取消：删除任务/排队取消/引擎关闭；不写 sidecar）。
     /// App 收到后执行已登记的延迟文件删除；未知 id 直接忽略。
@@ -127,6 +136,9 @@ pub enum Evt {
         downloaded: u64,
         /// 已完成块数
         chunk_done: u32,
+        /// 部分下载块号集合（升序，失败台账逐块真值；v131。无台账失败
+        /// （探测/预分配等未传输臂）为空集——与 downloaded=0 口径一致）
+        partial_blocks: Vec<u32>,
     },
     /// 续传一致性失效（FR-01-22：sidecar 作废、从头重下、不计失败）
     Invalidated {

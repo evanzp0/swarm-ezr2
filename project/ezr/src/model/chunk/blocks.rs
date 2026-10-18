@@ -62,6 +62,37 @@ impl Blocks {
             .sum()
     }
 
+    /// 已完成块号集合（升序；Progress 事件携带的逐块真值，乱序完成安全）。
+    /// 单次扫描与 [`Blocks::completed`] 同口径（`written` 达块长）。
+    #[must_use]
+    pub fn done_indices(&self) -> Vec<u32> {
+        self.written
+            .iter()
+            .enumerate()
+            .filter(|(i, w)| {
+                block_range(self.total, self.piece, *i as u32).is_some_and(|(s, e)| **w >= e - s)
+            })
+            .map(|(i, _)| i as u32)
+            .collect()
+    }
+
+    /// 部分下载块号集合（升序；块内已有字节但未达块长，Progress/PausedDone/
+    /// Failed 事件携带的逐块真值）。单次扫描与 [`Blocks::done_indices`] 同口径
+    /// ——pieces 弹窗 🟨 以集合为准（操作者实证缺陷修复：暂停/失败收尾的
+    /// 投影租约只覆盖尾部 ≤ 并发数个块，前缀外的真部分块无租约错标 ⬜）。
+    #[must_use]
+    pub fn partial_indices(&self) -> Vec<u32> {
+        self.written
+            .iter()
+            .enumerate()
+            .filter(|(i, w)| {
+                block_range(self.total, self.piece, *i as u32)
+                    .is_some_and(|(s, e)| **w > 0 && **w < e - s)
+            })
+            .map(|(i, _)| i as u32)
+            .collect()
+    }
+
     /// 第 `i` 块是否已完成
     #[must_use]
     pub fn is_done_block(&self, i: u32) -> bool {
@@ -157,6 +188,40 @@ mod tests {
         b.mark_progress(0, 9_999_999);
         assert!(b.is_done_block(0));
         assert_eq!(b.downloaded(), 1_000_000);
+    }
+
+    /// done_indices：升序列出已完成块号，与 completed() 计数同口径；
+    /// 乱序完成（先 2 后 0）不乱序输出；部分块不入选。
+    #[test]
+    fn done_indices_sorted_matches_completed() {
+        let mut b = Blocks::new(5_000_000, 1_000_000);
+        assert!(b.done_indices().is_empty(), "全空无完成块");
+        b.mark_done(2);
+        b.mark_done(0);
+        b.mark_progress(1, 300_000); // 部分块不入选
+        let idx = b.done_indices();
+        assert_eq!(idx, vec![0, 2], "升序列出已完成块号");
+        assert_eq!(idx.len() as u32, b.completed(), "与 completed() 计数一致");
+    }
+
+    /// partial_indices：升序列出部分下载块号（0 < written < 块长）；
+    /// 完成块与零字节块不入选，与 done_indices 互斥且并集覆盖全部有字节块。
+    #[test]
+    fn partial_indices_sorted_excludes_done_and_empty() {
+        let mut b = Blocks::new(5_000_000, 1_000_000);
+        assert!(b.partial_indices().is_empty(), "全空无部分块");
+        b.mark_done(0); // 完成块不入选
+        b.mark_progress(1, 400_000); // 部分块入选
+        b.mark_progress(2, 1_000_000); // 达块长 = 完成，不入选
+                                       // 块 3 零字节不入选
+        b.mark_progress(4, 1); // 部分块入选
+        let idx = b.partial_indices();
+        assert_eq!(idx, vec![1, 4], "升序列出部分下载块号");
+        let done = b.done_indices();
+        assert!(
+            idx.iter().all(|i| !done.contains(i)),
+            "部分集合与完成集合互斥"
+        );
     }
 
     #[test]

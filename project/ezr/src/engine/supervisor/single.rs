@@ -180,6 +180,9 @@ pub(super) async fn single_stream(
                             downloaded,
                             conns,
                             chunk_done: 0,
+                            // 单流无逐块记账（块边界即完成点，FR-01-12 口径）
+                            done_blocks: Vec::new(),
+                            partial_blocks: Vec::new(),
                         }).await;
                     }
                 }

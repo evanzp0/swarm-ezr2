@@ -133,6 +133,8 @@ pub(crate) async fn run(
                     id: spec.id,
                     downloaded: state.blocks.downloaded(),
                     chunk_done: state.blocks.completed(),
+                    // 终态逐块真值（stop_workers 后快照）：pieces 🟨 收尾口径
+                    partial_blocks: state.blocks.partial_indices(),
                 })
                 .await;
         }
@@ -144,9 +146,9 @@ pub(crate) async fn run(
             if let Some((sc, sc_path)) = &sidecar {
                 let _ = Sidecar::save(sc, sc_path);
             }
-            let (downloaded, chunk_done) = match &sidecar {
-                Some((sc, _)) => (sc.downloaded, completed_of(sc)),
-                None => (0, 0),
+            let (downloaded, chunk_done, partial_blocks) = match &sidecar {
+                Some((sc, _)) => (sc.downloaded, completed_of(sc), partial_of(sc)),
+                None => (0, 0, Vec::new()),
             };
             let _ = evt_tx
                 .send(Evt::Failed {
@@ -157,6 +159,8 @@ pub(crate) async fn run(
                     made_progress,
                     downloaded,
                     chunk_done,
+                    // 失败台账逐块真值：pieces 🟨 收尾口径（无台账失败臂为空集）
+                    partial_blocks,
                 })
                 .await;
         }
@@ -177,6 +181,19 @@ fn completed_of(sc: &Sidecar) -> u32 {
         .zip(0u32..)
         .filter(|(w, i)| block_range(sc.size, sc.block_size, *i).is_some_and(|(s, e)| **w >= e - s))
         .count() as u32
+}
+
+/// sidecar 中部分下载块号集合（升序；Failed 事件 pieces 🟨 汇总用，v131）。
+/// 与 [`completed_of`] 同口径单次扫描（0 < written < 块长）。
+fn partial_of(sc: &Sidecar) -> Vec<u32> {
+    sc.blocks
+        .iter()
+        .zip(0u32..)
+        .filter(|(w, i)| {
+            block_range(sc.size, sc.block_size, *i).is_some_and(|(s, e)| **w > 0 && **w < e - s)
+        })
+        .map(|(_, i)| i)
+        .collect()
 }
 
 /// sidecar 路径推导（委托 model 单源 namegen::sidecar_path_of，architect v116：

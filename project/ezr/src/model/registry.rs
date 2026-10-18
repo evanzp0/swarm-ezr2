@@ -179,6 +179,8 @@ impl From<&TaskSnapshot> for Task {
             probed: s.probed,
             connections: vec![],
             chunk_done: 0,
+            done_blocks: Vec::new(),
+            partial_blocks: Vec::new(),
             block_size: s.block_size,
             concurrency: s.concurrency,
             retries: s.retries,

@@ -71,6 +71,8 @@ impl App {
                 downloaded,
                 conns,
                 chunk_done,
+                done_blocks,
+                partial_blocks,
             } => {
                 let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else {
                     // 已删除/未知任务的幽灵进度：不建滑窗、不聚合（删除后引擎停止确认前的兜底）
@@ -96,6 +98,12 @@ impl App {
                 }
                 t.downloaded = downloaded;
                 t.chunk_done = chunk_done;
+                // 逐块完成集合全量重铺（引擎 Blocks 逐块真值；乱序完成安全，
+                // pieces 弹窗 🟩 权威口径）
+                t.done_blocks = done_blocks;
+                // 逐块部分集合全量重铺（引擎 Blocks 逐块真值；pieces 弹窗 🟨
+                // 权威口径，v131：暂停/失败后投影租约外的真部分块不再白屏）
+                t.partial_blocks = partial_blocks;
                 t.connections = conns.iter().map(conn_from_view).collect();
                 // 重锚消费（04-ui-conns-09 R 臂，QA v138 缺陷修复）：重试重启后
                 // 首个观测的块内 done 为续传检查点偏移——以当前观测重锚上一观
@@ -120,11 +128,15 @@ impl App {
                 id,
                 downloaded,
                 chunk_done,
+                partial_blocks,
             } => {
                 if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
                     t.downloaded = downloaded.max(t.downloaded);
                     t.speed = 0.0;
                     t.has_slot = false;
+                    // 逐块部分集合终态快照重铺（stop_workers 后引擎 Blocks
+                    // 终态：收尾与最后 Progress tick 间的尾部字节不缺，v131）
+                    t.partial_blocks = partial_blocks;
                     // 断点视图快照（详情页分块表）；含被覆盖的 t.chunk_done 中间写
                     t.apply_chunk_snapshot(downloaded, chunk_done);
                 }
@@ -138,6 +150,7 @@ impl App {
                 made_progress,
                 downloaded,
                 chunk_done,
+                partial_blocks,
             } => {
                 self.handle_failure(
                     id,
@@ -147,6 +160,7 @@ impl App {
                     made_progress,
                     downloaded,
                     chunk_done,
+                    partial_blocks,
                 );
             }
             Evt::Invalidated { id } => {
@@ -162,6 +176,8 @@ impl App {
                 let name = t.name.clone();
                 t.downloaded = 0;
                 t.chunk_done = 0;
+                t.done_blocks.clear();
+                t.partial_blocks.clear();
                 t.connections.clear();
                 t.speed = 0.0;
                 self.windows.remove(&id);
@@ -309,6 +325,7 @@ impl App {
         made_progress: bool,
         downloaded: u64,
         chunk_done: u32,
+        partial_blocks: Vec<u32>,
     ) {
         let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else {
             return;
@@ -331,6 +348,9 @@ impl App {
             t.downloaded = downloaded.max(t.downloaded);
         }
         t.speed = 0.0;
+        // 逐块部分集合终态快照重铺（失败台账逐块真值；v131，与 PausedDone
+        // 同口径——收尾与最后 Progress tick 间的尾部字节不缺）
+        t.partial_blocks = partial_blocks;
         // 重试决策（FR-01-41/42/43）：连续性规则 + 退避/Retry-After + 分类，
         // 策略唯一来源在 model::retry（DRY）
         let (auto_retry, max_retries) = (self.cfg.auto_retry, t.max_retries);

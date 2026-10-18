@@ -78,6 +78,15 @@ pub struct Task {
     pub connections: Vec<Connection>,
     /// AIR2：已完成分块数 x
     pub chunk_done: u32,
+    /// 已完成块号集合（升序；乱序完成安全，pieces 弹窗 🟩 权威口径）。
+    /// 由 Progress 事件逐 tick 全量重铺（引擎 Blocks 逐块真值），仅会话内
+    /// 存在，不持久化——重启后空集回退 chunk_done 计数前缀口径。
+    pub done_blocks: Vec<u32>,
+    /// 部分下载块号集合（升序；块内已有字节未达块长，pieces 弹窗 🟨 权威
+    /// 口径）。由 Progress 逐 tick 全量重铺、PausedDone/Failed 携带终态快照
+    /// 重铺（引擎 Blocks 逐块真值），仅会话内存在，不持久化——重启后空集
+    /// 回退投影租约零头口径（v129 行为）。
+    pub partial_blocks: Vec<u32>,
     /// 块大小（字节；HTTP 默认 1 MB 可配置，添加时按当时配置定死，D13）
     pub block_size: u64,
     /// 并发数（1–64）
@@ -163,6 +172,8 @@ impl Task {
             probed: false,
             connections: vec![],
             chunk_done: 0,
+            done_blocks: Vec::new(),
+            partial_blocks: Vec::new(),
             block_size,
             concurrency,
             proxy,
@@ -246,13 +257,26 @@ impl Task {
     /// 全量分块状态（pieces 弹窗展示口径，块序 = 字节序，FR-01-106 ③）。
     ///
     /// 口径（与 [`PieceState`] 文档一致）：
-    /// - 块号 < chunk_done → Done（已下载前缀）；
+    /// - 已完成块 🟩：优先按逐块完成集合 `done_blocks`（Progress 事件逐 tick
+    ///   全量重铺的引擎 Blocks 逐块真值）——多并发乱序完成时计数前缀错位
+    ///   （真完成块不在前缀、连接已移走后无租约可依，操作者实证：已完成块
+    ///   白屏）；集合为空（重启后未收到 Progress）时回退计数前缀
+    ///   `块号 < chunk_done`；
     /// - 块被并发连接持有（分块队列按块边界整块领块，连接 start 恒对齐块
     ///   边界）：任务「下载中」→ Active（分配即算，块内零头多少不影响——
     ///   「部分下载」且「正在下载」时只显示 Active）；任务非「下载中」
     ///   （暂停/等待/失败等状态下沉冻结的持块连接）→ 有零头 Partial、
     ///   零头为 0 → Empty；
     /// - 连接块内写满（done >= cap）→ Done（乱序完成块不必依赖前缀）；
+    /// - 部分下载块 🟨（v131）：非「下载中」且逐块部分集合 `partial_blocks`
+    ///   非空（Progress 逐 tick / PausedDone・Failed 终态快照重铺的引擎
+    ///   Blocks 逐块真值）→ 集合权威标 🟨——收尾投影租约按前缀同参投影只
+    ///   覆盖尾部 ≤ 并发数个块，投影外的真部分块无租约错标 ⬜（操作者
+    ///   实证：失败/暂停后部分块白屏）、投影内假零头虚标 🟨，集合非空时
+    ///   租约零头退出 🟨 判定（双向消除）；集合为空时回退投影租约零头口径
+    ///   （v129 行为，重启后未收到逐块事件的存量面）；
+    /// - 已完成块（🟩）不被部分/空租约降级（暂停快照为前缀同参投影，可能
+    ///   与逐块真值错位；下载中领块跳过已完成块，部分租约不落已完成块）；
     /// - 其余 → Empty（未下载）。
     ///
     /// 空/极小文件：y = 0（无分块）返回空表。
@@ -263,11 +287,26 @@ impl Task {
             return Vec::new();
         }
         let mut v = vec![PieceState::Empty; y];
-        let x = (self.chunk_done as usize).min(y);
-        for s in v.iter_mut().take(x) {
-            *s = PieceState::Done;
+        if self.done_blocks.is_empty() {
+            // 回退：无逐块集合（重启后未收到 Progress / 旧事件流）时维持
+            // 计数前缀口径（v129 原行为）
+            let x = (self.chunk_done as usize).min(y);
+            for s in v.iter_mut().take(x) {
+                *s = PieceState::Done;
+            }
+        } else {
+            // 逐块真值：乱序完成安全，已完成块精确标 🟩
+            for &i in &self.done_blocks {
+                if let Some(idx) = usize::try_from(i).ok().filter(|&idx| idx < y) {
+                    v[idx] = PieceState::Done;
+                }
+            }
         }
         let downloading = self.state == TaskState::Downloading;
+        // v131：非「下载中」且引擎逐块部分真值在位 → 部分块集合权威（与
+        // 🟩 集合口径对称）：收尾投影租约的块内零头是按权重散布的展示值，
+        // 不反映真实分布——集合非空时租约零头退出 🟨 判定
+        let partial_authoritative = !downloading && !self.partial_blocks.is_empty();
         for c in &self.connections {
             if c.cap() == 0 {
                 continue; // 待命连接（start=end）不持块
@@ -276,15 +315,32 @@ impl Task {
             if idx >= y {
                 continue; // 防御：越界租约不计
             }
-            v[idx] = if c.done >= c.cap() {
+            let s = if c.done >= c.cap() {
                 PieceState::Done
             } else if downloading {
                 PieceState::Active
+            } else if partial_authoritative {
+                PieceState::Empty // 集合权威：租约零头不参与 🟨 判定
             } else if c.done > 0 {
                 PieceState::Partial
             } else {
                 PieceState::Empty
             };
+            // 已完成块不被降级：🟩 保持，除非租约同样判满（Done）
+            if v[idx] != PieceState::Done || s == PieceState::Done {
+                v[idx] = s;
+            }
+        }
+        if partial_authoritative {
+            // 集合标 🟨：只把 ⬜ 提升为 🟨（不覆盖 🟩；与租约臂的防降级
+            // 对称，投影租约已摆错的块由集合真值改正）
+            for &i in &self.partial_blocks {
+                if let Some(idx) = usize::try_from(i).ok().filter(|&idx| idx < y) {
+                    if v[idx] == PieceState::Empty {
+                        v[idx] = PieceState::Partial;
+                    }
+                }
+            }
         }
         v
     }
@@ -478,6 +534,177 @@ mod tests {
         assert_eq!(v[1], PieceState::Empty, "块 1 无连接持有（跳过）");
         assert_eq!(v[2], PieceState::Done, "块 2 乱序写满 → 🟩");
         assert_eq!(v[3], PieceState::Empty);
+    }
+
+    /// 操作者 bug 报告回归（多并发 >= 4 乱序完成）：块 2、5 已完成且下载
+    /// 线程已移走（不在 conns），chunk_done 计数 = 2 但前缀位置 0/1 并未
+    /// 完成——pieces 必须按 Progress 携带的逐块完成集合（done_blocks）
+    /// 标 🟩；计数前缀口径在乱序完成下错位（真完成块白屏、前缀位置虚绿）。
+    #[test]
+    fn pieces_out_of_order_done_set_shows_green() {
+        let mut t = crate::model::sample_task();
+        t.total = 6_000_000;
+        t.block_size = 1_000_000;
+        t.chunk_done = 2;
+        t.done_blocks = vec![2, 5];
+        t.state = TaskState::Downloading;
+        t.probed = true;
+        t.connections = vec![
+            Connection {
+                id: 1,
+                start: 0,
+                end: 1_000_000,
+                done: 400_000, // 块 0 在传
+            },
+            Connection {
+                id: 2,
+                start: 1_000_000,
+                end: 2_000_000,
+                done: 0, // 块 1 在传（分配即算）
+            },
+            Connection {
+                id: 3,
+                start: 3_000_000,
+                end: 4_000_000,
+                done: 700_000, // 块 3 在传
+            },
+            Connection {
+                id: 4,
+                start: 4_000_000,
+                end: 5_000_000,
+                done: 100_000, // 块 4 在传
+            },
+        ];
+        let v = t.pieces();
+        assert_eq!(v[0], PieceState::Active);
+        assert_eq!(v[1], PieceState::Active);
+        assert_eq!(v[2], PieceState::Done, "乱序完成块 2：连接已移走仍须 🟩");
+        assert_eq!(v[3], PieceState::Active);
+        assert_eq!(v[4], PieceState::Active);
+        assert_eq!(v[5], PieceState::Done, "乱序完成块 5：连接已移走仍须 🟩");
+    }
+
+    /// 已完成块不被冻结租约降级：暂停/失败快照（前缀同参投影）可能与逐块
+    /// 真值错位——投影把部分零头租约摆在真实已完成块上时，🟩 不得被降级
+    /// 为 🟨/⬜（下载中满租约与集合口径恒一致：领块跳过已完成块，部分
+    /// 租约不会落在真实已完成块上）。
+    #[test]
+    fn pieces_done_set_not_downgraded_by_frozen_lease() {
+        let mut t = crate::model::sample_task();
+        t.total = 3_000_000;
+        t.block_size = 1_000_000;
+        t.chunk_done = 1;
+        t.done_blocks = vec![0, 2];
+        t.state = TaskState::Paused;
+        t.probed = true;
+        t.connections = vec![Connection {
+            id: 1,
+            start: 2_000_000, // 投影租约错位落在真实已完成块 2 上
+            end: 3_000_000,
+            done: 300_000,
+        }];
+        let v = t.pieces();
+        assert_eq!(v[0], PieceState::Done);
+        assert_eq!(v[2], PieceState::Done, "已完成块不被冻结租约降级为 🟨");
+    }
+
+    /// 操作者 bug 报告回归（v131，多并发失败/暂停）：部分下载块（引擎
+    /// Blocks.written 已有字节）在收尾投影租约之外 → 旧实现白屏（⬜）。
+    /// pieces 🟨 必须按事件携带的逐块部分集合（partial_blocks）标黄；投影
+    /// 租约的假零头（集合外块）不再虚标 🟨——集合非空时部分块口径以集合
+    /// 为权威（与 🟩 集合口径对称）。
+    #[test]
+    fn pieces_failed_partial_set_shows_yellow() {
+        let mut t = crate::model::sample_task();
+        t.total = 5_000_000;
+        t.block_size = 1_000_000;
+        t.done_blocks = vec![0];
+        t.partial_blocks = vec![1, 3];
+        t.state = TaskState::Failed;
+        t.probed = true;
+        // 失败收尾投影租约（lease_snapshot 前缀同参投影的形态）：只覆盖
+        // 尾部一个块（min(并发, 未完成块数)），真实部分块 1、3 在投影外
+        t.connections = vec![Connection {
+            id: 1,
+            start: 2_000_000, // 投影把零头摆在块 2 上（块 2 真值无字节）
+            end: 3_000_000,
+            done: 300_000,
+        }];
+        let v = t.pieces();
+        assert_eq!(v[0], PieceState::Done, "块 0 已完成");
+        assert_eq!(v[1], PieceState::Partial, "投影外的真部分块 1 → 🟨");
+        assert_eq!(v[2], PieceState::Empty, "投影租约假零头不虚标（集合权威）");
+        assert_eq!(v[3], PieceState::Partial, "投影外的真部分块 3 → 🟨");
+        assert_eq!(v[4], PieceState::Empty, "块 4 无字节");
+    }
+
+    /// 暂停态同口径：真部分块上有零头为 0 的冻结租约（Empty 臂）时，
+    /// 集合真值不得被降级为 ⬜。
+    #[test]
+    fn pieces_paused_partial_set_not_downgraded_by_idle_lease() {
+        let mut t = crate::model::sample_task();
+        t.total = 3_000_000;
+        t.block_size = 1_000_000;
+        t.done_blocks = vec![0, 2];
+        t.partial_blocks = vec![1];
+        t.state = TaskState::Paused;
+        t.probed = true;
+        t.connections = vec![Connection {
+            id: 1,
+            start: 1_000_000, // 投影租约落在部分块 1 上，零头 0
+            end: 2_000_000,
+            done: 0,
+        }];
+        let v = t.pieces();
+        assert_eq!(v[0], PieceState::Done);
+        assert_eq!(v[1], PieceState::Partial, "零头租约不把集合真值降级为 ⬜");
+        assert_eq!(v[2], PieceState::Done);
+    }
+
+    /// 下载中口径不变：部分集合不把下载中标黄——有租约的部分块仍 🟦
+    /// （「部分下载且正在下载只显示 Active」，FR-01-106 定稿口径）。
+    #[test]
+    fn pieces_downloading_partial_set_stays_active() {
+        let mut t = crate::model::sample_task();
+        t.total = 3_000_000;
+        t.block_size = 1_000_000;
+        t.done_blocks = vec![0];
+        t.partial_blocks = vec![1];
+        t.state = TaskState::Downloading;
+        t.probed = true;
+        t.connections = vec![Connection {
+            id: 1,
+            start: 1_000_000,
+            end: 2_000_000,
+            done: 400_000,
+        }];
+        let v = t.pieces();
+        assert_eq!(v[0], PieceState::Done);
+        assert_eq!(v[1], PieceState::Active, "下载中 🟦 口径不变");
+        assert_eq!(v[2], PieceState::Empty);
+    }
+
+    /// 空集回退（与 🟩 前缀回退对称）：重启后未收到逐块事件（partial_blocks
+    /// 空）时维持 v129 投影租约零头口径（有零头 → 🟨）。
+    #[test]
+    fn pieces_paused_empty_partial_set_falls_back_to_lease() {
+        let mut t = crate::model::sample_task();
+        t.total = 3_000_000;
+        t.block_size = 1_000_000;
+        t.done_blocks = Vec::new();
+        t.partial_blocks = Vec::new();
+        t.chunk_done = 1;
+        t.state = TaskState::Paused;
+        t.probed = true;
+        t.connections = vec![Connection {
+            id: 1,
+            start: 2_000_000,
+            end: 3_000_000,
+            done: 300_000,
+        }];
+        let v = t.pieces();
+        assert_eq!(v[0], PieceState::Done, "空集回退计数前缀");
+        assert_eq!(v[2], PieceState::Partial, "回退租约零头口径（v129 行为）");
     }
 
     /// v129/FR-01-106 ③：待命连接（cap = 0）不持块，不计入四态；
