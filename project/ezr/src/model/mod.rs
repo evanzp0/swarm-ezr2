@@ -173,7 +173,7 @@ mod timefmt;
 // 挂载测试 crate 不消费 product re-export，unused 属机制固有告警）。
 // architect v116：ProxyConfig 零消费者，从 re-export 移除（死 API 面清理）
 pub use config::{ProxyChoice, ProxyEndpoint};
-pub use task::{Connection, Task};
+pub use task::{Connection, PieceState, Task};
 #[allow(unused_imports)] // 对外保留（01 期已暴露）
 pub use timefmt::fmt_created;
 pub use timefmt::unix_now;

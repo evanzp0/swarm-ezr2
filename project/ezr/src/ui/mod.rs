@@ -35,6 +35,7 @@ mod dialog;
 mod footer;
 mod header;
 mod list;
+mod pieces;
 mod task_lines;
 mod text;
 
@@ -48,6 +49,7 @@ use dialog::draw_dialogs;
 use footer::draw_footer;
 use header::draw_header;
 use list::draw_list;
+use pieces::draw_pieces;
 #[cfg(test)]
 pub(crate) use text::{
     fmt_dur, fmt_eta, fmt_size, fmt_size_pair, fmt_speed, pad_right, truncate, w,
@@ -165,6 +167,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // 对话框最后绘制（覆盖层）
     if app.dialog.is_some() {
         draw_dialogs(f, app, area);
+    }
+
+    // pieces 分块弹窗最后绘制（最上层覆盖；与对话框互斥——按键层已保证，
+    // FR-01-106 ②；打开/关闭/拖拽帧全量重绘由 main.rs overlay_sig 保证）
+    if app.pieces_open {
+        draw_pieces(f, app, area);
     }
 }
 
@@ -1094,10 +1102,11 @@ mod ui_v113_tests {
         assert!(s.contains("活跃 0"), "待命连接速度 0 → 活跃 0");
         assert!(s.contains("序号"), "HTTP 表头 序号 列");
         assert!(s.contains("下载速度") && s.contains("累计下载"), "数据列");
-        assert!(
-            s.contains("Ctrl+↑↓ 选择 · Ctrl+B 断开（仅 BT）"),
-            "提示行恒定显示"
-        );
+        // v1.29/FR-01-96 修订：提示行随任务协议自适应——HTTP 任务仅
+        // `Ctrl+↑↓ 选择`（原「（仅 BT）」标注退役，spec 04-ui-conns-08）
+        assert!(s.contains("Ctrl+↑↓ 选择"), "提示行（HTTP 任务）");
+        assert!(!s.contains("Ctrl+B"), "HTTP 任务无断开段（v1.29）");
+        assert!(!s.contains("（仅 BT）"), "「（仅 BT）」标注退役（v1.29）");
         assert!(
             rows.iter()
                 .any(|r| r.trim().contains(" 1 ") && r.contains('-')),

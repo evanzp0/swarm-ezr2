@@ -35,6 +35,7 @@ mod engine;
 mod keys;
 mod mouse;
 mod paste;
+mod pieces;
 mod tasks;
 #[cfg(test)]
 pub(crate) mod testutil;
@@ -213,6 +214,20 @@ pub struct App {
     pub dlg_ck_rects: Vec<(Rect, usize)>,
     /// 代理下拉选项命中区域（v1.5/FR-01-86；鼠标点击选择）
     pub dlg_proxy_rects: Vec<(Rect, usize)>,
+    /// pieces 分块弹窗（`P` 快捷键，FR-01-106）是否打开
+    pub pieces_open: bool,
+    /// pieces 弹窗网格滚动偏移（网格行单位；上限由渲染层按实际总行数钳制）
+    pub pieces_scroll: usize,
+    /// 打开 pieces 弹窗时定位到下载前沿（由 ui 层按实际列数消费一次，
+    /// 打开后滚动完全由用户控制、不自动跟随下载推进）
+    pub pieces_follow: bool,
+    /// pieces 弹窗区域（ui 层每帧回填；滚轮滚动/点击关闭/拖拽的命中测试）
+    pub pieces_area: Option<Rect>,
+    /// pieces 弹窗左上角位置（鼠标拖拽移动记忆；None = 打开时居中，渲染层
+    /// 首帧回填；关闭不保留，再次打开重新居中）
+    pub pieces_pos: Option<(u16, u16)>,
+    /// pieces 弹窗拖拽中的抓取偏移（指针相对弹窗左上角；Some = 左键拖拽进行中）
+    pub pieces_drag: Option<(u16, u16)>,
     /// 待延迟文件删除（引擎 Cancelled 确认后执行）：id → (保存目录, 文件名)
     pending_deletes: HashMap<u32, (String, String)>,
 }
@@ -280,6 +295,12 @@ impl App {
             dlg_field_rects: Vec::new(),
             dlg_ck_rects: Vec::new(),
             dlg_proxy_rects: Vec::new(),
+            pieces_open: false,
+            pieces_scroll: 0,
+            pieces_follow: false,
+            pieces_area: None,
+            pieces_pos: None,
+            pieces_drag: None,
             proxy_options,
             proxy_labels,
             default_proxy_sel,

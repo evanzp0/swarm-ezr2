@@ -28,6 +28,25 @@ impl App {
             self.on_dialog_key(code);
             return;
         }
+        // pieces 分块弹窗打开时进入模态（FR-01-106 ⑥）：按键仅用于滚动与关闭
+        //（q/Q 同为关闭而非退出——弹窗内先关窗，避免误触直接退出应用）
+        if self.pieces_open {
+            match code {
+                KeyCode::Esc
+                | KeyCode::Char('p')
+                | KeyCode::Char('P')
+                | KeyCode::Char('q')
+                | KeyCode::Char('Q') => self.close_pieces(),
+                KeyCode::Up => self.pieces_scroll_by(-1),
+                KeyCode::Down => self.pieces_scroll_by(1),
+                KeyCode::PageUp => self.pieces_scroll_by(-8),
+                KeyCode::PageDown => self.pieces_scroll_by(8),
+                KeyCode::Home => self.pieces_scroll = 0,
+                KeyCode::End => self.pieces_scroll = usize::MAX, // 渲染层钳制到末页
+                _ => {}
+            }
+            return;
+        }
         match code {
             KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
             KeyCode::Down => self.move_sel(1),
@@ -45,6 +64,8 @@ impl App {
             KeyCode::BackTab => self.filter = (self.filter + FILTERS.len() - 1) % FILTERS.len(),
             KeyCode::Char(' ') => self.toggle_pause(),
             KeyCode::Char('r') | KeyCode::Char('R') => self.retry(),
+            // P：查看选中任务的 pieces 分块弹窗（仅支持分块下载的任务，FR-01-106）
+            KeyCode::Char('p') | KeyCode::Char('P') => self.open_pieces(),
             KeyCode::Char('a') | KeyCode::Char('A') => self.open_add_dialog(),
             KeyCode::Char('m') | KeyCode::Char('M') => self.open_modify_dialog(),
             KeyCode::Char('d') | KeyCode::Char('D') => self.open_delete_dialog(),
@@ -152,6 +173,124 @@ impl App {
     // -----------------------------------------------------------------------
     // 对话框（结构沿用 demo）
     // -----------------------------------------------------------------------
+}
+
+#[cfg(test)]
+mod pieces_key_tests {
+    //! FR-01-106 ⑥ 弹窗模态与关闭单测：模态消费主界面按键、q/Q 先关窗不
+    //! 退出、滚动键逐行/按页/Home/End、Ctrl 分支先于弹窗保持 FR-01-97 口径。
+
+    use super::*;
+    use crate::model::config::Config;
+    use crate::model::{Connection, TaskState};
+
+    fn make_app(tag: &str) -> App {
+        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-pkey-{tag}"));
+        let reg = dir.join("registry.json").to_string_lossy().into_owned();
+        App::new(Config::default(), reg)
+    }
+
+    fn dl_task(id: u32, name: &str) -> crate::model::Task {
+        let mut t = crate::model::sample_task();
+        t.id = id;
+        t.name = name.to_string();
+        t.state = TaskState::Downloading;
+        t.probed = true;
+        t.total = 5_000_000;
+        t.block_size = 1_000_000;
+        t
+    }
+
+    #[tokio::test]
+    async fn p_opens_pieces_popup() {
+        let mut app = make_app("open");
+        app.tasks.push(dl_task(1, "p.bin"));
+        app.selected = 0;
+        app.on_key(KeyCode::Char('p'), KeyModifiers::NONE);
+        assert!(app.pieces_open, "P 打开分块弹窗");
+        assert!(!app.quit);
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn modal_keys_consumed_q_closes_without_quit() {
+        let mut app = make_app("modal");
+        app.tasks.push(dl_task(1, "p.bin"));
+        app.selected = 0;
+        app.on_key(KeyCode::Char('p'), KeyModifiers::NONE);
+        assert!(app.pieces_open);
+        // 模态：主界面快捷键全部被消费为无动作
+        app.on_key(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert!(app.dialog.is_none(), "A 不打开添加对话框");
+        app.on_key(KeyCode::Char(' '), KeyModifiers::NONE);
+        assert_eq!(app.tasks[0].state, TaskState::Downloading, "Space 不暂停");
+        app.on_key(KeyCode::Char('d'), KeyModifiers::NONE);
+        assert_eq!(app.tasks.len(), 1, "D 不打开删除对话框");
+        app.on_key(KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(app.filter, 0, "Tab 不切页签");
+        app.on_key(KeyCode::Char('g'), KeyModifiers::NONE);
+        assert!(app.show_panes, "G 不收起面板");
+        // q/Q 先关窗不退出（FR-01-106 ⑥）
+        app.on_key(KeyCode::Char('q'), KeyModifiers::NONE);
+        assert!(!app.pieces_open, "q 关闭弹窗");
+        assert!(!app.quit, "q 不退出应用");
+        app.on_key(KeyCode::Char('p'), KeyModifiers::NONE);
+        app.on_key(KeyCode::Char('Q'), KeyModifiers::NONE);
+        assert!(!app.pieces_open && !app.quit, "Q 同口径");
+        app.on_key(KeyCode::Char('p'), KeyModifiers::NONE);
+        app.on_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(!app.pieces_open && !app.quit, "Esc 关闭不退出");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn modal_scroll_keys_step_line_and_page() {
+        let mut app = make_app("pscroll");
+        app.tasks.push(dl_task(1, "p.bin"));
+        app.selected = 0;
+        app.on_key(KeyCode::Char('p'), KeyModifiers::NONE);
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.pieces_scroll, 2, "↓ 逐行下滚");
+        assert_eq!(app.selected, 0, "任务列表选择不动");
+        app.on_key(KeyCode::PageDown, KeyModifiers::NONE);
+        assert_eq!(app.pieces_scroll, 10, "PgDn 按页 8 行");
+        app.on_key(KeyCode::PageUp, KeyModifiers::NONE);
+        assert_eq!(app.pieces_scroll, 2, "PgUp 按页 8 行");
+        app.on_key(KeyCode::End, KeyModifiers::NONE);
+        assert_eq!(app.pieces_scroll, usize::MAX, "End 交给渲染层钳制末页");
+        app.on_key(KeyCode::Home, KeyModifiers::NONE);
+        assert_eq!(app.pieces_scroll, 0, "Home 回首行");
+        app.on_key(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.pieces_scroll, 0, "↑ 顶部钳制");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn ctrl_branch_precedes_modal_fr0197_regression() {
+        // FR-01-106 ⑥：Ctrl 分支先于弹窗模态——Ctrl+↑↓/Ctrl+B 仍作用于底层
+        // 并发明细；Ctrl+C 退出优先级不变（05-ui-pieces-05 末段回归）
+        let mut app = make_app("pctrl");
+        let mut t = dl_task(1, "p.bin");
+        t.connections = (1..=3)
+            .map(|i| Connection {
+                id: i,
+                start: (i as u64 - 1) * 1_000_000,
+                end: i as u64 * 1_000_000,
+                done: 0,
+            })
+            .collect();
+        app.tasks.push(t);
+        app.selected = 0;
+        app.on_key(KeyCode::Char('p'), KeyModifiers::NONE);
+        app.on_key(KeyCode::Down, KeyModifiers::CONTROL);
+        assert_eq!(app.conns_sel, 1, "Ctrl+↓ 弹窗打开时仍作用于明细");
+        app.on_key(KeyCode::Up, KeyModifiers::CONTROL);
+        assert_eq!(app.conns_sel, 0, "Ctrl+↑ 回移");
+        app.on_key(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(app.quit, "Ctrl+C 退出优先级不变");
+        app.shutdown().await;
+    }
 }
 
 #[cfg(test)]

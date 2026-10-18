@@ -25,6 +25,25 @@ impl Connection {
     }
 }
 
+/// 分块（piece）四态——pieces 弹窗（`P` 快捷键，FR-01-106）展示口径，
+/// 色块字符与状态一一对应：Empty ⬜ 未下载 · Done 🟩 已下载 ·
+/// Partial 🟨 部分下载 · Active 🟦 正在下载。Active 仅当任务处于「下载中」
+/// 且该块已分配并发连接时出现（「分配了并发下载」即算，块内零头多少不影响）；
+/// 同一块「部分下载」且「正在下载」时只显示 Active（🟦 优先于 🟨）——
+/// 任务非「下载中」时任何块都不会出现 🟦。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PieceState {
+    /// 未下载（⬜）
+    Empty,
+    /// 已下载（🟩）
+    Done,
+    /// 部分下载（🟨）：块内有已落盘零头，但未分配并发下载
+    /// （暂停/等待/失败等状态下沉时冻结的持块连接）
+    Partial,
+    /// 正在下载（🟦）：已分配并发连接（仅「下载中」任务）
+    Active,
+}
+
 /// 下载任务（UI 权威状态；真实进度由引擎事件驱动更新）
 #[derive(Clone, Debug)]
 pub struct Task {
@@ -213,6 +232,63 @@ impl Task {
         (self.chunk_done.min(y), u64::from(y), self.block_size)
     }
 
+    /// 是否支持分块下载（pieces 弹窗 `P` 快捷键的功能门槛，FR-01-106）：
+    /// BT 恒分块（协议原生模型，phase-02 预留）；HTTP(S) 需服务器支持断点
+    /// 续传（Range）——不支持续传时只能单流整段下载、无分块概念。
+    #[must_use]
+    pub fn supports_pieces(&self) -> bool {
+        if self.protocol.is_bt() {
+            return true;
+        }
+        self.resumable
+    }
+
+    /// 全量分块状态（pieces 弹窗展示口径，块序 = 字节序，FR-01-106 ③）。
+    ///
+    /// 口径（与 [`PieceState`] 文档一致）：
+    /// - 块号 < chunk_done → Done（已下载前缀）；
+    /// - 块被并发连接持有（分块队列按块边界整块领块，连接 start 恒对齐块
+    ///   边界）：任务「下载中」→ Active（分配即算，块内零头多少不影响——
+    ///   「部分下载」且「正在下载」时只显示 Active）；任务非「下载中」
+    ///   （暂停/等待/失败等状态下沉冻结的持块连接）→ 有零头 Partial、
+    ///   零头为 0 → Empty；
+    /// - 连接块内写满（done >= cap）→ Done（乱序完成块不必依赖前缀）；
+    /// - 其余 → Empty（未下载）。
+    ///
+    /// 空/极小文件：y = 0（无分块）返回空表。
+    #[must_use]
+    pub fn pieces(&self) -> Vec<PieceState> {
+        let y = usize::try_from(chunk::chunk_total(self.total, self.block_size)).unwrap_or(0);
+        if y == 0 {
+            return Vec::new();
+        }
+        let mut v = vec![PieceState::Empty; y];
+        let x = (self.chunk_done as usize).min(y);
+        for s in v.iter_mut().take(x) {
+            *s = PieceState::Done;
+        }
+        let downloading = self.state == TaskState::Downloading;
+        for c in &self.connections {
+            if c.cap() == 0 {
+                continue; // 待命连接（start=end）不持块
+            }
+            let idx = (c.start / self.block_size) as usize;
+            if idx >= y {
+                continue; // 防御：越界租约不计
+            }
+            v[idx] = if c.done >= c.cap() {
+                PieceState::Done
+            } else if downloading {
+                PieceState::Active
+            } else if c.done > 0 {
+                PieceState::Partial
+            } else {
+                PieceState::Empty
+            };
+        }
+        v
+    }
+
     /// 目标文件完整路径（保存目录 + 文件名）
     #[must_use]
     pub fn target_path(&self) -> String {
@@ -257,6 +333,197 @@ impl Task {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// v129/FR-01-106：分块（piece）四态——pieces 弹窗展示口径。
+    /// Empty ⬜ 未下载 · Done 🟩 已下载 · Partial 🟨 部分下载 · Active 🟦 正在下载。
+    #[test]
+    fn piece_state_covers_four_states() {
+        // 四态互异且可判等（渲染层 run 合并与单测断言依赖 PartialEq）
+        let states = [
+            PieceState::Empty,
+            PieceState::Done,
+            PieceState::Partial,
+            PieceState::Active,
+        ];
+        for (i, a) in states.iter().enumerate() {
+            for (j, b) in states.iter().enumerate() {
+                assert_eq!(a == b, i == j, "四态互异：{a:?} vs {b:?}");
+            }
+        }
+    }
+
+    /// v129/FR-01-106 功能门槛：BT 恒支持分块（协议原生模型，phase-02 预留）；
+    /// HTTP(S) 需服务器支持断点续传——不支持续传只能单流整段下载、无分块概念。
+    #[test]
+    fn supports_pieces_bt_always_http_needs_resume() {
+        let mut t = crate::model::sample_task();
+        t.protocol = Protocol::Bt;
+        t.resumable = false;
+        assert!(t.supports_pieces(), "BT 恒支持（resumable 与门槛无关）");
+        t.protocol = Protocol::Http;
+        assert!(!t.supports_pieces(), "HTTP 不可续传 → 不支持分块");
+        t.resumable = true;
+        assert!(t.supports_pieces(), "HTTP 可续传 → 支持");
+        t.protocol = Protocol::Https;
+        assert!(t.supports_pieces(), "HTTPS 可续传 → 支持");
+    }
+
+    /// v129/FR-01-106：空内容（total = 0，无分块）→ 空 Vec（弹窗拒绝臂在 app 层，
+    /// 模型层直接给空表）
+    #[test]
+    fn pieces_empty_file_returns_empty_vec() {
+        let mut t = crate::model::sample_task();
+        t.total = 0;
+        t.probed = true;
+        t.state = TaskState::Downloading;
+        assert!(t.pieces().is_empty(), "total=0 无分块");
+    }
+
+    /// v129/FR-01-106 ③：块号 < chunk_done → Done（前缀口径）；其余 Empty；
+    /// 非「下载中」任务任何块都不出现 Active。
+    #[test]
+    fn pieces_done_prefix_rest_empty_when_not_downloading() {
+        let mut t = crate::model::sample_task();
+        t.total = 6_000_000;
+        t.block_size = 1_000_000;
+        t.chunk_done = 2;
+        t.state = TaskState::Paused;
+        t.probed = true;
+        let v = t.pieces();
+        assert_eq!(v.len(), 6);
+        assert_eq!(v[0], PieceState::Done);
+        assert_eq!(v[1], PieceState::Done);
+        assert!(v[2..].iter().all(|s| *s == PieceState::Empty));
+        assert!(!v.contains(&PieceState::Active), "非下载中不出现 🟦");
+    }
+
+    /// v129/FR-01-106 ③：下载中任务被并发连接持有的块 → Active（分配即算，
+    /// 块内零头多少不影响；done=0 也算）。连接租约恒为单块（引擎 ConnView
+    /// 携带 block 号，start 恒对齐块边界）。
+    #[test]
+    fn pieces_active_when_downloading_assigned_even_zero_progress() {
+        let mut t = crate::model::sample_task();
+        t.total = 4_000_000;
+        t.block_size = 1_000_000;
+        t.chunk_done = 1;
+        t.state = TaskState::Downloading;
+        t.probed = true;
+        t.connections = vec![
+            Connection {
+                id: 1,
+                start: 1_000_000, // 块 1
+                end: 2_000_000,
+                done: 0, // 零头 0：分配即算
+            },
+            Connection {
+                id: 2,
+                start: 3_000_000, // 块 3
+                end: 4_000_000,
+                done: 0,
+            },
+        ];
+        let v = t.pieces();
+        assert_eq!(v[0], PieceState::Done, "块 0 已完成");
+        assert_eq!(v[1], PieceState::Active, "块 1 被持有（done=0 也算）");
+        assert_eq!(v[2], PieceState::Empty, "块 2 无连接持有");
+        assert_eq!(v[3], PieceState::Active, "块 3 被持有");
+    }
+
+    /// v129/FR-01-106 ③：同一块既有已落盘零头又在传 → 只显示 Active
+    ///（🟦 优先于 🟨）；任务非「下载中」时同块有零头 → Partial（状态下沉
+    /// 冻结的持块连接）、无零头 → Empty。
+    #[test]
+    fn pieces_active_wins_over_partial_and_freezes_on_pause() {
+        let mut t = crate::model::sample_task();
+        t.total = 3_000_000;
+        t.block_size = 1_000_000;
+        t.state = TaskState::Downloading;
+        t.probed = true;
+        t.connections = vec![Connection {
+            id: 1,
+            start: 1_000_000,
+            end: 2_000_000,
+            done: 300_000, // 块 1 有零头且在传
+        }];
+        let v = t.pieces();
+        assert_eq!(v[1], PieceState::Active, "🟦 优先于 🟨（下载中）");
+        // 状态下沉（空格暂停）：同一连接视图冻结 → 有零头 Partial
+        t.state = TaskState::Paused;
+        let v = t.pieces();
+        assert_eq!(v[1], PieceState::Partial, "非下载中：有零头 → 🟨");
+        // 无零头的冻结持块 → Empty
+        t.connections[0].done = 0;
+        let v = t.pieces();
+        assert_eq!(v[1], PieceState::Empty, "非下载中：零头 0 → ⬜");
+    }
+
+    /// v129/FR-01-106 ③：连接块内写满（done >= cap）→ Done（乱序完成块不必
+    /// 依赖 chunk_done 前缀）；前缀与乱序完成并存时互不覆盖。
+    #[test]
+    fn pieces_completed_lease_shows_done() {
+        let mut t = crate::model::sample_task();
+        t.total = 4_000_000;
+        t.block_size = 1_000_000;
+        t.chunk_done = 1;
+        t.state = TaskState::Downloading;
+        t.probed = true;
+        t.connections = vec![Connection {
+            id: 2,
+            start: 2_000_000,
+            end: 3_000_000,
+            done: 1_000_000, // 块 2 已写满（乱序完成）
+        }];
+        let v = t.pieces();
+        assert_eq!(v[0], PieceState::Done, "前缀块 0");
+        assert_eq!(v[1], PieceState::Empty, "块 1 无连接持有（跳过）");
+        assert_eq!(v[2], PieceState::Done, "块 2 乱序写满 → 🟩");
+        assert_eq!(v[3], PieceState::Empty);
+    }
+
+    /// v129/FR-01-106 ③：待命连接（cap = 0）不持块，不计入四态；
+    /// 越界租约（start 超出总块数）防御性忽略。
+    #[test]
+    fn pieces_idle_and_out_of_range_leases_ignored() {
+        let mut t = crate::model::sample_task();
+        t.total = 2_000_000;
+        t.block_size = 1_000_000;
+        t.state = TaskState::Downloading;
+        t.probed = true;
+        t.connections = vec![
+            Connection {
+                id: 1,
+                start: 0,
+                end: 0, // 待命连接
+                done: 0,
+            },
+            Connection {
+                id: 2,
+                start: 9_000_000, // 越界租约
+                end: 10_000_000,
+                done: 100,
+            },
+        ];
+        let v = t.pieces();
+        assert!(v.iter().all(|s| *s == PieceState::Empty), "两条连接均不计");
+    }
+
+    /// v129/FR-01-106 ③：已完成任务全量 🟩（chunk_done = y 钳制口径与
+    /// chunk_info 一致，详情「分块」行同源）。
+    #[test]
+    fn pieces_completed_task_all_done() {
+        let mut t = crate::model::sample_task();
+        t.total = 2_500_000;
+        t.block_size = 1_000_000;
+        t.chunk_done = 3;
+        t.state = TaskState::Completed;
+        t.probed = true;
+        let v = t.pieces();
+        assert_eq!(v.len(), 3);
+        assert!(v.iter().all(|s| *s == PieceState::Done));
+        // chunk_done 超出总块数时按 y 钳制（防御：不 panic 不越界）
+        t.chunk_done = 99;
+        assert_eq!(t.pieces().len(), 3);
+    }
 
     /// v139 回归（操作者实证 bug）：多块乱序完成 + 多个部分块零头合计越块界
     /// 时，暂停/失败断点视图的连续前缀快照（x = done/piece）把未完成块计成

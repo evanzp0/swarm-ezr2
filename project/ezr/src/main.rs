@@ -355,12 +355,19 @@ async fn run_tui(app: &mut App) -> std::io::Result<()> {
     result
 }
 
-/// 覆盖层翻转检测（沿用 demo：对话框/下拉浮层出现或消失那一帧全量重绘）
-fn overlay_sig(app: &App) -> u8 {
-    match app.dialog.as_ref() {
-        None => 0,
-        Some(d) => 1 | ((d.ck_open as u8) << 1),
-    }
+/// 覆盖层翻转检测（沿用 demo：对话框/下拉浮层/pieces 弹窗出现或消失那一帧
+/// 全量重绘；弹窗拖拽移动逐帧位置变化同样全量重绘）
+fn overlay_sig(app: &App) -> u32 {
+    let dlg = match app.dialog.as_ref() {
+        None => 0u32,
+        Some(d) => 1 | ((d.ck_open as u32) << 1),
+    };
+    // pieces 分块弹窗（P）同属浮层：开/关帧同样全量重绘（位 2）；
+    // 位 8..23 编码弹窗左上角位置——鼠标拖拽移动时位置逐帧变化，
+    // 每帧都触发全量重绘，避免增量 diff 覆盖宽字符半格造成残影
+    //（与浮层开/关同口径，FR-01-106 ⑧）
+    let (px, py) = app.pieces_pos.unwrap_or((0, 0));
+    dlg | ((app.pieces_open as u32) << 2) | ((px as u32) << 8) | ((py as u32) << 16)
 }
 
 async fn run(

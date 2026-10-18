@@ -1,12 +1,9 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/specifier　会话：v129-spec（任务 ezr-v129-pieces-pkey）
-> 上游交接：QA ezr-qa-final（six-pack 全链路已走完一轮：specifier → coder → cleaner →
-> architect → hardender → QA；3363P/0F、e2e 165P/0F/0S、clippy 0、arch 15、覆盖 94.37%）。
-> 本轮（操作者指令两批新增需求：P 键 pieces 分块弹窗 + 并发面板提示行随协议自适应）：
-> mission 升版 v1.29（FR-01-106 新增、FR-01-96 修订、D35 新增），规格 `05-ui-pieces.feature`
-> （8 场景新增）与 `04-ui-conns.feature`（场景 08 修订），QA 套件 `05-ui-pieces-qa.md`
-> （QA-UP-01..08 新增）与 `qa/04-ui-conns-qa.md`（QA-UC-08 同步）。
+> 流程：six-pack　当前节点：six-pack/coder　会话：v129-impl（任务 ezr-v129-impl）
+> 上游交接：specifier v129-spec（本轮 = 操作者指令两批新增需求的实现轮）：
+> 实现 FR-01-106（P 键 pieces 分块弹窗 + 页脚 `P 分块`）与 FR-01-96 v1.29（并发面板
+> 提示行随协议自适应），全部 UI 与交互逐字对齐 ezr-demo 定稿 §6.4 与 demo 源码。
 
 ## 一、产物历史完成情况
 
@@ -17,84 +14,97 @@
 ### 产物总账（流程开工以来累计，当前有效口径）
 | 节点/切片 | 产物 | 完成情况 | 验证状态 |
 |---|---|---|---|
-| specifier（历轮） | mission v1.1→v1.28 全量规格 + features/ 13 份 + qa/ 13 份 | 全部交付 | 逐轮 parser/dry-check 通过（见归档台账） |
+| specifier（历轮） | mission v1.1→v1.29 全量规格 + features/ 14 份 + qa/ 14 份 | 全部交付 | 逐轮 parser/dry-check 通过（APS 不可用轮以人工规范化核对替代，见受限项） |
 | coder（v128-impl 等） | v1.28 URL 权威模型等全量实现 | 已交付 | 2925P/0F（v128 轮口径） |
 | cleaner（v128-clean） | supervisor 失败分类/完成收尾单源化 | 已交付 | 3040P/0F；CPD 17→15 |
 | architect（v145-arch） | supervisor 六文件拆分（114 点守恒）+ 属性 62 + arch 15 | 已交付 | 3049P/0F、clippy 0、fmt 0、arch 15 |
 | hardender（v147-hard） | 163 点差分变异 campaign + 加固套件 hardening_g_v147 | 已交付 | 3363P/0F、clippy 0、fmt 0、arch 15 |
-| QA（ezr-qa-final） | QA 规程可执行化 13 端到端套件（qa/runners/）+ 缺陷修复（接续钉名）+ 双度量复测 | 已交付 | e2e 165P/0F/0S（13 套件）、3363P/0F、覆盖 94.37%、CRAP≥30=0、CPD 89/15 |
-| **specifier（v129-spec，本轮）** | **mission v1.29（FR-01-106 + FR-01-96 修订 + D35）+ features/05-ui-pieces.feature（8 场景）+ features/04-ui-conns.feature（场景 08 修订）+ qa/05-ui-pieces-qa.md（QA-UP-01..08）+ qa/04-ui-conns-qa.md（QA-UC-08 同步）** | 已交付 | **APS 不可用（本轮受限项），人工规范化核对通过；规格就绪待批** |
+| QA（ezr-qa-final） | QA 规程可执行化 13 端到端套件（qa/runners/）+ 缺陷修复 + 双度量复测 | 已交付 | e2e 165P/0F/0S（13 套件）、3363P/0F、覆盖 94.37%、CRAP≥30=0、CPD 89/15 |
+| specifier（v129-spec） | mission v1.29（FR-01-106 + FR-01-96 修订 + D35）+ features/05-ui-pieces.feature（8 场景）+ features/04-ui-conns.feature（场景 08 修订）+ qa/05-ui-pieces-qa.md（QA-UP-01..08）+ qa/04-ui-conns-qa.md（QA-UC-08 同步） | 已交付 | APS 不可用（受限项），人工规范化核对通过 |
+| **coder（v129-impl，本轮）** | **FR-01-106 P 键 pieces 分块弹窗全量实现 + FR-01-96 v1.29 提示行随协议自适应**（详见当前节产物清单） | 已交付 | **cargo 全目标 3584P/0F（bin 475 + 集成 3109）、clippy 0、fmt 0；新增单测 40（435→475）** |
 
 ### 遗留受限项（当前有效）
-- **APS 工具（gherkin-parser / gherkin-ir-dry-checker / gherkin-mutator）本轮不可用**（沿袭开放）：
-  环境为 fresh clone（.tools/ 空），Babashka 静态二进制经 GitHub release 下载反复停滞
-  （24MB 仅取 1.5MB，网络受限），无法按 engineering.md 调用约定安装。影响面：本轮新增/
-  修订 feature 未过 parser/dry-checker 机检，以人工核对替代（场景稳定序号连续、参数与
-  Examples 列逐一对应、关键字/表格结构对齐既有已过机检的 13 份 feature 同款）；软 Gherkin
-  变异继续开放。建议下游会话在网络可用时补装机检复核本轮两份 feature。
-- **环境重建（跨会话不持久，沿袭）**：nightly 1.101.0-nightly（rustup minimal + clippy/rustfmt/
-  llvm-tools）；lld 桥接 `~/.local/bin/ld.lld`；cargo-llvm-cov 0.9.1、PMD 7.19.0（.tools/）、
-  java 21、Python e2e 依赖 pyte/wcwidth——均需在新会话重建（本轮未涉及 Rust 构建与测试）。
+- **APS 工具（gherkin-parser / gherkin-ir-dry-checker / gherkin-mutator）不可用**（沿袭开放）：
+  环境为 fresh clone（.tools/ 空），Babashka 静态二进制经 GitHub release 下载停滞
+  （网络受限）。影响面：v129-spec 新增/修订的 05-ui-pieces.feature 与 04-ui-conns
+  场景 08 未过 parser/dry-checker 机检（specifier 轮已人工核对替代）；本轮 coder 不
+  运行 Gherkin 机检（非 coder 职责），欠账不变。建议下游会话在网络可用时补装
+  （TUNA 镜像对 GitHub release 无效，APS 资产仍在 GitHub）。
+- **Rust 工具链本轮已重建（跨会话不持久，沿袭登记）**：rustup 1.101.0-nightly
+  （minimal profile + rustfmt + clippy）装于 `~/.cargo` + `~/.rustup`；lld 桥接
+  `~/.local/bin/ld.lld` → 工具链 rust-lld；crates 镜像 `~/.cargo/config.toml`
+  （rsproxy-sparse）。新会话若环境重置需按 `packs/_common/notes/rust.md` §1 重建。
 - **观察受限突变体（沿袭 hardender 登记，仍开放）**：workers.rs:27:5/51:25/57:14/168:25、
   download.rs:277:52 共 5 条 + 等价 download.rs:85:27——run 级回补基建已铺。
 - **ezr-proxy.rs 测试基建（沿袭裁决）**：127 变异点不拆、CRAP/CPD 读数不追责。
 - **磁盘/沙箱**：沿袭口径（throttle_proxy 慢速门控用例前台分批 `QA_TP_ONLY=1,3`）。
 
 ### 实现定义值登记（当前有效）
-- 沿袭有效：v1.28 全部口径、D26–D34、v138/v140 口径（见归档 handoff 登记清单）。
-- **本轮新增：D35**（FR-01-106 未探测臂）——未探测任务（probed = false）按 `P` → toast
-  `任务尚未探测，暂无分块信息`、弹窗不打开，门槛序位于「不支持分块」「空内容」两臂之前；
-  理由与改判面见 phase-01 §6 D35 行。**待操作者复核（见待办与待批）**。
-- 本轮其余全部为 demo 定稿照录（FR-01-106 各臂文案/尺寸/交互逐字对齐 ezr-demo 定稿 §6.4
-  与 demo 源码），非实现定义值。
+- 沿袭有效：v1.28 全部口径、D26–D35、v138/v140 口径（见归档 handoff 登记清单）。
+- **本轮零新增**：FR-01-106 全部交互口径（64×21 窗口、四态色块、±2 行滚轮、8 行
+  PgUp/PgDn、前沿定位公式、模态关闭集）与 FR-01-96 v1.29 文案均为 demo 定稿 §6.4
+  与 demo 源码逐字照录，非实现定义值。
 
-## 二、当前产出情况（specifier v129-spec）
+## 二、当前产出情况（coder v129-impl）
 
 ### 本会话产物清单
-- `project/mission.md`（v1.29）：头部同步注记——两批需求摘要与产物指针。
-- `project/mission/phase-01.md`（v1.29）：①头部 v1.29 修订注记；②**FR-01-106 新增**（P 键
-  pieces 分块弹窗：功能门槛四拒绝臂（未选中/未探测 D35/不支持续传/空内容，文案逐字照录
-  demo 定稿 §6.5）、窗口形态 64×21 居中可拖拽、四态色块 🟩🟦🟨⬜ 与 🟦 优先、前沿定位、
-  滚动/模态/关闭（P/Esc/q/Q 先关窗不退出、Ctrl 分支 demo 同构）、鼠标滚轮/拖拽/点击外部、
-  浮层全量重绘、页脚 `P 分块` 新增；BT 恒支持臂 = phase-02 预留）；③**FR-01-96 v1.29 修订**
-  （面板底部提示行随任务协议自适应：BT = `Ctrl+↑↓ 选择 · Ctrl+B 断开`、非 BT =
-  `Ctrl+↑↓ 选择`，「（仅 BT）」标注退役；01 期实际显示恒为 `Ctrl+↑↓ 选择`）；④**D35 新增**。
-- `project/features/05-ui-pieces.feature`（新增，8 场景 01–08）：窗口形态/四态色块（非下载中）/
-  🟦 在传与优先/前沿定位与滚动/模态与关闭/功能门槛拒绝臂/鼠标交互/页脚提示。
-- `project/features/04-ui-conns.feature`：场景 08 提示行断言改随协议自适应 + 头部 v1.29 修订
-  注记 + 场景清单注释同步（其余 17 场景与稳定序号零变动）。
-- `project/qa/05-ui-pieces-qa.md`（新增）：QA-UP-01..08，fixture 文件清单 8 份（含 520MB 稀疏
-  piece-big.bin 与 0 字节/无 Range/未探测三拒绝臂种子），BT 臂不覆盖声明（phase-02 增补）。
-- `project/qa/04-ui-conns-qa.md`：头部 v1.29 同步注记 + QA-UC-08 判据同步（提示行 HTTP =
-  `Ctrl+↑↓ 选择`，全行无「Ctrl+B」段与「（仅 BT）」标注）。
+- `project/ezr/src/model/task.rs`：`PieceState` 四态枚举（Empty/Done/Partial/Active）+
+  `Task::supports_pieces()`（BT 恒支持 / HTTP 需 resumable，FR-01-106 功能门槛）+
+  `Task::pieces()`（Done 前缀 / Active 分配即算 / 🟦 优先于 🟨 / 待命连接不计 /
+  越界租约防御 / 空表）。
+- `project/ezr/src/model/mod.rs`：re-export `PieceState`。
+- `project/ezr/src/app/pieces.rs`（新增）：`open_pieces()` 四拒绝臂（未选中 → 未探测
+  D35 → 不支持分块 → 空内容，toast 文案照录）+ `close_pieces()` + `pieces_scroll_by()`。
+- `project/ezr/src/app/mod.rs`：弹窗状态字段（pieces_open/scroll/follow/area/pos/drag）。
+- `project/ezr/src/app/keys.rs`：`P` 键路由 + 弹窗模态分支（Esc/P/q/Q 关闭且 q/Q 不
+  退出、↑↓/PgUp/PgDn/Home/End 滚动、其余键消费为无动作；Ctrl 分支先于弹窗，
+  FR-01-97 口径回归保持）。
+- `project/ezr/src/app/mouse.rs`：`on_mouse_pieces` 分支最上层（滚轮 ±2 行滚动网格、
+  左键内按下记抓取偏移、Drag 随动、Up 结束、点外关闭不穿透任务列表）。
+- `project/ezr/src/ui/pieces.rs`（新增）：`draw_pieces` 渲染——64×21 圆角浮层居中/
+  拖拽位置钳制、标题「分块状态」加粗青色、四段（任务名白粗截尾 / 元信息暗灰
+  `协议 · 块大小 N · x/y 块 · 并发 N` / 宽 2 列 run 合并色块网格 / 提示行暗灰）、
+  打开定位下载前沿（首帧一次）、右缘滚动条（超一屏）、`clip_wide_at_edges` 同口径。
+- `project/ezr/src/ui/mod.rs`：`mod pieces` + draw() 末层渲染弹窗；既有 conns 面板
+  金样测试断言同步 v1.29 口径（HTTP 无 Ctrl+B 段、「（仅 BT）」退役）。
+- `project/ezr/src/ui/footer.rs`：页脚新增 `P 分块`（位于「R 重试」与「A 添加」之间，
+  式样同其他项；窄屏截断档位不变）。
+- `project/ezr/src/ui/conns.rs`：**FR-01-96 v1.29**——底部提示行随任务协议自适应
+  （BT = `Ctrl+↑↓ 选择 · Ctrl+B 断开`、非 BT = `Ctrl+↑↓ 选择`，「（仅 BT）」标注退役）。
+- `project/ezr/src/main.rs`：`overlay_sig` 升 u32 并纳入 pieces 开关（位 2）与拖拽
+  位置（位 8..23）——开/关/拖拽帧全量重绘（FR-01-106 ⑧）。
 
 ### 验证证据
 | 验证项 | 结果 | 命令（可复现） |
 |---|---|---|
-| 规格三方对账（mission ↔ feature ↔ QA） | 一致（FR-01-106 九款、FR-01-96 提示行、D35 均有三方载体；toast 文案与 ezr-demo 定稿 §6.5/源码逐字一致） | 人工核对（对照 ezr-demo/src/app.rs open_pieces/draw_pieces/disconnect_conn、ui.rs draw_pieces/draw_conns、docs/UI交互需求文档-定稿.md §6.1/6.3/6.4/6.5） |
-| Gherkin 机检（parser/dry-checker） | **未执行——APS 不可用（受限项）**；人工核对：场景名稳定序号 01–08 连续、Examples 参数与步骤占位逐一对应、关键字/表格结构与既有 13 份已机检 feature 同款 | 机检待补：`(cd .tools/Acceptance-Pipeline-Specification && bb gherkin-parser <feature> <out>.json && bb gherkin-ir-dry-checker <ir> <out>.dry.json)` |
-| 场景稳定序号守恒 | 04-ui-conns 18 场景序号零重排（仅场景 08 内容修订）；05-ui-pieces 新占用 01–08，无冲突 | 人工核对两份 feature 场景清单注释 |
+| bin 单元测试（含 property_tests 62） | 475P / 0F | `cargo test --bin ezr` |
+| 集成测试 12 目标 | 3109P / 0F | hardening 126、engine_backfill 391、g_appcore 356、g_engine 351、g_main 2、g_proxy 16、g_slots 153、g_supervisor 325、g_throttle_err 215、ui_backfill 420、v115 415、g_v147 339（`cargo test --test <名>` 逐目标） |
+| clippy | 0 警告 | `cargo clippy --all-targets` |
+| rustfmt | 0 diff | `cargo fmt --check` |
+| 新增单测 | 40（435→475） | model 12 + app/pieces 8 + keys 4 + mouse 4 + ui/pieces 7 + footer 2 + conns 3 |
+| TDD 纪律 | 每切片先红后绿 | 模型层 E0433 红 → 绿；app 层 unimplemented 桩 15 红 → 绿；ui 层桩 7 红 → 绿 |
 
 ### 对账口径（如存在基线）
-- 相对上游 QA ezr-qa-final 基线：mission v1.28 → v1.29（+FR-01-106、FR-01-96 修订、D35）；
-  features 13 → 14 份（+05-ui-pieces，8 场景）；04-ui-conns 18 → 18 场景（内容修订 1）；
-  qa 套件规格 13 → 14 份（+05-ui-pieces，QA-UP-01..08）；qa/04-ui-conns-qa.md 用例数 18 → 18
-  （QA-UC-08 判据修订）。规格层增量，不涉及源码与测试基线数字变动。
+- 上游 QA ezr-qa-final 基线 3363P/0F（未留分项）→ 本轮实测全目标 3584P/0F：
+  bin 435→475（+40，全为本轮新增）+ 集成目标实测 3109（上游无分项可逐目标对账，
+  偏差 +181 归上游口径未留分项，以本轮逐目标实测为准）。
+- 规格层基线（specifier v129-spec）：本轮为纯实现轮，features/ 与 qa/ 零改动；
+  源码基线对账 = 全目标 0F + clippy 0 + fmt 0。
 
 ### 待办与待批（未决项）
-- **D35 待操作者复核**（本轮唯一非 demo 照录决策）：未探测任务按 `P` 的拒绝臂文案
-  `任务尚未探测，暂无分块信息` 与门槛序（未探测臂先于「不支持分块」「空内容」两臂）。
-  如改判（例如改沿用 demo「任务内容为空，无分块信息」），改动面 = FR-01-106①、
-  05-ui-pieces 场景 06 一处断言、QA-UP-06 一处判据。裁决后按 handoff-rule 6b 同轮落账
-  （D35 行状态列 + 本节闭环注记）。
-- APS 机检欠账：两份 feature（05-ui-pieces 新增、04-ui-conns 场景 08 修订）待网络可用时
-  补跑 parser/dry-checker（受限项已登记）。
-- 沿袭移交（非本轮缺口）：① 5+1 观察受限突变体回补；② 软 Gherkin 变异（APS 安装 + runner
-  适配器）；③ qa/runners/ 13 个可执行套件与本轮规格增量（QA-UC-08 判据、05-ui-pieces 全部）
-  的可执行化同步——属 six-pack/QA 职责范围，下一轮 QA 会话承接。
+- **D35 待操作者复核**（沿袭，本轮唯一相关决策点）：未探测任务按 `P` 拒绝臂文案
+  `任务尚未探测，暂无分块信息` 与门槛序（未探测臂先于「不支持分块」「空内容」）。
+  如改判：改动面 = FR-01-106①、05-ui-pieces 场景 06、QA-UP-06、`app/pieces.rs`
+  一处臂文案与一处单测断言。
+- **APS 机检欠账**（沿袭）：05-ui-pieces.feature（新增）与 04-ui-conns.feature（场景
+  08 修订）待网络可用时补跑 parser/dry-checker。
+- **沿袭移交（非本轮缺口）**：① 5+1 观察受限突变体回补；② 软 Gherkin 变异（APS
+  安装 + runner 适配器）；③ qa/runners/ 13 个可执行套件与 v129 规格增量
+  （QA-UP-01..08、QA-UC-08）的可执行化同步——属 six-pack/QA 职责范围，下一轮 QA
+  会话承接；本轮 8 场景行为已由 40 项单测覆盖（含 TestBackend 伪终端金样）。
 
 ### 移交建议
-- 建议下一步运行 `six-pack/coder`（以本 handoff 与 mission v1.29 为上游交接内容）：实现
-  FR-01-106（P 键 pieces 分块弹窗 + 页脚提示）与 FR-01-96 v1.29（提示行随协议自适应），
-  单测覆盖功能门槛四臂与色块口径；完成后再经 cleaner → architect → hardender → QA 链路
-  （QA 轮承接 qa/runners 可执行化同步）。移交仅为建议，不构成自动流转（宪法第一章）。
+- 建议下一步运行 `six-pack/cleaner`（以本 handoff 为上游交接内容）：对本轮触碰面
+  （model/task.rs、app/pieces.rs、ui/pieces.rs 等）做重复度与清洁检查，完成后再经
+  architect → hardender → QA 链路（QA 轮承接 qa/runners 可执行化同步）。移交仅为
+  建议，不构成自动流转（宪法第一章）。

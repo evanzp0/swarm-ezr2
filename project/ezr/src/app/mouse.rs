@@ -8,12 +8,48 @@ use super::{App, DialogKind, ITEM_HEIGHT};
 impl App {
     /// 鼠标事件入口（architect v116：分发核保持行为拆分——对话框态与主界面
     /// 命中各自成函数，消除早退 return 穿越两分支的控制流混杂；分支语义
-    /// 不变：对话框打开时一切鼠标事件仅作用于对话框）
+    /// 不变：对话框打开时一切鼠标事件仅作用于对话框；v129：pieces 弹窗
+    /// 最上层（模态，FR-01-106 ⑦）——弹窗打开时一切鼠标事件由弹窗分支消费）
     pub fn on_mouse(&mut self, m: MouseEvent) {
+        if self.pieces_open {
+            self.on_mouse_pieces(m);
+            return;
+        }
         if self.dialog.is_some() {
             self.on_mouse_dialog(m);
         } else {
             self.on_mouse_main(m);
+        }
+    }
+
+    /// pieces 弹窗命中（FR-01-106 ⑦，对齐 demo 源码 on_mouse pieces 分支）：
+    /// 滚轮滚动网格（每滚 2 行）；左键按下弹窗内记抓取偏移、点外关闭
+    ///（该次点击不穿透任务列表）；拖拽移动弹窗（位置钳制在渲染层）；
+    /// 松开结束拖拽。
+    fn on_mouse_pieces(&mut self, m: MouseEvent) {
+        match m.kind {
+            MouseEventKind::ScrollUp => self.pieces_scroll_by(-2),
+            MouseEventKind::ScrollDown => self.pieces_scroll_by(2),
+            MouseEventKind::Down(MouseButton::Left) => {
+                if pointer_in(&self.pieces_area, m.column, m.row) {
+                    // 开始拖拽：记录指针相对弹窗左上角的抓取偏移
+                    if let Some(r) = self.pieces_area {
+                        self.pieces_drag =
+                            Some((m.column.saturating_sub(r.x), m.row.saturating_sub(r.y)));
+                    }
+                } else {
+                    // 点击弹窗外部 = 关闭（不穿透任务列表）
+                    self.close_pieces();
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                // 拖拽移动：弹窗左上角 = 指针 - 抓取偏移（渲染层钳制在终端内）
+                if let Some((dx, dy)) = self.pieces_drag {
+                    self.pieces_pos = Some((m.column.saturating_sub(dx), m.row.saturating_sub(dy)));
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => self.pieces_drag = None,
+            _ => {}
         }
     }
 
@@ -159,6 +195,145 @@ fn pointer_in(area: &Option<Rect>, x: u16, y: u16) -> bool {
     area.is_some_and(|a| {
         x >= a.x && x < a.x.saturating_add(a.width) && y >= a.y && y < a.y.saturating_add(a.height)
     })
+}
+
+#[cfg(test)]
+mod pieces_mouse_tests {
+    //! FR-01-106 ⑦ 弹窗鼠标单测：滚轮滚动网格（±2 行）且任务列表不动、
+    //! 左键内按下记抓取偏移 / Drag 随动 / Up 结束、点外关闭且不选中任务。
+
+    use crossterm::event::KeyModifiers;
+    use ratatui::layout::Rect;
+
+    use super::*;
+    use crate::model::config::Config;
+    use crate::model::TaskState;
+
+    fn make_app(tag: &str) -> crate::app::App {
+        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-pmouse-{tag}"));
+        let reg = dir.join("registry.json").to_string_lossy().into_owned();
+        crate::app::App::new(Config::default(), reg)
+    }
+
+    fn dl_task(id: u32, name: &str) -> crate::model::Task {
+        let mut t = crate::model::sample_task();
+        t.id = id;
+        t.name = name.to_string();
+        t.state = TaskState::Downloading;
+        t.probed = true;
+        t.total = 5_000_000;
+        t.block_size = 1_000_000;
+        t
+    }
+
+    fn popup_area() -> Rect {
+        Rect {
+            x: 10,
+            y: 5,
+            width: 64,
+            height: 21,
+        }
+    }
+
+    fn mev(kind: MouseEventKind, col: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    #[tokio::test]
+    async fn wheel_scrolls_grid_not_task_list() {
+        let mut app = make_app("wheel");
+        app.tasks.push(dl_task(1, "p.bin"));
+        app.selected = 0;
+        app.open_pieces();
+        app.pieces_area = Some(popup_area());
+        app.on_mouse(mev(MouseEventKind::ScrollDown, 30, 10));
+        assert_eq!(app.pieces_scroll, 2, "滚轮下滚 2 行（FR-01-106 ⑦）");
+        app.on_mouse(mev(MouseEventKind::ScrollDown, 30, 10));
+        assert_eq!(app.pieces_scroll, 4);
+        app.on_mouse(mev(MouseEventKind::ScrollUp, 30, 10));
+        assert_eq!(app.pieces_scroll, 2, "滚轮上滚 2 行");
+        app.on_mouse(mev(MouseEventKind::ScrollUp, 30, 10));
+        app.on_mouse(mev(MouseEventKind::ScrollUp, 30, 10));
+        assert_eq!(app.pieces_scroll, 0, "上滚钳制 0");
+        assert_eq!(app.scroll, 0, "任务列表不滚动");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn drag_inside_moves_window_up_ends_drag() {
+        let mut app = make_app("drag");
+        app.tasks.push(dl_task(1, "p.bin"));
+        app.selected = 0;
+        app.open_pieces();
+        app.pieces_pos = Some((10, 5)); // 模拟渲染层回填
+        app.pieces_area = Some(popup_area());
+        // 按下弹窗内 (20, 8) → 抓取偏移 = 指针 - 左上角 = (10, 3)
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 20, 8));
+        assert_eq!(app.pieces_drag, Some((10, 3)), "记抓取偏移");
+        // 拖到 (18, 6) → pos = 指针 - 偏移 = (8, 3)（渲染层负责钳制终端内）
+        app.on_mouse(mev(MouseEventKind::Drag(MouseButton::Left), 18, 6));
+        assert_eq!(app.pieces_pos, Some((8, 3)), "拖拽随动");
+        assert!(app.pieces_open, "拖拽不关闭弹窗");
+        // 松开 → 拖拽结束、弹窗仍在
+        app.on_mouse(mev(MouseEventKind::Up(MouseButton::Left), 18, 6));
+        assert_eq!(app.pieces_drag, None);
+        assert!(app.pieces_open);
+        // 无拖拽中的 Drag 事件不移动窗口
+        app.on_mouse(mev(MouseEventKind::Drag(MouseButton::Left), 40, 20));
+        assert_eq!(app.pieces_pos, Some((8, 3)), "无抓取偏移不随动");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn click_outside_closes_without_task_selection() {
+        let mut app = make_app("out");
+        app.tasks.push(dl_task(1, "p.bin"));
+        app.tasks.push(dl_task(2, "q.bin"));
+        app.selected = 0;
+        app.open_pieces();
+        app.pieces_area = Some(popup_area());
+        app.list_area = Some(Rect {
+            x: 0,
+            y: 5,
+            width: 40,
+            height: 9,
+        });
+        // 点击弹窗外（任务列表区 (3, 9) 即第 1 条）→ 关闭且不选中
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 3, 9));
+        assert!(!app.pieces_open, "点外关闭弹窗");
+        assert_eq!(app.selected, 0, "该次点击不选中任何任务");
+        // 弹窗打开期间滚轮同样由弹窗分支消费（列表不动）
+        app.open_pieces();
+        app.pieces_area = Some(popup_area());
+        app.on_mouse(mev(MouseEventKind::ScrollDown, 3, 9));
+        assert_eq!(app.pieces_scroll, 2, "滚轮被弹窗分支消费");
+        assert_eq!(app.scroll, 0, "任务列表滚动不动");
+        app.shutdown().await;
+    }
+
+    /// 对话框分支与弹窗分支互斥：弹窗打开时对话框不可能存在（键路由保证），
+    /// 弹窗分支先行消费一切鼠标事件
+    #[tokio::test]
+    async fn pieces_branch_consumes_all_events() {
+        let mut app = make_app("consume");
+        app.tasks.push(dl_task(1, "p.bin"));
+        app.selected = 0;
+        app.open_pieces();
+        app.pieces_area = Some(popup_area());
+        // 非左键按下、非滚轮事件全部消费且无副作用
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Right), 30, 10));
+        assert!(app.pieces_open);
+        assert_eq!(app.pieces_drag, None, "右键不开始拖拽");
+        app.on_mouse(mev(MouseEventKind::Moved, 30, 10));
+        assert!(app.pieces_open);
+        let _ = KeyModifiers::NONE;
+        app.shutdown().await;
+    }
 }
 
 #[cfg(test)]

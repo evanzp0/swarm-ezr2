@@ -6,6 +6,17 @@
 
 ## 1. 工具链与环境
 
+- **受限网络的 rustup/crates 官方源停滞，换镜像而非盲等**：rustup-init 官方脚本
+  （static.rust-lang.org）在限速网络下「downloading installer」可停滞 10 分钟以上，
+  `cargo test` 的「Updating crates.io index」同理。先 `curl -o /dev/null -w %{speed_download}`
+  探测镜像速率再切换，勿反复重试官方源浪费时间：①工具链——下载 rustup-init 二进制
+  （`RUSTUP_UPDATE_ROOT` 对应的 dist 路径直链，21MB 探得 4MB/s）后以环境变量
+  `RUSTUP_DIST_SERVER=https://mirrors.tuna.tsinghua.edu.cn/rustup` +
+  `RUSTUP_UPDATE_ROOT=https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup` 运行安装；
+  ②crates——`~/.cargo/config.toml` 配 `[source.crates-io] replace-with = 'rsproxy-sparse'`
+  （`sparse+https://rsproxy.cn/index/`）后索引秒级可编译。注意区分"脚本卡在下载
+  installer"与"本体已装"：`pgrep -af rustup` + `~/.cargo/bin` 目录探针归因，别对空目录
+  重复 install。
 - **PATH 注入不跨会话持久**：会话恢复/新 shell 中 `cargo` 会 not found（工具链本体
   完好，丢的是注入）。任何 cargo 命令前先 `command -v cargo` 探测；失败则
   `export PATH="$HOME/.cargo/bin:$PATH"` 补注入，再 `cargo --version` 复核在位。
@@ -493,6 +504,24 @@ group_imports = "StdExternalCrate"
   优化改变进程树形态）。进程识别用「exe 路径 + ppid 拓扑」（同二进制的哨兵与主进程
   exe 相同，按"父是否 ezr 进程"区分；跨轮次 pid 复用会以单 pid 断言制造假失败，
   套件启动先清理上一轮孤儿进程）。
+
+- **TestBackend 金样断言用 `backend().to_string()`，逐 cell 拼接会掺入续格空格**：
+  TestBackend 缓冲区里宽字符（CJK/emoji）占两格、续格符号非空，逐 cell 把
+  `symbol()` 拼接成行会得到「选 择」式掺空格文本，`contains("选择")`/`contains("🟩🟩")`
+  必失配（表象：断言报"实际文本"里每个宽字后多个空格）。两个正确口径：①整行/全文
+  断言用 `term.backend().to_string()`（终端语义：宽字符占两格只印一次）；②几何类
+  断言（某列是什么边框、滑块在哪列）绕开文本，直接 `buf.cell((x, y)).unwrap().symbol()`
+  逐格取值。另注意 `to_string()` 不保留前导空格语义，"第 28 列起是弹窗"这类位置
+  断言只能走 ②。
+- **构造即拉起异步组件的应用夹具，渲染测试必须 `#[tokio::test]`**：App 构造函数内
+  `tokio::spawn` 引擎主循环（`EngineHandle::start`），`#[test]` 同步测试里调
+  `App::new` 即 panic "there is no reactor running"——凡触达 App 构造的测试一律
+  `#[tokio::test] async fn`，纯函数测试（不构造 App）才可用 `#[test]`。
+- **渲染函数回写的一次性状态（follow/消费标记），测试先渲染一帧再模拟后续输入**：
+  首帧定位类状态（打开时居中到下载前沿）由渲染层每帧消费一次并改写滚动——测试
+  若在渲染前预设 `scroll = usize::MAX`（模拟 End 键），首帧消费会把它覆盖为定位值，
+  断言失败且误导为"钳制失效"。正确次序：先渲染一帧（消费 follow、断言
+  `!follow`），再注入键效、二次渲染后断言钳制结果。
 
 - **reqwest 代理是 client 级、请求不可逐个指派**：`reqwest::Proxy` 只能在
   `ClientBuilder` 上设置，`RequestBuilder` 无 per-request 代理 API。「任务/会话级

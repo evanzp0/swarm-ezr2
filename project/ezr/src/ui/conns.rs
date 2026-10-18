@@ -118,8 +118,15 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         lines.push(Line::from(spans));
     }
 
-    // 提示行（恒定显示快捷键提示；文案照录 demo 定稿原文，D26）
-    let hint = "Ctrl+↑↓ 选择 · Ctrl+B 断开（仅 BT）".to_string();
+    // 提示行（恒定显示快捷键提示；文案照录 demo 定稿原文，D26。
+    // v1.29/FR-01-96 修订：提示行随任务协议自适应——「Ctrl+B 断开」段仅 BT
+    // 任务显示（断开能力本就仅 BT，FR-01-97），原恒显「（仅 BT）」标注退役；
+    // 01 期全部任务为 HTTP(S) → 实际显示恒为 `Ctrl+↑↓ 选择`）
+    let hint = if t.protocol.is_bt() {
+        "Ctrl+↑↓ 选择 · Ctrl+B 断开"
+    } else {
+        "Ctrl+↑↓ 选择"
+    };
     f.render_widget(
         Paragraph::new(Span::styled(hint, Style::default().fg(DIM2))),
         Rect {
@@ -132,4 +139,87 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
 
     app.visible_conns_rows = data_rows;
     f.render_widget(Paragraph::new(lines), inner);
+}
+
+#[cfg(test)]
+mod tests {
+    //! FR-01-96 v1.29 提示行随任务协议自适应单测：非 BT = `Ctrl+↑↓ 选择`
+    //!（无 Ctrl+B 段、无「（仅 BT）」标注）、BT = `Ctrl+↑↓ 选择 · Ctrl+B 断开`。
+
+    use ratatui::backend::TestBackend;
+    use ratatui::layout::Rect;
+    use ratatui::Terminal;
+
+    use super::super::testfx;
+    use crate::app::App;
+    use crate::model::{Connection, Protocol, Task, TaskState};
+
+    fn conns_text(app: &mut App) -> String {
+        let mut term = Terminal::new(TestBackend::new(60, 14)).unwrap();
+        term.draw(|f| {
+            super::draw_conns(
+                f,
+                app,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 60,
+                    height: 14,
+                },
+            )
+        })
+        .unwrap();
+        term.backend().to_string()
+    }
+
+    fn task_with_conns(protocol: Protocol) -> Task {
+        let mut t = crate::model::sample_task();
+        t.protocol = protocol;
+        t.state = TaskState::Downloading;
+        t.probed = true;
+        t.total = 5_000_000;
+        t.connections = (1..=3)
+            .map(|i| Connection {
+                id: i,
+                start: (i as u64 - 1) * 1_000_000,
+                end: i as u64 * 1_000_000,
+                done: 100,
+            })
+            .collect();
+        t
+    }
+
+    #[tokio::test]
+    async fn http_hint_has_no_disconnect_segment() {
+        let mut app = testfx::make_app_in("ezr-conns", "hint-http");
+        app.tasks.push(task_with_conns(Protocol::Http));
+        app.selected = 0;
+        let text = conns_text(&mut app);
+        assert!(text.contains("Ctrl+↑↓ 选择"), "HTTP 提示行：{text}");
+        assert!(!text.contains("Ctrl+B"), "HTTP 无断开段：{text}");
+        assert!(!text.contains("（仅 BT）"), "「（仅 BT）」标注退役：{text}");
+    }
+
+    #[tokio::test]
+    async fn bt_hint_includes_disconnect_segment() {
+        let mut app = testfx::make_app_in("ezr-conns", "hint-bt");
+        app.tasks.push(task_with_conns(Protocol::Bt));
+        app.selected = 0;
+        let text = conns_text(&mut app);
+        assert!(
+            text.contains("Ctrl+↑↓ 选择 · Ctrl+B 断开"),
+            "BT 提示行：{text}"
+        );
+        assert!(!text.contains("（仅 BT）"), "「（仅 BT）」标注退役：{text}");
+    }
+
+    #[tokio::test]
+    async fn https_hint_same_as_http() {
+        let mut app = testfx::make_app_in("ezr-conns", "hint-https");
+        app.tasks.push(task_with_conns(Protocol::Https));
+        app.selected = 0;
+        let text = conns_text(&mut app);
+        assert!(text.contains("Ctrl+↑↓ 选择"));
+        assert!(!text.contains("Ctrl+B"));
+    }
 }
