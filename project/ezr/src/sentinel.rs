@@ -43,18 +43,20 @@ const READY_BYTE: &[u8; 1] = b"R";
 const READY_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// 终端复原序列：逐字对应 crossterm 0.28.1 父进程正常收尾写入的三组关闭命令
-/// （DisableBracketedPaste → LeaveAlternateScreen → DisableMouseCapture，
-/// 鼠标组按其源码 `?1006l ?1015l ?1003l ?1002l ?1000l` 反序）；
-/// 备用屏幕 `?1049l` 同时恢复进入前光标位置与可见性（DECSC 语义）。
+/// （v137 镜像 main.rs restore_into() 新顺序：DisableMouseCapture →
+/// DisableBracketedPaste → LeaveAlternateScreen，鼠标组按其源码
+/// `?1006l ?1015l ?1003l ?1002l ?1000l` 反序最先发出，与正常收尾路径的
+/// 退出竞态修复同形）；备用屏幕 `?1049l` 同时恢复进入前光标位置与可见性
+/// （DECSC 语义）。
 #[cfg(unix)]
 const RESTORE_SEQUENCE: &str = concat!(
-    "\u{1b}[?2004l",
-    "\u{1b}[?1049l",
     "\u{1b}[?1006l",
     "\u{1b}[?1015l",
     "\u{1b}[?1003l",
     "\u{1b}[?1002l",
     "\u{1b}[?1000l",
+    "\u{1b}[?2004l",
+    "\u{1b}[?1049l",
 );
 
 /// 哨兵子进程结局
@@ -342,11 +344,12 @@ mod tests {
 
     #[test]
     fn restore_sequence_mirrors_crossterm_0_28_disable_set() {
-        // 顺序镜像 main.rs restore_terminal()：DisableBracketedPaste →
-        // LeaveAlternateScreen → DisableMouseCapture（鼠标组按 0.28.1 源码反序）
+        // 顺序镜像 main.rs restore_into()（v137）：DisableMouseCapture →
+        // DisableBracketedPaste → LeaveAlternateScreen（鼠标组按 0.28.1
+        // 源码反序最先发出，与正常收尾路径的退出竞态修复同形）
         assert_eq!(
             RESTORE_SEQUENCE,
-            "\u{1b}[?2004l\u{1b}[?1049l\u{1b}[?1006l\u{1b}[?1015l\u{1b}[?1003l\u{1b}[?1002l\u{1b}[?1000l"
+            "\u{1b}[?1006l\u{1b}[?1015l\u{1b}[?1003l\u{1b}[?1002l\u{1b}[?1000l\u{1b}[?2004l\u{1b}[?1049l"
         );
         assert!(
             !RESTORE_SEQUENCE.contains("?1000h"),

@@ -39,8 +39,8 @@ use std::io;
 use std::path::PathBuf;
 
 use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
-    EventStream, KeyEventKind,
+    poll, read, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
+    EnableMouseCapture, Event, EventStream, KeyEventKind,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -58,13 +58,46 @@ use crate::model::{checksum, Checksum};
 pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "-01");
 
 fn restore_terminal() {
+    let _ = restore_into(&mut io::stdout());
+}
+
+/// 终端复原的可测内核（v137）：接受任意 Write，测试以 `Vec<u8>` 断言
+/// 关闭命令的字节顺序。
+/// 顺序（v137 重排，鼠标组最先）：`DisableMouseCapture →
+/// DisableBracketedPaste → LeaveAlternateScreen`——鼠标上报停止得越早，
+/// disable 传播延迟窗口内新产生的鼠标事件字节越少（退出竞态最小化；
+/// 各关闭命令相互独立，无栈顺序约束，crossterm 0.28.1 逐字序列不变）。
+/// 哨兵 `RESTORE_SEQUENCE`（sentinel.rs）镜像本顺序（父死路径还原序列
+/// 与正常收尾同形的设计不变量）。
+fn restore_into<W: std::io::Write>(w: &mut W) -> std::io::Result<()> {
+    drain_input_events();
     let _ = disable_raw_mode();
-    let _ = execute!(
-        io::stdout(),
+    execute!(
+        w,
+        DisableMouseCapture,
         DisableBracketedPaste,
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    );
+        LeaveAlternateScreen
+    )
+}
+
+/// 退出前消费输入队列中已到达的事件字节（v137 鼠标序列泄漏修复）：
+/// 按 q 退出瞬间终端可能已发出鼠标事件字节（SGR any-event 模式下
+/// motion 事件高频，如 `ESC[<35;56;26M`），restore 只阻止后续上报，
+/// 不消费已排队字节——进程退出后它们被继承 tty 的 shell（zle）当作
+/// 输入回显成乱码。在 raw mode 仍开启时以非阻塞 poll 清空队列
+/// （非规范模式字节立即可读；无 tty 环境 poll 报错即视为无事件）。
+fn drain_input_events() {
+    // 上限护栏：异常积压也不阻塞退出（10_000 远超正常积压）
+    for _ in 0..10_000 {
+        match poll(std::time::Duration::from_millis(0)) {
+            Ok(true) => {
+                if read().is_err() {
+                    break;
+                }
+            }
+            _ => break, // Ok(false) 队列空 / Err 无 tty（测试与 CI 环境）
+        }
+    }
 }
 
 fn setup_panic_hook() {
@@ -533,6 +566,47 @@ mod cli_parse_tests {
         assert!(pos_url("-d").is_err()); // 旗标形状先于 URL 校验
         assert!(opt_conns(None).is_err());
         assert!(opt_speed(None).is_err());
+    }
+
+    /// v137 回归（退出后鼠标序列泄漏到 shell）：复原序列必须**最先**关闭
+    /// 鼠标捕获。按 q 退出瞬间鼠标 motion 事件字节（SGR `ESC[<b;x;yM`）可能
+    /// 已排队在 tty 缓冲；旧顺序（Paste → Leave → Mouse）中鼠标关闭最后
+    /// 发出——disable 传播延迟窗口内终端还在上报新事件，与已排队字节一起
+    /// 在进程退出后被 shell 读走，zle 回显成 `^[[<35;56;26M` 类乱码。
+    /// 锁定新顺序：鼠标组关闭（?1006l … ?1000l）先于备用屏离开（?1049l）
+    /// 与 paste 关闭（?2004l）出现；三组命令逐字在位（crossterm 0.28.1）。
+    #[test]
+    fn restore_sequence_disables_mouse_before_leave_and_paste() {
+        let mut buf: Vec<u8> = Vec::new();
+        restore_into(&mut buf).expect("复原序列写入 Vec<u8> 不应报错");
+        let s = String::from_utf8_lossy(&buf);
+        let mouse_sgr_off = s.find("\u{1b}[?1006l").expect("SGR 鼠标关闭在位");
+        let mouse_basic_off = s.find("\u{1b}[?1000l").expect("基础鼠标捕获关闭在位");
+        let paste_off = s.find("\u{1b}[?2004l").expect("bracketed paste 关闭在位");
+        let leave_alt = s.find("\u{1b}[?1049l").expect("备用屏离开在位");
+        assert!(
+            mouse_sgr_off < paste_off && mouse_sgr_off < leave_alt,
+            "鼠标 SGR 关闭最先发出"
+        );
+        assert!(
+            mouse_basic_off < paste_off && mouse_basic_off < leave_alt,
+            "基础鼠标捕获关闭先于 paste/备用屏"
+        );
+        assert!(!s.contains("?1000h"), "复原序列只含关闭（l）不含启用（h）");
+    }
+
+    /// v137 回归配套：drain 对空队列/无事件源环境（测试与 CI 无 tty）
+    /// 非阻塞快速返回——不挂死、不 panic；这是退出路径上的消费循环，
+    /// 任何阻塞都会拖慢退出。
+    #[test]
+    fn drain_input_events_returns_promptly_without_events() {
+        let start = std::time::Instant::now();
+        drain_input_events();
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "drain 非阻塞（实际 {:?}）",
+            start.elapsed()
+        );
     }
 
     #[test]

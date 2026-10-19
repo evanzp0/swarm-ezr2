@@ -41,6 +41,12 @@
 - **区分「丢注入」与「本体丢失」**：环境核验先探针安装目录（如 `ls ~/.cargo/bin`）——
   目录在位是丢 PATH 注入（export 即恢复）；目录不存在是全新沙箱/本体丢失，需完整重装
   （rustup minimal profile + clippy + rustfmt），交接记录的安装位置只对同机有效。
+  **重装清单必须包含 `~/.cargo/config.toml` 镜像配置**（rsproxy-sparse 等）：该文件
+  与 registry 缓存同属全局 home 目录，随沙箱清理一起丢——重装工具链后漏写它，
+  cargo 会走官方 crates.io 源，表象是 fetch 长时间零字节（`transfer too slow: failed
+  to transfer more than 10 bytes in 30s`），极易误归因为「镜像抖动」反复重试。
+  归因探针：看任意下载日志行的 `(registry `X`)` 括号里生效源名——不是配置的镜像名
+  即配置缺失/未生效，先补配置再重试，勿浪费时间换镜像。
 - **无 lld 环境的零改动桥接**：rustfmt/clippy 约束模板配套的 `-fuse-ld=lld` 在无 lld
   且无 root 装包权限的环境会挂掉一切链接。解法：用工具链自带 rust-lld 做符号链接——
   `ln -sf ~/.rustup/toolchains/<tc>/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld
@@ -525,6 +531,18 @@ group_imports = "StdExternalCrate"
   优化改变进程树形态）。进程识别用「exe 路径 + ppid 拓扑」（同二进制的哨兵与主进程
   exe 相同，按"父是否 ezr 进程"区分；跨轮次 pid 复用会以单 pid 断言制造假失败，
   套件启动先清理上一轮孤儿进程）。
+- **TUI 正常退出的事件字节泄漏 = 复原序列只阻未来上报、不消费已排队输入**：
+  退出瞬间（如按 q）SGR any-event 模式下高频 motion 事件字节可能已排队在 tty
+  内核缓冲，restore 发出 DisableMouseCapture 只阻止后续上报——进程退出后残留
+  字节被继承 tty 的 shell（zle）当作输入回显成 `^[[<b;x;yM` 类乱码（表象：
+  退出后 shell 提示符前后出现转义残影，与程序崩溃无关）。双修法：①复原前
+  在 raw mode 仍开启时以非阻塞 `poll(0)`/`read()` 循环消费输入队列（非规范
+  模式字节立即可读；disable 之后再 drain 无效——canonical 模式 read 等换行、
+  鼠标序列无换行会永久阻塞在内核行规程）；②关闭命令把鼠标组放最前
+  （DisableMouseCapture → paste → LeaveAlternateScreen），disable 传播延迟
+  窗口内不再产生新鼠标字节。复原序列要可测：抽 `restore_into<W: Write>`
+  内核，测试以 `Vec<u8>` 断言字节顺序；端到端验证用 pty 冒烟——同批写入
+  q + motion 字节，退出后由 `cat -v`（模拟 shell）读 tty 残留断言 0 字节。
 
 - **TestBackend 金样断言用 `backend().to_string()`，逐 cell 拼接会掺入续格空格**：
   TestBackend 缓冲区里宽字符（CJK/emoji）占两格、续格符号非空，逐 cell 把
