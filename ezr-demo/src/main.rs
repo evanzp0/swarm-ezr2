@@ -74,59 +74,19 @@ async fn run(
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(100));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    // 覆盖层（对话框/下拉浮层）出现或消失的那一帧必须全量重绘。
+    // 浮层翻转（打开/关闭对话框、展开/收起下拉）不再 terminal.clear() 全屏
+    // 清屏重绘——清屏会在浮层出现/消失的瞬间清空整个终端，造成整屏闪烁
+    // （打开新窗口闪烁修复）。
     //
-    // 原因：底层列表文本含 CJK 宽字符（一格占两列）。当浮层边框恰好落在
-    // 某个宽字符的右半格上时（如 112 列终端下添加对话框左边框 x=19 正好
-    // 是列表行「排队第 1 位 · 等待空闲下载槽位」中“待”字的右半格），增量
-    // diff 只会输出被改变的单个单元格（MoveTo + 空格/边框字符），部分终端
-    // 无法正确处理“覆盖宽字符半格”的写入，宽字会残留在浮层边框之上
-    // （表现为“等待空闲下…”盖住对话框左侧框线）。更糟糕的是后续帧 diff
-    // 认为该区域无变化、不再重绘，残影被固化。
-    // clear() 先清空终端网格并重置内部前后缓冲，下一帧全量输出：从左到右
-    // 连续打印，宽字符打印后游标自然推进两格，与网格位置严格同步，
-    // 彻底避免半格覆盖问题。
-    fn overlay_sig(app: &App) -> u64 {
-        // FNV-1a 混合（替代旧位域打包：浮层增至三个后 64 位不再够用）。
-        // 任一浮层开关 / 拖拽态 / 位置变化 → sig 变化 → terminal.clear()
-        // 全量重绘，根除增量 diff 覆盖宽字符半格造成的残影
-        const FNV_OFF: u64 = 0xcbf2_9ce4_8422_2325;
-        let mut h = FNV_OFF;
-        fn mix(h: &mut u64, v: u64) {
-            for b in 0..8 {
-                *h = (*h ^ ((v >> (b * 8)) & 0xFF)).wrapping_mul(0x0000_0100_0000_01b3);
-            }
-        }
-        let (dlg, ck, proxy) = match app.dialog.as_ref() {
-            None => (0u64, 0u64, 0u64),
-            Some(d) => (1, d.ck_open as u64, d.proxy_open as u64),
-        };
-        mix(&mut h, dlg | (ck << 1) | (proxy << 2));
-        mix(
-            &mut h,
-            (app.pieces_open as u64)
-                | ((app.dialog_drag.is_some() as u64) << 1)
-                | ((app.help_open as u64) << 2)
-                | ((app.help_drag.is_some() as u64) << 3),
-        );
-        let (px, py) = app.pieces_pos.unwrap_or((0, 0));
-        mix(&mut h, ((px as u64) & 0xFFFF) | (((py as u64) & 0xFFFF) << 16));
-        let (dx, dy) = app.dialog_pos.unwrap_or((0, 0));
-        mix(&mut h, ((dx as u64) & 0xFFFF) | (((dy as u64) & 0xFFFF) << 16));
-        let (hx, hy) = app.help_pos.unwrap_or((0, 0));
-        mix(&mut h, ((hx as u64) & 0xFFFF) | (((hy as u64) & 0xFFFF) << 16));
-        h
-    }
-    let mut last_overlay = overlay_sig(app);
-
+    // 历史背景：底层列表文本含 CJK 宽字符，浮层边框恰好落在某宽字符右半格
+    // 上时，增量 diff 会跳过被覆盖的尾格，宽字残留在浮层边框上且被后续帧
+    // 固化——旧版用 clear() 全屏重绘掩盖该残影。现残影已由渲染层
+    // `clip_wide_at_edges`（ui.rs，每处浮层 Clear 后调用）在缓冲区层根治：
+    // 左缘宽字符主格截断、右缘孤立半格补空格，前后帧模型自洽，diff 输出的
+    // 连续两格覆写与终端宽字符语义一致，开/关两个方向均无残影，全屏清屏
+    // 随之不再需要（scripts/check_overlay_redraw.py 已改断言「翻转零清屏」）。
     loop {
-        // 浮层翻转（打开/关闭对话框、展开/收起下拉）：先清屏强制全量重绘
-        let sig = overlay_sig(app);
-        if sig != last_overlay {
-            terminal.clear()?;
-            last_overlay = sig;
-        }
-
+        // 浮层翻转（打开/关闭对话框、展开/收起下拉）：diff 直接绘制，无清屏
         terminal.draw(|f| ui::draw(f, app))?;
 
         tokio::select! {

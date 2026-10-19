@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """check_popup_integrity.py — mini 终端模拟器验证浮层边框完整性。
 
-把 TUI 的全部输出字节流喂进一个理想网格终端（ANSI MoveTo/Clear/SGR +
+把 TUI 的全部输出字节流喂进一个网格终端模型（ANSI MoveTo/Clear/SGR +
 宽字符打印后游标推进 2 格），构建最终显示网格后断言：
 
   1. 添加对话框 (112x36 下居中于 x19,y12 74x12) 四边边框字符完整、无缺格
@@ -10,13 +10,22 @@
   4. pieces 分块弹窗（P，x24,y7 64x21，网格为连续宽字符色块）四边边框完整
   5. 浮层区域内不得出现底层列表文本穿透（「等待空闲」「排队第」等字样）
 
+两种模式：
+  - 默认 = 理想终端：逐格应用写入（与主流真实终端一致）。对应现行契约：
+    残影由渲染层 clip_wide_at_edges 在缓冲区层根治，浮层翻转不清屏
+    （打开/关闭窗口零闪烁），diff 输出与终端宽字符语义自洽。
+  - --ghost = 问题终端（历史模式）：向宽字符右半格（CONT 尾格）的写入
+    一律忽略（无论主格是否已被改写）。这是为已退役的 terminal.clear()
+    全屏重绘补丁定制的回归断言——按构造与无清屏的 diff 渲染互斥
+    （顶/底边框行必然跨越中途 CJK，diff 必然逐格覆写），仅作历史对照用。
+
 能检出两类问题：
-  - 增量 diff 局部补丁：覆盖 CJK 宽字符半格时部分终端残留（真实终端问题，
-    理想模型不残留但可检出「边框列在网格上缺字符」的错位输出）
+  - 增量 diff 局部补丁：模型层跳过被覆盖尾格导致边框缺字（已由
+    clip_wide_at_edges 根治）
   - 全量重绘错位：缓冲区存在「宽字符主格 + 浮层字符」重叠时，连续打印的
     宽字符使游标推进 2 格，边框字符被挤到错误的列——理想终端上边框也会断
 
-用法: python3 scripts/check_popup_integrity.py [程序路径]
+用法: python3 scripts/check_popup_integrity.py [--ghost] [--cols N] [程序路径]
 """
 
 import codecs
@@ -61,9 +70,10 @@ def rects_for(cols: int):
 class MiniTerm:
     """终端网格模型：MoveTo 绝对定位、SGR 忽略、宽字符推进 2 格。
 
-    ghost=True 模拟「问题终端」行为：向宽字符右半格独立写入窄字符时
-    保留原宽字符显示（写入被忽略）——对应「下层的字遮住浮层框线」的
-    残影机制。修复后的输出流不会出现这种写入，两种模型下都应通过。
+    ghost=True 模拟「问题终端」（历史模式）：向宽字符右半格（CONT 尾格）
+    的写入一律忽略——即使主格已被后续写入改写也不恢复。该模型是为已
+    退役的 terminal.clear() 全屏重绘补丁定制的回归断言，与无清屏的
+    diff 渲染按构造互斥，仅作历史对照（--ghost 显式启用）。
     """
 
     def __init__(self, ghost: bool = True, cols: int = COLS) -> None:
@@ -195,7 +205,7 @@ def main() -> None:
         i = a.index("--cols")
         cols = int(a[i + 1])
         del a[i:i + 2]
-    ghost = "--ideal" not in a
+    ghost = "--ghost" in a
     prog = [x for x in a if not x.startswith("--")]
     program = prog[0] if prog else "./target/release/ezr-tui-demo"
     add_dlg, del_dlg, dropdown, pieces_dlg, help_dlg = rects_for(cols)

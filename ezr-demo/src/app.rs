@@ -712,6 +712,13 @@ pub struct App {
     pub dlg_ck_rects: Vec<(Rect, usize)>,
     /// 代理下拉选项命中区域（v1.5/FR-01-86；鼠标点击选择）
     pub dlg_proxy_rects: Vec<(Rect, usize)>,
+    /// 页脚命令 chips 可点击区域（v0.2 页脚双行修订；由 ui 层每帧回填：
+    /// 行 1 常用命令图例 A/D/M/Q/H，左键按压高亮 = 点击效果、原地松开执行对应命令）
+    pub footer_cmd_rects: Vec<(Rect, usize)>,
+    /// 页脚命令 chip 按压态（Down 记录、Up 原地松开消费；渲染层据此反色高亮）
+    pub footer_press: Option<usize>,
+    /// 页脚命令 chip 点击高亮余辉（Down 点亮 400ms；快速点按在两帧之间也能看到点击效果）
+    pub footer_flash: Option<(usize, Instant)>,
     /// 代理选项表（v1.5/FR-01-86 同步；演示数据：直连 + 命名条目）
     pub proxy_options: Vec<ProxyChoice>,
     /// 代理选项显示名（与 proxy_options 一一对应；命名条目含类型标注，不含认证信息）
@@ -797,6 +804,9 @@ impl App {
             dlg_field_rects: Vec::new(),
             dlg_ck_rects: Vec::new(),
             dlg_proxy_rects: Vec::new(),
+            footer_cmd_rects: Vec::new(),
+            footer_press: None,
+            footer_flash: None,
             proxy_options,
             proxy_labels,
             default_proxy_sel: 0,
@@ -2370,6 +2380,8 @@ impl App {
                 }
                 MouseEventKind::ScrollDown => self.help_scroll += 1, // 渲染层馴制
                 MouseEventKind::Down(MouseButton::Left) => {
+                    // 模态接管：清除页脚 chip 按压态（点击外部关闭 = 页脚不可达）
+                    self.footer_press = None;
                     if Self::pointer_in(&self.help_area, m.column, m.row) {
                         // 开始拖拽：记录指针相对窗口左上角的抓取偏移
                         if let Some(r) = self.help_area {
@@ -2403,6 +2415,8 @@ impl App {
                 MouseEventKind::ScrollUp => self.pieces_scroll_by(-2),
                 MouseEventKind::ScrollDown => self.pieces_scroll_by(2),
                 MouseEventKind::Down(MouseButton::Left) => {
+                    // 模态接管：清除页脚 chip 按压态
+                    self.footer_press = None;
                     if Self::pointer_in(&self.pieces_area, m.column, m.row) {
                         // 开始拖拽：记录指针相对弹窗左上角的抓取偏移
                         if let Some(r) = self.pieces_area {
@@ -2439,6 +2453,8 @@ impl App {
                 MouseEventKind::Down(MouseButton::Left) => {
                     let ck_open = self.dialog.as_ref().is_some_and(|d| d.ck_open);
                     let proxy_open = self.dialog.as_ref().is_some_and(|d| d.proxy_open);
+                    // 模态接管：清除页脚 chip 按压态
+                    self.footer_press = None;
                     if ck_open {
                         let hit = |rects: &[(Rect, usize)]| {
                             rects
@@ -2533,6 +2549,20 @@ impl App {
                         && m.row >= r.y
                         && m.row < r.y.saturating_add(r.height)
                 };
+                // 页脚命令 chips（v0.2 页脚双行修订）：Down 按压反色高亮
+                //（点击效果 + 400ms 余辉），原地松开执行对应命令（与键盘
+                // 快捷键同口径）；拖到别处松开 = 取消
+                let footer_hit = self
+                    .footer_cmd_rects
+                    .iter()
+                    .find(|(r, _)| in_rect(*r))
+                    .map(|(_, i)| *i);
+                if let Some(i) = footer_hit {
+                    self.footer_press = Some(i);
+                    self.footer_flash = Some((i, Instant::now() + Duration::from_millis(400)));
+                    return;
+                }
+                self.footer_press = None;
                 let tab_hit = self
                     .tab_rects
                     .iter()
@@ -2618,10 +2648,31 @@ impl App {
                     self.scroll = self.scroll.saturating_sub(2);
                 }
             }
+            MouseEventKind::Up(MouseButton::Left) => {
+                // 页脚命令 chip：按压后原地松开 = 执行对应命令（与键盘快捷键
+                // 同口径）；拖到别处松开 = 取消。其余 Up 事件主界面无语义。
+                if let Some(pressed) = self.footer_press.take() {
+                    let still_on = self.footer_cmd_rects.iter().any(|(r, i)| {
+                        *i == pressed
+                            && m.column >= r.x
+                            && m.column < r.x.saturating_add(r.width)
+                            && m.row >= r.y
+                            && m.row < r.y.saturating_add(r.height)
+                    });
+                    if still_on {
+                        self.run_footer_cmd(pressed);
+                    }
+                }
+            }
             MouseEventKind::ScrollDown => {
                 // 指针在并发连接面板上：滚动该面板；否则滚动任务列表
                 if Self::pointer_in(&self.conns_area, m.column, m.row) {
-                    self.conns_scroll += 2;
+                    // 到底即停（滚到底闪烁修复）：事件内按可视行数立即钳制
+                    // （同任务列表口径）。此前 +2 后要等 tick 同步钳制，中间帧
+                    // 渲染出底部空白行又被钳回——窗口反复变化即闪烁。
+                    let vis = self.visible_conns_rows.max(1);
+                    let maxs = self.conn_count().saturating_sub(vis);
+                    self.conns_scroll = (self.conns_scroll + 2).min(maxs);
                 } else {
                     let vis = self.visible_rows.max(1);
                     let maxs = self.filtered().len().saturating_sub(vis);
@@ -2635,6 +2686,35 @@ impl App {
     /// 指针是否位于给定矩形内
     fn pointer_in(area: &Option<Rect>, x: u16, y: u16) -> bool {
         matches!(area, Some(a) if x >= a.x && x < a.x.saturating_add(a.width) && y >= a.y && y < a.y.saturating_add(a.height))
+    }
+
+    /// 页脚命令 chip 是否处于点击高亮（按压中，或 400ms 余辉内）
+    pub fn footer_chip_hot(&self, i: usize) -> bool {
+        if self.footer_press == Some(i) {
+            return true;
+        }
+        matches!(
+            self.footer_flash,
+            Some((fi, until)) if fi == i && Instant::now() < until
+        )
+    }
+
+    /// 页脚命令 chip 执行（v0.2 页脚双行修订）：与同名键盘快捷键完全同口径——
+    /// A 添加 / D 删除 / M 修改 / Q 退出 / H 帮助。仅主界面态可达（模态浮层
+    /// 打开时鼠标事件先交给浮层，P2 模态优先级）。
+    fn run_footer_cmd(&mut self, i: usize) {
+        match i {
+            0 => self.open_add_dialog(),
+            1 => self.open_delete_dialog(),
+            2 => self.open_modify_dialog(),
+            3 => self.quit = true,
+            4 => {
+                self.help_open = true;
+                self.help_scroll = 0;
+                // help_pos 保留上次拖拽位置；None = 渲染层首帧居中并回填
+            }
+            _ => {}
+        }
     }
 
     /// 对话框左键点击（拖拽未移动的 Up 事件）：字段行聚焦 / 按钮激活。

@@ -9,7 +9,9 @@
 //! 无边框流量图（占内容区全高 3 行、宽为内容区 20%，仅绘制下行流量，上传流量
 //! 不绘制）。主区：左列 58% = 任务列表；右列 42% = 任务详情
 //! （10 行内容 = 12 行定高，v1.20：任务 ID 与创建时间拆两行）及并发连接面板
-//! （占右列余下全部高度）。页脚 = 快捷键与提示。
+//! （占右列余下全部高度）。页脚 = 双行：行 1 常用命令图例（A 添加 / D 删除 /
+//! M 修改 / Q 退出 / H 帮助；鼠标左键可点击——按压反色高亮 = 点击效果、原地
+//! 松开执行对应命令，v0.2 页脚双行修订），行 2 toast 提示。
 //! 流量图：单色面积图——逐列自底向上填充，顶线以 ▁▂▃▄▅▆▇█ 八级部分块呈现
 //! 1/8 格亚字符精度的平滑曲线，全图统一一种颜色（下载淡蓝，REQ-8.5）；
 //! 序列经双向 EMA 平滑 + 窗口 min–max 自适应缩放，每列取双子样本较大值保尖峰
@@ -1272,7 +1274,12 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let mut lines = vec![Line::from(head)];
 
-    let start = app.conns_scroll.min(t.connections.len() - 1);
+    // 起点钳制到「最后一个满窗」起点（渲染层兜底）：即使滚动态短暂越界
+    // （连接数收缩的过渡帧），窗口也完整覆盖尾部数据行，不产生底部空白行
+    //（滚到底闪烁修复的第二道防线；顺带消除 len==0 的潜在减法恐慌）。
+    let start = app
+        .conns_scroll
+        .min(t.connections.len().saturating_sub(rows));
     let data_rows = rows;
     let end = (start + data_rows).min(t.connections.len());
 
@@ -1362,7 +1369,7 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -1370,28 +1377,100 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // 单行页脚（需求修订：仅保留 H 帮助 / Q 退出提示 + toast）。
-    // 完整分类说明见 H 帮助窗口。
-    let key = |s: &str| {
-        Span::styled(
-            s.to_string(),
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        )
-    };
-    let desc = |s: &str| Span::styled(s.to_string(), Style::default().fg(DIM));
-    let mut l1 = vec![
-        key(" H"),
-        desc(" 帮助  ·  "),
-        key(" Q"),
-        desc(" 退出  "),
-    ];
-    if let Some(msg) = &app.toast {
-        l1.push(Span::styled(
-            format!("◆ {}", msg),
-            Style::default().fg(YELLOW),
-        ));
+    // 双行页脚（v0.2 修订）：
+    // 行 1 = 常用命令图例 chips：A 添加 / D 删除 / M 修改 / Q 退出 / H 帮助
+    //   （鼠标左键可点击——按压反色高亮 = 点击效果、原地松开执行对应命令，
+    //   与键盘快捷键同口径；完整交互说明仍收敛于 H 帮助窗口，P3 原则）；
+    // 行 2 = toast 提示（◆ 黄色消息，§7.4）。
+    if inner.width == 0 || inner.height == 0 {
+        return;
     }
-    f.render_widget(Paragraph::new(Line::from(l1)), inner);
+    // 左右内边距（修订）：各留 1 列空白，与头部面板右侧留白同距（图区右缘
+    // 到右边框 1 列）——内容不再顶格贴边框，行 1 chips 与行 2 toast 起止一致。
+    const PAD: u16 = 1;
+    let row_x = inner.x + PAD;
+    let row_w = inner.width.saturating_sub(PAD * 2);
+    let row1 = Rect {
+        x: row_x,
+        y: inner.y,
+        width: row_w,
+        height: 1,
+    };
+    let row2 = Rect {
+        x: row_x,
+        y: inner.y + 1,
+        width: row_w,
+        height: 1,
+    };
+
+    // ---- 行 1：常用命令 chips（每帧重建命中矩形，不含分隔符）----
+    app.footer_cmd_rects.clear();
+    let cmds = [
+        ("A", "添加"),
+        ("D", "删除"),
+        ("M", "修改"),
+        ("Q", "退出"),
+        ("H", "帮助"),
+    ];
+    let mut spans: Vec<Span> = Vec::new();
+    let mut x = row1.x;
+    let right = row1.x.saturating_add(row1.width);
+    for (i, (key, label)) in cmds.iter().enumerate() {
+        // chip 显示宽 = 键 1 列 + 空格 1 列 + 标签（CJK 计 2）
+        let chip_w = 2 + w(label) as u16;
+        let sep_w = 3u16; // 分隔符 " · "
+        let placed = spans.is_empty();
+        let need = if placed { chip_w } else { sep_w + chip_w };
+        if x.saturating_add(need) > right {
+            break; // P7 小终端：放不下的 chip 整个不渲染（不越界、不截断）
+        }
+        if !placed {
+            spans.push(Span::styled(" · ", Style::default().fg(DIM2)));
+            x += sep_w;
+        }
+        // 点击效果：按压中或 400ms 余辉内整片反色高亮（同对话框按钮聚焦态色）
+        let hot = app.footer_chip_hot(i);
+        let (key_style, label_style) = if hot {
+            (
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(ACCENT)
+                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Black).bg(ACCENT),
+            )
+        } else {
+            (
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::default().fg(FG),
+            )
+        };
+        let key_span = Span::styled(format!("{} ", key), key_style);
+        let label_span = Span::styled((*label).to_string(), label_style);
+        app.footer_cmd_rects.push((
+            Rect {
+                x,
+                y: row1.y,
+                width: chip_w,
+                height: 1,
+            },
+            i,
+        ));
+        x += chip_w;
+        spans.push(key_span);
+        spans.push(label_span);
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), row1);
+
+    // ---- 行 2：toast 提示 ----
+    if let Some(msg) = &app.toast {
+        f.render_widget(
+            Paragraph::new(Line::from(vec![Span::styled(
+                format!("◆ {}", msg),
+                Style::default().fg(YELLOW),
+            )])),
+            row2,
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2161,6 +2240,7 @@ fn help_lines() -> Vec<Line<'static>> {
         sec("全局"),
         kd("Tab / BackTab", "切换面板（任务列表 → 详情 → 并发连接）"),
         kd("鼠标左键", "点击面板聚焦；点击任务/连接选中明细"),
+        kd("页脚命令", "A/D/M/Q/H 图例可点击：按压高亮，松开执行"),
         kd("H", "打开 / 关闭本帮助窗口"),
         kd("G", "收起/展开 任务详情 + 并发连接面板"),
         kd("Esc", "关闭弹窗"),
@@ -2252,8 +2332,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let outer = Layout::vertical([
         Constraint::Length(5), // 顶部区：头部仪表面板（标题边框 + 字段/分割线/页签 3 内容行 + 底边框）
-        Constraint::Min(8),    // 主区：任务列表 | 任务详情 + 并发连接面板
-        Constraint::Length(3), // 页脚（单行：Q/H 提示 + toast）
+        Constraint::Min(8),   // 主区：任务列表 | 任务详情 + 并发连接面板
+        Constraint::Length(4), // 页脚（双行：常用命令图例 chips + toast）
     ])
     .split(area);
 
