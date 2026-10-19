@@ -38,6 +38,16 @@
   `https://codeload.github.com/<owner>/<repo>/tar.gz/refs/heads/<branch>` 直链
   tar.gz 后解包（分支名先经 GitHub API `default_branch` 字段查证；解包后重命名
   为 `<仓库名>/` 以符合 .tools 布局）。
+- **release 资产与 codeload 全域慢/超时走镜像代理直链**：GitHub 直连（含
+  codeload 与 `release-assets.githubusercontent.com` 重定向目标）长时间无
+  字节或 curl 28 超时时，先直链复测一次排除偶发；仍失败改经公共 GitHub
+  镜像代理取 `https://<镜像域>/<原始 GitHub URL 全文>`（如
+  `https://gh-proxy.com/https://github.com/...` 或
+  `https://gh-proxy.com/https://codeload.github.com/...`）——镜像代理对
+  release 资产与 codeload tarball 均可透传，URL 原文照拼不改写路径；
+  多镜像逐个短超时试拉（首个 404/慢速即换下一个），落盘后校验
+  `file` 类型与体积再解包。直链偶发成功与镜像可用性都会漂移，两者都试
+  而非认定网络不通。
 - **工具安装位置**：clone/构建后的工具仓库统一放在 `swarm/.tools/<仓库名>/`（工具缓存，跨会话复用；不进归档包、不随会话清除）。会话缓存不随工作区流转：每会话先确认所需工具在位，缺则按上文重建，安装位置与选型理由写入 `project/handoff.md`。APS 仓库名为 `Acceptance-Pipeline-Specification`。
 - **上游钉死路径的兼容桥接**：上游脚本/文档钉死的工具路径（如对 `.tools/bin/bb` 的
   硬编码）与实际安装位置不一致时，优先在钉死位置补**符号链接**桥接到真实位置，不要改
