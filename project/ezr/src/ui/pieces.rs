@@ -14,7 +14,8 @@
 //! - 滚动上限按实际总行数钳制（`End` 置 `usize::MAX` 在此收敛到末页）；
 //! - 块数超一屏时右缘（右边框列）lazygit 式滚动条（▲│█▼，滑块恒聚焦绿，
 //!   v1.30/FR-01-109）；
-//! - 打开/关闭/拖拽帧全量重绘由 main.rs overlay_sig 保证（浮层翻转检测）。
+//! - 浮层翻转零清屏（v1.31/FR-01-106⑧）：开/关/拖拽帧由增量 diff 直接绘制、
+//!   不清屏，无整屏闪烁；残影由 clip_wide_at_edges 缓冲区级清扫根治。
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -288,11 +289,12 @@ mod tests {
         assert_eq!(buf.cell((91, 7)).unwrap().symbol(), "╮", "右缘 x=91");
         assert_eq!(buf.cell((28, 25)).unwrap().symbol(), "╰", "底边框 y=25");
         assert_eq!(buf.cell((91, 25)).unwrap().symbol(), "╯", "右下角圆角");
-        // 弹窗外主界面仍完整渲染（页脚仍在：页脚 3 行 = y31 边框 + y32 内容 + y33 边框）
+        // 弹窗外主界面仍完整渲染（页脚仍在：v1.31 双行页脚 4 行 =
+        // y30 边框 + y31 chips + y32 toast + y33 边框）
         assert!(
-            rows[32].contains("退出"),
-            "页脚收敛行不被破坏: {}",
-            rows[32]
+            rows[31].contains("退出"),
+            "页脚 chips 行不被破坏: {}",
+            rows[31]
         );
         app.shutdown().await;
     }

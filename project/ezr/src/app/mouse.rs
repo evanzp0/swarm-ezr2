@@ -1,5 +1,7 @@
 //! mouse — 鼠标事件：点击选中/聚焦/滚轮/对话框按钮命中
 
+use std::time::Instant;
+
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
@@ -36,6 +38,9 @@ impl App {
             }
             MouseEventKind::ScrollDown => self.help_scroll += 1, // 渲染层钳制
             MouseEventKind::Down(MouseButton::Left) => {
+                // 模态接管：清除页脚 chip 按压态（v1.31/FR-01-107①：
+                // 点击外部关闭 = 页脚不可达）
+                self.footer_press = None;
                 if pointer_in(&self.help_area, m.column, m.row) {
                     // 开始拖拽：记录指针相对窗口左上角的抓取偏移
                     if let Some(r) = self.help_area {
@@ -67,6 +72,8 @@ impl App {
             MouseEventKind::ScrollUp => self.pieces_scroll_by(-2),
             MouseEventKind::ScrollDown => self.pieces_scroll_by(2),
             MouseEventKind::Down(MouseButton::Left) => {
+                // 模态接管：清除页脚 chip 按压态（v1.31/FR-01-107①）
+                self.footer_press = None;
                 if pointer_in(&self.pieces_area, m.column, m.row) {
                     // 开始拖拽：记录指针相对弹窗左上角的抓取偏移
                     if let Some(r) = self.pieces_area {
@@ -100,6 +107,8 @@ impl App {
                 let kind = self.dialog.as_ref().map(|d| d.kind);
                 let ck_open = self.dialog.as_ref().is_some_and(|d| d.ck_open);
                 let proxy_open = self.dialog.as_ref().is_some_and(|d| d.proxy_open);
+                // 模态接管：清除页脚 chip 按压态（v1.31/FR-01-107①）
+                self.footer_press = None;
                 let hit = |rects: &[(Rect, usize)]| {
                     rects
                         .iter()
@@ -187,9 +196,7 @@ impl App {
         let over_conns = pointer_in(&self.conns_area, m.column, m.row);
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                // 页签命中（ui 层每帧回填 tab_rects）：切换到该页签 + 聚焦列表
-                //（v1.30/FR-01-80：鼠标点击页签切换）
-                let tab_rects = self.tab_rects.clone();
+                // 矩形命中（footer_cmd_rects/tab_rects 共用；x/y 在矩形内）
                 let hit = |rects: &[(Rect, usize)]| {
                     rects
                         .iter()
@@ -201,6 +208,21 @@ impl App {
                         })
                         .map(|(_, i)| *i)
                 };
+                // 页脚命令 chips（v1.31/FR-01-107①）：Down 按压反色高亮
+                //（点击效果 + 400ms 余辉），原地松开执行对应命令（与键盘
+                // 快捷键同口径）；拖到别处松开 = 取消。命中矩形不含分隔符、
+                // ui 层每帧重建（footer_cmd_rects）
+                let footer_hit = hit(&self.footer_cmd_rects);
+                if let Some(i) = footer_hit {
+                    self.footer_press = Some(i);
+                    self.footer_flash =
+                        Some((i, Instant::now() + std::time::Duration::from_millis(400)));
+                    return;
+                }
+                self.footer_press = None;
+                // 页签命中（ui 层每帧回填 tab_rects）：切换到该页签 + 聚焦列表
+                //（v1.30/FR-01-80：鼠标点击页签切换）
+                let tab_rects = self.tab_rects.clone();
                 if let Some(i) = hit(&tab_rects) {
                     if i != self.filter {
                         self.filter = i;
@@ -273,6 +295,23 @@ impl App {
                         if ti < self.filtered().len() {
                             self.selected = ti;
                         }
+                    }
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                // 页脚命令 chip：按压后原地松开 = 执行对应命令（与键盘快捷键
+                // 同口径，P5 双通道等价）；拖到别处松开 = 取消。其余 Up 事件
+                // 主界面无语义（v1.31/FR-01-107①）
+                if let Some(pressed) = self.footer_press.take() {
+                    let still_on = self.footer_cmd_rects.iter().any(|(r, i)| {
+                        *i == pressed
+                            && m.column >= r.x
+                            && m.column < r.x.saturating_add(r.width)
+                            && m.row >= r.y
+                            && m.row < r.y.saturating_add(r.height)
+                    });
+                    if still_on {
+                        self.run_footer_cmd(pressed);
                     }
                 }
             }

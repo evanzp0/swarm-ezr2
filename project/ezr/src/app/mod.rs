@@ -210,6 +210,15 @@ pub struct App {
     pub help_area: Option<Rect>,
     /// 头部页签命中矩形（ui 层每帧回填；鼠标点击页签切换，v1.30/FR-01-80）
     pub tab_rects: Vec<(Rect, usize)>,
+    /// 页脚命令 chips 命中矩形（v1.31/FR-01-107①：ui 层每帧重建，不含分隔符；
+    /// 鼠标点击执行与键盘同口径）
+    pub footer_cmd_rects: Vec<(Rect, usize)>,
+    /// 页脚 chip 按压中下标（v1.31/FR-01-107①：Down 记录、原地松开执行、
+    /// 拖出取消、浮层接管清除）
+    pub footer_press: Option<usize>,
+    /// 页脚 chip 点击余辉（v1.31/FR-01-107①：(下标, 余辉截止时刻)，
+    /// 400ms——快速点按在两帧之间也可见）
+    pub footer_flash: Option<(usize, Instant)>,
     /// 下载槽位上限（配置 `download_slots`，默认 5，D13）
     pub max_slots: usize,
     /// 引擎句柄
@@ -382,6 +391,9 @@ impl App {
             help_drag: None,
             help_area: None,
             tab_rects: Vec::new(),
+            footer_cmd_rects: Vec::new(),
+            footer_press: None,
+            footer_flash: None,
             proxy_options,
             proxy_labels,
             default_proxy_sel,
@@ -445,6 +457,38 @@ impl App {
     #[must_use]
     pub fn overlay_open(&self) -> bool {
         self.dialog.is_some() || self.pieces_open || self.help_open
+    }
+
+    /// 页脚命令 chip 是否处于点击高亮（v1.31/FR-01-107①：按压中，或
+    /// 400ms 余辉内——快速点按在两帧之间也可见）
+    #[must_use]
+    pub fn footer_chip_hot(&self, i: usize) -> bool {
+        if self.footer_press == Some(i) {
+            return true;
+        }
+        matches!(
+            self.footer_flash,
+            Some((fi, until)) if fi == i && Instant::now() < until
+        )
+    }
+
+    /// 页脚命令 chip 执行（v1.31/FR-01-107①）：与同名键盘快捷键完全同口径
+    /// —— A 添加 / D 删除 / M 修改 / Q 退出 / H 帮助（含「已完成任务不可
+    /// 修改」等既有校验与 toast 反馈）。仅主界面态可达（模态浮层打开时
+    /// 鼠标事件先交给浮层，P2 模态优先级）。
+    pub(crate) fn run_footer_cmd(&mut self, i: usize) {
+        match i {
+            0 => self.open_add_dialog(),
+            1 => self.open_delete_dialog(),
+            2 => self.open_modify_dialog(),
+            3 => self.quit = true,
+            4 => {
+                self.help_open = true;
+                self.help_scroll = 0;
+                // help_pos 保留上次拖拽位置；None = 渲染层首帧居中并回填
+            }
+            _ => {}
+        }
     }
 
     /// 过滤后的任务下标视图（页签 0 = 正在下载，1 = 已完成）

@@ -38,7 +38,8 @@ pub enum PieceState {
     /// 已下载（🟩）
     Done,
     /// 部分下载（🟨）：块内有已落盘零头，但未分配并发下载
-    /// （暂停/等待/失败等状态下沉时冻结的持块连接）
+    /// （下载中缩容回收的无租约块，或暂停/等待/失败等状态下沉时冻结的
+    /// 持块连接）
     Partial,
     /// 正在下载（🟦）：已分配并发连接（仅「下载中」任务）
     Active,
@@ -268,12 +269,17 @@ impl Task {
     ///   （暂停/等待/失败等状态下沉冻结的持块连接）→ 有零头 Partial、
     ///   零头为 0 → Empty；
     /// - 连接块内写满（done >= cap）→ Done（乱序完成块不必依赖前缀）；
-    /// - 部分下载块 🟨（v131）：非「下载中」且逐块部分集合 `partial_blocks`
-    ///   非空（Progress 逐 tick / PausedDone・Failed 终态快照重铺的引擎
-    ///   Blocks 逐块真值）→ 集合权威标 🟨——收尾投影租约按前缀同参投影只
-    ///   覆盖尾部 ≤ 并发数个块，投影外的真部分块无租约错标 ⬜（操作者
-    ///   实证：失败/暂停后部分块白屏）、投影内假零头虚标 🟨，集合非空时
-    ///   租约零头退出 🟨 判定（双向消除）；集合为空时回退投影租约零头口径
+    /// - 部分下载块 🟨（v131；**v136 扩面：集合权威不再限定任务状态**）：
+    ///   逐块部分集合 `partial_blocks` 非空（Progress 逐 tick / PausedDone・
+    ///   Failed 终态快照重铺的引擎 Blocks 逐块真值）→ 集合权威标 🟨——
+    ///   收尾投影租约按前缀同参投影只覆盖尾部 ≤ 并发数个块，投影外的真
+    ///   部分块无租约错标 ⬜（操作者实证：失败/暂停后部分块白屏）、投影内
+    ///   假零头虚标 🟨，集合非空时租约零头退出 🟨 判定（双向消除）；v136
+    ///   操作者实证「M 缩容 4→2 继续下载后无租约部分块白屏」：下载中同样
+    ///   存在「有落盘零头但无租约」的块（缩容回收的租约、quota 中止块），
+    ///   集合权威扩到下载中——有租约的部分块仍 🟦（连接循环先判 Active，
+    ///   集合循环只把 ⬜ 提升为 🟨，「部分下载且正在下载只显示 Active」
+    ///   不变）、已完成块不被降级；集合为空时回退投影租约零头口径
     ///   （v129 行为，重启后未收到逐块事件的存量面）；
     /// - 已完成块（🟩）不被部分/空租约降级（暂停快照为前缀同参投影，可能
     ///   与逐块真值错位；下载中领块跳过已完成块，部分租约不落已完成块）；
@@ -303,10 +309,15 @@ impl Task {
             }
         }
         let downloading = self.state == TaskState::Downloading;
-        // v131：非「下载中」且引擎逐块部分真值在位 → 部分块集合权威（与
-        // 🟩 集合口径对称）：收尾投影租约的块内零头是按权重散布的展示值，
-        // 不反映真实分布——集合非空时租约零头退出 🟨 判定
-        let partial_authoritative = !downloading && !self.partial_blocks.is_empty();
+        // v131：引擎逐块部分真值在位 → 部分块集合权威（与 🟩 集合口径对称）：
+        // 收尾投影租约的块内零头是按权重散布的展示值，不反映真实分布——
+        // 集合非空时租约零头退出 🟨 判定。v136（操作者实证「M 缩容 4→2 继续
+        // 下载后无租约部分块白屏」）：集合权威不再限定「非下载中」——下载中
+        // 同样存在有落盘零头但无租约的块（缩容回收的租约、quota 中止块），
+        // 排除下载中会让它们错标 ⬜；下游已保证优先级不破：活跃租约块由
+        // 连接循环先判 Active（🟦 优先于 🟨 不变）、集合循环只把 ⬜ 提升为
+        // 🟨 且不覆盖 🟩。
+        let partial_authoritative = !self.partial_blocks.is_empty();
         for c in &self.connections {
             if c.cap() == 0 {
                 continue; // 待命连接（start=end）不持块
@@ -661,8 +672,9 @@ mod tests {
         assert_eq!(v[2], PieceState::Done);
     }
 
-    /// 下载中口径不变：部分集合不把下载中标黄——有租约的部分块仍 🟦
-    /// （「部分下载且正在下载只显示 Active」，FR-01-106 定稿口径）。
+    /// 下载中口径不变：有租约的部分块仍 🟦（「部分下载且正在下载只显示
+    /// Active」，FR-01-106 定稿口径）——集合权威扩面（v136）只补无租约
+    /// 部分块的 🟨，不改有租约块的 🟦。
     #[test]
     fn pieces_downloading_partial_set_stays_active() {
         let mut t = crate::model::sample_task();
@@ -682,6 +694,70 @@ mod tests {
         assert_eq!(v[0], PieceState::Done);
         assert_eq!(v[1], PieceState::Active, "下载中 🟦 口径不变");
         assert_eq!(v[2], PieceState::Empty);
+    }
+
+    /// 操作者 bug 报告回归（v136，下载中缩容白屏）：4 并发 4 个部分块时
+    /// 暂停（partial_blocks = [0,1,2,3]，按 P 恒 4 个 🟨），M 缩容为 2 并发
+    /// 继续下载——引擎仅 2 个活跃租约（块 0、1 被领走继续传），块 2、3
+    /// 有落盘零头但无租约。旧实现集合权威限定 `!downloading` → 无租约
+    /// 部分块在下载中无判定路径 → ⬜ 白屏。修复后口径：集合权威不限任务
+    /// 状态——有租约的部分块仍 🟦（🟦 优先于 🟨），无租约部分块恢复 🟨，
+    /// 无字节块仍 ⬜。
+    #[test]
+    fn pieces_downloading_unleased_partial_blocks_show_yellow() {
+        let mut t = crate::model::sample_task();
+        t.total = 6_000_000;
+        t.block_size = 1_000_000;
+        t.partial_blocks = vec![0, 1, 2, 3];
+        t.state = TaskState::Downloading;
+        t.probed = true;
+        t.connections = vec![
+            Connection {
+                id: 1,
+                start: 0, // 缩容后 worker 领走块 0 继续传
+                end: 1_000_000,
+                done: 400_000,
+            },
+            Connection {
+                id: 2,
+                start: 1_000_000, // worker 领走块 1（零头 0 也算）
+                end: 2_000_000,
+                done: 0,
+            },
+        ];
+        let v = t.pieces();
+        assert_eq!(v.len(), 6);
+        assert_eq!(v[0], PieceState::Active, "有租约的部分块 0 仍 🟦");
+        assert_eq!(v[1], PieceState::Active, "有租约的块 1 🟦（分配即算）");
+        assert_eq!(v[2], PieceState::Partial, "缩容回收的无租约部分块 2 → 🟨");
+        assert_eq!(v[3], PieceState::Partial, "缩容回收的无租约部分块 3 → 🟨");
+        assert_eq!(v[4], PieceState::Empty, "块 4 无字节");
+        assert_eq!(v[5], PieceState::Empty, "块 5 无字节");
+    }
+
+    /// 同口径防降级护栏：下载中无租约部分块的集合提升只作用于 ⬜——
+    /// 集合真值为已完成的块（🟩）不得被 partial_blocks 误降级为 🟨。
+    #[test]
+    fn pieces_downloading_unleased_partial_not_downgrading_done() {
+        let mut t = crate::model::sample_task();
+        t.total = 5_000_000;
+        t.block_size = 1_000_000;
+        t.done_blocks = vec![2];
+        t.partial_blocks = vec![1, 2, 3];
+        t.state = TaskState::Downloading;
+        t.probed = true;
+        t.connections = vec![Connection {
+            id: 1,
+            start: 0, // 仅块 0 在传；块 1、2、3 无租约
+            end: 1_000_000,
+            done: 100_000,
+        }];
+        let v = t.pieces();
+        assert_eq!(v[0], PieceState::Active);
+        assert_eq!(v[1], PieceState::Partial, "无租约部分块 1 → 🟨");
+        assert_eq!(v[2], PieceState::Done, "🟩 不被集合降级");
+        assert_eq!(v[3], PieceState::Partial, "无租约部分块 3 → 🟨");
+        assert_eq!(v[4], PieceState::Empty);
     }
 
     /// 空集回退（与 🟩 前缀回退对称）：重启后未收到逐块事件（partial_blocks

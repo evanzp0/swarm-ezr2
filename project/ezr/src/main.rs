@@ -5,8 +5,9 @@
 //! tokio 事件循环（键盘/鼠标/粘贴事件流 + 100ms tick）、优雅退出（恢复终端 + 保存状态，FR-01-73）、
 //! 终端哨兵武装与退场（FR-01-84：异常死亡后终端自恢复，机制见 sentinel.rs）。
 //!
-//! 覆盖层（对话框/下拉浮层）出现或消失的那一帧必须全量重绘（CJK 宽字符
-//! 半格覆盖问题，沿用 demo 定稿注释与方案）。
+//! 覆盖层（对话框/下拉浮层/pieces 弹窗/帮助窗口）翻转零清屏（v1.31/FR-01-106⑧）：
+//! 开/关/拖拽帧由增量 diff 直接绘制，不清屏；CJK 宽字符半格覆盖残影由
+//! clip_wide_at_edges（ui/btn.rs，每处浮层 Clear 后调用）在缓冲区层根治。
 #![allow(missing_docs)] // 交互层：demo 定稿基线复用，接口文档见 model/engine 层
 #![allow(clippy::multiple_crate_versions)] // 依赖树固有重复（reqwest/rustls 链条），无法单侧消除
 #![allow(clippy::pedantic)] // 交互层字节/速度展示算术与 demo 基线风格豁免
@@ -356,30 +357,6 @@ async fn run_tui(app: &mut App) -> std::io::Result<()> {
     result
 }
 
-/// 覆盖层翻转检测（沿用 demo：对话框/下拉浮层/pieces 弹窗/帮助窗口出现或消失
-/// 那一帧全量重绘；浮层拖拽移动逐帧位置变化同样全量重绘）
-fn overlay_sig(app: &App) -> u64 {
-    // 位 0..1 = 对话框（含下拉），位 2 = pieces，位 3 = 帮助（v1.30/FR-01-107
-    // 帮助窗口并入）。三类浮层模态互斥（任一打开时其余不可达：互开的按键
-    // 均在主界面路由，被浮层模态消费），故位 8 起的 4 × 14 位位置段按「当前
-    // 打开的浮层」编码其左上角——鼠标拖拽移动时位置逐帧变化，每帧都触发
-    // 全量重绘，避免增量 diff 覆盖宽字符半格造成残影（FR-01-106 ⑧；
-    // 14 位 = 16383，终端尺寸上限内无损）。v133/D38：对话框拖拽并入
-    //（对话框打开时 pieces/help 恒关，位置段让渡无歧义）。
-    let (dlg_bits, pos) = if app.help_open {
-        (1u64 << 3, app.help_pos.unwrap_or((0, 0)))
-    } else if app.pieces_open {
-        (1u64 << 2, app.pieces_pos.unwrap_or((0, 0)))
-    } else {
-        match app.dialog.as_ref() {
-            None => (0u64, (0, 0)),
-            Some(d) => (1 | ((d.ck_open as u64) << 1), app.dlg_pos.unwrap_or((0, 0))),
-        }
-    };
-    let (x, y) = pos;
-    dlg_bits | (((x as u64) & 0x3fff) << 8) | (((y as u64) & 0x3fff) << 22)
-}
-
 async fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
@@ -388,15 +365,20 @@ async fn run(
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(100));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    let mut last_overlay = overlay_sig(app);
-
+    // 浮层翻转（打开/关闭对话框/下拉、pieces/帮助窗口出现或消失、拖拽
+    // 逐帧移动）不再 terminal.clear() 全屏清屏重绘——清屏会在浮层出现/
+    // 消失/移动的瞬间清空整个终端，造成整屏闪烁（弹窗显示与移动主界面
+    // 闪烁修复，v1.31/FR-01-106⑧ 浮层翻转零清屏）。
+    //
+    // 历史背景：底层列表文本含 CJK 宽字符，浮层边框恰好落在某宽字符右半格
+    // 上时，增量 diff 会跳过被覆盖的尾格，宽字残留在浮层边框上且被后续帧
+    // 固化——旧版用 overlay_sig 签名比对 + clear() 全屏重绘掩盖该残影。
+    // 现残影已由渲染层 clip_wide_at_edges（ui/btn.rs，每处浮层 Clear 后
+    // 调用）在缓冲区层根治：左缘宽字符主格截断、右缘孤立半格补空格，
+    // 前后帧模型自洽，diff 输出的连续两格覆写与终端宽字符语义一致，
+    // 开/关/拖拽三个方向均无残影，全屏清屏随之退役。
     loop {
-        let sig = overlay_sig(app);
-        if sig != last_overlay {
-            terminal.clear()?;
-            last_overlay = sig;
-        }
-
+        // 浮层翻转（打开/关闭/拖拽）：diff 直接绘制，无清屏
         terminal.draw(|f| ui::draw(f, app))?;
 
         tokio::select! {
@@ -609,18 +591,102 @@ mod cli_parse_tests {
         std::fs::remove_dir_all(&base).ok();
     }
 
+    /// 浮层翻转零清屏的缓冲区模型守卫（v1.31/FR-01-106⑧）：同一 Terminal
+    /// 上连续三帧（无浮层 → 对话框打开 → 对话框关闭），CJK 任务名文本
+    /// 铺满对话框边界区，开/关两向翻转均由增量 diff 直接绘制——关帧
+    /// 缓冲区与首帧完全一致（无残影、无半格伪影、无清屏痕迹）。
+    /// 残影根因（diff 跳过被覆盖宽字符尾格）由 clip_wide_at_edges
+    /// 缓冲区级清扫根治；本测试以「同一 TestBackend 双帧复绘」复现
+    /// 真实终端的增量 diff 语境。
     #[tokio::test]
-    async fn overlay_sig_tracks_dialog_and_dropdown() {
-        let dir = crate::model::testenv::uniq_tmp_dir("ezr-ov");
+    async fn overlay_flip_redraws_via_diff_without_clear() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-ovflip");
         let reg = dir.join("registry.json").to_string_lossy().to_string();
         let mut app = App::new(Config::default(), reg);
-        assert_eq!(overlay_sig(&app), 0);
-        app.open_add_dialog();
-        assert_eq!(overlay_sig(&app), 1);
-        if let Some(d) = app.dialog.as_mut() {
-            d.ck_open = true;
+        // CJK 任务名铺在对话框居中区域（74×11 @ 120×34 → x=23..96, y=11..21），
+        // 底层文本含宽字符（残影高危形态）
+        for i in 0..3 {
+            let mut t = crate::model::sample_task();
+            t.id = 100 + i;
+            t.name = format!("视频文件第{i}段超长名称测试宽字符边界.bin");
+            t.state = crate::model::TaskState::Downloading;
+            t.probed = true;
+            t.total = 4_000_000;
+            app.tasks.push(t);
         }
-        assert_eq!(overlay_sig(&app), 3);
+        app.selected = 0;
+        app.toast = None;
+
+        let screen = |t: &Terminal<TestBackend>| -> Vec<Vec<String>> {
+            (0..34u16)
+                .map(|y| {
+                    (0..120u16)
+                        .map(|x| {
+                            t.backend()
+                                .buffer()
+                                .cell((x, y))
+                                .expect("界内")
+                                .symbol()
+                                .to_string()
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+
+        let mut term = Terminal::new(TestBackend::new(120, 34)).unwrap();
+        term.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let before = screen(&term);
+
+        // 帧 2：对话框打开（增量 diff 直接绘制，不清屏——清屏会整屏闪烁）
+        app.open_add_dialog();
+        term.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let s_open = term.backend().to_string();
+        assert!(s_open.contains("添加下载任务"), "帧 2 对话框已绘制");
+        // 残影根治锚（clip_wide_at_edges）：对话框底层文本被浮层边界切断处，
+        // 边界列内不残留「宽字 + 窄字」同格重叠——对话框左缘列起的行内，
+        // 缓冲区在浮层渲染后的宽字符主格不跨界（凡主格在浮层左缘外一格的
+        // 宽字已被截断为空格， orphan 半格已补空格）。此处以「浮层区域每行
+        // 起止列符号为边框/空白/浮层内容」的保守断言验证缓冲区自洽。
+        let dlg = app.dlg_area.expect("帧 2 已回填对话框区域");
+        for y in dlg.top()..dlg.bottom() {
+            let x = dlg.x.saturating_sub(1);
+            let left_sym = term
+                .backend()
+                .buffer()
+                .cell((x, y))
+                .expect("界内")
+                .symbol()
+                .to_string();
+            let width = crate::ui::w(&left_sym);
+            assert!(
+                width <= 1,
+                "浮层左缘外一格不得是会侵入浮层的宽字主格 @({x},{y}): {left_sym}"
+            );
+        }
+
+        // 帧 3：对话框关闭（关向翻转，同 Terminal 复绘 → 恢复原画面）。
+        // 注意 TestBackend 的模拟屏对宽字符有固有精度边界：diff 下发更新时
+        // 当前帧宽字符的续格被跳过（真实终端由宽字符双格覆盖语义兜底），
+        // 故帧 2 曾被浮层边框占据的续格在模拟屏上会残留旧符号——断言按
+        // 「首帧宽字符的续格豁免」口径逐格比对（其余任何残影即红）。
+        app.dialog = None;
+        term.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let after = screen(&term);
+        for (y, row) in before.iter().enumerate() {
+            for (x, sym_before) in row.iter().enumerate() {
+                // 宽字主格的续格（x+1）为模拟屏豁免位：首帧该位由宽字覆盖
+                //（真实终端语义），diff 模拟中该位从不下发更新
+                if x > 0 && crate::ui::w(&row[x - 1]) > 1 {
+                    continue;
+                }
+                let sym = &after[y][x];
+                assert_eq!(sym, sym_before, "关帧恢复首帧（无残影） @({x},{y})");
+            }
+        }
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }

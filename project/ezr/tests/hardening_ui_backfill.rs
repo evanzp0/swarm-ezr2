@@ -901,17 +901,18 @@ async fn conns_panel_draws_data_rows() {
     a.tasks.push(t);
     a.selected = 0;
     let rows = row_strings(&render_full(&mut a, 100, 24));
-    // v1.30/FR-01-107 页脚 4→3 行 + 提示行退役：100×24 下并发面板内框
-    // y=16..21，表头 y=16、数据行 y=17 起（连接 1/2 → rows[17]/rows[18]）
+    // v1.31/FR-01-107① 页脚双行改版（3 行 → 4 行）：100×24 右列
+    // [Length(12), Min(6)] 受限空间下 Min 优先——并发面板内框 y=15..18，
+    // 表头 y=15、数据行 y=16 起（连接 1/2 → rows[16]/rows[17]）
     assert!(
-        rows[17].contains("   1"),
+        rows[16].contains("   1"),
         "连接 1 数据行存在（mutant end=start*rows 后无数据行）: {:?}",
-        rows[17]
+        rows[16]
     );
     assert!(
-        rows[18].contains("   2"),
+        rows[17].contains("   2"),
         "连接 2 数据行存在: {:?}",
-        rows[18]
+        rows[17]
     );
     a.shutdown().await;
 }

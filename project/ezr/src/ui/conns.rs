@@ -112,7 +112,11 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     // v1.30：无底部提示行 → 数据行 = 内框高 - 表头 1 行
     let rows = (inner.height as usize).saturating_sub(1);
     let data_rows = rows.max(1);
-    let start = app.conns_scroll.min(n_conns.saturating_sub(1));
+    // v1.31/FR-01-96/109 注记（滚到底闪烁修复第二道防线）：起点钳到
+    // 「最后一个满窗」起点——连接数收缩的过渡帧不产生底部空白行
+    //（顺带消除 len < rows 时的减法恐慌；第一道防线 = 滚轮向下事件内
+    // 按可视行数立即钳制，mouse.rs ScrollDown 臂）
+    let start = app.conns_scroll.min(n_conns.saturating_sub(data_rows));
     let end = (start + data_rows).min(n_conns);
     // 选中行高亮仅本面板聚焦时显示（v1.30/FR-01-108 可见性策略：
     // 非聚焦面板不显示内部选中态，保证视觉焦点唯一）

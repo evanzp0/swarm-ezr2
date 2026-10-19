@@ -188,11 +188,12 @@ async fn engine_conn_ledger_kills() {
         "速度 EMA 已立起（窗口速率经每秒采样）"
     );
     let mid_rows = ui::testfx::row_strings(&ui::testfx::render_full(&mut a, 100, 24));
-    // v1.30/FR-01-107 页脚收敛（4 行 → 3 行）后 100×24 紧凑布局行位整体上移
-    // 一行：并发面板内框 y=16..21，表头 y=16、数据行 y=17..20（提示行退役，
-    // 数据行 = 内框高 - 表头 1 行）。数据行区间任一行含速度数值即达标
-    //（mutant 恒 '-' 时区间内零命中）。
-    let speed_visible = mid_rows[17..=20].iter().any(|r| r.contains("B/s"));
+    // v1.31/FR-01-107① 页脚双行改版（3 行 → 4 行）后 100×24 主区收缩：
+    // 右列 [Length(12), Min(6)] 在受限空间下 Min 优先——并发面板内框
+    // y=15..18，表头 y=15、数据行 y=16..18（提示行退役，数据行 = 内框高
+    // - 表头 1 行）。数据行区间任一行含速度数值即达标（mutant 恒 '-'
+    // 时区间内零命中）。
+    let speed_visible = mid_rows[16..=18].iter().any(|r| r.contains("B/s"));
     assert!(
         speed_visible,
         "下载中并发明细数据行速度列应显数值（mutant 恒 '-'）：{:?}",

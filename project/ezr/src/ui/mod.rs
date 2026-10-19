@@ -222,7 +222,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let outer = Layout::vertical([
         Constraint::Length(5), // 顶部带：头部仪表面板通栏全宽 5 行（FR-01-94）
         Constraint::Min(8),    // 主区：任务列表 | 任务详情 + 并发连接面板
-        Constraint::Length(3), // 页脚：单行 H 帮助 · Q 退出 + toast（v1.30/FR-01-107）
+        Constraint::Length(4), // 页脚：双行 = 常用命令图例 chips + toast 独占行（v1.31/FR-01-107①）
     ])
     .split(area);
 
@@ -280,7 +280,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     // pieces 分块弹窗（覆盖层；与对话框互斥——按键层已保证，FR-01-106 ②；
-    // 打开/关闭/拖拽帧全量重绘由 main.rs overlay_sig 保证）
+    // 浮层翻转零清屏 v1.31/FR-01-106⑧：开/关/拖拽帧由增量 diff 直接绘制，
+    // 残影由 clip_wide_at_edges 缓冲区级清扫根治）
     if app.pieces_open {
         draw_pieces(f, app, area);
     }
