@@ -49,13 +49,14 @@ use crate::app::{
     chunk_size_label, App, DialogKind, FailKind, Panel, PieceState, SbKey, Task, TaskState,
     CHECKSUM_ALGOS, FILTERS, ITEM_HEIGHT, MAX_DOWNLOAD_SLOTS,
 };
-use crate::scrollbar;
+use crate::scrollable_panel::{ScrollablePanel, ScrollbarMode};
 
 // ---------------------------------------------------------------------------
 // 调色板（语义状态色；下载中=淡蓝，暂停=白，等待=黄，失败=红，完成=绿，做种=粉）
 // ---------------------------------------------------------------------------
 
-const BORDER: Color = Color::Rgb(56, 78, 86);
+/// 面板默认边框色（未聚焦；聚焦 = FOCUS_BORDER）——ScrollablePanel 滑块默认色
+pub(crate) const BORDER: Color = Color::Rgb(56, 78, 86);
 const FG: Color = Color::Rgb(198, 208, 212);
 /// 两级弱化文字：标签、占位符、次级提示（滚动条箭头/轨道同用，§4.1.3）
 pub(crate) const DIM: Color = Color::Rgb(126, 141, 147);
@@ -109,38 +110,11 @@ fn panel_title_style(focused: bool) -> Style {
     }
 }
 
-/// 通用滚动条渲染入口（垂直 ↑║↓ / 水平 ←═→，全系统唯一实现见
-/// `scrollbar.rs`）：几何（滑块吸附/取整）、字形、命中测试全部由组件提供，
-/// 各 panel 只是回填 `total/page/pos` 与面板矩形——保证不同 panel 获得完全
-/// 相同的行为（滑块拖拽 / 箭头点击·按住连发 / 轨道翻页 / 方向键，§4.1.3）。
-///
-/// * `panel`：面板完整区域（含边框）——垂直画右边框列、水平画下边框行；
-/// * `total`/`page`：内容总单位数 / 可视单位数（total <= page 时不绘制）；
-/// * `position`：滚动偏移（组件内部钳制到 0..=total-page）；
-/// * `thumb`：滑块颜色（跟随便属面板边框色：聚焦面板/弹窗均为高亮绿）；
-/// * `pressed`：按压中的箭头（App 层按压/余辉态，None = 常规）——按下/
-///   按住 = 前景色换成滑块同款（加粗、无背景色，§4.1.3）。
-///
-/// 返回本次渲染的滚动条几何（供 App 层命中测试；调用方回填到对应字段）。
-fn draw_scrollbar(
-    f: &mut Frame,
-    panel: Rect,
-    vertical: bool,
-    total: usize,
-    page: usize,
-    position: usize,
-    thumb: Color,
-    pressed: Option<scrollbar::Arrow>,
-) -> scrollbar::Bar {
-    let bar = if vertical {
-        scrollbar::Bar::vertical(panel, total, page, position)
-    } else {
-        scrollbar::Bar::horizontal(panel, total, page, position)
-    };
-    scrollbar::render(f, &bar, thumb, pressed);
-    bar
-}
-
+// 通用滚动条渲染入口已组件化为 [`ScrollablePanel`]（面板边框 + 滚动条
+// 一体化，ScrollbarMode::None/Vertical/Horizontal/Both 四态；滚动条引擎 =
+// scrollbar.rs 唯一实现，§4.1.3）——五个滚动条实例（任务列表 Vertical /
+// 并发连接 Both / pieces 弹窗 Vertical / 帮助弹窗 Vertical）与任务详情
+// （None 演示）全部经由组件渲染，App 命中几何由 render_bars 统一回填。
 fn state_color(s: TaskState) -> Color {
     match s {
         TaskState::Queued => YELLOW,
@@ -790,8 +764,11 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             ))
             .alignment(Alignment::Right),
         );
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    // 面板框架 = ScrollablePanel（Vertical：右边框列 ↑│║│↓，§4.1.3）
+    let mut sb = ScrollablePanel::new(ScrollbarMode::Vertical);
+    sb.thumb(if focused { FOCUS_BORDER } else { BORDER })
+        .pressed_v(app.sb_arrow_pressed(SbKey::List));
+    let inner = sb.render_block(f, area, block);
 
     let idxs = app.filtered();
     // 可见任务块数：完整块 = 3 行内容 + 1 行块间空行（ITEM_HEIGHT = 4）；
@@ -847,24 +824,11 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         render_task(f, t, row_area, ti == app.selected, spinner, qpos[ti]);
     }
 
-    // 通用滚动条（任务数超出一屏时；画在面板右边框列，↑↓ 箭头 + │轨道 + ║滑块）。
-    // 几何回填给 App：滑块拖拽 / 箭头点击·按住连发 / 轨道翻页全组件化（§4.1.3）
-    if idxs.len() > rows {
-        let thumb = if focused { FOCUS_BORDER } else { BORDER };
-        let bar = draw_scrollbar(
-            f,
-            area,
-            true,
-            idxs.len(),
-            rows,
-            app.scroll,
-            thumb,
-            app.sb_arrow_pressed(SbKey::List),
-        );
-        app.list_sb = Some(bar);
-    } else {
-        app.list_sb = None;
-    }
+    // 通用滚动条（任务数超出一屏才绘制——显示条件在组件内收口）；画在面板
+    // 右边框列，↑↓ 箭头 + │轨道 + ║滑块。几何回填给 App：滑块拖拽 / 箭头
+    // 点击·按住连发 / 轨道翻页全组件化（§4.1.3）
+    sb.vertical(idxs.len(), rows, app.scroll);
+    app.list_sb = sb.render_bars(f, area).vertical;
 
     app.visible_rows = max_items;
     app.list_area = Some(inner);
@@ -877,8 +841,10 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(panel_border_style(focused))
         .title(Span::styled(" 任务详情 ", panel_title_style(focused)));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    // 面板框架 = ScrollablePanel（ScrollbarMode::None：纯边框、无滚动条——
+    // 全部面板框架统一走组件；None 模式下 render_bars 恒返回 None）
+    let sb = ScrollablePanel::new(ScrollbarMode::None);
+    let inner = sb.render_block(f, area, block);
     // 详情面板内框（鼠标点击聚焦本面板；需求修订-1）
     app.detail_area = Some(inner);
 
@@ -1221,8 +1187,13 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
             ))
             .alignment(Alignment::Right),
         );
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    // 面板框架 = ScrollablePanel（Both：唯一同时拥有垂直 + 水平滚动条的
+    // 实例，§4.1.3）
+    let mut sb = ScrollablePanel::new(ScrollbarMode::Both);
+    sb.thumb(if focused { FOCUS_BORDER } else { BORDER })
+        .pressed_v(app.sb_arrow_pressed(SbKey::ConnsV))
+        .pressed_h(app.sb_arrow_pressed(SbKey::ConnsH));
+    let inner = sb.render_block(f, area, block);
     app.conns_area = Some(inner);
 
     // 面板结构：表头 1 行 + 数据行（提示行已删除，全部空间让给数据）
@@ -1384,35 +1355,14 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     app.visible_conns_rows = data_rows;
     f.render_widget(Paragraph::new(lines).scroll((0, hscroll)), inner);
 
-    let thumb = if focused { FOCUS_BORDER } else { BORDER };
-    // 通用滚动条·垂直（连接数超出一屏时；右边框列 ↑│║│↓）
-    if conn_total > data_rows {
-        let bar = draw_scrollbar(
-            f,
-            area,
-            true,
-            conn_total,
-            data_rows,
-            app.conns_scroll,
-            thumb,
-            app.sb_arrow_pressed(SbKey::ConnsV),
-        );
-        app.conns_v_sb = Some(bar);
-    }
-    // 通用滚动条·水平（m3 新增：BT 七列内容宽超出内框时；下边框行 ←─═══─→）
-    if content_w > inner.width as usize {
-        let bar = draw_scrollbar(
-            f,
-            area,
-            false,
-            content_w,
-            inner.width as usize,
-            app.conns_hscroll,
-            thumb,
-            app.sb_arrow_pressed(SbKey::ConnsH),
-        );
-        app.conns_h_sb = Some(bar);
-    }
+    // 通用滚动条·垂直（连接数超出一屏时；右边框列 ↑│║│↓）+ 水平（m3：
+    // BT 七列内容宽超出内框时；下边框行 ←─═══─→）——Both 模式一组件双轴，
+    // 显示条件（total>page）在组件内收口，App 字段恒与画面一致
+    sb.vertical(conn_total, data_rows, app.conns_scroll)
+        .horizontal(content_w, inner.width as usize, app.conns_hscroll);
+    let bars = sb.render_bars(f, area);
+    app.conns_v_sb = bars.vertical;
+    app.conns_h_sb = bars.horizontal;
 }
 
 fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
@@ -2145,8 +2095,10 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
         // 与底层面板降级暗边框形成对比）
         .border_style(panel_border_style(true))
         .title(Span::styled(" 分块状态 ", panel_title_style(true)));
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    // 弹窗框架 = ScrollablePanel（Vertical：右边框列 ↑│║│↓）
+    let mut sb = ScrollablePanel::new(ScrollbarMode::Vertical);
+    sb.thumb(FOCUS_BORDER).pressed_v(app.sb_arrow_pressed(SbKey::Pieces));
+    let inner = sb.render_block(f, rect, block);
     app.pieces_area = Some(rect);
 
     let cols = (inner.width as usize / 2).max(1); // 每块占 2 列
@@ -2238,24 +2190,12 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
         rows[3],
     );
 
-    // 通用滚动条·垂直（块数超出一屏时；↑↓ 箭头 + │轨道 + ║滑块，画在弹窗
-    // 右边框列，不与网格内容重叠）。几何回填给 App：滑块拖拽 = 滚动网格
-    // （修复：此前拖拽按窗口移动处理）、箭头点击/按住连发、轨道翻页（§4.1.3）
-    if total_rows > grid_h {
-        let bar = draw_scrollbar(
-            f,
-            rect,
-            true,
-            total_rows,
-            grid_h,
-            start_row,
-            FOCUS_BORDER,
-            app.sb_arrow_pressed(SbKey::Pieces),
-        );
-        app.pieces_sb = Some(bar);
-    } else {
-        app.pieces_sb = None;
-    }
+    // 通用滚动条·垂直（块数超出一屏才绘制——显示条件在组件内收口；
+    // ↑↓ 箭头 + │轨道 + ║滑块，画在弹窗右边框列，不与网格内容重叠）。
+    // 几何回填给 App：滑块拖拽 = 滚动网格（修复：此前拖拽按窗口移动处理）、
+    // 箭头点击/按住连发、轨道翻页（§4.1.3）
+    sb.vertical(total_rows, grid_h, start_row);
+    app.pieces_sb = sb.render_bars(f, rect).vertical;
     app.pieces_max_scroll = total_rows.saturating_sub(grid_h);
 }
 
@@ -2373,8 +2313,10 @@ fn draw_help(f: &mut Frame, app: &mut App, area: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(panel_border_style(true))
         .title(Span::styled(" 帮助 ", panel_title_style(true)));
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    // 弹窗框架 = ScrollablePanel（Vertical：右边框列 ↑│║│↓）
+    let mut sb = ScrollablePanel::new(ScrollbarMode::Vertical);
+    sb.thumb(FOCUS_BORDER).pressed_v(app.sb_arrow_pressed(SbKey::Help));
+    let inner = sb.render_block(f, rect, block);
     app.help_area = Some(rect);
 
     let lines = help_lines();
@@ -2385,23 +2327,11 @@ fn draw_help(f: &mut Frame, app: &mut App, area: Rect) {
     let shown: Vec<Line> = lines.iter().skip(start).take(view_h).cloned().collect();
     f.render_widget(Paragraph::new(shown), inner);
 
-    // 通用滚动条·垂直（内容超窗时；↑↓ 箭头 + │轨道 + ║滑块；滑块拖拽 =
-    // 滚动内容、箭头点击/按住连发、轨道翻页——与主界面面板同一组件同一行为）
-    if lines.len() > view_h && view_h > 0 {
-        let bar = draw_scrollbar(
-            f,
-            rect,
-            true,
-            lines.len(),
-            view_h,
-            start,
-            FOCUS_BORDER,
-            app.sb_arrow_pressed(SbKey::Help),
-        );
-        app.help_sb = Some(bar);
-    } else {
-        app.help_sb = None;
-    }
+    // 通用滚动条·垂直（内容超窗才绘制——显示条件在组件内收口；↑↓ 箭头 +
+    // │轨道 + ║滑块；滑块拖拽 = 滚动内容、箭头点击/按住连发、轨道翻页——
+    // 与主界面面板同一组件同一行为）
+    sb.vertical(lines.len(), view_h, start);
+    app.help_sb = sb.render_bars(f, rect).vertical;
     app.help_max_scroll = lines.len().saturating_sub(view_h.max(1));
 }
 
