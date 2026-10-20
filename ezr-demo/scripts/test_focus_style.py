@@ -5,13 +5,14 @@
 
   F   聚焦边框：列表绿框/详情暗框 → Tab 高亮跟随；对话框打开后底层
       三面板全部暗框（bug 修复）；Esc 恢复；页签高亮跟随列表焦点
-  G   lazygit 式滚动条：列表 / pieces 弹窗（边框绿色高亮 + ▲▼ 箭头 +
-      █ 滑块，与主面板高亮色统一）/ 窄终端并发面板
+  G   通用滚动条（m3）：列表 / pieces 弹窗（边框绿色高亮 + ↑↓ 箭头 +
+      ║ 双线滑块在 │ 单线轨道上滑动，与主面板高亮色统一）/ 窄终端并发面板
   H   对话框鼠标拖拽（位移生效、不误关）+ 点击判定保留（按下+松开）
   I   B 键语义迁移（HTTP 拒绝 toast）+ T 键页签切换（原 Tab 语义）
   J   弹窗高亮色统一（删除框/下拉框绿框）+ 列表滚动解锁（滚轮自由
       滚动不被拉回）+ 键盘选择视口跟随
-  K   帮助窗口 / 点击聚焦 / 页签 [ ] 与点击切换 / pieces 图例 / 单行页脚
+  K   帮助窗口 / 点击聚焦 / 页签 [ ] 与点击切换 / pieces 图例 / 单行页脚 /
+      模态窗外点击无操作（帮助 + pieces 守卫）
   L   需求修订：并发面板提示行删除；主界面退出键 Q/q（Esc 不退出）
 
 用法: python3 scripts/test_focus_style.py [二进制路径] [场景集合 fghijkl]
@@ -137,14 +138,14 @@ def bottom_border_fg(screen, title: str):
 
 
 def scrollbar_chars(screen, x_col):
-    """收集某真实列全部字符（滚动条列应含 ▲▼█│）。"""
+    """收集某真实列全部字符（滚动条列应含 ↑↓║│）。"""
     return "".join(screen.buffer[y][x_col].data for y in range(screen.lines))
 
 
 def thumb_top(screen, x_col):
-    """滚动条列中首个 █ 滑块行（0 基）；无则 None（滑块位置探针）。"""
+    """滚动条列中首个 ║ 滑块行（0 基）；无则 None（滑块位置探针）。"""
     for y in range(screen.lines):
-        if screen.buffer[y][x_col].data == "█":
+        if screen.buffer[y][x_col].data == "║":
             return y
     return None
 
@@ -287,19 +288,19 @@ def scenario_focus():
 # ---------------------------------------------------------------------------
 
 def scenario_scrollbars():
-    print("\n== G：lazygit 式滚动条（▲▼ 箭头 + │ 轨道 + █ 滑块）==")
+    print("\n== G：通用滚动条（↑↓ 箭头 + │ 单线轨道 + ║ 双线滑块）==")
 
-    # 列表滚动条：120x44 下 10 任务 > 9 可视块 → 右边框列出现 ▲/▼/█
+    # 列表滚动条：120x44 下 10 任务 > 9 可视块 → 右边框列出现 ↑/↓/║
     _, screen = V.run(120, 44, 5.0, key_delay_frac=0.5)
     lx, _ = find_border_col(screen, "下载任务")
     V.check("G1a 任务列表右边框列定位", lx is not None, str(lx))
     if lx is not None:
         col = scrollbar_chars(screen, lx)
-        V.check("G1b 列表滚动条含 ▲ 上箭头", "▲" in col, repr(col[:50]))
-        V.check("G1c 列表滚动条含 ▼ 下箭头", "▼" in col, repr(col[:50]))
-        V.check("G1d 列表滚动条含 █ 滑块", "█" in col, repr(col[:50]))
+        V.check("G1b 列表滚动条含 ↑ 上箭头", "↑" in col, repr(col[:50]))
+        V.check("G1c 列表滚动条含 ↓ 下箭头", "↓" in col, repr(col[:50]))
+        V.check("G1d 列表滚动条含 ║ 滑块", "║" in col, repr(col[:50]))
 
-    # pieces 弹窗：边框绿色高亮（与主面板高亮色统一）+ 滚动条 ▲▼█
+    # pieces 弹窗：边框绿色高亮（与主面板高亮色统一）+ 滚动条 ↑↓║
     _, screen2 = V.run(120, 44, 5.0, keys=["p"], key_delay_frac=0.4)
     text2 = "\n".join(screen2.display)
     V.check("G2a pieces 弹窗打开（分块状态）", "分块状态" in text2)
@@ -309,19 +310,20 @@ def scenario_scrollbars():
     pxc, _ = find_border_col(screen2, "分块状态")
     if pxc is not None:
         col2 = scrollbar_chars(screen2, pxc)
-        V.check("G2c pieces 弹窗滚动条含 ▲▼ 箭头（bug 修复）",
-                "▲" in col2 and "▼" in col2, repr(col2[:50]))
-        V.check("G2d pieces 弹窗滚动条含 █ 滑块", "█" in col2, repr(col2[:50]))
+        V.check("G2c pieces 弹窗滚动条含 ↑↓ 箭头（bug 修复）",
+                "↑" in col2 and "↓" in col2, repr(col2[:50]))
+        V.check("G2d pieces 弹窗滚动条含 ║ 滑块", "║" in col2, repr(col2[:50]))
 
-    # 并发面板滚动条：窄终端 100x30 → 可视行 < 12（sintel BT 12 条）触发
-    _, screen3 = V.run(100, 30, 6.0, keys=["end", "tab", "tab"], key_delay_frac=0.3)
+    # 并发面板滚动条：窄终端 100x34 → 可视行 10 < 12（sintel BT 12 条）触发
+    # （组件契约：面板轴向 ≥ 10 才绘制；100x30 时面板高 9 低于下限，属正常退化）
+    _, screen3 = V.run(100, 34, 6.0, keys=["end", "tab", "tab"], key_delay_frac=0.3)
     cx3, _ = find_border_col(screen3, "并发连接")
     if cx3 is not None:
         col3 = scrollbar_chars(screen3, cx3)
-        V.check("G3 窄终端并发面板滚动条出现（12 条 > 可视行，▲▼）",
-                "▲" in col3 and "▼" in col3, repr(col3[:40]))
+        V.check("G3 窄终端并发面板滚动条出现（12 条 > 可视行，↑↓）",
+                "↑" in col3 and "↓" in col3, repr(col3[:40]))
     else:
-        V.check("G3 窄终端并发面板滚动条出现（12 条 > 可视行，▲▼）", False, "panel not found")
+        V.check("G3 窄终端并发面板滚动条出现（12 条 > 可视行，↑↓）", False, "panel not found")
 
 
 # ---------------------------------------------------------------------------
@@ -544,6 +546,23 @@ def scenario_k():
     t11 = "\n".join(s11.display)
     V.check("K11 帮助内容可滚动（End 后末行提示可见）",
             "滚动本页" in t11, t11[-400:] if len(t11) > 400 else "")
+
+    # K12/K13 模态统一口径：浮层打开时点击窗口外部 = 无任何操作
+    #（帮助窗口 70x24 / pieces 64x21 在 120x44 下均远离左上角 (3,3)）
+    def click_outside_seq():
+        return mouse(3, 3, True) + mouse(3, 3, False)
+
+    orig_kb = V.key_bytes
+    V.key_bytes = lambda k: click_outside_seq() if k == "mout:seq" else orig_kb(k)
+    _, s12 = V.run(120, 44, 5.0, keys=["h", "mout:seq"], key_delay_frac=0.4)
+    t12 = "\n".join(s12.display)
+    V.check("K12 帮助窗口打开时点击外部 = 无任何操作（窗口仍开）",
+            "【全局】" in t12 and "退出程序" in t12, t12[:120])
+    _, s13 = V.run(120, 44, 5.0, keys=["p", "mout:seq"], key_delay_frac=0.4)
+    t13 = "\n".join(s13.display)
+    V.check("K13 pieces 弹窗打开时点击外部 = 无任何操作（弹窗仍开）",
+            "已下载" in t13 and "正在下载" in t13, t13[:120])
+    V.key_bytes = orig_kb
 
 
 # ---------------------------------------------------------------------------

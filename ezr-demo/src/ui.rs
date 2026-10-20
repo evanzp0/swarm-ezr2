@@ -18,13 +18,16 @@
 //! ——面积首尾相接、无断列、无间隔、无盲文点阵。
 //! 每个任务条目 3 行：标题行(名称+协议/状态徽标+百分比)、整体进度条(不分块)、统计行。
 //! 协议徽标 [HTTP/HTTPS/BT] 统一黄色；详情页分块以文字显示 x/y（已完成/总块数）与块大小 N/块。
-//! pieces 分块弹窗（P）支持鼠标左键拖拽移动（按住弹窗内任意位置拖动）。
+//! pieces 分块弹窗（P）支持鼠标左键拖拽移动（按住弹窗内空白处拖动；
+//! 右缘滚动条上的拖拽 = 滚动网格内容，与主界面面板同一通用滚动条组件）。
 //! 分块策略：块大小按协议写死（HTTP 1 MB / BT 256 KB），块数与并发数解耦。
-//! 并发连接面板：BT 任务列序 = 对端 IP(掩码)/下载速度/累计下载/上传速度/累计上传，
-//! HTTP 任务列序 = 序号/下载速度/累计下载（无上传两列）；BT 首列对端 IP 以
+//! 并发连接面板：BT 任务列序 = 对端 IP(掩码)/下载速度/累计下载/上传速度/
+//! 累计上传/客户端/协议(TCP|uTP)（m3 新增 客户端/协议 两列置于末尾，内容超宽时底部
+//! 出现通用横向滚动条 ←═→，←/→ 键横向滚动）；HTTP 任务列序 = 序号/下载速度/
+//! 累计下载（无上传两列）；BT 首列对端 IP 以
 //! 「IPv4 首段.*.末端（如 192.*.100）/ IPv6 首段:*:末端（如 2001:*:7334）」掩码显示；
-//! 聚焦本面板后 ↑/↓ 选中行高亮（lazygit 式统一列表选择），B 断开选中连接
-//! （底部断开提示仅 BT 任务显示；非聚焦时提示 Tab 聚焦口径）。
+//! 客户端 = 对端客户端两字母缩写（QB/TR/LT/UT/DE/AR/RT/TX/AZ/XL 演示池）。
+//! 聚焦本面板后 ↑/↓ 选中行高亮（lazygit 式统一列表选择），B 断开选中连接。
 //! 累计均为当前任务本次开始下载后的累计量（重新排队/重试时清零）；
 //! 仅「下载中」与「做种中」状态显示并发明细，其余状态（等待中/已暂停/校验中/
 //! 后期处理中/已失败/已完成）明细为空、活跃 0/0。
@@ -43,9 +46,10 @@ use ratatui::{
 };
 
 use crate::app::{
-    chunk_size_label, App, DialogKind, FailKind, Panel, PieceState, Task, TaskState,
+    chunk_size_label, App, DialogKind, FailKind, Panel, PieceState, SbKey, Task, TaskState,
     CHECKSUM_ALGOS, FILTERS, ITEM_HEIGHT, MAX_DOWNLOAD_SLOTS,
 };
+use crate::scrollbar;
 
 // ---------------------------------------------------------------------------
 // 调色板（语义状态色；下载中=淡蓝，暂停=白，等待=黄，失败=红，完成=绿，做种=粉）
@@ -53,10 +57,13 @@ use crate::app::{
 
 const BORDER: Color = Color::Rgb(56, 78, 86);
 const FG: Color = Color::Rgb(198, 208, 212);
-const DIM: Color = Color::Rgb(126, 141, 147);
-const DIM2: Color = Color::Rgb(88, 102, 108);
+/// 两级弱化文字：标签、占位符、次级提示（滚动条箭头/轨道同用，§4.1.3）
+pub(crate) const DIM: Color = Color::Rgb(126, 141, 147);
+pub(crate) const DIM2: Color = Color::Rgb(88, 102, 108);
 const SEL_BG: Color = Color::Rgb(22, 42, 48);
-const ACCENT: Color = Color::Cyan;
+/// 强调色（页脚命令键、对话框按钮共用，§4.1.3；滚动条箭头按压高亮
+/// 不再用 ACCENT——改用滑块同款前景色，见 scrollbar::render）
+pub(crate) const ACCENT: Color = Color::Cyan;
 const GREEN: Color = Color::Green;
 const YELLOW: Color = Color::Rgb(228, 178, 62);
 const RED: Color = Color::Rgb(226, 92, 84);
@@ -102,61 +109,36 @@ fn panel_title_style(focused: bool) -> Style {
     }
 }
 
-/// lazygit 式滚动条（右侧边框列：▲/▼ 上下箭头 + │ 轨道 + █ 滑块）。
+/// 通用滚动条渲染入口（垂直 ↑║↓ / 水平 ←═→，全系统唯一实现见
+/// `scrollbar.rs`）：几何（滑块吸附/取整）、字形、命中测试全部由组件提供，
+/// 各 panel 只是回填 `total/page/pos` 与面板矩形——保证不同 panel 获得完全
+/// 相同的行为（滑块拖拽 / 箭头点击·按住连发 / 轨道翻页 / 方向键，§4.1.3）。
 ///
-/// * `panel`：面板完整区域（含边框）——滚动条画在右边框列、上下角之间的行；
-/// * `total`/`page`：内容总项数 / 可视项数（total <= page 时不绘制）；
-/// * `position`：滚动偏移（内部钳制到 0..=total-page）；
-/// * `thumb`：滑块颜色（跟随便属面板边框色：聚焦面板/弹窗均为高亮绿）。
+/// * `panel`：面板完整区域（含边框）——垂直画右边框列、水平画下边框行；
+/// * `total`/`page`：内容总单位数 / 可视单位数（total <= page 时不绘制）；
+/// * `position`：滚动偏移（组件内部钳制到 0..=total-page）；
+/// * `thumb`：滑块颜色（跟随便属面板边框色：聚焦面板/弹窗均为高亮绿）；
+/// * `pressed`：按压中的箭头（App 层按压/余辉态，None = 常规）——按下/
+///   按住 = 前景色换成滑块同款（加粗、无背景色，§4.1.3）。
 ///
-/// 滑块位置口径同 lazygit gocui scrollbar.go：顶/底端吸附，中间按比例取整、
-/// 末页前不吸底（ceil 保证下滑即移动，-1 预留行程）。
-fn lazy_scrollbar(f: &mut Frame, panel: Rect, total: usize, position: usize, page: usize, thumb: Color) {
-    if page == 0 || total <= page || panel.height < 5 || panel.width == 0 {
-        return;
-    }
-    let col = panel.x + panel.width - 1; // 右边框列
-    let top = panel.y + 1; // 上角之下
-    let bottom = panel.y + panel.height - 1; // 下角（不含）
-    let h = (bottom.saturating_sub(top)) as usize; // 可绘行数（▲+轨道+▼）
-    if h < 3 {
-        return;
-    }
-    let track = h - 2; // 轨道行数（扣除上下箭头）
-    let thumb_h = ((((page as f64) / (total as f64)) * track as f64) as usize).clamp(1, track);
-    let max_pos = total - page;
-    let position = position.min(max_pos);
-    let thumb_y = if position >= max_pos {
-        track - thumb_h
+/// 返回本次渲染的滚动条几何（供 App 层命中测试；调用方回填到对应字段）。
+fn draw_scrollbar(
+    f: &mut Frame,
+    panel: Rect,
+    vertical: bool,
+    total: usize,
+    page: usize,
+    position: usize,
+    thumb: Color,
+    pressed: Option<scrollbar::Arrow>,
+) -> scrollbar::Bar {
+    let bar = if vertical {
+        scrollbar::Bar::vertical(panel, total, page, position)
     } else {
-        (((position as f64 / max_pos as f64)
-            * (track - thumb_h - 1) as f64)
-            .ceil()) as usize
-    }
-    .min(track.saturating_sub(thumb_h));
-    // 字形全部取格内居中（▲ │ █ ▼ 同列垂直对齐）：滑块用全块 █ 而非
-    // 左对齐的半块 ▐——半块贴左缘会与居中的轨道/箭头错位（对齐修复）
-    let arrow_style = Style::default().fg(DIM);
-    let track_style = Style::default().fg(DIM2);
-    let thumb_style = Style::default().fg(thumb).add_modifier(Modifier::BOLD);
-    for (i, y) in (top..bottom).enumerate() {
-        let (sym, style) = if i == 0 {
-            ("▲", arrow_style)
-        } else if i == h - 1 {
-            ("▼", arrow_style)
-        } else {
-            let t = i - 1; // 轨道行下标 0..track
-            if t >= thumb_y && t < thumb_y + thumb_h {
-                ("█", thumb_style)
-            } else {
-                ("│", track_style)
-            }
-        };
-        if let Some(cell) = f.buffer_mut().cell_mut((col, y)) {
-            cell.set_symbol(sym);
-            cell.set_style(style);
-        }
-    }
+        scrollbar::Bar::horizontal(panel, total, page, position)
+    };
+    scrollbar::render(f, &bar, thumb, pressed);
+    bar
 }
 
 fn state_color(s: TaskState) -> Color {
@@ -832,6 +814,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         );
         app.visible_rows = 0;
         app.list_area = Some(inner);
+        app.list_sb = None; // 空态无滚动条（命中几何同步清空）
         return;
     }
 
@@ -864,10 +847,23 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         render_task(f, t, row_area, ti == app.selected, spinner, qpos[ti]);
     }
 
-    // lazygit 式滚动条（任务数超出一屏时；画在面板右边框列）
+    // 通用滚动条（任务数超出一屏时；画在面板右边框列，↑↓ 箭头 + │轨道 + ║滑块）。
+    // 几何回填给 App：滑块拖拽 / 箭头点击·按住连发 / 轨道翻页全组件化（§4.1.3）
     if idxs.len() > rows {
         let thumb = if focused { FOCUS_BORDER } else { BORDER };
-        lazy_scrollbar(f, area, idxs.len(), app.scroll, rows, thumb);
+        let bar = draw_scrollbar(
+            f,
+            area,
+            true,
+            idxs.len(),
+            rows,
+            app.scroll,
+            thumb,
+            app.sb_arrow_pressed(SbKey::List),
+        );
+        app.list_sb = Some(bar);
+    } else {
+        app.list_sb = None;
     }
 
     app.visible_rows = max_items;
@@ -1172,16 +1168,23 @@ fn draw_chart(f: &mut Frame, app: &App, area: Rect) {
 }
 
 /// 并发连接面板（任务详情下方）：每个连接一行——
-/// BT 任务列序 = 对端 IP(掩码)/下载速度/累计下载/上传速度/累计上传，按连接建立顺序；
+/// BT 任务列序 = 对端 IP(掩码)/下载速度/累计下载/上传速度/累计上传/客户端/协议
+/// （m3 新增 客户端/协议 两列置于末尾；宽度超内框 → 底部横向滚动条 ←═→，←/→ 键与
+/// 滚轮横向滚动），按连接建立顺序；
 /// HTTP 任务列序 = 序号/下载速度/累计下载（无上传两列），按序号（1 基）升序。
 /// 对端 IP 掩码：IPv4「首段.*.末端」（如 192.*.100）、IPv6「首段:*:末端」（如 2001:*:7334）。
+/// 客户端 = 对端客户端两字母缩写（QB=qBittorrent / TR=Transmission / LT=libtorrent …），
+/// 协议 = 传输协议 TCP / uTP（BT 专用列，演示数据确定性生成）。
 /// 累计上传/下载均为当前任务本次开始下载后的累计量（重试/重新排队开新一次下载时清零）；
 /// 仅「下载中」与「做种中」状态的任务有明细，其余状态明细为空、活跃 0/0
 /// （面板为空时滚轮穿透滚任务列表，Ctrl+↑↓/Ctrl+B 给出状态提示 toast）。
-/// Ctrl+↑/↓ 选中行高亮（跟随滚动），Ctrl+B 断开选中连接（提示行仅 BT
-/// 任务显示断开快捷键）。
-/// 连接数超出面板高度时滚轮/Ctrl+↑↓ 滚动（指针悬停于本面板时滚轮滚动这里而非任务列表）。
+/// ↑/↓ 选中行高亮（跟随滚动），B 断开选中连接。
+/// 连接数超出面板高度时纵向滚动（指针悬停于本面板时滚轮滚动这里而非任务列表）。
 fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
+    // 通用滚动条命中几何与横向滚动上限：先按空面板清底，有明细时再回填
+    app.conns_v_sb = None;
+    app.conns_h_sb = None;
+    app.conns_max_hscroll = 0;
     // 修订-3：标题仅展示活跃并发数（原「活跃 x/y」中的上限 y 已移除）
     let (is_bt, _total_n, active, empty) = match app.sel_task() {
         Some(t) => {
@@ -1236,6 +1239,7 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         );
         return;
     };
+    let conn_total = t.connections.len(); // 预提取（后续写回 app 需先结束 t 借用）
     if empty {
         app.visible_conns_rows = 0;
         // 明细为空：面板不接收滚轮（指针悬停时滚轮滚任务列表）
@@ -1248,10 +1252,21 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
+    // 并发表列宽（显示列，单空格分隔）——表头/数据/内容总宽共用同一份定义，
+    // 保证横向滚动上限与实际渲染宽度永远一致：
+    // BT   = IP(11) 下载速度(8) 累计下载(8) 上传速度(8) 累计上传(8) 客户端(6) 协议(4)
+    // HTTP = 序号(4) 下载速度(8) 累计下载(8)
+    let colw: Vec<usize> = if is_bt {
+        vec![11, 8, 8, 8, 8, 6, 4]
+    } else {
+        vec![4, 8, 8]
+    };
+    let content_w = colw.iter().sum::<usize>() + colw.len().saturating_sub(1);
+
     let dim = |s: String, wd: usize| Span::styled(pad_left(&s, wd), Style::default().fg(DIM));
-    // 表头（列宽：BT 首列 IP 11 / HTTP 序号 4 · 数据列各 8，单空格分隔；HTTP 无上传两列）
+    // 表头（m3：BT 新增 客户端/协议 两列；IP 掩码列宽 11：IPv4「192.*.100」
+    // 最长 9、IPv6「2001:*:7334」最长 11；客户端列宽 6 容纳 CJK 表头）
     let head = if is_bt {
-        // IP 掩码列宽 11：IPv4「192.*.100」最长 9、IPv6「2001:*:7334」最长 11
         vec![
             Span::styled(pad_right("IP", 11), Style::default().fg(DIM)),
             Span::raw(" "),
@@ -1262,6 +1277,10 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
             dim("上传速度".to_string(), 8),
             Span::raw(" "),
             dim("累计上传".to_string(), 8),
+            Span::raw(" "),
+            dim("客户端".to_string(), 6),
+            Span::raw(" "),
+            dim("协议".to_string(), 4),
         ]
     } else {
         vec![
@@ -1330,6 +1349,12 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                 ),
                 Span::styled(" ", Style::default().bg(bg)),
                 cell(fmt_size(c.cum_up), 8, FG),
+                Span::styled(" ", Style::default().bg(bg)),
+                // m3 新增 客户端（末二列）：对端客户端两字母缩写（DIM，演示数据）
+                cell(c.client.to_string(), 6, DIM),
+                Span::styled(" ", Style::default().bg(bg)),
+                // m3 新增 协议（末列）：TCP 直连 / uTP 微传输协议（DIM）
+                cell(c.transport.label().to_string(), 4, DIM),
             ]
         } else {
             vec![
@@ -1352,21 +1377,42 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         lines.push(Line::from(spans));
     }
 
-    // lazygit 式滚动条（连接数超出一屏时；画在面板右边框列）
-    if t.connections.len() > data_rows {
-        let thumb = if focused { FOCUS_BORDER } else { BORDER };
-        lazy_scrollbar(
+    // 横向滚动偏移（钳制在渲染层兜底 + tick 事件内双防线）：
+    // Paragraph.scroll 的水平分量按显示列跳过行首内容，表头随数据同步平移
+    let hscroll = app.conns_hscroll.min(content_w.saturating_sub(inner.width as usize)) as u16;
+    app.conns_max_hscroll = content_w.saturating_sub(inner.width as usize);
+    app.visible_conns_rows = data_rows;
+    f.render_widget(Paragraph::new(lines).scroll((0, hscroll)), inner);
+
+    let thumb = if focused { FOCUS_BORDER } else { BORDER };
+    // 通用滚动条·垂直（连接数超出一屏时；右边框列 ↑│║│↓）
+    if conn_total > data_rows {
+        let bar = draw_scrollbar(
             f,
             area,
-            t.connections.len(),
-            app.conns_scroll,
+            true,
+            conn_total,
             data_rows,
+            app.conns_scroll,
             thumb,
+            app.sb_arrow_pressed(SbKey::ConnsV),
         );
+        app.conns_v_sb = Some(bar);
     }
-
-    app.visible_conns_rows = data_rows;
-    f.render_widget(Paragraph::new(lines), inner);
+    // 通用滚动条·水平（m3 新增：BT 七列内容宽超出内框时；下边框行 ←─═══─→）
+    if content_w > inner.width as usize {
+        let bar = draw_scrollbar(
+            f,
+            area,
+            false,
+            content_w,
+            inner.width as usize,
+            app.conns_hscroll,
+            thumb,
+            app.sb_arrow_pressed(SbKey::ConnsH),
+        );
+        app.conns_h_sb = Some(bar);
+    }
 }
 
 fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
@@ -2192,11 +2238,25 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
         rows[3],
     );
 
-    // 右缘滚动条（块数超出一屏时；lazygit 式：▲▼箭头 + │轨道 + █滑块，
-    // 画在弹窗右边框列，不与网格内容重叠）
+    // 通用滚动条·垂直（块数超出一屏时；↑↓ 箭头 + │轨道 + ║滑块，画在弹窗
+    // 右边框列，不与网格内容重叠）。几何回填给 App：滑块拖拽 = 滚动网格
+    // （修复：此前拖拽按窗口移动处理）、箭头点击/按住连发、轨道翻页（§4.1.3）
     if total_rows > grid_h {
-        lazy_scrollbar(f, rect, total_rows, start_row, grid_h, FOCUS_BORDER);
+        let bar = draw_scrollbar(
+            f,
+            rect,
+            true,
+            total_rows,
+            grid_h,
+            start_row,
+            FOCUS_BORDER,
+            app.sb_arrow_pressed(SbKey::Pieces),
+        );
+        app.pieces_sb = Some(bar);
+    } else {
+        app.pieces_sb = None;
     }
+    app.pieces_max_scroll = total_rows.saturating_sub(grid_h);
 }
 
 // ---------------------------------------------------------------------------
@@ -2261,13 +2321,20 @@ fn help_lines() -> Vec<Line<'static>> {
         sec("任务详情"),
         kd("鼠标点击", "URL / 校验 字段名复制对应值"),
         sec("并发连接"),
-        kd("↑ / ↓", "选择连接明细"),
+        kd("↑ / ↓", "选择连接明细（视口跟随滚动）"),
+        kd("← / →", "横向滚动明细列（客户端/协议等超宽列）"),
+        kd("鼠标滚轮", "悬停并发面板 = 滚动连接明细（±2/格）"),
         kd("B", "阻塞并移除选中连接（仅 BT 任务）"),
+        sec("滚动条（通用组件）"),
+        kd("拖拽滑块 ═║", "按住双线滑块拖动 = 比例滚动内容（浮层内同样滚内容）"),
+        kd("点击 ↑↓←→", "步进滚动 1 格；按住不放自动连发"),
+        kd("点击轨道", "朝点击方向整页滚动（可按住连发）"),
+        kd("方向键", "面板聚焦时 ↑↓ 选择/纵向滚动、←→ 横向滚动（并发）"),
         sec("弹窗（添加/修改/删除/pieces/帮助）"),
         kd("Tab / ↑↓", "切换字段/焦点（下拉框内选择选项）"),
         kd("Enter", "确认"),
         kd("Esc", "取消/关闭"),
-        kd("鼠标拖拽", "按住弹窗内任意位置拖动移动窗口"),
+        kd("鼠标拖拽", "按住弹窗内空白处拖动移动窗口（滑块/边框除外）"),
         sec("pieces 分块弹窗"),
         kd("↑↓ / PgUp·PgDn", "滚动分块网格（Home / End 跳首/尾）"),
         kd("Esc / P", "关闭弹窗"),
@@ -2318,10 +2385,24 @@ fn draw_help(f: &mut Frame, app: &mut App, area: Rect) {
     let shown: Vec<Line> = lines.iter().skip(start).take(view_h).cloned().collect();
     f.render_widget(Paragraph::new(shown), inner);
 
-    // 右缘滚动条（内容超窗时；▲▼ + │轨道 + █滑块）
+    // 通用滚动条·垂直（内容超窗时；↑↓ 箭头 + │轨道 + ║滑块；滑块拖拽 =
+    // 滚动内容、箭头点击/按住连发、轨道翻页——与主界面面板同一组件同一行为）
     if lines.len() > view_h && view_h > 0 {
-        lazy_scrollbar(f, rect, lines.len(), start, view_h, FOCUS_BORDER);
+        let bar = draw_scrollbar(
+            f,
+            rect,
+            true,
+            lines.len(),
+            view_h,
+            start,
+            FOCUS_BORDER,
+            app.sb_arrow_pressed(SbKey::Help),
+        );
+        app.help_sb = Some(bar);
+    } else {
+        app.help_sb = None;
     }
+    app.help_max_scroll = lines.len().saturating_sub(view_h.max(1));
 }
 
 // ---------------------------------------------------------------------------

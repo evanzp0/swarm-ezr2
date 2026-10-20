@@ -74,7 +74,9 @@
                         齐、紧跟已完成并以 │ 分隔）并入头部第 3 内容行，任务列表
                         自头部正下方起；
                         HTTP 任务并发连接列 = 序号/下载速度/累计下载（无上传两列）；
-                        BT 任务 = IP(掩码)/下载速度/累计下载/上传速度/累计上传 五列，
+                        BT 任务 = IP(掩码)/下载速度/累计下载/上传速度/
+                        累计上传/客户端/协议 七列（m3 新增客户端缩写与 TCP/uTP 协议列，
+                        表宽超内框时底部横向滚动条 + ←/→ 键横向滚动），
                         首列为掩码 IP（IPv4 首段.*.末端 / IPv6 首段:*:末端，
                         无完整地址泄露、互不重复、IPv4/IPv6 混合）；
                         已完成任务（godot）明细为空、活跃 0/0；
@@ -90,7 +92,7 @@
                         ↑↓/B 给出提示 toast（并发面板聚焦后）；win11 按 R
                         重试开始下载后明细恢复（rust 递补，生产 FR-01-34：
                         R 让槽队首递补）；做种中（arch）明细显示
-                        （BT 五列、首列掩码 IP、活跃 1）。
+                        （BT 七列、首列掩码 IP、活跃 1）。
 场景 R（v1.28 同步）：  生产同步轮八（URL 权威模型交互同步）两段运行：
                         R1 正路径——同 URL 同目录重复添加被拒（toast「任务已存在」、
                         对话框保持打开）；「仅删除任务（保留文件）」后异 URL 同
@@ -894,15 +896,31 @@ def scenario_n():
     check("N4 并发明细速度不闪烁（采样期无缺速行）", not flicker,
           flicker[0] if flicker else "采样 4.5s")
 
-    # 第二段：end 选中 sintel（BT 下载中）→ 五列齐全 + 首列掩码 IP
+    # 第二段：end 选中 sintel（BT 下载中）→ 首列掩码 IP。
+    # m3：新增 客户端/协议 两列（置于末尾）后 BT 表宽 59 > 内框 48，
+    # 默认视口只到「累计上传」；七列齐全在横向滚动后另行验证
+    # （N5b，←→/横向滚动条双通道）
     samples2, screen2 = run(120, 44, 5.0, keys=["end"], key_delay_frac=0.3)
     rows2 = samples2[-1][1]
     final2 = "\n".join(rows2)
-    bt_head = next((r for r in rows2 if "下载速度" in r and "累计上传" in r), None)
-    check("N5 BT 任务并发连接五列齐全（IP/下载速度/累计下载/上传速度/累计上传）",
-          bt_head is not None and all(s in bt_head for s in ("IP", "下载速度", "累计下载", "上传速度", "累计上传")),
+    bt_head = next((r for r in rows2 if "下载速度" in r and "累计下载" in r), None)
+    check("N5 BT 任务并发连接表头：IP/速度四列可见、客户端/协议在视口外（列序修订）",
+          bt_head is not None
+          and all(s in bt_head for s in ("IP", "下载速度", "累计下载", "上传速度", "累计上传"))
+          and "客户端" not in bt_head and "协议" not in bt_head,
           bt_head.strip()[:70] if bt_head else "not found")
     check("N6 BT 下载中任务选中（sintel）", "sintel-4k-2160p" in final2)
+
+    # N5b：聚焦并发面板后 → ×8 横向滚动到最右 → 上传两列移入视野
+    samples2b, _ = run(120, 44, 5.0,
+                       keys=["end", "tab", "tab"] + ["right"] * 8,
+                       key_delay_frac=0.3)
+    rows2b = samples2b[-1][1]
+    bt_head_r = next((r for r in rows2b if "下载速度" in r and "累计上传" in r), None)
+    check("N5b → 横向滚动后七列齐全（客户端/协议/上传速度/累计上传 移入视野）",
+          bt_head_r is not None and all(s in bt_head_r for s in
+                                        ("客户端", "协议", "下载速度", "累计上传")),
+          bt_head_r.strip()[:70] if bt_head_r else "not found")
 
     # N10/N11 BT 首列 = 掩码 IP：12 条互不重复、无完整地址泄露、IPv4/IPv6 混合
     px_n = conns_panel_left(screen2)
@@ -1067,11 +1085,12 @@ def scenario_p():
             break
     check("P16 后期处理中任务选中且明细为空 + 活跃 0（neovim 采样帧）", hit6)
 
-    # 第七段：T → 已完成页签选中 arch（做种中）→ 明细显示（BT 五列、掩码 IP、活跃 1/1）
+    # 第七段：T → 已完成页签选中 arch（做种中）→ 明细显示（掩码 IP、活跃 1/1）。
+    # m3：七列齐全在横向滚动后另行验证（P20b，同 N5b 口径）
     samples7, screen7 = run(120, 44, 5.0, keys=["t"], key_delay_frac=0.4)
     rows7 = samples7[-1][1]
     final7 = "\n".join(rows7)
-    head7 = next((r for r in rows7 if "下载速度" in r and "累计上传" in r), None)
+    head7 = next((r for r in rows7 if "下载速度" in r and "累计下载" in r), None)
     px7 = conns_panel_left(screen7)
     tokens7 = [s for s, _ in conns_data_rows(screen7, px7)] if px7 is not None else []
     act7 = next((r for r in rows7 if "活跃" in r and "并发连接" in r), None)
@@ -1079,9 +1098,19 @@ def scenario_p():
     check("P19 做种中任务明细显示（1 条连接，首列为掩码 IP）",
           len(tokens7) == 1 and CONN_TOKEN_RE.match(tokens7[0]) is not None,
           str(tokens7))
-    check("P20 做种中任务五列齐全（BT：IP/下载速度/累计下载/上传速度/累计上传）",
-          head7 is not None and all(s in head7 for s in ("IP", "下载速度", "累计下载", "上传速度", "累计上传")),
+    check("P20 做种中任务表头：IP/速度四列可见、客户端/协议在视口外（横向裁剪前）",
+          head7 is not None
+          and all(s in head7 for s in ("IP", "下载速度", "累计下载", "上传速度", "累计上传"))
+          and "客户端" not in head7 and "协议" not in head7,
           head7.strip()[:70] if head7 else "not found")
+    samples7b, _ = run(120, 44, 5.0,
+                       keys=["t", "tab", "tab"] + ["right"] * 8,
+                       key_delay_frac=0.4)
+    rows7b = samples7b[-1][1]
+    head7b = next((r for r in rows7b if "下载速度" in r and "累计上传" in r), None)
+    check("P20b → 横向滚动后七列齐全（上传速度/累计上传 移入视野）",
+          head7b is not None and all(s in head7b for s in ("协议", "上传速度", "累计上传")),
+          head7b.strip()[:70] if head7b else "not found")
     check("P21 做种中任务活跃 1（上传连接活跃，修订-3 同口径）", act7 is not None and "活跃 1 " in act7,
           act7.strip()[:50] if act7 else "not found")
 

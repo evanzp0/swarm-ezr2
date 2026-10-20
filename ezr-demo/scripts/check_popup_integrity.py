@@ -160,13 +160,23 @@ def check_box(term: MiniTerm, rect, name: str, results: list, title_w: int,
     if term.cell(x, y) != "╭" or term.cell(x1, y) != "╮" \
             or term.cell(x, y1) != "╰" or term.cell(x1, y1) != "╯":
         bad.append("角")
+
+    def gap_ok(yy):
+        """留白格（历史 m3 外侧留白；现垂直已改紧贴不留白，容忍仅为兼容保留）：
+        仅当紧邻 ↑/↓ 箭头时合法。"""
+        return (term.cell(x1, yy - 1) in ("↑", "↓")
+                or term.cell(x1, yy + 1) in ("↑", "↓"))
+
     for yy in range(y + 1, y1):
         if term.cell(x, yy) != "│":
             bad.append(f"左边框@({x},{yy})={term.cell(x, yy)!r}")
-        # right_extra：合法覆盖右边框的字符（pieces 弹窗 lazygit 式滚动条：
-        # ▲▼ 上下箭头 + █ 滑块 + │ 轨道，与边框同列绘制）
-        if term.cell(x1, yy) != "│" and term.cell(x1, yy) not in right_extra:
-            bad.append(f"右边框@({x1},{yy})={term.cell(x1, yy)!r}")
+        # right_extra：合法覆盖右边框的字符（pieces 弹窗通用滚动条：
+        # ↑↓ 上下箭头 + ║ 双线滑块 + │ 单线轨道，紧贴绘制不留白；
+        # 留白容忍仅为历史兼容，防误吞真缺格）
+        r = term.cell(x1, yy)
+        if r != "│" and r not in right_extra \
+                and not (r == " " and gap_ok(yy)):
+            bad.append(f"右边框@({x1},{yy})={r!r}")
     # 水平边：title 文字（含其合法半格）之外的区域不得是宽字符半格（错位特征）
     for xx in range(x + 1 + title_w, x1):
         if term.cell(xx, y) == CONT:
@@ -254,7 +264,7 @@ def main() -> None:
         os.write(fd, b"p")
         read(term, fd, 1.5)
         check_box(term, pieces_dlg, "pieces 弹窗四边边框完整 + 无穿透",
-                  results, title_w=19, right_extra=("▲", "▼", "█"))
+                  results, title_w=19, right_extra=("↑", "║", "↓", "│"))
         os.write(fd, b"\x1b")
         read(term, fd, 0.5)
 
@@ -262,7 +272,7 @@ def main() -> None:
         os.write(fd, b"h")
         read(term, fd, 1.5)
         check_box(term, help_dlg, "帮助窗口四边边框完整 + 无穿透",
-                  results, title_w=9, right_extra=("▲", "▼", "█"))
+                  results, title_w=9, right_extra=("↑", "║", "↓", "│"))
         os.write(fd, b"\x1b")
         read(term, fd, 0.5)
     finally:

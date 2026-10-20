@@ -104,16 +104,26 @@ class Tui:
 def border_broken(tui, x_left, y_top, y_bot, x_right):
     """浮层左右边框列是否残缺（残影/缺格/穿透都会表现为非边框字符）。
 
-    参数均为 0 基：(左列, 顶行, 底行, 右列)。右列额外接受滚动条箭头
-    ▲/▼（pieces/帮助窗口的滚动条画在右边框列上，合法设计）。"""
+    参数均为 0 基：(左列, 顶行, 底行, 右列)。右列额外接受通用滚动条箭头
+    ↑/↓、║ 滑块、│ 单线轨道（m3 修订：垂直紧贴角与轨道、不留白；留白格
+    容忍仅为历史兼容，仅当紧邻 ↑/↓ 箭头时合法——防止误吞真缺格）。"""
     s = tui.screen
     if y_bot >= tui.rows or x_right >= tui.cols:
         return f"越界: y_bot={y_bot} x_right={x_right}"
-    right_ok = ("│", "╮", "╯", "▲", "▼", "█")  # █ = 聚焦滑块（画在右边框列）
+    right_ok = ("│", "╮", "╯", "↑", "║", "↓")  # ║ = 聚焦滑块、│ = 单线轨道（画在右边框列）
+
+    def gap_ok(y):
+        """留白格：必须紧邻 ↑（上方留白）或 ↓（下方留白）箭头。"""
+        if y > 0 and s.buffer[y - 1][x_right].data in ("↑", "↓"):
+            return True
+        if y < tui.rows - 1 and s.buffer[y + 1][x_right].data in ("↑", "↓"):
+            return True
+        return False
+
     for y in range(y_top, y_bot + 1):
         l = s.buffer[y][x_left].data
         r = s.buffer[y][x_right].data
-        if l not in ("│", "╭", "╰") or r not in right_ok:
+        if l not in ("│", "╭", "╰") or (r not in right_ok and not (r == " " and gap_ok(y))):
             return f"row {y}: left={l!r} right={r!r}"
     return None
 

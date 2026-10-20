@@ -4,6 +4,7 @@
 //! （键盘/鼠标事件流 + 100ms 模拟 tick）、退出时恢复终端。
 
 mod app;
+mod scrollbar;
 mod ui;
 
 use std::io;
