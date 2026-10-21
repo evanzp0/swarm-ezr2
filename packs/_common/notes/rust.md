@@ -269,6 +269,16 @@ group_imports = "StdExternalCrate"
   `no method named start_paused`）；②暂停时钟下计时断言必须用 `tokio::time::Instant`——
   `std::time::Instant` 走真实钟，测得微秒级「没等」假象；暂停钟自动推进
   （全部任务 idle 时虚拟时间跳跃），`assert_eq!(t.elapsed(), GRACE)` 可精确相等。
+- **DNS 解析器双腿接线测试用不可达 nameserver 构造确定性失败，免 mock DNS 服务器**：
+  reqwest 自定义解析器（hickory `TokioAsyncResolver`）的 A/AAAA 查询+映射胶水，
+  client 级用例常被 hosts 拦截臂短路而零执行（覆盖率假缺口先用 FNDA 交叉证伪非
+  度量伪影）。失败路径注入：`NameServerConfigGroup::from(vec![NameServerConfig::new(
+  SocketAddr::from(([127,0,0,1],1)), Protocol::Udp)])` + `ResolverOpts` 短 timeout
+  （150ms）低 attempts（1）——双腿各自失败→合并空集→回落臂，client 级再断言
+  `.invalid` 假域名请求必败（证明 builtin 臂→fallback 臂全链接通）。免协议 mock、
+  确定性快（本机端口立即拒答）；成功映射臂仍需真实 DNS 应答，登记受限不硬凑。
+  注意 `ResolverOpts` 为 `#[non_exhaustive]`，跨 crate 不可用结构体字面量
+  （含 `..Default::default()`），必须 `Default::default()` 后逐字段赋值。
 
 ## 7. 测试与变异度量
 
@@ -448,6 +458,12 @@ group_imports = "StdExternalCrate"
   上界近似（N 条件的守卫链 comp 虚高约一倍）——CRAP 门禁判定（comp≤6）对 3–4 条件
   守卫链会出现"BRDA comp=13 但源码 comp≈6"的假阳性；以源码决策点数（if/match 臂/
   短路项）复核后再登记，不据此硬拆守卫链。
+  **`tokio::select!` 各臂不落 BRDA 记录，方向与短路链相反**：宏展开的内部分派不被
+  行归属，select! 本身零 BRDA，而同函数内普通 if/else 每处仍记 2 条——select 密集
+  的 async fn 上 BRDA comp 既非上界也非下界（实测：select! 二臂 + 三处 if/else 的
+  函数 BRDA comp=7、源码 comp=5），门禁判定一律以源码决策点数为准，BRDA 读数
+  只作交叉参考；若分支记录全部已命中（taken>0），cov=100% 下 CRAP=comp 源码口径
+  即门禁值，无需为宏口径偏差拆函数。
 - **生成式（剥头副本）夹具的再生成是收尾链的最后一环，必须排在 rustfmt 之后**：剥头
   夹具（gen fixture）要求与产品源码逐字一致，任何后续格式化/微调都会让源码行形态漂移
   使守卫红（实测：功能改完后先重生成夹具、再跑 fmt 收尾 → fmt 把多行
@@ -536,6 +552,13 @@ group_imports = "StdExternalCrate"
   结构的写操作只允许回填字段」）同时要枚举容器方法形态（push/clear/insert/retain/…），
   只盯 `=` 赋值会漏掉方法调用式改写；经别名改写（先借 `as_mut()` 再经别名赋值）登记为
   已知豁免，不为它把 grep 升级成解析器。
+  **白名单扩展前先枚举同词族字段并逐个判定属性，同形政策字段必须收窄为精确词族**：
+  交接建议的宽泛词族（如 `scroll|pos|follow`）直接套用时，先 grep 该词族在状态结构体
+  全部字段中的命中清单，逐个区分回填/政策属性——同形政策字段（如裸 `scroll` 与面板
+  `_scroll` 同形）不得随词族豁免，改用精确形态（`(help|pieces)_scroll`、`_pos`、
+  `_scrollbar`、`max_` 前缀）收窄；豁免放宽的验证是双向阳性对照：回填存量全部收口
+  全绿 + 政策同形字段注入探针必须仍红。新增面板/字段的同类写入响亮失败、显式扩
+  白名单，是护栏设计行为而非缺陷。
 - **新增模块的平台 env 读取必须预先收口适配缝（arch 规则「环境变量收口」形态）**：
   机制层遇到平台差异路径（如 Windows hosts 表 `%SystemRoot%`）时，本地 `std::env::var_os`
   会命中「业务/机制层不直读环境变量」规则（env 收口仅 model/config.rs 等适配缝）；

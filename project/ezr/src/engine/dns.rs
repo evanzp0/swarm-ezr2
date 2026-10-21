@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -57,7 +58,12 @@ pub(crate) struct HostsFile {
 impl HostsFile {
     /// 从平台 hosts 路径加载（读不到 → 空表，不阻塞、不致命）。
     pub(crate) fn load() -> Self {
-        match std::fs::read_to_string(crate::model::config::hosts_file_path()) {
+        Self::load_from(crate::model::config::hosts_file_path())
+    }
+
+    /// 从指定路径加载（单源供 [`HostsFile::load`] 与测试注入；读不到 → 空表）。
+    fn load_from(path: PathBuf) -> Self {
+        match std::fs::read_to_string(path) {
             Ok(text) => Self::from_lines(&text),
             Err(_) => Self {
                 entries: HashMap::new(),
@@ -122,13 +128,13 @@ where
         r = &mut a => (false, r),
         r = &mut b => (true, r),
     };
-    // 第二阶段：先答腿成功 → 另一腿至多再等 grace（超时弃置 = None）；
-    // 先答腿失败 → 等另一腿到其自身超时（dyn + Send 擦除：跨 await 持有需 Send 才不染非 Send）
+    // 第二阶段（dyn + Send 擦除：跨 await 持有需 Send 才不染非 Send）：
+    // 先答腿成功 → 另一腿至多再等 grace（超时弃置 = None）；
+    // 先答腿失败 → 等另一腿到其自身超时
+    let pending_leg: PendingLeg<'_, T, E> = if first_is_b { a.as_mut() } else { b.as_mut() };
     let second = if first.is_ok() {
-        let pending_leg: PendingLeg<'_, T, E> = if first_is_b { a.as_mut() } else { b.as_mut() };
         tokio::time::timeout(grace, pending_leg).await.ok()
     } else {
-        let pending_leg: PendingLeg<'_, T, E> = if first_is_b { a.as_mut() } else { b.as_mut() };
         Some(pending_leg.await)
     };
     if first_is_b {
@@ -274,10 +280,14 @@ fn ips_to_addrs(ips: Vec<IpAddr>) -> Addrs {
 #[cfg(test)]
 mod tests {
     use std::future::{pending, ready};
-    use std::net::IpAddr;
+    use std::net::{IpAddr, SocketAddr};
+    use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use hickory_resolver::config::{
+        NameServerConfig, NameServerConfigGroup, Protocol, ResolverConfig, ResolverOpts,
+    };
     use hickory_resolver::TokioAsyncResolver;
 
     use super::{
@@ -326,6 +336,13 @@ mod tests {
         assert_eq!(h.lookup("host"), None);
         assert_eq!(h.lookup("bad"), None);
         assert_eq!(h.lookup("good.test"), Some(vec![ip4(10, 2, 3, 4)]));
+    }
+
+    #[test]
+    fn load_missing_path_yields_empty_table() {
+        // load 的 Err 臂：读不到 → 空表非致命（自愈链继续，自愈链①不阻断）
+        let h = HostsFile::load_from(PathBuf::from("/nonexistent/ezr-v141-test-hosts"));
+        assert_eq!(h.lookup("anything.test"), None, "空表任何别名都不命中");
     }
 
     // ---------- merge_answers（D40②：IPv4 前置去重） ----------
@@ -399,6 +416,21 @@ mod tests {
         assert!(r6.unwrap().is_err());
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn race_first_is_b_ok_abandons_slow_leg_after_grace() {
+        // b 先答（a 永不就绪）：first_is_b=true 交换臂序确定性覆盖（D40①）
+        let slow = pending::<Result<Vec<IpAddr>, ()>>();
+        let t0 = tokio::time::Instant::now();
+        let (r4, r6) = race_with_grace(slow, ready(Ok(vec![ip6(7, 8)])), GRACE).await;
+        assert_eq!(t0.elapsed(), GRACE, "慢腿（a）至多拖 GRACE");
+        assert_eq!(r4, None, "a 腿宽限超时弃置");
+        assert_eq!(
+            r6.map(|r| r.unwrap()),
+            Some(vec![ip6(7, 8)]),
+            "b 腿答案保留"
+        );
+    }
+
     // ---------- resolve_flow（自愈链臂序） ----------
 
     struct MockFallback {
@@ -411,6 +443,13 @@ mod tests {
             Self {
                 calls: Mutex::new(Vec::new()),
                 result: Ok(ips),
+            }
+        }
+
+        fn err() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                result: Err(()),
             }
         }
 
@@ -471,10 +510,7 @@ mod tests {
 
     #[tokio::test]
     async fn flow_fallback_error_propagates() {
-        let fb = MockFallback {
-            calls: Mutex::new(Vec::new()),
-            result: Err(()),
-        };
+        let fb = MockFallback::err();
         let err = resolve_flow(None, || async { Vec::new() }, &fb, "h")
             .await
             .unwrap_err();
@@ -511,6 +547,25 @@ mod tests {
         (port, handle)
     }
 
+    /// client 级接线脚手架单源：内置器注入 client → 请求 mini http → 收尾。
+    async fn fetch_through_builtin(resolver: BuiltinResolver, host: &str) -> String {
+        let client = reqwest::Client::builder()
+            .dns_resolver(Arc::new(resolver))
+            .build()
+            .unwrap();
+        let (port, server) = spawn_mini_http().await;
+        let body = client
+            .get(format!("http://{host}:{port}/"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        server.await.unwrap();
+        body
+    }
+
     #[tokio::test]
     async fn client_resolves_fake_host_via_builtin_hosts_interception() {
         // ezr.test 非真实域名：系统解析必败；命中注入 hosts 表 ⇒ 证明解析被内置器接管
@@ -519,42 +574,61 @@ mod tests {
             Arc::new(HostsFile::from_lines("127.0.0.1 ezr.test\n")),
             Arc::new(GaiFallback),
         );
-        let client = reqwest::Client::builder()
-            .dns_resolver(Arc::new(resolver))
-            .build()
-            .unwrap();
-        let (port, server) = spawn_mini_http().await;
-        let body = client
-            .get(format!("http://ezr.test:{port}/"))
-            .send()
-            .await
-            .unwrap()
-            .text()
-            .await
-            .unwrap();
-        assert_eq!(body, "ok");
-        server.await.unwrap();
+        assert_eq!(fetch_through_builtin(resolver, "ezr.test").await, "ok");
     }
 
     #[tokio::test]
     async fn client_resolves_localhost_through_builtin_chain() {
         // try_system 构造（真实系统 DNS 配置）+ hosts(localhost) 臂 + 全链 client
         let resolver = BuiltinResolver::try_system().unwrap();
+        assert_eq!(fetch_through_builtin(resolver, "localhost").await, "ok");
+    }
+
+    // ---------- parallel_lookup 双腿接线 + 内置臂→回落衔接（覆盖率补齐） ----------
+
+    /// 双腿不可达的内置解析器（nameserver = 127.0.0.1:1 UDP 短超时；
+    /// A/AAAA 两腿各自失败 → 合并空集，供 fallback 链补测注入）。
+    fn unreachable_builtin_resolver() -> BuiltinResolver {
+        let group = NameServerConfigGroup::from(vec![NameServerConfig::new(
+            SocketAddr::from(([127, 0, 0, 1], 1)),
+            Protocol::Udp,
+        )]);
+        let config = ResolverConfig::from_parts(None, Vec::new(), group);
+        let mut options = ResolverOpts::default();
+        options.timeout = Duration::from_millis(150);
+        options.attempts = 1;
+        BuiltinResolver::with_parts(
+            TokioAsyncResolver::tokio(config, options),
+            Arc::new(HostsFile::from_lines("")),
+            Arc::new(GaiFallback),
+        )
+    }
+
+    #[tokio::test]
+    async fn parallel_lookup_unreachable_nameserver_yields_empty() {
+        // 双腿接线（A/AAAA 查询 + 映射 + 宽限竞速 + 合并）：双腿皆败 → 空集
+        let r = unreachable_builtin_resolver()
+            .parallel_lookup("leg-fail.invalid")
+            .await;
+        assert!(r.is_empty(), "双腿皆败合并后必须为空集（调用方走回落）");
+    }
+
+    #[tokio::test]
+    async fn client_hosts_miss_falls_through_builtin_to_failure() {
+        // hosts 未命中 + 内置双腿空集 → 回落系统解析（.invalid 假域名必败）：
+        // 同一 client 请求内走通 Resolve::resolve → builtin 臂 → fallback 臂全链
         let client = reqwest::Client::builder()
-            .dns_resolver(Arc::new(resolver))
+            .dns_resolver(Arc::new(unreachable_builtin_resolver()))
             .build()
             .unwrap();
-        let (port, server) = spawn_mini_http().await;
-        let body = client
-            .get(format!("http://localhost:{port}/"))
+        let sent = client
+            .get("http://builtin-fallthrough.invalid/")
             .send()
-            .await
-            .unwrap()
-            .text()
-            .await
-            .unwrap();
-        assert_eq!(body, "ok");
-        server.await.unwrap();
+            .await;
+        assert!(
+            sent.is_err(),
+            "hosts 未命中 + 双腿空集 + 系统解析必败 → 请求必须失败（零新增成功形态）"
+        );
     }
 
     // ---------- 引擎基线构建器接线（FR-01-112） ----------

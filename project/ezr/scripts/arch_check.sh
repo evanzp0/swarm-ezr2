@@ -155,24 +155,34 @@ fi
 
 # 规则 14【回填白名单】ui 渲染路径对 App 状态的写操作只允许回填字段
 # （architect v126：ui 是纯渲染层，读 App 状态渲染 + 把命中区域/可视行数
-# 回填 App 供鼠标交互——写面仅限字段名含 rect/area/visible 的回填字段；
-# 策略状态（quit/filter/selected/tasks/dialog 等）从渲染路径改写即分层泄漏。
-# 扫描域 = 各 ui 文件首个 #[cfg(test)] 之前的产品区（测试夹具播种状态属
-# 合法豁免形态，不入扫描域）；写形态 = 字段赋值或容器方法调用（push/clear/
-# insert/remove/retain/swap/drain/resize/append/truncate）；已知豁免：经别名
-# 改写（如 if let Some(d) = app.dialog.as_mut() 后经 d 赋值）不在本规则扫描域，
-# 产品渲染路径现无此形态）
+# 回填 App 供鼠标交互——策略状态（quit/filter/selected/tasks/dialog 等）
+# 从渲染路径改写即分层泄漏。扫描域 = 各 ui 文件首个 #[cfg(test)] 之前的产品区
+# （测试夹具播种状态属合法豁免形态，不入扫描域）；写形态 = 字段赋值或容器方法
+# 调用（push/clear/insert/remove/retain/swap/drain/resize/append/truncate）；
+# 已知豁免：经别名改写（如 if let Some(d) = app.dialog.as_mut() 后经 d 赋值）
+# 不在本规则扫描域，产品渲染路径现无此形态。
+# cleaner v141 白名单扩展（17 行渲染回填存量收口，裁决移交自 coder v140）：
+#   _pos（弹窗命中区域回填：about/dlg/help/pieces_pos）、
+#   _scrollbar（滚动条渲染态回填：conns_v/h、help、list、pieces_scrollbar）、
+#   max_hscroll/max_scroll（渲染派生滚动界回填：conns_max_hscroll、help/pieces_max_scroll）、
+#   follow（下载前沿跟随标志回填：pieces_follow）、
+#   (help|pieces)_scroll 面板滚动渲染期钳制（渲染期 min(max_scroll) 收口）。
+#   注意：裸 scroll / conns_scroll / conns_hscroll 是键盘导航政策字段
+#   （app 层写、ui 只读），不豁免——未来 ui 渲染路径改写它们即红（白名单
+#   精确对齐判例，防误报压力放宽真规则，engineering.md）；新增面板的渲染钳制
+#   写入会在此响亮失败，需显式扩白名单。）
 ui_product_lines=$(for f in src/ui/*.rs; do
   awk '/#\[cfg\(test\)\]/{exit} {print FILENAME":"FNR":"$0}' "$f"
 done)
 hit=$(printf '%s\n' "$ui_product_lines" \
   | grep -E 'app\.[a-z_]+([[:space:]]*=[^=]|\.(push|clear|insert|remove|retain|swap|drain|resize|append|truncate)\()' \
-  | grep -vE 'app\.[a-z_]*(rect|area|visible)' \
+  | grep -vE 'app\.[a-z_]*(rect|area|visible|_pos|_scrollbar|max_hscroll|max_scroll|follow)' \
+  | grep -vE 'app\.(help|pieces)_scroll\b' \
   | grep -vE ':[0-9]+:[[:space:]]*//' || true)
 if [ -n "$hit" ]; then
-  echo "[FAIL] ui 渲染路径改写非回填 App 字段（写面只限 rect/area/visible 回填）:"; echo "$hit"; fails=$((fails+1))
+  echo "[FAIL] ui 渲染路径改写非回填 App 字段（写面只限回填白名单，政策字段零豁免）:"; echo "$hit"; fails=$((fails+1))
 else
-  echo "[ OK ] ui 渲染路径只回填 rect/area/visible 字段"
+  echo "[ OK ] ui 渲染路径只回填白名单字段（rect/area/visible/_pos/_scrollbar/max_*/follow/面板 scroll 钳制）"
 fi
 
 # 规则 15【窄接口】supervisor 实现子模块保持私有（architect v145：supervisor
@@ -219,3 +229,9 @@ echo "arch_check: 全部边界规则通过"
 #   首个 #[cfg(test)] 之前的产品区——把探针插进测试模块（如 mod.rs 底部
 #   tests 内的合法夹具播种）不命中属扫描域对齐行为，非规则失效；探针必须是
 #   真实赋值/容器调用行，注释形态（`// app.quit = true`）不被扫描。
+# cleaner v141 白名单扩展阳性对照（本轮会话实测）：
+#   ① 向 src/ui/header.rs 产品区临时插入 `app.scroll = 3;`（裸 scroll 政策字段）
+#      → 规则 14 命中并非零退出（白名单收窄后政策字段仍被护栏覆盖）；
+#   ② 17 行渲染回填存量（_pos/_scrollbar/max_hscroll/max_scroll/follow/
+#      help_scroll/pieces_scroll）扩展后全部收口，规则全绿；
+#   对照后均已移除。
