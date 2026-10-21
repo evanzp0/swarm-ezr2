@@ -1,116 +1,134 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/coder　会话：ezr-v137-mouse-leak-fix（2026-10-19）
-> 上游交接：coder v136-partial-chunk-fix（交接内容 = 前轮产物总账 + 移交建议 cleaner）
-> + 操作者 chat 指令（bug 报告：「swarm-20261019-104911-six-pack-coder 运行下载后，
-> 按 q 退出，会有显示 `^[[<35;56;26M%   35;56;26M` 类似这样的乱码」+ 基线指令
-> 「swarm-20261019-104911-six-pack-coder 的基础上修改」——工作区 = 该包解压）。
-> 当轮任务：v137 缺陷修复轮——按 q 退出后 SGR 鼠标事件字节泄漏给 shell（zle 回显乱码）。
+> 流程：six-pack　当前节点：six-pack/specifier　会话：ezr-v132-spec-m3-align（2026-10-21）
+> 上游交接：coder v137-mouse-leak-fix（交接内容 = 前轮产物总账 + 移交建议 cleaner）
+> + 操作者 chat 指令（「ezr-demo ui 和交互进行了重大重构，根据 ezr-demo 文档和它的代码，
+> 对 ezr 项目进行更新」——权威 = `ezr-demo/docs/ezr-demo UI界面及交互设计规范.md`
+> 适用版本 v0.1.0-m3 与 ezr-demo 源码）。
+> 当轮任务：v132 规格轮——UI 与交互对齐 ezr-demo m3 修订版（通用滚动条组件化、并发面板
+> 客户端/协议列、头部去版本号、对话框更名、校验 NONE、O 关于窗口、模态统一口径等）。
 
 ## 一、产物历史完成情况
 
 ### 项目与需求
 - EZR Downloader（Rust / TUI 下载器，01 期：HTTP/HTTPS 真实下载内核与 TUI 正式版）。
-  需求权威来源 `project/mission.md`（v1.31，分期模式）+ `project/mission/phase-01.md`（v1.31）。
-- 本轮任务 = 操作者 bug 报告轮（v137）：修复「按 q 正常退出后 tty 输入缓冲中已排队的
-  鼠标事件字节被 shell 回显」——退出竞态窗口治理；无规格文档改动。
+  需求权威来源 `project/mission.md`（v1.32，分期模式）+ `project/mission/phase-01.md`（v1.32）。
+- 本轮任务 = 操作者 m3 对齐指令轮（v1.32）：仅规格面（mission/phase-01/features/qa），
+  无代码改动；ezr 源码仍处 v137 状态（3889P/0F），待 coder 轮实现。
 
 ### 产物总账（流程开工以来累计，当前有效口径）
 | 节点/切片 | 产物 | 完成情况 | 验证状态 |
 |---|---|---|---|
-| specifier（历轮） | mission v1.1→v1.31 全量规格 + features/ 14 份 + qa/ 14 份 | 全部交付 | v134 起 3 份 UI feature 过 APS 机检（0 错误级） |
+| specifier（历轮） | mission v1.1→v1.32 全量规格 + features/ 15 份 + qa/ 15 份 | 全部交付 | v134 起 3 份 UI feature 过 APS 机检（0 错误级）；本轮 APS 机检因沙箱无 bb/网络未执行（见受限项） |
 | coder（v128-impl 等） | v1.28 URL 权威模型等全量实现 | 已交付 | 2925P/0F（v128 轮口径） |
 | cleaner（v128-clean） | supervisor 失败分类/完成收尾单源化 | 已交付 | 3040P/0F；CPD 17→15 |
 | architect（v145-arch） | supervisor 六文件拆分（114 点守恒）+ 属性 62 + arch 15 | 已交付 | 3049P/0F、clippy 0、fmt 0、arch 15 |
 | hardender（v147-hard） | 163 点差分变异 campaign + 加固套件 hardening_g_v147 | 已交付 | 3363P/0F、clippy 0、fmt 0 |
 | QA（ezr-qa-final） | QA 规程可执行化 13 端到端套件（qa/runners/）+ 缺陷修复 | 已交付 | e2e 165P/0F/0S、3363P/0F、覆盖 94.37% |
 | specifier（v129/v130/v133/v134） | FR-01-106/107/108/109/110 + D35/D36/D38 规格 + v1.31 对齐 | 已交付 | 反向自检通过 |
-| coder（v129–v133） | FR-01-106 实现 + 缺陷修复三件 + v1.30 全部 UI 改版 + D35 收窄 | 已交付 | 3843P/0F（v133 口径） |
-| coder（v135-impl-m2） | v1.31 规格面四项落地（页脚双行 chips / 帮助 36 行 / 浮层翻转零清屏 / 满窗起点钳制） | 已交付 | 3867P/0F、clippy 0、fmt 0、arch 规则级守恒 |
-| coder（v136-partial-chunk-fix） | 缺陷修复：pieces 🟨 集合权威去 `!downloading` 前提（M 缩容后无租约部分块恢复 🟩 不白屏）+2 回归测试 | 已交付 | 3887P/0F、clippy 0、fmt 0、arch 守恒 |
-| **coder（v137-mouse-leak-fix，本轮）** | **缺陷修复：①`restore_into<W: Write>` 可测内核——复原序列重排为 `DisableMouseCapture → DisableBracketedPaste → LeaveAlternateScreen`（鼠标组最先关闭，竞态窗口最小化）；②新增 `drain_input_events()`——raw mode 仍开时以非阻塞 poll/read 清空输入队列，消费按 q 瞬间已排队/在途的鼠标事件字节（进程退出后不再泄漏给 shell）；③哨兵 `RESTORE_SEQUENCE` 镜像新顺序（父死路径与正常收尾同形不变量）+ 镜像断言测试同步；+2 回归测试** | **已交付** | **3889P/0F、clippy 0、fmt clean、arch 规则级守恒（规则 14 沿袭 8 行同集合）、pty 行为级双冒烟 PASS** |
+| coder（v129–v137） | FR-01-106 实现 + 缺陷修复 + v1.30/v1.31 UI 改版 + pieces 🟨 修复 + q 退出鼠标泄漏修复 | 已交付 | 3889P/0F、clippy 0、fmt clean（v137 口径） |
+| **specifier（v132-spec-m3-align，本轮）** | **v1.32 规格：P9 通用滚动条组件（FR-01-109 重写）+ FR-01-111 关于窗口 + FR-01-94/95/96/106/107/108/110/80/01/50/87/83 修订 + D39；features 5 份修订（14 退役/24 新增）+ qa 5 份同步** | **已交付** | **反向自检通过（退役标识残留仅历史注记与 runners 欠账）；Gherkin 表结构检查 5/5 通过** |
 
 ### 遗留受限项（当前有效）
+- **APS 机检本轮未执行**：`.tools/` 不随工作区流转且沙箱无 Babashka、无外网（仓库拉取超时）；
+  影响面 = 本轮修订的 3 份 UI feature 未过 `gherkin-ir-dry-checker`。**移交建议**：coder/QA 轮
+  在工具链可用环境中补跑（进入 APS 仓库目录调用，输出写 `.work/tmp/`）。
+- **qa/runners/ 可执行化同步欠账（沿袭 + v1.32 增量再扩大）**：旧断言残留——`suite_tui_display.py`
+  QA-TD-14 版本号断言（场景已退役）、`suite_ui_conns.py` 头部版本号断言、四处 `添加下载任务`
+  对话框标题断言、`suite_modify_task.py` 「默认 SHA-256」注释头、滚动条字形/帮助七组类断言；
+  影响面 = runners 与 v1.32 规格不符，coder 实现后必然红。**移交建议**：QA 轮一并承接
+  （与既有 v1.30/v1.31 增量欠账同账）。
 - **arch_check 规则 14（ui 回填白名单）沿袭未过**：8 行同集合（dlg_pos×2/help_pos/
-  help_scroll/pieces_pos/pieces_follow/pieces_scroll×2），规则级守恒不变。本轮零触碰
-  ui 层、0 新增失败行。**移交建议（不变）**：cleaner/architect 轮将白名单正则扩为
-  含 `scroll|pos|follow` 并裁决存量 8 行形态。
+  help_scroll/pieces_pos/pieces_follow/pieces_scroll×2），规则级守恒不变。本轮零触碰代码。
+  **移交建议（不变）**：cleaner/architect 轮将白名单正则扩为含 `scroll|pos|follow` 并裁决存量 8 行。
 - **v147 时序 flake（沿袭）**：`sidecar_not_written_within_first_500ms` / `hardening_g_v147`
-  偶发（隔离 ×3 + 重跑绿）；本轮全量跑未复现。建议 QA 轮放宽 `wait_state` 预算或加重试。
-- **Rust 工具链沙箱不持久（本轮重建登记）**：nightly 1.98.0-nightly（cced03bfd
-  2026-05-28）+ rustfmt/clippy + ld.lld 桥接，配方同前。**本轮新踩**：重装后
-  `~/.cargo/config.toml` 缺失（随沙箱清理），cargo 走官方 crates.io 源假卡
-  （`transfer too slow ... 0 bytes in 30s`，易误归因镜像抖动）——重装清单必须含
-  cargo 镜像配置（已沉淀 rust.md）。
+  偶发（隔离 ×3 + 重跑绿）。建议 QA 轮放宽 `wait_state` 预算或加重试。
+- **Rust 工具链沙箱不持久（沿袭登记）**：重装清单须含 cargo 镜像配置（已沉淀 rust.md）。
 - **观察受限突变体（沿袭 hardender 登记，仍开放）**：workers.rs 5 条 + 等价 download.rs:85:27。
 - **ezr-proxy.rs 测试基建（沿袭裁决）**：127 变异点不拆、CRAP/CPD 读数不追责。
-- **qa/runners/ 可执行化同步欠账（沿袭 + v1.30/v1.31 增量再扩大）**：QA 轮一并承接。
-- **gen 剥头副本守卫覆盖面（本轮核对登记）**：五件守卫面（btn/chart/clipboard/detail/
-  update_conn_stats）不含本轮触碰文件（main.rs / sentinel.rs），无需再生成。
-- **退出竞态修复的可观测边界（本轮登记）**：drain 消费的是 restore 时刻已到达的输入
-  字节；disable 传播延迟窗口（毫秒级）内新产生且在 drain 之后到达的事件仍可能残留——
-  已通过「鼠标组最先关闭」把窗口压到最小；pty 泄漏模拟（q + motion 同批入队）实测
-  残留 0 字节。极端时序下的毫秒级残留属业界（crossterm/ratatui 模板）共有限界。
+- **gen 剥头副本守卫覆盖面（沿袭核对）**：五件守卫面（btn/chart/clipboard/detail/
+  update_conn_stats）不含本轮触碰文件（规格文档轮零代码），无需再生成。
+- **退出竞态修复的可观测边界（沿袭 v137 登记）**：极端时序下毫秒级鼠标事件残留属业界共有限界。
 
 ### 实现定义值登记（当前有效）
-- 沿袭有效：v1.28 全部口径、D26–D37、v138/v140 口径、D35 结案收窄、D38 登记差异
+- 沿袭有效：v1.28 全部口径、D26–D38、v138/v140 口径、D35 结案收窄、D38 登记差异
   （维持产品口径，待操作者裁决）。
-- **本轮口径注记（非新增实现定义值）**：复原序列顺序 = 鼠标组 → paste → 备用屏
-  （v137 重排；crossterm 0.28.1 逐字序列不变，仅组间顺序调整）；哨兵 RESTORE_SEQUENCE
-  镜像同序。FR-01-84 哨兵「父死还原 = 正常收尾镜像」设计不变量保持。
+- **D39（本轮新增）**：关于窗口版本文案照录 demo 钦定 `EZR Download v1.0.0`（不随期号变体；
+  期号/产品版本号差异化策略留操作者裁决，改动面 = FR-01-111 与 01-tui-display-24 各一处）。
+- **本轮口径注记（非新增 D 值）**：点击浮层外部统一无操作、校验 NONE 默认/必填、对话框更名、
+  头部去版本号、图区 0 列空白、滚动条组件契约（几何公式/连发 0.4s+0.12s/余辉 400ms/
+  步长 1（水平 2））均为 demo m3 权威口径的直接照录，非角色自定值。
+- **demo-only 差异登记（沿袭 + 本轮沿用）**：添加对话框预填演示数据（ADD_POOL 轮换）为 demo
+  演示辅助，正式版维持空字段；并发面板「客户端/协议」两列的演示数据生成方式（确定性缩写池 +
+  1/3 uTP 概率）为 demo 演示辅助，正式版数据源 phase-02 定夺。
 
-## 二、当前产出情况（coder v137-mouse-leak-fix）
+## 二、当前产出情况（specifier v132-spec-m3-align）
 
 ### 本会话产物清单
-- `project/ezr/src/main.rs`（+66/−9）：
-  - `restore_into<W: Write>`：复原序列可测内核（接受任意 Write，测试以 `Vec<u8>`
-    断言字节顺序）；顺序重排 `DisableMouseCapture → DisableBracketedPaste →
-    LeaveAlternateScreen`（鼠标组最先关闭——disable 传播延迟窗口内不再产生新
-    鼠标字节；各命令相互独立无栈约束，crossterm 0.28.1 逐字序列不变）；
-  - `drain_input_events()`：退出前在 raw mode 仍开启时以非阻塞 `poll(0)`/`read()`
-    循环清空输入队列（消费按 q 瞬间已排队/在途的鼠标事件字节；上限护栏 10_000
-    次防异常积压阻塞退出；无 tty 环境报错即视为无事件）；
-  - `restore_terminal()` 改为薄封装（`restore_into(&mut io::stdout())`），
-    panic hook 路径自动获得同序 + drain 行为；
-  - +2 回归测试：`restore_sequence_disables_mouse_before_leave_and_paste`
-    （字节序守卫：?1006l/?1000l 先于 ?2004l/?1049l，且只含关闭不含启用）、
-    `drain_input_events_returns_promptly_without_events`（非阻塞语义）。
-- `project/ezr/src/sentinel.rs`（+12/−11）：
-  - `RESTORE_SEQUENCE` 重排镜像新顺序（鼠标五连 `?1006l ?1015l ?1003l ?1002l
-    ?1000l` 最先 → `?2004l` → `?1049l`），注释同步「父死还原 = 正常收尾镜像」；
-  - 镜像断言测试 `restore_sequence_mirrors_crossterm_0_28_disable_set` 同步新序列。
-- `packs/_common/notes/rust.md`（工具侧经验沉淀 2 处，见验证证据节）。
+- `project/mission.md`：新增 v1.32 注记（m3 对齐需求十项全录，含逐项 demo 源码核证锚点）。
+- `project/mission/phase-01.md`：新增 v1.32 修订注记；FR-01-109 全面重写（P9 通用滚动条组件 =
+  滚动条引擎 + ScrollablePanel 一体化封装：字形 `═║`/单线轨道/箭头留白分轴向规则/显示条件
+  组件内收口/几何公式与行程保证/拖拽-连发-按压高亮-轨道翻页契约/键盘 ←→ 横向）；新增
+  FR-01-111（O 快捷键与关于窗口 40×7，z-order 最上层、位置跨次记忆）；FR-01-94①⑤（头部去
+  版本号 + 左对齐、图区 0 列空白）、FR-01-95（clamp −93）、FR-01-96（BT 七列预留 + 客户端/协议
+  两列 + 横向滚动 + ←/→ ±2 列）、FR-01-01（NONE 默认/必填/更名/提示删除）、FR-01-87（NONE
+  预填与清除路径、更名）、FR-01-107（八组 44 行 + O 条目 + 点外无操作）、FR-01-108（overlay
+  集合含关于）、FR-01-110②（统一口径注记）、FR-01-80（O 键/←→/鼠标口径）、FR-01-50（NONE
+  下拉项注记）修订；FR-01-83 退役登记；新增 D39。
+- `project/features/01-tui-display.feature`：场景 14 退役（版本号随期号递进，留空不重排）、
+  场景 24 新增（关于窗口）、场景 07/19/20/22/23 修订（O 键、帮助八组 44 行 + 点外无操作 +
+  O 叠帮助、通用滚动条组件全交互契约、chips 点外无操作、对话框点外统一口径注记）。
+- `project/features/04-ui-conns.feature`：场景 01/04/08 修订（标题无版本 + 左对齐、图区 0 列
+  空白 + clamp −93、滚动条组件字形 + BT 七列预留 + HTTP ←/→ 不响应）。
+- `project/features/05-ui-pieces.feature`：场景 04/07 修订（通用滚动条 + 连发/高亮/轨道翻页/
+  滑块拖拽滚网格、点外无操作、滚动条命中优先于窗口拖拽）。
+- `project/features/01-add-task.feature`：场景 01/02/03/05/19 修订（更名、八项含 NONE 默认、
+  NONE 禁输入臂、必填拒绝臂、占位提示删除断言）。
+- `project/features/03-modify-task.feature`：场景 01/05 修订（更名 + NONE 预填臂、NONE = 清除
+  校验重写 + 必填拒绝臂）。
+- `project/qa/01-tui-display-qa.md`：头部计数与 v1.32 同步注；QA-TD-07/19/20/22 修订、
+  QA-TD-14 退役登记、QA-TD-24 新增。
+- `project/qa/04-ui-conns-qa.md`：QA-UC-01/04/08 判据修订 + v1.32 同步注。
+- `project/qa/05-ui-pieces-qa.md`：QA-UP-04/07 判据修订 + v1.32 同步注。
+- `project/qa/01-add-task-qa.md`：QA-01-01/02/03/05 判据修订。
+- `project/qa/03-modify-task-qa.md`：QA-MT-01/05 判据修订。
+- `packs/six-pack/specifier/SKILL.md`：经验沉淀 1 条（组件化重构对齐轮的三层核证，跨项目纪律）。
 
 ### 验证证据
 | 验证项 | 结果 | 命令（可复现） |
 |---|---|---|
-| 全量测试 | **3889P / 0F**（15 目标全绿） | `cd project/ezr && cargo test --all-targets --no-fail-fast` |
-| 红灯回放 | 临时反转回旧顺序（Mouse 最后）→ 主回归 FAILED；恢复新顺序全绿 | 单测级灵敏度确认 |
-| clippy | 0 警告 | `cargo clippy --all-targets` |
-| fmt | 0 偏差 | `cargo fmt --check` |
-| arch_check | 规则级守恒：15 项 OK，仅规则 14 沿袭 8 行（同集合逐行比对） | `bash scripts/arch_check.sh` |
-| **pty 行为冒烟 ①** | 复原序列完整性 + 顺序：退出时 `?1049l/?1006l/?1000l/?2004l` 全在位且 **1006l@606 < 2004l@646 < 1049l@654（鼠标组最先）** | `python3 .work/tmp/smoke_quit_restore.py`（pty fork 启动 ezr → q → 断言序列字节位置） |
-| **pty 行为冒烟 ②（泄漏模拟）** | q + 2 个 SGR motion 字节同批入队 → ezr 退出 → `cat -v`（模拟 shell）读到残留 **0 字节**（修复前即用户报告的 `^[[<35;56;26M` 回显） | `python3 .work/tmp/smoke_quit_leak.py`（脚本在 .work/tmp，随会话清理；复现逻辑已沉淀 rust.md） |
+| 参照实现逐字核证 | m3 全部逐字断言（文案/尺寸/字形/常量/公式/时序）经 ezr-demo 源码核证：scrollbar.rs（EDGE_PAD/ARROW_PAD/min_len/thumb 公式/render）、scrollable_panel.rs（四态/收口）、app.rs（FIRST_DELAY 400ms/REPEAT 120ms/SbKey::step ConnsH=2/CHECKSUM_ALGOS 8 项含 NONE/必填 toast/about/hover）、ui.rs（列宽 59/帮助 44 行 8 组/About 40×7/头部标题/图区 chart_w clamp −93） | 逐文件通读（本轮会话记录） |
+| 退役标识反向自检 | 通过——`▲│█▼`/「点击外部关闭」/旧标题/「默认 SHA-256」/`v0.1.0-01` 全仓检索：features/qa 活跃断言零残留（残留仅为「原 X 退役」历史注记、空态引导文案「按 A 添加下载任务」（demo m3 仍保留，非退役对象）与 qa/runners 欠账（已登记）） | `rg -n '▲│█▼|点击外部关闭\|添加下载任务\|默认 SHA-256\|v0\.1\.0-01' project/features project/qa` |
+| Gherkin 结构检查 | 5 份修订 feature 表行结构 5/5 通过 | python 逐行表行完整性检查（本轮） |
+| APS 机检 | **未执行**（受限项） | 需 bb + APS 仓库（`.tools/` 不流转、无网络） |
 
 ### 对账口径（如存在基线）
-- 上游 v136 基线 = 3887P/0F。本轮测试计数 **3887 → 3889（+2）**，复算自洽
-  = 2 新测试均挂载 bin ezr（512→514）；sentinel 镜像断言为既有测试同步（净 0）；
-  main.rs/sentinel.rs 不被其余 14 测试目标挂载（bin 专属模块），计数不变。
-- arch 规则 14 失败行集合逐行比对 = 基线 8 行同集合，规则级守恒。
+- 本轮为纯规格轮，零代码改动：ezr 源码测试基线维持 v137 口径 3889P/0F 不变（未重跑——
+  代码与工具链均未触碰；Rust 工具链沙箱不持久，重跑需先按 rust.md 配方重建）。
+- 规格面对账：features 有效场景数 01-tui-display 23→22（14 退役、24 新增）；其余 4 份场景数
+  不变（口径修订）；qa 用例 QA-TD +1（24）、QA-TD-14 退役留空。
 
 ### 待办与待批（未决项）
-- **待操作者裁决（沿袭开放）：对话框拖拽起拖面/点击时机**（FR-01-110①/D38）——本轮
-  未触及，维持产品口径零改动。
-- **qa/runners/ 同步欠账**（沿袭 + v1.30/v1.31 增量）：QA 轮承接。
+- **待操作者裁决（沿袭开放）：对话框拖拽起拖面/点击时机**（FR-01-110①/D38）——本轮未触及，
+  维持产品口径零改动。
+- **待操作者知悉（本轮改判项，均照录 demo m3 权威口径，如需推翻请指示）**：
+  ①点击浮层外部统一 = 无任何操作（v1.29/v1.30 的 pieces/帮助「点击外部关闭」退役）；
+  ②校验语义改判——NONE 默认 + 非 NONE 算法校验码必填（原「任一算法留空 = 不校验」退役，
+  「无校验」路径改由 NONE 承载；CLI `-x` 与伴随文件来源不受影响）；
+  ③头部标题栏版本号移除（原「版本号随期号递进」退役，版本展示面迁移关于窗口，文案
+  `EZR Download v1.0.0` 不随期号变体 = D39，如需期号版本可改判）。
+- **qa/runners/ 同步欠账**（沿袭 + v1.32 增量，清单见遗留受限项）：QA 轮承接。
+- **APS 机检补跑**（本轮受限项）：工具链可用环境补过 3 份 UI feature。
 - **arch 规则 14 白名单扩展建议**（沿袭）：cleaner/architect 裁决。
 - **v147 时序 flake**（沿袭）：如复现，QA 轮放宽预算或加重试。
-- **请操作者实机复测**：真实终端下运行下载 → 按 q 退出 → 确认鼠标乱码消失
-  （pty 冒烟已模拟通过，真实终端模拟器行为以操作者实测为准）。
 
 ### 移交建议
-- 建议下一步运行 `six-pack/cleaner`（以本 handoff 为上游交接内容）：v137 修复切片
-  已全绿，按 cleaner 职责做保持行为清理、覆盖率提升、CRAP/DRY 审查与变异点扫描；
-  顺带裁决 arch 规则 14 白名单扩展（scroll|pos|follow）与存量 8 行形态。
-- 其后按链路 architect → hardender → QA。移交仅为建议，不构成自动流转（宪法第一章）。
+- 建议下一步运行 `six-pack/coder`（以本 handoff 为上游交接内容）：v1.32 规格已就绪待批，
+  按 coder 职责实现 m3 对齐（实现面建议顺序：①ScrollablePanel 组件 + 滚动条引擎（FR-01-109
+  重写，全实例替换旧 lazy_scrollbar）；②头部标题/图区（FR-01-94①⑤/95）；③对话框更名 +
+  校验 NONE/必填/提示删除（FR-01-01/87/50）；④FR-01-111 关于窗口 + O 键；⑤帮助八组 44 行；
+  ⑥模态统一口径（点击外部无操作）；并发面板 BT 七列仅更新预留常量/注释（01 期不触发））。
+  实现后 QA 轮顺带承接 qa/runners 同步欠账。
+- 其后按链路 cleaner → architect → hardender → QA。移交仅为建议，不构成自动流转（宪法第一章）。
 
-By coder.
+By specifier.
