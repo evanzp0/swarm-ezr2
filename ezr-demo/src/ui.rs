@@ -31,8 +31,10 @@
 //! 累计均为当前任务本次开始下载后的累计量（重新排队/重试时清零）；
 //! 仅「下载中」与「做种中」状态显示并发明细，其余状态（等待中/已暂停/校验中/
 //! 后期处理中/已失败/已完成）明细为空、活跃 0/0。
-//! 对话框：添加任务(URL+目录+并发+校验算法下拉+校验码+代理下拉) /
-//! 修改任务(并发+校验+校验码+代理，v1.5/FR-01-87 同步) / 删除任务(仅任务|任务和文件|取消)。
+//! 对话框：添加任务：HTTP(S)(URL+目录+并发+校验算法下拉+校验码+代理下拉) /
+//! 修改任务：HTTP(S)(并发+校验+校验码+代理，v1.5/FR-01-87 同步) / 删除任务(仅任务|任务和文件|取消)。
+//! 校验下拉首行 NONE（默认，不校验：校验码清空且不可输入）；其余算法校验码必填。
+//! 关于窗口（O）：居中显示 EZR Download v1.0.0。
 //! pieces 分块弹窗（P）：分块（piece）状态一览——🟩 已下载 / 🟦 正在下载（分配了
 //! 并发下载）/ 🟨 部分下载 / ⬜ 未下载；同一块「部分下载」且「正在下载」时只显示
 //! 🟦；仅支持分块下载的任务可打开（BT / 支持断点续传的 HTTP(S)）。
@@ -81,10 +83,10 @@ const LIGHT_BLUE: Color = Color::Rgb(122, 185, 242);
 /// 聚焦面板边框色（lazygit 主题默认 activeBorderColor = green + bold）
 const FOCUS_BORDER: Color = Color::Green;
 
-/// 是否存在浮层（对话框/pieces 弹窗/帮助窗口）：浮层打开时底层面板全部
-/// 降级为暗边框，焦点面板不再高亮（视觉焦点让位给模态浮层）
+/// 是否存在浮层（对话框/pieces 弹窗/帮助窗口/关于窗口）：浮层打开时底层面板
+/// 全部降级为暗边框，焦点面板不再高亮（视觉焦点让位给模态浮层）
 fn overlay_open(app: &App) -> bool {
-    app.dialog.is_some() || app.pieces_open || app.help_open
+    app.dialog.is_some() || app.pieces_open || app.help_open || app.about_open
 }
 
 /// 面板边框样式：聚焦 = 绿色加粗（lazygit activeBorderColor 口径），
@@ -562,32 +564,36 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect, with_chart: bool) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(BORDER))
-        .title(Line::from(vec![
-            Span::styled(
-                " ◆ ",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "EZR Downloader",
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("  v0.1.0-m1", Style::default().fg(DIM)),
-        ]));
+        .title(
+            // 标题左对齐（需求修订：左对齐，不居中）；标题单元
+            // " ◆ EZR Downloader " —— 名称前后各 1 列空白，前后 padding 距离相等
+            Line::from(vec![
+                Span::styled(
+                    " ◆ ",
+                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "EZR Downloader ",
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+        );
 
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // 右侧内嵌流量图：│ 分隔符 + 左右各 1 列空白 + 图宽 = 内容区 20%（第七轮
+    // 右侧内嵌流量图：│ 分隔符 + 图区（需求修订：图区左右不再留空白 padding，
+    // 与上下 padding 一致——图区紧贴分隔符与右边框）；图宽 = 内容区 20%（第七轮
     // 较此前 40% 减半），并保证字段区至少 92 列（不足时压缩图宽）；占内容区全高
     let chart_w = if with_chart && inner.height >= 3 && inner.width >= 49 {
-        (inner.width / 5).clamp(6, inner.width.saturating_sub(95).max(6))
+        (inner.width / 5).clamp(6, inner.width.saturating_sub(93).max(6))
     } else {
         0
     };
     let fields_w = if chart_w > 0 {
-        inner.width - chart_w - 3
+        inner.width - chart_w - 1
     } else {
         inner.width
     };
@@ -740,9 +746,10 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect, with_chart: bool) {
                 },
             );
         }
-        // 图：分隔符右侧留 1 列空白、图区右缘再留 1 列空白（无边框、占全高）
+        // 图：紧贴 │ 分隔符与右边框（需求修订：左右 0 列空白，与上下 padding
+        // 一致；无边框、占全高）
         let chart_area = Rect {
-            x: inner.x + fields_w + 2,
+            x: inner.x + fields_w + 1,
             width: chart_w,
             ..inner
         };
@@ -1630,9 +1637,9 @@ struct Row {
 fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) {
     let is_add = kind == DialogKind::Add;
     let (title, dw, dh) = if is_add {
-        (" 添加下载任务 ", 74u16, 11u16)
+        (" 添加任务：HTTP(S) ", 74u16, 11u16)
     } else {
-        (" 修改任务 ", 74, 9)
+        (" 修改任务：HTTP(S) ", 74, 9)
     };
     // 可拖拽定位：记忆位置优先（钳制在终端内），首帧居中并回填位置/热区
     let dlg = dialog_rect_at(area, app.dialog_pos, dw, dh);
@@ -1670,7 +1677,7 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
             d.proxy_open,
         )
     };
-    let (algo_name, algo_need) = CHECKSUM_ALGOS[ck_type.min(CHECKSUM_ALGOS.len() - 1)];
+    let (algo_name, _algo_need) = CHECKSUM_ALGOS[ck_type.min(CHECKSUM_ALGOS.len() - 1)];
     let proxy_label = app
         .proxy_labels
         .get(proxy_sel)
@@ -1683,7 +1690,8 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         rows.push(Row {
             label: "URL",
             value: url,
-            placeholder: "https://example.com/file.zip".to_string(),
+            // 需求修订：URL 占位提示删除（空值不再显示示例地址）
+            placeholder: String::new(),
             kind: RowKind::Text,
         });
         rows.push(Row {
@@ -1708,7 +1716,8 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
     rows.push(Row {
         label: "校验码",
         value: ck_value,
-        placeholder: format!("{} 位十六进制（可留空）", algo_need),
+        // 需求修订：校验码占位提示删除（算法要求以 H 帮助与提交校验为准）
+        placeholder: String::new(),
         kind: RowKind::Text,
     });
     rows.push(Row {
@@ -1747,9 +1756,7 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
                     "▾",
                     Style::default().fg(if focused { YELLOW } else { DIM }),
                 ));
-                if focused {
-                    spans.push(Span::styled("  Enter 选择算法", Style::default().fg(DIM2)));
-                }
+                // 需求修订：「Enter 选择算法」尾注删除（交互说明收敛于 H 帮助）
             }
             RowKind::ProxySel => {
                 spans.push(Span::styled(
@@ -1865,7 +1872,8 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
                         }),
                 ),
                 Span::styled(
-                    format!("{} 位", need),
+                    // NONE（不校验）无期望长度，右列显示占位破折号
+                    if *need == 0 { "—".to_string() } else { format!("{} 位", need) },
                     Style::default().fg(if sel { ACCENT } else { DIM2 }).bg(bg),
                 ),
             ]);
@@ -2242,6 +2250,7 @@ fn help_lines() -> Vec<Line<'static>> {
         kd("鼠标左键", "点击面板聚焦；点击任务/连接选中明细"),
         kd("页脚命令", "A/D/M/Q/H 图例可点击：按压高亮，松开执行"),
         kd("H", "打开 / 关闭本帮助窗口"),
+        kd("O", "打开 / 关闭关于窗口（About）"),
         kd("G", "收起/展开 任务详情 + 并发连接面板"),
         kd("Esc", "关闭弹窗"),
         kd("Q", "退出程序（主界面；弹窗内先关窗）"),
@@ -2270,7 +2279,7 @@ fn help_lines() -> Vec<Line<'static>> {
         kd("点击 ↑↓←→", "步进滚动 1 格；按住不放自动连发"),
         kd("点击轨道", "朝点击方向整页滚动（可按住连发）"),
         kd("方向键", "面板聚焦时 ↑↓ 选择/纵向滚动、←→ 横向滚动（并发）"),
-        sec("弹窗（添加/修改/删除/pieces/帮助）"),
+        sec("弹窗（添加/修改/删除/pieces/帮助/关于）"),
         kd("Tab / ↑↓", "切换字段/焦点（下拉框内选择选项）"),
         kd("Enter", "确认"),
         kd("Esc", "取消/关闭"),
@@ -2333,6 +2342,68 @@ fn draw_help(f: &mut Frame, app: &mut App, area: Rect) {
     sb.vertical(lines.len(), view_h, start);
     app.help_sb = sb.render_bars(f, rect).vertical;
     app.help_max_scroll = lines.len().saturating_sub(view_h.max(1));
+}
+
+// ---------------------------------------------------------------------------
+// 关于窗口（O 快捷键）
+// ---------------------------------------------------------------------------
+
+/// 关于窗口固定尺寸（宽×高，含边框）
+const ABOUT_W: u16 = 40;
+const ABOUT_H: u16 = 7;
+
+/// 关于窗口（O）：模态浮层——绿色高亮边框（与主面板聚焦色统一）；内容区垂直
+/// 居中一行「EZR Download v1.0.0」（白色加粗）；支持鼠标拖拽移动（位置记忆）；
+/// Esc/O/q/Q 关闭；点击窗口外部 = 无任何操作（§4.2.5 模态统一口径）。
+fn draw_about(f: &mut Frame, app: &mut App, area: Rect) {
+    // 可拖拽定位：记忆位置优先（钳制在终端内），首帧居中并回填
+    let rect = match app.about_pos {
+        Some((px, py)) => {
+            let dw = ABOUT_W.min(area.width);
+            let dh = ABOUT_H.min(area.height);
+            Rect {
+                x: px.min(area.width.saturating_sub(dw)),
+                y: py.min(area.height.saturating_sub(dh)),
+                width: dw,
+                height: dh,
+            }
+        }
+        None => {
+            let r = dialog_rect(area, ABOUT_W, ABOUT_H);
+            app.about_pos = Some((r.x, r.y));
+            r
+        }
+    };
+    f.render_widget(Clear, rect);
+    // 浮层边界 CJK 宽字符切割处理（残影根治点，与对话框同口径）
+    clip_wide_at_edges(f, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(panel_border_style(true))
+        .title(Span::styled(" About ", panel_title_style(true)));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    app.about_area = Some(rect);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    // 内容：居中一行版本标识（需求文案：EZR Download v1.0.0）
+    let line = Line::from(Span::styled(
+        "EZR Download v1.0.0",
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    ));
+    f.render_widget(
+        Paragraph::new(line).alignment(Alignment::Center),
+        Rect {
+            x: inner.x,
+            y: inner.y + inner.height / 2,
+            width: inner.width,
+            height: 1,
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2404,5 +2475,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // 帮助窗口（最上层；H 打开，模态：打开时底层面板暗框）
     if app.help_open {
         draw_help(f, app, area);
+    }
+
+    // 关于窗口（最上层；O 打开，模态：打开时底层面板暗框）
+    if app.about_open {
+        draw_about(f, app, area);
     }
 }

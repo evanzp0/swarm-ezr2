@@ -236,7 +236,7 @@ def main():
             tui.pump(0.3)
             data = tui.bytes_since_mark
             ok_noclear = CLEAR_ALL not in data
-            box = locate_dialog_box(tui, "添加下载任务")
+            box = locate_dialog_box(tui, "添加任务：HTTP(S)")
             if box is None:
                 check(f"{cols} 列: 对话框出现", False)
                 continue
@@ -256,7 +256,7 @@ def main():
         mask, snapshot = animated_mask(tui)
 
         print("== 场景 1：添加对话框 打开/关闭 ==")
-        cycle(tui, "添加对话框", [b"a"], [b"\x1b"], "添加下载任务", snapshot, mask)
+        cycle(tui, "添加对话框", [b"a"], [b"\x1b"], "添加任务：HTTP(S)", snapshot, mask)
 
         print("== 场景 2：校验算法下拉 展开/收起/关窗 ==")
         tui.send(b"a", wait=0.5)
@@ -277,7 +277,7 @@ def main():
         tui.send(b"\x1b", wait=0.5)   # 关闭对话框
         tui.pump(0.3)
         check("校验下拉: 收起+关窗零清屏", CLEAR_ALL not in tui.bytes_since_mark)
-        dbox = locate_dialog_box(tui, "添加下载任务")
+        dbox = locate_dialog_box(tui, "添加任务：HTTP(S)")
         residue_scan(tui, snapshot, "校验下拉", [dbox] if dbox else [])
 
         print("== 场景 3：删除确认对话框 打开/关闭 ==")
@@ -299,7 +299,7 @@ def main():
         stable = tui.bytes_since_mark
         check("稳定期 1s 零清屏", CLEAR_ALL not in stable)
         check("稳定期浮层仍在（标题可见）",
-              any("添加下载任务" in row_text(tui, y) for y in range(tui.rows)))
+              any("添加任务：HTTP(S)" in row_text(tui, y) for y in range(tui.rows)))
         tui.send(b"\x1b", wait=0.5)
     finally:
         tui.close()

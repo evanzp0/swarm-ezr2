@@ -29,8 +29,8 @@
 场景 D（5s end）：      跳到最后一个任务（BT 下载中）→ [BT] 徽标黄色、
                         分块 x/y · 256 KB/块且 y=15984（4.19GB/256KB）。
 场景 E（5s a）：        添加对话框打开：三按钮 [ 立即下载 ] [ 仅添加 ] [ 取消 ]（v1.15/FR-01-103 同步）；
-                        并发预填 4；校验行默认 SHA-256；代理行默认直连；
-                        校验码占位「64 位十六进制（可留空）」；提示行「Enter 立即下载」；无『最大并发』提示。
+                        标题「添加任务：HTTP(S)」；并发预填 4；校验行默认 NONE（不校验）；
+                        代理行默认直连；URL/校验码无占位提示；无『最大并发』提示。
 场景 F（10s space）：   暂停 ubuntu 释放槽位 → 队首 rust 自动获得槽位并从断点
                         继续下载（[下载中]）；imagenet 递补为排队第 1 位；
                         toast「▶ 槽位空闲，开始下载: rust-…」。
@@ -44,12 +44,14 @@
                         tensorflow 第 2 位；再次运行：已暂停 rust 再按 Space（槽位满
                         5/5，v1.8 有空槽也一样）→ 回到等待中排队第 1 位，toast
                         「继续下载（从断点恢复，已进入等待队列）」（一律重新排队口径）。
-场景 I（16s 键盘）：    校验算法下拉框键盘流：Tab×3 → Enter 展开 → ↓ 选 SHA-384 →
-                        输入非法校验码 → toast「需为 96 位（当前 4 位）」；切回 MD5、
-                        输入合法 32 位校验码 → 确认建任务，详情出现「校验 MD5 ·…（完成后校验）」。
-场景 J（两轮鼠标）：    先跑一轮探测「SHA-256 ▾」与下拉项坐标；再以 SGR 鼠标点击
+场景 I（17s 键盘）：    校验下拉键盘流（NONE 默认）：Tab×3 → Enter 展开 → ↓ 选 MD5 →
+                        输入非法校验码 → toast「需为 32 位（当前 4 位）」；空校验码提交
+                        → toast「不可为空」（必填，需求修订）；输入合法 32 位 →
+                        确认建任务（详情「校验 MD5 ·…（待校验）」）；重开对话框
+                        切 NONE（校验码清空）→ 输入被拦截 → 确认建任务（无校验码）。
+场景 J（两轮鼠标）：    先跑一轮探测「NONE ▾」（默认选中）与下拉项坐标；再以 SGR 鼠标点击
                         校验算法行展开下拉框 → 点击 SHA-512 选项 → 字段变为
-                        「SHA-512 ▾」且下拉框收起。
+                        「SHA-512 ▾」且下拉框收起、校验码无占位提示。
 场景 K（17s 键盘）：    gpt4all 启动 10.6s 后 SHA-256 校验失败（不自动重试，
                         详情「下载内容与校验值不符」）→ 选中后按 R →
                         toast「重新校验（无块重传）」（生产 v1.17/D10 同步）→
@@ -65,8 +67,9 @@
                         页签行），右缘 = 屏幕右缘 = 任务详情右缘；流量图 = 单色面积
                         图（▁▂▃▄▅▆▇█ 八级部分块、1/8 格亚字符精度、自底向上填充，
                         全图仅一种颜色 = 下载淡蓝，REQ-8.5），内嵌头部右侧（宽
-                        20%、占 3 行内容区全高、仅下行流量；│ 分隔符 + 图区左右各
-                        1 列空白；双向 EMA + 窗口 min–max 缩放，每列双子样本取较
+                        20%、占 3 行内容区全高、仅下行流量；│ 分隔符 + 图区紧贴
+                        分隔符与右边框、左右无空白 padding，与上下 padding 一致；
+                        双向 EMA + 窗口 min–max 缩放，每列双子样本取较
                         大值，无断列、无间隔、无盲文点阵）；头部字段顺序 = 并发、会
                         话已下
                         载、全局、峰值（单行、峰值写在面板内容里）；「任务队列」
@@ -424,20 +427,22 @@ def scenario_d():
 
 
 def scenario_e():
-    print("\n== 场景 E：添加对话框——三按钮（v1.15/FR-01-103）+ 6 字段，默认 SHA-256 ==")
+    print("\n== 场景 E：添加对话框——三按钮（v1.15/FR-01-103）+ 6 字段，默认 NONE ==")
     samples, _ = run(120, 44, 5.0, keys=["a"], key_delay_frac=0.3)
     # 取按键后的最后几帧（对话框稳定可见）
     final_rows = samples[-1][1]
     final = "\n".join(final_rows)
-    check("E1 对话框已打开", "添加下载任务" in final)
+    check("E1 对话框已打开（标题「添加任务：HTTP(S)」）", "添加任务：HTTP(S)" in final)
     dialog_rows = [r for r in final_rows if any(
-        s in r for s in ("添加下载任务", "URL", "保存到", "并发", "校验", "代理", "直连",
+        s in r for s in ("添加任务：HTTP(S)", "URL", "保存到", "并发", "校验", "代理", "直连",
                          "立即下载", "仅添加", "取消", "Enter 立即下载"))]
     dlg_text = "\n".join(dialog_rows)
     check("E2 无『最大并发』提示文字", "最大并发" not in dlg_text and "最大并发" not in final)
-    check("E3 校验行默认 SHA-256 下拉指示", re.search(r"校验\s*>\s*SHA-256 ▾", dlg_text) is not None,
+    check("E3 校验行默认 NONE（不校验）下拉指示（需求修订）",
+          re.search(r"校验\s*>\s*NONE ▾", dlg_text) is not None,
           next((r.strip()[:44] for r in dialog_rows if "▾" in r), ""))
-    check("E4 校验码占位为 64 位十六进制（可留空）", "64 位十六进制（可留空）" in dlg_text)
+    check("E4 URL/校验码无占位提示（需求修订）",
+          "example.com" not in dlg_text and "位十六进制" not in dlg_text)
     check("E5 并发字段预填默认值 4", re.search(r"并发\s*>\s*4", dlg_text) is not None,
           next((r.strip()[:40] for r in dialog_rows if "并发" in r and ">" in r), ""))
     check("E6 底部提示行已删除（需求修订：说明收敛到 H 帮助）",
@@ -468,37 +473,45 @@ def find_text_pos(screen, needle: str):
 
 
 def scenario_i():
-    print("\n== 场景 I：校验算法下拉框键盘流 + 校验码格式验证 + 合法 MD5 确认建任务 ==")
+    print("\n== 场景 I：校验下拉键盘流（NONE 默认/必填校验码/NONE 输入拦截）+ MD5 建任务 ==")
     keys = (["a", "tab", "tab", "tab", "enter", "down", "enter", "tab"]
-            + ["a", "b", "c", "d", "enter"]          # SHA-384 + 仅 4 位校验码 → 长度报错
+            + ["a", "b", "c", "d", "enter"]          # MD5 + 仅 4 位校验码 → 长度报错
             + ["bs"] * 4                              # 清空校验码
-            + ["backtab", "enter", "home", "enter", "tab"]  # 下拉切回 MD5
+            + ["enter"]                               # 空校验码提交 → 必填报错（需求修订）
             + list("d41d8cd98f00b204e9800998ecf8427e")       # 合法 32 位
-            + ["enter"])
-    samples, _ = run(120, 44, 17.0, keys=keys, key_delay_frac=0.12)
+            + ["enter"]                               # 确认建任务（MD5 校验）
+            + ["a", "tab", "tab", "tab", "enter", "home", "enter", "tab"]  # 下拉切 NONE（校验码清空）
+            + list("d41d8cd98f00b204e9800998ecf8427e")       # NONE 下输入被拦截（需求修订）
+            + ["enter"])                              # 确认建任务（NONE = 不校验）
+    # 键序拉长（两轮建任务），key_interval 压到 0.08s 保证 17s 内全部发完
+    samples, _ = run(120, 44, 17.0, keys=keys, key_delay_frac=0.12, key_interval=0.08)
     all_text = "\n".join("".join(rows) for _, rows in samples)
     final_rows = samples[-1][1]
     final = "\n".join(final_rows)
 
-    # 下拉框曾展开：全部 7 种算法与期望位数出现过
-    for item in ("MD5", "SHA-1", "SHA-224", "SHA-384", "SHA-512", "Adler-32"):
+    # 下拉框曾展开：NONE（不校验）与全部算法出现过
+    for item in ("NONE", "MD5", "SHA-1", "SHA-224", "SHA-384", "SHA-512", "Adler-32"):
         check(f"I1 下拉框展示 {item}", item in all_text)
-    check("I2 非法校验码报错（SHA-384 需 96 位，当前 4 位）",
-          "SHA-384 校验码需为 96 位十六进制（当前 4 位）" in all_text)
-    check("I3 对话框已确认关闭", "添加下载任务" not in final)
-    check("I4 toast「已添加任务」出现", "已添加任务 #" in all_text)
-    # 新任务自动选中：详情出现校验行（MD5 · 校验码前缀 · 待校验）
-    ck_rows = [r for r in final_rows if re.search(r"校验\s+MD5 · d41d8cd98f", r)]
-    check("I5 详情出现校验行「MD5 · d41d8cd98f…（待校验）」",
-          ck_rows and "（待校验）" in "\n".join(ck_rows),
-          ck_rows[0].strip()[:60] if ck_rows else "not found")
+    check("I2 非法校验码报错（MD5 需 32 位，当前 4 位）",
+          "MD5 校验码需为 32 位十六进制（当前 4 位）" in all_text)
+    check("I2b 空校验码报错（MD5 校验码不可为空，必填，需求修订）",
+          "MD5 校验码不可为空（需 32 位十六进制）" in all_text)
+    check("I3 对话框已确认关闭", "添加任务：HTTP(S)" not in final)
+    check("I4 toast「已添加任务」出现（MD5 + NONE 两次）",
+          all_text.count("已添加任务 #") >= 2)
+    # 第一轮：MD5 + 合法校验码 → 详情出现校验行（MD5 · 校验码前缀 · 待校验）
+    check("I5 MD5 任务详情出现校验行「MD5 · d41d8cd98f…（待校验）」",
+          "MD5 · d41d8cd98f" in all_text and "（待校验）" in all_text)
+    # 第二轮：NONE（不校验）→ 输入被拦截 + 建任务无校验码（末帧详情无校验行）
+    check("I6 NONE 下校验码输入被拦截且新任务无校验码（需求修订）",
+          "d41d8cd" not in final)
 
 
 def scenario_j():
     print("\n== 场景 J：鼠标点击展开校验算法下拉框并选择 SHA-512 ==")
-    # 第一轮：仅打开对话框，探测「SHA-256 ▾」字段与下拉项坐标（布局确定性复用）
+    # 第一轮：仅打开对话框，探测「NONE ▾」（默认选中）字段与下拉项坐标（布局确定性复用）
     _, screen1 = run(120, 44, 5.0, keys=["a"], key_delay_frac=0.3)
-    pos_field = find_text_pos(screen1, "SHA-256 ▾")
+    pos_field = find_text_pos(screen1, "NONE ▾")
     check("J1 第一轮定位校验算法字段", pos_field is not None, str(pos_field))
     if pos_field is None:
         return
@@ -521,7 +534,7 @@ def scenario_j():
     final3 = "\n".join(samples3[-1][1])
     check("J4 点击 SHA-512 后字段变为「SHA-512 ▾」", "SHA-512 ▾" in final3)
     check("J5 下拉框已收起（标题消失）", "校验算法" not in final3)
-    check("J6 校验码占位同步为 128 位", "128 位十六进制（可留空）" in final3)
+    check("J6 校验码无占位提示（需求修订）", "位十六进制" not in final3)
 
 
 def scenario_f():
@@ -824,8 +837,9 @@ def scenario_n():
     def stroke_cols(row, start):
         return [x for x in range(start, screen.columns) if row[x] in blocks]
 
-    # 流量图区 = 头部内容区右端（120 列终端：内宽 118 = 字段区 92 + │ 1 + 空白 1
-    # + 图区 23 + 空白 1）；左/右界 = rows1-3 中块字符（面积填充）最左/最右列
+    # 流量图区 = 头部内容区右端（120 列终端：内宽 118 = 字段区 94 + │ 1
+    # + 图区 23；需求修订：图区左右不留空白，与上下 padding 一致）；
+    # 左/右界 = rows1-3 中块字符（面积填充）最左/最右列
     all_strokes = [x for ty in (1, 2, 3) for x in stroke_cols(true_row(screen, ty), 1)]
     chart_l = min(all_strokes) if all_strokes else screen.columns - 24
     chart_r = max(all_strokes) if all_strokes else chart_l
@@ -839,12 +853,11 @@ def scenario_n():
     check("N2c 图区占内容区右端约 20%（23±2 列）且 rows1-3 均有波形",
           21 <= chart_r - chart_l + 1 <= 25 and bool(all_strokes),
           f"图宽={chart_r - chart_l + 1}")
-    sep_x = chart_l - 2  # │ 分隔符列（图区左侧 1 列空白 + 分隔符）
-    check("N2d 行2 = 分割线贯通字段区 + │ 分隔符 + 图区左右各 1 列留白",
+    sep_x = chart_l - 1  # │ 分隔符列（需求修订：图区紧贴分隔符，左右 0 列空白）
+    check("N2d 行2 = 分割线贯通字段区 + │ 分隔符 + 图区直达右边框（左右无留白）",
           all(r2[x] == "─" for x in range(1, sep_x))
-          and r2[sep_x] == "│" and r2[sep_x + 1] == " "
-          and r2[screen.columns - 2] == " "
-          and all(r2[x] not in borders for x in range(chart_l, screen.columns - 1)),
+          and r2[sep_x] == "│"
+          and all(r2[x] not in borders for x in range(sep_x + 1, screen.columns - 1)),
           repr(r2[1:6]) + repr(r2[sep_x - 1:sep_x + 2]))
     d3 = screen.display[3]  # display 行 CJK 连续（true_row 会在宽字后插占位列）
     check("N2e 页签行并入头部（row3 = 正在下载 ( → 已完成 ( → │ → 下载槽位，内联左对齐）",
@@ -1145,7 +1158,7 @@ def scenario_r():
     check("R1-2 同 URL 同目录重复添加被拒（toast「任务已存在」）",
           "任务已存在" in all_text1)
     dup_open = any(
-        "任务已存在" in "\n".join(rows) and "添加下载任务" in "\n".join(rows)
+        "任务已存在" in "\n".join(rows) and "添加任务：HTTP(S)" in "\n".join(rows)
         for _, rows in samples1)
     check("R1-3 拒绝后对话框保持打开（与其他校验失败一致）", dup_open)
     check("R1-4 仅删除任务（保留文件）",

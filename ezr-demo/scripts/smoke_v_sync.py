@@ -74,9 +74,10 @@ total_bad += smoke("主界面（详情精简）", [b"\x1b[B"] * 6, lambda t: [
 ])
 
 total_bad += smoke("添加对话框 6 字段", [b"a"], lambda t: [
-    ("对话框打开", "添加下载任务" in t),
+    ("对话框打开", "添加任务：HTTP(S)" in t),
     ("代理行 直连 ▾", "代理" in t and "直连 ▾" in t),
-    ("校验行 SHA-256 ▾", "SHA-256 ▾" in t),
+    ("校验行默认 NONE ▾（需求修订）", "NONE ▾" in t),
+    ("URL/校验码无占位提示（需求修订）", "example.com" not in t and "位十六进制" not in t),
     ("底部提示行已删除（需求修订）", "校验码留空 = 不校验" not in t),
 ])
 
@@ -88,7 +89,7 @@ total_bad += smoke("代理下拉", [b"a", b"\t", b"\t", b"\t", b"\t", b"\t", b"\
 ])
 
 total_bad += smoke("修改对话框", [b"m"], lambda t: [
-    ("标题「修改任务」", "修改任务" in t),
+    ("标题「修改任务：HTTP(S)」", "修改任务：HTTP(S)" in t),
     ("并发预填 8", "并发" in t and "> 8" in t),
     ("代理回显命名代理", "办公网代理（http）" in t),
     ("底部提示已删除（需求修订）", "确定后立即生效" not in t),
@@ -102,7 +103,7 @@ total_bad += smoke("清已完成（状态级）", [b"t", b"c"], lambda t: [
 # 空态引导：正在下载页签逐个删除后（借 D 对话框路径太长，此处直验渲染分支文案已在代码内），
 # 改验「区域过小」之外的空态文案——已完成页签仅剩做种任务时不清空，跳过该路径。
 total_bad += smoke("修改对话框·已完成拒绝", [b"t", b"\x1b[B", b"m"], lambda t: [
-    ("已完成任务按 m → toast 拒绝", "已完成任务不可修改" in t or "修改任务" not in t),
+    ("已完成任务按 m → toast 拒绝", "已完成任务不可修改" in t or "修改任务：HTTP(S)" not in t),
 ])
 
 print(f"\n总失败项: {total_bad}")

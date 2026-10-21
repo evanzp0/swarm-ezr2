@@ -652,8 +652,10 @@ fn alloc_task_id(tasks: &[Task]) -> u32 {
     }
 }
 
-/// 校验算法表（添加对话框下拉选择）：（显示名，期望十六进制长度）
-pub const CHECKSUM_ALGOS: [(&str, usize); 7] = [
+/// 校验算法表（添加对话框下拉选择）：（显示名，期望十六进制长度）。
+/// 首行 NONE = 不校验（期望长度 0，仅作下拉占位显示）；其余算法校验码必填。
+pub const CHECKSUM_ALGOS: [(&str, usize); 8] = [
+    ("NONE", 0),
     ("MD5", 32),
     ("SHA-1", 40),
     ("SHA-224", 56),
@@ -662,6 +664,9 @@ pub const CHECKSUM_ALGOS: [(&str, usize); 7] = [
     ("SHA-512", 128),
     ("Adler-32", 8),
 ];
+
+/// 校验算法下拉中「NONE（不校验）」的下标（默认选中项）
+pub const CK_NONE: usize = 0;
 
 /// 任务的完整性校验码（添加对话框可选填）
 #[derive(Clone, Debug)]
@@ -708,9 +713,10 @@ pub struct Dialog {
     pub conns: String,
     /// Add: 用户是否手动修改过并发数（未修改时随 URL 类型自动同步默认值）
     pub conns_edited: bool,
-    /// Add: 校验算法在 CHECKSUM_ALGOS 中的下标（默认 SHA-256 = 3）
+    /// Add: 校验算法在 CHECKSUM_ALGOS 中的下标（默认 NONE = 0，不校验）
     pub ck_type: usize,
-    /// Add: 校验码输入缓冲（十六进制，可留空 = 不校验）
+    /// Add: 校验码输入缓冲（十六进制；算法为 NONE 时清空且不可输入，
+    /// 其余算法必填）
     pub ck_value: String,
     /// Add: 校验算法下拉框是否展开
     pub ck_open: bool,
@@ -774,6 +780,14 @@ pub struct App {
     pub focus: Panel,
     /// 帮助窗口（H 快捷键）是否打开
     pub help_open: bool,
+    /// 关于窗口（O 快捷键）是否打开
+    pub about_open: bool,
+    /// 关于窗口左上角位置（鼠标拖拽移动记忆；None = 打开时居中）
+    pub about_pos: Option<(u16, u16)>,
+    /// 关于窗口拖拽中的抓取偏移（指针相对窗口左上角）
+    pub about_drag: Option<(u16, u16)>,
+    /// 关于窗口区域（由 ui 层每帧回填；拖拽的命中测试）
+    pub about_area: Option<Rect>,
     /// 帮助窗口内容滚动偏移（以“行”为单位；渲染层按内容高度馴制）
     pub help_scroll: usize,
     /// 帮助窗口左上角位置（鼠标拖拽移动记忆；None = 打开时居中）
@@ -924,6 +938,10 @@ impl App {
             frame: 0,
             quit: false,
             help_open: false,
+            about_open: false,
+            about_pos: None,
+            about_drag: None,
+            about_area: None,
             help_scroll: 0,
             help_pos: None,
             help_drag: None,
@@ -1719,12 +1737,23 @@ impl App {
             // 统一进面板焦点模型：聚焦面板后 ↑↓ 选择、B 断开）
             return;
         }
+        // 关于窗口最上层模态：Esc/O/q/Q 关闭（先关窗不退出），其余键忽略
+        if self.about_open {
+            match code {
+                KeyCode::Esc
+                | KeyCode::Char('o')
+                | KeyCode::Char('O')
+                | KeyCode::Char('q')
+                | KeyCode::Char('Q') => self.close_about(),
+                _ => {}
+            }
+            return;
+        }
         // 对话框打开时，按键优先交给对话框
         if self.dialog.is_some() {
             self.on_dialog_key(code);
             return;
         }
-        // pieces 分块弹窗打开时进入模态：按键仅用于滚动与关闭
         //（q/Q 同为关闭而非退出——弹窗内先关窗，避免误触直接退出应用）
         if self.pieces_open {
             match code {
@@ -1744,7 +1773,7 @@ impl App {
             return;
         }
         // 帮助窗口模态：滚动翻阅分类帮助；Esc/H/q 关闭（q 同 pieces 口径：
-        // 先关窗不退出）
+        // 先关窗不退出）；O 打开关于窗口（About 叠于帮助之上，z-order 最上层）
         if self.help_open {
             match code {
                 KeyCode::Esc
@@ -1752,6 +1781,7 @@ impl App {
                 | KeyCode::Char('H')
                 | KeyCode::Char('q')
                 | KeyCode::Char('Q') => self.help_open = false,
+                KeyCode::Char('o') | KeyCode::Char('O') => self.open_about(),
                 KeyCode::Up => self.help_scroll = self.help_scroll.saturating_sub(1),
                 KeyCode::Down => self.help_scroll += 1, // 渲染层钳制
                 KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(8),
@@ -1782,6 +1812,8 @@ impl App {
                 self.help_scroll = 0;
                 // help_pos 保留上次拖拽位置；None = 渲染层首帧居中并回填
             }
+            // O：关于窗口（About，显示 EZR Download v1.0.0；Esc/O/q 关闭）
+            KeyCode::Char('o') | KeyCode::Char('O') => self.open_about(),
             // ↑/↓：统一列表选择交互——聚焦任务列表 = 选任务；聚焦并发连接 =
             // 选连接明细（原 Ctrl+↑↓ 语义，修订：移除 Ctrl 组合键方式）。
             // A 形态列表的选择即纵向滚动（视口即时跟随，§4.1.6）
@@ -2020,8 +2052,11 @@ impl App {
                 d.ck_sel = d.ck_type;
             }
         } else if focus == 4 {
-            // 校验码：仅接受十六进制字符，最多 128 位（SHA-512）
-            if c.is_ascii_hexdigit() && self.dialog.as_ref().unwrap().ck_value.chars().count() < 128
+            // 校验码：仅接受十六进制字符，最多 128 位（SHA-512）；
+            // 算法为 NONE（不校验）时不可输入（需求：NONE 下校验码清空禁输入）
+            if self.dialog.as_ref().unwrap().ck_type != CK_NONE
+                && c.is_ascii_hexdigit()
+                && self.dialog.as_ref().unwrap().ck_value.chars().count() < 128
             {
                 self.dialog.as_mut().unwrap().ck_value.push(c);
             }
@@ -2051,7 +2086,11 @@ impl App {
                 d.ck_sel = d.ck_type;
             }
         } else if focus == 2 {
-            if c.is_ascii_hexdigit() && self.dialog.as_ref().unwrap().ck_value.chars().count() < 128
+            // 校验码：仅接受十六进制字符，最多 128 位（SHA-512）；
+            // 算法为 NONE（不校验）时不可输入（需求：NONE 下校验码清空禁输入）
+            if self.dialog.as_ref().unwrap().ck_type != CK_NONE
+                && c.is_ascii_hexdigit()
+                && self.dialog.as_ref().unwrap().ck_value.chars().count() < 128
             {
                 self.dialog.as_mut().unwrap().ck_value.push(c);
             }
@@ -2110,9 +2149,20 @@ impl App {
             conns_raw.parse::<usize>().unwrap_or(0).clamp(1, 64)
         };
 
-        // 校验：空 = 清除；非空同添加对话框合法性口径，非法 → 不生效 + 聚焦校验码字段
-        let checksum = if ck_raw.is_empty() {
+        // 校验：NONE = 不校验（清除校验码）；其余算法同添加对话框合法性口径
+        //（校验码必填，非空同添加对话框合法性），非法 → 不生效 + 聚焦校验码字段
+        let checksum = if ck_type == CK_NONE {
             None
+        } else if ck_raw.is_empty() {
+            let (algo, need) = CHECKSUM_ALGOS[ck_type.min(CHECKSUM_ALGOS.len() - 1)];
+            self.set_toast(format!(
+                "⚠ {} 校验码不可为空（需 {} 位十六进制）",
+                algo, need
+            ));
+            if let Some(d) = self.dialog.as_mut() {
+                d.focus = 2;
+            }
+            return;
         } else {
             let (algo, need) = CHECKSUM_ALGOS[ck_type.min(CHECKSUM_ALGOS.len() - 1)];
             let v = ck_raw.to_lowercase();
@@ -2224,9 +2274,20 @@ impl App {
         // 代理选择一并先读出（借用收窄：后续 sync_sim_sidecars 需要 &mut self）
         let proxy_sel = d.proxy_sel.min(self.proxy_options.len() - 1);
 
-        // 校验码验证：非空时必须是纯十六进制且长度与算法匹配
-        let checksum = if ck_raw.is_empty() {
+        // 校验码验证：NONE = 不校验（无需校验码）；其余算法校验码必填，
+        // 非空时必须是纯十六进制且长度与算法匹配
+        let checksum = if ck_type == CK_NONE {
             None
+        } else if ck_raw.is_empty() {
+            let (algo, need) = CHECKSUM_ALGOS[ck_type.min(CHECKSUM_ALGOS.len() - 1)];
+            self.set_toast(format!(
+                "⚠ {} 校验码不可为空（需 {} 位十六进制）",
+                algo, need
+            ));
+            if let Some(d) = self.dialog.as_mut() {
+                d.focus = 4;
+            }
+            return;
         } else {
             let (algo, need) = CHECKSUM_ALGOS[ck_type.min(CHECKSUM_ALGOS.len() - 1)];
             let v = ck_raw.to_lowercase();
@@ -2458,17 +2519,30 @@ impl App {
             dir: "/srv/downloads".to_string(),
             conns: default_conns(proto).to_string(),
             conns_edited: false,
-            // 校验算法默认 SHA-256，校验码留空 = 不校验
-            ck_type: 3,
+            // 校验算法默认 NONE（不校验，下拉首行；校验码清空且不可输入）
+            ck_type: CK_NONE,
             ck_value: String::new(),
             ck_open: false,
-            ck_sel: 3,
+            ck_sel: CK_NONE,
             proxy_sel: self.default_proxy_sel,
             proxy_open: false,
             focus: 0,
             task_name: String::new(),
             task_id: None,
         });
+    }
+
+    /// 打开关于窗口（O 快捷键）：居中显示 EZR Download v1.0.0
+    pub fn open_about(&mut self) {
+        self.about_open = true;
+        // about_pos 保留上次拖拽位置；None = 渲染层首帧居中并回填
+    }
+
+    /// 关闭关于窗口
+    pub fn close_about(&mut self) {
+        self.about_open = false;
+        self.about_area = None;
+        self.about_drag = None;
     }
 
     /// 打开修改任务对话框（v1.5/FR-01-87 同步）：四字段预填当前值；
@@ -2492,7 +2566,7 @@ impl App {
         let ck_type = CHECKSUM_ALGOS
             .iter()
             .position(|(n, _)| checksum.as_ref().is_some_and(|c| c.algo == *n))
-            .unwrap_or(3);
+            .unwrap_or(CK_NONE); // 无校验码 → NONE（不校验）
         // 选项表未收录时追加兜底项保证回显一致（正常流都在表内）
         let proxy_sel = match self.proxy_options.iter().position(|o| o == &proxy) {
             Some(i) => i,
@@ -2563,6 +2637,39 @@ impl App {
     // -----------------------------------------------------------------------
 
     pub fn on_mouse(&mut self, m: MouseEvent) {
+        // 关于窗口最上层（模态）：左键按住窗口内任意位置拖拽移动；点击窗口
+        // 外部 = 无任何操作（全部浮层统一口径，§4.2.5）；无滚动条、无滚轮内容
+        if self.about_open {
+            match m.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    // 模态接管：清除页脚 chip 按压态（模态期页脚不可达）
+                    self.footer_press = None;
+                    if Self::pointer_in(&self.about_area, m.column, m.row) {
+                        // 开始拖拽：记录指针相对窗口左上角的抓取偏移
+                        if let Some(r) = self.about_area {
+                            self.about_drag = Some((
+                                m.column.saturating_sub(r.x),
+                                m.row.saturating_sub(r.y),
+                            ));
+                        }
+                    }
+                }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    if let Some((dx, dy)) = self.about_drag {
+                        self.about_pos = Some((
+                            m.column.saturating_sub(dx),
+                            m.row.saturating_sub(dy),
+                        ));
+                    }
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    self.about_drag = None;
+                    self.sb_release();
+                }
+                _ => {}
+            }
+            return;
+        }
         // 帮助窗口最上层（模态）：滚轮滚动帮助内容；左键按住窗口内任意
         // 位置拖拽移动（滚动条上的按下除外——拖滑块 = 滚动内容，§4.1.3）；
         // 点击窗口外部 = 无任何操作（全部浮层统一口径，§4.2.5）
@@ -2695,6 +2802,10 @@ impl App {
                             let d = self.dialog.as_mut().unwrap();
                             d.ck_type = i;
                             d.ck_sel = i;
+                            // 选中 NONE（不校验）：校验码清空且不可输入
+                            if d.ck_type == CK_NONE {
+                                d.ck_value.clear();
+                            }
                             d.ck_open = false;
                         } else if let Some(d) = self.dialog.as_mut() {
                             // 点击下拉框外部：仅收起下拉框
@@ -3543,19 +3654,27 @@ fn proxy_dropdown_open_key(d: &mut Dialog, n: usize, code: KeyCode) {
 
 /// 校验算法下拉框展开态逐键处理（Up/Down/Home/End 选择，Enter/Esc 关闭，
 /// Tab/BackTab 关闭并跳转焦点，其余键关闭）。消费所有按键。
+/// 选中 NONE（不校验）时实时清空校验码（选中即改值口径；NONE 下不可输入）。
 fn ck_dropdown_open_key(d: &mut Dialog, code: KeyCode) {
     match code {
         KeyCode::Up => {
             d.ck_sel = (d.ck_sel + CHECKSUM_ALGOS.len() - 1) % CHECKSUM_ALGOS.len();
             d.ck_type = d.ck_sel;
+            if d.ck_type == CK_NONE {
+                d.ck_value.clear();
+            }
         }
         KeyCode::Down => {
             d.ck_sel = (d.ck_sel + 1) % CHECKSUM_ALGOS.len();
             d.ck_type = d.ck_sel;
+            if d.ck_type == CK_NONE {
+                d.ck_value.clear();
+            }
         }
         KeyCode::Home => {
             d.ck_sel = 0;
             d.ck_type = 0;
+            d.ck_value.clear();
         }
         KeyCode::End => {
             d.ck_sel = CHECKSUM_ALGOS.len() - 1;
@@ -3624,6 +3743,10 @@ fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, text: &str) -
             inserted
         }
         (DialogKind::Add, 4) | (DialogKind::Modify, 2) => {
+            // NONE（不校验）下校验码不可输入（与逐键输入同口径）
+            if d.ck_type == CK_NONE {
+                return false;
+            }
             let hex: String = clean.chars().filter(|c| c.is_ascii_hexdigit()).collect();
             push_capped(&mut d.ck_value, &hex, 128)
         }

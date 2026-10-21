@@ -12,13 +12,15 @@ B. 并发列表滚动到底即停：滚到底后继续大量下滚，面板数�
 """
 import os
 import pty
+import os
 import select
 import sys
 import time
 
 import pyte
 
-BIN = "/home/z/my-project/swarm-ezr2/ezr-demo/target/release/ezr-tui-demo"
+BIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                   "target", "release", "ezr-tui-demo")
 COLS, ROWS = 110, 26  # 小高度：强制并发面板溢出（8 连接 > 可视数据行）
 
 screen = pyte.Screen(COLS, ROWS)

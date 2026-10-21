@@ -260,7 +260,7 @@ def scenario_focus():
             d4 is not None and d4[3] == BORDER_HEX, str(d4))
     V.check("F4c 对话框打开后并发边框变暗（底边框取样）",
             c4 is not None and c4 == BORDER_HEX, str(c4))
-    dlg_fg = top_border_fg(screen4, "添加下载任务")
+    dlg_fg = top_border_fg(screen4, "添加任务：HTTP(S)")
     V.check("F4d 添加对话框边框绿色高亮（与主面板统一）",
             dlg_fg is not None and is_green(dlg_fg[3]), str(dlg_fg))
 
@@ -335,7 +335,7 @@ def scenario_drag():
 
     # 第一轮：打开添加对话框，探测标题位置
     _, screen1 = V.run(120, 44, 5.0, keys=["a"], key_delay_frac=0.4)
-    pos = V.find_text_pos(screen1, "添加下载任务")
+    pos = V.find_text_pos(screen1, "添加任务：HTTP(S)")
     V.check("H1 添加对话框打开（标题定位）", pos is not None, str(pos))
     if pos is None:
         return
@@ -353,11 +353,11 @@ def scenario_drag():
     V.key_bytes = lambda k: seq if k == "mdrag:seq" else orig_kb(k)
     samples, screen2 = V.run(120, 44, 6.0, keys=["a", "mdrag:seq"], key_delay_frac=0.35)
     V.key_bytes = orig_kb
-    pos2 = V.find_text_pos(screen2, "添加下载任务")
+    pos2 = V.find_text_pos(screen2, "添加任务：HTTP(S)")
     moved = pos2 is not None and (pos2[0] > ty and pos2[1] > tx)
     V.check("H2 拖拽后对话框标题位移（可拖拽）", moved, f"{(ty, tx)} → {pos2}")
     text2 = "\n".join(samples[-1][1])
-    V.check("H3 拖拽后对话框保持打开", "添加下载任务" in text2)
+    V.check("H3 拖拽后对话框保持打开", "添加任务：HTTP(S)" in text2)
 
     # 第三轮：点击（按下+松开未移动）URL 字段聚焦后输入 → 值更新
     _, screen3 = V.run(120, 44, 6.0, keys=["a"], key_delay_frac=0.4)
@@ -481,7 +481,7 @@ def scenario_k():
     _, s5 = V.run(120, 44, 5.0, keys=["a"], key_delay_frac=0.4)
     text5 = "\n".join(s5.display)
     V.check("K5 添加对话框底部提示已删除",
-            "校验码留空 = 不校验" not in text5 and "添加下载任务" in text5)
+            "校验码留空 = 不校验" not in text5 and "添加任务：HTTP(S)" in text5)
 
     # K6 鼠标点击并发连接面板 = 聚焦（边框变绿）
     _, sp = V.run(120, 44, 4.5, key_delay_frac=0.5)
