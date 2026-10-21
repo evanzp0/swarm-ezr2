@@ -255,6 +255,20 @@ group_imports = "StdExternalCrate"
   停止信号）的 worker 不生效——控制变更要等当前工作单元自然结束才被观察到，大工作单元
   （大块/慢速）下表现为「修改不生效」。防法：控制通道与停止信号同层监听（`_ =
   quota_rx.changed() =>` 分支判定后置 abort 标志）， abort 路径保留已写进度后再退出。
+- **reqwest 自定义 DNS 解析器（Chrome 式内置 async DNS）实现形态**：`ClientBuilder::dns_resolver(Arc<R>)`
+  （R: `reqwest::dns::Resolve`）整体替换默认 GaiResolver；系统配置单源用
+  `hickory_resolver::TokioAsyncResolver::tokio_from_system_conf()`（unix = `/etc/resolv.conf`、
+  windows = 适配器配置；无 `ResolverOpts::from_system_conf`，勿臆造）。三个坑：①hickory 0.24
+  lookup（`ipv4_lookup/ipv6_lookup`）迭代项是 rdata 新类型 `A`/`AAAA`（取 `.0` 得
+  Ipv4Addr/Ipv6Addr），不是直接迭代 IP；②`Resolve::resolve` 返回的 boxed future 必须 Send——
+  async 内跨 await 持有另一腿 `Pin<&mut dyn Future>` 时必须擦除为 `+ Send` 并给泛型腿补
+  `Send` 界，否则整个 future 非 Send 编译失败（报错点在远处的 cast，难定位）；③Send 报错链
+  指向 `impl Future` 而非具体字段，按报错里的 async 块类型名反查代码定位。
+- **`#[tokio::test(start_paused = true)]` 的两个前置**：①需 dev-dependencies 加
+  `tokio = { version = "1", features = ["test-util"] }`（缺 feature 报
+  `no method named start_paused`）；②暂停时钟下计时断言必须用 `tokio::time::Instant`——
+  `std::time::Instant` 走真实钟，测得微秒级「没等」假象；暂停钟自动推进
+  （全部任务 idle 时虚拟时间跳跃），`assert_eq!(t.elapsed(), GRACE)` 可精确相等。
 
 ## 7. 测试与变异度量
 
@@ -522,6 +536,11 @@ group_imports = "StdExternalCrate"
   结构的写操作只允许回填字段」）同时要枚举容器方法形态（push/clear/insert/retain/…），
   只盯 `=` 赋值会漏掉方法调用式改写；经别名改写（先借 `as_mut()` 再经别名赋值）登记为
   已知豁免，不为它把 grep 升级成解析器。
+- **新增模块的平台 env 读取必须预先收口适配缝（arch 规则「环境变量收口」形态）**：
+  机制层遇到平台差异路径（如 Windows hosts 表 `%SystemRoot%`）时，本地 `std::env::var_os`
+  会命中「业务/机制层不直读环境变量」规则（env 收口仅 model/config.rs 等适配缝）；
+  防法 = 把路径解析直接写进既有缝函数（如 config.rs 增 `hosts_file_path()`），机制层只
+  调缝不碰 env——写码前先查 arch_check.sh 的白名单 grep 范围再落位，避免实现完返工。
 
 ## 9. 终端与 TTY（TUI）
 

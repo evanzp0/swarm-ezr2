@@ -27,6 +27,9 @@ ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "net"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "stream", "socks"] }
+# FR-01-112：内置异步 DNS 解析器——跨平台系统 DNS 配置读取（Linux/macOS = /etc/resolv.conf，
+# Windows = 系统适配器 DNS 配置）+ 自行发 UDP 查询（不经 getaddrinfo/系统解析栈）
+hickory-resolver = { version = "0.24", default-features = false, features = ["system-config", "tokio-runtime"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -61,3 +64,5 @@ cargo = { level = "warn", priority = -1 }
 
 [dev-dependencies]
 proptest = "1"
+# dns.rs 守卫测试 start_paused（暂停时钟下宽限期精确断言）
+tokio = { version = "1", features = ["test-util"] }

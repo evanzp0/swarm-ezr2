@@ -420,6 +420,23 @@ pub fn state_dir() -> Option<PathBuf> {
     ezr_dir().map(|d| d.join("state"))
 }
 
+/// hosts 静态表路径（FR-01-112①，平台适配缝——env 读取收口于本缝，arch 规则 8
+/// 与 [`home_dir`]/[`ezr_dir`] 同源）：Linux/macOS = `/etc/hosts`；Windows =
+/// `%SystemRoot%\System32\drivers\etc\hosts`（SystemRoot 缺失回退 `C:\Windows`）。
+#[must_use]
+pub fn hosts_file_path() -> PathBuf {
+    #[cfg(windows)]
+    let path = {
+        std::env::var_os("SystemRoot")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
+            .join(r"System32\drivers\etc\hosts")
+    };
+    #[cfg(not(windows))]
+    let path = PathBuf::from("/etc/hosts");
+    path
+}
+
 /// 用户主目录下的下载目录（FR-01-03：Linux/macOS `~/Downloads`；Windows
 /// `%USERPROFILE%\Downloads`——三者路径形态一致）
 #[must_use]

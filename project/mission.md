@@ -245,6 +245,13 @@
 >（01/04/08 修订）、`features/05-ui-pieces.feature`（04/07 修订）、`features/01-add-task.feature`
 >（01/02/03/05/19 修订）、`features/03-modify-task.feature`（01/05 修订），QA 套件 5 份同步
 >（QA-TD-07/19/20/22/23、QA-UC-01/04/08、QA-UP-04/07、QA-01-01/02/03/05、QA-MT-01/05；QA-TD-14 退役）。
+> v1.33（操作者 20261021 指令「Chrome 的内置 async DNS resolver 机制——读系统 DNS 配置、自己
+> 直接发 UDP 查询、完全绕开平台系统解析库——可以给 ezr 也加一个吗；ezr 需支持
+> Linux/macOS/Windows」，与 phase-01 v1.33 同步）：**新增 FR-01-112 内置异步 DNS 解析器**——
+> 引擎 HTTP 客户端域名解析默认走内置解析器（读系统 DNS 解析配置——Linux/macOS =
+> `/etc/resolv.conf`、Windows = 系统适配器 DNS 配置——自行发查询、绕开 getaddrinfo/NSS 与
+> Windows 系统解析栈；hosts 优先 → A/AAAA 并行独立查询 + 1s 宽限期 → 失败回落系统解析；
+> 微决策登记 D40）。引擎传输层策略无界面可观察形态，features/qa 零改动（FR-01-61 同口径）。
 
 
 

@@ -10,6 +10,7 @@
 //! 与载荷类型 [`TaskSpec`]/[`VerifySpec`]；supervisor/error/throttle 为实现
 //! 子模块（私有，app/ui 不可达，防越层 reach-in）。
 
+mod dns;
 mod error;
 mod supervisor;
 mod throttle;
@@ -294,15 +295,23 @@ fn build_endpoint_client(ep: &crate::model::ProxyEndpoint) -> Option<reqwest::Cl
 
 /// 客户端策略单一事实来源（DRY 收敛：直连基线与端点 client 共用）：
 /// 重定向上限 10（FR-01-14）、不读环境变量代理（FR-01-61）、
-/// 连接 15s / 读 30s 超时
+/// 连接 15s / 读 30s 超时、内置异步 DNS 解析器（FR-01-112：hosts →
+/// A/AAAA 并行独立查询 + 1s 宽限 → 回落系统解析；构造失败整体降级
+/// 系统解析路径——零配置自愈，不阻塞启动，D40④）。
 fn base_client_builder() -> reqwest::ClientBuilder {
-    reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         // FR-01-14：最多跟随 10 次重定向
         .redirect(reqwest::redirect::Policy::limited(10))
         // FR-01-61：代理仅配置文件，不读取环境变量（no_proxy 关闭系统代理解析）
         .no_proxy()
         .connect_timeout(std::time::Duration::from_secs(15))
-        .read_timeout(std::time::Duration::from_secs(30))
+        .read_timeout(std::time::Duration::from_secs(30));
+    // FR-01-112：内置异步 DNS 解析器（自行发查询、绕开平台系统解析库）；
+    // 构造失败（系统 DNS 配置不可读等）→ 沿用 reqwest 默认系统解析，行为与既有版本一致
+    if let Ok(resolver) = dns::BuiltinResolver::try_system() {
+        builder = builder.dns_resolver(Arc::new(resolver));
+    }
+    builder
 }
 
 /// 引擎句柄（App 持有；命令下发与事件消费的边界；Clone 以便任务内发送）
