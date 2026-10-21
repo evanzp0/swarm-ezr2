@@ -28,6 +28,14 @@
   先 `curl -sw '%{http_code}' <dist>/dist/<日期>/channel-rust-nightly.toml` 探 200 再跑
   安装。安装脚本失败先看输出（nohup 重定向到 0 字节日志 = 进程被沙箱回收，换
   前台 `</dev/null` 暴露真实报错）。
+- **`rust-toolchain.toml` 钉 nightly 的沙箱冷启动：先一次性装全 nightly 再跑任何 cargo**：
+  新沙箱（`~/.rustup` 不存在）里项目钉 nightly 时，每个 cargo 调用都会触发 rustup shim
+  自动安装 nightly；该安装被 timeout/会话回收打断后工具链残缺，下次调用又触发
+  `recovering from a partially installed toolchain` 重装，与在跑的 cargo 并发互踩
+  （表象：rustc/cargo 二进制时有时无、编译中途报工具链组件丢失、反复下载 6 组件）。
+  解法：开工第一步以前台完整执行 `rustup toolchain install nightly --profile minimal
+  --component rustfmt,clippy`（拉满超时预算，中途勿杀），`rustc --version` 复核在位
+  后再跑任何 cargo 命令；与「区分丢注入与本体丢失」条目配套使用（先探针再按需装）。
 - **PATH 注入不跨会话持久**：会话恢复/新 shell 中 `cargo` 会 not found（工具链本体
   完好，丢的是注入）。任何 cargo 命令前先 `command -v cargo` 探测；失败则
   `export PATH="$HOME/.cargo/bin:$PATH"` 补注入，再 `cargo --version` 复核在位。
@@ -134,6 +142,13 @@ group_imports = "StdExternalCrate"
 
 ## 3. 编译、lint 与磁盘
 
+- **给被 `#[path]` 挂载的产品源新增跨模块依赖时，先盘点全部挂载点同步补挂**：产品源
+  新增 `use crate::新模块`（如把几何/类型引擎提为新顶层模块供 app 与 ui 共同消费）后，
+  一切 `#[path] = "../src/<该文件>"` 挂载它的测试 harness 都会 `unresolved import`
+  （产品 bin 编译通过≠测试编译通过）。防法：动手前 `rg -l '#\[path.*<文件>' tests/`
+  盘点挂载者清单，逐一补 `#[path = "../src/<新模块>.rs"] mod <新模块>;`；新模块本身
+  应收敛为只依赖低层（ratatui/标准库）的叶子，否则挂载链会继续向上蔓延（引擎自带
+  其渲染常量、不被消费方 re-export 反向依赖，是阻断蔓延的关键决策）。
 - **`#[path]` 收编产品源的测试 crate 必须镜像产品 bin 的 crate 级 lint 姿态**：产品入口
   （main.rs）的 crate 级 allow（pedantic/nursery/cast 系等）不随 `#[path]` 模块收编进入
   测试 crate，同一份产品源在测试编译下会重燃产品面本已为 0 的警告；挂载机制还固有产生
@@ -149,6 +164,11 @@ group_imports = "StdExternalCrate"
 - **中断的重跑靠增量编译低成本恢复**：cargo 的 target 缓存使"测试跑到一半被取消"后
   重跑只重编改动部分；配合 engineering.md「预告 + tee 落盘日志 + 增量重跑」使用，
   长测试被交互消息打断的损失可控制在分钟级。
+- **中文文档注释的续行以半角 `+`/`-`/`*` 开头会被 clippy 解析为 markdown 列表**：
+  （doc_lazy_continuation）清单式说明换行后，续行内容顶格写会被判「列表项未缩进的
+  懒续行」告警（测试 crate 挂载同一文件时重复出现，一处源 N 份告警）。防法：数学
+  表达式与正文同段时不要让换行落在 `+`/`-` 前（改顿号/「加」或调整断行点）；
+  真要列清单就统一缩进（`  - `）。出现告警时按行首字符归因，勿当成普通文本误判。
 - **构建目录膨胀会写满磁盘并挂死构建**：长会话多轮增量构建后 `target/` 可膨胀至数 GB。
   构建前查 `df -h /`（余量 <1.5G 先 `cargo clean`，确认无在跑构建）；持续带
   `CARGO_PROFILE_DEV_DEBUG=0` 压制 debuginfo；长会话内每完成一个重构建阶段即复查一次。
@@ -552,6 +572,14 @@ group_imports = "StdExternalCrate"
   断言（某列是什么边框、滑块在哪列）绕开文本，直接 `buf.cell((x, y)).unwrap().symbol()`
   逐格取值。另注意 `to_string()` 不保留前导空格语义，"第 28 列起是弹窗"这类位置
   断言只能走 ②。
+- **右对齐标题的前导空格在渲染 buffer 上不可判定，形态守卫上移到单源构造函数**
+  （v139 coder 轮实证）：`Alignment::Right` 的 Line 若无显式前导空格，「活」字左侧
+  本来就是默认空白单元格，与显式空格在 `to_string()`/逐格比对下完全同形——
+  `contains(" 活跃 N ")` 对前导空格有无**零判定力**（永远绿，形同虚设）。防法：
+  把此类带 padding 的标题文本提取成模块级构造函数（如 `fn active_title(n)
+  -> String`），渲染与测试共用单源，测试直接断言返回值形态（`assert_eq!` 字面量），
+  不经渲染路径。与上文 TestBackend 口径条目配套：buffer 断言管几何/字形，
+  文本形态管构造层。
 - **TestBackend 跨帧 diff 比对（浮层翻转类测试）必须豁免宽字续格**（v134 coder 轮实证）：
   同一 Terminal 上多帧复绘后逐格比对模拟屏（`backend().buffer()`）时，当前帧宽字主格的
   续格被 `Buffer::diff` 的 to_skip 吞掉、永不下发更新（真实终端由宽字符双格覆盖语义

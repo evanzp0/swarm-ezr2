@@ -18,7 +18,7 @@
 //! 对话框：添加任务(URL+目录+并发+校验算法下拉+校验码+代理下拉) / 修改任务 /
 //! 删除任务(仅任务|任务和文件|取消)。
 
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, BorderType, Borders};
 use ratatui::Frame;
@@ -26,6 +26,7 @@ use ratatui::Frame;
 use crate::app::App;
 use crate::model::TaskState;
 
+mod about;
 mod btn;
 mod chart;
 mod conns;
@@ -37,9 +38,13 @@ mod header;
 mod help;
 mod list;
 mod pieces;
+mod scrollable_panel;
 mod task_lines;
 mod text;
 
+// 弱化色常量（DIM/DIM2）单源迁移：滚动条引擎（crate::scrollbar）自带其渲染
+// 弱化色，ui 调色板经 re-export 消费同一常量（v1.32/FR-01-109）
+use about::draw_about;
 // 测试可达性门面：property_tests 属性测试需触达 text 纯函数（显示宽度不变量/
 // 截断·填充幂等/时长往返/格式化稳定性），经 cfg(test) 门控 re-export
 // （notes/rust.md「门面 re-export」手法）；产品构建（cfg(test)=off）不产生
@@ -57,6 +62,8 @@ pub(crate) use text::{
     fmt_dur, fmt_eta, fmt_size, fmt_size_pair, fmt_speed, pad_right, truncate, w,
 };
 
+use crate::scrollbar::{DIM, DIM2};
+
 // ---------------------------------------------------------------------------
 // 调色板（语义状态色；下载中=淡蓝，暂停=白，等待=黄，失败=红，完成=绿，做种=粉，
 // 挂起（失败）=白——v1.19/FR-01-92 裁决，与暂停同色承载静置语义）
@@ -64,8 +71,7 @@ pub(crate) use text::{
 
 pub(super) const BORDER: Color = Color::Rgb(56, 78, 86);
 pub(super) const FG: Color = Color::Rgb(198, 208, 212);
-pub(super) const DIM: Color = Color::Rgb(126, 141, 147);
-pub(super) const DIM2: Color = Color::Rgb(88, 102, 108);
+// DIM/DIM2 由 crate::scrollbar 单源 re-export（见上方 use 绑定，v1.32/FR-01-109）
 pub(super) const SEL_BG: Color = Color::Rgb(22, 42, 48);
 pub(super) const ACCENT: Color = Color::Cyan;
 pub(super) const GREEN: Color = Color::Green;
@@ -109,72 +115,10 @@ pub(super) fn panel_title_style(focused: bool) -> Style {
     }
 }
 
-/// lazygit 式滚动条（右侧边框列：▲/▼ 上下箭头 + │ 轨道 + █ 滑块，
-/// v1.30/FR-01-109）。
-///
-/// * `panel`：面板完整区域（含边框）——滚动条画在右边框列、上下角之间的行；
-/// * `total`/`page`：内容总项数 / 可视项数（total <= page 时不绘制）；
-/// * `position`：滚动偏移（内部钳制到 0..=total-page）；
-/// * `thumb`：滑块颜色（跟随便属面板边框色：聚焦面板/弹窗均为高亮绿）。
-///
-/// 显示条件：total > page 且面板高 ≥ 5 且可绘行数 ≥ 3。
-/// 滑块位置口径同 lazygit gocui scrollbar.go：顶/底端吸附，中间按比例取整、
-/// 末页前不吸底（ceil 保证下滑即移动，-1 预留行程）；滑块长度下取整
-/// （规格 FR-01-109：以代码为准 = floor）。
-pub(super) fn lazy_scrollbar(
-    f: &mut Frame,
-    panel: Rect,
-    total: usize,
-    position: usize,
-    page: usize,
-    thumb: Color,
-) {
-    if page == 0 || total <= page || panel.height < 5 || panel.width == 0 {
-        return;
-    }
-    let col = panel.x + panel.width - 1; // 右边框列
-    let top = panel.y + 1; // 上角之下
-    let bottom = panel.y + panel.height - 1; // 下角（不含）
-    let h = (bottom.saturating_sub(top)) as usize; // 可绘行数（▲+轨道+▼）
-    if h < 3 {
-        return;
-    }
-    let track = h - 2; // 轨道行数（扣除上下箭头）
-    let thumb_h = ((((page as f64) / (total as f64)) * track as f64) as usize).clamp(1, track);
-    let max_pos = total - page;
-    let position = position.min(max_pos);
-    let thumb_y = if position >= max_pos {
-        track - thumb_h
-    } else {
-        (((position as f64 / max_pos as f64) * (track - thumb_h - 1) as f64).ceil()) as usize
-    }
-    .min(track.saturating_sub(thumb_h));
-    // 字形全部取格内居中（▲ │ █ ▼ 同列垂直对齐）：滑块用全块 █ 而非
-    // 左对齐的半块 ▐——半块贴左缘会与居中的轨道/箭头错位（对齐修复）
-    let arrow_style = Style::default().fg(DIM);
-    let track_style = Style::default().fg(DIM2);
-    let thumb_style = Style::default()
-        .fg(thumb)
-        .add_modifier(ratatui::style::Modifier::BOLD);
-    for (i, y) in (top..bottom).enumerate() {
-        let (sym, style) = if i == 0 {
-            ("▲", arrow_style)
-        } else if i == h - 1 {
-            ("▼", arrow_style)
-        } else {
-            let t = i - 1; // 轨道行下标 0..track
-            if t >= thumb_y && t < thumb_y + thumb_h {
-                ("█", thumb_style)
-            } else {
-                ("│", track_style)
-            }
-        };
-        if let Some(cell) = f.buffer_mut().cell_mut((col, y)) {
-            cell.set_symbol(sym);
-            cell.set_style(style);
-        }
-    }
-}
+// lazygit 式滚动条（▲│█▼）已随 v1.32/FR-01-109 全面重写退役：滚动条引擎
+// 单一实现迁移至 crate::scrollbar（↑│║│↓ 字形 + 水平 ←═→），面板一律经由
+// ui::scrollable_panel::ScrollablePanel 一体化组件绘制（本文件不再承载
+// 滚动条几何）。
 
 /// 状态 → 语义色映射表（8 态全显式映射。v1.19/FR-01-92 徽标色裁决：失败挂起
 /// 映射白——与 Paused 同色承载「操作者主动静置」语义；v1.21 合并口径：失败
@@ -219,6 +163,13 @@ pub(super) fn bordered_block(fg: Color) -> Block<'static> {
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
+    // v1.32/FR-01-109：滚动条命中几何每帧重建——先清空、渲染时按显示条件
+    // 收口回填（未绘制的实例本帧不可命中，杜绝陈旧几何误导命中测试）
+    app.list_scrollbar = None;
+    app.conns_v_scrollbar = None;
+    app.conns_h_scrollbar = None;
+    app.pieces_scrollbar = None;
+    app.help_scrollbar = None;
     let outer = Layout::vertical([
         Constraint::Length(5), // 顶部带：头部仪表面板通栏全宽 5 行（FR-01-94）
         Constraint::Min(8),    // 主区：任务列表 | 任务详情 + 并发连接面板
@@ -286,9 +237,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_pieces(f, app, area);
     }
 
-    // 帮助窗口（最上层覆盖，v1.30/FR-01-107；模态：打开时底层面板暗框）
+    // 帮助窗口（覆盖层，v1.30/FR-01-107）
     if app.help_open {
         draw_help(f, app, area);
+    }
+
+    // 关于窗口（v1.32/FR-01-111：z-order 最上层，叠于帮助之上；O 快捷键）
+    if app.about_open {
+        draw_about(f, app, area);
     }
 }
 
@@ -524,8 +480,16 @@ mod ui_tests {
         let mut term = Terminal::new(TestBackend::new(110, 34)).unwrap();
         term.draw(|f| draw(f, &mut app)).unwrap();
         let s = term.backend().to_string();
-        assert!(s.contains("添加下载任务"), "对话框标题");
-        assert!(s.contains("SHA-256"), "算法行显示当前算法");
+        // v1.32：标题更名「 添加任务：HTTP(S) 」；默认校验 = NONE（不校验）
+        assert!(
+            s.contains("添加任务：HTTP(S)"),
+            "对话框标题（v1.32 更名）: {s}"
+        );
+        assert!(s.contains("NONE"), "算法行显示默认 NONE（v1.32）");
+        assert!(
+            !s.contains("https://example.com/file.zip"),
+            "URL 占位提示已删除（v1.32/P3）: {s}"
+        );
         // v1.15/FR-01-103 三钮：立即下载 / 仅添加 / 取消
         assert!(s.contains("立即下载"), "立即下载按钮");
         assert!(s.contains("仅添加"), "仅添加按钮");
@@ -538,7 +502,8 @@ mod ui_tests {
         let s = term.backend().to_string();
         // 注：TestBackend Display 会把宽字符半格单元以 Hidden 注记隐藏，
         // 断言锚定浮层条目的稳定可见文本（选中指示 + 算法名 + 位数）
-        assert!(s.contains("▸ SHA-256"), "下拉选中项: {s}");
+        // v1.32：下拉 8 项 = NONE（右列 — 占位）+ 7 算法
+        assert!(s.contains("▸ NONE"), "下拉首行选中 NONE: {s}");
         assert!(s.contains("MD5"), "下拉算法项");
         assert!(s.contains("Adler-32"), "下拉算法项2");
         assert!(s.contains("128 位"), "下拉位数列");
@@ -1074,7 +1039,10 @@ mod ui_tests {
             !s.contains("确定后立即生效"),
             "Modify 提示行退役（v1.30）: {s}"
         );
-        assert!(!s.contains("添加下载任务"), "不得渲染 Add 标题: {s}");
+        assert!(
+            !s.contains("添加任务：HTTP(S)"),
+            "不得渲染 Add 标题（v1.32 更名后新标题）: {s}"
+        );
         app.shutdown().await;
     }
 }
@@ -1190,12 +1158,13 @@ mod ui_v113_tests {
         app.speed_hist = hist();
         let term = render(&mut app, 120, 40);
         let g = grid(&term);
-        // 布局推算（120 宽）：头部内框 x=1..119（宽 118）→ 图宽 23、字段区 92、
-        // │ 分隔符 x=93、图区 x=95..118
+        // 布局推算（120 宽，v1.32/FR-01-94⑤ 图区 0 列空白）：头部内框
+        // x=1..119（宽 118）→ 图宽 clamp(23, 118−93=25) = 23、字段区 94、
+        // │ 分隔符 x=95、图区 x=96..118（紧贴分隔符与右边框）
         let mut partials = 0;
         let mut foreign_color = false;
         for row in &g[1..4] {
-            for &(ch, fg) in &row[95..118] {
+            for &(ch, fg) in &row[96..119] {
                 if ch != ' ' {
                     partials += 1;
                     if fg != LIGHT_BLUE {
@@ -1207,16 +1176,21 @@ mod ui_v113_tests {
         assert!(partials > 0, "图区每列均有面积块字符（无断列）");
         assert!(!foreign_color, "全图仅一种颜色（下载淡蓝，REQ-8.5）");
         // 顶线含部分块字符（亚字符精度，N2l 口径）
-        let top_line: String = (95..118).map(|x| g[1][x].0).collect();
+        let top_line: String = (96..119).map(|x| g[1][x].0).collect();
         assert!(
             top_line.chars().any(|c| ('▁'..='▇').contains(&c)),
             "顶线含部分块字符（1/8 格精度）: {top_line}"
         );
-        // 分隔符贯通内容区全高 + 左右各 1 列空白
+        // 分隔符贯通内容区全高；图区右缘无 padding 留白（v1.32：0 列空白——
+        // 末列/次末列必有墨；单列可为窗口最小值的零填充列，不作逐格断言）
+        let mut right_edge_ink = false;
         for (y, row) in g.iter().enumerate().take(4).skip(1) {
-            assert_eq!(row[93].0, '│', "│ 分隔符贯通全高 y={y}");
-            assert_eq!(row[94].0, ' ', "分隔符右侧（图区侧）1 列空白");
+            assert_eq!(row[95].0, '│', "│ 分隔符贯通全高 y={y}");
+            if row[117].0 != ' ' || row[118].0 != ' ' {
+                right_edge_ink = true;
+            }
         }
+        assert!(right_edge_ink, "图区右缘两列内有墨（无右 padding，v1.32）");
         // 全帧无盲文点阵字符
         for row in &g {
             for (ch, _) in row {

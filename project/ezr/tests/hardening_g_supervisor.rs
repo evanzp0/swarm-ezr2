@@ -37,6 +37,9 @@ use model::TaskState;
 
 #[path = "../src/app/mod.rs"]
 mod app;
+#[path = "../src/scrollbar.rs"]
+// v1.32/FR-01-109：滚动条引擎（app 状态机依赖的几何/命中类型单源）
+mod scrollbar;
 
 use app::App;
 

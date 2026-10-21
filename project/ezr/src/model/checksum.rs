@@ -27,6 +27,23 @@ pub const CHECKSUM_ALGOS: [(&str, usize, &str); 7] = [
     ("Adler-32", 8, "adler32"),
 ];
 
+/// 校验算法下拉中「NONE（不校验）」的下标（v1.32/FR-01-01：首行 + 默认选中；
+/// NONE 为下拉选项而非算法——不入 [`CHECKSUM_ALGOS`]、无伴随文件后缀、
+/// CLI `-x` 不接受，FR-01-50 v1.32 注记）
+pub const CK_NONE: usize = 0;
+
+/// 对话框校验算法下拉 8 项（v1.32/FR-01-01 修订，对齐 ezr-demo m3
+/// `CHECKSUM_ALGOS`：首行 NONE（右列 `—` 占位、期望长度 0 仅作占位显示）
+/// 加 [`CHECKSUM_ALGOS`] 7 种；本表由算法表单源派生，防双源漂移）。
+/// 元组为（显示名，期望十六进制长度）。
+#[must_use]
+pub fn checksum_dropdown() -> Vec<(&'static str, usize)> {
+    let mut v = Vec::with_capacity(1 + CHECKSUM_ALGOS.len());
+    v.push(("NONE", 0));
+    v.extend(CHECKSUM_ALGOS.iter().map(|(n, need, _)| (*n, *need)));
+    v
+}
+
 /// 校验码校验错误
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChecksumError {

@@ -3,6 +3,7 @@
 
 use super::dialog_keys::{CAP_CK_HEX, CAP_CONNS_DIGITS, CAP_TEXT};
 use super::{App, Dialog, DialogKind};
+use crate::model::checksum::CK_NONE;
 
 impl App {
     /// bracketed paste 事件入口（FR-01-06）：Add/Modify 两对话框的文本字段接收
@@ -67,6 +68,11 @@ fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, text: &str) -
             inserted
         }
         (DialogKind::Add, 4) | (DialogKind::Modify, 2) => {
+            // v1.32/FR-01-01：算法选中 NONE 时校验码不可输入（粘贴与逐键
+            // 同拦截——NONE 臂直接吞掉粘贴内容）
+            if d.ck_type == CK_NONE {
+                return false;
+            }
             let hex: String = clean.chars().filter(|c| c.is_ascii_hexdigit()).collect();
             push_capped(&mut d.ck_value, &hex, CAP_CK_HEX)
         }

@@ -5,14 +5,20 @@ use std::time::Instant;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
-use super::{App, DialogKind, Panel, ITEM_HEIGHT};
+use super::{App, DialogKind, Panel, SbKey, ITEM_HEIGHT};
+use crate::model::checksum::CK_NONE;
 
 impl App {
     /// 鼠标事件入口（architect v116：分发核保持行为拆分——对话框态与主界面
     /// 命中各自成函数，消除早退 return 穿越两分支的控制流混杂；分支语义
     /// 不变：浮层打开时一切鼠标事件仅作用于最上层浮层。
-    /// v1.30/FR-01-107：帮助窗口最上层（帮助 > pieces > 对话框 > 主界面））
+    /// v1.32/FR-01-111：关于窗口最上层（关于 > 帮助 > pieces > 对话框 >
+    /// 主界面））
     pub fn on_mouse(&mut self, m: MouseEvent) {
+        if self.about_open {
+            self.on_mouse_about(m);
+            return;
+        }
         if self.help_open {
             self.on_mouse_help(m);
             return;
@@ -28,9 +34,43 @@ impl App {
         }
     }
 
-    /// 帮助窗口命中（v1.30/FR-01-107，对齐 demo on_mouse help 分支）：
-    /// 滚轮滚动内容（每滚 1 行，帮助步长 ±1）；左键按住窗口内任意位置拖拽
-    /// 移动；点击窗口外部关闭（该次点击不穿透主界面）。
+    /// 关于窗口命中（v1.32/FR-01-111，对齐 demo on_mouse about 分支）：
+    /// 左键按住窗口内任意位置拖拽移动；点击窗口外部 = 无任何操作
+    ///（模态统一口径：不关闭、不穿透到主界面；Esc/O/q/Q 才是关闭通道）。
+    /// 无滚动条无滚轮内容。
+    fn on_mouse_about(&mut self, m: MouseEvent) {
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                // 模态接管：清除页脚 chip 按压态（页脚不可达）
+                self.footer_press = None;
+                if pointer_in(&self.about_area, m.column, m.row) {
+                    // 开始拖拽：记录指针相对窗口左上角的抓取偏移
+                    if let Some(r) = self.about_area {
+                        self.about_drag =
+                            Some((m.column.saturating_sub(r.x), m.row.saturating_sub(r.y)));
+                    }
+                }
+                // 点击窗口外部 = 无任何操作（模态统一口径）
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                // 拖拽移动：窗口左上角 = 指针 - 抓取偏移（渲染层钳制在终端内）
+                if let Some((dx, dy)) = self.about_drag {
+                    self.about_pos = Some((m.column.saturating_sub(dx), m.row.saturating_sub(dy)));
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.about_drag = None;
+                self.sb_release();
+            }
+            _ => {}
+        }
+    }
+
+    /// 帮助窗口命中（v1.30/FR-01-107；v1.32 修订对齐 ezr-demo m3）：滚轮滚动
+    /// 内容（每滚 1 行，帮助步长 ±1）；Down **先查滚动条命中**（滚动条优先于
+    /// 窗口拖拽——滑块拖拽滚内容不移窗，m3 修复，FR-01-109 ⑥），未命中时
+    /// 窗口内按下 = 开始拖拽移动；点击窗口外部 = 无任何操作（模态统一口径：
+    /// 不关闭不穿透；Esc/H/q/Q 才是关闭通道）。
     fn on_mouse_help(&mut self, m: MouseEvent) {
         match m.kind {
             MouseEventKind::ScrollUp => {
@@ -38,60 +78,87 @@ impl App {
             }
             MouseEventKind::ScrollDown => self.help_scroll += 1, // 渲染层钳制
             MouseEventKind::Down(MouseButton::Left) => {
-                // 模态接管：清除页脚 chip 按压态（v1.31/FR-01-107①：
-                // 点击外部关闭 = 页脚不可达）
+                // 模态接管：清除页脚 chip 按压态（页脚不可达）
                 self.footer_press = None;
+                // 滚动条命中优先（FR-01-109 ⑥：滑块/箭头/轨道交互，不误移窗口）
+                if let Some(bar) = SbKey::Help.bar(self) {
+                    if let Some(hit) = bar.hit(m.column, m.row) {
+                        self.sb_press(SbKey::Help, &bar, hit);
+                        return;
+                    }
+                }
                 if pointer_in(&self.help_area, m.column, m.row) {
                     // 开始拖拽：记录指针相对窗口左上角的抓取偏移
                     if let Some(r) = self.help_area {
                         self.help_drag =
                             Some((m.column.saturating_sub(r.x), m.row.saturating_sub(r.y)));
                     }
-                } else {
-                    // 点击窗口外部 = 关闭（与 pieces 弹窗同口径）
-                    self.help_open = false;
                 }
+                // 点击窗口外部 = 无任何操作（v1.32 模态统一口径，原「点外关闭」退役）
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                // 拖拽移动：窗口左上角 = 指针 - 抓取偏移（渲染层钳制在终端内）
-                if let Some((dx, dy)) = self.help_drag {
+                // 按住的箭头拖出/拖回高亮跟随（连发不中断，FR-01-109 ⑥）
+                self.sb_arrow_follow(m.column, m.row);
+                if self.sb_drag.is_some() {
+                    // 滑块拖拽 = 比例滚动内容（不移窗口，m3 修复）
+                    self.sb_drag_move(m.column, m.row);
+                } else if let Some((dx, dy)) = self.help_drag {
+                    // 窗口拖拽移动：左上角 = 指针 - 抓取偏移（渲染层钳制在终端内）
                     self.help_pos = Some((m.column.saturating_sub(dx), m.row.saturating_sub(dy)));
                 }
             }
-            MouseEventKind::Up(MouseButton::Left) => self.help_drag = None,
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.help_drag = None;
+                self.sb_release();
+            }
             _ => {}
         }
     }
 
-    /// pieces 弹窗命中（FR-01-106 ⑦，对齐 demo 源码 on_mouse pieces 分支）：
-    /// 滚轮滚动网格（每滚 2 行）；左键按下弹窗内记抓取偏移、点外关闭
-    ///（该次点击不穿透任务列表）；拖拽移动弹窗（位置钳制在渲染层）；
-    /// 松开结束拖拽。
+    /// pieces 弹窗命中（FR-01-106 ⑦；v1.32 修订对齐 ezr-demo m3）：滚轮滚动
+    /// 网格（每滚 2 行）；Down **先查滚动条命中**（滚动条优先于窗口拖拽——
+    /// 滑块拖拽滚网格不移窗，m3 修复，FR-01-109 ⑥），未命中时窗口内按下 =
+    /// 开始拖拽；点击窗口外部 = 无任何操作（v1.32 模态统一口径：不关闭、
+    /// 不穿透任务列表；关闭通道 = P/Esc/q/Q，原「点外关闭」退役）；
+    /// 拖拽移动弹窗（位置钳制在渲染层）；松开结束。
     fn on_mouse_pieces(&mut self, m: MouseEvent) {
         match m.kind {
             MouseEventKind::ScrollUp => self.pieces_scroll_by(-2),
             MouseEventKind::ScrollDown => self.pieces_scroll_by(2),
             MouseEventKind::Down(MouseButton::Left) => {
-                // 模态接管：清除页脚 chip 按压态（v1.31/FR-01-107①）
+                // 模态接管：清除页脚 chip 按压态（页脚不可达）
                 self.footer_press = None;
+                // 滚动条命中优先（FR-01-109 ⑥：滑块/箭头/轨道交互，不误移窗口）
+                if let Some(bar) = SbKey::Pieces.bar(self) {
+                    if let Some(hit) = bar.hit(m.column, m.row) {
+                        self.sb_press(SbKey::Pieces, &bar, hit);
+                        return;
+                    }
+                }
                 if pointer_in(&self.pieces_area, m.column, m.row) {
                     // 开始拖拽：记录指针相对弹窗左上角的抓取偏移
                     if let Some(r) = self.pieces_area {
                         self.pieces_drag =
                             Some((m.column.saturating_sub(r.x), m.row.saturating_sub(r.y)));
                     }
-                } else {
-                    // 点击弹窗外部 = 关闭（不穿透任务列表）
-                    self.close_pieces();
                 }
+                // 点击弹窗外部 = 无任何操作（v1.32 模态统一口径）
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                // 拖拽移动：弹窗左上角 = 指针 - 抓取偏移（渲染层钳制在终端内）
-                if let Some((dx, dy)) = self.pieces_drag {
+                // 按住的箭头拖出/拖回高亮跟随（连发不中断，FR-01-109 ⑥）
+                self.sb_arrow_follow(m.column, m.row);
+                if self.sb_drag.is_some() {
+                    // 滑块拖拽 = 比例滚网格（不移窗口，m3 修复）
+                    self.sb_drag_move(m.column, m.row);
+                } else if let Some((dx, dy)) = self.pieces_drag {
+                    // 窗口拖拽移动：左上角 = 指针 - 抓取偏移（渲染层钳制在终端内）
                     self.pieces_pos = Some((m.column.saturating_sub(dx), m.row.saturating_sub(dy)));
                 }
             }
-            MouseEventKind::Up(MouseButton::Left) => self.pieces_drag = None,
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.pieces_drag = None;
+                self.sb_release();
+            }
             _ => {}
         }
     }
@@ -126,6 +193,11 @@ impl App {
                         let d = self.dialog.as_mut().unwrap();
                         d.ck_type = i;
                         d.ck_sel = i;
+                        // v1.32/FR-01-01：选中 NONE（点击）→ 校验码实时清空
+                        //（与键盘选择同口径）
+                        if d.ck_type == CK_NONE {
+                            d.ck_value.clear();
+                        }
                         d.ck_open = false;
                     } else if let Some(d) = self.dialog.as_mut() {
                         d.ck_open = false;
@@ -263,6 +335,12 @@ impl App {
                     self.focus = Panel::Detail;
                     return;
                 }
+                // 通用滚动条命中（v1.32/FR-01-109 ⑥：按下滚动条 = 交互同时
+                // 聚焦所属面板；滑块拖拽/箭头步进连发/轨道翻页，sb_press_at
+                // 依实例序检查 列表 → 并发垂直 → 并发水平；留白格不可点）
+                if self.sb_press_at(m.column, m.row) {
+                    return;
+                }
                 // 并发连接面板点击 = 聚焦 + 选行（表头 1 行之下为数据行，
                 // v1.30/FR-01-108 ⑤）
                 if let Some(a) = self.conns_area {
@@ -299,9 +377,11 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                // 页脚命令 chip：按压后原地松开 = 执行对应命令（与键盘快捷键
-                // 同口径，P5 双通道等价）；拖到别处松开 = 取消。其余 Up 事件
-                // 主界面无语义（v1.31/FR-01-107①）
+                // 通用滚动条：松开 = 结束拖拽/连发/按压高亮（任何位置，
+                // v1.32/FR-01-109 ⑥）；页脚命令 chip：按压后原地松开 = 执行
+                // 对应命令（与键盘快捷键同口径，P5 双通道等价）；拖到别处
+                // 松开 = 取消。其余 Up 事件主界面无语义（v1.31/FR-01-107①）
+                self.sb_release();
                 if let Some(pressed) = self.footer_press.take() {
                     let still_on = self.footer_cmd_rects.iter().any(|(r, i)| {
                         *i == pressed
@@ -335,6 +415,12 @@ impl App {
                 let vis = self.visible_rows.max(1);
                 let maxs = self.filtered().len().saturating_sub(vis);
                 self.scroll = (self.scroll + 2).min(maxs);
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                // 按住的箭头拖出/拖回高亮跟随（连发不中断，v1.32/FR-01-109 ⑥）；
+                // 滑块拖拽 = 比例滚动内容（主面板无窗口拖拽语义）
+                self.sb_arrow_follow(m.column, m.row);
+                self.sb_drag_move(m.column, m.row);
             }
             _ => {}
         }
@@ -440,8 +526,10 @@ mod pieces_mouse_tests {
         app.shutdown().await;
     }
 
+    /// v1.32 模态统一口径（FR-01-106 ⑦ 修订）：点击弹窗外部 = 无任何操作
+    ///（不关闭、不穿透任务列表）；弹窗打开期间滚轮仍由弹窗分支消费
     #[tokio::test]
-    async fn click_outside_closes_without_task_selection() {
+    async fn click_outside_is_noop_without_task_selection() {
         let mut app = make_app("out");
         app.tasks.push(dl_task(1, "p.bin"));
         app.tasks.push(dl_task(2, "q.bin"));
@@ -454,13 +542,16 @@ mod pieces_mouse_tests {
             width: 40,
             height: 9,
         });
-        // 点击弹窗外（任务列表区 (3, 9) 即第 1 条）→ 关闭且不选中
+        // 点击弹窗外（任务列表区 (3, 9) 即第 1 条）→ 无任何操作（不关闭、
+        // 不选中、不穿透——关闭通道 = P/Esc/q/Q，v1.32 统一模态口径）
         app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 3, 9));
-        assert!(!app.pieces_open, "点外关闭弹窗");
+        assert!(
+            app.pieces_open,
+            "点外不关闭弹窗（v1.32 修订，原「点外关闭」退役）"
+        );
         assert_eq!(app.selected, 0, "该次点击不选中任何任务");
+        assert_eq!(app.pieces_drag, None, "窗外按下不起拖拽");
         // 弹窗打开期间滚轮同样由弹窗分支消费（列表不动）
-        app.open_pieces();
-        app.pieces_area = Some(popup_area());
         app.on_mouse(mev(MouseEventKind::ScrollDown, 3, 9));
         assert_eq!(app.pieces_scroll, 2, "滚轮被弹窗分支消费");
         assert_eq!(app.scroll, 0, "任务列表滚动不动");

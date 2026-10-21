@@ -2,9 +2,9 @@
 //!
 //! PMD CPD 登记：Dialog 字段多（14 个），Add/Modify 默认夹具字面量曾在
 //! `dialog_keys`/`paste`/`mouse` 各测试模块重复 4 份——收敛为本模块单一
-//! 构造点；默认值对齐既有 Add/Modify 夹具（算法下标 3 = SHA-256、校验码
-//! 空、下拉收起、代理直连选中）。Delete 等特殊形态由调用方按差异字段
-//! 覆盖，不再整段复制字面量。
+//! 构造点；默认值对齐既有 Add/Modify 夹具（算法下标 4 = SHA-256——v1.32
+//! 起下拉 8 项含首行 NONE，算法表下标 + 1；校验码空、下拉收起、代理直连
+//! 选中）。Delete 等特殊形态由调用方按差异字段覆盖，不再整段复制字面量。
 
 use super::{Dialog, DialogKind};
 
@@ -16,10 +16,10 @@ pub(crate) fn dialog(kind: DialogKind, focus: usize) -> Dialog {
         dir: String::new(),
         conns: String::new(),
         conns_edited: false,
-        ck_type: 3,
+        ck_type: 4,
         ck_value: String::new(),
         ck_open: false,
-        ck_sel: 3,
+        ck_sel: 4,
         proxy_sel: 0,
         proxy_open: false,
         focus,

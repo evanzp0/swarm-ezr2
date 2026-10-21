@@ -216,6 +216,7 @@ mod dialog_key_tests {
     // 测试模块显式导入（拆分后产品路径不再经 mod.rs 转发该常量）
     use crate::app::CHECKSUM_ALGOS;
     use crate::app::{Dialog, DialogKind};
+    use crate::model::checksum::CK_NONE;
     use crate::model::config::Config;
     use crate::model::Protocol;
 
@@ -242,15 +243,21 @@ mod dialog_key_tests {
         let mut d = add_dlg();
         d.ck_open = true;
         d.ck_sel = 0;
+        // v1.32：下拉 8 项（NONE 首行 + 7 算法）——末尾下标 = CHECKSUM_ALGOS.len()
         dropdown_open_key(&mut d, KeyCode::Up);
-        assert_eq!(d.ck_sel, CHECKSUM_ALGOS.len() - 1, "Up 环绕到末尾");
+        assert_eq!(d.ck_sel, CHECKSUM_ALGOS.len(), "Up 环绕到末尾（8 项）");
         assert_eq!(d.ck_type, d.ck_sel);
-        dropdown_open_key(&mut d, KeyCode::Down);
-        assert_eq!(d.ck_sel, 0, "Down 环绕回首");
-        dropdown_open_key(&mut d, KeyCode::End);
-        assert_eq!(d.ck_sel, CHECKSUM_ALGOS.len() - 1);
+        // Home = NONE：选中即改值 + 校验码实时清空（v1.32）
+        d.ck_value.push_str("ff");
         dropdown_open_key(&mut d, KeyCode::Home);
-        assert_eq!(d.ck_sel, 0);
+        assert_eq!(d.ck_sel, CK_NONE, "Home 回首（NONE）");
+        assert!(d.ck_value.is_empty(), "选中 NONE 实时清空校验码");
+        dropdown_open_key(&mut d, KeyCode::Down);
+        assert_eq!(d.ck_sel, 1, "Down 环绕回首后步进");
+        dropdown_open_key(&mut d, KeyCode::End);
+        assert_eq!(d.ck_sel, CHECKSUM_ALGOS.len());
+        dropdown_open_key(&mut d, KeyCode::Home);
+        assert_eq!(d.ck_sel, CK_NONE);
         dropdown_open_key(&mut d, KeyCode::Enter);
         assert!(!d.ck_open);
         // Tab：关闭下拉并跳到校验码字段
@@ -332,8 +339,11 @@ mod dialog_key_tests {
         assert!(app.dialog.is_some(), "校验码位数不符拒绝");
         assert_eq!(app.dialog.as_ref().unwrap().focus, 4, "聚焦回校验码");
         assert!(app.tasks.is_empty());
-        // 合法完整输入（并发显式 9）→ 建任务、关闭对话框、页签回下载视图
+        // 合法完整输入（NONE = 不校验，v1.32；并发显式 9）→ 建任务、关闭
+        // 对话框、页签回下载视图
         let d = app.dialog.as_mut().unwrap();
+        d.ck_type = CK_NONE;
+        d.ck_sel = CK_NONE;
         d.ck_value.clear();
         d.conns = "9".to_string();
         app.dlg_confirm_add();
@@ -363,6 +373,9 @@ mod dialog_key_tests {
         let d = app.dialog.as_mut().unwrap();
         d.url = "http://example.com/r.bin".to_string();
         d.dir = dir.to_string_lossy().into_owned();
+        // NONE = 不校验创建（v1.32：非 NONE 算法校验码必填，空值路径改由 NONE 承载）
+        d.ck_type = CK_NONE;
+        d.ck_sel = CK_NONE;
         // 预置同 URL sidecar（断点视图：模拟既有下载残留）——夹具单源 testutil
         crate::app::testutil::preset_resume_sidecar(&dir);
         app.dlg_confirm_add();
@@ -445,13 +458,21 @@ mod dialog_key_tests {
             0,
         ));
         app.selected = 0;
-        // 按 m 打开修改对话框（预填并发 2）
+        // 按 m 打开修改对话框（预填并发 2；无校验任务预填 NONE，v1.32/FR-01-87）
         app.on_key(KeyCode::Char('m'), crossterm::event::KeyModifiers::NONE);
         assert_eq!(
             app.dialog.as_ref().unwrap().kind,
             DialogKind::Modify,
             "m 打开修改对话框"
         );
+        assert_eq!(
+            app.dialog.as_ref().unwrap().ck_type,
+            CK_NONE,
+            "无校验任务预填 NONE（v1.32）"
+        );
+        // 选 SHA-256（下拉下标 4）后校验码可输入（NONE 禁输入，v1.32）
+        app.dialog.as_mut().unwrap().ck_type = 4;
+        app.dialog.as_mut().unwrap().ck_sel = 4;
 
         // focus 0：并发仅数字、≤2 位（预填 "2" → "27"，字母与第 3 位拒绝）
         app.on_dialog_key(KeyCode::Char('7'));
@@ -486,7 +507,13 @@ mod dialog_key_tests {
         assert!(app.dialog.is_some(), "非法校验码不生效");
         assert_eq!(app.dialog.as_ref().unwrap().focus, 2, "聚焦回校验码");
 
-        // 清空校验码 → Enter 确认：并发 27 生效、对话框关闭
+        // 校验选回 NONE（v1.32：清除校验路径）→ Enter 确认：并发 27 生效、
+        // 对话框关闭、任务校验保持为空。注：直接置字段需同步清码——产品路径
+        // 中「选 NONE 即时清码」由下拉选择事件（dropdown_open_key/点击选项）
+        // 承载，见 dropdown_open_key_navigation_and_close 的 NONE 臂断言
+        let d = app.dialog.as_mut().unwrap();
+        d.ck_type = CK_NONE;
+        d.ck_value.clear();
         app.on_dialog_key(KeyCode::Backspace);
         assert!(app.dialog.as_ref().unwrap().ck_value.is_empty());
         app.on_dialog_key(KeyCode::Enter);
@@ -655,8 +682,11 @@ mod dialog_key_tests {
         app.on_dialog_key(KeyCode::Tab);
         app.on_dialog_key(KeyCode::Char(' '));
         assert!(app.dialog.is_some(), "空 URL 确认被拒");
-        // 填入合法 URL 后再确认 → 建任务并关闭
-        app.dialog.as_mut().unwrap().url = "http://example.com/a.bin".to_string();
+        // 填入合法 URL + NONE（不校验）后再确认 → 建任务并关闭
+        let d = app.dialog.as_mut().unwrap();
+        d.url = "http://example.com/a.bin".to_string();
+        d.ck_type = CK_NONE;
+        d.ck_sel = CK_NONE;
         app.on_dialog_key(KeyCode::Char(' '));
         assert!(app.dialog.is_none(), "确认按钮建任务");
         assert_eq!(app.tasks.len(), 1);

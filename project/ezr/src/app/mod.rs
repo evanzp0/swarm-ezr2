@@ -14,7 +14,7 @@
 //! `paste`（bracketed paste）/ `tasks`（暂停·重试·清理操作）。App 结构体与构造在此。
 
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 
@@ -37,6 +37,11 @@ mod mouse;
 mod paste;
 mod pieces;
 mod tasks;
+
+// v1.32/FR-01-109：通用滚动条引擎几何类型（Bar/Hit/Arrow）经根叶子模块引入
+// （渲染与命中几何单一来源 crate::scrollbar；app 侧交互状态机在本文件；
+// 引擎为根叶子层，app → scrollbar 不违反组装根分层——arch 规则 13 只约束 ui）
+use crate::scrollbar::{Arrow as SbArrow, Bar as SbBar, Hit as SbHit};
 #[cfg(test)]
 pub(crate) mod testutil;
 
@@ -52,6 +57,79 @@ pub(crate) use dialog_keys::{
 
 /// 每个任务在列表中占用的行高（3 行内容 + 1 行空行分隔）
 pub const ITEM_HEIGHT: u16 = 4;
+
+// ---------------------------------------------------------------------------
+// 通用滚动条交互状态机（v1.32/FR-01-109 全面重写，对齐 ezr-demo m3 app.rs）
+// ---------------------------------------------------------------------------
+
+/// 滚动条实例标识（每实例一个；[`SbKey::bar`] 从 App 回填几何取本帧 [`SbBar`]）
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SbKey {
+    /// 任务列表（垂直）
+    List,
+    /// 并发连接面板（垂直）
+    ConnsV,
+    /// 并发连接面板（水平，m3 新增）
+    ConnsH,
+    /// pieces 分块弹窗（垂直）
+    Pieces,
+    /// 帮助窗口（垂直）
+    Help,
+}
+
+impl SbKey {
+    /// 箭头单击/按住连发的步长（内容单位：任务条目/连接行/内容列/网格行/文本行；
+    /// 水平以 2 列为单位——单列步进肉眼难辨，FR-01-109 ⑥）
+    #[must_use]
+    pub fn step(self) -> i32 {
+        match self {
+            SbKey::ConnsH => 2,
+            _ => 1,
+        }
+    }
+
+    /// 本实例当前帧的滚动条几何（ui 层每帧回填；None = 本帧未绘制）
+    pub(crate) fn bar(self, app: &App) -> Option<SbBar> {
+        match self {
+            SbKey::List => app.list_scrollbar,
+            SbKey::ConnsV => app.conns_v_scrollbar,
+            SbKey::ConnsH => app.conns_h_scrollbar,
+            SbKey::Pieces => app.pieces_scrollbar,
+            SbKey::Help => app.help_scrollbar,
+        }
+    }
+}
+
+/// 滚动条箭头/轨道按住连发状态（Down 记录、Up 取消、tick 驱动重复）
+#[derive(Clone, Copy, Debug)]
+pub struct SbHold {
+    /// 哪个滚动条实例
+    pub key: SbKey,
+    /// 方向：-1 = 朝头箭头（↑/←），+1 = 朝尾箭头（↓/→）
+    pub dir: i32,
+    /// true = 轨道翻页（按 page 步长），false = 箭头步进（按 step 步长）
+    pub page: bool,
+    /// 按下时刻（起振延迟基准）
+    pub since: Instant,
+    /// 上次重复时刻
+    pub last: Instant,
+}
+
+impl SbHold {
+    /// 首次重复的延迟（按住起振时间，FR-01-109 ⑥：0.4s）
+    const FIRST_DELAY: Duration = Duration::from_millis(400);
+    /// 后续重复周期（0.12s）
+    const REPEAT: Duration = Duration::from_millis(120);
+
+    /// 下次重复到期时刻（首次按起振延迟，之后按周期）
+    fn due(&self) -> Instant {
+        if self.since == self.last {
+            self.since + Self::FIRST_DELAY
+        } else {
+            self.last + Self::REPEAT
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // 面板焦点（lazygit 式聚焦显示，v1.30/FR-01-108，对齐 ezr-demo 重构版）
@@ -208,6 +286,39 @@ pub struct App {
     pub help_drag: Option<(u16, u16)>,
     /// 帮助窗口区域（由 ui 层每帧回填；拖拽/滚轮/点击外部关闭的命中测试）
     pub help_area: Option<Rect>,
+    /// 任务列表滚动条命中几何（v1.32/FR-01-109：ui 层每帧回填；None = 本帧未绘制）
+    pub list_scrollbar: Option<SbBar>,
+    /// 并发连接面板垂直滚动条命中几何（v1.32/FR-01-109）
+    pub conns_v_scrollbar: Option<SbBar>,
+    /// 并发连接面板水平滚动条命中几何（v1.32/FR-01-109：唯一 Both 实例）
+    pub conns_h_scrollbar: Option<SbBar>,
+    /// pieces 弹窗滚动条命中几何（v1.32/FR-01-109）
+    pub pieces_scrollbar: Option<SbBar>,
+    /// 帮助窗口滚动条命中几何（v1.32/FR-01-109）
+    pub help_scrollbar: Option<SbBar>,
+    /// pieces 网格滚动上限（总行数 − 网格行数；ui 层每帧回填，与渲染层钳制同源）
+    pub pieces_max_scroll: usize,
+    /// 帮助窗口滚动上限（内容总行数 − 内框行数；ui 层每帧回填）
+    pub help_max_scroll: usize,
+    /// 通用滚动条滑块拖拽中：(哪个滚动条, 抓取点在滑块内的格偏移)
+    /// ——Down 命中 Thumb 记录、Drag 随动反解、任意 Up 结束（FR-01-109 ⑥）
+    pub sb_drag: Option<(SbKey, usize)>,
+    /// 通用滚动条箭头/轨道按压连发状态（Down 记录、Up 取消、tick 驱动重复）
+    pub sb_hold: Option<SbHold>,
+    /// 通用滚动条箭头按压高亮态（Some = (哪个滚动条, 哪个箭头)；按住期间拖出
+    /// 箭头 = 取消高亮连发不中断、拖回恢复，FR-01-109 ⑥）
+    pub sb_pressed: Option<(SbKey, SbArrow)>,
+    /// 箭头点击高亮余辉（Down 即置 400ms；与页脚 chips 的 footer_flash 同机制）
+    pub sb_flash: Option<(SbKey, SbArrow, Instant)>,
+    /// 关于窗口（O 快捷键，v1.32/FR-01-111）是否打开
+    pub about_open: bool,
+    /// 关于窗口左上角位置（鼠标拖拽移动记忆；None = 打开时居中。
+    /// 位置跨次打开记忆——关闭不清除，与帮助窗口同口径）
+    pub about_pos: Option<(u16, u16)>,
+    /// 关于窗口拖拽中的抓取偏移（指针相对窗口左上角）
+    pub about_drag: Option<(u16, u16)>,
+    /// 关于窗口区域（由 ui 层每帧回填；拖拽的命中测试）
+    pub about_area: Option<Rect>,
     /// 头部页签命中矩形（ui 层每帧回填；鼠标点击页签切换，v1.30/FR-01-80）
     pub tab_rects: Vec<(Rect, usize)>,
     /// 页脚命令 chips 命中矩形（v1.31/FR-01-107①：ui 层每帧重建，不含分隔符；
@@ -274,6 +385,11 @@ pub struct App {
     pub visible_conns_rows: usize,
     /// 明细滚动所属的列表选中序号（切换任务时重置滚动与选择，FR-01-97）
     conns_scroll_for: usize,
+    /// 并发连接面板横向滚动偏移（v1.32/FR-01-96/109：以「内容列」为单位，
+    /// ←/→ 键步进 ±2；上限 = 内容宽 − 内框宽，ui 层每帧回填钳制）
+    pub conns_hscroll: usize,
+    /// 并发连接面板横向最大滚动偏移（内容宽 − 内框宽，ui 层每帧回填）
+    pub conns_max_hscroll: usize,
     /// 当前打开的对话框
     pub dialog: Option<Dialog>,
     /// 对话框按钮可点击区域（ui 层每帧回填）
@@ -371,6 +487,23 @@ impl App {
             last_copied: None,
             visible_conns_rows: 8,
             conns_scroll_for: 0,
+            conns_hscroll: 0,
+            conns_max_hscroll: 0,
+            list_scrollbar: None,
+            conns_v_scrollbar: None,
+            conns_h_scrollbar: None,
+            pieces_scrollbar: None,
+            help_scrollbar: None,
+            pieces_max_scroll: 0,
+            help_max_scroll: 0,
+            sb_drag: None,
+            sb_hold: None,
+            sb_pressed: None,
+            sb_flash: None,
+            about_open: false,
+            about_pos: None,
+            about_drag: None,
+            about_area: None,
             dialog: None,
             dlg_btn_rects: Vec::new(),
             dlg_field_rects: Vec::new(),
@@ -452,11 +585,240 @@ impl App {
         slots::queue_pos(&self.tasks, task_id)
     }
 
-    /// 是否存在浮层（对话框/pieces 弹窗/帮助窗口，v1.30/FR-01-107）。
+    /// 是否存在浮层（对话框/pieces 弹窗/帮助窗口/关于窗口）。
     /// 浮层打开时底层面板全部降级暗边框、页签高亮不再使用反色底。
+    /// v1.32/FR-01-108 注记：浮层集合含关于窗口（FR-01-111）。
     #[must_use]
     pub fn overlay_open(&self) -> bool {
-        self.dialog.is_some() || self.pieces_open || self.help_open
+        self.dialog.is_some() || self.pieces_open || self.help_open || self.about_open
+    }
+
+    /// 打开关于窗口（O 快捷键，v1.32/FR-01-111）：居中显示 EZR Download v1.0.0
+    pub fn open_about(&mut self) {
+        self.about_open = true;
+        // about_pos 保留上次拖拽位置（跨次记忆）；None = 渲染层首帧居中并回填
+    }
+
+    /// 关闭关于窗口（位置记忆保留，与帮助窗口同口径）
+    pub fn close_about(&mut self) {
+        self.about_open = false;
+        self.about_area = None;
+        self.about_drag = None;
+    }
+
+    // -----------------------------------------------------------------------
+    // 通用滚动条交互（v1.32/FR-01-109 ⑥：滑块拖拽/箭头步进连发/轨道翻页/
+    // 按压高亮余辉；对齐 ezr-demo m3 app.rs sb_* 方法族）
+    // -----------------------------------------------------------------------
+
+    /// 滚动条滚动上限（按实例取各自的 total − page；ConnsH = 横向内容差）
+    fn sb_max(&self, key: SbKey) -> usize {
+        match key {
+            SbKey::List => self
+                .filtered()
+                .len()
+                .saturating_sub(self.visible_rows.max(1)),
+            SbKey::ConnsV => self
+                .conn_count()
+                .saturating_sub(self.visible_conns_rows.max(1)),
+            SbKey::ConnsH => self.conns_max_hscroll,
+            SbKey::Pieces => self.pieces_max_scroll,
+            SbKey::Help => self.help_max_scroll,
+        }
+    }
+
+    /// 滚动偏移写入（按实例写回各自的滚动字段；事件内立即钳制 0..=max_pos，
+    /// 末页即停——FR-01-109 ⑥）
+    fn sb_scroll(&mut self, key: SbKey, delta: i32) {
+        let max = self.sb_max(key);
+        let clamp = |v: i64| v.clamp(0, max as i64) as usize;
+        match key {
+            SbKey::List => self.scroll = clamp(self.scroll as i64 + delta as i64),
+            SbKey::ConnsV => self.conns_scroll = clamp(self.conns_scroll as i64 + delta as i64),
+            SbKey::ConnsH => self.conns_hscroll = clamp(self.conns_hscroll as i64 + delta as i64),
+            SbKey::Pieces => self.pieces_scroll = clamp(self.pieces_scroll as i64 + delta as i64),
+            SbKey::Help => self.help_scroll = clamp(self.help_scroll as i64 + delta as i64),
+        }
+    }
+
+    /// 滚动偏移绝对写入（滑块拖拽反解结果；钳制到 0..=max_pos）
+    fn sb_set(&mut self, key: SbKey, pos: usize) {
+        let max = self.sb_max(key);
+        let v = pos.min(max);
+        match key {
+            SbKey::List => self.scroll = v,
+            SbKey::ConnsV => self.conns_scroll = v,
+            SbKey::ConnsH => self.conns_hscroll = v,
+            SbKey::Pieces => self.pieces_scroll = v,
+            SbKey::Help => self.help_scroll = v,
+        }
+    }
+
+    /// 轨道翻页页长（本实例一屏可视单位数；几何缺失时退化为 1）
+    fn sb_page(&self, key: SbKey) -> i32 {
+        key.bar(self).map_or(1, |b| b.page.max(1) as i32)
+    }
+
+    /// 滚动条 Down 事件分派（FR-01-109 ⑥）：滑块 = 开始拖拽；箭头 = 立即
+    /// 步进一次 + 按压高亮 + 400ms 余辉 + 记连发；轨道 = 朝点击方向整页滚动
+    /// + 记连发。同时聚焦所属面板（主界面实例）。
+    fn sb_press(&mut self, key: SbKey, bar: &SbBar, hit: SbHit) {
+        match hit {
+            SbHit::Thumb(grab) => {
+                self.sb_drag = Some((key, grab));
+            }
+            SbHit::Head => {
+                let step = key.step();
+                self.sb_scroll(key, -step);
+                self.sb_pressed = Some((key, SbArrow::Head));
+                self.sb_flash = Some((
+                    key,
+                    SbArrow::Head,
+                    Instant::now() + Duration::from_millis(400),
+                ));
+                self.sb_hold = Some(SbHold {
+                    key,
+                    dir: -1,
+                    page: false,
+                    since: Instant::now(),
+                    last: Instant::now(),
+                });
+            }
+            SbHit::Tail => {
+                let step = key.step();
+                self.sb_scroll(key, step);
+                self.sb_pressed = Some((key, SbArrow::Tail));
+                self.sb_flash = Some((
+                    key,
+                    SbArrow::Tail,
+                    Instant::now() + Duration::from_millis(400),
+                ));
+                self.sb_hold = Some(SbHold {
+                    key,
+                    dir: 1,
+                    page: false,
+                    since: Instant::now(),
+                    last: Instant::now(),
+                });
+            }
+            SbHit::Track(t) => {
+                // 朝点击方向整页滚动：点击滑块上方/左侧 = 向头翻页，反之为向尾
+                let dir = if t < bar.thumb_pos() { -1 } else { 1 };
+                let page = self.sb_page(key);
+                self.sb_scroll(key, dir * page);
+                self.sb_hold = Some(SbHold {
+                    key,
+                    dir,
+                    page: true,
+                    since: Instant::now(),
+                    last: Instant::now(),
+                });
+            }
+        }
+    }
+
+    /// 滑块拖拽随动（Drag 事件）：指针在轨道内的下标 − 抓取偏移 = 滑块新位，
+    /// 反解回滚动偏移（与正向显示取整严格互逆，FR-01-109 ④）
+    fn sb_drag_move(&mut self, col: u16, row: u16) {
+        let Some((key, grab)) = self.sb_drag else {
+            return;
+        };
+        let Some(bar) = key.bar(self) else {
+            return;
+        };
+        let t = bar.track_index_at(col, row);
+        let pos = bar.pos_from_thumb(t.saturating_sub(grab));
+        self.sb_set(key, pos);
+    }
+
+    /// 松开左键：结束拖拽/连发/按压高亮（任何位置松开都调用）
+    fn sb_release(&mut self) {
+        self.sb_drag = None;
+        self.sb_hold = None;
+        self.sb_pressed = None;
+    }
+
+    /// tick 驱动的按住连发（FR-01-109 ⑥：0.4s 起振、0.12s 周期，松开即停）
+    pub(crate) fn sb_hold_tick(&mut self, now: Instant) {
+        let Some(h) = self.sb_hold else {
+            return;
+        };
+        if now < h.due() {
+            return;
+        }
+        let delta = if h.page {
+            self.sb_page(h.key)
+        } else {
+            h.key.step()
+        };
+        self.sb_scroll(h.key, h.dir * delta);
+        if let Some(hh) = self.sb_hold.as_mut() {
+            hh.last = now;
+        }
+    }
+
+    /// 渲染查询：箭头按压高亮态（按压中优先；否则 400ms 余辉内可见——
+    /// 快速单击也有可见点击效果，FR-01-109 ⑥）
+    #[must_use]
+    pub fn sb_arrow_pressed(&self, key: SbKey) -> Option<SbArrow> {
+        if let Some((k, a)) = self.sb_pressed {
+            if k == key {
+                return Some(a);
+            }
+        }
+        match self.sb_flash {
+            Some((k, a, until)) if k == key && Instant::now() < until => Some(a),
+            _ => None,
+        }
+    }
+
+    /// 按住箭头期间的拖出/拖回高亮跟随：指针在按住的箭头上 = 恢复高亮，
+    /// 拖出 = 取消高亮（连发不中断，FR-01-109 ⑥）
+    pub(crate) fn sb_arrow_follow(&mut self, col: u16, row: u16) {
+        let Some(h) = self.sb_hold else {
+            return;
+        };
+        if h.page {
+            return; // 轨道翻页无箭头高亮
+        }
+        let key = h.key;
+        let arrow = if h.dir < 0 {
+            SbArrow::Head
+        } else {
+            SbArrow::Tail
+        };
+        let on_arrow = key
+            .bar(self)
+            .and_then(|b| b.hit(col, row))
+            .is_some_and(|hit| match hit {
+                SbHit::Head => arrow == SbArrow::Head,
+                SbHit::Tail => arrow == SbArrow::Tail,
+                _ => false,
+            });
+        if on_arrow {
+            self.sb_pressed = Some((key, arrow));
+        } else if self.sb_pressed == Some((key, arrow)) {
+            self.sb_pressed = None;
+        }
+    }
+
+    /// 主界面滚动条 Down 命中分派（FR-01-109 ⑥：按下滚动条同时聚焦所属面板）。
+    /// 依实例序检查命中（列表 → 并发垂直 → 并发水平）；命中即消费。
+    pub(crate) fn sb_press_at(&mut self, col: u16, row: u16) -> bool {
+        for (key, focus) in [
+            (SbKey::List, Panel::List),
+            (SbKey::ConnsV, Panel::Conns),
+            (SbKey::ConnsH, Panel::Conns),
+        ] {
+            if let Some(bar) = key.bar(self) {
+                if let Some(hit) = bar.hit(col, row) {
+                    self.focus = focus;
+                    self.sb_press(key, &bar, hit);
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// 页脚命令 chip 是否处于点击高亮（v1.31/FR-01-107①：按压中，或
@@ -690,6 +1052,231 @@ mod tests {
         // 历史回缩（tick 窗口滑动剔除旧峰）→ 峰值随动（展示口径随窗口）
         app.speed_hist = vec![1, 2];
         assert_eq!(app.peak_dl_speed(), 2.0 * 1024.0);
+        app.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+mod sb_interaction_tests {
+    //! v1.32/FR-01-109 通用滚动条交互状态机单测：箭头步进+按压高亮+连发、
+    //! 轨道翻页方向、滑块拖拽反解、松开收尾、←→ 横向钳制与 About 模态。
+
+    use crossterm::event::{KeyCode, KeyModifiers};
+    use ratatui::layout::Rect;
+
+    use super::*;
+    use crate::model::config::Config;
+    use crate::model::TaskState;
+
+    fn make_app(tag: &str) -> App {
+        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-sb-{tag}"));
+        let reg = dir.join("registry.json").to_string_lossy().into_owned();
+        App::new(Config::default(), reg)
+    }
+
+    fn dl_task(id: u32, name: &str) -> crate::model::Task {
+        let mut t = crate::model::sample_task();
+        t.id = id;
+        t.name = name.to_string();
+        t.state = TaskState::Downloading;
+        t.probed = true;
+        t.total = 5_000_000;
+        t
+    }
+
+    /// 40×20 面板的垂直滚动条几何（total=30、page=5 → max 25，与下方
+    /// 测试播种的 30 个任务一致——回填几何与真实滚动上限同源，模拟 ui 层
+    /// 每帧回填的真实契约）
+    fn vbar() -> SbBar {
+        SbBar::vertical(Rect::new(0, 0, 40, 20), 30, 5, 0)
+    }
+
+    /// 以当前 scroll 重建回填几何（模拟下一帧 ui 层回填：pos 字段随帧刷新）
+    fn refill(app: &mut App) -> SbBar {
+        let bar = SbBar {
+            pos: app.scroll,
+            ..app.list_scrollbar.unwrap()
+        };
+        app.list_scrollbar = Some(bar);
+        bar
+    }
+
+    #[tokio::test]
+    async fn arrow_press_steps_and_focuses_panel() {
+        let mut app = make_app("arrow");
+        app.list_scrollbar = Some(vbar());
+        app.visible_rows = 5;
+        for _ in 0..30 {
+            let mut t = dl_task(1, "t.bin");
+            t.state = TaskState::Queued;
+            app.tasks.push(t);
+        }
+        app.focus = Panel::Detail;
+        // 尾箭头命中（几何：高 20 → 轨道 [2,17]；Tail 在行 18）
+        let bar = app.list_scrollbar.unwrap();
+        let hit = bar.hit(39, 18);
+        assert!(matches!(hit, Some(SbHit::Tail)));
+        app.sb_press(SbKey::List, &bar, hit.unwrap());
+        assert_eq!(app.scroll, 1, "尾箭头步进 1");
+        assert!(app.sb_hold.is_some(), "记录连发");
+        assert_eq!(
+            app.sb_pressed,
+            Some((SbKey::List, SbArrow::Tail)),
+            "按压高亮"
+        );
+        assert!(app.sb_flash.is_some(), "400ms 余辉");
+        // 主界面按下滚动条同时聚焦所属面板（sb_press_at 入口语义）
+        app.focus = Panel::Detail;
+        assert!(app.sb_press_at(39, 18), "尾箭头再次命中");
+        assert_eq!(app.focus, Panel::List, "按下滚动条聚焦所属面板");
+        // 渲染查询：按压态可见
+        assert_eq!(app.sb_arrow_pressed(SbKey::List), Some(SbArrow::Tail));
+        // 头箭头：scroll 回 0 后再按被钳 0
+        app.scroll = 0;
+        let hit = bar.hit(39, 1);
+        assert!(matches!(hit, Some(SbHit::Head)));
+        app.sb_press(SbKey::List, &bar, hit.unwrap());
+        assert_eq!(app.scroll, 0, "事件内立即钳制（末页/首页即停）");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn track_press_pages_toward_click_side() {
+        let mut app = make_app("track");
+        app.list_scrollbar = Some(vbar());
+        app.visible_rows = 5;
+        for _ in 0..30 {
+            let mut t = dl_task(1, "t.bin");
+            t.state = TaskState::Queued;
+            app.tasks.push(t);
+        }
+        let bar = app.list_scrollbar.unwrap();
+        // 首屏（pos 0）：滑块在轨道头部 → 轨道下半段点击 = 朝尾翻页
+        let hit = bar.hit(39, 10);
+        assert!(matches!(hit, Some(SbHit::Track(_))));
+        app.sb_press(SbKey::List, &bar, hit.unwrap());
+        assert_eq!(app.scroll, 5, "整页翻页（page = 可视 5）");
+        assert!(app.sb_hold.as_ref().is_some_and(|h| h.page), "轨道连发按页");
+        // 滑块拖到末页后（下一帧回填 pos）：轨道上半段点击 = 朝头翻页
+        app.sb_set(SbKey::List, 25);
+        let bar = refill(&mut app);
+        let hit = bar.hit(39, 3);
+        if let Some(SbHit::Track(t)) = hit {
+            assert!(t < bar.thumb_pos(), "点击点在滑块上方");
+            app.sb_press(SbKey::List, &bar, hit.unwrap());
+            assert_eq!(app.scroll, 20, "朝头整页翻页（25 − page 5）");
+        } else {
+            panic!("轨道上半段应命中 Track");
+        }
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn thumb_drag_inverse_and_release() {
+        let mut app = make_app("thumb");
+        app.list_scrollbar = Some(vbar());
+        app.visible_rows = 5;
+        for _ in 0..30 {
+            let mut t = dl_task(1, "t.bin");
+            t.state = TaskState::Queued;
+            app.tasks.push(t);
+        }
+        let bar = app.list_scrollbar.unwrap();
+        // 滑块命中（首屏滑块在轨道首格：行 2）→ 抓取偏移 0
+        let hit = bar.hit(39, 2);
+        assert!(matches!(hit, Some(SbHit::Thumb(0))));
+        app.sb_press(SbKey::List, &bar, hit.unwrap());
+        assert_eq!(app.sb_drag, Some((SbKey::List, 0)));
+        // 拖到轨道中部（行 10 → 轨道下标 8）→ 反解滚动偏移
+        app.sb_drag_move(39, 10);
+        let expected = bar.pos_from_thumb(8);
+        assert_eq!(app.scroll, expected, "拖拽反解与显示取整互逆");
+        // 松开 = 结束拖拽/连发/按压
+        app.sb_release();
+        assert!(app.sb_drag.is_none() && app.sb_hold.is_none() && app.sb_pressed.is_none());
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn hold_autorepeat_first_delay_then_period() {
+        let mut app = make_app("hold");
+        app.list_scrollbar = Some(vbar());
+        app.visible_rows = 5;
+        for _ in 0..30 {
+            let mut t = dl_task(1, "t.bin");
+            t.state = TaskState::Queued;
+            app.tasks.push(t);
+        }
+        let bar = app.list_scrollbar.unwrap();
+        app.sb_press(SbKey::List, &bar, SbHit::Tail);
+        assert_eq!(app.scroll, 1, "按下立即步进一次");
+        // 起振前（<400ms）tick 不重复
+        app.sb_hold_tick(Instant::now());
+        assert_eq!(app.scroll, 1);
+        // 起振（>400ms）→ 重复一次
+        let later = Instant::now() + std::time::Duration::from_millis(450);
+        app.sb_hold_tick(later);
+        assert_eq!(app.scroll, 2, "0.4s 起振后重复");
+        // 周期（0.12s 内）不重复
+        app.sb_hold_tick(later + std::time::Duration::from_millis(60));
+        assert_eq!(app.scroll, 2);
+        // 周期到期 → 再重复
+        app.sb_hold_tick(later + std::time::Duration::from_millis(130));
+        assert_eq!(app.scroll, 3, "0.12s 周期重复");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn conns_horizontal_keys_clamp_to_zero_for_http() {
+        let mut app = make_app("hkey");
+        app.tasks.push(dl_task(1, "h.bin"));
+        app.selected = 0;
+        app.focus = Panel::Conns;
+        // HTTP 内容 22 列常态不超宽 → conns_max_hscroll = 0（ui 回填）
+        app.conns_max_hscroll = 0;
+        app.on_key(KeyCode::Right, KeyModifiers::NONE);
+        app.on_key(KeyCode::Right, KeyModifiers::NONE);
+        assert_eq!(app.conns_hscroll, 0, "←/→ 无横向内容不响应（钳制归零）");
+        app.on_key(KeyCode::Left, KeyModifiers::NONE);
+        assert_eq!(app.conns_hscroll, 0);
+        // 非 Conns 聚焦不响应
+        app.focus = Panel::List;
+        app.conns_max_hscroll = 10;
+        app.on_key(KeyCode::Right, KeyModifiers::NONE);
+        assert_eq!(app.conns_hscroll, 0, "列表聚焦时 ←→ 不滚并发明细");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn about_modal_lifecycle_and_priority() {
+        let mut app = make_app("about");
+        // O 打开；位置记忆跨次保留
+        app.on_key(KeyCode::Char('o'), KeyModifiers::NONE);
+        assert!(app.about_open);
+        assert!(app.overlay_open(), "浮层集合含关于窗口（FR-01-108 注记）");
+        app.about_pos = Some((7, 9));
+        app.close_about();
+        assert!(!app.about_open && !app.overlay_open());
+        app.open_about();
+        assert_eq!(app.about_pos, Some((7, 9)), "位置跨次记忆");
+        // 模态：主界面快捷键全部消费为无动作；Esc/O/q/Q 关闭不退出
+        app.on_key(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert!(app.dialog.is_none(), "About 模态消费 A");
+        app.on_key(KeyCode::Char('h'), KeyModifiers::NONE);
+        assert!(!app.help_open, "About 模态消费 H");
+        app.on_key(KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(app.focus, Panel::List, "About 模态消费 Tab");
+        app.on_key(KeyCode::Char('q'), KeyModifiers::NONE);
+        assert!(!app.about_open && !app.quit, "q 先关窗不退出");
+        // 帮助内 O：About 叠于帮助之上，关闭后回帮助
+        app.help_open = true;
+        app.on_key(KeyCode::Char('O'), KeyModifiers::NONE);
+        assert!(app.about_open && app.help_open, "帮助内打开 About");
+        app.on_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(!app.about_open && app.help_open, "关闭后回帮助");
+        // 帮助内 Esc/H/q/Q 仍关闭帮助
+        app.on_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(!app.help_open);
         app.shutdown().await;
     }
 }

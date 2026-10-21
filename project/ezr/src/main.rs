@@ -29,6 +29,9 @@
 mod app;
 mod engine;
 mod model;
+// 通用滚动条引擎（v1.32/FR-01-109，对齐 ezr-demo m3 根级 scrollbar.rs +
+// ui/scrollable_panel.rs 组合：几何/命中/反解/渲染单一实现，app 与 ui 共同消费）
+mod scrollbar;
 mod sentinel;
 mod ui;
 
@@ -719,7 +722,10 @@ mod cli_parse_tests {
         app.open_add_dialog();
         term.draw(|f| ui::draw(f, &mut app)).unwrap();
         let s_open = term.backend().to_string();
-        assert!(s_open.contains("添加下载任务"), "帧 2 对话框已绘制");
+        assert!(
+            s_open.contains("添加任务：HTTP(S)"),
+            "帧 2 对话框已绘制（v1.32 标题）"
+        );
         // 残影根治锚（clip_wide_at_edges）：对话框底层文本被浮层边界切断处，
         // 边界列内不残留「宽字 + 窄字」同格重叠——对话框左缘列起的行内，
         // 缓冲区在浮层渲染后的宽字符主格不跨界（凡主格在浮层左缘外一格的

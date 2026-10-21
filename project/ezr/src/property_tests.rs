@@ -1057,12 +1057,12 @@ proptest! {
         }
     }
 
-    /// 算法下拉状态机不变量：任意键序列下 ck_sel 恒在算法表界内且
-    /// ck_type == ck_sel 同步；选择键（Up/Down/Home/End）保持展开，
-    /// Tab/BackTab 关闭并按 Add 布局跳焦（4/2）
+    /// 算法下拉状态机不变量（v1.32：下拉 8 项 = NONE 首行 + 7 算法）：任意
+    /// 键序列下 ck_sel 恒在 8 项界内且 ck_type == ck_sel 同步；选择键
+    ///（Up/Down/Home/End）保持展开；Tab/BackTab 关闭并按 Add 布局跳焦（4/2）
     #[test]
     fn prop_dropdown_open_key_sync_and_bounds(
-        sel0 in 0usize..CHECKSUM_ALGOS.len(),
+        sel0 in 0usize..=CHECKSUM_ALGOS.len(),
         keys in dialog_key_seq(),
     ) {
         let mut d = crate::app::testutil::dialog(DialogKind::Add, 3);
@@ -1076,10 +1076,16 @@ proptest! {
             let was_open = d.ck_open;
             let navigated = matches!(k, KeyCode::Up | KeyCode::Down | KeyCode::Home | KeyCode::End);
             crate::app::dropdown_open_key(&mut d, *k);
-            prop_assert!(d.ck_sel < CHECKSUM_ALGOS.len(), "ck_sel 恒在界内");
+            prop_assert!(
+                d.ck_sel <= CHECKSUM_ALGOS.len(),
+                "ck_sel 恒在下拉 8 项界内（NONE + 7 算法）"
+            );
             prop_assert_eq!(d.ck_type, d.ck_sel, "ck_type 与 ck_sel 同步");
             if was_open && navigated {
                 prop_assert!(d.ck_open, "选择键保持展开");
+            }
+            if d.ck_type == crate::model::checksum::CK_NONE {
+                prop_assert!(d.ck_value.is_empty(), "选中 NONE 时校验码实时清空");
             }
             if *k == KeyCode::Tab {
                 prop_assert_eq!(d.focus, 4, "Tab 关闭并跳焦 4");

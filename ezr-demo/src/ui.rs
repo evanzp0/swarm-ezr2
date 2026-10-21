@@ -1158,7 +1158,8 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     app.conns_v_sb = None;
     app.conns_h_sb = None;
     app.conns_max_hscroll = 0;
-    // 修订-3：标题仅展示活跃并发数（原「活跃 x/y」中的上限 y 已移除）
+    // 修订-3：标题仅展示活跃并发数（原「活跃 x/y」中的上限 y 已移除）；
+    // v139：前后各 1 空格，左右 padding 对称（与左标题 ` 并发连接 ` 同口径）
     let (is_bt, _total_n, active, empty) = match app.sel_task() {
         Some(t) => {
             // 仅「下载中」与「做种中」任务显示并发明细：
@@ -1189,7 +1190,7 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         .title(Span::styled(" 并发连接 ", panel_title_style(focused)))
         .title(
             Line::from(Span::styled(
-                format!("活跃 {} ", active),
+                format!(" 活跃 {} ", active),
                 Style::default().fg(DIM),
             ))
             .alignment(Alignment::Right),

@@ -2,6 +2,7 @@
 
 use super::{App, Dialog, DialogKind, CHECKSUM_ALGOS};
 use crate::engine::Cmd;
+use crate::model::checksum::CK_NONE;
 use crate::model::namegen::{DOWNLOADING_EXT, SIDECAR_EXT};
 use crate::model::sidecar::Sidecar;
 use crate::model::{
@@ -17,26 +18,43 @@ impl App {
         self.dlg_drag = None;
         self.dlg_area = None;
     }
-    /// 校验码输入共识（Add/Modify 共用，DRY 收敛）：空 = 清除（None）；
-    /// 非空按算法合法性校验，合法构造 Checksum；非法 → toast 提示并
-    /// 聚焦回校验码字段（Add focus 4 / Modify focus 2），返回 None 表示
-    /// 流程中止（不生效）。外层 Some(None) = 清除校验、Some(Some(..)) = 设置。
+    /// 校验码输入共识（Add/Modify 共用，DRY 收敛；v1.32/FR-01-01 修订）：
+    /// **NONE = 不校验**（创建/修改清除校验——原「留空 = 清除」路径改由
+    /// NONE 选项承载）；**非 NONE 算法校验码必填**——空提交被拒绝，toast
+    /// `⚠ {算法} 校验码不可为空（需 N 位十六进制）` 并聚焦校验码字段
+    /// （Add focus 4 / Modify focus 2）；非空按算法合法性校验，合法构造
+    /// Checksum；非法 → toast 提示并聚焦回校验码字段。外层 Some(None) =
+    /// 清除校验、Some(Some(..)) = 设置、None = 流程中止（不生效）。
+    /// `ck_type` 为下拉 8 项下标（0 = NONE，1..=7 = CHECKSUM_ALGOS）。
     fn checksum_from_input(
         &mut self,
         ck_type: usize,
         ck_raw: &str,
         ck_focus: usize,
     ) -> Option<Option<Checksum>> {
-        if ck_raw.is_empty() {
+        let entries = checksum::checksum_dropdown();
+        let (algo, need) = entries[ck_type.min(entries.len() - 1)];
+        if ck_type == CK_NONE {
+            // NONE = 不校验（校验码输入已被实时禁用，此处扫尾空值路径）
             return Some(None);
         }
-        match checksum::validate_value(ck_type, ck_raw) {
+        if ck_raw.is_empty() {
+            // v1.32：非 NONE 算法校验码必填——空提交被拒绝并聚焦校验码字段
+            self.set_toast(format!("⚠ {algo} 校验码不可为空（需 {need} 位十六进制）"));
+            if let Some(d) = self.dialog.as_mut() {
+                d.focus = ck_focus;
+            }
+            return None;
+        }
+        // 算法表下标 = 下拉下标 − 1（首行 NONE 占位，v1.32）
+        let algo_idx = ck_type - 1;
+        match checksum::validate_value(algo_idx, ck_raw) {
             Ok(v) => Some(Some(Checksum {
-                algo: CHECKSUM_ALGOS[ck_type].0,
+                algo: CHECKSUM_ALGOS[algo_idx].0,
                 value: v,
             })),
             Err(e) => {
-                let algo = CHECKSUM_ALGOS[ck_type].0;
+                let algo = CHECKSUM_ALGOS[algo_idx].0;
                 self.set_toast(format!("⚠ {algo} {e}"));
                 if let Some(d) = self.dialog.as_mut() {
                     d.focus = ck_focus;
@@ -342,7 +360,8 @@ impl App {
         }
     }
 
-    /// 打开添加对话框（空预填；URL/目录留空由用户输入）
+    /// 打开添加对话框（v1.32/FR-01-01：校验默认 NONE（不校验）——原
+    /// 「默认 SHA-256」退役；空预填；URL/目录留空由用户输入）
     pub fn open_add_dialog(&mut self) {
         self.set_dialog(Dialog {
             kind: DialogKind::Add,
@@ -350,10 +369,10 @@ impl App {
             dir: String::new(),
             conns: String::new(),
             conns_edited: false,
-            ck_type: 3,
+            ck_type: CK_NONE,
             ck_value: String::new(),
             ck_open: false,
-            ck_sel: 3,
+            ck_sel: CK_NONE,
             proxy_sel: self.default_proxy_sel,
             proxy_open: false,
             focus: 0,
@@ -382,11 +401,13 @@ impl App {
             t.proxy.clone(),
         );
         // 规范名回查单源 checksum::algo_index_exact_or_default（architect v116：
-        // 原内联 exact-match + unwrap_or(3) 与引擎 verify 重复）
+        // 原内联 exact-match 与引擎 verify 重复）。v1.32/FR-01-87：下拉 8 项含
+        // 首行 NONE——有校验任务预填 = 算法表下标 + 1；无校验任务预填 NONE
+        //（v1.32：原 unwrap_or(3) SHA-256 退役）
         let ck_type = checksum
             .as_ref()
-            .map(|c| checksum::algo_index_exact_or_default(c.algo))
-            .unwrap_or(3);
+            .map(|c| checksum::algo_index_exact_or_default(c.algo) + 1)
+            .unwrap_or(CK_NONE);
         // 选项表未收录时追加兜底项保证回显一致（命名代理被从配置删除的
         // 存量任务；正常流都在表内）
         let proxy_sel = match self.proxy_options.iter().position(|o| o == &proxy) {
@@ -504,10 +525,10 @@ mod add_dialog_flow_tests {
             dir: dir.to_string_lossy().to_string(),
             conns: String::new(),
             conns_edited: false,
-            ck_type: 3,
+            ck_type: CK_NONE,
             ck_value: String::new(),
             ck_open: false,
-            ck_sel: 3,
+            ck_sel: CK_NONE,
             proxy_sel: 0,
             proxy_open: false,
             focus: 7,
@@ -554,10 +575,10 @@ mod add_dialog_flow_tests {
             dir: dir.to_string_lossy().into_owned(),
             conns: String::new(),
             conns_edited: false,
-            ck_type: 3,
+            ck_type: CK_NONE,
             ck_value: String::new(),
             ck_open: false,
-            ck_sel: 3,
+            ck_sel: CK_NONE,
             proxy_sel: 0,
             proxy_open: false,
             focus: 7,
@@ -605,10 +626,10 @@ mod add_dialog_flow_tests {
             dir: dir.to_string_lossy().into_owned(),
             conns: String::new(),
             conns_edited: false,
-            ck_type: 3,
+            ck_type: CK_NONE,
             ck_value: String::new(),
             ck_open: false,
-            ck_sel: 3,
+            ck_sel: CK_NONE,
             proxy_sel: 0,
             proxy_open: false,
             focus: 7,
@@ -668,10 +689,10 @@ mod add_dialog_flow_tests {
             dir: String::new(),
             conns: String::new(),
             conns_edited: false,
-            ck_type: 3,
+            ck_type: CK_NONE,
             ck_value: String::new(),
             ck_open: false,
-            ck_sel: 3,
+            ck_sel: CK_NONE,
             proxy_sel: 0,
             proxy_open: false,
             focus: 7,
@@ -776,19 +797,23 @@ mod add_dialog_flow_tests {
         let d = app.dialog.as_ref().expect("m 打开修改对话框");
         assert_eq!(d.kind, DialogKind::Modify);
         assert_eq!(d.conns, "2");
-        assert_eq!(d.ck_type, 3, "SHA-256 下标");
+        // v1.32：下拉 8 项含首行 NONE——算法表下标 + 1（SHA-256 = 4）
+        assert_eq!(d.ck_type, 4, "SHA-256 下拉下标（NONE 首行 + 1）");
         assert_eq!(d.ck_value, "a".repeat(64));
         assert_eq!(d.proxy_sel, 0, "任务为 Direct → 预选直连");
-        // 改并发 6 + 清空校验码 + 代理切命名 a → 确定
+        // 改并发 6 + 校验选 NONE（v1.32：清除校验改由 NONE 选项承载）+
+        // 代理切命名 a → 确定
         let d = app.dialog.as_mut().unwrap();
         d.conns = "6".to_string();
+        d.ck_type = CK_NONE;
+        d.ck_sel = CK_NONE;
         d.ck_value.clear();
         d.proxy_sel = 1;
         app.dlg_confirm_modify();
         assert!(app.dialog.is_none());
         let t = &app.tasks[0];
         assert_eq!(t.concurrency, 6, "并发立即生效");
-        assert!(t.checksum.is_none(), "清空校验码 = 清除校验");
+        assert!(t.checksum.is_none(), "选 NONE 确定 = 清除校验（v1.32）");
         assert_eq!(t.proxy, crate::model::ProxyChoice::Named("a".into()));
         assert!(app
             .toast

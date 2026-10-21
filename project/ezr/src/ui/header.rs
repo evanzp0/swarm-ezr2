@@ -32,32 +32,37 @@ pub(super) fn draw_header(f: &mut Frame, app: &mut App, area: Rect, with_chart: 
     let ulp_val = app.peak_ul_speed();
     let conns_n = app.conns_display_total();
 
+    // v1.32/FR-01-94①（对齐 ezr-demo m3）：标题左对齐（Block 默认锚点，
+    // 不居中）、标题单元 " ◆ EZR Downloader "（名称前后各 1 列空白，前后
+    // padding 距离相等）；**版本号移除**（原「随期号递进」退役，版本展示面
+    // 迁移关于窗口 FR-01-111/D39）；峰值不写在标题行边框上
     let block = bordered_block(BORDER).title(Line::from(vec![
         Span::styled(
             " ◆ ",
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "EZR Downloader",
+            "EZR Downloader ",
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!("  v{}", crate::VERSION), Style::default().fg(DIM)),
     ]));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // 右侧内嵌流量图：│ 分隔符 + 左右各 1 列空白 + 图宽 = 内容区 20%，并保证
-    // 字段区至少 92 列（不足时压缩图宽）；占内容区全高（FR-01-95）
+    // 右侧内嵌流量图：│ 分隔符 + 图区（v1.32/FR-01-94⑤ 修订，对齐
+    // ezr-demo m3：图区紧贴分隔符与右边框——左右 0 列空白，与上下 padding
+    // 一致）；图宽 = 内容区 20%，并保证字段区至少 92 列（不足时压缩图宽，
+    // v1.32：clamp 上限改 内容宽 − 93）；占内容区全高
     let chart_w = if with_chart && inner.height >= 3 && inner.width >= 49 {
-        (inner.width / 5).clamp(6, inner.width.saturating_sub(95).max(6))
+        (inner.width / 5).clamp(6, inner.width.saturating_sub(93).max(6))
     } else {
         0
     };
     let fields_w = if chart_w > 0 {
-        inner.width - chart_w - 3
+        inner.width - chart_w - 1
     } else {
         inner.width
     };
@@ -211,9 +216,10 @@ pub(super) fn draw_header(f: &mut Frame, app: &mut App, area: Rect, with_chart: 
                 },
             );
         }
-        // 图：分隔符右侧留 1 列空白、图区右缘再留 1 列空白（无边框、占全高）
+        // v1.32/FR-01-94⑤：图区紧贴分隔符与右边框（分隔符右侧 0 列空白、
+        // 图区右缘不另留白；无边框、占全高）
         let chart_area = Rect {
-            x: inner.x + fields_w + 2,
+            x: inner.x + fields_w + 1,
             width: chart_w,
             ..inner
         };

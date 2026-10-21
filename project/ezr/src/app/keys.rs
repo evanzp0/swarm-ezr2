@@ -11,7 +11,7 @@
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use super::{App, Panel};
+use super::{App, Panel, SbKey};
 
 impl App {
     /// 键盘事件入口
@@ -27,6 +27,19 @@ impl App {
         // 对话框打开时，按键优先交给对话框
         if self.dialog.is_some() {
             self.on_dialog_key(code);
+            return;
+        }
+        // 关于窗口最上层模态（v1.32/FR-01-111）：Esc/O/q/Q 关闭（先关窗
+        // 不退出），其余键忽略——模态优先级 关于 > 帮助 > pieces > 对话框
+        if self.about_open {
+            match code {
+                KeyCode::Esc
+                | KeyCode::Char('o')
+                | KeyCode::Char('O')
+                | KeyCode::Char('q')
+                | KeyCode::Char('Q') => self.close_about(),
+                _ => {}
+            }
             return;
         }
         // pieces 分块弹窗打开时进入模态（FR-01-106 ⑥）：按键仅用于滚动与关闭
@@ -49,7 +62,8 @@ impl App {
             return;
         }
         // 帮助窗口模态（v1.30/FR-01-107）：滚动翻阅分类帮助；Esc/H/q/Q 关闭
-        //（q 同 pieces 口径：先关窗不退出）
+        //（q 同 pieces 口径：先关窗不退出）；O 打开关于窗口（v1.32/FR-01-111：
+        // About 叠于帮助之上，关闭后回帮助）
         if self.help_open {
             match code {
                 KeyCode::Esc
@@ -57,6 +71,7 @@ impl App {
                 | KeyCode::Char('H')
                 | KeyCode::Char('q')
                 | KeyCode::Char('Q') => self.help_open = false,
+                KeyCode::Char('o') | KeyCode::Char('O') => self.open_about(),
                 KeyCode::Up => self.help_scroll = self.help_scroll.saturating_sub(1),
                 KeyCode::Down => self.help_scroll += 1, // 渲染层钳制
                 KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(8),
@@ -86,6 +101,22 @@ impl App {
                 self.help_open = true;
                 self.help_scroll = 0;
                 // help_pos 保留上次拖拽位置（跨次记忆）；None = 渲染层首帧居中并回填
+            }
+            // O：关于窗口（v1.32/FR-01-111：40×7，EZR Download v1.0.0；
+            // Esc/O/q/Q 关闭，位置跨次记忆）
+            KeyCode::Char('o') | KeyCode::Char('O') => self.open_about(),
+            // ←/→（v1.32/FR-01-109 ⑦ m3 新增）：并发连接面板聚焦时横向滚动
+            // 明细列（±2 列/步，SbKey::ConnsH）；无横向内容的面板不响应
+            //（HTTP 22 列不超宽 → 上限 0 钳制，事件内末页即停）
+            KeyCode::Left => {
+                if self.focus == Panel::Conns {
+                    self.sb_scroll(SbKey::ConnsH, -SbKey::ConnsH.step());
+                }
+            }
+            KeyCode::Right => {
+                if self.focus == Panel::Conns {
+                    self.sb_scroll(SbKey::ConnsH, SbKey::ConnsH.step());
+                }
             }
             // ↑/↓：统一列表选择交互——聚焦任务列表 = 选任务；聚焦并发连接 =
             // 选连接明细（原 Ctrl+↑↓ 语义，v1.30/FR-01-97 修订：移除 Ctrl 方式）；

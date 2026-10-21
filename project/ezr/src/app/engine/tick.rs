@@ -37,7 +37,7 @@ impl App {
         self.tick_retry_countdown(dt).await;
         self.tick_speed_and_session(now);
         self.tick_housekeeping(now);
-        self.tick_clamp_selection();
+        self.tick_clamp_selection(now);
     }
 
     /// tick ① 消费引擎事件（本轮全部）
@@ -218,8 +218,9 @@ impl App {
     /// tick ⑧⑨ 选中项 / 滚动钳制 + 并发明细选择 / 滚动钳制（FR-01-97：
     /// 切换选中任务后复位，选中行越界钳制到有效范围；v1.30/FR-01-109 防锁死：
     /// 仅当选中项真的变化（last_selected ≠ selected）才把视口拉回选中项——
-    /// 滚轮自由滚动不被逐帧归位；末页不空滚钳制仍每帧生效）
-    fn tick_clamp_selection(&mut self) {
+    /// 滚轮自由滚动不被逐帧归位；末页不空滚钳制仍每帧生效）；v1.32：通用
+    /// 滚动条按住连发由本节驱动（0.4s 起振、0.12s 周期）
+    fn tick_clamp_selection(&mut self, now: Instant) {
         let flen = self.filtered().len();
         if flen == 0 {
             self.selected = 0;
@@ -249,6 +250,9 @@ impl App {
             self.conns_scroll_for = self.selected;
             self.conns_scroll = 0;
             self.conns_sel = 0;
+            // v1.32/FR-01-96：切换选中任务时横向偏移归零重置（切协议
+            // BT↔HTTP 同理由此覆盖——任务切换是协议切换的载体）
+            self.conns_hscroll = 0;
         }
         let clen = self
             .sel_task()
@@ -259,6 +263,12 @@ impl App {
         }
         let cvis = self.visible_conns_rows.max(1);
         self.conns_scroll = self.conns_scroll.min(clen.saturating_sub(cvis));
+        // v1.32/FR-01-96/109：横向滚动钳制（上限 = 内容宽 − 内框宽，ui 层每帧
+        // 回填；协议切换 BT↔HTTP 时内容宽变化，由本钳制兑底）
+        self.conns_hscroll = self.conns_hscroll.min(self.conns_max_hscroll);
+        // 通用滚动条箭头/轨道按住连发（Down 记录、Up 取消、tick 驱动重复：
+        // 起振 0.4s、周期 0.12s，v1.32/FR-01-109 ⑥）
+        self.sb_hold_tick(now);
     }
 
     /// 重试补发 Start 并清进展标记（FR-01-41：新一轮尝试的连续性判定从零起算；

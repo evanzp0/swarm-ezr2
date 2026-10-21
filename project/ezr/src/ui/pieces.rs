@@ -1,8 +1,10 @@
 //! pieces — 分块状态弹窗（`P` 快捷键，FR-01-106）渲染层：64×19 圆角浮层
 //!（小终端钳制）、四段内容（任务名/元信息/分块网格/四色图例）、
-//! 下载前沿定位、右缘滚动条、CJK 宽字符边界切割（与对话框同口径）。
+//! 下载前沿定位、右缘滚动条（v1.32 通用滚动条组件 ScrollablePanel Vertical
+//! 实例）、CJK 宽字符边界切割（与对话框同口径）。
 //!
-//! 口径（FR-01-106 ②④⑤⑧，v1.30 修订对齐 ezr-demo 重构版 draw_pieces）：
+//! 口径（FR-01-106 ②④⑤⑧，v1.30 修订对齐 ezr-demo 重构版 draw_pieces；
+//! v1.32 滚动条对齐 ezr-demo m3）：
 //! - 固定 64×19（含圆角边框；内框 62×17：名称/元信息/图例各 1 行 +
 //!   网格 14 行，每行 31 块 → 一屏 434 块；v1.30：64×21 → 64×19——底部
 //!   快捷键提示行改四色图例行，高度 −2）；打开时终端内居中，拖拽位置
@@ -12,8 +14,8 @@
 //! - 打开首帧定位下载前沿（第一块未完成块所在行滚动至网格垂直居中），
 //!   此后滚动完全由用户控制、不自动跟随；
 //! - 滚动上限按实际总行数钳制（`End` 置 `usize::MAX` 在此收敛到末页）；
-//! - 块数超一屏时右缘（右边框列）lazygit 式滚动条（▲│█▼，滑块恒聚焦绿，
-//!   v1.30/FR-01-109）；
+//! - 块数超一屏时右缘（右边框列）通用滚动条（↑│║│↓，滑块恒聚焦绿加粗；
+//!   v1.32/FR-01-109：拖滑块滚网格不移窗——m3 修复，ScrollablePanel 组件收口）；
 //! - 浮层翻转零清屏（v1.31/FR-01-106⑧）：开/关/拖拽帧由增量 diff 直接绘制、
 //!   不清屏，无整屏闪烁；残影由 clip_wide_at_edges 缓冲区级清扫根治。
 
@@ -24,12 +26,12 @@ use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
 
 use super::btn::{clip_wide_at_edges, dialog_rect};
+use super::scrollable_panel::{ScrollablePanel, ScrollbarMode};
 use super::text::truncate;
 use super::{
-    lazy_scrollbar, panel_border_style, panel_title_style, EMPTY, FG, FOCUS_BORDER, GREEN,
-    LIGHT_BLUE, YELLOW,
+    panel_border_style, panel_title_style, EMPTY, FG, FOCUS_BORDER, GREEN, LIGHT_BLUE, YELLOW,
 };
-use crate::app::App;
+use crate::app::{App, SbKey};
 use crate::model::chunk::fmt_block_size;
 use crate::model::PieceState;
 
@@ -103,8 +105,12 @@ pub(super) fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
         // 与底层面板降级暗边框形成对比，v1.30/FR-01-108）
         .border_style(panel_border_style(true))
         .title(Span::styled(" 分块状态 ", panel_title_style(true)));
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    // v1.32/FR-01-109：ScrollablePanel 一体化组件（pieces = Vertical 实例，
+    // 滑块恒聚焦绿）；滑块拖拽滚网格、箭头/轨道交互随 App 态
+    let mut sb = ScrollablePanel::new(ScrollbarMode::Vertical);
+    sb.thumb(FOCUS_BORDER)
+        .pressed_v(app.sb_arrow_pressed(SbKey::Pieces));
+    let inner = sb.render_block(f, rect, block);
     app.pieces_area = Some(rect);
 
     let cols = (inner.width as usize / 2).max(1); // 每块占 2 列
@@ -190,11 +196,11 @@ pub(super) fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
         rows[3],
     );
 
-    // 右缘滚动条（块数超出一屏时；画在弹窗右边框列，不与网格内容重叠；
-    // 滑块恒聚焦绿，v1.30/FR-01-109）
-    if total_rows > grid_h {
-        lazy_scrollbar(f, rect, total_rows, start_row, grid_h, FOCUS_BORDER);
-    }
+    // 右缘滚动条（v1.32/FR-01-109：ScrollablePanel 组件收口——块数超一屏时
+    // 画在弹窗右边框列；显示条件由组件内判定；滑块恒聚焦绿）
+    sb.vertical(total_rows, grid_h, start_row);
+    app.pieces_scrollbar = sb.render_bars(f, rect).vertical;
+    app.pieces_max_scroll = total_rows.saturating_sub(grid_h);
 }
 
 #[cfg(test)]
@@ -412,8 +418,8 @@ mod tests {
         app.shutdown().await;
     }
 
-    /// ②块数超一屏：右缘（右边框列）出现滚动条滑块（v1.30：lazygit 字形，
-    /// 滑块恒聚焦绿）
+    /// ②块数超一屏：右缘（右边框列）出现滚动条滑块（v1.32：通用滚动条字形
+    /// ↑│║│↓，双线滑块恒聚焦绿加粗）
     #[tokio::test]
     async fn popup_shows_scrollbar_when_overflow() {
         let mut app = make_app("sbar");
@@ -424,20 +430,22 @@ mod tests {
         term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         let buf = term.backend().buffer();
         // 弹窗 x=28、宽 64 → 右边框列 x=91；总 20 行 > 网格 14 行 → 有滑块
-        //（v1.30：滑块恒聚焦绿）
+        //（v1.32：滑块 ║ 恒聚焦绿）
         let thumb = (8..25).any(|y| {
             buf.cell((91, y))
-                .map(|c| c.symbol() == "█" && c.fg == super::FOCUS_BORDER)
+                .map(|c| c.symbol() == "║" && c.fg == super::FOCUS_BORDER)
                 .unwrap_or(false)
         });
         assert!(thumb, "右缘滚动条滑块出现（聚焦绿）");
+        // 命中几何回填（滑块拖拽/箭头/轨道交互依据）
+        assert!(app.pieces_scrollbar.is_some(), "pieces 滚动条几何回填");
         // 不超一屏（5 块）→ 无滚动条
         let mut app2 = make_app("nosbar");
         app2.tasks.push(dl_task(1, "small.bin", 5_242_880));
         app2.selected = 0;
         app2.open_pieces();
         let rows = render_rows(&mut app2, 120, 34);
-        let no_thumb = (7..25).all(|y| !rows[y].contains('█'));
+        let no_thumb = (7..25).all(|y| !rows[y].contains('║'));
         assert!(no_thumb, "不超一屏无滚动条");
         app.shutdown().await;
     }

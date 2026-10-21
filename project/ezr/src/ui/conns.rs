@@ -1,16 +1,22 @@
-//! conns — 并发连接面板（FR-01-96，对齐 ezr-demo 定稿 5.5；v1.30 修订）
+//! conns — 并发连接面板（FR-01-96，对齐 ezr-demo 定稿 5.5；v1.30 修订；
+//! v1.32 对齐 ezr-demo m3）
 //!
 //! 位置 = 右列、任务详情正下方，占右列余下全部高度。可见性状态门槛（REQ-3.1）：
 //! 仅「下载中」（与 BT 预留「做种中」）显示逐连接明细，其余状态空面板居中提示
 //! 「（无并发连接）」+ 活跃 0（渲染层门槛：状态下沉时连接数据冻结隐藏，恢复下载
 //! 原样续用）。列定义（01 期 HTTP 三列，表头随协议自适应）：
 //! 序号（4 列，1 基 = 连接 id，按序号升序）/ 下载速度（8 列右对齐，待命显示 `-`）/
-//! 累计下载（8 列右对齐，自本次开始下载起算，FR-01-99）。BT 五列（对端 IP 掩码
-//! 11 列/下载速度/累计下载/上传速度/累计上传）为 phase-02 预留形态（01 期无 BT
-//! 任务，不触发）。标题右侧显示「活跃 x」（速度 > 0 的连接数）。
-//! v1.30 修订：**面板无底部提示行**（P3 原则/FR-01-107：交互说明收敛 H 帮助窗口，
-//! 原「提示行随任务协议自适应」口径整体退役）；选中行高亮仅本面板聚焦时显示
-//! （FR-01-108 可见性策略）；右缘滚动条按 FR-01-109 通用口径绘制（滑块色随焦点）。
+//! 累计下载（8 列右对齐，自本次开始下载起算，FR-01-99）。
+//! **BT 七列为 phase-02 预留形态**（v1.32/FR-01-96 修订，对齐 ezr-demo m3）：
+//! 对端 IP 掩码 11 列 / 下载速度 8 / 累计下载 8 / 上传速度 8 / 累计上传 8 /
+//! 客户端 6 / 协议 4——客户端/协议两列置于末尾，内容宽 59 列超内框 → 底部
+//! 横向滚动条（通用滚动条组件，并发面板 = 唯一 Both 实例）+ ←/→ 键横向
+//! 滚动（±2 列）+ 切任务/切协议横向偏移归零（[`SbKey::ConnsH`]）；01 期无
+//! BT 任务，BT 臂不触发（列宽常量预留，数据源 phase-02 定夺）；HTTP 三列
+//! 内容 22 列不超宽 → 无水平滚动条、←/→ 无横向内容不响应（上限 0 钳制）。
+//! v1.30 修订：**面板无底部提示行**（P3 原则/FR-01-107）；选中行高亮仅本面板
+//! 聚焦时显示（FR-01-108）；滚动条按 FR-01-109 v1.32 通用组件绘制
+//! （ScrollablePanel Both 实例，滑块色随焦点）。
 //! 连接数超出可视高度时滚轮 / ↑↓（面板聚焦时）翻看。明细为空或未选中任务时
 //! 面板不接收滚轮（conns_area 置 None，滚轮穿透滚动任务列表）。
 
@@ -20,12 +26,35 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
+use super::scrollable_panel::{ScrollablePanel, ScrollbarMode};
 use super::text::{fmt_size, fmt_speed, pad_left};
 use super::{
-    lazy_scrollbar, panel_border_style, panel_title_style, BORDER, DIM, DIM2, FG, FOCUS_BORDER,
-    LIGHT_BLUE, SEL_BG,
+    panel_border_style, panel_title_style, BORDER, DIM, DIM2, FG, FOCUS_BORDER, LIGHT_BLUE, SEL_BG,
 };
-use crate::app::{App, Panel};
+use crate::app::{App, Panel, SbKey};
+
+/// BT 七列列宽（phase-02 预留形态，v1.32/FR-01-96 修订对齐 ezr-demo m3：
+/// 对端 IP 11 / 下载速度 8 / 累计下载 8 / 上传速度 8 / 累计上传 8 /
+/// 客户端 6 / 协议 4，列间单空格分隔；01 期无 BT 任务不触发，
+/// 列宽常量与内容宽口径先行预留，数据源 phase-02 定夺）
+#[allow(dead_code)]
+const BT_COLW: [usize; 7] = [11, 8, 8, 8, 8, 6, 4];
+/// BT 七列内容总宽（59 列 = 53 数据列 + 6 个单空格分隔；与 [`BT_COLW`]
+/// 单源对应性由测试模块 bt_content_w_matches_colw 守卫；超内框 → 水平滚动条
+/// + ←/→）
+#[allow(dead_code)]
+const BT_CONTENT_W: usize = 59;
+/// HTTP 三列列宽（序号 4 / 下载速度 8 / 累计下载 8，单空格分隔）
+const HTTP_COLW: [usize; 3] = [4, 8, 8];
+/// HTTP 三列内容总宽（22 列 = 20 数据列 + 2 个单空格分隔；与 [`HTTP_COLW`]
+/// 单源对应性由测试守卫；不超宽 → 无水平滚动条）
+const HTTP_CONTENT_W: usize = 22;
+
+/// 右上角活跃计数标题（v139：前后各 1 空格——右侧离边框 1 列、左侧留白 1 列，
+/// 与左标题 ` 并发连接 ` 前后各 1 空格对称；单源供渲染与形态守卫测试）
+fn active_title(active: usize) -> String {
+    format!(" 活跃 {active} ")
+}
 
 pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     let (active, empty) = match app.sel_task() {
@@ -46,14 +75,16 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         .border_style(panel_border_style(focused))
         .title(Span::styled(" 并发连接 ", panel_title_style(focused)))
         .title(
-            Line::from(Span::styled(
-                format!("活跃 {} ", active),
-                Style::default().fg(DIM),
-            ))
-            .alignment(Alignment::Right),
+            Line::from(Span::styled(active_title(active), Style::default().fg(DIM)))
+                .alignment(Alignment::Right),
         );
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    // v1.32/FR-01-109：ScrollablePanel 一体化组件（并发面板 = 唯一 Both 实例：
+    // 垂直连接行 + 水平内容列）。滑块色随焦点；箭头按压高亮随 App 态。
+    let mut sb = ScrollablePanel::new(ScrollbarMode::Both);
+    sb.thumb(if focused { FOCUS_BORDER } else { BORDER })
+        .pressed_v(app.sb_arrow_pressed(SbKey::ConnsV))
+        .pressed_h(app.sb_arrow_pressed(SbKey::ConnsH));
+    let inner = sb.render_block(f, area, block);
     app.conns_area = Some(inner);
 
     let Some(t) = app.sel_task() else {
@@ -79,14 +110,17 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    // 表头（HTTP 三列：序号 4 / 数据列各 8，单空格分隔；列对齐 CJK 宽度感知）
+    // 表头（HTTP 三列：序号 4 / 数据列各 8，单空格分隔；列对齐 CJK 宽度感知）。
+    // BT 七列表头（IP/下载速度/累计下载/上传速度/累计上传/客户端/协议）为
+    // phase-02 预留（BT_COLW 常量同源），01 期无 BT 任务不触发
     let dim = |s: String, wd: usize| Span::styled(pad_left(&s, wd), Style::default().fg(DIM));
+    // 列宽单源 HTTP_COLW（与 content_w 同源，防漂移）
     let head = vec![
-        dim("序号".to_string(), 4),
+        dim("序号".to_string(), HTTP_COLW[0]),
         Span::raw(" "),
-        dim("下载速度".to_string(), 8),
+        dim("下载速度".to_string(), HTTP_COLW[1]),
         Span::raw(" "),
-        dim("累计下载".to_string(), 8),
+        dim("累计下载".to_string(), HTTP_COLW[2]),
     ];
     let mut lines = vec![Line::from(head)];
 
@@ -153,13 +187,22 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     // 协议自适应文案随页脚收敛整体退役，交互说明收敛帮助窗口【并发连接】组）
 
     app.visible_conns_rows = data_rows;
-    f.render_widget(Paragraph::new(lines), inner);
+    // v1.32/FR-01-96/109：横向滚动（唯一 Both 实例）——内容宽 = HTTP 22 列
+    // （BT 预留 59 列，phase-02 承接）；上限 = 内容宽 − 内框宽，偏移钳制后
+    // 整表（表头 + 数据）随视口平移；HTTP 22 列常态不超宽 → 上限 0、
+    // ←/→ 无横向内容不响应（sb_scroll 钳制归零）
+    let content_w = HTTP_CONTENT_W;
+    app.conns_max_hscroll = content_w.saturating_sub(inner.width as usize);
+    let hscroll = app.conns_hscroll.min(app.conns_max_hscroll) as u16;
+    f.render_widget(Paragraph::new(lines).scroll((0, hscroll)), inner);
 
-    // 右缘滚动条（v1.30/FR-01-109：连接数超一屏时；滑块色随面板焦点）
-    if n_conns > data_rows {
-        let thumb = if focused { FOCUS_BORDER } else { BORDER };
-        lazy_scrollbar(f, area, n_conns, app.conns_scroll, data_rows, thumb);
-    }
+    // 滚动条叠画（v1.32/FR-01-109：ScrollablePanel 组件收口——垂直连接行 +
+    // 水平内容列；显示条件由组件内判定）
+    sb.vertical(n_conns, data_rows, app.conns_scroll)
+        .horizontal(content_w, inner.width as usize, app.conns_hscroll);
+    let bars = sb.render_bars(f, area);
+    app.conns_v_scrollbar = bars.vertical;
+    app.conns_h_scrollbar = bars.horizontal;
 }
 
 #[cfg(test)]
@@ -172,7 +215,7 @@ mod tests {
     use ratatui::Terminal;
 
     use super::super::testfx;
-    use super::{BORDER, FOCUS_BORDER, SEL_BG};
+    use super::{BORDER, BT_COLW, BT_CONTENT_W, FOCUS_BORDER, HTTP_COLW, HTTP_CONTENT_W, SEL_BG};
     use crate::app::{App, Panel};
     use crate::model::{Connection, Protocol, Task, TaskState};
 
@@ -252,7 +295,8 @@ mod tests {
         assert_ne!(cell.bg, SEL_BG, "非聚焦时选中行不高亮");
     }
 
-    /// v1.30/FR-01-109：右缘滚动条——聚焦绿 / 未聚焦暗色；连接数不超一屏不绘制
+    /// v1.32/FR-01-109：右缘滚动条——↑│║│↓ 字形（双线滑块在单线轨道上滑动）；
+    /// 聚焦绿加粗 / 未聚焦暗色；连接数不超一屏不绘制
     #[tokio::test]
     async fn scrollbar_thumb_color_follows_focus() {
         let mut app = testfx::make_app_in("ezr-conns", "sbar");
@@ -268,27 +312,34 @@ mod tests {
             .collect();
         app.tasks.push(t);
         app.selected = 0;
-        // 聚焦：滑块聚焦绿
+        // 聚焦：滑块 ║ 聚焦绿（首屏贴顶吸附：轨道首格为滑块）
         app.focus = Panel::Conns;
         let term = conns_render(&mut app, 40, 7);
         let buf = term.backend().buffer();
         let col = 40 - 1;
         let green_thumb = (1..6).any(|y| {
             buf.cell((col, y))
-                .map(|c| c.symbol() == "█" && c.fg == FOCUS_BORDER)
+                .map(|c| c.symbol() == "║" && c.fg == FOCUS_BORDER)
                 .unwrap_or(false)
         });
-        assert!(green_thumb, "聚焦时滑块聚焦绿");
+        assert!(green_thumb, "聚焦时滑块 ║ 聚焦绿");
         // 未聚焦：滑块暗色
         app.focus = Panel::List;
         let term = conns_render(&mut app, 40, 7);
         let buf = term.backend().buffer();
         let dim_thumb = (1..6).any(|y| {
             buf.cell((col, y))
-                .map(|c| c.symbol() == "█" && c.fg == BORDER)
+                .map(|c| c.symbol() == "║" && c.fg == BORDER)
                 .unwrap_or(false)
         });
         assert!(dim_thumb, "未聚焦时滑块暗色");
+        // 垂直边框列连续：上角之下紧贴 ↑ 箭头、无中断（v1.32 不留白）
+        let has_arrow = (1..6).any(|y| {
+            buf.cell((col, y))
+                .map(|c| c.symbol() == "↑" || c.symbol() == "↓")
+                .unwrap_or(false)
+        });
+        assert!(has_arrow, "上下箭头紧贴角（垂直不留白）");
         // 不超一屏：无滑块
         let mut app2 = testfx::make_app_in("ezr-conns", "nosbar");
         app2.tasks.push(task_with_conns(Protocol::Http));
@@ -296,8 +347,29 @@ mod tests {
         let term = conns_render(&mut app2, 40, 12);
         let buf = term.backend().buffer();
         let no_thumb =
-            (1..11).all(|y| buf.cell((39, y)).map(|c| c.symbol() != "█").unwrap_or(true));
+            (1..11).all(|y| buf.cell((39, y)).map(|c| c.symbol() != "║").unwrap_or(true));
         assert!(no_thumb, "不超一屏无滚动条");
+    }
+
+    /// 内容宽常量与列宽表单源对应性守卫（BT 预留 59 / HTTP 22；防两处漂移）
+    #[test]
+    fn content_w_matches_colw() {
+        assert_eq!(
+            BT_CONTENT_W,
+            BT_COLW.iter().sum::<usize>() + BT_COLW.len() - 1
+        );
+        assert_eq!(
+            HTTP_CONTENT_W,
+            HTTP_COLW.iter().sum::<usize>() + HTTP_COLW.len() - 1
+        );
+    }
+
+    /// v139：右上角活跃计数标题前后各 1 空格（左右 padding 对称，与左标题
+    /// ` 并发连接 ` 同口径）；单源 [`active_title`]，防字面量漂移回归
+    #[test]
+    fn active_title_padded_both_sides() {
+        assert_eq!(super::active_title(0), " 活跃 0 ");
+        assert_eq!(super::active_title(7), " 活跃 7 ");
     }
 
     /// 表头仍在位（序号/下载速度/累计下载）

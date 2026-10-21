@@ -6,10 +6,20 @@ use crossterm::event::KeyCode;
 
 use super::{Dialog, DialogKind, CAP_CK_HEX, CAP_CONNS_DIGITS, CAP_TEXT};
 use crate::app::CHECKSUM_ALGOS;
+use crate::model::checksum::CK_NONE;
+
+/// 下拉项总数（v1.32/FR-01-01：8 项 = 首行 NONE + CHECKSUM_ALGOS 7 种，
+/// 单源派生）
+const CK_DROPDOWN_LEN: usize = CHECKSUM_ALGOS.len() + 1;
 
 /// 校验码字段字符追加（Add focus 4 / Modify focus 2 共用，DRY 收敛）：
-/// 仅十六进制、≤ [`CAP_CK_HEX`] 位（SHA-512 上限）
+/// 仅十六进制、≤ [`CAP_CK_HEX`] 位（SHA-512 上限）。
+/// v1.32/FR-01-01：算法选中 NONE 时校验码不可输入（逐键拦截，与粘贴
+/// 同口径）——NONE 臂直接吞掉输入。
 pub fn push_hex_capped(d: &mut Dialog, c: char) {
+    if d.ck_type == CK_NONE {
+        return;
+    }
     if c.is_ascii_hexdigit() && d.ck_value.chars().count() < CAP_CK_HEX {
         d.ck_value.push(c);
     }
@@ -21,26 +31,24 @@ pub(super) const fn kind_add() -> DialogKind {
     DialogKind::Add
 }
 
-/// 下拉框展开态逐键处理（Up/Down/Home/End 选择，Enter/Esc 关闭，
-/// Tab/BackTab 关闭并跳转焦点，其余键关闭下拉）。消费所有按键。
+/// 下拉框展开态逐键处理（v1.32/FR-01-01 修订：8 项 = 首行 NONE + 7 算法；
+/// ↑↓/Home/End 选择**选中即改值**（ck_type 同步），选中 NONE 时校验码**实时
+/// 清空**且此后不可输入；Enter/Esc 关闭，Tab/BackTab 关闭并跳转焦点，
+/// 其余键关闭下拉）。消费所有按键。
 pub fn dropdown_open_key(d: &mut Dialog, code: KeyCode) {
+    /// 选中即改值 + NONE 臂实时清空校验码（↑↓/Home/End 三臂共用）
+    fn select(d: &mut Dialog, i: usize) {
+        d.ck_sel = i;
+        d.ck_type = i;
+        if i == CK_NONE {
+            d.ck_value.clear();
+        }
+    }
     match code {
-        KeyCode::Up => {
-            d.ck_sel = (d.ck_sel + CHECKSUM_ALGOS.len() - 1) % CHECKSUM_ALGOS.len();
-            d.ck_type = d.ck_sel;
-        }
-        KeyCode::Down => {
-            d.ck_sel = (d.ck_sel + 1) % CHECKSUM_ALGOS.len();
-            d.ck_type = d.ck_sel;
-        }
-        KeyCode::Home => {
-            d.ck_sel = 0;
-            d.ck_type = 0;
-        }
-        KeyCode::End => {
-            d.ck_sel = CHECKSUM_ALGOS.len() - 1;
-            d.ck_type = d.ck_sel;
-        }
+        KeyCode::Up => select(d, (d.ck_sel + CK_DROPDOWN_LEN - 1) % CK_DROPDOWN_LEN),
+        KeyCode::Down => select(d, (d.ck_sel + 1) % CK_DROPDOWN_LEN),
+        KeyCode::Home => select(d, CK_NONE),
+        KeyCode::End => select(d, CK_DROPDOWN_LEN - 1),
         KeyCode::Enter | KeyCode::Esc => d.ck_open = false,
         KeyCode::Tab | KeyCode::BackTab => {
             d.ck_open = false;
@@ -94,6 +102,10 @@ pub fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> bool {
             true
         }
         (DialogKind::Add, 4) | (DialogKind::Modify, 2) => {
+            // v1.32/FR-01-01：NONE 选中后校验码不可输入（退格同拦截）
+            if d.ck_type == CK_NONE {
+                return true;
+            }
             d.ck_value.pop();
             true
         }

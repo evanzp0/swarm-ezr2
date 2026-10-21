@@ -10,7 +10,8 @@ use super::btn::{clip_wide_at_edges, draw_button_row, overlay_rect};
 use super::delete::draw_delete_dialog;
 use super::text::{pad_right, truncate, w};
 use super::{panel_border_style, panel_title_style, ACCENT, DIM, DIM2, FG, YELLOW};
-use crate::app::{App, DialogKind, CHECKSUM_ALGOS};
+use crate::app::{App, DialogKind};
+use crate::model::checksum::checksum_dropdown;
 
 /// 字段行显示值：空值显示占位提示；超宽显示尾部（…+末尾字符，便于核对校验码结尾）
 fn field_display(val: &str, ph: &str, avail: usize) -> String {
@@ -204,10 +205,13 @@ struct Row {
 /// * Modify —— 并发/校验/校验码/代理（确定 4 取消 5）
 fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) {
     let is_add = kind == DialogKind::Add;
+    // v1.32/FR-01-01/FR-01-87 修订（对齐 ezr-demo m3）：标题更名——
+    // ` 添加下载任务 ` → ` 添加任务：HTTP(S) `、` 修改任务 ` →
+    // ` 修改任务：HTTP(S) `（尺寸不变 74×11 / 74×9）
     let (title, dw, dh) = if is_add {
-        (" 添加下载任务 ", 74u16, 11u16)
+        (" 添加任务：HTTP(S) ", 74u16, 11u16)
     } else {
-        (" 修改任务 ", 74, 9)
+        (" 修改任务：HTTP(S) ", 74, 9)
     };
     let dlg = {
         // v133/D38：拖拽位置优先（钳制终端内），首帧居中并记忆；区域热区
@@ -249,20 +253,27 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
             d.proxy_open,
         )
     };
-    let (algo_name, algo_need, _) = CHECKSUM_ALGOS[ck_type.min(CHECKSUM_ALGOS.len() - 1)];
+    // 校验下拉当前项（v1.32：下拉 8 项含首行 NONE——（显示名，期望位数）
+    // 由 model::checksum 单源派生；期望位数仅校验码占位提示使用，占位提示
+    // 已随 v1.32/P3 删除，此处仅取显示名）
+    let entries = checksum_dropdown();
+    let (algo_name, _algo_need) = entries[ck_type.min(entries.len() - 1)];
     let proxy_label = app
         .proxy_labels
         .get(proxy_sel)
         .cloned()
         .unwrap_or_else(|| "直连".to_string());
 
-    // 字段行构建（Add 六行 / Modify 四行；校验与代理为下拉选择行）
+    // 字段行构建（Add 六行 / Modify 四行；校验与代理为下拉选择行）。
+    // v1.32/P3（提示信息删除，对齐 ezr-demo m3）：URL 字段占位提示、校验码
+    // 字段占位提示（原「{N} 位十六进制（可留空）」）全部移除（交互说明收敛
+    // 帮助窗口）；保存到/并发占位提示保留（demo 同口径）
     let mut rows: Vec<Row> = Vec::new();
     if is_add {
         rows.push(Row {
             label: "URL",
             value: url,
-            placeholder: "https://example.com/file.zip".to_string(),
+            placeholder: String::new(),
             kind: RowKind::Text,
         });
         rows.push(Row {
@@ -287,7 +298,7 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
     rows.push(Row {
         label: "校验码",
         value: ck_value,
-        placeholder: format!("{} 位十六进制（可留空）", algo_need),
+        placeholder: String::new(),
         kind: RowKind::Text,
     });
     rows.push(Row {
@@ -318,9 +329,8 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         match row.kind {
             RowKind::CkSel => {
                 push_selector_spans(&mut spans, algo_name, focused);
-                if focused {
-                    spans.push(Span::styled("  Enter 选择算法", Style::default().fg(DIM2)));
-                }
+                // v1.32/P3：校验行聚焦尾注 `  Enter 选择算法` 删除
+                //（交互说明收敛帮助窗口，对齐 ezr-demo m3）
             }
             RowKind::ProxySel => {
                 push_selector_spans(&mut spans, &proxy_label, focused);
@@ -367,11 +377,22 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
     // n_rows + 3；下拉框操作提示同步移除，交互说明统一收敛 H 帮助窗口）
 
     // 校验算法下拉框（浮层最后绘制，覆盖对话框与下层内容；架构轮单源的
-    // dropdown_frame/dropdown_item + architect v116 整体渲染收口 draw_dropdown）
+    // dropdown_frame/dropdown_item + architect v116 整体渲染收口 draw_dropdown）。
+    // v1.32/FR-01-01：下拉 8 项 = 首行 NONE（右列 — 占位，不校验）+ 7 算法
+    //（各右列显示期望位数）
     if ck_open {
-        let items: Vec<(String, Option<String>)> = CHECKSUM_ALGOS
+        let items: Vec<(String, Option<String>)> = checksum_dropdown()
             .iter()
-            .map(|(name, need, _)| (pad_right(name, 9), Some(format!("{need} 位"))))
+            .map(|(name, need)| {
+                (
+                    pad_right(name, 9),
+                    Some(if *need == 0 {
+                        "—".to_string()
+                    } else {
+                        format!("{need} 位")
+                    }),
+                )
+            })
             .collect();
         draw_dropdown(
             f,

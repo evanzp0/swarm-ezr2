@@ -52,6 +52,9 @@ mod app;
 mod engine;
 #[path = "../src/model/mod.rs"]
 mod model;
+#[path = "../src/scrollbar.rs"]
+// v1.32/FR-01-109：滚动条引擎（app 状态机依赖的几何/命中类型单源）
+mod scrollbar;
 #[path = "../src/ui/mod.rs"]
 mod ui;
 
@@ -171,8 +174,8 @@ async fn add_dialog_field_rows_exact_geometry() {
     assert_eq!(cell(&buf, 25, 18), "并", "并发行 y=18");
     assert_eq!(cell(&buf, 25, 19), "校", "校验行 y=19");
     assert!(
-        row_text(&buf, 19, 120).contains("SHA-256"),
-        "校验行显示当前算法"
+        row_text(&buf, 19, 120).contains("NONE"),
+        "校验行显示默认 NONE（v1.32/FR-01-01：NONE 首行默认）"
     );
     // 行首列：label 从 x=25 起（mutant x=inner.x*1=24 / inner.x-1=23 皆错位）
     assert_eq!(cell(&buf, 25, 16), "U", "URL label 首字符恰在 x=25");
@@ -225,11 +228,11 @@ async fn add_dialog_button_and_hint_rows_exact_geometry() {
 // ui/dialog.rs —— 校验算法下拉几何（36:16、41:21、123:21、363:37）
 // ---------------------------------------------------------------------------
 
-/// 120×18 终端：dlg.y=3、inner.y=4、校验行 y=8、下拉 py=9、ph=7+2=9、
-/// px=inner.x+8=32（未越界不触发钳制）。py+ph=18 恰等于终端底 →
-/// 越界翻转守卫（`py+ph > bottom` 为假）必须保持行下方展开。
-/// 选项行 y = pinner.y + i = 10+i（MD5@10、SHA-1@11、Adler-32@16），
-/// 底边框角 ╰ 在 (32,17)。
+/// 120×21 终端（v1.32：下拉 8 项 = NONE + 7 算法，ph = 8+2 = 10）：
+/// dlg.y=5、inner.y=6、校验行 y=10、下拉 py=11、ph=10、px=inner.x+8=32
+///（未越界不触发钳制：py+ph=21 恰等于终端底，越界翻转守卫
+/// `py+ph > bottom` 为假）。选项行 y = pinner.y + i = 12+i
+///（NONE@12、MD5@13、SHA-1@14、Adler-32@19），底边框角 ╰ 在 (32,20)。
 #[tokio::test]
 async fn ck_dropdown_exact_geometry() {
     let (mut a, reg) = app_with_add_dialog();
@@ -238,22 +241,26 @@ async fn ck_dropdown_exact_geometry() {
         d.focus = 3; // 校验行
         d.ck_open = true;
     }
-    let buf = render(&mut a, 120, 18);
+    let buf = render(&mut a, 120, 21);
     assert_eq!(
-        cell(&buf, 32, 9),
+        cell(&buf, 32, 11),
         "╭",
-        "下拉框左上角必须在其 x=32、y=9（未越界不翻转）"
+        "下拉框左上角必须在其 x=32、y=11（未越界不翻转）"
     );
-    assert!(row_text(&buf, 10, 120).contains("MD5"), "选项 0 行 y=10");
-    assert!(row_text(&buf, 11, 120).contains("SHA-1"), "选项 1 行 y=11");
     assert!(
-        row_text(&buf, 16, 120).contains("Adler-32"),
-        "选项 6 行 y=16"
+        row_text(&buf, 12, 120).contains("NONE"),
+        "选项 0（NONE）行 y=12"
+    );
+    assert!(row_text(&buf, 13, 120).contains("MD5"), "选项 1 行 y=13");
+    assert!(row_text(&buf, 14, 120).contains("SHA-1"), "选项 2 行 y=14");
+    assert!(
+        row_text(&buf, 19, 120).contains("Adler-32"),
+        "选项 7 行 y=19（8 项末行）"
     );
     assert_eq!(
-        cell(&buf, 32, 17),
+        cell(&buf, 32, 20),
         "╰",
-        "下拉框左下角 y=17（ph=9 收口于终端底）"
+        "下拉框左下角 y=20（ph=10 收口于终端底）"
     );
     a.shutdown().await;
     let _ = std::fs::remove_file(&reg);
