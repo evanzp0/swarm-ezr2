@@ -8,7 +8,11 @@
 //! 已完成 页签并以 │ 分隔）。内容区右侧 = │ 竖线分隔符 + 左右各 1 列空白 + 内嵌
 //! 无边框流量图（占内容区全高 3 行、宽为内容区 20%，仅绘制下行流量，上传流量
 //! 不绘制）。主区：左列 58% = 任务列表；右列 42% = 任务详情
-//! （10 行内容 = 12 行定高，v1.20：任务 ID 与创建时间拆两行）及并发连接面板
+//! （10 行内容 = 12 行定高；本轮需求修订：字段名精简——「任务 ID」→「ID」、
+//! 「创建时间」→「创建」、「失败原因」→「失败」；校验 / URL / 失败 / 路径
+//! 四个字段名为蓝色下划线链接、点击复制对应值；字段值悬停显示下划线、
+//! 点击打开「字段值弹窗」——模态小窗口、wrap text 完整展示、仅垂直滚动条、
+//! Y 复制窗口内容，操作说明收敛于帮助窗口）及并发连接面板
 //! （占右列余下全部高度）。页脚 = 双行：行 1 常用命令图例（A 添加 / D 删除 /
 //! M 修改 / Q 退出 / H 帮助；鼠标左键可点击——按压反色高亮 = 点击效果、原地
 //! 松开执行对应命令，v0.2 页脚双行修订），行 2 toast 提示。
@@ -38,6 +42,24 @@
 //! pieces 分块弹窗（P）：分块（piece）状态一览——🟩 已下载 / 🟦 正在下载（分配了
 //! 并发下载）/ 🟨 部分下载 / ⬜ 未下载；同一块「部分下载」且「正在下载」时只显示
 //! 🟦；仅支持分块下载的任务可打开（BT / 支持断点续传的 HTTP(S)）。
+//! 字段值弹窗（本轮需求修订：点击详情面板 校验/URL/失败/路径 字段值打开）：
+//! 模态小窗口，标题 = 字段名，内容 = 打开时快照的完整字段值（wrap text），
+//! panel 只提供垂直滚动条；Y 复制窗口全部内容；Esc/q/Q 关闭、可拖拽移动；
+//! 内容区带阅读内边距且为纯静态文本（无悬停反馈/不下划线，与详情面板
+//! 字段值热区不同）；窗口内无任何操作提示，交互说明收敛于 H 帮助窗口
+//! 【字段值弹窗】组。
+//! 本轮 bug 修订（URL 反链接下划线）：详情 URL 值与字段值弹窗内容经
+//! break_links 注入零宽变体选择符 VS15（U+FE0E）断开 http(s)/www 特征串，
+//! 终端不再对显示文本叠加默认的链接下划线（悬停双下划线 / 弹窗常驻下划线
+//! 根治）；ezr-demo 自身悬停下划线（SGR）不受影响；复制语义走 App 原值。
+//! 本轮需求修订（弹窗 [✗]）：全部弹窗（添加/修改/删除/pieces/帮助/关于/
+//! 字段值）右上角统一 [✗] 关闭按钮（✗ = U+2717 BALLOT X，中括号内紧凑
+//! 无 padding）——画在顶边框行右端，[✗] 与边框线左右各留 1 列 padding
+//! （不覆盖边框线；1 列与面板标题「 任务详情 」自身首尾 1 空格 padding
+//! 同构，整体占用 5 列）；配色 = 中括号与弹窗边框线同色（绿+粗，不随
+//! 悬停/按压变化），**高亮的只有 ✗**——常态 DIM2，悬停/按压 = 仅前景色
+//! 红+粗（无背景色/无反色）；按下高亮、原地松开关闭对应弹窗（拖出热区
+//! 取消）；关闭行为 = 各弹窗 Esc 通道同口径。
 
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
@@ -48,8 +70,8 @@ use ratatui::{
 };
 
 use crate::app::{
-    chunk_size_label, App, DialogKind, FailKind, Panel, PieceState, SbKey, Task, TaskState,
-    CHECKSUM_ALGOS, FILTERS, ITEM_HEIGHT, MAX_DOWNLOAD_SLOTS,
+    chunk_size_label, App, DetailField, DialogKind, FailKind, Panel, PieceState, SbKey, Task,
+    TaskState, CHECKSUM_ALGOS, FILTERS, ITEM_HEIGHT, MAX_DOWNLOAD_SLOTS,
 };
 use crate::scrollable_panel::{ScrollablePanel, ScrollbarMode};
 
@@ -83,10 +105,10 @@ const LIGHT_BLUE: Color = Color::Rgb(122, 185, 242);
 /// 聚焦面板边框色（lazygit 主题默认 activeBorderColor = green + bold）
 const FOCUS_BORDER: Color = Color::Green;
 
-/// 是否存在浮层（对话框/pieces 弹窗/帮助窗口/关于窗口）：浮层打开时底层面板
-/// 全部降级为暗边框，焦点面板不再高亮（视觉焦点让位给模态浮层）
+/// 是否存在浮层（对话框/pieces 弹窗/帮助窗口/关于窗口/字段值弹窗）：浮层打开时
+/// 底层面板全部降级为暗边框，焦点面板不再高亮（视觉焦点让位给模态浮层）
 fn overlay_open(app: &App) -> bool {
-    app.dialog.is_some() || app.pieces_open || app.help_open || app.about_open
+    app.dialog.is_some() || app.pieces_open || app.help_open || app.about_open || app.val_open
 }
 
 /// 面板边框样式：聚焦 = 绿色加粗（lazygit activeBorderColor 口径），
@@ -134,12 +156,23 @@ fn state_color(s: TaskState) -> Color {
 // 文本工具（CJK 宽度感知）
 // ---------------------------------------------------------------------------
 
-/// 估算终端显示宽度（CJK 等宽字符按 2 计）
+/// 估算终端显示宽度（CJK 等宽字符按 2 计；零宽字符按 0 计）
 fn w(s: &str) -> usize {
     s.chars()
         .map(|c| {
             let u = c as u32;
-            if (0x2E80..=0xA4CF).contains(&u)
+            // 零宽字符（本轮 bug 修订：URL 反链接下划线注入 VS15 后，
+            // 宽度计算不得把它当占位字符，否则热区/wrap/truncate 全部偏移）：
+            // 变体选择符 U+FE00..=FE0F（含本应用使用的 VS15）、零宽空格/
+            // 连接符 U+200B..=200F、词连接符 U+2060、BOM U+FEFF——终端渲染
+            // 均为零宽（VS15 兼属组合符号 Mn，各终端零宽口径最稳）
+            if (0xFE00..=0xFE0F).contains(&u)
+                || (0x200B..=0x200F).contains(&u)
+                || u == 0x2060
+                || u == 0xFEFF
+            {
+                0
+            } else if (0x2E80..=0xA4CF).contains(&u)
                 || (0xAC00..=0xD7A3).contains(&u)
                 || (0xF900..=0xFAFF).contains(&u)
                 || (0xFF00..=0xFF60).contains(&u)
@@ -152,6 +185,76 @@ fn w(s: &str) -> usize {
             }
         })
         .sum()
+}
+
+/// 反链接显示变换（本轮 bug 修订）：在 http(s)/www 链接特征串内注入变体
+/// 选择符 VS15（U+FE0E——零宽组合符号 Mn、Default_Ignorable，各主流终端
+/// 均零宽渲染且不产生可见字形），使「https://」「http://」「www.」不再与
+/// 终端自身的 URL 自动识别正则匹配——终端因此不再对显示文本叠加默认的
+/// 链接下划线（根治「详情 URL 值悬停出现双下划线」「URL 弹窗内容带终端
+/// 默认下划线」两个 bug；ezr-demo 自身的悬停下划线仍由 SGR 控制不受影响）。
+/// 仅影响显示层：复制语义走 App 状态原值（字段名点击 / Y 键），不经注入。
+/// VS15 与宿主字符构成同一 grapheme 簇（零宽），w()/truncate/wrap_text 及
+/// ratatui 渲染管线均按零宽透传。
+///
+/// **注意**：断链文本必须经 [`link_break_spans`] 渲染（而非直接作为单
+/// Span）——原因见该函数文档。
+fn break_links(s: &str) -> String {
+    const VS15: &str = "\u{FE0E}";
+    s.replace("https://", &format!("https{VS15}://"))
+        .replace("http://", &format!("http{VS15}://"))
+        .replace("www.", &format!("www{VS15}."))
+}
+
+/// 影子前景色：与原色仅最低位灰度 ±1（肉眼不可见），唯一作用是让
+/// crossterm 在两段文本之间输出样式切换转义序列（见 [`link_break_spans`]）。
+fn fg_shadow(c: Option<Color>) -> Option<Color> {
+    match c {
+        Some(Color::Rgb(r, g, 0)) => Some(Color::Rgb(r, g.saturating_add(1), 1)),
+        Some(Color::Rgb(r, g, b)) => Some(Color::Rgb(r, g, b - 1)),
+        other => other,
+    }
+}
+
+/// 断链文本 span 化（pyte 等简易终端模拟器兼容）：
+///
+/// VS15 是「零宽但组合类为 0」的字符——pyte 的 `Screen::draw` 对这类字符
+/// 直接 `break`，**丢弃同一文本 run 中其后的全部字符**（真终端无此问题，
+/// 会继续渲染）。而 ratatui 同一样式相邻单元格连续输出、中间无转义序列，
+/// VS15 天然落在 run 中间，pyte 解码画面会丢失 URL 尾部。
+///
+/// 处理：以每个 VS15 为界把文本切段，奇数段换用「影子前景色」
+/// （[`fg_shadow`]，与原色肉眼不可分）——crossterm 由此在每段之间输出
+/// SGR 切换序列，**每个 VS15 都落在各自文本 run 的末尾**，pyte 在 run 末尾
+/// break 零损失；真终端按单元格渲染，网格文本不变、视觉不变、断链效果
+/// 不变。段样式交替保证相邻段必不相同（连续多个 VS15 也逐段隔断）。
+fn link_break_spans(s: &str, style: Style) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut rest = s;
+    let mut shadow = false;
+    while let Some((i, c)) = rest.char_indices().find(|&(_, c)| c == '\u{FE0E}') {
+        let (head, tail) = rest.split_at(i + c.len_utf8());
+        let st = if shadow {
+            Style { fg: fg_shadow(style.fg), ..style }
+        } else {
+            style
+        };
+        spans.push(Span::styled(head.to_string(), st));
+        rest = tail;
+        shadow = !shadow;
+    }
+    if !rest.is_empty() {
+        let st = if shadow {
+            Style { fg: fg_shadow(style.fg), ..style }
+        } else {
+            style
+        };
+        spans.push(Span::styled(rest.to_string(), st));
+    }
+    if spans.is_empty() {
+        spans.push(Span::styled(String::new(), style));
+    }
+    spans
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -841,6 +944,79 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     app.list_area = Some(inner);
 }
 
+/// 详情字段值悬停判定：指针最近位置（on_mouse 每事件回填）落在热区内
+/// （本轮需求修订：字段值悬停 = 下划线反馈）
+fn hovered(pointer: Option<(u16, u16)>, r: Rect) -> bool {
+    pointer.is_some_and(|(px, py)| {
+        px >= r.x
+            && px < r.x.saturating_add(r.width)
+            && py >= r.y
+            && py < r.y.saturating_add(r.height)
+    })
+}
+
+/// 基础样式追加下划线（悬停反馈；不加背景色，与字段名链接样式同口径）
+fn with_underline(s: Style, on: bool) -> Style {
+    if on {
+        s.add_modifier(Modifier::UNDERLINED)
+    } else {
+        s
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 弹窗右上角 [✗] 关闭按钮（本轮需求修订：全部弹窗统一；[✗] 中括号内紧凑
+// 无 padding、中括号与边框线之间左右各留 1 列 padding；中括号与弹窗边框
+// 线同色、不随悬停变化，仅 ✗ 前景色高亮）
+// ---------------------------------------------------------------------------
+
+/// 弹窗右上角 [✗] 关闭按钮：画在弹窗顶边框行右端——右角符内侧先留 1 列
+/// 边框 padding，再画 `[✗]`（3 列宽，**中括号内紧凑、不留空格**），`[✗]`
+/// 左侧再留 1 列边框 padding（不覆盖边框线；padding 取 1 列 = 与面板标题
+/// 「 任务详情 」自身首尾 1 空格 padding 同构，整体占用 5 列）；配色 =
+/// **中括号 `[`/`]` 与弹窗边框线同色**（panel_border_style(true) 绿+粗，
+/// 融入边框、不随悬停/按压变化），**高亮的只有 ✗**——常态 DIM2，指针
+/// 悬停或按压 = 仅前景色红+粗（无背景色/无反色）；按下/松开判定与关闭
+/// 行为在 App 层（popup_close_rect / x_press，各弹窗鼠标分支各自关闭自身）。
+/// 返回命中热区（None = 弹窗过窄或与标题重叠，放弃绘制不设热区；热区 =
+/// `[✗]` 自身 3 列，前后 padding 列保持边框线原样、不参与点击）。
+/// 按钮符号 = "[✗]"（✗ = U+2717 BALLOT X，单列宽）。
+fn draw_close_btn(f: &mut Frame, app: &App, popup: Rect, title_w: usize) -> Option<Rect> {
+    // 极小弹窗不绘制，避免挤掉标题/内容
+    if popup.width < 12 || popup.height < 3 {
+        return None;
+    }
+    let bx = popup.x + popup.width - 5; // [✗] 3 列：右 padding 1 列 + 右角符
+    if (bx as usize) < popup.x as usize + 1 + title_w + 2 {
+        return None; // 左 padding 列压到标题：放弃绘制
+    }
+    let r = Rect {
+        x: bx,
+        y: popup.y,
+        width: 3,
+        height: 1,
+    };
+    let hot = app.x_press || hovered(app.pointer, r);
+    // 中括号 = 弹窗边框线同色（绿+粗），不随悬停/按压变化；
+    // 仅 ✗ 高亮：常态纯 DIM2（显式清除按钮覆盖在边框单元格上继承的 BOLD，
+    // 避免常态 ✗ 偏粗），悬停/按压 = 前景红+粗（无背景色/无反色）
+    let bracket = panel_border_style(true);
+    let x_st = if hot {
+        Style::default().fg(RED).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(DIM2).remove_modifier(Modifier::BOLD)
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("[", bracket),
+            Span::styled("✗", x_st),
+            Span::styled("]", bracket),
+        ])),
+        r,
+    );
+    Some(r)
+}
+
 fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Panel::Detail && !overlay_open(app);
     let block = Block::default()
@@ -856,9 +1032,12 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     app.detail_area = Some(inner);
 
     let Some(t) = app.sel_task() else {
-        // 无选中任务：字段名热区清空（修订-5）
+        // 无选中任务：字段名/字段值热区清空（修订-5；本轮需求修订同步新增热区）
         app.detail_url_rect = None;
         app.detail_ck_rect = None;
+        app.detail_fail_rect = None;
+        app.detail_save_rect = None;
+        app.detail_val_rects = Vec::new();
         f.render_widget(
             Paragraph::new(Span::styled("（未选中任务）", Style::default().fg(DIM)))
                 .alignment(Alignment::Center),
@@ -871,6 +1050,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     // 修订-5：可点击复制的字段名（URL/校验）= 蓝色链接样式；点击行为见 on_mouse。
     // 修订-6：下划线仅覆盖字段名文字部分（pad_right 填充空格不带下划线），
     // 热区仍为整段 9 列（与 label 对齐块一致，便于点击）
+    // 本轮需求修订：可点击复制字段名扩展为 校验 / URL / 失败 / 路径 四项
     let label_link = |s: &str| -> Vec<Span<'static>> {
         vec![
             Span::styled(
@@ -884,6 +1064,33 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let val = |s: String| Span::styled(s, Style::default().fg(FG));
     let state_c = state_color(t.state);
+
+    // 本轮需求修订：字段值悬停 = 下划线、点击 = 打开完整值弹窗（§6.8）。
+    // 悬停判定仅在无浮层时生效（浮层打开时详情面板处于模态降级态）；
+    // 值热区 = 行首 1 空格 + 字段名 9 列之后、值文本实际显示宽 × 1 行，
+    // 由 ui 层每帧回填（detail_val_rects），点击行为见 on_mouse。
+    let hoverable = !overlay_open(app);
+    let val_rect = |idx: usize, vw: usize| -> Option<Rect> {
+        let y = inner.y + idx as u16;
+        (y < inner.y + inner.height).then(|| Rect {
+            x: inner.x + 10,
+            y,
+            width: vw.min(inner.width.saturating_sub(10) as usize) as u16,
+            height: 1,
+        })
+    };
+    let mut val_rects: Vec<(Rect, DetailField)> = Vec::new();
+    // 登记值热区并返回悬停态（idx = 该行在 lines 中的下标、vw = 值显示宽）
+    let mut val_hover = |idx: usize, vw: usize, field: DetailField| -> bool {
+        match val_rect(idx, vw) {
+            Some(r) => {
+                let hv = hoverable && hovered(app.pointer, r);
+                val_rects.push((r, field));
+                hv
+            }
+            None => false,
+        }
+    };
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(vec![
@@ -918,14 +1125,13 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     }
     lines.push(Line::from(vec![
         Span::raw(" "),
-        label("任务 ID"),
+        label("ID"),
         Span::styled(format!("{id}", id = t.id), Style::default().fg(DIM)),
     ]));
-    // 创建时间单独一行（v1.20 生产同步，操作者 20261011 指令：原「ID · 添加于」
-    // 合并行拆分；ID 为随机 u32，仅详情页展示）
+    // 创建单独一行（v1.20 生产同步拆行；本轮需求修订：字段名「创建时间」→「创建」）
     lines.push(Line::from(vec![
         Span::raw(" "),
-        label("创建时间"),
+        label("创建"),
         Span::styled(t.created.clone(), Style::default().fg(DIM)),
     ]));
     lines.push(Line::from(vec![
@@ -946,7 +1152,8 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
         },
     ]));
     // 校验行（提供了校验码的任务）：算法 · 校验码前缀 + 状态
-    // 前缀取 10 位、状态用短文案，保证 110 列窄面板也能完整显示
+    // 前缀取 10 位、状态用短文案，保证 110 列窄面板也能完整显示；
+    // 本轮需求修订：值部分悬停下划线 + 点击打开完整值弹窗
     let mut ck_line_idx: Option<usize> = None;
     if let Some(ck) = &t.checksum {
         let vshort: String = if ck.value.chars().count() > 10 {
@@ -961,17 +1168,24 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
             _ => ("（待校验）", DIM),
         };
         ck_line_idx = Some(lines.len());
+        // 值显示宽 = 算法 + " · " + 前缀 + 状态（CJK 感知）
+        let algo_s = ck.algo.to_string();
+        let vw = w(&algo_s) + 3 + w(&vshort) + w(st);
+        let hv = val_hover(lines.len(), vw, DetailField::Checksum);
         let mut ck_line = vec![Span::raw(" ")];
         ck_line.extend(label_link("校验"));
         ck_line.push(Span::styled(
-            ck.algo.to_string(),
-            Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+            algo_s,
+            with_underline(
+                Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+                hv,
+            ),
         ));
         ck_line.push(Span::styled(
             format!(" · {}", vshort),
-            Style::default().fg(FG),
+            with_underline(Style::default().fg(FG), hv),
         ));
-        ck_line.push(Span::styled(st, Style::default().fg(stc)));
+        ck_line.push(Span::styled(st, with_underline(Style::default().fg(stc), hv)));
         lines.push(Line::from(ck_line));
     }
     lines.push(Line::from(vec![
@@ -985,37 +1199,51 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
             fmt_size(t.total)
         )),
     ]));
-    // 失败原因：仅「已失败」态展示（生产 v1.22 直判同步——失败挂起不再展示，
-    // 详情与普通已暂停完全一致）
+    // 失败：仅「已失败」态展示（生产 v1.22 直判同步——失败挂起不再展示，
+    // 详情与普通已暂停完全一致）；本轮需求修订：字段名「失败原因」→「失败」，
+    // 蓝色下划线链接（点击复制）+ 值悬停下划线、点击打开完整值弹窗
+    let mut fail_line_idx: Option<usize> = None;
     if t.state == TaskState::Failed {
-        lines.push(Line::from(vec![
-            Span::raw(" "),
-            label("失败原因"),
-            Span::styled(
-                truncate(
-                    t.error.as_deref().unwrap_or("未知错误"),
-                    (inner.width as usize).saturating_sub(12),
-                ),
-                Style::default().fg(RED),
-            ),
-        ]));
-    }
-    lines.push(Line::from(vec![
-        Span::raw(" "),
-        label("保存"),
-        val(truncate(
-            &t.save_path,
+        fail_line_idx = Some(lines.len());
+        let err_s = truncate(
+            t.error.as_deref().unwrap_or("未知错误"),
             (inner.width as usize).saturating_sub(12),
-        )),
-    ]));
-    // 修订-5：URL 字段名可点击复制（蓝色下划线）；记录行号供热区回填
+        );
+        let hv = val_hover(lines.len(), w(&err_s), DetailField::Failed);
+        let mut fail_line = vec![Span::raw(" ")];
+        fail_line.extend(label_link("失败"));
+        fail_line.push(Span::styled(err_s, with_underline(Style::default().fg(RED), hv)));
+        lines.push(Line::from(fail_line));
+    }
+    // 路径：本轮需求修订：字段名原「保存」再简化为「路径」，蓝色下划线链接
+    // （点击复制），值悬停下划线 + 点击打开完整值弹窗
+    let save_line_idx = lines.len();
+    let save_s = truncate(
+        &t.save_path,
+        (inner.width as usize).saturating_sub(12),
+    );
+    let hv = val_hover(save_line_idx, w(&save_s), DetailField::SavePath);
+    let mut save_line = vec![Span::raw(" ")];
+    save_line.extend(label_link("路径"));
+    save_line.push(Span::styled(save_s, with_underline(Style::default().fg(FG), hv)));
+    lines.push(Line::from(save_line));
+    // 修订-5：URL 字段名可点击复制（蓝色下划线）；本轮需求修订：值悬停下划线
+    // + 点击打开完整值弹窗；记录行号供热区回填；本轮 bug 修订：显示值经
+    // break_links 注入 VS15 断链——终端不再叠加 http(s) 默认链接下划线
+    //（悬停时只剩 ezr-demo 自身的 SGR 下划线，不再出现双下划线）；
+    // 经 link_break_spans 分段渲染兼容 pyte 类模拟器（文档见该函数）
     let url_line_idx = lines.len();
-    let mut url_line = vec![Span::raw(" ")];
-    url_line.extend(label_link("URL"));
-    url_line.push(val(truncate(
+    let url_s = break_links(&truncate(
         &t.url,
         (inner.width as usize).saturating_sub(12),
-    )));
+    ));
+    let hv = val_hover(url_line_idx, w(&url_s), DetailField::Url);
+    let mut url_line = vec![Span::raw(" ")];
+    url_line.extend(label_link("URL"));
+    url_line.extend(link_break_spans(
+        &url_s,
+        with_underline(Style::default().fg(FG), hv),
+    ));
     lines.push(Line::from(url_line));
 
     // 分块：文字显示——x/y（x=已完成分块数，y=总分块数）与块大小「N/块」；
@@ -1055,6 +1283,10 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     };
     app.detail_url_rect = hot(url_line_idx);
     app.detail_ck_rect = ck_line_idx.and_then(hot);
+    // 本轮需求修订：失败/路径 字段名热区 + 字段值热区（悬停下划线/点击弹窗）
+    app.detail_fail_rect = fail_line_idx.and_then(hot);
+    app.detail_save_rect = hot(save_line_idx);
+    app.detail_val_rects = val_rects;
 }
 
 /// 流量图（内嵌于头部面板右侧、**无边框**；第八轮定稿：单色面积图，REQ-8.5）。
@@ -1658,6 +1890,9 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         .title(Span::styled(title, panel_title_style(true)));
     let inner = block.inner(dlg);
     f.render_widget(block, dlg);
+    // 右上角 [✗]（本轮需求修订：全部弹窗统一；原地松开 = 取消对话框，
+    // Esc 同口径；先于下拉浮层绘制，展开下拉时被覆盖、点击先收起下拉）
+    app.popup_close_rect = draw_close_btn(f, app, dlg, w(title));
     let min_h = if is_add { 9 } else { 7 };
     if inner.width < 24 || inner.height < min_h {
         return;
@@ -1955,6 +2190,8 @@ fn draw_delete_dialog(f: &mut Frame, app: &mut App, area: Rect) {
         .title(Span::styled(" 删除任务 ", panel_title_style(true)));
     let inner = block.inner(dlg);
     f.render_widget(block, dlg);
+    // 右上角 [✗]（本轮需求修订：全部弹窗统一；原地松开 = 取消删除对话框）
+    app.popup_close_rect = draw_close_btn(f, app, dlg, w(" 删除任务 "));
     if inner.width < 40 || inner.height < 5 {
         return;
     }
@@ -2109,6 +2346,8 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
     sb.thumb(FOCUS_BORDER).pressed_v(app.sb_arrow_pressed(SbKey::Pieces));
     let inner = sb.render_block(f, rect, block);
     app.pieces_area = Some(rect);
+    // 右上角 [✗]（本轮需求修订：全部弹窗统一；原地松开 = 关闭分块弹窗）
+    app.popup_close_rect = draw_close_btn(f, app, rect, w(" 分块状态 "));
 
     let cols = (inner.width as usize / 2).max(1); // 每块占 2 列
     let rows = Layout::vertical([
@@ -2269,7 +2508,14 @@ fn help_lines() -> Vec<Line<'static>> {
         kd("C", "清除已完成任务"),
         kd("P", "查看分块状态（仅分块下载任务）"),
         sec("任务详情"),
-        kd("鼠标点击", "URL / 校验 字段名复制对应值"),
+        kd("鼠标点击字段名", "校验 / URL / 失败 / 路径 复制对应值"),
+        kd("鼠标点击字段值", "打开完整值弹窗（悬停显示下划线）"),
+        sec("字段值弹窗"),
+        kd("↑↓ / PgUp·PgDn", "滚动内容（Home / End 跳首/尾）"),
+        kd("Y", "复制窗口全部内容（完整字段值）"),
+        kd("鼠标拖拽 / 滚轮", "移动窗口 / 滚动内容"),
+        kd("鼠标点击 [✗]", "关闭窗口（右上角按钮，悬停高亮）"),
+        kd("Esc / q", "关闭窗口"),
         sec("并发连接"),
         kd("↑ / ↓", "选择连接明细（视口跟随滚动）"),
         kd("← / →", "横向滚动明细列（客户端/协议等超宽列）"),
@@ -2280,14 +2526,15 @@ fn help_lines() -> Vec<Line<'static>> {
         kd("点击 ↑↓←→", "步进滚动 1 格；按住不放自动连发"),
         kd("点击轨道", "朝点击方向整页滚动（可按住连发）"),
         kd("方向键", "面板聚焦时 ↑↓ 选择/纵向滚动、←→ 横向滚动（并发）"),
-        sec("弹窗（添加/修改/删除/pieces/帮助/关于）"),
+        sec("弹窗（添加/修改/删除/pieces/帮助/关于/字段值）"),
         kd("Tab / ↑↓", "切换字段/焦点（下拉框内选择选项）"),
         kd("Enter", "确认"),
         kd("Esc", "取消/关闭"),
         kd("鼠标拖拽", "按住弹窗内空白处拖动移动窗口（滑块/边框除外）"),
+        kd("鼠标点击 [✗]", "关闭当前弹窗（右上角按钮，悬停高亮）"),
         sec("pieces 分块弹窗"),
         kd("↑↓ / PgUp·PgDn", "滚动分块网格（Home / End 跳首/尾）"),
-        kd("Esc / P", "关闭弹窗"),
+        kd("Esc / P / [✗]", "关闭弹窗（右上角按钮可点击，悬停高亮）"),
         note(""),
         note(" ↑↓/滚轮 滚动本页 · Esc/H 关闭"),
     ]
@@ -2328,6 +2575,8 @@ fn draw_help(f: &mut Frame, app: &mut App, area: Rect) {
     sb.thumb(FOCUS_BORDER).pressed_v(app.sb_arrow_pressed(SbKey::Help));
     let inner = sb.render_block(f, rect, block);
     app.help_area = Some(rect);
+    // 右上角 [✗]（本轮需求修订：全部弹窗统一；原地松开 = 关闭帮助窗口）
+    app.popup_close_rect = draw_close_btn(f, app, rect, w(" 帮助 "));
 
     let lines = help_lines();
     let view_h = inner.height as usize;
@@ -2386,6 +2635,8 @@ fn draw_about(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     app.about_area = Some(rect);
+    // 右上角 [✗]（本轮需求修订：全部弹窗统一；原地松开 = 关闭关于窗口）
+    app.popup_close_rect = draw_close_btn(f, app, rect, w(" About "));
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -2405,6 +2656,123 @@ fn draw_about(f: &mut Frame, app: &mut App, area: Rect) {
             height: 1,
         },
     );
+}
+
+// ---------------------------------------------------------------------------
+// 字段值弹窗（点击详情面板 校验/URL/失败/路径 字段值打开；本轮需求修订）
+// ---------------------------------------------------------------------------
+
+/// 字段值弹窗固定尺寸（宽×高，含边框；本轮需求修订：60 → 48 收窄窗体）
+const VAL_W: u16 = 48;
+const VAL_H: u16 = 12;
+
+/// 弹窗内容区阅读内边距（本轮需求修订）：左右各 2 列、上下各 1 行——
+/// 文本不贴边框，长文案阅读更舒适（极小窗口按内框一半钳制，不 panic）
+const VAL_PAD_X: u16 = 2;
+const VAL_PAD_Y: u16 = 1;
+
+/// CJK 感知 wrap text：按显示宽折行（超宽即断行，不做词边界回退——URL/校验码
+/// 等无空格长串与中文文案统一按列宽折行），供字段值弹窗完整展示字段值；
+/// 每行显示宽 ≤ width（width ≤ 1 时按 1 处理，极端窄窗退化为逐字符折行）
+fn wrap_text(s: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut cur_w = 0usize;
+    for ch in s.chars() {
+        let cw = w(&ch.to_string());
+        if cur_w + cw > width {
+            out.push(std::mem::take(&mut cur));
+            cur_w = 0;
+        }
+        cur.push(ch);
+        cur_w += cw;
+    }
+    out.push(cur);
+    out
+}
+
+/// 字段值弹窗：模态浮层——绿色高亮边框（与主面板聚焦色统一）；标题 = 字段名；
+/// 内容 = 打开时快照的完整字段值（wrap text，整段完整显示、无截断），
+/// 内容区带阅读内边距（VAL_PAD_X/Y：左右 2 列、上下 1 行）；内容为
+/// **纯静态文本——无悬停反馈、悬停不加下划线**（本轮需求修订；与详情面板
+/// 字段值热区的悬停下划线不同，§5.3/§6.8）；
+/// **panel 只提供垂直滚动条**（通用组件 §4.1.3，内容超窗才显示；无水平滚动条
+/// ——wrap 保证任意宽度下内容完整可见）；Y 复制窗口全部内容（on_key 处理，
+/// 窗口内无任何操作提示，交互说明收敛于 H 帮助窗口【字段值弹窗】组）；
+/// 支持鼠标拖拽移动（位置关闭即清，同 pieces）、滚轮滚动、点击外部无操作
+/// （§4.2.5 模态统一口径）；Esc/q/Q 关闭。
+fn draw_val_popup(f: &mut Frame, app: &mut App, area: Rect) {
+    // 可拖拽定位：记忆位置优先（钳制在终端内），首帧居中并回填
+    let rect = match app.val_pos {
+        Some((px, py)) => {
+            let dw = VAL_W.min(area.width);
+            let dh = VAL_H.min(area.height);
+            Rect {
+                x: px.min(area.width.saturating_sub(dw)),
+                y: py.min(area.height.saturating_sub(dh)),
+                width: dw,
+                height: dh,
+            }
+        }
+        None => {
+            let r = dialog_rect(area, VAL_W, VAL_H);
+            app.val_pos = Some((r.x, r.y));
+            r
+        }
+    };
+    f.render_widget(Clear, rect);
+    // 浮层边界 CJK 宽字符切割处理（残影根治点，与对话框同口径）
+    clip_wide_at_edges(f, rect);
+    let title = format!(" {} ", app.val_title);
+    let title_w = w(&title);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(panel_border_style(true))
+        .title(Span::styled(title, panel_title_style(true)));
+    // 弹窗框架 = ScrollablePanel（Vertical：右边框列 ↑│║│↓）
+    let mut sb = ScrollablePanel::new(ScrollbarMode::Vertical);
+    sb.thumb(FOCUS_BORDER)
+        .pressed_v(app.sb_arrow_pressed(SbKey::Val));
+    let inner = sb.render_block(f, rect, block);
+    app.val_area = Some(rect);
+    // 右上角 [✗]（本轮需求修订：全部弹窗统一；原地松开 = 关闭字段值弹窗）
+    app.popup_close_rect = draw_close_btn(f, app, rect, title_w);
+
+    // 内容：完整字段值 wrap 成行（每行 ≤ 内容区宽），FG 常规色、纯静态样式
+    // （无悬停反馈——本轮需求修订：窗口内内容悬停不加下划线）；
+    // 内容区 = 内框再收阅读内边距（VAL_PAD_X/Y）；内框过窄时按 1 列折行兜底
+    // （只留边框的极小窗口不 panic）
+    let pad_x = VAL_PAD_X.min(inner.width / 2);
+    let pad_y = VAL_PAD_Y.min(inner.height / 2);
+    let content = Rect {
+        x: inner.x + pad_x,
+        y: inner.y + pad_y,
+        width: inner.width - pad_x * 2,
+        height: inner.height - pad_y * 2,
+    };
+    let view_h = content.height as usize;
+    // 本轮 bug 修订：每行经 break_links 断链——URL 值不再被终端叠加 http(s)
+    // 默认链接下划线；wrap 先按原值折行、断链注入零宽不改变行宽与折行结果；
+    // 经 link_break_spans 分段渲染兼容 pyte 类模拟器（文档见该函数）
+    let lines: Vec<Line<'static>> = wrap_text(&app.val_text, content.width as usize)
+        .into_iter()
+        .map(|s| Line::from(link_break_spans(&break_links(&s), Style::default().fg(FG))))
+        .collect();
+    let total = lines.len();
+    let max_scroll = total.saturating_sub(view_h);
+    app.val_scroll = app.val_scroll.min(max_scroll);
+    let start = app.val_scroll;
+    let shown: Vec<Line> = lines.into_iter().skip(start).take(view_h).collect();
+    f.render_widget(Paragraph::new(shown), content);
+
+    // 通用滚动条·垂直（内容超窗才绘制——显示条件在组件内收口；↑↓ 箭头 +
+    // │轨道 + ║滑块；滑块拖拽 = 滚动内容、箭头点击/按住连发、轨道翻页——
+    // 与主界面面板同一组件同一行为）
+    sb.vertical(total, view_h, start);
+    app.val_sb = sb.render_bars(f, rect).vertical;
+    app.val_max_scroll = total.saturating_sub(view_h.max(1));
 }
 
 // ---------------------------------------------------------------------------
@@ -2435,7 +2803,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         if app.show_panes {
             // 主区：左列 58% = 任务列表（「任务队列」面板已并入头部，列表自头部正下方
             // 起、占满左列全高）；右列 42% = 任务详情（10 行内容 + 边框 = 12 行；
-            // v1.20 生产同步：任务 ID 与创建时间拆分两行）+
+            // 本轮需求修订：字段名精简为 ID/创建 等，字段值可点击打开完整值弹窗）+
             // 并发连接面板（占余下全部高度）
             let cols = Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
                 .split(outer[1]);
@@ -2450,6 +2818,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             app.conns_area = None;
             app.detail_url_rect = None;
             app.detail_ck_rect = None;
+            app.detail_fail_rect = None;
+            app.detail_save_rect = None;
+            app.detail_val_rects = Vec::new();
             draw_list(f, app, outer[1]);
         }
     } else {
@@ -2457,12 +2828,18 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         app.conns_area = None;
         app.detail_url_rect = None;
         app.detail_ck_rect = None;
+        app.detail_fail_rect = None;
+        app.detail_save_rect = None;
+        app.detail_val_rects = Vec::new();
         draw_header(f, app, outer[0], false);
         draw_list(f, app, outer[1]);
     }
 
     draw_footer(f, app, outer[2]);
 
+    // 弹窗 [ X ] 热区每帧重建（本轮需求修订：无弹窗打开 = None；
+    // 顶层弹窗绘制时回填，z 序后者覆盖）
+    app.popup_close_rect = None;
     // 对话框最后绘制（覆盖层）
     if app.dialog.is_some() {
         draw_dialogs(f, app, area);
@@ -2481,5 +2858,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // 关于窗口（最上层；O 打开，模态：打开时底层面板暗框）
     if app.about_open {
         draw_about(f, app, area);
+    }
+
+    // 字段值弹窗（最上层；点击详情面板字段值打开，模态：打开时底层面板暗框）
+    if app.val_open {
+        draw_val_popup(f, app, area);
     }
 }

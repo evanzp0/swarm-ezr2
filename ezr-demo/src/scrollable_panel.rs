@@ -82,7 +82,7 @@ pub struct ScrollState {
 
 /// 一次 [`ScrollablePanel::render_bars`] 的产物：各轴命中几何（None = 本帧
 /// 未绘制该轴）。调用方原样回填 App 的对应字段（list_sb / conns_v_sb /
-/// conns_h_sb / pieces_sb / help_sb）。
+/// conns_h_sb / pieces_sb / help_sb / val_sb）。
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PanelBars {
     /// 垂直滚动条命中几何
@@ -94,7 +94,8 @@ pub struct PanelBars {
 /// 面板 + 滚动条一体化组件（纯数据配置，`Copy` 语义）。
 ///
 /// 实例清单（§4.1.3）：任务列表 = Vertical、并发连接 = Both、
-/// pieces 分块弹窗 = Vertical、帮助窗口 = Vertical、任务详情 = None
+/// pieces 分块弹窗 = Vertical、帮助窗口 = Vertical、字段值弹窗 = Vertical
+/// （本轮需求修订新增：只提供垂直滚动条）、任务详情 = None
 /// （仅边框，统一面板框架绘制路径）。
 #[derive(Clone, Copy, Debug)]
 pub struct ScrollablePanel {

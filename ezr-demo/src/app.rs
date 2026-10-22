@@ -69,6 +69,8 @@ pub enum SbKey {
     Pieces,
     /// 帮助窗口（垂直）
     Help,
+    /// 任务详情字段值弹窗（垂直；本轮需求修订新增）
+    Val,
 }
 
 impl SbKey {
@@ -88,6 +90,7 @@ impl SbKey {
             SbKey::ConnsH => app.conns_h_sb,
             SbKey::Pieces => app.pieces_sb,
             SbKey::Help => app.help_sb,
+            SbKey::Val => app.val_sb,
         }
     }
 }
@@ -155,6 +158,42 @@ pub enum Panel {
 impl Default for Panel {
     fn default() -> Self {
         Panel::List
+    }
+}
+
+/// 任务详情可弹窗查看完整值的字段（本轮需求修订：点击字段值打开小窗口，
+/// 字段名点击仍是复制）。字段与详情面板蓝色下划线链接字段一一对应。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DetailField {
+    /// 校验（完整校验码）
+    Checksum,
+    /// URL（完整下载地址）
+    Url,
+    /// 失败（完整错误文案；字段名原「失败原因」）
+    Failed,
+    /// 路径（完整保存路径；字段名原「保存」，本轮需求修订再简化）
+    SavePath,
+}
+
+impl DetailField {
+    /// 弹窗标题（= 详情面板字段名）
+    pub fn title(self) -> &'static str {
+        match self {
+            DetailField::Checksum => "校验",
+            DetailField::Url => "URL",
+            DetailField::Failed => "失败",
+            DetailField::SavePath => "路径",
+        }
+    }
+
+    /// 复制 toast 文案（与字段名点击复制同口径）
+    pub fn copy_label(self) -> &'static str {
+        match self {
+            DetailField::Checksum => "校验码",
+            DetailField::Url => "url",
+            DetailField::Failed => "失败原因",
+            DetailField::SavePath => "保存路径",
+        }
     }
 }
 
@@ -810,6 +849,18 @@ pub struct App {
     pub detail_url_rect: Option<Rect>,
     /// 任务详情面板「校验」字段名热区（由 ui 层每帧回填；点击复制校验码值，修订-5）
     pub detail_ck_rect: Option<Rect>,
+    /// 任务详情面板「失败」字段名热区（由 ui 层每帧回填；点击复制失败原因值，
+    /// 本轮需求修订：仅「已失败」态存在）
+    pub detail_fail_rect: Option<Rect>,
+    /// 任务详情面板「路径」字段名热区（由 ui 层每帧回填；点击复制保存路径值，
+    /// 本轮需求修订新增；字段名原「保存」）
+    pub detail_save_rect: Option<Rect>,
+    /// 任务详情字段值热区（由 ui 层每帧回填；悬停 = 值下划线反馈、
+    /// 点击 = 打开完整值弹窗，本轮需求修订新增）
+    pub detail_val_rects: Vec<(Rect, DetailField)>,
+    /// 指针最近位置（任意鼠标事件回填；详情字段值悬停下划线判定用，
+    /// 本轮需求修订新增）
+    pub pointer: Option<(u16, u16)>,
     /// 并发连接面板可视行数（由 ui 层回填，用于滚动钳制）
     pub visible_conns_rows: usize,
     /// 并发连接面板滚动所属的选中序号（选中变化时重置滚动）
@@ -863,6 +914,36 @@ pub struct App {
     pub pieces_pos: Option<(u16, u16)>,
     /// pieces 弹窗拖拽中的抓取偏移（指针相对弹窗左上角；Some = 左键拖拽进行中）
     pub pieces_drag: Option<(u16, u16)>,
+    /// 任务详情字段值弹窗（点击详情字段值打开；本轮需求修订新增）是否打开
+    pub val_open: bool,
+    /// 弹窗对应字段（Y 复制 toast 文案区分）
+    pub val_field: DetailField,
+    /// 弹窗标题（= 字段名：校验 / URL / 失败 / 路径）
+    pub val_title: String,
+    /// 弹窗内容（打开时快照的完整字段值；wrap text 显示）
+    pub val_text: String,
+    /// 弹窗内容滚动偏移（wrap 后行数；上限由渲染层按实际内容行数钳制）
+    pub val_scroll: usize,
+    /// 弹窗内容最大滚动偏移（内容行数 − 可视行数，ui 层每帧回填）
+    pub val_max_scroll: usize,
+    /// 弹窗区域（由 ui 层每帧回填；滚轮滚动/拖拽的命中测试）
+    pub val_area: Option<Rect>,
+    /// 弹窗左上角位置（鼠标拖拽移动记忆；None = 打开时居中，
+    /// 由渲染层首帧回填；渲染时钳制在终端内）
+    pub val_pos: Option<(u16, u16)>,
+    /// 弹窗拖拽中的抓取偏移（指针相对弹窗左上角；Some = 左键拖拽进行中）
+    pub val_drag: Option<(u16, u16)>,
+    /// 字段值弹窗滚动条命中几何（ui 层每帧回填）
+    pub val_sb: Option<scrollbar::Bar>,
+    /// 弹窗右上角 [✗] 关闭按钮热区（由 ui 层每帧回填；顶层弹窗为准，
+    /// 无弹窗 = None）。Down 按下 = 按压高亮、原地松开 = 关闭当前弹窗
+    /// （页脚 chips 同纪律；本轮需求修订：全部弹窗统一右上角 [✗]——
+    /// ✗ = U+2717 BALLOT X，中括号内紧凑无 padding，与边框线左右各留
+    /// 1 列 padding；热区仅 [✗] 自身 3 列）
+    pub popup_close_rect: Option<Rect>,
+    /// [✗] 按压态（Down 记录、Up 消费；拖出热区取消——渲染层据此仅前景色
+    /// 红+粗高亮，无背景色/无反色）
+    pub x_press: bool,
     /// 当前打开的对话框（None = 无）
     pub dialog: Option<Dialog>,
     /// 对话框左上角位置（鼠标拖拽移动记忆；None = 打开时居中，
@@ -962,6 +1043,10 @@ impl App {
             conns_area: None,
             detail_url_rect: None,
             detail_ck_rect: None,
+            detail_fail_rect: None,
+            detail_save_rect: None,
+            detail_val_rects: Vec::new(),
+            pointer: None,
             visible_conns_rows: 8,
             conns_scroll_for: 0,
             conns_hscroll: 0,
@@ -984,6 +1069,18 @@ impl App {
             pieces_area: None,
             pieces_pos: None,
             pieces_drag: None,
+            val_open: false,
+            popup_close_rect: None,
+            x_press: false,
+            val_field: DetailField::Url,
+            val_title: String::new(),
+            val_text: String::new(),
+            val_scroll: 0,
+            val_max_scroll: 0,
+            val_area: None,
+            val_pos: None,
+            val_drag: None,
+            val_sb: None,
             dialog: None,
             dialog_pos: None,
             dialog_drag: None,
@@ -1745,6 +1842,30 @@ impl App {
                 | KeyCode::Char('O')
                 | KeyCode::Char('q')
                 | KeyCode::Char('Q') => self.close_about(),
+                _ => {}
+            }
+            return;
+        }
+        // 任务详情字段值弹窗模态（本轮需求修订）：Esc/q/Q 关闭（先关窗不退出）；
+        // Y 复制窗口全部内容（完整字段值）；↑↓/PgUp/PgDn/Home/End 滚动内容。
+        // 窗口内无任何操作提示——交互说明收敛于 H 帮助窗口（P3 原则）
+        if self.val_open {
+            match code {
+                KeyCode::Esc
+                | KeyCode::Char('q')
+                | KeyCode::Char('Q') => self.close_val_popup(),
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    let text = self.val_text.clone();
+                    self.copy_to_clipboard(&text);
+                    let label = self.val_field.copy_label();
+                    self.set_toast(format!("已复制 {label}"));
+                }
+                KeyCode::Up => self.val_scroll_by(-1),
+                KeyCode::Down => self.val_scroll_by(1),
+                KeyCode::PageUp => self.val_scroll_by(-8),
+                KeyCode::PageDown => self.val_scroll_by(8),
+                KeyCode::Home => self.val_scroll = 0,
+                KeyCode::End => self.val_scroll = usize::MAX, // 渲染层钳制到末页
                 _ => {}
             }
             return;
@@ -2637,6 +2758,10 @@ impl App {
     // -----------------------------------------------------------------------
 
     pub fn on_mouse(&mut self, m: MouseEvent) {
+        // 指针位置跟踪（本轮需求修订：任意鼠标事件均携带坐标，
+        // 供详情字段值悬停下划线判定；TUI 无法感知指针离开终端，
+        // 悬停态以最后一次上报位置为准）
+        self.pointer = Some((m.column, m.row));
         // 关于窗口最上层（模态）：左键按住窗口内任意位置拖拽移动；点击窗口
         // 外部 = 无任何操作（全部浮层统一口径，§4.2.5）；无滚动条、无滚轮内容
         if self.about_open {
@@ -2644,6 +2769,11 @@ impl App {
                 MouseEventKind::Down(MouseButton::Left) => {
                     // 模态接管：清除页脚 chip 按压态（模态期页脚不可达）
                     self.footer_press = None;
+                    // 右上角 [✗]：按下高亮（原地松开关闭窗口，页脚 chip 同纪律）
+                    if Self::pointer_in(&self.popup_close_rect, m.column, m.row) {
+                        self.x_press = true;
+                        return;
+                    }
                     if Self::pointer_in(&self.about_area, m.column, m.row) {
                         // 开始拖拽：记录指针相对窗口左上角的抓取偏移
                         if let Some(r) = self.about_area {
@@ -2655,7 +2785,10 @@ impl App {
                     }
                 }
                 MouseEventKind::Drag(MouseButton::Left) => {
-                    if let Some((dx, dy)) = self.about_drag {
+                    // [✗] 按压中：拖出热区取消按压、不移动窗口（原地松开才关闭）
+                    if self.x_press {
+                        self.x_press = Self::pointer_in(&self.popup_close_rect, m.column, m.row);
+                    } else if let Some((dx, dy)) = self.about_drag {
                         self.about_pos = Some((
                             m.column.saturating_sub(dx),
                             m.row.saturating_sub(dy),
@@ -2663,7 +2796,87 @@ impl App {
                     }
                 }
                 MouseEventKind::Up(MouseButton::Left) => {
+                    // [✗] 原地松开 = 关闭关于窗口（拖出取消；页脚 chip 同纪律）
+                    if self.x_press {
+                        let hit = Self::pointer_in(&self.popup_close_rect, m.column, m.row);
+                        self.x_press = false;
+                        self.sb_release();
+                        if hit {
+                            self.about_open = false;
+                        }
+                        return;
+                    }
                     self.about_drag = None;
+                    self.sb_release();
+                }
+                _ => {}
+            }
+            return;
+        }
+        // 任务详情字段值弹窗最上层（模态，本轮需求修订新增）：滚轮滚动内容；
+        // 左键按住窗口内任意位置拖拽移动（滚动条上按下除外——拖滑块 = 滚动
+        // 内容，§4.1.3）；点击窗口外部 = 无任何操作（全部浮层统一口径，§4.2.5；
+        // Esc/q/Q 才是关闭通道，Y 复制内容见 on_key）
+        if self.val_open {
+            match m.kind {
+                MouseEventKind::ScrollUp => self.val_scroll_by(-1),
+                MouseEventKind::ScrollDown => self.val_scroll_by(1),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    // 模态接管：清除页脚 chip 按压态（模态期页脚不可达）
+                    self.footer_press = None;
+                    // 右上角 [✗]：按下高亮（原地松开关闭窗口，页脚 chip 同纪律）
+                    if Self::pointer_in(&self.popup_close_rect, m.column, m.row) {
+                        self.x_press = true;
+                        return;
+                    }
+                    // 通用滚动条优先于窗口拖拽：滑块按下 = 内容拖拽滚动准备，
+                    // 箭头/轨道按下 = 步进/翻页（与帮助/pieces 同口径）
+                    if let Some(bar) = self.val_sb {
+                        if let Some(hit) = bar.hit(m.column, m.row) {
+                            self.sb_press(SbKey::Val, &bar, hit);
+                            return;
+                        }
+                    }
+                    if Self::pointer_in(&self.val_area, m.column, m.row) {
+                        // 开始拖拽：记录指针相对窗口左上角的抓取偏移
+                        if let Some(r) = self.val_area {
+                            self.val_drag = Some((
+                                m.column.saturating_sub(r.x),
+                                m.row.saturating_sub(r.y),
+                            ));
+                        }
+                    }
+                }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    // [✗] 按压中：拖出热区取消按压、不移动窗口（原地松开才关闭）
+                    if self.x_press {
+                        self.x_press = Self::pointer_in(&self.popup_close_rect, m.column, m.row);
+                        return;
+                    }
+                    // 滑块拖拽进行中 = 滚动内容；否则 = 移动窗口。
+                    // （箭头按压高亮跟随指针：拖出取消、拖回恢复）
+                    self.sb_arrow_follow(m);
+                    if self.sb_drag.is_some() {
+                        self.sb_drag_move(m);
+                    } else if let Some((dx, dy)) = self.val_drag {
+                        self.val_pos = Some((
+                            m.column.saturating_sub(dx),
+                            m.row.saturating_sub(dy),
+                        ));
+                    }
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    // [✗] 原地松开 = 关闭字段值弹窗（拖出取消；页脚 chip 同纪律）
+                    if self.x_press {
+                        let hit = Self::pointer_in(&self.popup_close_rect, m.column, m.row);
+                        self.x_press = false;
+                        self.sb_release();
+                        if hit {
+                            self.close_val_popup();
+                        }
+                        return;
+                    }
+                    self.val_drag = None;
                     self.sb_release();
                 }
                 _ => {}
@@ -2682,6 +2895,11 @@ impl App {
                 MouseEventKind::Down(MouseButton::Left) => {
                     // 模态接管：清除页脚 chip 按压态（模态期页脚不可达）
                     self.footer_press = None;
+                    // 右上角 [✗]：按下高亮（原地松开关闭窗口，页脚 chip 同纪律）
+                    if Self::pointer_in(&self.popup_close_rect, m.column, m.row) {
+                        self.x_press = true;
+                        return;
+                    }
                     // 通用滚动条优先于窗口拖拽：滑块按下 = 内容拖拽滚动准备，
                     // 箭头/轨道按下 = 步进/翻页（修复：拖滚动条误移窗口）
                     if let Some(bar) = self.help_sb {
@@ -2703,6 +2921,11 @@ impl App {
                     // 穿透到底层面板；Esc/H/q/Q 才是关闭通道，§4.2.5）
                 }
                 MouseEventKind::Drag(MouseButton::Left) => {
+                    // [✗] 按压中：拖出热区取消按压、不移动窗口（原地松开才关闭）
+                    if self.x_press {
+                        self.x_press = Self::pointer_in(&self.popup_close_rect, m.column, m.row);
+                        return;
+                    }
                     // 滑块拖拽进行中 = 滚动内容；否则 = 移动窗口。
                     // （箭头按压高亮跟随指针：拖出取消、拖回恢复）
                     self.sb_arrow_follow(m);
@@ -2716,6 +2939,16 @@ impl App {
                     }
                 }
                 MouseEventKind::Up(MouseButton::Left) => {
+                    // [✗] 原地松开 = 关闭帮助窗口（拖出取消；页脚 chip 同纪律）
+                    if self.x_press {
+                        let hit = Self::pointer_in(&self.popup_close_rect, m.column, m.row);
+                        self.x_press = false;
+                        self.sb_release();
+                        if hit {
+                            self.help_open = false;
+                        }
+                        return;
+                    }
                     self.help_drag = None;
                     self.sb_release();
                 }
@@ -2733,6 +2966,11 @@ impl App {
                 MouseEventKind::Down(MouseButton::Left) => {
                     // 模态接管：清除页脚 chip 按压态
                     self.footer_press = None;
+                    // 右上角 [✗]：按下高亮（原地松开关闭弹窗，页脚 chip 同纪律）
+                    if Self::pointer_in(&self.popup_close_rect, m.column, m.row) {
+                        self.x_press = true;
+                        return;
+                    }
                     // 通用滚动条优先于窗口拖拽（修复：拖滚动条误移窗口）
                     if let Some(bar) = self.pieces_sb {
                         if let Some(hit) = bar.hit(m.column, m.row) {
@@ -2753,6 +2991,11 @@ impl App {
                     // 穿透到底层面板；Esc/P/q/Q 才是关闭通道，§4.2.5）
                 }
                 MouseEventKind::Drag(MouseButton::Left) => {
+                    // [✗] 按压中：拖出热区取消按压、不移动窗口（原地松开才关闭）
+                    if self.x_press {
+                        self.x_press = Self::pointer_in(&self.popup_close_rect, m.column, m.row);
+                        return;
+                    }
                     // 滑块拖拽进行中 = 滚动网格；否则移动窗口：弹窗左上角 =
                     // 指针 - 抓取偏移（渲染层钳制在终端内）。
                     // （箭头按压高亮跟随指针：拖出取消、拖回恢复）
@@ -2767,6 +3010,16 @@ impl App {
                     }
                 }
                 MouseEventKind::Up(MouseButton::Left) => {
+                    // [✗] 原地松开 = 关闭分块弹窗（拖出取消；页脚 chip 同纪律）
+                    if self.x_press {
+                        let hit = Self::pointer_in(&self.popup_close_rect, m.column, m.row);
+                        self.x_press = false;
+                        self.sb_release();
+                        if hit {
+                            self.close_pieces();
+                        }
+                        return;
+                    }
                     self.pieces_drag = None;
                     self.sb_release();
                 }
@@ -2835,6 +3088,11 @@ impl App {
                         }
                         return;
                     }
+                    // 右上角 [✗]：按下高亮（原地松开 = 取消对话框，Esc 同口径）
+                    if Self::pointer_in(&self.popup_close_rect, m.column, m.row) {
+                        self.x_press = true;
+                        return;
+                    }
                     // 弹窗内按下：开始拖拽（记录抓取偏移；是否算点击在 Up 判定）；
                     // 弹窗外按下：忽略
                     if Self::pointer_in(&self.dialog_area, m.column, m.row) {
@@ -2848,6 +3106,11 @@ impl App {
                     }
                 }
                 MouseEventKind::Drag(MouseButton::Left) => {
+                    // [✗] 按压中：拖出热区取消按压、不移动窗口（原地松开才关闭）
+                    if self.x_press {
+                        self.x_press = Self::pointer_in(&self.popup_close_rect, m.column, m.row);
+                        return;
+                    }
                     // 拖拽移动：弹窗左上角 = 指针 - 抓取偏移（渲染层钳制在终端内）
                     if let Some((dx, dy)) = self.dialog_drag {
                         let new = (m.column.saturating_sub(dx), m.row.saturating_sub(dy));
@@ -2858,6 +3121,16 @@ impl App {
                     }
                 }
                 MouseEventKind::Up(MouseButton::Left) => {
+                    // [✗] 原地松开 = 取消对话框（与 Esc/取消按钮同口径；拖出取消）
+                    if self.x_press {
+                        let hit = Self::pointer_in(&self.popup_close_rect, m.column, m.row);
+                        self.x_press = false;
+                        self.sb_release();
+                        if hit {
+                            self.dialog = None;
+                        }
+                        return;
+                    }
                     // 对话框无滚动条；此处兜底清理按压/拖拽态（如按住滚动条
                     // 箭头期间经键盘打开了对话框）
                     self.sb_release();
@@ -2915,6 +3188,7 @@ impl App {
                     return;
                 }
                 // 修订-5/7：任务详情面板点击字段名复制——URL → url 值、校验 → 校验码值；
+                // 本轮需求修订：扩展到失败 → 失败原因值、路径 → 保存路径值。
                 // 系统剪贴板（arboard）优先，无图形会话回退 OSC 52；
                 // 反馈仅在底部提示（toast），面板本身无提示信息
                 // （点击复制同时聚焦详情面板）
@@ -2936,6 +3210,38 @@ impl App {
                             self.set_toast("已复制 校验码");
                         }
                     }
+                    return;
+                }
+                // 本轮需求修订：「失败」字段名点击 = 复制失败原因值
+                if Self::pointer_in(&self.detail_fail_rect, m.column, m.row) {
+                    self.focus = Panel::Detail;
+                    if let Some(t) = self.sel_task() {
+                        let v = t.error.clone().unwrap_or_else(|| "未知错误".to_string());
+                        self.copy_to_clipboard(&v);
+                        self.set_toast("已复制 失败原因");
+                    }
+                    return;
+                }
+                // 本轮需求修订：「路径」字段名点击 = 复制保存路径值
+                if Self::pointer_in(&self.detail_save_rect, m.column, m.row) {
+                    self.focus = Panel::Detail;
+                    if let Some(t) = self.sel_task() {
+                        let v = t.save_path.clone();
+                        self.copy_to_clipboard(&v);
+                        self.set_toast("已复制 保存路径");
+                    }
+                    return;
+                }
+                // 本轮需求修订：点击字段值 = 打开完整值弹窗（模态；
+                // 悬停下划线反馈见 ui 层，热区随帧回填）
+                let val_hit = self
+                    .detail_val_rects
+                    .iter()
+                    .find(|(r, _)| in_rect(*r))
+                    .map(|(_, f)| *f);
+                if let Some(field) = val_hit {
+                    self.focus = Panel::Detail;
+                    self.open_val_popup(field);
                     return;
                 }
                 // 详情面板任意处点击 = 聚焦
@@ -3075,6 +3381,7 @@ impl App {
             SbKey::ConnsH => self.conns_max_hscroll,
             SbKey::Pieces => self.pieces_max_scroll,
             SbKey::Help => self.help_max_scroll,
+            SbKey::Val => self.val_max_scroll,
         }
     }
 
@@ -3097,6 +3404,9 @@ impl App {
             SbKey::Help => {
                 self.help_scroll = clamp_offset(self.help_scroll as i64 + delta as i64, max);
             }
+            SbKey::Val => {
+                self.val_scroll = clamp_offset(self.val_scroll as i64 + delta as i64, max);
+            }
         }
     }
 
@@ -3110,6 +3420,7 @@ impl App {
             SbKey::ConnsH => self.conns_hscroll = pos,
             SbKey::Pieces => self.pieces_scroll = pos,
             SbKey::Help => self.help_scroll = pos,
+            SbKey::Val => self.val_scroll = pos,
         }
     }
 
@@ -3616,6 +3927,56 @@ impl App {
                 .saturating_sub(delta.unsigned_abs() as usize);
         } else {
             self.pieces_scroll = self.pieces_scroll.saturating_add(delta as usize);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 任务详情字段值弹窗（点击详情字段值打开；本轮需求修订新增）
+    // -----------------------------------------------------------------------
+
+    /// 打开任务详情字段值弹窗（模态）：快照对应字段的**完整值**
+    /// （校验码 / URL / 失败原因 / 保存路径），标题 = 字段名。
+    /// 字段不可用时（如未提供校验码）不打开；窗口操作说明收敛于
+    /// H 帮助窗口【字段值弹窗】组，窗口内无提示（P3 原则）。
+    pub fn open_val_popup(&mut self, field: DetailField) {
+        let Some(t) = self.sel_task() else {
+            return;
+        };
+        let text = match field {
+            DetailField::Checksum => {
+                let Some(ck) = &t.checksum else { return };
+                ck.value.clone()
+            }
+            DetailField::Url => t.url.clone(),
+            DetailField::Failed => t.error.clone().unwrap_or_else(|| "未知错误".to_string()),
+            DetailField::SavePath => t.save_path.clone(),
+        };
+        self.val_open = true;
+        self.val_field = field;
+        self.val_title = field.title().to_string();
+        self.val_text = text;
+        self.val_scroll = 0;
+        self.val_pos = None; // 打开时居中（渲染层首帧回填）
+        self.val_drag = None;
+    }
+
+    /// 关闭字段值弹窗
+    pub fn close_val_popup(&mut self) {
+        self.val_open = false;
+        self.val_area = None;
+        self.val_pos = None;
+        self.val_drag = None;
+        self.val_sb = None;
+    }
+
+    /// 弹窗内容滚动（行单位；上限由渲染层按实际内容行数钳制）
+    fn val_scroll_by(&mut self, delta: i32) {
+        if delta < 0 {
+            self.val_scroll = self
+                .val_scroll
+                .saturating_sub(delta.unsigned_abs() as usize);
+        } else {
+            self.val_scroll = self.val_scroll.saturating_add(delta as usize);
         }
     }
 }

@@ -671,7 +671,8 @@ def scenario_m():
 
     check("M1 详情失败原因含「HTTP 503 Service Unavailable」（附状态码）",
           "HTTP 503 Service Unavailable" in all_text)
-    check("M2 失败原因行标签存在（失败原因）", "失败原因" in all_text)
+    check("M2 失败行标签存在（本轮需求修订：「失败原因」→「失败」）",
+          " 失败     " in all_text)
     w_blk = task_block(final_rows, "win11-24h2-x64")
     check("M3 win11 处于已失败（停等重试中）",
           w_blk is not None and "[已失败]" in w_blk,
