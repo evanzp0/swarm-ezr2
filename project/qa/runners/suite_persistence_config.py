@@ -115,7 +115,8 @@ class PersistenceConfigSuite(Suite):
                 # 下载中任务重启后自动续传至完成（结果口径，避免速率竞速）
                 assert app.wait_for("已完成 (2)", 90), "退出前下载中的任务应续传至完成（v1.13 页签行口径）"
                 # 已完成历史（含顺序：small.bin 先于 three-m）在第二页签
-                app.send("tab")
+                # （v1.30：Tab 改面板焦点，页签键 ] 承载切页）
+                app.send("]")
                 app.pump(0.3)
                 text = app.text()
                 assert_in("small.bin", text, "已完成历史应还原（第二页签）")
@@ -373,7 +374,13 @@ class PersistenceConfigSuite(Suite):
                 app.graceful_quit()
 
     def _case_09(self):
-        """QA-PC-09 Esc / Ctrl+C 退出：语义同 Q（停传、保断点、存注册表）无花屏（AC-9）。"""
+        """QA-PC-09 Esc 主界面无操作 + Ctrl+C 优雅退出：停传、保断点、存注册表、无花屏。
+
+        v1.30 退出语义改版同步（01-tui-display-10：Esc 主界面无任何动作，
+        退出仅 Q/Ctrl+C；Ctrl+C 全局直通 = 优雅退出，keys.rs 同 q 置 quit，
+        AC-9 终端哨兵照常覆盖）。01-persistence-config-09 feature 场景标题
+        仍为旧「Esc 与 Ctrl+C 优雅退出」口径，偏差已记 handoff 待操作者裁决。
+        """
         @self.case("QA-PC-09")
         def go(env: Env):
             # 每轮独立子目录：第二轮同 URL+同目录会被重复守卫拦截（QA-01-16）；
@@ -389,8 +396,17 @@ class PersistenceConfigSuite(Suite):
                 assert app.wait_for("下载中", 5)
                 sc = os.path.join(sub, "five-m.bin.ezr")
                 self._wait_sidecar(app, sc)  # 等首个周期落盘（同 PC-08 口径）
-                code = self._quit_and_check(app, key)
-                assert code == 0, f"{key} 优雅退出码应为 0，得到 {code}"
+                if key == "esc":
+                    # v1.30：Esc 主界面无操作——应用不退出、任务继续下载；
+                    # 收尾改以 Q 优雅退出验证断点保留（停传、存注册表同口径）
+                    app.send("esc")
+                    app.pump(1.0)
+                    assert app.exit_code is None,                         "Esc 不应退出应用（v1.30 主界面无操作）"
+                    assert app.wait_for("下载中", 5), "Esc 后任务应继续下载"
+                    code = self._quit_and_check(app, "q")
+                else:
+                    code = self._quit_and_check(app, key)
+                assert code == 0, f"{key} 轮优雅退出码应为 0，得到 {code}"
                 assert file_bytes(sc) is not None, f"{key} 后 sidecar 应保留"
                 # 重启无花屏：画面正常渲染并可恢复下载（续传至完成）
                 app2 = EzrApp(env.home, save_dir=env.save_dir)

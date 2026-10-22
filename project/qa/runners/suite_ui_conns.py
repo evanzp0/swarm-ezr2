@@ -207,11 +207,18 @@ class UiConnsSuite(Suite):
                 add_task_via_dialog(app, env, self._slow(env, "three-m.bin", 1))
                 assert app.wait_for("下载中", 8)
                 rows = app.screen.display
-                # 标题行：◆ EZR Downloader + 版本；行 0 为顶边框行
+                # 标题行：` ◆ `（青色加粗）+ `EZR Downloader `（白色加粗）左对齐，
+                # 名称前后各 1 列空白（padding 对称）；**不含版本号**
+                #（v1.32/FR-01-94①：版本展示面迁移关于窗口 FR-01-111）
                 assert_in("◆ EZR Downloader", rows[0], "标题行含产品名")
-                assert_in("v0.1.0-01", rows[0], "标题行含期号版本号")
+                assert_not_in("v0.1.0", rows[0], \
+                    "标题行不应含版本号（v1.32，全屏唯一展示面 = 关于窗口）")
                 assert rows[0].rstrip().endswith("╮"), \
                     f"头部应通栏全宽（右缘贴屏幕右缘）: {rows[0][-6:]!r}"
+                # 左对齐 + 名称前后各 1 列空白：◆ 前恰 1 列空白（行首 ╭ 后）
+                tcol = _find_in_row(app, 0, "EZR Downloader")
+                assert tcol is not None and tcol < 25, \
+                    f"标题应左对齐（产品名列 {tcol}）"
                 # 峰值不出现在标题行（FR-01-94：峰值在内容行 1）
                 assert "峰值" not in rows[0], "峰值不应写在标题行"
                 # 头部 5 行：行 4 为底边框（─ 横线）
@@ -286,26 +293,35 @@ class UiConnsSuite(Suite):
                 assert app.cell_fg(3, c + 2) == YELLOW, \
                     f"满槽应为黄色: {app.cell_fg(3, c + 2)}"
                 assert _cell_bold(app, 3, c + 2), "满槽应加粗"
-                # Tab 切换页签：活动页签黑字青底加粗
+                # ] 切换页签（v1.30 页签键改版：Tab 改面板焦点）：活动页签黑字青底加粗
                 before = _find_in_row(app, 3, "正在下载")
                 # 终端真彩口径：黑=RGB(0,0,0)、青=SGR 36 上抛 RGB 形态（00cdcd 实测）
                 assert app.cell_fg(3, before + 1) in ("black", "000000") \
                     and _cell_bg(app, 3, before + 1) in ("cyan", "00cdcd"), \
                     f"活动页签应为黑字青底: fg={app.cell_fg(3, before + 1)} " \
                     f"bg={_cell_bg(app, 3, before + 1)}"
-                app.send("tab")
+                app.send("]")
                 app.pump(0.4)
                 done = _find_in_row(app, 3, "已完成")
                 assert done is not None and done > before, \
-                    f"Tab 后已完成页签应在正在下载右侧: {done} vs {before}"
+                    f"] 后已完成页签应在正在下载右侧: {done} vs {before}"
                 assert app.cell_fg(3, done + 1) in ("black", "000000") \
                     and _cell_bg(app, 3, done + 1) in ("cyan", "00cdcd"), \
-                    "Tab 后活动页签应切换为已完成（黑字青底）"
+                    "] 后活动页签应切换为已完成（黑字青底）"
+                # [ 切回（v1.30 页签键 ]/[/T 承载，规程 QA-UC-03 ]/[ 切换口径）
+                app.send("[")
+                app.pump(0.4)
+                back = _find_in_row(app, 3, "正在下载")
+                assert back is not None and back < done, \
+                    f"[ 后应切回正在下载页签: {back} vs {done}"
+                assert app.cell_fg(3, back + 1) in ("black", "000000") \
+                    and _cell_bg(app, 3, back + 1) in ("cyan", "00cdcd"), \
+                    "[ 后活动页签应切回正在下载（黑字青底）"
             finally:
                 app.graceful_quit()
 
     def _case_04(self):
-        """QA-UC-04 │ 分隔符贯通全高、左右各 1 列空白、行 2 横线止于 │。"""
+        """QA-UC-04 │ 分隔符贯通全高、图区紧贴无空白（v1.32）、行 2 横线止于 │。"""
         @self.case("QA-UC-04")
         def go(env: Env):
             app = EzrApp(env.home, save_dir=env.save_dir)
@@ -315,17 +331,20 @@ class UiConnsSuite(Suite):
                 assert app.wait_for("下载中", 8)
                 sep = _sep_col(app)
                 assert sep is not None, "行 1–3 同列 │ 分隔符应存在"
-                # 字段文本行（1/3）分隔符左右各 1 列空白；行 2 横线贯通字段区
-                # 宽、直抵 │（FR-01-94 ⑤「止于 │」，不空格）
+                # v1.32/FR-01-94⑤：图区紧贴分隔符与右边框——分隔符右侧与
+                # 图区右缘 0 列空白（与上下 padding 一致；旧「左右各 1 列
+                # 空白」口径随 m3 改版退役）
                 for y in (1, 3):
                     assert app.screen.buffer[y][sep - 1].data == " ", \
-                        f"分隔符左侧应 1 列空白（行 {y}）"
+                        f"分隔符左侧应 1 列空白（行 {y}，字段区 padding）"
                 for y in (1, 2, 3):
-                    assert app.screen.buffer[y][sep + 1].data == " ", \
-                        f"分隔符右侧应 1 列空白（行 {y}）"
-                # 图区右缘 1 列空白（面板右边框前）
-                assert app.screen.buffer[1][app.screen.columns - 2].data == " ", \
-                    "图区右缘应 1 列空白"
+                    d = app.screen.buffer[y][sep + 1].data
+                    assert d != "│" and (d == " " or d in BLOCKS), \
+                        f"分隔符右侧应紧贴图区 0 列空白（行 {y}: {d!r}）"
+                # 图区右缘紧贴右边框（0 列空白；非边框线字符）
+                d = app.screen.buffer[1][app.screen.columns - 2].data
+                assert d == " " or d in BLOCKS, \
+                    f"图区右缘应紧贴右边框 0 列空白（实测 {d!r}）"
                 # 行 2 横线贯通字段区、止于 │、图区无横线（buffer 列空间）
                 for x in range(1, sep):
                     assert app.screen.buffer[2][x].data == "─", \
@@ -528,11 +547,14 @@ class UiConnsSuite(Suite):
                 assert ids and ids == sorted(ids) and ids[0] == 1, \
                     f"数据行应按序号 1 基升序: {ids}"
                 assert len(ids) <= 4, f"行数不应超并发数: {ids}"
-                # 提示行恒显（右栏列空间）
+                # v1.30/FR-01-96 修订：面板无底部提示行（全面板底部区域无
+                # 提示文字——原「提示行随协议自适应」口径退役，交互说明收敛
+                # 帮助窗口【并发连接】组）
                 hint_found = any(
-                    "Ctrl+↑↓ 选择 · Ctrl+B 断开（仅 BT）" in _right_text(app, y)
+                    ("Ctrl+↑↓ 选择" in _right_text(app, y)
+                     or "Ctrl+B" in _right_text(app, y))
                     for y in range(c + 1, app.screen.lines))
-                assert hint_found, "面板底部提示行应恒显"
+                assert not hint_found, "面板底部不应再有提示行（v1.30/P3 退役）"
                 # 12 块文件 4 连接不至于全 idle，速度列至少一行非 '-'
                 data = _conns_data_rows(app)
                 assert any(v and v != "-" for _, v, _ in data), \
@@ -711,13 +733,13 @@ class UiConnsSuite(Suite):
                 app.send("home")
                 app.pump(0.3)
                 check_empty("已失败")
-                # 已完成任务：切已完成页签选中
-                app.send("tab")
+                # 已完成任务：切已完成页签选中（v1.30 页签键 ]/[）
+                app.send("]")
                 app.pump(0.4)
                 app.send("home")
                 app.pump(0.3)
                 check_empty("已完成")
-                app.send("tab")
+                app.send("[")
                 app.pump(0.4)
                 # 空明细滚轮穿透：指针悬停明细面板滚动 → 列表视口位移
                 # 穿透断言的滚动余量：列表视口受「选中可见」不变式钳制
@@ -752,7 +774,8 @@ class UiConnsSuite(Suite):
                 app.graceful_quit()
 
     def _case_11(self):
-        """QA-UC-11 Ctrl+↑↓ 明细选择：移动/高亮/跟随/钳制/切任务复位/状态门槛 toast。"""
+        """QA-UC-11 明细选择（v1.30/FR-01-97 改键）：↑↓（并发聚焦时）移动/高亮/
+        跟随/钳制/切任务复位/状态门槛 toast/焦点移开不高亮。"""
         @self.case("QA-UC-11")
         def go(env: Env):
             app = EzrApp(env.home, save_dir=env.save_dir)
@@ -765,48 +788,67 @@ class UiConnsSuite(Suite):
                 c = _title_row(app, "并发连接")
                 inner_x = _find_in_row(app, c + 1, "序号", start_col=64)
                 assert inner_x is not None, "明细表头应可见"
-                # Ctrl+↓ ×3：选中行下移（深青背景 + 首列白字）
-                app.send("ctrl_down", "ctrl_down", "ctrl_down")
+
+                def sel_y():
+                    return next(
+                        (y for y in range(c + 2, min(c + 12, len(app.screen.display)))
+                         if _cell_bg(app, y, inner_x) == SEL_BG), None)
+                # v1.30 改键：明细选择 = ↑↓（仅并发面板聚焦时生效）——Tab×2 聚焦
+                # （列表 → 详情 → 并发；FR-01-108 面板焦点模型）
+                app.send("tab", "tab")
+                app.pump(0.4)
+                assert sel_y() is not None, "并发聚焦应显示内部选中行（仅聚焦时高亮）"
+                # ↓ ×3：选中行下移（深青背景 + 首列白字）
+                app.send("down", "down", "down")
                 app.pump(0.5)
-                sel_row = None
-                for y in range(c + 2, min(c + 12, len(app.screen.display))):
-                    if _cell_bg(app, y, inner_x) == SEL_BG:
-                        sel_row = y
-                        break
-                assert sel_row is not None, "Ctrl+↓ 后应有深青背景选中行"
+                sel_row = sel_y()
+                assert sel_row is not None, "↓ 后应有深青背景选中行"
                 assert app.cell_fg(sel_row, inner_x) in ("white", "ffffff"), \
                     f"选中行首列应白字: {app.cell_fg(sel_row, inner_x)}"
-                # Ctrl+↑：上移 1 格
-                app.send("ctrl_up")
+                # ↑：上移 1 格
+                app.send("up")
                 app.pump(0.4)
-                sel2 = next((y for y in range(c + 2, min(c + 12, len(app.screen.display)))
-                             if _cell_bg(app, y, inner_x) == SEL_BG), None)
-                assert sel2 == sel_row - 1, f"Ctrl+↑ 应上移 1 格: {sel_row} → {sel2}"
-                # 边界钳制：连续 Ctrl+↑×8 不越界（仍停在首行，不崩）
-                app.send(*(["ctrl_up"] * 8))
+                sel2 = sel_y()
+                assert sel2 == sel_row - 1, f"↑ 应上移 1 格: {sel_row} → {sel2}"
+                # 边界钳制：连续 ↑×8 不越界（仍停在首行，不崩）
+                app.send(*(["up"] * 8))
                 app.pump(0.5)
-                sel3 = next((y for y in range(c + 2, min(c + 12, len(app.screen.display)))
-                             if _cell_bg(app, y, inner_x) == SEL_BG), None)
+                sel3 = sel_y()
                 assert sel3 == c + 2, f"边界钳制应停在首行: {sel3} vs {c + 2}"
-                # 切换任务后切回：选择复位首行
+                # 焦点移开并发面板：面板不显示内部选中态（仅聚焦时高亮，v1.30）
+                app.send("tab")
+                app.pump(0.4)
+                assert sel_y() is None, \
+                    "焦点移开后明细不应显示选中高亮（仅聚焦时高亮，v1.30/FR-01-108）"
+                app.send("tab", "tab")  # 回并发聚焦
+                app.pump(0.4)
+                # 切换任务后切回：选择复位首行（切任务需列表焦点：Tab 环绕回列表）
+                app.send("tab")   # 并发 → 列表
+                app.pump(0.3)
                 app.send("down")
                 app.pump(0.4)
                 app.send("up")
                 app.pump(0.4)
-                sel4 = next((y for y in range(c + 2, min(c + 12, len(app.screen.display)))
-                             if _cell_bg(app, y, inner_x) == SEL_BG), None)
+                app.send("tab", "tab")  # 列表 → 详情 → 并发
+                app.pump(0.4)
+                sel4 = sel_y()
                 assert sel4 == c + 2, f"切任务后明细选择应复位首行: {sel4}"
-                # 已暂停任务 Ctrl+↓：状态门槛 toast
+                # 已暂停任务 ↓：状态门槛 toast（暂停走列表焦点空格）
+                app.send("tab")   # 并发 → 列表
+                app.pump(0.3)
                 app.send("space")
                 assert app.wait_for("已暂停", 6)
-                app.send("ctrl_down")
+                app.send("tab", "tab")  # → 并发聚焦
+                app.pump(0.4)
+                app.send("down")
                 assert app.wait_for("当前状态无并发明细（仅下载中/做种中可选）", 5), \
-                    "暂停态 Ctrl+↓ 应给状态门槛 toast"
+                    "暂停态 ↓ 应给状态门槛 toast"
             finally:
                 app.graceful_quit()
 
     def _case_12(self):
-        """QA-UC-12 Ctrl+B 断开守卫链：HTTP 拒绝 toast、状态门槛先行、对话框内不响应。"""
+        """QA-UC-12 B 断开守卫链（v1.30 改键，不限焦点面板）：HTTP 拒绝 toast、
+        状态门槛先行、浮层内不响应、Ctrl+C 全局直通。"""
         @self.case("QA-UC-12")
         def go(env: Env):
             app = EzrApp(env.home, save_dir=env.save_dir)
@@ -817,26 +859,27 @@ class UiConnsSuite(Suite):
                 assert app.wait_for("下载中", 8)
                 assert app.wait_for("并发连接", 6)
                 n_rows = len(_conns_data_rows(app))
-                # 下载中 HTTP 任务 Ctrl+B：协议拒绝 toast + 行数不变
-                app.send("ctrl_b")
-                assert app.wait_for("仅 BT 任务支持断开并发连接（Ctrl+B）", 5), \
-                    "HTTP 下载中 Ctrl+B 应拒绝"
+                # 下载中 HTTP 任务按 B（v1.30：断开改 B，不限焦点面板）：
+                # 协议拒绝 toast（文案随键改 …（B））+ 行数不变
+                app.send("b")
+                assert app.wait_for("仅 BT 任务支持断开并发连接（B）", 5), \
+                    "HTTP 下载中 B 应拒绝（v1.30 文案）"
                 assert len(_conns_data_rows(app)) == n_rows, "拒绝断开行数应不变"
-                # 已暂停任务 Ctrl+B：状态门槛 toast 先于协议 toast
+                # 已暂停任务按 B：状态门槛 toast 先于协议 toast
                 app.send("space")
                 assert app.wait_for("已暂停", 6)
-                app.send("ctrl_b")
+                app.send("b")
                 assert app.wait_for("当前状态无可断开的并发连接（仅下载中/做种中）", 5), \
-                    "暂停态 Ctrl+B 应给状态门槛 toast（先于协议判断）"
-                # 对话框打开：两键不响应、Ctrl+C 退出不受影响
+                    "暂停态 B 应给状态门槛 toast（先于协议判断）"
+                # 对话框打开：B 与 ↑↓ 不响应、Ctrl+C 全局直通退出（v1.31/D38）
                 app.send("A")
-                assert app.wait_for("添加下载任务", 3)
-                app.send("ctrl_b")
+                assert app.wait_for("添加任务：HTTP(S)", 3)
+                app.send("b")
                 app.pump(0.4)
-                assert_in("添加下载任务", app.text(), "对话框内 Ctrl+B 不应生效")
-                app.send("ctrl_down")
+                assert_in("添加任务：HTTP(S)", app.text(), "对话框内 B 不应生效")
+                app.send("down")
                 app.pump(0.4)
-                assert_in("添加下载任务", app.text(), "对话框内 Ctrl+↓ 不应生效")
+                assert_in("添加任务：HTTP(S)", app.text(), "对话框内 ↓ 应为字段导航（不生效断开）")
                 app.send("ctrl_c")
                 app.pump(0.6)
                 assert app.exit_code is not None, "Ctrl+C 应退出应用"
@@ -981,8 +1024,13 @@ class UiConnsSuite(Suite):
                            for y in (b[0], b[0] + 1, b[0] + 2)
                            for x in range(b[1], b[2] + 1)), \
                     "头部流量图应仍在绘制（活跃下载采样点）"
+                # v1.30/P3 页脚收敛 + v1.31 双行 chips：页脚无 G 提示项
+                #（「G 面板」判据随页脚收敛退役），仍为五枚 chips + toast 行
                 footer = "".join(rows[-4:])
-                assert re.search(r"G\s*面板", footer), f"页脚 G 提示应为「面板」: {footer!r}"
+                assert not re.search(r"G\s*面板", footer), \
+                    f"页脚不应再有 G 提示（v1.30/P3 退役）: {footer!r}"
+                assert "A 添加" in footer and "H 帮助" in footer, \
+                    f"页脚应仍为 chips 图例（v1.31）: {footer!r}"
                 # 第二次 G：两面板恢复
                 app.send("g")
                 app.pump(0.5)
@@ -1184,12 +1232,12 @@ class UiConnsSuite(Suite):
                 app.pump(0.5)
                 # ⑤ 对话框内点击「URL」字段名：被对话框分支消费、剪贴板与 toast 不变
                 app.send("A")
-                assert app.wait_for("添加下载任务", 3)
+                assert app.wait_for("添加任务：HTTP(S)", 3)
                 n_before = len(app.osc52_payloads())
                 _click(app, pos_url[0], pos_url[1])
                 app.pump(0.5)
                 assert len(app.osc52_payloads()) == n_before, "对话框内点击不应复制"
-                assert_in("添加下载任务", app.text(), "对话框应保持打开")
+                assert_in("添加任务：HTTP(S)", app.text(), "对话框应保持打开")
                 assert_not_in("已复制", app.text(), "对话框内点击不应 toast")
             finally:
                 app.graceful_quit()

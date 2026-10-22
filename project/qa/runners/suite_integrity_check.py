@@ -366,13 +366,18 @@ class IntegrityCheckSuite(Suite):
                 assert file_bytes(
                     os.path.join(env.save_dir, "ic12a.bin.sha256")) is None, \
                     "场景前置：保存目录不应有伴随文件"
-                # 清空校验码：m → 焦点0(并发) Tab×2 → 焦点2(校验码) 清空 → Tab×2 确认
+                # 清除校验（v1.32/FR-01-01 语义改版：原「清空校验码 = 清除校验」
+                # 改由 NONE 选项承载——清空文本 + SHA-256 提交被拒「校验码不可为
+                # 空」）：m → 焦点0(并发) Tab → 焦点1(校验) Enter 展开下拉 →
+                # Home 选 NONE（选中即改值、校验码实时清空）→ Enter 关下拉 →
+                # Tab → 焦点2(校验码) Enter 确认
                 app.send("m")
                 assert app.wait_for("修改任务", 3)
-                app.send(*(["tab"] * 2))
-                for _ in range(130):
-                    app.send("bs", gap=0.01)
-                app.send(*(["tab"] * 2))
+                app.send("tab")
+                app.send("enter")
+                app.send("home")
+                app.send("enter")
+                app.send("tab")
                 app.send("enter")
                 assert app.wait_for("任务参数已更新", 5), "清码修改应生效"
                 # R：无校验指令、无块重传（ts 后 fixture 无新 Range 请求）
@@ -408,10 +413,12 @@ class IntegrityCheckSuite(Suite):
                 assert app.wait_for("SHA-256 校验失败", 60)
                 app.send("m")
                 assert app.wait_for("修改任务", 3)
-                app.send(*(["tab"] * 2))
-                for _ in range(130):
-                    app.send("bs", gap=0.01)
-                app.send(*(["tab"] * 2))
+                # 清除校验走 v1.32 NONE 选项承载（同主相口径，见主相注记）
+                app.send("tab")
+                app.send("enter")
+                app.send("home")
+                app.send("enter")
+                app.send("tab")
                 app.send("enter")
                 assert app.wait_for("任务参数已更新", 5)
                 # 外部改动：截断 .downloading（台账与磁盘脱节形态）

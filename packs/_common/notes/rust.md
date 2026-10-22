@@ -692,11 +692,28 @@ group_imports = "StdExternalCrate"
   解析产物落 `.work/tmp/`）→ 立即删 llvm-cov-target 还盘 → 终验走主 target 增量」
   排布——度量解析产物与构建目录分离，删除构建目录不损失已提取数据；跳过此排布
   会让终验在链接期 `cc failed`（磁盘满的典型症状，非测试失败），先查 df 再归因。
+  **单调用超时预算不够时用 `--no-report` 分块累积 profraw，但必须同构建指纹**：
+  大测试集插桩超单调用预算时，按测试目标分块 `cargo llvm-cov --no-report`（profraw
+  落 coverage 目录累积），末了 `cargo llvm-cov report --lcov --branch` 统一合并——
+  但跨块构建指纹必须一致：CARGO_INCREMENTAL 切换/RUSTFLAGS 变化触发重链，旧 profraw
+  与新二进制混排会报 `malformed instrumentation profile data: symbol name is empty`
+  且无法定位哪个文件——切换任何构建环境变量后全量重跑（先 `rm *.profraw`）。
+  另外报告的对象列表是 build/<hash>/out 的全量 glob：磁盘满被杀的链接会残留损坏
+  `.tmp*` 产物与陈旧 hash 目录一并入选（表象同名报错但根因是对象列表污染）——
+  按 mtime 清理早于统一构建起点的 `build/<crate>/<旧hash>/` 目录后重跑 report。
+  报告期错误先分辨「profraw 坏」还是「对象列表脏」：后者删目录即愈，不必重跑测试。
 
 - **PMD 7 的 cpd 子命令用 `--dir`（`--files` 已废弃）**：`pmd cpd -l rust
   --minimum-tokens 50 --dir <src>`；退出码 4 = 发现重复（正常语义，不是失败），
   0 = 无重复。重复块计数口径随目录参数变化，src-only 与 src+tests 是两套数字
   （对账纪律见 engineering.md「度量数字对账先核口径」）。
+  **GitHub 不可达沙箱的 PMD 7 组装路径（Maven Central 直连）**：repo1.maven.org
+  直连可达时无需 bin zip——`pmd-cli` + `pmd-rust`（外加 pmd-core 传递依赖）三个
+  artifact 即可组装 CPD：Maven（TUNA apache 镜像取二进制包）`dependency:copy-
+  dependencies` 收 jar 到 lib/，启动器 `java -cp "lib/*" net.sourceforge.pmd.cli.
+  PmdCli cpd ...`；**勿依赖 pmd-dist**——它会拉全语言模块 ~150MB（数十语言 jar），
+  单次解析超时。阳性对照先行：两个 >50 token 同构文件验证 CPD 真能报重复，
+  再采信零发现结果。
 
 - **llvm-cov 的 lcov 输出是标准 lcov 格式（冒号+逗号混合分隔）**：记录行为
   `FN:<line>,<name>`、`BRDA:<line>,<block>,<branch>,<taken>`、`DA:<line>,<count>`——

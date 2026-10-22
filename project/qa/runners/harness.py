@@ -136,7 +136,7 @@ NAMED_KEYS = {
     "up": b"\x1b[A", "down": b"\x1b[B", "right": b"\x1b[C", "left": b"\x1b[D",
     "enter": b"\r", "esc": b"\x1b", "tab": b"\t", "space": b" ",
     "pgup": b"\x1b[5~", "pgdn": b"\x1b[6~", "home": b"\x1b[H", "end": b"\x1b[F",
-    "bs": b"\x7f", "ctrl_c": b"\x03",
+    "bs": b"\x7f", "ctrl_c": b"\x03", "backtab": b"\x1b[Z",
     # Ctrl 组合键（04-ui-conns 并发明细交互，FR-01-97：Ctrl+↑↓ 选择、Ctrl+B 断开）
     "ctrl_up": b"\x1b[1;5A", "ctrl_down": b"\x1b[1;5B",
     "ctrl_b": b"\x02",
@@ -153,6 +153,10 @@ def key_bytes(k: str) -> bytes:
     if k.startswith("mup:"):
         _, x, y = k.split(":")
         return f"\x1b[<0;{x};{y}m".encode()
+    if k.startswith("mdrag:"):
+        # 左键按住移动（SGR motion，button 32）：窗口/滑块拖拽的随动事件
+        _, x, y = k.split(":")
+        return f"\x1b[<32;{x};{y}M".encode()
     if k.startswith("mwu:"):
         _, x, y = k.split(":")
         return f"\x1b[<64;{x};{y}M".encode()
@@ -700,7 +704,9 @@ def add_task_via_dialog(app: "EzrApp", env: "Env", url: str, conns: str = "",
     避免落盘脏测与重复守卫）显式传独立子目录。
     """
     app.send("A")
-    assert app.wait_for("添加下载任务", 3), "添加对话框未打开"
+    # v1.32 标题更名：锚定对话框标题（勿锚「添加下载任务」——空态引导文案
+    # 「按 A 添加下载任务」含同文，空列表时会把未打开误判为已打开）
+    assert app.wait_for("添加任务：HTTP(S)", 3), "添加对话框未打开"
     app.type_text(url)
     app.send("tab")
     # 哨兵语义：None=env.save_dir；""=字段留空（走默认 download_dir）；
@@ -709,12 +715,21 @@ def add_task_via_dialog(app: "EzrApp", env: "Env", url: str, conns: str = "",
     # 字段序：URL → 保存到 → 并发 → 校验（下拉）→ 校验码
     if conns:
         app.send("tab")
+        # v1.30/FR-01-01：URL 输入自动回填默认并发（未手动改过时）——
+        # 先退格清空回填值（≤2 位）再输入目标并发，防 "4"+"3"→"43" 拼接
+        app.send("bs", "bs")
         app.type_text(conns)
         tabs_to_ck = 2  # 当前在并发：校验、校验码
     else:
         tabs_to_ck = 3  # 当前在保存到：并发、校验、校验码
     if ck_value:
-        app.send(*(["tab"] * tabs_to_ck))
+        # v1.32/FR-01-01：校验下拉默认 NONE，NONE 选中时校验码实时清空且
+        # 不可输入（逐键/粘贴同拦截）——先在校验字段展开下拉选 SHA-256
+        # （↓×4 自 NONE 起选中即改值），Tab 关下拉并跳校验码字段再输码
+        app.send(*(["tab"] * (tabs_to_ck - 1)))  # 落在校验字段
+        app.send("enter")                        # 展开下拉（选中即改值）
+        app.send(*(["down"] * 4))                # NONE→MD5→SHA-1→SHA-224→SHA-256
+        app.send("tab")                          # 关下拉，焦点跳校验码
         app.type_text(ck_value)
     app.send("enter")
     app.pump(0.3)
@@ -784,8 +799,9 @@ def task_pct(app: "EzrApp") -> float | None:
 
 def select_completed(app: "EzrApp", needles: list[str],
                      max_moves: int = 8) -> set[str]:
-    """Tab 切「已完成」页签，Home 起步逐个选中直至断言集合全部命中。"""
-    app.send("tab")
+    """] 切「已完成」页签（v1.30：Tab 改面板焦点，页签键 ]/[/T 承载），
+    Home 起步逐个选中直至断言集合全部命中。"""
+    app.send("]")
     app.pump(0.4)
     app.send("home")
     app.pump(0.3)

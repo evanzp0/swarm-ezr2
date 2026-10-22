@@ -117,7 +117,7 @@ class NamedProxySuite(Suite):
     def _dropdown_options(app: EzrApp) -> str:
         """展开添加对话框代理下拉并返回全画面文本（选项行内嵌其中）。"""
         app.send("A")
-        assert app.wait_for("添加下载任务", 3), "添加对话框未打开"
+        assert app.wait_for("添加任务：HTTP(S)", 3), "添加对话框未打开"
         app.send(*(["tab"] * 5))  # URL→目录→并发→校验→校验码→代理
         app.send("enter")         # 展开代理下拉
         assert app.wait_for("选择代理", 3), "代理下拉未展开"
@@ -132,7 +132,7 @@ class NamedProxySuite(Suite):
                        save_dir: str | None = None) -> None:
         """添加任务并选中代理下拉第 option_index 项（0 = 直连）。"""
         app.send("A")
-        assert app.wait_for("添加下载任务", 3), "添加对话框未打开"
+        assert app.wait_for("添加任务：HTTP(S)", 3), "添加对话框未打开"
         app.type_text(url)
         app.send("tab")                                  # URL(0)→目录(1)
         app.type_text(env.save_dir if save_dir is None else save_dir)

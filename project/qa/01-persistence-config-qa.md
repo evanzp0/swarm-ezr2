@@ -21,7 +21,7 @@
 | QA-PC-06 | 01-persistence-config-06 | download_slots=2 后添加 4 任务 | 前 2 下载；队列栏「下载槽位 n/2」；其余排队 |
 | QA-PC-07 | 01-persistence-config-07 | 运行中二次启动 ezr | 第二实例提示「ezr 已在运行」非零退出；首实例正常；全程单实例（AC-11） |
 | QA-PC-08 | 01-persistence-config-08 | 下载至 30% 按 Q→重启 | 断点保留（sidecar 完整）；终端恢复；重启续传完成（AC-9） |
-| QA-PC-09 | 01-persistence-config-09 | 下载中分别以 Esc / Ctrl+C 退出 | 语义同 Q（停传、保断点、存注册表）；终端无花屏（AC-9） |
+| QA-PC-09 | 01-persistence-config-09 | 下载中分别按 Esc / Ctrl+C | Esc 主界面无任何动作（应用不退出、任务继续下载；v1.30/01-tui-display-10，退出仅 Q/Ctrl+C），收尾以 Q 优雅退出验证停传/保断点/存注册表；Ctrl+C 优雅退出（语义同 Q：停传、保断点、存注册表）；终端无花屏（AC-9）。注：本行 01 场景标题「Esc 与 Ctrl+C 优雅退出」为 v1.30 前旧口径，与 01-tui-display-10 冲突，待操作者裁决（QA 轮按实现与 01-tui-display v1.30 口径执行） |
 
 ## 通过准则
 

@@ -55,7 +55,7 @@ class AddTaskSuite(Suite):
     # -- 用例 -----------------------------------------------------------------
 
     def run(self) -> list[CaseResult]:
-        for i in range(1, 19):
+        for i in range(1, 20):
             getattr(self, f"_case_{i:02d}")()
         return self.results
 
@@ -87,113 +87,156 @@ class AddTaskSuite(Suite):
                 app.graceful_quit()
 
     def _case_02(self):
-        """QA-01-02 算法下拉展开与选择：7 算法齐备；选 SHA-512 后占位 128 位。"""
+        """QA-01-02 算法下拉（v1.32 重写）：默认 NONE 禁输入；8 项齐备；选 SHA-512 可输入。
+
+        规程 v1.32 口径：默认选中 NONE（校验码字段清空、逐键/粘贴均不可输入）；
+        下拉 8 项 = NONE + 7 算法；URL/校验码字段无占位提示、校验行无
+        `Enter 选择算法` 尾注（v1.32/P3 提示信息删除）；↑↓ 移动选中即时改值，
+        回 NONE 校验码实时清空；选中 SHA-512 后校验码可输入、Enter 确认收起。
+        """
         @self.case("QA-01-02")
         def go(env: Env):
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 app.send("A")
-                assert app.wait_for("添加下载任务", 3)
+                assert app.wait_for("添加任务：HTTP(S)", 3)
                 app.type_text(env.fixture.url("small.bin"))
                 app.send("tab", "tab", "tab")  # 焦点至校验字段
+                # v1.32：默认 NONE + 占位提示删除（URL/校验码占位、尾注全 removed）
+                assert_in("NONE", app.text(), "默认应选中 NONE（v1.32）")
+                assert_not_in("位十六进制", app.text(), "占位提示应已删除（v1.32/P3）")
+                assert_not_in("Enter 选择算法", app.text(), "校验行尾注应已删除（v1.32/P3）")
                 app.send("enter")  # 展开下拉
                 assert app.wait_for("MD5", 3), "下拉应展开"
                 text = app.text()
+                assert_in("NONE", text, "下拉首行应含 NONE（v1.32 八项）")
                 for algo in ("MD5", "SHA-1", "SHA-224", "SHA-256",
                              "SHA-384", "SHA-512", "Adler-32"):
                     assert_in(algo, text, f"下拉应含 {algo}")
-                # End 到末项 Adler-32 → 上移到 SHA-512（或逐 ↓）；用 End+up 序列
+                # ↑↓ 即时改值：↓ 到 MD5 → Home 回 NONE（校验码实时清空）→
+                # End 末项 Adler-32 → ↑ 到 SHA-512
+                app.send("down")
+                app.pump(0.2)
+                app.send("home")
+                app.pump(0.2)
                 app.send("end")
                 app.pump(0.2)
                 app.send("up")
                 app.pump(0.2)
-                app.send("enter")  # 选中 SHA-512
+                app.send("enter")  # 选中 SHA-512 并收起
                 app.pump(0.3)
                 # 对话框居中渲染，不在右栏详情区：用整屏断言
                 assert_in("SHA-512", app.text(), "选中 SHA-512 应生效")
-                assert app.wait_for("128 位十六进制", 3), "校验码占位应显示 128 位"
+                # 选中 SHA-512 后校验码可输入（NONE 锁解除）
+                app.send("tab")  # 校验 → 校验码
+                app.type_text("ff00")
+                assert_in("ff00", app.text(), "SHA-512 选中后校验码可输入")
             finally:
                 app.graceful_quit()
 
     def _case_03(self):
-        """QA-01-03 校验码含 zz/-：产品逐键过滤非十六进制字符（输入即拒绝）。
-
-        口径注记（已裁决）：操作者裁决改规程文案随实现——非法输入不污染校验值的
-        规格意图以更强形式（输入即拒绝）成立；Gherkin 场景 03 与规程均已改为
-        逐键过滤语义（纯非法输入字段留空，确认无格式报错，空值按无校验创建）。
-        """
+        """QA-01-03（v1.32 同步）选 MD5 输入 zz/-：逐键过滤字段保持空；确认被拒必填。"""
         @self.case("QA-01-03")
         def go(env: Env):
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 app.send("A")
-                assert app.wait_for("添加下载任务", 3)
+                assert app.wait_for("添加任务：HTTP(S)", 3)
                 app.type_text(env.fixture.url("five-m.bin?speed=400000"))
                 app.send("tab")
                 app.type_text(env.save_dir)
-                app.send("tab", "tab", "tab")
+                app.send("tab", "tab")          # 保存到1 → 并发2 → 校验3
+                app.send("enter")               # 展开下拉
+                app.send("home")                # NONE（基点）
+                app.send("down")                # MD5（v1.32 表序：NONE 后第 1）
+                app.send("enter")               # 选中 MD5 并收起（焦点留 3）
+                app.send("tab")                 # 校验3 → 校验码4
                 app.type_text("zz" + "-" * 30)
                 app.pump(0.3)
-                # 非法字符应被逐键拒绝：字段保持空（占位符仍显示）
-                assert_in("位十六进制（可留空）", app.text(), "非法字符应被拒绝、字段留空")
+                # 非法字符逐键拒绝：字段保持空；v1.32 占位提示已删除——
+                # 以「无 hex 进入字段」为空判据（toast/字段渲染无残留值）
+                assert_not_in("位十六进制（可留空）", app.text(),
+                              "占位提示应已删除（v1.32/P3）")
                 app.send("enter")
-                assert app.wait_for("（无校验）", 30), "空校验码应正常创建并无校验完成"
+                # v1.32 必填：MD5 空校验码确认被拒——toast 逐字 + 对话框未关闭
+                assert app.wait_for("MD5 校验码不可为空", 5), \
+                    "空校验码确认应被拒（v1.32 必填）"
+                assert_in("添加任务：HTTP(S)", app.text(), "对话框未关闭")
             finally:
                 app.graceful_quit()
 
     def _case_04(self):
-        """QA-01-04 位数不符：SHA-256 配 32 位 / MD5 配 64 位均报错。"""
+        """QA-01-04 位数不符（v1.32：算法显式选择，无「默认 SHA-256」）：均报错。"""
         @self.case("QA-01-04")
         def go(env: Env):
-            for algo_sel, want, wrong in (("SHA-256（默认）", "64", "b" * 32),
-                                          ("MD5", "32", "c" * 64)):
+            # v1.32：NONE 为默认——SHA-256/MD5 都须在下拉显式选择
+            # （Home 归 NONE 基点后 ↓×N：MD5=1、SHA-256=4）
+            for downs, want, wrong in ((4, "64", "b" * 32), (1, "32", "c" * 64)):
                 app = EzrApp(env.home, save_dir=env.save_dir)
                 try:
                     app.send("A")
-                    assert app.wait_for("添加下载任务", 3)
+                    assert app.wait_for("添加任务：HTTP(S)", 3)
                     app.type_text(env.fixture.url("small.bin"))
-                    app.send("tab", "tab", "tab")
-                    if algo_sel != "SHA-256（默认）":
-                        app.send("enter")
-                        app.send("home")
-                        app.pump(0.2)
-                        app.send("enter")  # 选 MD5（表首）
-                        app.pump(0.3)
-                    app.send("tab")  # 焦点至校验码
+                    app.send("tab", "tab", "tab")  # 焦点至校验字段
+                    app.send("enter")              # 展开下拉
+                    app.send("home")               # NONE 基点
+                    app.send(*(["down"] * downs))  # → SHA-256 / MD5
+                    app.send("enter")              # 选中并收起
+                    app.send("tab")                # 焦点至校验码
                     app.type_text(wrong)
                     app.send("enter")
                     assert app.wait_for("位十六进制", 5), \
-                        f"{algo_sel} 位数不符应报错（期望 {want} 位）"
-                    assert_in("添加下载任务", app.text(), "对话框应保持打开")
+                        f"位数不符应报错（期望 {want} 位）"
+                    assert_in("添加任务：HTTP(S)", app.text(), "对话框应保持打开")
                 finally:
                     app.graceful_quit()
 
     def _case_05(self):
-        """QA-01-05 ①校验码留空=无校验；②大写 MD5 统一小写显示前缀 d869db7f。"""
+        """QA-01-05（v1.32 三臂）①NONE 直接确认=无校验；②MD5 留空被拒；③大写 MD5 小写前缀。"""
         @self.case("QA-01-05")
         def go(env: Env):
-            # ① 留空（门控保持下载中，「无校验」列表行可见）
+            # ① 默认 NONE 直接确认（校验码禁输入）→ 任务创建、详情「无校验」
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(
                     app, env, env.fixture.url("five-m.bin?speed=400000"))
-                assert app.wait_for("（无校验）", 30), "留空应无校验完成"
+                assert app.wait_for("（无校验）", 30), "NONE 应无校验完成"
                 app.graceful_quit()
             except Exception:
                 app.graceful_quit()
                 raise
-            # ② 大写 MD5 → 小写前缀
+            # ② 选 MD5 留空确认 → 提交被拒 toast（v1.32 必填）
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                app.send("A")
+                assert app.wait_for("添加任务：HTTP(S)", 3)
+                app.type_text(env.fixture.url("small.bin"))
+                app.send("tab", "tab", "tab", "enter")  # 展开下拉（焦点 3）
+                app.send("home")                        # NONE 基点
+                app.send("down")                        # MD5
+                app.send("enter")                       # 选中并收起（焦点留 3）
+                app.send("tab")                         # 校验3 → 校验码4
+                app.send("enter")                       # 校验码留空确认（被拒）
+                assert app.wait_for("MD5 校验码不可为空", 5), \
+                    "MD5 留空应被拒（v1.32 必填）"
+                assert_in("添加任务：HTTP(S)", app.text(), "对话框应保持打开")
+                app.send("esc")
+                app.pump(0.3)
+            finally:
+                app.graceful_quit()
+            # ③ 大写 MD5 → 小写前缀
             # 用限速 ten-m（25s 窗口）：1KB 文件秒完成会使「（待校验）」
             # 状态断言与完成竞速（实测偶发 F）；断言须落在稳定下载中段。
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 app.send("A")
-                assert app.wait_for("添加下载任务", 3)
+                assert app.wait_for("添加任务：HTTP(S)", 3)
                 app.type_text(env.fixture.url("ten-m.bin?speed=400000"))
                 app.send("tab", "tab", "tab", "enter")
                 app.send("home")
+                app.send("down")  # MD5（v1.32 表序）
                 app.pump(0.2)
-                app.send("enter")  # MD5
+                app.send("enter")
                 app.pump(0.3)
                 app.send("tab")
                 app.type_text(MD5_UPPER)
@@ -352,7 +395,7 @@ class AddTaskSuite(Suite):
 
             def manual_add(url: str, dir_text: str) -> None:
                 app.send("A")
-                assert app.wait_for("添加下载任务", 3)
+                assert app.wait_for("添加任务：HTTP(S)", 3)
                 app.type_text(url)
                 app.send("tab")
                 if dir_text:
@@ -471,7 +514,7 @@ class AddTaskSuite(Suite):
                 assert n1 == 1, f"首次添加后任务数 1: {n1}"
                 # 再次添加相同 URL 与目录
                 app.send("A")
-                assert app.wait_for("添加下载任务", 3)
+                assert app.wait_for("添加任务：HTTP(S)", 3)
                 app.type_text(env.fixture.url("five-m.bin?speed=500000"))
                 app.send("tab")
                 app.type_text(env.save_dir)
@@ -496,7 +539,7 @@ class AddTaskSuite(Suite):
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 app.send("A")
-                assert app.wait_for("添加下载任务", 3)
+                assert app.wait_for("添加任务：HTTP(S)", 3)
                 os.write(app.fd, b"\x1b[200~" + url.encode() + b"\x1b[201~")
                 app.pump(0.6)
                 assert_in(url[-40:], app.text(), "字段应完整显示粘贴内容（尾部可见）")
@@ -512,7 +555,8 @@ class AddTaskSuite(Suite):
     def _case_18(self):
         """QA-01-18 仅添加按钮（FR-01-103/D28/D29）：按钮行、焦点序、落态、toast、校验链。
 
-        ①按钮行 [ 立即下载 ] [ 仅添加 ] [ 取消 ] 且提示行含 Enter 立即下载，
+        ①按钮行 [ 立即下载 ] [ 仅添加 ] [ 取消 ]，对话框无底部操作提示行
+        （v1.30/FR-01-107：验无 Enter 立即下载 等提示文字，交互说明收敛帮助窗口），
         Tab 环绕可达三钮（焦点 6/7/8，Add nfocus=9）；②合法 URL 激活「仅添加」：
         任务创建且状态「已暂停」、不占槽位不下载（下载槽位 0/5、目标文件与
         .downloading 未落盘）、toast 含「已添加任务」与「已暂停，按空格开始下载」
@@ -528,21 +572,22 @@ class AddTaskSuite(Suite):
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 app.send("A")
-                assert app.wait_for("添加下载任务", 3)
+                assert app.wait_for("添加任务：HTTP(S)", 3)
                 text = app.text()
                 for btn in ("[ 立即下载 ]", "[ 仅添加 ]", "[ 取消 ]"):
                     assert_in(btn, text, f"按钮行应含 {btn}（FR-01-103）")
-                assert_in("Enter 立即下载", text, "提示行应含 Enter 立即下载")
+                # v1.30/FR-01-107：对话框无底部操作提示行（交互说明收敛帮助窗口）
+                assert_not_in("Enter 立即下载", text, "提示行应已删除（v1.30/P3）")
                 # Tab 环绕：焦点从 URL 起经全部字段与三钮后回到首字段
                 app.send(*(["tab"] * 9))
                 app.pump(0.2)
-                assert_in("添加下载任务", app.text(), "Tab×9 后应环绕回 URL 字段（对话框仍开）")
+                assert_in("添加任务：HTTP(S)", app.text(), "Tab×9 后应环绕回 URL 字段（对话框仍开）")
                 app.send("esc")
                 app.pump(0.3)
                 # ② 合法 URL + 仅添加
                 target = os.path.join(env.save_dir, "one-m.bin")
                 app.send("A")
-                assert app.wait_for("添加下载任务", 3)
+                assert app.wait_for("添加任务：HTTP(S)", 3)
                 app.type_text(env.fixture.url("one-m.bin?speed=200000"))
                 app.send("tab")
                 app.type_text(env.save_dir)
@@ -576,16 +621,57 @@ class AddTaskSuite(Suite):
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 app.send("A")
-                assert app.wait_for("添加下载任务", 3)
+                assert app.wait_for("添加任务：HTTP(S)", 3)
                 app.type_text("ftp://example.invalid/file.bin")
                 app.send(*(["tab"] * 6))
                 app.send("enter")
                 app.pump(0.5)
                 text = app.text()
-                assert_in("添加下载任务", text, "对话框应保持打开（校验拒绝不关闭）")
+                assert_in("添加任务：HTTP(S)", text, "对话框应保持打开（校验拒绝不关闭）")
                 assert_in("仅支持 http", text, "应报仅支持 http/https（校验链与立即下载一致）")
                 assert_not_in("已添加任务", text, "不应创建任务")
                 assert_in("下载槽位 0/5", text, "不应有任务获槽")
+            finally:
+                app.graceful_quit()
+
+    def _case_19(self):
+        """QA-01-19（v1.30/FR-01-01 注记）URL 输入自动回填默认并发与 Esc 取消。
+
+        规程口径：开框并发留空 → 逐字输入合法 URL → 并发字段自动回填 4
+        （HTTP 默认；BT 20 为 phase-02 预留）→ 手动改 6 后继续改 URL 不再被
+        回填（仅未手动改过时同步）→ Esc 关闭对话框且无任务创建。
+        """
+        @self.case("QA-01-19")
+        def go(env: Env):
+            import re
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                app.send("A")
+                assert app.wait_for("添加任务：HTTP(S)", 3)
+                # 逐字输入合法 URL（type_text 即逐字注入）：并发自动回填 4
+                app.type_text(env.fixture.url("small.bin"))
+                app.pump(0.3)
+                assert re.search(r"并发\s*>\s*4\b", app.text()), \
+                    "URL 输入后并发应自动回填 4（v1.30/FR-01-01）"
+                # 手动改 6：URL → 保存到 → 并发，退格清回填值再输入
+                app.send("tab", "tab")  # URL0 → 保存到1 → 并发2
+                app.send("bs")
+                app.type_text("6")
+                app.pump(0.2)
+                assert re.search(r"并发\s*>\s*6\b", app.text()), "并发应改为 6"
+                # 继续修改 URL：回 URL 字段（BackTab×2）删尾字重输 → 并发保持 6
+                os.write(app.fd, b"\x1b[Z\x1b[Z")  # BackTab×2：并发 → 保存到 → URL
+                app.pump(0.2)
+                app.send("bs")
+                app.type_text("n")
+                app.pump(0.3)
+                assert re.search(r"并发\s*>\s*6\b", app.text()), \
+                    "手动改过并发后改 URL 不应再回填（仅未手动改过时同步）"
+                # Esc 取消：对话框关闭、无任务创建
+                app.send("esc")
+                app.pump(0.4)
+                assert_not_in("添加任务：HTTP(S)", app.text(), "对话框应关闭")
+                assert_in("正在下载 (0) │ 已完成 (0)", app.text(), "无任务创建")
             finally:
                 app.graceful_quit()
 

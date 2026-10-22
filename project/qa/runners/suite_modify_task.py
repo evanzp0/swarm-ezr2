@@ -8,7 +8,7 @@
 （v1.16/D30 改判）**——确定后约 1 秒内连接数降至目标值（不等块边界）。
 焦点/字段口径（product dialogs.rs）：Add 六行 URL/保存到/并发/校验/校验码/代理
 （立即下载 6 仅添加 7 取消 8）；Modify 四行 并发0/校验1/校验码2/代理3（确认 4 取消 5）；
-添加对话框校验算法默认 SHA-256（ck_type=3）。
+v1.32：校验下拉 8 项默认 NONE（校验码禁输入），设/改校验值须先在下拉选算法。
 
 v1.17 同步（QA v138 会话）：新增 QA-MT-09（对话框粘贴，FR-01-06 v1.17 修订）——
 Add/Modify 文本字段同权接收 bracketed paste：校验码仅 hex ≤128 位（CAP_CK_HEX）、
@@ -91,8 +91,20 @@ class ModifyTaskSuite(Suite):
 
     @staticmethod
     def _edit_ck_value(app: EzrApp, value: str) -> None:
-        """从并发 Tab×2 到校验码字段（焦点 2）清空重输（焦点留在 2）。"""
-        app.send(*(["tab"] * 2))
+        """设/改校验为 SHA-256 并重输校验码（焦点留在校验码 2）。
+
+        v1.32/FR-01-01 语义：校验下拉默认 NONE（无校验任务修改框预填 NONE）
+        且 NONE 选中时校验码禁输入——设值必须先在校验字段（焦点 1）展开下拉
+        选算法：Home 归 NONE（选中即改值、校验码实时清空）→ ↓×4 到 SHA-256
+        （与预填算法无关的确定性路径）→ Enter 关下拉（焦点留 1）→ Tab 到
+        校验码（焦点 2）→ 清残值重输。
+        """
+        app.send("tab")                 # 并发0 → 校验1
+        app.send("enter")               # 展开算法下拉
+        app.send("home")                # 归 NONE（清校验码）
+        app.send(*(["down"] * 4))       # NONE→MD5→SHA-1→SHA-224→SHA-256
+        app.send("enter")               # 关下拉（焦点留校验 1）
+        app.send("tab")                 # 校验1 → 校验码2
         for _ in range(130):
             app.send("bs", gap=0.01)
         if value:
@@ -145,6 +157,23 @@ class ModifyTaskSuite(Suite):
                 # 再次打开：参数未被取消路径改动
                 _open_modify(app)
                 assert re.search(r"并发\s*>\s*3\b", app.text()), "取消后并发不应变化"
+                app.send("esc")
+                app.pump(0.3)
+                # v1.32 NONE 预填臂（规程第二相）：无校验任务按 m → 预填 NONE、
+                # 校验码输入框空且禁输入（逐键拦截）
+                add_task_via_dialog(
+                    app, env, env.fixture.url("three-m.bin?speed=300000"),
+                    save_dir=os.path.join(env.save_dir, "t2"))
+                assert app.wait_for("下载中", 8), "无校验任务应在下载中"
+                app.send("down")   # 选中第二行（新任务；已在末行时钳制原地）
+                app.pump(0.3)
+                _open_modify(app)
+                text = app.text()
+                assert_in("NONE", text, "无校验任务算法应预填 NONE（v1.32）")
+                app.send(*(["tab"] * 2))   # 并发0 → 校验1 → 校验码2
+                app.type_text("abcd1234")
+                app.pump(0.3)
+                assert_not_in("abcd", app.text(), "NONE 选中时校验码应禁输入")
                 app.send("esc")
                 app.pump(0.3)
             finally:
@@ -348,13 +377,21 @@ class ModifyTaskSuite(Suite):
                 app.graceful_quit()
 
     def _case_05(self):
-        """QA-MT-05 清空校验码确定：完成无校验直接已完成；详情无校验行。"""
+        """QA-MT-05 v1.32 双臂：NONE 臂 = 清除校验唯一路径；SHA-256 留空臂 = 提交被拒。
+
+        规程 v1.32 重写口径：①NONE 臂——算法选 NONE（校验码实时清空禁输入）
+        确定 = 清除校验，完成无校验直接已完成、详情无校验期望行；②SHA-256
+        留空臂——保持算法清空校验码文本确定被拒，toast
+        `⚠ SHA-256 校验码不可为空（需 64 位十六进制）` + 聚焦校验码字段
+        （原「清空校验码 = 清除校验」路径退役）。
+        """
         @self.case("QA-MT-05")
         def go(env: Env):
             ck = sha256_hex(expected_content(FIVE_M))  # 与下载文件匹配
             app = EzrApp(env.home, save_dir=env.save_dir)
             self._cur_app = app
             try:
+                # -- 臂①：NONE 清除路径 ------------------------------------
                 add_task_via_dialog(
                     app, env, env.fixture.url("five-m.bin?speed=300000"),
                     conns="1", ck_value=ck)
@@ -362,17 +399,39 @@ class ModifyTaskSuite(Suite):
                 d = detail_text(app)
                 assert_in("校验", d, "前置：详情应有校验行")
                 _open_modify(app)
-                self._edit_ck_value(app, "")  # 清空校验码
-                _confirm(app, tabs=2)
-                assert app.wait_for("任务参数已更新", 3), "清空校验码应生效"
+                app.send("tab")            # 并发0 → 校验1
+                app.send("enter")          # 展开算法下拉
+                app.send("home")           # 选 NONE（选中即改值、校验码清空）
+                app.send("enter")          # 关下拉（焦点留校验 1）
+                app.send("tab")            # 校验1 → 校验码2（应空且禁输入）
+                app.type_text("ff" * 8)
+                app.pump(0.2)
+                assert_not_in("ffffff", app.text(), "NONE 选中校验码应禁输入")
+                app.send("enter")          # 校验码2 Enter = 确认
+                assert app.wait_for("任务参数已更新", 3), "NONE 清除应生效"
                 assert app.wait_for("（无校验）", 35), "完成应无校验直接已完成"
-                # 已完成页签选中该任务：详情应无校验行
-                app.send("tab")
+                # 已完成页签选中该任务：详情应无校验行（v1.30 页签键 ]）
+                app.send("]")
                 app.pump(0.3)
                 app.send("down")
                 app.pump(0.3)
                 d = detail_text(app)
                 assert_not_in("校验", d, "详情应无校验行")
+                app.graceful_quit()
+                # -- 臂②：SHA-256 留空提交被拒 ------------------------------
+                sub2 = os.path.join(env.save_dir, "b2")
+                app = EzrApp(env.home, save_dir=env.save_dir)
+                self._cur_app = app
+                add_task_via_dialog(
+                    app, env, env.fixture.url("three-m.bin?speed=300000"),
+                    save_dir=sub2)
+                assert app.wait_for("下载中", 8), "臂②任务应在下载中"
+                _open_modify(app)
+                self._edit_ck_value(app, "")  # 选 SHA-256、清空校验码文本
+                _confirm(app, tabs=2)
+                assert app.wait_for("校验码不可为空", 3), \
+                    "SHA-256 留空确定应被拒（v1.32 必填）"
+                assert_in("修改任务", app.text(), "被拒后对话框应保持打开")
             finally:
                 app.graceful_quit()
 
@@ -414,8 +473,8 @@ class ModifyTaskSuite(Suite):
             try:
                 add_task_via_dialog(app, env, env.fixture.url("small.bin"))
                 assert app.wait_for("已完成", 10)
-                # 已完成任务在第二页签：切换并选中后再按 m
-                app.send("tab")
+                # 已完成任务在第二页签：切换并选中后再按 m（v1.30 页签键 ]）
+                app.send("]")
                 app.pump(0.3)
                 app.send("down")
                 app.pump(0.3)
@@ -522,7 +581,8 @@ class ModifyTaskSuite(Suite):
                 text = app.text()
                 assert re.search(r"并发\s*>\s*34\b", text), \
                     f"并发应钳制 2 位（34 不再追加）: {text[:200]!r}"
-                # ① 校验码字段（焦点 2）粘贴含杂质超长摘要：先清空再粘贴
+                # ① 校验码字段（焦点 2）粘贴含杂质超长摘要：先选 SHA-256
+                #    （v1.32：NONE 选中时校验码禁输入，粘贴同拦截）再粘贴
                 self._edit_ck_value(app, "")
                 junk = ("中\t文\n" + "zz" + "a1B2c3D4" * 20)  # 控制字符+非hex+hex 160 位
                 os.write(app.fd, b"\x1b[200~" + junk.encode() + b"\x1b[201~")

@@ -598,9 +598,11 @@ class ResumeSidecarSuite(Suite):
                 # 已完成任务同语义
                 app.send("home")
                 app.pump(0.3)
-                # 切到已完成页签选中 small.bin 删除
-                app.send("tab")
+                # 切到已完成页签选中 small.bin 删除（v1.30 页签键 ]）
+                app.send("]")
                 app.pump(0.4)
+                app.send("home")
+                app.pump(0.3)
                 app.send("D")
                 assert app.wait_for("删除任务", 3)
                 app.send("tab")
@@ -627,7 +629,7 @@ class ResumeSidecarSuite(Suite):
             assert app.wait_for("已删除任务（保留文件）", 6)
             # 重加同 URL 同目录
             app.send("A")
-            assert app.wait_for("添加下载任务", 3)
+            assert app.wait_for("添加任务：HTTP(S)", 3)
             app.type_text(env.fixture.url(f"{name}?speed=800000"))
             app.send("tab")
             app.type_text(env.save_dir)
@@ -681,7 +683,7 @@ class ResumeSidecarSuite(Suite):
             self._wait_sidecar(env, name, timeout=5)  # 超时即断言失败：sidecar 应保留
             # 重加同推导名异 URL + 相同保存目录
             app.send("A")
-            assert app.wait_for("添加下载任务", 3)
+            assert app.wait_for("添加任务：HTTP(S)", 3)
             app.type_text(env.fixture.url(f"{new_rel}?speed=800000"))
             app.send("tab")
             app.type_text(env.save_dir)
