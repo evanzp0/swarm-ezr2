@@ -97,7 +97,9 @@ impl HostsFile {
 }
 
 /// 双腿答案合并（D40②）：IPv4 前置、跨腿去重、保序。
-fn merge_answers(v4: Vec<IpAddr>, v6: Vec<IpAddr>) -> Vec<IpAddr> {
+/// `pub(crate)`：architect v146 属性测试可达性门面 re-export 前置条件
+/// （notes/rust.md「门面 re-export」手法①；私有模块内不外泄，窄接口不受影响）。
+pub(crate) fn merge_answers(v4: Vec<IpAddr>, v6: Vec<IpAddr>) -> Vec<IpAddr> {
     let mut out: Vec<IpAddr> = Vec::with_capacity(v4.len() + v6.len());
     for ip in v4.into_iter().chain(v6) {
         if !out.contains(&ip) {

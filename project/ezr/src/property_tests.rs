@@ -42,12 +42,21 @@
 //!   已卫生化 / 优先级链逐级回退）；
 //! - `idgen::alloc_task_id` 随机分配契约（非 0 / 不与占用集命中 / 连续
 //!   分配互不相同）。
+//!
+//! architect v146 追加（v141 清理后复核批次，文末独立 proptest! 块）：
+//! - `engine::dns::HostsFile` hosts 静态表解析契约（v140 新增模块的属性面
+//!   补齐）：任意文本全函数解析、别名查找大小写无关三态等价、逐别名命中
+//!   列表精确特征化（首见序去重 oracle）、未声明探针 None、行尾注释免疫；
+//! - `engine::dns::merge_answers` 双腿合并契约（D40②）：输出零重复、
+//!   v4 家族先于 v6 家族、全局去重保序独立 oracle 复算相等。
+
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use crossterm::event::KeyCode;
 use proptest::prelude::*;
 
 use crate::app::DialogKind;
-use crate::engine::parse_retry_after_header;
+use crate::engine::{merge_answers, parse_retry_after_header, HostsFile};
 use crate::model::checksum::{
     algo_index_exact_or_default, parse_companion_content, CHECKSUM_ALGOS,
 };
@@ -1914,5 +1923,131 @@ proptest! {
             seen.push(id);
             used.insert(id);
         }
+    }
+}
+
+// ---------------------------------------------------------------------
+// engine::dns — hosts 静态表解析与双腿答案合并（v146 架构轮补充：
+// v140 新增模块的属性面补齐；测试可达性经 engine 门面 cfg(test) re-export）
+// ---------------------------------------------------------------------
+
+// v146：IP 生成策略单源（hosts 解析属性与 merge 合并属性共用；proptest 策略
+// 构造脚手架同参数表两处克隆收口 helper——CPD 自配对消解，生成分布不变）。
+fn arb_ipv4() -> impl Strategy<Value = IpAddr> {
+    (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>())
+        .prop_map(|(a, b, c, d)| IpAddr::V4(Ipv4Addr::new(a, b, c, d)))
+}
+
+fn arb_ipv6_ula() -> impl Strategy<Value = IpAddr> {
+    (any::<u16>(), any::<u16>())
+        .prop_map(|(a, b)| IpAddr::V6(Ipv6Addr::new(0xfd00, 0, a, 0, 0, 0, 0, b)))
+}
+
+proptest! {
+    /// hosts 静态表解析契约（FR-01-112①；v146 属性面补齐）：
+    /// ① 全函数：任意行（合法条目/垃圾行混排）解析不 panic；
+    /// ② 别名查找大小写无关：原/全大写变体等价（lookup 归一化口径）；
+    /// ③ 逐别名命中列表精确特征化 = 首见序去重的声明序列（独立 oracle 复算）；
+    /// ④ 未声明探针（连字符不在别名字母表内）→ None；
+    /// ⑤ 注释免疫：全部行加 `# …` 尾注后整表查找结果与无注释版逐点相等。
+    #[test]
+    fn prop_hosts_parse_contract(
+        lines in prop::collection::vec(
+            (
+                prop_oneof![arb_ipv4(), arb_ipv6_ula()],
+                prop::collection::vec("[a-z][a-z0-9]{0,7}", 0..4),
+                prop::collection::vec("[a-z0-9]{1,6}[!?*#%/]{0,2}", 0..3),
+                any::<bool>(),
+            ),
+            0..10,
+        ),
+    ) {
+        // 组装文本：合法条目行（IP + 别名展开）与垃圾行混排；对照文本全部行加尾注。
+        let mut text = String::new();
+        let mut text_commented = String::new();
+        let mut declared: std::collections::BTreeMap<String, Vec<IpAddr>> = Default::default();
+        for (ip, aliases, garbage, comment) in &lines {
+            let mut toks: Vec<String> = vec![ip.to_string()];
+            for a in aliases {
+                toks.push(a.clone());
+            }
+            let line = toks.join(" ");
+            text.push_str(&line);
+            text_commented.push_str(&line);
+            if *comment {
+                text_commented.push_str(" # v146 probe");
+            }
+            text.push('\n');
+            text_commented.push('\n');
+            // 垃圾行（`##` 整行注释形态 + 无法解析为首 token IP 的行）不中止解析
+            for g in garbage {
+                let gl = format!("## {g} {g}=");
+                text.push_str(&gl);
+                text.push('\n');
+                text_commented.push_str(&gl);
+                text_commented.push('\n');
+            }
+            // 首见序去重 oracle（与 from_lines 逐别名口径一致）
+            for a in aliases {
+                let key = a.to_ascii_lowercase();
+                let ips = declared.entry(key).or_default();
+                if !ips.contains(ip) {
+                    ips.push(*ip);
+                }
+            }
+        }
+
+        let hosts = HostsFile::from_lines(&text);
+        let hosts_c = HostsFile::from_lines(&text_commented);
+
+        // ①④ 全函数 + 未声明探针 None
+        for s in ["-probe9", "-PROBE9"] {
+            prop_assert_eq!(hosts.lookup(s), None, "未声明探针应 None");
+        }
+
+        // ②③⑤ 逐别名断言（大小写等价 + 精确特征化 + 注释免疫）
+        for (alias, expected) in &declared {
+            let got = hosts.lookup(alias);
+            let want = Some(expected.clone());
+            prop_assert_eq!(&got, &want, "命中列表 = 首见序去重声明序列");
+            prop_assert_eq!(
+                hosts.lookup(&alias.to_ascii_uppercase()),
+                got.clone(),
+                "大写变体等价"
+            );
+            prop_assert_eq!(hosts_c.lookup(alias), got.clone(), "行尾注释免疫");
+        }
+    }
+
+    /// merge_answers 双腿合并契约（D40②；v146 属性面补齐）：
+    /// ① 输出内零重复（集合口径，强于相邻对）；
+    /// ② v4 家族元素全部先于 v6 家族元素（链序口径）；
+    /// ③④ 输出 = 输入并集的全局去重保序（首见序独立 oracle 复算）。
+    #[test]
+    fn prop_merge_answers_ipv4_first_dedup(
+        v4 in prop::collection::vec(arb_ipv4(), 0..12),
+        v6 in prop::collection::vec(arb_ipv6_ula(), 0..12),
+    ) {
+        let merged = merge_answers(v4.clone(), v6.clone());
+        // ① 零重复
+        prop_assert_eq!(
+            merged.iter().collect::<std::collections::BTreeSet<_>>().len(),
+            merged.len(),
+            "输出零重复"
+        );
+        // ② v4 家族先于 v6 家族
+        let last_v4 = merged.iter().rposition(|ip| ip.is_ipv4());
+        let first_v6 = merged.iter().position(|ip| ip.is_ipv6());
+        if let (Some(l4), Some(f6)) = (last_v4, first_v6) {
+            prop_assert!(l4 < f6, "v4 先于 v6（last_v4={l4}, first_v6={f6}）");
+        }
+        // ③④ 首见序全局去重 oracle
+        let mut oracle: Vec<IpAddr> = Vec::with_capacity(v4.len() + v6.len());
+        for ip in v4.iter().chain(v6.iter()) {
+            if !oracle.contains(ip) {
+                oracle.push(*ip);
+            }
+        }
+        prop_assert_eq!(merged, oracle, "全局去重保序 oracle");
     }
 }

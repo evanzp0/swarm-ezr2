@@ -18,6 +18,11 @@ mod throttle;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+// architect v146：属性测试锁 dns hosts 静态表解析与双腿合并契约（v140 新增
+// 模块的属性面补齐；同上手法，产品构建不产生该路径，窄接口不受影响）
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(crate) use dns::{merge_answers, HostsFile};
 // 测试可达性门面：#[path] 挂载的加固测试需直接测实现子模块（throttle/error），
 // 经 cfg(test) 门控在门面 re-export（notes/rust.md「门面 re-export」手法）；
 // 产品构建（cfg(test)=off）不产生该路径，窄接口不受影响。allow 依据：产品

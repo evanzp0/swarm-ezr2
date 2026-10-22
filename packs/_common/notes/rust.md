@@ -300,8 +300,11 @@ group_imports = "StdExternalCrate"
   的 `Display` 会把宽字符半格单元隐藏并附 `Hidden by multi-width symbols` 注记——断言锚定
   不被 CJK 截断的稳定文本（如 ASCII 名称、选中行标记），不要断言与 CJK 相邻的边框/标题。
 - **输出管道会吞 `#[m` 形态字符**：日志采集/展示层按 CSI 转义清洗 `[m` 等序列时，
-  源码中的 `#[must_use]` 会显示成 `#ust_use]`（可复现、可误导"文件损坏"判断）。
-  审计源码一律以 `od -c`/`xxd` 字节为准，不信显示层。
+  源码中的 `#[must_use]` 会显示成 `#ust_use]`（可复现、可误导“文件损坏”判断）。
+  伪影可出现在包括 `cat -A` 在内的一切经管道/工具层回显的输出里——`cat -A` 并非
+  字节级证据（v146 实证：od 直读与 cat -A 回显对同一行给出不同形态），字节级审计
+  以 `od -c`/`xxd` 直读文件为准，不信显示层。条目文本自身也可能被吞（本条初版即
+  受害者，v146 修复）。
 - **双向拷贝代理（io::copy 两线程对拷）的单测必须显式关闭客户端写侧**：`shutdown(Write)`
   后代理的 client→upstream 拷贝得到 EOF、两个 copy 线程才能收尾、socket 才会 drop；
   否则 read_to_end 与 copy 线程互等，测试永久挂起（真实客户端通常天然关写侧，故线上不显）。
@@ -771,7 +774,11 @@ group_imports = "StdExternalCrate"
   4 文件拷贝中 2 处位于当轮触碰文件）。**新增测试同样能制造 +1 tile**：新测试的
   渲染/构造脚手架若与既有测试同形态（同尺寸 TestBackend + draw + to_string），会给
   原本无配对的既有脚手架引入首个配对（实测 110×34 对话框金样脚手架轮 +1）——处置：
-  测试脚手架提取共享 helper（testfx 类模块）消解，产品样板收口路径不变。CPD 增量对账见
+  测试脚手架提取共享 helper（testfx 类模块）消解，产品样板收口路径不变。属性测试的
+  策略构造脚手架同理：proptest 策略体（prop_oneof/vec+prop_map 组合）在同会话多个
+  新属性间同形克隆即凑足 50 token 自配对（v146 实测一次 +2）——生成策略提取
+  `fn arb_xxx() -> impl Strategy<Value = T>` 单源 helper 消解（生成分布不变）。
+  CPD 增量对账见
   +1 时先核 tile 形态：全部拷贝均为惯用样板/夹具形态 → 登记既有形态移交，非真重复回归；
   勿据此回头拆样板。
   操作者裁决拆样板时（移交 coder 执行），实证路径：差异点参数化成共享父模块 helper
