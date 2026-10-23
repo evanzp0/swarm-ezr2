@@ -1,139 +1,135 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/QA　会话：ezr-v148-qa（2026-10-22）
-> 上游交接：project/handoff.md（architect v146-arch 交接：4200P/0F + 两项移交闭环）
-> + 操作者 chat 指令（运行 six-pack/QA，最终独立验证轮）。
-> 当轮任务：e2e 腐化探针全收绿 + qa/runners 欠账消化 + 05-ui-pieces 可执行化 +
-> CRAP/DRY 门禁对账 + 覆盖率读数复核；产品代码零改动（QA 轮边界）。
+> 流程：six-pack　当前节点：six-pack/specifier　会话：ezr-v149-demo-sync（2026-10-23）
+> 上游交接：project/handoff.md（QA v148-qa 交接：最终独立验证闭环、01 期可交付）
+> + 操作者 chat 指令（six-pack/specifier：ezr-demo 进行了重构，根据 ezr-demo 的文档和代码，
+> 修改 ezr 项目的相关文档）。
+> 当轮任务：UI 与交互对齐 ezr-demo 重构版（demo 提交 ef951d2「task detail refactor」+
+> 7b0095a「refactor for ui and unknown len」，README 变更记录 9–19）——纯规格轮，
+> 产品源码零改动，全部产出在 mission/features/qa 文档与工具侧 packs/（经验沉淀）。
 
 ## 一、产物历史完成情况
 
 ### 项目与需求
 - EZR Downloader（Rust / TUI 下载器，01 期：HTTP/HTTPS 真实下载内核与 TUI 正式版）。
-  需求权威来源 `project/mission.md`（v1.33，分期模式）+ `project/mission/phase-01.md`（v1.33）。
-- 源码状态 v148（规格 v1.33 / features 14 份 / qa 规程 14 份；全 15 目标 **4200P/0F**，
-  对账见下）。本轮为最终独立验证轮：**产品源码零改动**，全部产出在 qa/（套件与规程
-  同步）与工具侧 packs/_common/（经验沉淀）。
+  需求权威来源 `project/mission.md`（v1.34，分期模式）+ `project/mission/phase-01.md`（v1.34）。
+- 源码状态 v148（本轮规格 v1.34 不改代码；全 15 目标 4200P/0F 沿袭 v148-QA 总账）。
+  本轮后规格面：mission v1.34 / features 14 份（01-tui-display 有效场景 25）/ qa 规程 14 份。
 
 ### 产物总账（流程开工以来累计，当前有效口径）
 | 节点/切片 | 产物 | 完成情况 | 验证状态 |
 |---|---|---|---|
-| specifier（历轮） | mission v1.1→v1.33 全量规格 + features/ 14 份 + qa/ 14 份 | 全部交付 | v134 起 3 份 UI feature 过 APS 机检（0 错误级）；v132 轮修订未过机检（见受限项） |
+| specifier（历轮） | mission v1.1→v1.34 全量规格 + features/ 14 份 + qa/ 14 份 | 全部交付 | 历轮口径见各批注记；v132 轮 3 份 UI feature APS 机检沿袭未跑（GitHub 不可达） |
 | coder（v128-impl 等） | v1.28 URL 权威模型等全量实现 | 已交付 | 2925P/0F（v128 轮口径） |
-| cleaner（v128-clean） | supervisor 失败分类/完成收尾单源化 | 已交付 | 3040P/0F（v128 口径，CPD 读数不可比见 v141 登记） |
-| architect（v145-arch） | supervisor 六文件拆分（114 点守恒）+ 属性 62 + arch 15 | 已交付 | 3049P/0F、clippy 0、fmt 0、arch 15 |
-| hardender（v147-hard） | 163 点差分变异 campaign + 加固套件 hardening_g_v147 | 已交付 | 3363P/0F、clippy 0、fmt 0 |
-| QA（ezr-qa-final） | QA 规程可执行化 13 端到端套件（qa/runners/）+ 缺陷修复 | 已交付 | e2e 165P/0F/0S（v1.29 口径快照）、3363P/0F、覆盖 94.37% |
-| specifier（v129–v134/v132/v140） | FR-01-106…110 + v1.30/v1.31/v1.32 对齐规格 + v1.33 FR-01-112/D40 | 已交付 | v140 反向自检过（纯新增） |
-| coder（v129–v137） | FR-01-106 实现 + 缺陷修复 + v1.30/v1.31 UI 改版 + q 退出鼠标泄漏修复 | 已交付 | 3889P/0F、clippy 0、fmt clean（v137 口径） |
-| coder（v138-m3-impl） | m3 对齐全量实现（scrollbar 引擎 + scrollable_panel + About + 头部/对话框/帮助/模态口径） | 已交付 | 3963P/0F、clippy 0、fmt clean |
-| coder（v139-m3-padding-fix） | 活跃计数标题 padding 对称；ezr-demo 同步 + demo 文档 §5.4 | 已交付 | 4009P/0F、clippy 0、fmt clean |
-| coder（v140-builtin-dns-impl） | FR-01-112：src/engine/dns.rs 内置异步 DNS 解析器 + base_client_builder 挂接 + config hosts_file_path 缝 | 已交付 | 4162P/0F（全 15 目标）、clippy 0、fmt clean |
-| cleaner（v141-clean-dns） | 保持行为清理：dns.rs E1–E3 去重 + load_from 测试缝 + 补测 4 例；arch 规则 14 白名单收口 | 已交付 | 4198P/0F、clippy 0、fmt clean、arch 15/15、dns.rs 覆盖 97.8%、CPD 125 tile |
-| architect（v146-arch） | 四阶段评审（零违规）+ 两项移交裁决收口 + dns 属性面 +2 + arch 阳性对照复测 | 已交付 | 4200P/0F、clippy 0、fmt clean、arch 15/15、CPD 125 tile（零新增） |
-| **QA（v148-qa，本轮）** | **14 套件 e2e 全收绿（167P/0F）+ 欠账全量消化 + 05-ui-pieces 可执行化（+1 套件 7 用例）+ CRAP/CPD 全项目首扫基线 + 覆盖率读数复核** | **已交付** | **e2e 167P/0F、插桩全量 4186P/0F（+14 doc = 4200 闭合）、行覆盖 94.9%、分支命中 94.1%、CPD 125 tile（与 v146 精确一致、零新增）、CRAP>30 共 9 处登记移交、clippy 0、fmt clean、arch 15/15（动工前基线复核）** |
+| cleaner（v128-clean） | supervisor 失败分类/完成收尾单源化 | 已交付 | 3040P/0F（v128 口径） |
+| architect（v145-arch） | supervisor 六文件拆分 + 属性 62 + arch 15 | 已交付 | 3049P/0F、clippy 0、fmt 0、arch 15 |
+| hardender（v147-hard） | 163 点差分变异 campaign + 加固套件 | 已交付 | 3363P/0F、clippy 0、fmt 0 |
+| QA（ezr-qa-final / v148-qa） | 13+1 套件 e2e 可执行化（qa/runners/ 14 份）+ 欠账消化 | 已交付 | e2e 167P/0F、插桩全量 4186P+14 doc = 4200P/0F、行覆盖 94.9%、CPD 125 tile |
+| specifier（v129–v134/v140/v1.30–v1.33） | FR-01-106…112 + m2/m3 对齐规格 | 已交付 | v140 反向自检过（纯新增） |
+| coder（v129–v140 系列） | FR-01-106 实现 + v1.30/v1.31 UI 改版 + m3 对齐 + FR-01-112 内置 DNS | 已交付 | 4162P/0F（v140 口径）、clippy 0、fmt clean |
+| cleaner（v141）/ architect（v146） | dns 清理 + 四阶段评审 | 已交付 | 4200P/0F、arch 15/15、CPD 125 tile |
+| **specifier（v149-demo-sync，本轮）** | **mission v1.34 + phase-01 v1.34（FR-01-80/81/25/87/94/96/101/103/106/107/108/109 修订 + 新增 FR-01-113…116 + D41…D43）+ features 5 份修订（01-tui-display 新增场景 25–28）+ qa 规程 6 份同步 + 反向自检两处漏改修复** | **已交付** | **逐字断言全部经 ezr-demo 源码核证（app.rs/ui.rs：DetailField/copy_label/draw_val_popup/marquee_bar/draw_close_btn/draw_conns/help_lines/draw_task_dialog 等）；退役标识反向自检通过（活断言零残留）；D43 帮助行数文档冲突以源码落账** |
 
 ### 遗留受限项（当前有效）
-- **APS 机检沿袭未执行**（v132 修订的 3 份 UI feature 未过 `gherkin-ir-dry-checker`；
-  本沙箱 GitHub 不可达未补跑，状态不变）。
-- **v147 时序 flake（沿袭）**：本轮插桩全量 + e2e 全程未见 flake（hardening_g_v147
-  分块内 943 用例含其全量，0F）；`wait_state` 预算放宽建议维持给 hardender。
-- **Rust 工具链沙箱不持久（本轮再证）**：全新沙箱完整重装 nightly
-  1.101.0-nightly（rsproxy rustup-init + USTC dist + rsproxy-sparse + rust-lld 桥接 +
-  pyte pip）。冷启动配方见 rust.md §1。**本轮新增：GitHub 不可达**（pmd bin zip /
-  APS gherkin-ir-dry-checker 的获取路径受影响；替代路径见 rust.md PMD 条目）。
-- **dns.rs 覆盖率残余 3 行（沿袭 v141 登记）**：167、241/247（需真实 DNS 应答）。
-  hardender 变异轮若在这三行产生存活突变体，按 v141 登记处置。
-- **观察受限突变体（沿袭 hardender 登记，仍开放）**：workers.rs 5 条 + 等价
-  download.rs:85:27。
-- **ezr-proxy.rs 测试基建（沿袭裁决）**：127 变异点不拆、CRAP/CPD 读数不追责。
-- **CRAP 全项目首扫基线（本轮新登记，移交 hardender 处置）**：产品区 1193 逻辑函数
-  （BRDA comp=BRDA+1 受限近似，闭包归组取极值，测试区行界排除 1499 函数），
-  **CRAP>30 共 9 处**：mouse.rs:325/188/74/41、scrollbar.rs:297/236、keys.rs:18、
-  supervisor/single.rs:63（UI 分派主链/守卫链，源码决策点复核为真复杂 + 单测残余
-  覆盖，e2e 套件实际覆盖鼠标/键盘/滚动条全路径）、ezr-fixture respond.rs:156
-  （QA 工具，e2e 覆盖、单测盲区）；豁免区（ezr-proxy）2 处（沿袭裁决不追责）。
-  另 comp>6 离群点 91 处（BRDA 上界口径，含 `&&`/`||` 短路链双计虚高，见
-  rust.md 对应条目）。QA 轮不擅改产品，处置建议：hardender 轮按「补测提覆盖优先、
-  拆函数其次、守卫链以源码决策点数复核后豁免登记」排序。
-- **退出竞态修复的可观测边界（沿袭 v137 登记）**：极端时序下毫秒级鼠标事件残留属
-  业界共有限界。
-- **沙箱后台进程回收（本轮再证）**：detached 后台进程随工具调用结束被连带清场——
-  长验证一律前台分段，不用后台进程（engineering.md 已载）。
+- **APS 机检沿袭未执行**：v132 修订的 3 份 UI feature 未过 `gherkin-ir-dry-checker`；
+  本沙箱 GitHub 不可达未补跑；**本轮修订的 5 份 feature 同样未过机检**（同因），待环境可用时
+  与沿袭项一并补跑。
+- **本轮规格与既有实现存在预期差（正常）**：v1.34 规格超前于源码 v148（coder 未实现本轮条款），
+  e2e 套件（qa/runners/）仍为 v1.30–v1.32 口径、未随本轮修订——运行套件对新增场景会 F，
+  属预期，待 coder 实现轮后由 QA 轮同步可执行套件。
+- **v147 时序 flake（沿袭）**：本轮全程未运行测试（纯文档轮），状态不变。
+- **Rust 工具链沙箱不持久 + GitHub 不可达（沿袭）**：不影响本轮（无构建需求）。
+- **dns.rs 覆盖率残余 3 行 / 观察受限突变体 / ezr-proxy 测试基建豁免（沿袭 hardender/QA 登记）**：
+  状态不变。
+- **CRAP>30 9 处处置（沿袭，移交 hardender）**：状态不变。
+- **PC-09/feature 场景 09 旧口径待裁决（沿袭）**：v1.31 登记的 persistence 场景 09 文字统一
+  仍待 specifier 小会话处理（本轮范围外，未动）。
 
 ### 实现定义值登记（当前有效）
 - 沿袭有效：v1.28 全部口径、D26–D40。
-- **本轮零新增实现定义值**（QA 验证轮，产品零改动）。
+- **本轮新增**：
+  - **D41**：[✗] 配色拆分——中括号同边框色（绿+粗、无高亮），高亮的只有 ✗（常态 DIM2、
+    悬停/按压 = 仅前景红+粗，无背景/反色）；demo 首版两版配色均废弃。
+  - **D42**：复制 toast 描述被复制的值——字段名点击与字段值弹窗 Y 复制共用 `copy_label` 单源
+    （`已复制 校验码`/`已复制 url`/`已复制 失败原因`/`已复制 保存路径`），与字段名显示文本
+    （v1.34 精简后「失败」「路径」）刻意分离。
+  - **D43**：帮助窗口内容行数 = **50 行**（源码 `help_lines()` 逐项清点：9 组标题 + 41 条目）；
+    demo 自述设计文档记 51 行为文档误差，以源码为准。
 
-## 二、当前产出情况（QA v148-qa）
+## 二、当前产出情况（specifier v149-demo-sync）
 
 ### 本会话产物清单
-- `project/qa/runners/suite_ui_pieces.py`（**新增，05 规程可执行化**，7 用例）：
-  P 键分块弹窗端到端套件——64×19 弹窗几何/四段内容/56×16 钳制（UP-01）、暂停/完成
-  网格四色分布 + 图例恒显（UP-02）、下载中 🟦/🟩 分布 + 暂停清零（UP-03）、2000 块
-  通用滚动条 + 键盘滚动全键位（UP-04）、功能键无动作 + 关闭通道（UP-05）、四拒绝
-  臂 toast 逐字（UP-06）、滚轮/拖拽/重开居中/点击外部无操作（UP-07）。修复过程
-  五点：图例行底部扫描区间、24 MiB=24 块口径（24000000 仅 23 块）、20% 同时完成点
-  门槛（4 并发 ~16.7% 四块同刻）、2 GiB 稀疏真实文件替代 swapsize 注入（后者物化
-  进内存 GB 级即爆）、UP-06 各臂独立 HOME（会话恢复互染）与 ④臂 416 不可达登记。
-- `project/qa/runners/suite_tui_display.py` 等 8 套件 + `harness.py`：v1.30–v1.32
-  口径同步（版本锚/对话框标题/页签键 ]/[/T、TD-07 重写、PC-09 Esc 口径、滚动条
-  字形、帮助行数、点外关闭类——v146 登记欠账全部消化）。
-- `project/qa/05-ui-pieces-qa.md`：规程同轮同步——环境判据修订（piece-dl8.bin
-  24 MiB=24 块口径、piece-big.bin 2 GiB 稀疏=2000 块≈65 行网格、原 520 块仅 2 行
-  滚程不足以驱动 PgDn/End/Home 且 14×34 算术与实测 31 块/行不符）+ UP-06 ④ 判据
-  修订（0 字节资源探测恒 416 → D35 臂先中，第 4 臂端到端不可达由产品单测承载，
-  套件 S 登记口径落套件头注）。
-- `project/qa/01-*-qa.md / 02/03/04-*-qa.md`：随套件同步的规程期望行（同轮一致，
-  不擅改产品；含 PC-09/feature 场景 09 旧口径待裁决注记）。
-- `.work/tmp/crap_scan_v148.py` + `lcov_v148.info` + `cpd_v148.txt`：度量产物
-  （会话级，口径见脚本头注）。
-- 工具侧经验沉淀（宪法第三章，7 条）：engineering.md 4 条（fixture 注入参数
-  物化进内存→大文件稀疏真实文件路径；多臂用例共享 HOME 会话恢复互染；wait_for
-  锚点与页签头常驻文本撞车；并发均分带宽同时完成点门槛 + RFC 7233 0 字节 416
-  环境判据校验）；notes/rust.md 2 条扩展（llvm-cov 分块 --no-report 跨构建指纹
-  一致性 + 报告对象列表污染按 mtime 清理；PMD 7 GitHub 不可达时 Maven Central
-  pmd-cli+pmd-rust 组装路径）。
+- `project/mission.md`：追加 v1.34 注记（九条要点全录，与 phase-01 v1.34 同步）。
+- `project/mission/phase-01.md`：
+  - 头部修订注记新增 v1.34 段（demo 提交号、README 记录号、九条要点、规格/QA 落点清单）；
+  - FR 修订 12 条：FR-01-80（字段名精简/行首 2 列/大小 ? B/分块 -/URL 断链注记）、FR-01-81
+    （头部「并发」活跃口径）、FR-01-25（删除框提示行退役 + 66×7 padding）、FR-01-87（74×10）、
+    FR-01-94（字段/页签行左 2 列）、FR-01-96（活跃口径明细/x·y 徽标/2 列 padding/序号=槽位号/
+    B 映射真实连接/横滚上限 +1）、FR-01-101（复制扩展四项 + 热区 x+2/x+11 + D42 toast）、
+    FR-01-103（74×12 + [✗]）、FR-01-106（64×21、29 块/行 406 一屏、[✗] 通道）、FR-01-107
+    （帮助九组 50 行、组标题 2 列/条目 4 列、可视 20 行、note 行退役、页脚 2 列）、
+    FR-01-108（overlay 集合含字段值弹窗）、FR-01-109（实例映射 + 字段值弹窗 Vertical）；
+  - FR 新增 4 条：FR-01-113 字段值弹窗（48×12 快照完整值/wrap/仅垂直滚动条/Y 复制/纯静态文本/
+    断链显示/拖拽关闭即清/L6 最上层）、FR-01-114 [✗] 关闭按钮（P11；几何/配色/交互/回填）、
+    FR-01-115 通用 padding 体系（P12；S1/S2/S3 + 特例表 + 设计清单）、FR-01-116 总大小未知
+    展示口径（?%/走马灯/? B/ETA -/分块 -）；
+  - D 表新增 D41/D42/D43。
+- `project/features/01-tui-display.feature`：场景 03/07/19/21/22/24 修订；**新增场景 25–28**
+  （字段名精简与复制四项 / 字段值弹窗 / [✗] 几何配色交互 / 总大小未知口径）；场景 04/14/16
+  沿袭退役留空。
+- `project/features/04-ui-conns.feature`：场景 06（并发活跃口径）/08（x·y 徽标、活跃明细、
+  2 列 padding、槽位号、横滚上限 +1、「待命 -」臂退役）/10（0/y 空态徽标）/17（字段名列表
+  更新 + 扩展注记）修订。
+- `project/features/01-add-task.feature`：场景 01/02/18 修订（74×12、下拉选项左 2 列前缀、[✗]）。
+- `project/features/03-modify-task.feature`：场景 01 修订（74×10、[✗]）。
+- `project/features/05-ui-pieces.feature`：场景 01/04/05/07 修订（64×21 六段布局、29 块/行
+  406 一屏、[✗] 关闭通道）。
+- `project/features/01-slots-queue.feature`：场景 14 失败行述语随字段名精简同步（「失败」行）。
+- `project/qa/01-tui-display-qa.md`：QA-TD-03/07/19/21/22/24 判据同步；**新增 QA-TD-25/26/27/28**；
+  有效场景计数勘正（25 个 = 场景块实数；前版表头 22 系误计 04/16）。
+- `project/qa/04-ui-conns-qa.md`：QA-UC-06/08/10/17 判据同步。
+- `project/qa/01-add-task-qa.md`：QA-01-01/02/18 判据同步。
+- `project/qa/03-modify-task-qa.md`：QA-MT-01 判据同步。
+- `project/qa/05-ui-pieces-qa.md`：QA-UP-01/04/05/07 判据同步。
+- `project/qa/01-slots-queue-qa.md`：QA-SQ-14 失败行述语同步。
+- 工具侧经验沉淀（宪法第三章，1 条扩展）：`packs/six-pack/specifier/SKILL.md`
+  「参照实现驱动的修订核证」补两点延伸——①计数断言同属逐字类（行数/条目数/块数须源码
+  逐项清点，文档合计数字易滞后）；②变更记录链可能含「撤销再恢复」来回（按源码终态落账，
+  不按记录序线性累积）。
 
 ### 验证证据
 | 验证项 | 结果 | 命令（可复现） |
 |---|---|---|
-| 基线复核（动工前） | 4200P/0F + clippy 0 + fmt clean + arch 15/15（与 v146 精确一致） | `cargo test --all-features` 等（本轮前段已执行并记录于 plan） |
-| e2e 端到端（14 套件） | **167P / 0F**：retry_backoff 9、config_template 5、throttle_proxy 5、persistence_config 9、add_task 19、download_engine 16、integrity_check 12、modify_task 9、named_proxy 18、resume_sidecar 14、slots_queue 15、tui_display 20、ui_conns 18、ui_pieces 7 | `python3 suite_<name>.py`（qa/runners/，逐套件） |
-| 插桩全量测试（覆盖率口径） | 分块累计 **4186P/0F**（555 bin + 45 fixture/proxy + 943/803/1840 集成三批；+14 doctest = 4200 闭合） | `cargo llvm-cov --all-features --branch --lcov --no-report`（按 15 目标分块）+ `report` |
-| 覆盖率读数 | 行 **94.9%**（17359/18295）、分支命中 **94.1%**（2092/2224）（src 含测试区口径） | 解析 `.work/tmp/lcov_v148.info` |
-| CRAP 受限近似（首扫基线） | 产品区 1193 逻辑函数；**CRAP>30 共 9 处**（8 产品 + 1 fixture）+ 豁免区 2 处；阳性对照 Top5 经源码决策点复核 | `python3 .work/tmp/crap_scan_v148.py`（口径见头注） |
-| DRY（CPD） | **125 tile，与 v146 精确一致；本轮新增区零 tile**（产品零改动自动成立）；阳性对照（同构文件对）报重复正常 | `pmd cpd -l rust --minimum-tokens 50 --dir src`（pmd 7.28.0，Maven Central 组装） |
-| UP 套件修复后复跑 | 7/7 P（修复前 2P/5F，五点根因全修复） | `python3 suite_ui_pieces.py` |
+| 参照实现源码核证 | 本轮全部逐字断言（文案/尺寸/键位/几何/颜色/计数）逐条在 ezr-demo/src 核证 | `grep -n` 于 `ezr-demo/src/{app,ui}.rs`：字段名（ui.rs:1217–1345）、copy_label（app.rs:178–196）、48×12（ui.rs:2803）、[✗]（ui.rs:1055–1070）、74×12/74×10/66×7（ui.rs:1997/2305）、64×21（ui.rs:2399）、帮助 50 行（`help_lines` vec 清点 9 sec + 41 kd）、marquee（ui.rs:409–440）、x/y 项（ui.rs:1525）、横滚 +1（ui.rs:1712）、页脚 PAD=2（ui.rs:1749）、值热区 x+11（ui.rs:1163） |
+| 退役标识反向自检 | 活断言零残留（两处漏改已修复：04-ui-conns-17 字段名列表、01-slots-queue-14 失败行述语）；残留命中均为历史注记或退役说明 | 全仓 `grep -rn` 旧字段名（任务 ID/创建时间/保存）/旧尺寸（74×11、74×9、66×6、64×19）/旧徽标（活跃 x）/旧提示行/44 行/[ ✗ ] 于 project/features、project/qa |
+| 规格一致性 | mission v1.34 ↔ phase-01 v1.34 ↔ features ↔ qa 四层引用闭合（FR 号、场景号、QA 号一一对应） | 逐文件交叉核对（FR-01-113→TD-25/26、FR-01-114→TD-27、FR-01-116→TD-28 等） |
+| 产品源码零改动 | 本轮未触碰 `project/ezr/`（QA 轮 v148 基线 4200P/0F 不变） | `git status`（project/ezr 无变更） |
 
 ### 对账口径
-- 测试基线：上轮 handoff 记 4200P/0F（v146）。本轮产品零改动 → 基线复核 4200P/0F
-  成立；插桩分块 4186P + doctest 14 = 4200，口径闭合（插桩分块不跑 doctest 段）。
-- e2e 对账：本轮 167P（14 套件，逐套件数字如上）；前轮 QA 交接 165P/0F/0S（13 套件，
-  v1.29 口径快照）——两轮之间规程历经 v1.30/31/32 改版（页脚收敛退役 UP-08、
-  TD-07/PC-09 重写、UP 套件可执行化 +7 等），套件面随规程同步演化，两数字非同口径
-  可比基线；**167P 为当前有效总账**。
-- CPD 对账：125 tile（v146）→ 125 tile（本轮，pmd 7.28.0 同口径复跑），产品零改动
-  一致性成立；本轮新增区零 tile。
-- 覆盖率对账：前轮 QA 记 94.37%（v1.29 口径、13 套件时代的 bin harness 口径）；
-  本轮 94.9%/分支 94.1%（全 15 目标插桩口径），口径变化（分块全量 vs 单 bin）
-  已在登记中注明，不直接对比。
+- demo 重构范围对账：README 变更记录 9–19 共 11 条 → 本轮规格吸收 9 条行为需求
+  （记录 15 为 demo 内部编译修复与回归校准、记录 16 被 18 部分撤销——页脚 chips 恢复，
+  均按源码终态落账，不单独立 FR）；记录 16 的 P10 提示行退役、17 的 padding 体系以终态
+  吸收（FR-01-25/107/115）。
+- 场景/用例增量对账：01-tui-display 有效场景 21 → 25（+25/26/27/28，序号留空不重排沿袭）；
+  QA-TD 21 → 25（+4）；其余套件场景数不变、判据修订。
+- 测试基线：产品零改动 → 4200P/0F 沿袭有效（本轮未运行测试，纯文档轮）。
 
 ### 待办与待批（未决项）
 - **D40 微决策待操作者裁决（沿袭）**：宽限期 300ms / 加 `dns` 配置键等改判。
-- **PC-09/feature 场景 09 旧口径待裁决（本轮登记）**：PC-09 Esc 行为（v1.32 口径
-  无操作+Ctrl+C）与 feature 场景 09 旧文字残留并存，规程行已同步、场景文字待
-  specifier 轮统一（不擅改 features，本轮只登记）。
-- **CRAP>30 9 处处置**：移交 hardender 轮（登记见受限项；QA 轮不修产品）。
-- 沿袭待办：APS 机检补跑（本沙箱 GitHub 不可达）、v147 flake 预算放宽。
+- **PC-09/feature 场景 09 旧口径待裁决（沿袭）**：场景文字统一待 specifier 小会话。
+- **APS 机检欠账扩大（沿袭 + 本轮新增 5 份）**：GitHub 恢复可达后补跑
+  `gherkin-ir-dry-checker`（v132 轮 3 份 + 本轮 5 份）。
+- **本轮无阻塞**：定稿文档视同已收齐答案（SKILL「定稿文档视同已收齐答案」条款——
+  ezr-demo README 记录 9–19 + 设计规范 + 源码构成逐项可观察行为与验收口径的定稿级需求，
+  两阶段访谈以免答合成执行；真实歧义点仅帮助行数一处，已按源码核证落 D43 并在
+  反向自检中复核）。
 
 ### 移交建议
-- 本轮最终独立验证已闭环：14 套件 e2e 全绿 + 欠账全量消化 + CRAP/CPD 基线落账 +
-  覆盖率读数复核，**01 期可交付操作者审阅**（`bin/swarm complete` 产物归档）。
-- 若继续 01 期收尾：残余三件移交项（CRAP 9 处、PC-09 场景文字统一、D40 裁决）
-  建议下一轮 hardender（CRAP 处置）+ specifier（场景文字）小会话处理。
-- 02 期（BT）启动时按 mission/phase-02 详述建档，UP 套件预留 BT 用例增补位
-  （05 规程已注）。
+- 本轮为规格轮，**建议下一步运行 `six-pack/coder`** 实现 v1.34 条款（实现优先级建议：
+  FR-01-113/114（弹窗族）→ FR-01-115（padding 横切）→ FR-01-96/81（活跃口径）→
+  FR-01-116（大小未知展示）→ FR-01-80/101/107 细节收口；实现后由 QA 轮同步
+  qa/runners/ 可执行套件）。
+- 若需独立验证规格一致性，可先跑 `bin/swarm list` / 阅读本 handoff 验证证据列的 grep 入口。
 - 移交仅为建议，不构成自动流转（宪法第一章）。
 
-By QA.
+By specifier.
