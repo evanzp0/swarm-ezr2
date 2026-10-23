@@ -11,7 +11,7 @@
   I   B 键语义迁移（HTTP 拒绝 toast）+ T 键页签切换（原 Tab 语义）
   J   弹窗高亮色统一（删除框/下拉框绿框）+ 列表滚动解锁（滚轮自由
       滚动不被拉回）+ 键盘选择视口跟随
-  K   帮助窗口 / 点击聚焦 / 页签 [ ] 与点击切换 / pieces 图例 / 单行页脚 /
+  K   帮助窗口 / 点击聚焦 / 页签 [ ] 与点击切换 / pieces 图例 / 双行页脚 /
       模态窗外点击无操作（帮助 + pieces 守卫）
   L   需求修订：并发面板提示行删除；主界面退出键 Q/q（Esc 不退出）
 
@@ -446,7 +446,7 @@ def scenario_unify_scroll():
 
 
 # ---------------------------------------------------------------------------
-# K：需求修订——帮助窗口 / 点击聚焦 / 页签点击与中括号 / 图例 / 单行页脚
+# K：需求修订——帮助窗口 / 点击聚焦 / 页签点击与中括号 / 图例 / 双行页脚
 # ---------------------------------------------------------------------------
 
 def scenario_k():
@@ -462,11 +462,12 @@ def scenario_k():
     h_fg = top_border_fg(s1, "帮助")
     V.check("K1b 帮助窗口边框绿色高亮", h_fg is not None and is_green(h_fg[3]), str(h_fg))
 
-    # K2 Esc 关闭帮助；K3 单行页脚（仅 H/Q 提示 + toast）
+    # K2 Esc 关闭帮助；K3 页脚双行：行 1 chips（恢复保留）+ 行 2 toast
     _, s2 = V.run(120, 44, 5.0, keys=["h", "esc"], key_delay_frac=0.3)
     text2 = "\n".join(s2.display)
     V.check("K2 Esc 关闭帮助窗口", "【全局】" not in text2)
-    V.check("K3a 页脚单行含 H 帮助 / Q 退出", "H 帮助" in text2 and "Q 退出" in text2)
+    V.check("K3a 页脚五枚命令 chips 可见（chips 恢复保留）",
+            "H 帮助" in text2 and "Q 退出" in text2 and "A 添加" in text2)
     V.check("K3b 旧版多键页脚提示已删除", "暂停/继续" not in text2 and "清已完成" not in text2
             and "Esc 退出" not in text2)
 
@@ -541,11 +542,11 @@ def scenario_k():
         moved = hpos2 is not None and hpos2[0] > hy and hpos2[1] > hx
         V.check("K10 帮助窗口拖拽位移", moved, f"{(hy, hx)} → {hpos2}")
 
-    # K11 帮助内容滚动（End → 末行提示可见）
+    # K11 帮助内容滚动（End → 末组条目可见；本轮需求修订：末行 note 提示已删除）
     _, s11 = V.run(120, 44, 5.0, keys=["h", "end"], key_delay_frac=0.3)
     t11 = "\n".join(s11.display)
-    V.check("K11 帮助内容可滚动（End 后末行提示可见）",
-            "滚动本页" in t11, t11[-400:] if len(t11) > 400 else "")
+    V.check("K11 帮助内容可滚动（End 后末组条目可见）",
+            "关闭弹窗（右上角按钮可点击" in t11, t11[-400:] if len(t11) > 400 else "")
 
     # K12/K13 模态统一口径：浮层打开时点击窗口外部 = 无任何操作
     #（帮助窗口 70x24 / pieces 64x21 在 120x44 下均远离左上角 (3,3)）

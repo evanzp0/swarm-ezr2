@@ -82,20 +82,20 @@
                         表宽超内框时底部横向滚动条 + ←/→ 键横向滚动），
                         首列为掩码 IP（IPv4 首段.*.末端 / IPv6 首段:*:末端，
                         无完整地址泄露、互不重复、IPv4/IPv6 混合）；
-                        已完成任务（godot）明细为空、活跃 0/0；
+                        已完成任务（godot）明细为空、徽标 0/1 项；
                         下载中任务并发明细速度不闪烁（采样 5s 无「-」闪现）。
 场景 O（键盘）：        Tab×2 聚焦并发连接面板 → ↑/↓ 选中并发明细行（高亮跟随，
                         统一列表选择交互）；BT 任务 B 阻塞并移除（断开）
-                        选中连接（行移除、掩码 IP 互不重复、活跃总数 -1、toast
+                        选中连接（行移除、掩码 IP 互不重复、徽标 11/12 项、toast
                         含被断开的掩码 IP）；HTTP 任务 B 被拒绝（toast、
                         序号列行数不变）。
 场景 P（明细门槛）：    仅「下载中」/「做种中」任务有并发明细：已暂停（blender）、
                         等待中（rust）、已失败（win11）、校验中（gpt4all）、
-                        后期处理中（neovim）均明细空、活跃 0；无明细状态
+                        后期处理中（neovim）均明细空、徽标 0/y 项；无明细状态
                         ↑↓/B 给出提示 toast（并发面板聚焦后）；win11 按 R
                         重试开始下载后明细恢复（rust 递补，生产 FR-01-34：
                         R 让槽队首递补）；做种中（arch）明细显示
-                        （BT 七列、首列掩码 IP、活跃 1）。
+                        （BT 七列、首列掩码 IP、徽标 1/1 项）。
 场景 R（v1.28 同步）：  生产同步轮八（URL 权威模型交互同步）两段运行：
                         R1 正路径——同 URL 同目录重复添加被拒（toast「任务已存在」、
                         对话框保持打开）；「仅删除任务（保留文件）」后异 URL 同
@@ -135,10 +135,14 @@ import pyte
 
 # 二进制路径：仓库内 release 构建（bin/ezr-tui-demo 为随包预编译副本）。
 # 以本脚本位置解析（脚本位于 <repo>/ezr-demo/scripts/，构建位于 <repo>/ezr-demo/target/release/），
-# 不再硬编码原仓库布局的绝对路径
-PROG = os.path.join(
+# 不再硬编码原仓库布局的绝对路径；无 target/ 构建产物时回退 bin/ 预编译副本
+_PROG_BUILD = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "target", "release", "ezr-tui-demo"
 )
+_PROG_FALLBACK = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "bin", "ezr-tui-demo"
+)
+PROG = _PROG_BUILD if os.path.exists(_PROG_BUILD) else _PROG_FALLBACK
 YEL_HEX = "e4b23e"      # 黄 Rgb(228,178,62)
 
 PASS: list[str] = []
@@ -761,11 +765,12 @@ def conn_token(seg):
 
 
 def conns_data_rows(screen, px):
-    """提取并发连接面板数据行（px = 面板左边框真实列，从内框起点切片）：
+    """提取并发连接面板数据行（px = 面板左边框真实列；内框自 px+1 起，
+    本页重构后列表明细左右各留 2 列 padding，内容自 px+3 起切片）：
     返回 (首列标识, 行片段) 列表——HTTP 任务为序号数字串，BT 任务为掩码 IP"""
     out = []
     for y in range(screen.lines):
-        seg = true_row(screen, y)[px + 1 :]
+        seg = true_row(screen, y)[px + 3 :]
         tok = conn_token(seg)
         if tok is not None:
             out.append((tok, seg))
@@ -780,7 +785,8 @@ def selected_conn_ident(screen, px):
         row_buf = screen.buffer[y]
         for x in range(screen.columns):
             if row_buf[x].bg == "162a30" and x >= px - 2:
-                seg = true_row(screen, y)[px + 1 :]
+                # 内容自 px+3 起（内框 px+1 + 2 列 padding，本页重构）
+                seg = true_row(screen, y)[px + 3 :]
                 return conn_token(seg)
     return None
 
@@ -911,29 +917,34 @@ def scenario_n():
           flicker[0] if flicker else "采样 4.5s")
 
     # 第二段：end 选中 sintel（BT 下载中）→ 首列掩码 IP。
-    # m3：新增 客户端/协议 两列（置于末尾）后 BT 表宽 59 > 内框 48，
-    # 默认视口只到「累计上传」；七列齐全在横向滚动后另行验证
-    # （N5b，←→/横向滚动条双通道）
+    # m3：新增 客户端/协议 两列（置于末尾）后 BT 表宽 59；本页重构：明细左右
+    # 各 2 列 padding 后数据视口 = 内框 48 − 4 = 44 列，初始视口 [0,44) 可见
+    # IP/下载速度/累计下载/上传速度 四列（「累计上传」39-46 列被右缘裁切），
+    # 客户端/协议在视口外；尾列在横向滚动后另行验证（N5b，←→/横向滚动条双通道）
     samples2, screen2 = run(120, 44, 5.0, keys=["end"], key_delay_frac=0.3)
     rows2 = samples2[-1][1]
     final2 = "\n".join(rows2)
     bt_head = next((r for r in rows2 if "下载速度" in r and "累计下载" in r), None)
-    check("N5 BT 任务并发连接表头：IP/速度四列可见、客户端/协议在视口外（列序修订）",
+    check("N5 BT 任务并发连接表头：IP/速度前三列可见、客户端/协议在视口外（padding 后视口 44 列）",
           bt_head is not None
-          and all(s in bt_head for s in ("IP", "下载速度", "累计下载", "上传速度", "累计上传"))
+          and all(s in bt_head for s in ("IP", "下载速度", "累计下载", "上传速度"))
           and "客户端" not in bt_head and "协议" not in bt_head,
           bt_head.strip()[:70] if bt_head else "not found")
     check("N6 BT 下载中任务选中（sintel）", "sintel-4k-2160p" in final2)
 
-    # N5b：聚焦并发面板后 → ×8 横向滚动到最右 → 上传两列移入视野
-    samples2b, _ = run(120, 44, 5.0,
+    # N5b：聚焦并发面板后 → ×8 横向滚动到最右（上限 = 表宽 59 − 视口 44 + 1 = 16，
+    # 末列「协议」宽字完整可见）→ 尾部五列移入视野；「下载速度」12-19 列被左缘
+    # 裁切不再整词可见。按键整体推迟到 3s 后（key_delay_frac=0.6）：本页签内
+    # neovim 约 2.3s 完成移出 → sintel 下标前移 = 选中变化 → 横向偏移按设计
+    # 归零重置（§5.4），滚动按键须落在重置之后才能累积到上限
+    samples2b, _ = run(120, 44, 7.0,
                        keys=["end", "tab", "tab"] + ["right"] * 8,
-                       key_delay_frac=0.3)
+                       key_delay_frac=0.6)
     rows2b = samples2b[-1][1]
-    bt_head_r = next((r for r in rows2b if "下载速度" in r and "累计上传" in r), None)
-    check("N5b → 横向滚动后七列齐全（客户端/协议/上传速度/累计上传 移入视野）",
+    bt_head_r = next((r for r in rows2b if "客户端" in r and "协议" in r), None)
+    check("N5b → 横向滚动后尾列齐全（累计下载/上传速度/累计上传/客户端/协议 移入视野；与 N5 合计七列）",
           bt_head_r is not None and all(s in bt_head_r for s in
-                                        ("客户端", "协议", "下载速度", "累计上传")),
+                                        ("累计下载", "上传速度", "累计上传", "客户端", "协议")),
           bt_head_r.strip()[:70] if bt_head_r else "not found")
 
     # N10/N11 BT 首列 = 掩码 IP：12 条互不重复、无完整地址泄露、IPv4/IPv6 混合
@@ -948,13 +959,14 @@ def scenario_n():
           and not re.search(r"\d+\.\d+\.\d+\.\d+", " ".join(bt_tokens)),
           str(bt_tokens))
 
-    # 第三段：end → T 切到已完成页签（自动选中 godot）→ 明细为空、活跃 0/0
+    # 第三段：end → T 切到已完成页签（自动选中 godot）→ 明细为空、徽标 0/1 项
     samples3, _ = run(120, 44, 5.0, keys=["end", "t"], key_delay_frac=0.35)
     rows3 = samples3[-1][1]
     final3 = "\n".join(rows3)
-    act = next((r for r in rows3 if "活跃" in r and "并发连接" in r), None)
+    act = next((r for r in rows3 if "并发连接" in r and "项" in r), None)
     check("N7 已完成任务并发连接明细为空（无并发连接）", "（无并发连接）" in final3)
-    check("N8 已完成任务活跃显示 0（修订-3 同口径）", act is not None and "活跃 0 " in act,
+    check("N8 已完成任务徽标 0/1 项（活跃口径：x=0，y=任务最大并发）",
+          act is not None and " 0/1 项 " in act,
           act.strip()[:50] if act else "not found")
     check("N9 已完成任务选中（godot·已完成）", "godot-4.4-stable" in final3 and "已完成" in final3)
 
@@ -987,9 +999,9 @@ def scenario_o():
           "已断开连接" in all_text
           and re.search(r"已断开连接 \S+（剩余 \d+ 条）", all_text) is not None,
           str([l for l in all_text.splitlines() if "已断开连接" in l][:1]))
-    act = next((r for r in final_rows if "活跃" in r and "并发连接" in r), None)
-    check("O5 断开后剩余 11 条连接全部活跃（活跃 11，修订-3 同口径）",
-          act is not None and "活跃 11 " in act,
+    act = next((r for r in final_rows if "并发连接" in r and "项" in r), None)
+    check("O5 断开后剩余 11 条连接全部活跃（徽标 11/12 项：x=活跃明细行数，y=最大并发）",
+          act is not None and " 11/12 项 " in act,
           act.strip()[:50] if act else "not found")
     check("O6 断开后任务仍正常下载（sintel [下载中]）",
           any("[下载中]" in r and "sintel-4k-2160p" in r for r in final_rows))
@@ -1022,7 +1034,7 @@ def scenario_o():
 
 
 def scenario_p():
-    print("\n== 场景 P：仅「下载中」/「做种中」有并发明细（其余状态空、活跃 0/0）+ 交互守卫 ==")
+    print("\n== 场景 P：仅「下载中」/「做种中」有并发明细（其余状态空、徽标 0/y 项）+ 交互守卫 ==")
 
     # 第一段：↓↓↓ 选中 blender（已暂停）→ 明细空；tab×2 聚焦并发面板后 ↓ 提示无明细可选
     samples, screen = run(120, 44, 8.0,
@@ -1030,10 +1042,11 @@ def scenario_p():
     all_text = "\n".join("".join(rows) for _, rows in samples)
     rows = samples[-1][1]
     final = "\n".join(rows)
-    act = next((r for r in rows if "活跃" in r and "并发连接" in r), None)
+    act = next((r for r in rows if "并发连接" in r and "项" in r), None)
     check("P1 已暂停任务选中（blender）", "blender-4.5-linux-x64" in final)
     check("P2 已暂停任务明细为空（无并发连接）", "（无并发连接）" in final)
-    check("P3 已暂停任务活跃 0（修订-3 同口径）", act is not None and "活跃 0 " in act,
+    check("P3 已暂停任务徽标 0/4 项（活跃口径：x=0，y=最大并发 4）",
+          act is not None and " 0/4 项 " in act,
           act.strip()[:50] if act else "not found")
     check("P4 已暂停任务 ↓ 提示无明细", "当前状态无并发明细" in all_text)
     px = conns_panel_left(screen)
@@ -1044,10 +1057,10 @@ def scenario_p():
     all_text2 = "\n".join("".join(rows) for _, rows in samples2)
     rows2 = samples2[-1][1]
     final2 = "\n".join(rows2)
-    act2 = next((r for r in rows2 if "活跃" in r and "并发连接" in r), None)
+    act2 = next((r for r in rows2 if "并发连接" in r and "项" in r), None)
     check("P6 等待中任务选中（rust）", "rust-toolchain-nightly" in final2)
-    check("P7 等待中任务明细为空 + 活跃 0",
-          "（无并发连接）" in final2 and act2 is not None and "活跃 0 " in act2,
+    check("P7 等待中任务明细为空 + 徽标 0/4 项",
+          "（无并发连接）" in final2 and act2 is not None and " 0/4 项 " in act2,
           act2.strip()[:50] if act2 else "not found")
     check("P8 等待中任务 B 提示无可断开连接", "当前状态无可断开的并发连接" in all_text2)
 
@@ -1055,10 +1068,10 @@ def scenario_p():
     samples3, _ = run(120, 44, 4.5, keys=["down"] * 6, key_delay_frac=0.35)
     rows3 = samples3[-1][1]
     final3 = "\n".join(rows3)
-    act3 = next((r for r in rows3 if "活跃" in r and "并发连接" in r), None)
+    act3 = next((r for r in rows3 if "并发连接" in r and "项" in r), None)
     check("P9 已失败任务选中（win11·已失败）", "win11-24h2-x64" in final3 and "已失败" in final3)
-    check("P10 已失败任务明细为空 + 活跃 0",
-          "（无并发连接）" in final3 and act3 is not None and "活跃 0 " in act3,
+    check("P10 已失败任务明细为空 + 徽标 0/8 项",
+          "（无并发连接）" in final3 and act3 is not None and " 0/8 项 " in act3,
           act3.strip()[:50] if act3 else "not found")
 
     # 第四段：win11 按 R 重试 → 生产 v1.17/FR-01-34 同口径：正常重新排队
@@ -1070,36 +1083,36 @@ def scenario_p():
           any("[等待中]" in r and "win11-24h2" in r for r in rows4))
     check("P12 rust 递补获得槽位开始下载（队首优先，生产 FR-01-34 同口径）",
           any("[下载中]" in r and "rust-toolchain" in r for r in rows4))
-    act4 = next((r for r in rows4 if "活跃" in r and "并发连接" in r), None)
-    check("P13 等待中任务明细为空 + 活跃 0（选中项仍为 win11）",
-          "（无并发连接）" in final4 and act4 is not None and "活跃 0 " in act4,
+    act4 = next((r for r in rows4 if "并发连接" in r and "项" in r), None)
+    check("P13 等待中任务明细为空 + 徽标 0/8 项（选中项仍为 win11）",
+          "（无并发连接）" in final4 and act4 is not None and " 0/8 项 " in act4,
           act4.strip()[:50] if act4 else "not found")
 
     # 第五段：选中 gpt4all（校验中）→ 明细空
     samples5, _ = run(120, 44, 4.5, keys=["down"] * 8, key_delay_frac=0.3)
     rows5 = samples5[-1][1]
     final5 = "\n".join(rows5)
-    act5 = next((r for r in rows5 if "活跃" in r and "并发连接" in r), None)
+    act5 = next((r for r in rows5 if "并发连接" in r and "项" in r), None)
     check("P14 校验中任务选中（gpt4all·校验中）",
           "gpt4all-models-bundle" in final5 and "校验中" in final5)
-    check("P15 校验中任务明细为空 + 活跃 0",
-          "（无并发连接）" in final5 and act5 is not None and "活跃 0 " in act5,
+    check("P15 校验中任务明细为空 + 徽标 0/8 项",
+          "（无并发连接）" in final5 and act5 is not None and " 0/8 项 " in act5,
           act5.strip()[:50] if act5 else "not found")
 
     # 第六段：neovim（后期处理中）——启动后约 2.2s 完成并移出本页签（列表缩短、
     # 选中项回跳），故用快速按键 + 采样帧断言：选中 neovim 且仍为 [后期处理中]
-    # 的帧内明细为空、活跃 0/0（任务名出现在 详情+列表+保存路径 ≥2 处 = 已选中）
+    # 的帧内明细为空、徽标 0/2 项（任务名出现在 详情+列表+保存路径 ≥2 处 = 已选中）
     samples6, _ = run(120, 44, 2.6, keys=["down"] * 9, key_delay_frac=0.02)
     hit6 = False
     for _, rows6 in samples6:
         text6 = "\n".join(rows6)
         if (text6.count("neovim-0.11.2") >= 2 and "[后期处理中]" in text6
-                and "（无并发连接）" in text6 and "活跃 0 " in text6):
+                and "（无并发连接）" in text6 and " 0/2 项 " in text6):
             hit6 = True
             break
-    check("P16 后期处理中任务选中且明细为空 + 活跃 0（neovim 采样帧）", hit6)
+    check("P16 后期处理中任务选中且明细为空 + 徽标 0/2 项（neovim 采样帧）", hit6)
 
-    # 第七段：T → 已完成页签选中 arch（做种中）→ 明细显示（掩码 IP、活跃 1/1）。
+    # 第七段：T → 已完成页签选中 arch（做种中）→ 明细显示（掩码 IP、徽标 1/1 项）。
     # m3：七列齐全在横向滚动后另行验证（P20b，同 N5b 口径）
     samples7, screen7 = run(120, 44, 5.0, keys=["t"], key_delay_frac=0.4)
     rows7 = samples7[-1][1]
@@ -1107,25 +1120,28 @@ def scenario_p():
     head7 = next((r for r in rows7 if "下载速度" in r and "累计下载" in r), None)
     px7 = conns_panel_left(screen7)
     tokens7 = [s for s, _ in conns_data_rows(screen7, px7)] if px7 is not None else []
-    act7 = next((r for r in rows7 if "活跃" in r and "并发连接" in r), None)
+    act7 = next((r for r in rows7 if "并发连接" in r and "项" in r), None)
     check("P18 做种中任务选中（arch）", "archlinux-x86_64" in final7)
     check("P19 做种中任务明细显示（1 条连接，首列为掩码 IP）",
           len(tokens7) == 1 and CONN_TOKEN_RE.match(tokens7[0]) is not None,
           str(tokens7))
-    check("P20 做种中任务表头：IP/速度四列可见、客户端/协议在视口外（横向裁剪前）",
+    check("P20 做种中任务表头：IP/速度前三列可见、客户端/协议在视口外（padding 后视口 44 列）",
           head7 is not None
-          and all(s in head7 for s in ("IP", "下载速度", "累计下载", "上传速度", "累计上传"))
+          and all(s in head7 for s in ("IP", "下载速度", "累计下载", "上传速度"))
           and "客户端" not in head7 and "协议" not in head7,
           head7.strip()[:70] if head7 else "not found")
+    # 横向滚动到最右（上限 = 表宽 59 − 视口 44 = 15）→ 尾部五列移入视野
     samples7b, _ = run(120, 44, 5.0,
                        keys=["t", "tab", "tab"] + ["right"] * 8,
                        key_delay_frac=0.4)
     rows7b = samples7b[-1][1]
-    head7b = next((r for r in rows7b if "下载速度" in r and "累计上传" in r), None)
-    check("P20b → 横向滚动后七列齐全（上传速度/累计上传 移入视野）",
-          head7b is not None and all(s in head7b for s in ("协议", "上传速度", "累计上传")),
+    head7b = next((r for r in rows7b if "客户端" in r and "协议" in r), None)
+    check("P20b → 横向滚动后尾列齐全（累计下载/上传速度/累计上传/客户端/协议 移入视野）",
+          head7b is not None and all(s in head7b for s in
+                                     ("累计下载", "上传速度", "累计上传", "客户端", "协议")),
           head7b.strip()[:70] if head7b else "not found")
-    check("P21 做种中任务活跃 1（上传连接活跃，修订-3 同口径）", act7 is not None and "活跃 1 " in act7,
+    check("P21 做种中任务徽标 1/1 项（上传连接活跃，活跃口径：x=活跃明细行数，y=最大并发 1）",
+          act7 is not None and " 1/1 项 " in act7,
           act7.strip()[:50] if act7 else "not found")
 
 

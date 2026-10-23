@@ -70,7 +70,7 @@ total_bad += smoke("主界面（详情精简）", [b"\x1b[B"] * 6, lambda t: [
     ("详情含失败字段行（本轮需求修订：字段名「失败原因」→「失败」）", " 失败     " in t),
     ("详情含分块行", "分块     " in t),
     ("列表标题无鼠标提示", "鼠标: 点击选中" not in t),
-    ("页脚单行含帮助/退出提示（需求修订）", "H 帮助" in t and "Q 退出" in t),
+    ("页脚命令图例 chips 可见（chips 恢复 + toast 保留）", "H 帮助" in t and "Q 退出" in t),
 ])
 
 total_bad += smoke("添加对话框 6 字段", [b"a"], lambda t: [

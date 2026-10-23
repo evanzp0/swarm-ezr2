@@ -13,15 +13,19 @@
 //! 四个字段名为蓝色下划线链接、点击复制对应值；字段值悬停显示下划线、
 //! 点击打开「字段值弹窗」——模态小窗口、wrap text 完整展示、仅垂直滚动条、
 //! Y 复制窗口内容，操作说明收敛于帮助窗口）及并发连接面板
-//! （占右列余下全部高度）。页脚 = 双行：行 1 常用命令图例（A 添加 / D 删除 /
-//! M 修改 / Q 退出 / H 帮助；鼠标左键可点击——按压反色高亮 = 点击效果、原地
-//! 松开执行对应命令，v0.2 页脚双行修订），行 2 toast 提示。
+//! （占右列余下全部高度）。页脚 = 双行：行 1 常用命令图例 chips（A/D/M/Q/H，
+//! 鼠标可点击、与键盘快捷键同口径）+ 行 2 toast 操作反馈（◆ 黄色消息）；
+//! panel/弹窗内容区一律无提示信息（P10），快捷键完整说明收敛于 H 帮助窗口。
 //! 流量图：单色面积图——逐列自底向上填充，顶线以 ▁▂▃▄▅▆▇█ 八级部分块呈现
 //! 1/8 格亚字符精度的平滑曲线，全图统一一种颜色（下载淡蓝，REQ-8.5）；
 //! 序列经双向 EMA 平滑 + 窗口 min–max 自适应缩放，每列取双子样本较大值保尖峰
 //! ——面积首尾相接、无断列、无间隔、无盲文点阵。
 //! 每个任务条目 3 行：标题行(名称+协议/状态徽标+百分比)、整体进度条(不分块)、统计行。
-//! 协议徽标 [HTTP/HTTPS/BT] 统一黄色；详情页分块以文字显示 x/y（已完成/总块数）与块大小 N/块。
+//! 总大小未知（不支持断点续传的 HTTP(S) 流式下载，Task::size_known = false）时：
+//! 百分比显示 ?%、进度条为循环滑动的走马灯色块（下载中）/空轨道（其余状态）、
+//! 统计行与详情的总大小以 ? B 占位、剩余时间显示 -（无从估计）。
+//! 协议徽标 [HTTP/HTTPS/BT] 统一黄色；详情页分块以文字显示 x/y（已完成/总块数）与块大小 N/块
+//! （不支持分块下载的任务恒显示 -）。
 //! pieces 分块弹窗（P）支持鼠标左键拖拽移动（按住弹窗内空白处拖动；
 //! 右缘滚动条上的拖拽 = 滚动网格内容，与主界面面板同一通用滚动条组件）。
 //! 分块策略：块大小按协议写死（HTTP 1 MB / BT 256 KB），块数与并发数解耦。
@@ -33,8 +37,12 @@
 //! 客户端 = 对端客户端两字母缩写（QB/TR/LT/UT/DE/AR/RT/TX/AZ/XL 演示池）。
 //! 聚焦本面板后 ↑/↓ 选中行高亮（lazygit 式统一列表选择），B 断开选中连接。
 //! 累计均为当前任务本次开始下载后的累计量（重新排队/重试时清零）；
+//! 本页重构（活跃口径）：明细只显示活跃并发——「正在连接」或「已经连接」的
+//! 连接（Connection::is_active，任务开跑时交错建连、块队列耗尽自然断开），
+//! 待命/已断开不显示；右上角徽标 = x/y 项（x = 活跃明细行数即活跃并发数、
+//! y = 任务设置的最大并发数，前后各 1 空格）；列表明细左右各留 2 列 padding。
 //! 仅「下载中」与「做种中」状态显示并发明细，其余状态（等待中/已暂停/校验中/
-//! 后期处理中/已失败/已完成）明细为空、活跃 0/0。
+//! 后期处理中/已失败/已完成）明细为空、徽标 0/y。
 //! 对话框：添加任务：HTTP(S)(URL+目录+并发+校验算法下拉+校验码+代理下拉) /
 //! 修改任务：HTTP(S)(并发+校验+校验码+代理，v1.5/FR-01-87 同步) / 删除任务(仅任务|任务和文件|取消)。
 //! 校验下拉首行 NONE（默认，不校验：校验码清空且不可输入）；其余算法校验码必填。
@@ -60,6 +68,18 @@
 //! 悬停/按压变化），**高亮的只有 ✗**——常态 DIM2，悬停/按压 = 仅前景色
 //! 红+粗（无背景色/无反色）；按下高亮、原地松开关闭对应弹窗（拖出热区
 //! 取消）；关闭行为 = 各弹窗 Esc 通道同口径。
+//! 本轮需求修订（padding 统一）：panel 与弹窗内容区统一三档 padding 体系
+//! （设计规范 §4.3：S1 边框附着元素 = 标题/徽标/[✗] 前后各 1 空格；
+//! S2 内容区 = 左右各 2 列、上下各 1 行；S3 层次缩进 = 2 列步进）——
+//! 头部字段/页签行左 2 列、任务详情行首 2 列（热区同步 +1）、任务列表
+//! 右侧 2 列（左 2 列由光标槽承担、选中背景满行不变）、页脚左右 2 列、
+//! 帮助组标题 2 列/条目 4 列 + 内容区上下各 1 行（窗体 70×24 不变、
+//! 可视行 22→20）、下拉选项左 2 列（高度「项数+2」紧凑特例不变）、
+//! pieces 文本行与网格左 2 列（尺寸 64×19→64×21，每行 29 块/一屏 406）、
+//! 添加/修改/删除对话框内容左右 2 列 + 底部补齐 1 行 padding
+//! （74×11→74×12 / 74×9→74×10 / 66×6→66×7，字段行与按钮行 y 不变）；
+//! 流量图区紧贴分隔符与边框、分割线贯通全宽为既定图形/装饰特例；
+//! 字段值弹窗与并发明细（左右 2 列/上下 1 行）为本次统一的基准先例。
 
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
@@ -386,6 +406,46 @@ fn plain_bar(width: usize, frac: f64, fill: Color) -> Vec<Span<'static>> {
     spans
 }
 
+/// 走马灯进度条（总大小未知的下载中任务，bug 修正：不支持续传的 HTTP(S)
+/// 流式下载拿不到 Content-Length，百分比/填充进度无从计算——进度条以循环
+/// 滑动的色块（marquee）表达「传输进行中、进度不可知」：滑块自左缘滑入、
+/// 匀速右移、右缘滑出，空一帧后重新滑入循环）。anim = App::frame（100ms/tick
+/// 的 10fps 节拍，与 spinner 同源）；每帧 2 列 → 全周期（宽+滑块长）≈ 3s。
+fn marquee_bar(width: usize, anim: u64, fill: Color) -> Vec<Span<'static>> {
+    let width = width.max(1);
+    let block = (width / 4).clamp(4, 8);
+    let period = width + block; // 滑块完全离场后一个空帧，再从左缘重新滑入
+    let head = ((anim as usize * 2) % period) as isize; // 滑块头部（排他）
+    let tail = head - block as isize; // 滑块尾部（含）
+    // 线性裁剪到轨道（不绕环）：滑块 = [tail, head) ∩ [0, width)
+    let s = tail.clamp(0, width as isize) as usize;
+    let e = head.clamp(0, width as isize) as usize;
+    let mut spans = Vec::new();
+    if s > 0 {
+        spans.push(Span::styled("░".repeat(s), Style::default().fg(EMPTY)));
+    }
+    if s < e {
+        spans.push(Span::styled("█".repeat(e - s), Style::default().fg(fill)));
+    }
+    if e < width {
+        spans.push(Span::styled(
+            "░".repeat(width - e),
+            Style::default().fg(EMPTY),
+        ));
+    }
+    spans
+}
+
+/// 已下载/总大小 对（列表统计行口径）：总大小未知时以 `? B` 占位
+/// （bug 修正：不支持续传的 HTTP(S) 流式下载，下载中拿不到文件大小）
+fn dl_total_txt(t: &Task) -> String {
+    if t.size_known() {
+        format!("{}/{}", fmt_size(t.downloaded), fmt_size(t.total))
+    } else {
+        format!("{}/? B", fmt_size(t.downloaded))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 任务条目（3 行）
 // ---------------------------------------------------------------------------
@@ -396,13 +456,21 @@ fn task_lines(
     spinner: char,
     width: usize,
     queue_pos: usize,
+    anim: u64,
 ) -> Vec<Line<'static>> {
     let width = width.max(20);
     let state_c = state_color(t.state);
+    // 总大小是否已知（不支持续传的 HTTP(S) 流式下载 = 未知：?%/走马灯/? B）
+    let known = t.size_known();
 
     // ---- 行 1：光标 + 名称 + 徽标 + 右对齐百分比 ----
-    // 等待中任务显示真实进度（可能持有断点进度）
-    let pct_txt = format!("{:>5.1}%", t.progress() * 100.0);
+    // 等待中任务显示真实进度（可能持有断点进度）；总大小未知时百分比
+    // 无从计算，右对齐占同宽列显示 ?%（bug 修正）
+    let pct_txt = if known {
+        format!("{:>5.1}%", t.progress() * 100.0)
+    } else {
+        "    ?%".to_string()
+    };
     let proto_badge = format!("[{}]", t.protocol.label());
     // v1.22 展示统一同步：徽标文案 = 状态名单源，失败挂起不细分
     let state_badge = format!("[{}]", t.state.label());
@@ -447,9 +515,17 @@ fn task_lines(
     ];
 
     // ---- 行 2：整体进度条（不分块）----
+    // 总大小未知 + 下载中 = 走马灯滑块（进度条无法增长，以循环滑动表达传输
+    // 进行中）；总大小未知 + 其余状态 = 空轨道（无进度语义）；已知 = 填充进度条
     let bar_w = width.saturating_sub(4);
     let mut l2 = vec![Span::raw("  ")];
-    l2.extend(plain_bar(bar_w, t.progress(), state_c));
+    if !known && t.state == TaskState::Downloading {
+        l2.extend(marquee_bar(bar_w, anim, state_c));
+    } else if known {
+        l2.extend(plain_bar(bar_w, t.progress(), state_c));
+    } else {
+        l2.extend(plain_bar(bar_w, 0.0, state_c));
+    }
     // 行内动态提示（非状态文案，仅校验/后期处理的活动提示）
     match t.state {
         TaskState::Verifying => {
@@ -490,10 +566,7 @@ fn task_lines(
             l3.push(Span::styled(" · ", Style::default().fg(RED)));
             l3.push(Span::styled(countdown, Style::default().fg(RED)));
             l3.push(Span::styled(" · ", Style::default().fg(RED)));
-            l3.push(Span::styled(
-                format!("{}/{}", fmt_size(t.downloaded), fmt_size(t.total)),
-                Style::default().fg(RED),
-            ));
+            l3.push(Span::styled(dl_total_txt(t), Style::default().fg(RED)));
         }
         TaskState::Queued => {
             // 槽位排队信息：位次按列表顺序从上往下（已获槽位的重试任务显示即将开始）
@@ -509,10 +582,7 @@ fn task_lines(
                 ));
             }
             l3.push(Span::styled(" · ", Style::default().fg(DIM)));
-            l3.push(Span::styled(
-                format!("{}/{}", fmt_size(t.downloaded), fmt_size(t.total)),
-                Style::default().fg(FG),
-            ));
+            l3.push(Span::styled(dl_total_txt(t), Style::default().fg(FG)));
         }
         TaskState::Completed => {
             // 校验情况（按算法显示）+ 文件大小
@@ -603,15 +673,16 @@ fn task_lines(
                 l3.push(dash.clone());
             }
             l3.push(Span::styled(
-                format!("  {}/{}", fmt_size(t.downloaded), fmt_size(t.total)),
+                format!("  {}", dl_total_txt(t)),
                 Style::default().fg(FG),
             ));
-            if downloading {
+            if downloading && known {
                 l3.push(Span::styled(
                     format!("  剩余 {}", fmt_eta(t.eta_secs())),
                     Style::default().fg(DIM),
                 ));
             } else {
+                // 非下载中：剩余无义；总大小未知：剩余时间无从估计（缺失数值用 -）
                 l3.push(Span::raw("  剩余 "));
                 l3.push(dash.clone());
             }
@@ -626,8 +697,18 @@ fn task_lines(
     ]
 }
 
-fn render_task(f: &mut Frame, t: &Task, area: Rect, sel: bool, spinner: char, queue_pos: usize) {
-    let text = task_lines(t, sel, spinner, area.width as usize, queue_pos);
+fn render_task(f: &mut Frame, t: &Task, area: Rect, sel: bool, spinner: char, queue_pos: usize, anim: u64) {
+    // 内容宽 = 行宽 - 2：右侧 2 列 padding（§4.3 S2 本轮统一；左 2 列由
+    // 选择光标槽「▌ 」承担）；Paragraph::style 仍作用于整个 area，
+    // 选中背景保持满行，仅内容排版收窄（百分比离右边框 2 列）
+    let text = task_lines(
+        t,
+        sel,
+        spinner,
+        area.width.saturating_sub(2) as usize,
+        queue_pos,
+        anim,
+    );
     let para = Paragraph::new(text).style(if sel {
         Style::default().bg(SEL_BG)
     } else {
@@ -653,14 +734,16 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect, with_chart: bool) {
         .filter(|t| t.upload_speed > 0.0)
         .map(|t| t.upload_speed)
         .sum();
-    // 会话内峰值（速度历史为 KB/s）与全局并发连接数（下载中/做种中任务的连接总数）
+    // 会话内峰值（速度历史为 KB/s）与全局并发连接数（活跃口径，本页重构：
+    // 正在连接/已连接的连接总数，与并发面板 x/y 项 的 x 同口径；
+    // 已断开/待命连接不计入）
     let peak_dl = app.speed_hist.iter().copied().max().unwrap_or(0);
     let peak_ul = app.up_hist.iter().copied().max().unwrap_or(0);
     let conns_n: usize = app
         .tasks
         .iter()
         .filter(|t| t.state.shows_conns())
-        .map(|t| t.connections.len())
+        .map(|t| t.connections.iter().filter(|c| c.is_active()).count())
         .sum();
 
     let block = Block::default()
@@ -719,8 +802,10 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect, with_chart: bool) {
     let ulp = format!("↑ {}", fmt_speed(peak_ul as f64 * 1024.0));
     let sess = fmt_size(app.session_bytes);
 
-    // 字段行 1：单行排列，顺序固定：并发 → 会话已下载 → 全局 → 峰值（第七轮合并为一行）
+    // 字段行 1：单行排列，顺序固定：并发 → 会话已下载 → 全局 → 峰值（第七轮合并为一行）；
+    // 行首 1 空格 + 标签自带前导 1 空格 = 内容区左 2 列 padding（§4.3 S2，本轮统一）
     let fields = Line::from(vec![
+        Span::raw(" "),
         lab(" 并发 "),
         val(&conns_n.to_string()),
         lab("   会话已下载 "),
@@ -768,14 +853,16 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect, with_chart: bool) {
         let row_y = inner.y + 2;
         let list_hot = app.focus == Panel::List && !overlay_open(app);
         // 页签可点击区域（需求修订：鼠标点击切换页签）：每帧重建，
-        // 记录各页签 span 的命中矩形（不含分隔符）
+        // 记录各页签 span 的命中矩形（不含分隔符）；行首空格 + 页签自带
+        // 前导空格 = 内容区左 2 列 padding（§4.3 S2 本轮统一），命中矩形
+        // 随内容同步 +1 列
         app.tab_rects.clear();
         let mut spans: Vec<Span> = Vec::new();
         let mut tabs_w: u16 = 0;
         for (i, label) in FILTERS.iter().enumerate() {
             let text = format!(" {} ({}) ", label, counts[i]);
             let tab_rect = Rect {
-                x: inner.x + tabs_w,
+                x: inner.x + 1 + tabs_w,
                 y: row_y,
                 width: w(&text) as u16,
                 height: 1,
@@ -827,9 +914,9 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect, with_chart: bool) {
         f.render_widget(
             Paragraph::new(Line::from(spans)),
             Rect {
-                x: inner.x,
+                x: inner.x + 1, // 行首空格 + 页签前导空格 = 左 2 列 padding（S2）
                 y: row_y,
-                width: fields_w,
+                width: fields_w.saturating_sub(1),
                 height: 1,
             },
         );
@@ -931,7 +1018,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             width: inner.width,
             height: (ih as u16).min(inner.bottom().saturating_sub(y)),
         };
-        render_task(f, t, row_area, ti == app.selected, spinner, qpos[ti]);
+        render_task(f, t, row_area, ti == app.selected, spinner, qpos[ti], app.frame);
     }
 
     // 通用滚动条（任务数超出一屏才绘制——显示条件在组件内收口）；画在面板
@@ -1067,15 +1154,15 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
 
     // 本轮需求修订：字段值悬停 = 下划线、点击 = 打开完整值弹窗（§6.8）。
     // 悬停判定仅在无浮层时生效（浮层打开时详情面板处于模态降级态）；
-    // 值热区 = 行首 1 空格 + 字段名 9 列之后、值文本实际显示宽 × 1 行，
+    // 值热区 = 行首 2 列 padding + 字段名 9 列之后、值文本实际显示宽 × 1 行，
     // 由 ui 层每帧回填（detail_val_rects），点击行为见 on_mouse。
     let hoverable = !overlay_open(app);
     let val_rect = |idx: usize, vw: usize| -> Option<Rect> {
         let y = inner.y + idx as u16;
         (y < inner.y + inner.height).then(|| Rect {
-            x: inner.x + 10,
+            x: inner.x + 11,
             y,
-            width: vw.min(inner.width.saturating_sub(10) as usize) as u16,
+            width: vw.min(inner.width.saturating_sub(11) as usize) as u16,
             height: 1,
         })
     };
@@ -1093,8 +1180,10 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     };
 
     let mut lines: Vec<Line> = Vec::new();
+    // 行首 2 空格 = 内容区左 2 列 padding（§4.3 S2 本轮统一，原 1 列；
+    // 字段名/值热区 x 同步 +1）
     lines.push(Line::from(vec![
-        Span::styled(" ", Style::default()),
+        Span::raw("  "),
         Span::styled(
             truncate(&t.name, (inner.width as usize).saturating_sub(4)),
             Style::default()
@@ -1115,27 +1204,27 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
             None => "已获得下载槽位，即将开始下载".to_string(),
         };
         lines.push(Line::from(vec![
-            Span::raw(" "),
+            Span::raw("  "),
             label("排队"),
             Span::styled(
-                truncate(&vtxt, (inner.width as usize).saturating_sub(12)),
+                truncate(&vtxt, (inner.width as usize).saturating_sub(13)),
                 Style::default().fg(YELLOW),
             ),
         ]));
     }
     lines.push(Line::from(vec![
-        Span::raw(" "),
+        Span::raw("  "),
         label("ID"),
         Span::styled(format!("{id}", id = t.id), Style::default().fg(DIM)),
     ]));
     // 创建单独一行（v1.20 生产同步拆行；本轮需求修订：字段名「创建时间」→「创建」）
     lines.push(Line::from(vec![
-        Span::raw(" "),
+        Span::raw("  "),
         label("创建"),
         Span::styled(t.created.clone(), Style::default().fg(DIM)),
     ]));
     lines.push(Line::from(vec![
-        Span::raw(" "),
+        Span::raw("  "),
         label("类型"),
         Span::styled(
             t.protocol.label().to_string(),
@@ -1172,7 +1261,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
         let algo_s = ck.algo.to_string();
         let vw = w(&algo_s) + 3 + w(&vshort) + w(st);
         let hv = val_hover(lines.len(), vw, DetailField::Checksum);
-        let mut ck_line = vec![Span::raw(" ")];
+        let mut ck_line = vec![Span::raw("  ")];
         ck_line.extend(label_link("校验"));
         ck_line.push(Span::styled(
             algo_s,
@@ -1189,15 +1278,16 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
         lines.push(Line::from(ck_line));
     }
     lines.push(Line::from(vec![
-        Span::raw(" "),
+        Span::raw("  "),
         label("大小"),
         // v1.12/FR-01-80 同步：仅「已下载/总大小」，不含「（剩余 …）」后缀
-        // （进度展示由列表行承载，FR-01-17 口径不变）
-        val(format!(
-            "{} / {}",
-            fmt_size(t.downloaded),
-            fmt_size(t.total)
-        )),
+        // （进度展示由列表行承载，FR-01-17 口径不变）；总大小未知（不支持
+        // 续传的 HTTP(S) 流式下载，bug 修正）以 ? B 占位
+        val(if t.size_known() {
+            format!("{} / {}", fmt_size(t.downloaded), fmt_size(t.total))
+        } else {
+            format!("{} / ? B", fmt_size(t.downloaded))
+        }),
     ]));
     // 失败：仅「已失败」态展示（生产 v1.22 直判同步——失败挂起不再展示，
     // 详情与普通已暂停完全一致）；本轮需求修订：字段名「失败原因」→「失败」，
@@ -1207,10 +1297,10 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
         fail_line_idx = Some(lines.len());
         let err_s = truncate(
             t.error.as_deref().unwrap_or("未知错误"),
-            (inner.width as usize).saturating_sub(12),
+            (inner.width as usize).saturating_sub(13),
         );
         let hv = val_hover(lines.len(), w(&err_s), DetailField::Failed);
-        let mut fail_line = vec![Span::raw(" ")];
+        let mut fail_line = vec![Span::raw("  ")];
         fail_line.extend(label_link("失败"));
         fail_line.push(Span::styled(err_s, with_underline(Style::default().fg(RED), hv)));
         lines.push(Line::from(fail_line));
@@ -1220,10 +1310,10 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     let save_line_idx = lines.len();
     let save_s = truncate(
         &t.save_path,
-        (inner.width as usize).saturating_sub(12),
+        (inner.width as usize).saturating_sub(13),
     );
     let hv = val_hover(save_line_idx, w(&save_s), DetailField::SavePath);
-    let mut save_line = vec![Span::raw(" ")];
+    let mut save_line = vec![Span::raw("  ")];
     save_line.extend(label_link("路径"));
     save_line.push(Span::styled(save_s, with_underline(Style::default().fg(FG), hv)));
     lines.push(Line::from(save_line));
@@ -1235,10 +1325,10 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     let url_line_idx = lines.len();
     let url_s = break_links(&truncate(
         &t.url,
-        (inner.width as usize).saturating_sub(12),
+        (inner.width as usize).saturating_sub(13),
     ));
     let hv = val_hover(url_line_idx, w(&url_s), DetailField::Url);
-    let mut url_line = vec![Span::raw(" ")];
+    let mut url_line = vec![Span::raw("  ")];
     url_line.extend(label_link("URL"));
     url_line.extend(link_break_spans(
         &url_s,
@@ -1247,11 +1337,13 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     lines.push(Line::from(url_line));
 
     // 分块：文字显示——x/y（x=已完成分块数，y=总分块数）与块大小「N/块」；
-    // 块大小按协议写死（HTTP 1 MB / BT 256 KB），块数 = ceil(total/块大小)
+    // 块大小按协议写死（HTTP 1 MB / BT 256 KB），块数 = ceil(total/块大小)；
+    // 不支持分块下载的任务（不支持续传的 HTTP(S)/FTP：无分块概念，与
+    // supports_pieces 门槛同口径）恒显示 -（bug 修正口径：流式下载无块）
     {
         let (x, y, _) = t.chunk_info();
-        let mut l = vec![Span::raw(" "), label("分块")];
-        if t.total == 0 || y == 0 {
+        let mut l = vec![Span::raw("  "), label("分块")];
+        if t.total == 0 || y == 0 || !t.supports_pieces() {
             l.push(Span::styled("-".to_string(), Style::default().fg(DIM)));
         } else {
             l.push(Span::styled(
@@ -1270,12 +1362,12 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
 
     f.render_widget(Paragraph::new(lines), inner);
 
-    // 修订-5：回填字段名热区（点击复制）。热区 = 行首空格后的字段名整段
-    // （pad_right 9 列，与下划线视觉一致）；y = 内框顶 + 行号，超出内框则不设
+    // 修订-5：回填字段名热区（点击复制）。热区 = 行首 2 列 padding 后的字段名
+    // 整段（pad_right 9 列，与下划线视觉一致）；y = 内框顶 + 行号，超出内框则不设
     let hot = |idx: usize| {
         let y = inner.y + idx as u16;
         (y < inner.y + inner.height).then(|| Rect {
-            x: inner.x + 1,
+            x: inner.x + 2,
             y,
             width: 9,
             height: 1,
@@ -1381,37 +1473,42 @@ fn draw_chart(f: &mut Frame, app: &App, area: Rect) {
 /// 客户端 = 对端客户端两字母缩写（QB=qBittorrent / TR=Transmission / LT=libtorrent …），
 /// 协议 = 传输协议 TCP / uTP（BT 专用列，演示数据确定性生成）。
 /// 累计上传/下载均为当前任务本次开始下载后的累计量（重试/重新排队开新一次下载时清零）；
-/// 仅「下载中」与「做种中」状态的任务有明细，其余状态明细为空、活跃 0/0
-/// （面板为空时滚轮穿透滚任务列表，Ctrl+↑↓/Ctrl+B 给出状态提示 toast）。
+/// 本页重构（活跃口径）：明细只显示活跃并发——「正在连接」或「已经连接」的连接
+/// （Connection::is_active；任务开跑时交错建连，块队列耗尽自然断开），
+/// 待命/已断开连接不显示；右上角徽标 = x/y 项：x = 活跃明细行数（活跃并发数，
+/// 与明细行数同源）、y = 任务设置的最大并发数（前后各 1 空格，左右 padding 对称）。
+/// 列表明细左右各留 2 列 padding（内容不顶格贴边框，与页脚/弹窗阅读内边距同思路）。
+/// 明细为空（未选中任务/非下载做种状态/无活跃连接）时居中提示，面板不接收滚轮
+///（Ctrl+↑↓/Ctrl+B 给出状态提示 toast）。
 /// ↑/↓ 选中行高亮（跟随滚动），B 断开选中连接。
-/// 连接数超出面板高度时纵向滚动（指针悬停于本面板时滚轮滚动这里而非任务列表）。
+/// 活跃连接数超出面板高度时纵向滚动（指针悬停于本面板时滚轮滚动这里而非任务列表）。
 fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     // 通用滚动条命中几何与横向滚动上限：先按空面板清底，有明细时再回填
     app.conns_v_sb = None;
     app.conns_h_sb = None;
     app.conns_max_hscroll = 0;
-    // 修订-3：标题仅展示活跃并发数（原「活跃 x/y」中的上限 y 已移除）；
-    // v139：前后各 1 空格，左右 padding 对称（与左标题 ` 并发连接 ` 同口径）
-    let (is_bt, _total_n, active, empty) = match app.sel_task() {
+    // 活跃口径（本页重构）：明细行 = 活跃并发（正在连接/已连接），
+    // rows_idx = 「显示行 → connections 真实下标」映射；y = 任务最大并发数
+    let (is_bt, rows_idx, max_conc, empty) = match app.sel_task() {
         Some(t) => {
             // 仅「下载中」与「做种中」任务显示并发明细：
             // 其余状态（等待中/已暂停/校验中/后期处理中/已失败/已完成）按空面板处理
             let shows = t.state.shows_conns();
-            (
-                t.protocol.is_bt(),
-                if shows { t.connections.len() } else { 0 },
-                if shows {
-                    t.connections
-                        .iter()
-                        .filter(|c| c.speed > 0.0 || c.up_speed > 0.0)
-                        .count()
-                } else {
-                    0
-                },
-                !shows || t.connections.is_empty(),
-            )
+            let idx: Vec<usize> = if shows {
+                t.connections
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.is_active())
+                    .map(|(i, _)| i)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            // 先取 is_empty 再把 idx move 进元组（Vec 非 Copy，move 后不可借用）
+            let empty = idx.is_empty();
+            (t.protocol.is_bt(), idx, t.concurrency, empty)
         }
-        None => (false, 0, 0, true),
+        None => (false, Vec::new(), 0, true),
     };
     // 聚焦状态（并发连接面板边框/标题/选中行高亮跟随；滚轮滚动不受影响）
     let focused = app.focus == Panel::Conns && !overlay_open(app);
@@ -1422,7 +1519,10 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         .title(Span::styled(" 并发连接 ", panel_title_style(focused)))
         .title(
             Line::from(Span::styled(
-                format!(" 活跃 {} ", active),
+                // 右上角徽标 = x/y 项（本页重构）：x = 活跃明细行数（活跃并发数），
+                // y = 任务设置的最大并发数；前后各 1 空格（左右 padding 对称，
+                // 与左标题 ` 并发连接 ` 同口径）
+                format!(" {}/{} 项 ", rows_idx.len(), max_conc),
                 Style::default().fg(DIM),
             ))
             .alignment(Alignment::Right),
@@ -1436,8 +1536,17 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = sb.render_block(f, area, block);
     app.conns_area = Some(inner);
 
-    // 面板结构：表头 1 行 + 数据行（提示行已删除，全部空间让给数据）
-    let rows = (inner.height as usize).saturating_sub(1);
+    // 列表明细左右 padding（本页重构）：数据区在面板内框基础上左右各收 2 列，
+    // 内容不顶格贴边框（与页脚/字段值弹窗阅读内边距同思路）；面板结构不变 =
+    // 表头 1 行 + 数据行（提示行已删除，全部空间让给数据）
+    const PAD_X: u16 = 2;
+    let view = Rect {
+        x: inner.x.saturating_add(PAD_X),
+        y: inner.y,
+        width: inner.width.saturating_sub(PAD_X * 2),
+        height: inner.height,
+    };
+    let rows = (view.height as usize).saturating_sub(1);
 
     let Some(t) = app.sel_task() else {
         app.visible_conns_rows = 0;
@@ -1450,7 +1559,6 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         );
         return;
     };
-    let conn_total = t.connections.len(); // 预提取（后续写回 app 需先结束 t 借用）
     if empty {
         app.visible_conns_rows = 0;
         // 明细为空：面板不接收滚轮（指针悬停时滚轮滚任务列表）
@@ -1504,20 +1612,22 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let mut lines = vec![Line::from(head)];
 
+    // 活跃明细窗口（本页重构：滚动与选中均在「显示行号」空间，
+    // 行窗口经 rows_idx 映射到真实连接）。
     // 起点钳制到「最后一个满窗」起点（渲染层兜底）：即使滚动态短暂越界
-    // （连接数收缩的过渡帧），窗口也完整覆盖尾部数据行，不产生底部空白行
+    // （活跃行数收缩的过渡帧），窗口也完整覆盖尾部数据行，不产生底部空白行
     //（滚到底闪烁修复的第二道防线；顺带消除 len==0 的潜在减法恐慌）。
-    let start = app
-        .conns_scroll
-        .min(t.connections.len().saturating_sub(rows));
+    let total_rows = rows_idx.len();
+    let start = app.conns_scroll.min(total_rows.saturating_sub(rows));
     let data_rows = rows;
-    let end = (start + data_rows).min(t.connections.len());
+    let end = (start + data_rows).min(total_rows);
 
-    for (i, c) in t.connections[start..end].iter().enumerate() {
-        let i = start + i;
+    for (ri, &ci) in rows_idx[start..end].iter().enumerate() {
+        let disp = start + ri; // 显示行号（选中/滚动空间）
+        let c = &t.connections[ci]; // 活跃映射指向的真实连接
         // 选中行高亮仅在本面板聚焦时显示（lazygit 式：非聚焦面板不显示
         // 内部选中态，视觉焦点唯一）；任务选中不受影响（主列表恒定高亮）
-        let sel = focused && i == app.conns_sel;
+        let sel = focused && disp == app.conns_sel;
         // 选中行：深青背景高亮（同任务列表选中色）
         let bg = if sel { SEL_BG } else { Color::Reset };
         let up_on = c.up_speed > 0.0;
@@ -1569,7 +1679,9 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
             ]
         } else {
             vec![
-                cell(format!("{}", i + 1), 4, if sel { Color::White } else { FG }),
+                // 序号 = 连接在任务连接池中的槽位号（1 基，稳定不随断连重编号；
+                // 活跃明细可能不连续——已断开槽位的序号不显示）
+                cell(format!("{}", ci + 1), 4, if sel { Color::White } else { FG }),
                 Span::styled(" ", Style::default().bg(bg)),
                 // 下载=淡蓝（同头部 ↓/详情速度配色），待命显示 -
                 cell(
@@ -1589,17 +1701,24 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     // 横向滚动偏移（钳制在渲染层兜底 + tick 事件内双防线）：
-    // Paragraph.scroll 的水平分量按显示列跳过行首内容，表头随数据同步平移
-    let hscroll = app.conns_hscroll.min(content_w.saturating_sub(inner.width as usize)) as u16;
-    app.conns_max_hscroll = content_w.saturating_sub(inner.width as usize);
+    // Paragraph.scroll 的水平分量按显示列跳过行首内容，表头随数据同步平移；
+    // 视口宽 = padding 后的数据区宽（本页重构）。上限 = 内容宽 − 视口宽后再
+    // 放宽 1 列：末列（协议）含宽字，若停点与宽字前半格重叠，渲染会按宽字
+    // 边界回退（如 15 → 14），末字「议」将永远差一格无法完整进入视口；
+    // 放宽 1 列后最右停点越过内容末列，末列宽字两格均在视口内完整可见
+    //（滚动条 position 由 Bar 内部按 total−page 钳制，滑块不越界）
+    let hmax = content_w.saturating_sub(view.width as usize) + 1;
+    let hscroll = app.conns_hscroll.min(hmax) as u16;
+    app.conns_max_hscroll = hmax;
     app.visible_conns_rows = data_rows;
-    f.render_widget(Paragraph::new(lines).scroll((0, hscroll)), inner);
+    f.render_widget(Paragraph::new(lines).scroll((0, hscroll)), view);
 
-    // 通用滚动条·垂直（连接数超出一屏时；右边框列 ↑│║│↓）+ 水平（m3：
-    // BT 七列内容宽超出内框时；下边框行 ←─═══─→）——Both 模式一组件双轴，
-    // 显示条件（total>page）在组件内收口，App 字段恒与画面一致
-    sb.vertical(conn_total, data_rows, app.conns_scroll)
-        .horizontal(content_w, inner.width as usize, app.conns_hscroll);
+    // 通用滚动条·垂直（活跃明细行数超出一屏时；右边框列 ↑│║│↓）+ 水平（m3：
+    // BT 七列内容宽超出数据区宽时；下边框行 ←─═══─→）——Both 模式一组件双轴，
+    // 显示条件（total>page）在组件内收口，App 字段恒与画面一致；
+    // 垂直 total = 活跃明细行数（本页重构），水平视口 = padding 后宽
+    sb.vertical(total_rows, data_rows, app.conns_scroll)
+        .horizontal(content_w, view.width as usize, app.conns_hscroll);
     let bars = sb.render_bars(f, area);
     app.conns_v_sb = bars.vertical;
     app.conns_h_sb = bars.horizontal;
@@ -1613,17 +1732,17 @@ fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // 双行页脚（v0.2 修订）：
-    // 行 1 = 常用命令图例 chips：A 添加 / D 删除 / M 修改 / Q 退出 / H 帮助
-    //   （鼠标左键可点击——按压反色高亮 = 点击效果、原地松开执行对应命令，
-    //   与键盘快捷键同口径；完整交互说明仍收敛于 H 帮助窗口，P3 原则）；
-    // 行 2 = toast 提示（◆ 黄色消息，§7.4）。
+    // 双行页脚（行 1 快捷命令 chips 恢复 + 行 2 toast 保留——本轮修订：
+    // 页脚的常用命令图例 chips 与 toast 反馈通道均为页脚既有功能，保留；
+    // P10「窗口不需要有提示信息」针对 panel/弹窗内容区，页脚 chips 是
+    // 可点击的命令入口（非提示文案），toast 是操作反馈通道（§7.4）；
+    // panel/弹窗仍一律无提示信息，样式沿用 §4.3 统一 padding 体系）。
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    // 左右内边距（修订）：各留 1 列空白，与头部面板右侧留白同距（图区右缘
-    // 到右边框 1 列）——内容不再顶格贴边框，行 1 chips 与行 2 toast 起止一致。
-    const PAD: u16 = 1;
+    // 左右内边距（§4.3 S2，本轮 padding 统一口径）：各留 2 列空白（与其他
+    // panel/弹窗内容区同宽）——行 1 chips 与行 2 toast 起止一致，不顶格贴边框。
+    const PAD: u16 = 2;
     let row_x = inner.x + PAD;
     let row_w = inner.width.saturating_sub(PAD * 2);
     let row1 = Rect {
@@ -1830,13 +1949,14 @@ fn field_display(val: &str, ph: &str, avail: usize) -> String {
 }
 
 /// 下拉浮层定位：优先展开在选择行下方；超出终端底部则改为行上方；
-/// 横向钳制在终端内（左右各留 1 列边距）
+/// 横向钳制在终端内（左右各留 1 列边距）；px = 内框 + 9 = 字段行左 2 列
+/// padding 后「> 」指示符所在列（与字段行相对对齐随 S2 同步 +1）
 fn dropdown_rect(area: Rect, inner: Rect, row_y: u16, pw: u16, ph: u16) -> Rect {
     let mut py = row_y + 1;
     if py + ph > area.y + area.height {
         py = row_y.saturating_sub(ph);
     }
-    let px = (inner.x + 8)
+    let px = (inner.x + 9)
         .min(area.x + area.width.saturating_sub(pw + 1))
         .max(area.x + 1);
     Rect {
@@ -1863,16 +1983,20 @@ struct Row {
 
 /// 添加/修改任务对话框统一渲染（v1.5/FR-01-86/87 同步）：字段行 + 按钮行
 /// （需求修订：底部快捷键提示行已删除，高度相应缩短 1 行；完整说明见 H 帮助）
-/// + 算法/代理下拉浮层。
+/// + 算法/代理下拉浮层。本轮 padding 统一（§4.3 S2）：内容左右各 2 列、
+/// 上下各 1 行——窗体高度底部补齐 1 行（字段行/按钮行 y 不变），
+/// 字段行 x +2（热区同步）。
 ///
 /// * Add —— URL/保存到/并发/校验/校验码/代理（立即下载 6 · 仅添加 7 · 取消 8）
 /// * Modify —— 并发/校验/校验码/代理（确定 4 取消 5）
 fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) {
     let is_add = kind == DialogKind::Add;
     let (title, dw, dh) = if is_add {
-        (" 添加任务：HTTP(S) ", 74u16, 11u16)
+        // 74×12（本轮 padding 统一：内框 72×10 = 顶 1 + 字段 6 + 空 1 +
+        // 按钮 1 + 底 1；原 11 行按钮贴底，底部补 1 行 padding）
+        (" 添加任务：HTTP(S) ", 74u16, 12u16)
     } else {
-        (" 修改任务：HTTP(S) ", 74, 9)
+        (" 修改任务：HTTP(S) ", 74, 10)
     };
     // 可拖拽定位：记忆位置优先（钳制在终端内），首帧居中并回填位置/热区
     let dlg = dialog_rect_at(area, app.dialog_pos, dw, dh);
@@ -1893,7 +2017,7 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
     // 右上角 [✗]（本轮需求修订：全部弹窗统一；原地松开 = 取消对话框，
     // Esc 同口径；先于下拉浮层绘制，展开下拉时被覆盖、点击先收起下拉）
     app.popup_close_rect = draw_close_btn(f, app, dlg, w(title));
-    let min_h = if is_add { 9 } else { 7 };
+    let min_h = if is_add { 10 } else { 8 };
     if inner.width < 24 || inner.height < min_h {
         return;
     }
@@ -1963,7 +2087,8 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         kind: RowKind::ProxySel,
     });
 
-    let avail = (inner.width as usize).saturating_sub(12);
+    // 值文本可用宽 = 行宽 − 左 2 − 字段名 7 − "> " 2 − 右 2（§4.3 S2）
+    let avail = (inner.width as usize).saturating_sub(13);
     let mut ck_row_y = inner.y;
     let mut proxy_row_y = inner.y;
     for (i, row) in rows.iter().enumerate() {
@@ -2022,9 +2147,9 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
             }
         }
         let rect = Rect {
-            x: inner.x + 1,
+            x: inner.x + 2, // 内容区左 2 列 padding（§4.3 S2，本轮统一）
             y: row_y,
-            width: inner.width.saturating_sub(2),
+            width: inner.width.saturating_sub(4),
             height: 1,
         };
         f.render_widget(Paragraph::new(Line::from(spans)), rect);
@@ -2093,7 +2218,7 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
             let bg = if sel { Color::DarkGray } else { Color::Reset };
             let line = Line::from(vec![
                 Span::styled(
-                    format!(" {} ", if sel { "▸" } else { " " }),
+                    format!("  {} ", if sel { "▸" } else { " " }),
                     Style::default().fg(if sel { ACCENT } else { DIM2 }).bg(bg),
                 ),
                 Span::styled(
@@ -2145,7 +2270,7 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
             let bg = if sel { Color::DarkGray } else { Color::Reset };
             let line = Line::from(vec![
                 Span::styled(
-                    format!(" {} ", if sel { "▸" } else { " " }),
+                    format!("  {} ", if sel { "▸" } else { " " }),
                     Style::default().fg(if sel { ACCENT } else { DIM2 }).bg(bg),
                 ),
                 Span::styled(
@@ -2174,7 +2299,9 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
 }
 
 fn draw_delete_dialog(f: &mut Frame, app: &mut App, area: Rect) {
-    // 可拖拽定位：记忆位置优先（钳制在终端内），首帧居中并回填位置/热区
+    // 可拖拽定位：记忆位置优先（钳制在终端内），首帧居中并回填位置/热区；
+    // 66×7（本轮 padding 统一：底部补齐 1 行，内框 64×5 = 顶 1 + 提示 1 +
+    // 空 1 + 按钮 1 + 底 1）
     let dlg = dialog_rect_at(area, app.dialog_pos, 66, 7);
     if app.dialog_pos.is_none() {
         app.dialog_pos = Some((dlg.x, dlg.y));
@@ -2201,10 +2328,10 @@ fn draw_delete_dialog(f: &mut Frame, app: &mut App, area: Rect) {
         (d.focus, d.task_name.clone())
     };
 
-    // 提示信息
+    // 提示信息（内容区左 2 列 padding，§4.3 S2；文本不再自带前导空格）
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(" 删除任务 ", Style::default().fg(DIM)),
+            Span::styled("删除任务 ", Style::default().fg(DIM)),
             Span::styled(
                 format!(
                     "「{}」",
@@ -2214,12 +2341,12 @@ fn draw_delete_dialog(f: &mut Frame, app: &mut App, area: Rect) {
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" ？", Style::default().fg(DIM)),
+            Span::styled("？", Style::default().fg(DIM)),
         ])),
         Rect {
-            x: inner.x + 1,
+            x: inner.x + 2,
             y: inner.y + 1,
-            width: inner.width.saturating_sub(2),
+            width: inner.width.saturating_sub(4),
             height: 1,
         },
     );
@@ -2246,20 +2373,8 @@ fn draw_delete_dialog(f: &mut Frame, app: &mut App, area: Rect) {
         app.dlg_btn_rects.push((rect, *idx));
         bx += bw + 2;
     }
-
-    // 提示行
-    f.render_widget(
-        Paragraph::new(Span::styled(
-            " 1/2/3 快捷选择 · Enter 确认 · Esc 取消",
-            Style::default().fg(DIM2),
-        )),
-        Rect {
-            x: inner.x + 1,
-            y: inner.y + 4,
-            width: inner.width.saturating_sub(2),
-            height: 1,
-        },
-    );
+    // 本轮需求修订：底部快捷键提示行已删除（窗口不需要有提示信息，
+    // 交互说明统一收敛到 H 帮助窗口）；底部 1 行 padding（§4.3 S2）
 }
 
 // ---------------------------------------------------------------------------
@@ -2278,10 +2393,11 @@ fn piece_span(st: PieceState, n: usize) -> Span<'static> {
     Span::styled(ch.to_string().repeat(n), Style::default().fg(color))
 }
 
-/// pieces 弹窗固定尺寸（宽×高，含边框；高度较初版缩短 2 行：
-/// 底部快捷键提示行改为图例行，网格区域同步收紧）
+/// pieces 弹窗固定尺寸（宽×高，含边框；本轮 padding 统一：高度 19→21——
+/// 底部快捷键提示行改为图例行后，再按 §4.3 S2 补齐上下各 1 行 padding，
+/// 网格仍 14 行）
 const PIECES_W: u16 = 64;
-const PIECES_H: u16 = 19;
+const PIECES_H: u16 = 21;
 
 /// pieces 分块弹窗（P）：展示选中任务分块（piece）状态一览。
 ///
@@ -2311,9 +2427,10 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let y = y as usize;
 
-    // 弹窗尺寸 64×19（内框 62×17：名称/元信息/图例各 1 行 + 网格 14 行；
-    // 每行 31 块 → 一屏 434 块）；位置优先取记忆的拖拽位置（钳制在终端内），
-    // 打开首帧居中并记忆；小终端钳制尺寸，网格行数随内框收缩
+    // 弹窗尺寸 64×21（内框 62×19：顶 padding 1 + 名称/元信息/图例各 1 行 +
+    // 网格 14 行 + 底 padding 1；每行 29 块 → 一屏 406 块；本轮 padding 统一
+    // §4.3 S2：内容左右各 2 列、上下各 1 行）；位置优先取记忆的拖拽位置
+    // （钳制在终端内），打开首帧居中并记忆；小终端钳制尺寸，网格行数随内框收缩
     let rect = match app.pieces_pos {
         Some((px, py)) => {
             let dw = PIECES_W.min(area.width);
@@ -2349,16 +2466,27 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
     // 右上角 [✗]（本轮需求修订：全部弹窗统一；原地松开 = 关闭分块弹窗）
     app.popup_close_rect = draw_close_btn(f, app, rect, w(" 分块状态 "));
 
-    let cols = (inner.width as usize / 2).max(1); // 每块占 2 列
     let rows = Layout::vertical([
+        Constraint::Length(1), // 顶部 padding（§4.3 S2：内容区上 1 行）
         Constraint::Length(1), // 任务名
         Constraint::Length(1), // 元信息
         Constraint::Min(1),    // 分块网格
         Constraint::Length(1), // 图例行（四色说明；需求修订：替代快捷键提示）
+        Constraint::Length(1), // 底部 padding（§4.3 S2：内容区下 1 行）
     ])
     .split(inner);
-    let grid = rows[2];
+    let grid = rows[3];
     let grid_h = grid.height as usize;
+    // 网格视口（左 2 列、右 2 列 padding，§4.3 S2 本轮统一）
+    let grid_view = Rect {
+        x: grid.x + 2,
+        y: grid.y,
+        width: grid.width.saturating_sub(4),
+        height: grid.height,
+    };
+    // 每行列数 = 视口宽 / 2（每块占 2 列）——块总数/前沿换算/行构建共用同一
+    // 份定义，保证行内容不超出收窄后的视口（64×21 下 = 29 块/行）
+    let cols = (grid_view.width as usize / 2).max(1);
 
     let total_rows = y.div_ceil(cols);
     // 打开首帧：以第一块未完成块所在行为中心定位（下载前沿可见：
@@ -2373,20 +2501,23 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
         .min(total_rows.saturating_sub(grid_h));
     let start_row = app.pieces_scroll;
 
-    // 行 1：任务名（超宽截尾）
+    // 行 1：任务名（超宽截尾；预算 = 内框宽 − 左 2 − 右 2，§4.3 S2）
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            format!(" {}", truncate(&name, inner.width as usize)),
+            format!(
+                "  {}",
+                truncate(&name, inner.width.saturating_sub(4) as usize)
+            ),
             Style::default().fg(FG).add_modifier(Modifier::BOLD),
         ))),
-        rows[0],
+        rows[1],
     );
 
     // 行 2：元信息 = 协议 · 块大小 · x/y 块（x=已下载块数，与详情面板分块行
-    // 同口径）· 并发上限
+    // 同口径）· 并发上限（左 2 列 padding，§4.3 S2）
     let meta = Span::styled(
         format!(
-            " {} · 块大小 {} · {}/{} 块 · 并发 {}",
+            "  {} · 块大小 {} · {}/{} 块 · 并发 {}",
             proto.label(),
             chunk_size_label(proto),
             x,
@@ -2395,9 +2526,10 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
         ),
         Style::default().fg(DIM),
     );
-    f.render_widget(Paragraph::new(Line::from(vec![meta])), rows[1]);
+    f.render_widget(Paragraph::new(Line::from(vec![meta])), rows[2]);
 
-    // 行 3：分块网格（仅构建可视行；同状态连续块合并为单 span）
+    // 行 3：分块网格（仅构建可视行；同状态连续块合并为单 span）；
+    // 行构建与视口共用同一 cols（29 块/行），不产生行尾裁切
     let mut lines: Vec<Line> = Vec::with_capacity(grid_h);
     for r in 0..grid_h {
         let s = (start_row + r) * cols;
@@ -2419,13 +2551,13 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
         spans.push(piece_span(run, e - run_at));
         lines.push(Line::from(spans));
     }
-    f.render_widget(Paragraph::new(lines), grid);
+    f.render_widget(Paragraph::new(lines), grid_view);
 
     // 行 4：图例（需求修订：底部分块状态说明，替代原快捷键提示行——
-    // 色块字符与网格同源，字色兜底同 piece_span）
+    // 色块字符与网格同源，字色兜底同 piece_span；左 2 列 padding）
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(" ", Style::default()),
+            Span::styled("  ", Style::default()),
             Span::styled("🟩", Style::default().fg(GREEN)),
             Span::styled(" 已下载   ", Style::default().fg(FG)),
             Span::styled("🟦", Style::default().fg(LIGHT_BLUE)),
@@ -2435,7 +2567,7 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
             Span::styled("⬜", Style::default().fg(EMPTY)),
             Span::styled(" 未下载", Style::default().fg(FG)),
         ])),
-        rows[3],
+        rows[4],
     );
 
     // 通用滚动条·垂直（块数超出一屏才绘制——显示条件在组件内收口；
@@ -2451,26 +2583,29 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
 // 帮助窗口（H 快捷键）
 // ---------------------------------------------------------------------------
 
-/// 帮助窗口固定尺寸（宽×高，含边框）
+/// 帮助窗口固定尺寸（宽×高，含边框；内容区上下各收 1 行 padding（§4.3 S2），
+/// 窗体尺寸不变、可视行 22→20）
 const HELP_W: u16 = 70;
 const HELP_H: u16 = 24;
 
 /// 分类帮助内容（需求修订：按 panel / 窗口分组的交互说明）。
 /// 每帧重建（行数小、无状态）；键名列用 CJK 感知宽度对齐。
+/// padding（§4.3 S2/S3）：组标题左 2 列（内容区基准）、条目行左 4 列
+///（内容区基准 + 2 列层次缩进）；内容渲染区上下各收 1 行（draw_help）。
 fn help_lines() -> Vec<Line<'static>> {
-    /// 分组标题
+    /// 分组标题（左 2 列 = 内容区基准）
     fn sec(t: &str) -> Line<'static> {
         Line::from(Span::styled(
-            format!(" 【{}】", t),
+            format!("  【{}】", t),
             Style::default()
                 .fg(FOCUS_BORDER)
                 .add_modifier(Modifier::BOLD),
         ))
     }
-    /// 键位 + 说明（键列 16 显示宽，CJK 感知对齐）
+    /// 键位 + 说明（键列 16 显示宽，CJK 感知对齐；左 4 列 = 基准 2 + 层次 2）
     fn kd(k: &str, d: &str) -> Line<'static> {
         Line::from(vec![
-            Span::styled("   ", Style::default()),
+            Span::styled("    ", Style::default()),
             Span::styled(
                 pad_right(k, 16),
                 Style::default()
@@ -2479,10 +2614,6 @@ fn help_lines() -> Vec<Line<'static>> {
             ),
             Span::styled(d.to_string(), Style::default().fg(FG)),
         ])
-    }
-    /// 补充说明（暗色）
-    fn note(s: &str) -> Line<'static> {
-        Line::from(Span::styled(s.to_string(), Style::default().fg(DIM)))
     }
     vec![
         sec("全局"),
@@ -2535,8 +2666,6 @@ fn help_lines() -> Vec<Line<'static>> {
         sec("pieces 分块弹窗"),
         kd("↑↓ / PgUp·PgDn", "滚动分块网格（Home / End 跳首/尾）"),
         kd("Esc / P / [✗]", "关闭弹窗（右上角按钮可点击，悬停高亮）"),
-        note(""),
-        note(" ↑↓/滚轮 滚动本页 · Esc/H 关闭"),
     ]
 }
 
@@ -2579,12 +2708,20 @@ fn draw_help(f: &mut Frame, app: &mut App, area: Rect) {
     app.popup_close_rect = draw_close_btn(f, app, rect, w(" 帮助 "));
 
     let lines = help_lines();
-    let view_h = inner.height as usize;
+    // 内容区 = 内框上下各收 1 行 padding（§4.3 S2 本轮统一；滚动型窗口：
+    // 窗体尺寸不变，可视行数减 2）
+    let content = Rect {
+        x: inner.x,
+        y: inner.y + 1,
+        width: inner.width,
+        height: inner.height.saturating_sub(2),
+    };
+    let view_h = content.height as usize;
     let max_scroll = lines.len().saturating_sub(view_h);
     app.help_scroll = app.help_scroll.min(max_scroll);
     let start = app.help_scroll;
     let shown: Vec<Line> = lines.iter().skip(start).take(view_h).cloned().collect();
-    f.render_widget(Paragraph::new(shown), inner);
+    f.render_widget(Paragraph::new(shown), content);
 
     // 通用滚动条·垂直（内容超窗才绘制——显示条件在组件内收口；↑↓ 箭头 +
     // │轨道 + ║滑块；滑块拖拽 = 滚动内容、箭头点击/按住连发、轨道翻页——
@@ -2784,7 +2921,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let outer = Layout::vertical([
         Constraint::Length(5), // 顶部区：头部仪表面板（标题边框 + 字段/分割线/页签 3 内容行 + 底边框）
         Constraint::Min(8),   // 主区：任务列表 | 任务详情 + 并发连接面板
-        Constraint::Length(4), // 页脚（双行：常用命令图例 chips + toast）
+        Constraint::Length(4), // 页脚（双行：行1 快捷命令 chips + 行2 toast；chips 恢复保留）
     ])
     .split(area);
 

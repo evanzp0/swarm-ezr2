@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """verify_footer_pad_scroll.py — 两项修订的端到端验证。
 
-A. footer 左右内边距：内容行首列（边框内侧）为空白，chips 从第 2 内容列开始；
-   新几何下点击 H 打开帮助、点击 Q 退出（命中矩形随 padding 平移回归）。
+A. footer 双行化（本轮修订：命令图例 chips 恢复 + toast 保留）：页脚总高 4
+   （边框 2 + 内容 2），行 1 = 五枚命令 chips（A/D/M/Q/H，鼠标点击与键盘同
+   口径），行 2 = toast（◆）；左右各 2 列内边距（§4.3 S2，panel/弹窗同宽）；
+   chips 点击回归：点击 H 开帮助、点击 Q 退出（命中矩形随双行 + 2 列
+   padding 平移）。
 B. 并发列表滚动到底即停：滚到底后继续大量下滚，面板数据区不出现空白行
    （闪烁 bug 的特征是越界窗口渲染出底部空白行又被钳回）。
 
@@ -13,6 +16,7 @@ B. 并发列表滚动到底即停：滚到底后继续大量下滚，面板数�
 import os
 import pty
 import os
+import re
 import select
 import sys
 import time
@@ -100,18 +104,29 @@ def main():
         lines = render()
         _ = lines
 
-        # ---------- A1-A3: footer padding ----------
-        fr = ROWS - 3  # 页脚内容行 1
-        left_border_x = find_in_row(fr, "│")
-        right_border_x = COLS - 1 - lines[fr][::-1].index("│")
-        check("A1 footer 行1 边框内侧第 1 列为空白（左 padding）",
-              screen.buffer[fr][left_border_x + 1].data == " ",
-              f"got {screen.buffer[fr][left_border_x + 1].data!r}")
-        a_col = find_in_row(fr, "A")
-        check("A2 chips 起列 = 边框内侧第 2 列（padding=1）", a_col == left_border_x + 2,
-              f"A at col {a_col}, expect {left_border_x + 2}")
+        # ---------- A: footer 双行化（chips 恢复 + toast 保留，本轮修订） ----------
+        fr1 = ROWS - 3  # 页脚内容行 1（chips；总高 4：边框 2 + 内容 2）
+        fr2 = ROWS - 2  # 页脚内容行 2（toast）
+        lines = render()
+        left_border_x = find_in_row(fr1, "│")
+        right_border_x = COLS - 1 - lines[fr1][::-1].index("│")
+        check("A1 footer 总高 4 行（上边框为圆角 ╭）",
+              lines[ROWS - 4].startswith("╭") and lines[ROWS - 1].startswith("╰"),
+              f"top={lines[ROWS - 4][:3]!r} bot={lines[ROWS - 1][:3]!r}")
+        check("A2 chips 行边框内侧 2 列均为空白（左 padding = 2 列，§4.3 S2）",
+              screen.buffer[fr1][left_border_x + 1].data == " "
+              and screen.buffer[fr1][left_border_x + 2].data == " ",
+              f"got {screen.buffer[fr1][left_border_x + 1].data!r} "
+              f"{screen.buffer[fr1][left_border_x + 2].data!r}")
+        foot_text = lines[fr1]
+        check("A3 行 1 五枚命令 chips 全部可见（A 添加/D 删除/M 修改/Q 退出/H 帮助）",
+              all(s in foot_text for s in ("A 添加", "D 删除", "M 修改", "Q 退出", "H 帮助")),
+              f"row={foot_text!r}")
+        check("A4 行 2 启动欢迎 toast 可见（◆ 前缀，4s 内；行 1 无 ◆）",
+              find_in_row(fr2, "◆") is not None and find_in_row(fr1, "◆") is None,
+              f"row2={lines[fr2]!r}")
 
-        # ---------- B 前置：定位并发连接面板 ----------
+        # ---------- B 前置：定位并发连接面板（保持原口径） ----------
         title_y = next((y for y in range(ROWS) if find_in_row(y, "并发连接") is not None), None)
         check("B1 前置：找到并发连接面板", title_y is not None)
         data_top = data_bot = bottom_first = init_first = None
@@ -121,15 +136,28 @@ def main():
             data_bot = bottom_y - 1
             panel_l = left_border_x
             panel_r = right_border_x
+            # 并发面板左列 = 标题行 ╭（右列 42% 起点列）；滚轮与切片都落在
+            # 本面板内（旧版用整行/全屏中点，滚轮落左列任务列表——修复）
+            right_panel_l = find_in_row(title_y, "╭ 并发连接")
+            if right_panel_l is None:
+                right_panel_l = panel_l
 
             def data_blank_rows(ls):
                 return [y for y in range(data_top, data_bot + 1)
-                        if not ls[y][panel_l + 1: panel_r].strip()]
+                        if not ls[y][right_panel_l + 1: panel_r].strip()]
 
             check("B2 前置：面板初始无空白数据行", len(data_blank_rows(lines)) == 0,
                   f"blanks={data_blank_rows(lines)}")
-            init_first = lines[data_top].strip()[:10]
-            cx = (panel_l + 1 + panel_r) // 2
+
+            # 面板首行判定只取首列序号（速度/累计值为实时模拟数据，
+            # 逐秒跳动不可比对；序号 = 连接池槽位号，稳定）
+            def panel_first(ls):
+                m = re.match(r"\s*(\d+)",
+                             ls[data_top][right_panel_l + 1: panel_r].strip())
+                return m.group(1) if m else ""
+
+            init_first = panel_first(lines)
+            cx = (right_panel_l + 1 + panel_r) // 2
             cy = (data_top + data_bot) // 2
 
             # 大量下滚（20 次 × 2 行 ≫ 连接总数，必然多次触底）
@@ -141,8 +169,8 @@ def main():
             lines4 = render()
             bl = data_blank_rows(lines4)
             check("B3 触底后连续下滚：无空白数据行（闪烁修复）", len(bl) == 0, f"blank rows={bl}")
-            bottom_first = lines4[data_top].strip()[:10]
-            check("B4 触底后窗口已移动（首行 ≠ 初始首行）",
+            bottom_first = panel_first(lines4)
+            check("B4 触底后窗口已移动（面板首行 ≠ 初始首行）",
                   bottom_first != init_first and bottom_first != "",
                   f"init={init_first!r} now={bottom_first!r}")
 
@@ -168,30 +196,30 @@ def main():
             time.sleep(0.25)
             read_all(fd, 0.4)
             lines6 = render()
-            check("B7 上滚回顶：首行恢复初始连接", lines6[data_top].strip()[:10] == init_first,
-                  f"now={lines6[data_top].strip()[:10]!r} expect={init_first!r}")
+            check("B7 上滚回顶：面板首行恢复初始连接", panel_first(lines6) == init_first,
+                  f"now={panel_first(lines6)!r} expect={init_first!r}")
 
-        # ---------- A4/A5: 新几何下点击 H 打开帮助 ----------
-        hx = find_in_row(fr, "帮助")
-        check("A4 前置：footer 行内可见「帮助」chip", hx is not None)
+        # ---------- A5-A7: chips 点击回归（命中矩形随双行 + 2 列 padding 平移） ----------
+        hx = find_in_row(fr1, "帮助")
+        check("A5 前置：footer 行 1 可见「帮助」chip", hx is not None)
         if hx is not None:
-            sgr_click(fd, hx, fr)
+            sgr_click(fd, hx, fr1)
             time.sleep(0.8)
             read_all(fd, 0.6)
             lines2 = render()
             # 帮助窗口出现 = 页脚行之外的区域出现「帮助」字样（页脚 chip 排除）
             opened = any(find_in_row(y, "帮助") is not None for y in range(0, ROWS - 5))
-            check("A5 点击 H 打开帮助窗口", opened)
+            check("A6 点击 H 打开帮助窗口", opened)
             if opened:
                 send(fd, b"q")  # 帮助窗口内 q = 关窗（不退出）
                 time.sleep(0.6)
                 read_all(fd, 0.5)
 
-        # ---------- A6: 点击 Q 退出（新几何回归） ----------
+        # ---------- A7: 点击 Q 退出（双行页脚命中矩形回归） ----------
         lines_now = render()
-        qx = find_in_row(fr, "退出")
+        qx = find_in_row(fr1, "退出")
         if qx is not None:
-            sgr_click(fd, qx, fr)
+            sgr_click(fd, qx, fr1)
             time.sleep(1.0)
             dead = False
             try:
@@ -199,9 +227,9 @@ def main():
                 dead = wpid == pid
             except ChildProcessError:
                 dead = True
-            check("A6 点击 Q 退出进程（padding 后命中矩形正确）", dead)
+            check("A7 点击 Q 退出进程（双行页脚命中矩形正确）", dead)
         else:
-            check("A6 前置：找到「退出」chip", False)
+            check("A7 前置：找到「退出」chip", False)
     finally:
         try:
             os.kill(pid, 9)

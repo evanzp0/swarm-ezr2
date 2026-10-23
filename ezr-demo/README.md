@@ -14,7 +14,7 @@ chmod +x bin/ezr-tui-demo
 ## 目录结构
 
 - `bin/ezr-tui-demo` — 随包预编译的 release 二进制（x86-64 Linux, stripped；
-  已随变更记录 12 重建，与当前源码一致；如需自行构建见「重新构建」）
+  已随变更记录 18 重建，与当前源码一致；如需自行构建见「重新构建」）
 - `src/` — 全部源码（`src/ui.rs` 布局与渲染、`src/app.rs` 交互与模拟器）
 - `docs/` — 设计文档，含《ezr-demo UI界面及交互设计规范.md》（与实现同步维护）
 - `scripts/` — 回归/验证脚本（见下）
@@ -174,6 +174,151 @@ chmod +x bin/ezr-tui-demo
      1 列 padding，热区仍为 `[✗]` 自身 3 列；
    - 文档同步：规范文档头部修订说明、§4.2.3/§4.2.5/§6.8/§9；源码头部
      注释同步；bin/ 预编译二进制已随本记录重建
+14. **并发连接面板重构（活跃口径）**
+   - **明细只显示活跃并发**：活跃并发 = 「正在连接」（握手中，TCP/uTP
+     尚未传数据）或「已经连接」（握手完成、持有块在传）的连接；待命/
+     已断开连接不再显示。新增 `ConnPhase` 连接阶段（正在连接/已连接/
+     已断开，`Connection::is_active()` 为活跃判定唯一口径）：
+     - 任务开始/续传下载（等待中获槽开跑）时各连接槽位按序交错进入
+       「正在连接」（握手耗时 0.2s 起每个 +0.1s、上限 1.5s，速度列 `-`、
+       不传数据），握手完成转「已连接」开始跳动；
+     - 下载临近结束块队列耗尽时连接自然转「已断开」，明细行逐个消失；
+     - 头部全局「并发」字段同步改为活跃口径计数（已断开连接不计）。
+   - **右上角徽标 ` 活跃 N ` → ` x/y 项 `**：前后各 1 空格 padding 保留
+     （左右对称，与左标题 ` 并发连接 ` 同口径）；x = 并发明细行数
+     （活跃并发数，与明细行严格同源），y = 任务设置的最大并发数
+     （添加对话框设定 1–64、修改对话框热调）——x 从 0 爬升至 y、随队列
+     耗尽回落的全过程实时可见；空态仍显示 ` 0/y 项 `。
+   - **列表明细左右各留 2 列 padding**：表头与数据行在面板内框基础上左右
+     各收 2 列，内容不再顶格贴边框（与页脚/字段值弹窗阅读内边距同思路）；
+     滚动/命中/横向滚动条几何随数据区平移，点击与键盘语义不变。
+   - **滚动/选中口径同步**：明细滚动（滚轮/滚动条/PgUp·PgDn）、选中行
+     （↑↓/点击）均以活跃明细行为准；B 断开选中行先映射回真实连接下标
+     再移除（HTTP `序号` = 连接池槽位号 1 基，稳定不随断连重编号）。
+   - 文档同步：《docs/ezr-demo UI界面及交互设计规范.md》（头部修订说明、
+     §5.4 全节）；`scripts/verify_ezr.py` 徽标断言同步为 x/y 项 口径
+15. **编译修复与回归校准（活跃口径重构的收尾）**
+   - **E0382 修复**（`src/ui.rs` draw_conns）：`idx`（`Vec<usize>`，非 Copy）
+     move 进元组后又调用 `idx.is_empty()` 触发借用错误——改为先取
+     `let empty = idx.is_empty();` 再 move（无克隆开销）
+   - **横向滚动上限 +1**（`src/ui.rs`）：数据视口收窄至 44 列后，
+     `内容宽 59 − 44 = 15` 的停点与末列宽字「议」（57–58 列）前半格重叠，
+     渲染按宽字边界回退到 14，末字永远差一格无法完整进入视口；上限放宽
+     为 `内容宽 − 视口宽 + 1` 后滚到最右末列完整可见（滑块位置仍由滚动
+     条组件按内容宽−视口宽钳制、不越界）；文档 §5.4 同步
+   - **verify_ezr.py 校准**（padding 后几何 + 活跃口径）：面板数据切片从
+     `px+1` 改为 `px+3`（内框 + 2 列 padding）；表头可见列断言按视口 44 列
+     重算（初始 IP/下载速度/累计下载/上传速度 可见、累计上传右缘裁切；
+     滚动最右尾列五列齐全）；N5b 按键整体推迟到 3s 后——避开 neovim
+     ~2.3s 完成移出页签导致选中下标变化、横向偏移按设计归零重置的窗口
+   - **bin/ 预编译二进制已随本记录重建**（release, stripped）
+   - **全套回归 194/194 通过**（verify_ezr.py 全部 19 个场景：abcde 44、
+     fghij 43、klmrs 47、nop 60）
+16. **需求修订（窗口提示信息清理 + 设计原则定版）**
+   - **设计原则定版（P10/P11）**：**「窗口不需要有提示信息」「窗口右上角
+     关闭按钮」**写入《ezr-demo UI界面及交互设计规范.md》设计原则表——
+     任何窗口（面板/页脚/弹窗）内不渲染操作提示/快捷键图例，操作反馈走
+     toast，交互说明唯一入口 = H 帮助窗口；全部弹窗统一右上角 [✗] 关闭
+     按钮（常驻可见的鼠标关闭通道，不依赖提示行告知）
+   - **主界面页脚单行化**：常用命令图例 chips（A 添加 / D 删除 / M 修改 /
+     Q 退出 / H 帮助）删除，页脚只保留 toast 反馈，总高 4 → 3（主区相应
+     +1 行）；chips 的鼠标点击通道（`footer_cmd_rects` / `footer_press` /
+     `footer_flash` / `footer_chip_hot` / `run_footer_cmd`）随之一并移除
+   - **帮助窗口**：底部 note 提示行（` ↑↓/滚轮 滚动本页 · Esc/H 关闭`）删除，
+     帮助内容 53 → 50 行；【全局】组同步去除「页脚命令」条目
+   - **删除任务对话框**：底部快捷键提示行（`1/2/3 快捷选择 · Enter 确认 ·
+     Esc 取消`）删除，尺寸 66×7 → 66×6（本弹窗为最后一个保留提示行的
+     弹窗，至此全部窗口无提示信息）
+   - 脚本同步：verify_footer_pad_scroll.py（A 部分改写为单行 toast 页脚
+     口径 + B 部分滚轮/切片修正到并发面板列区间、首行判定改取稳定序号）、
+     test_focus_style.py（K3a 页脚无 chips、K11 末组条目）、
+     smoke_v_sync.py（页脚无 chips）、check_popup_integrity.py（删除框 66×6）
+   - 文档同步：《docs/ezr-demo UI界面及交互设计规范.md》头部修订说明、
+     §1 设计原则（P3 改写 + 新增 P10/P11、P5 举例更新）、§3 布局图与图层
+     L1、§4.2.4 尺寸表、§5.5 页脚全节改写、§6.3/6.6、§7.3/7.4、§12 速查表
+   - **bin/ 预编译二进制已随本记录重建**（release, stripped）
+   - **回归全绿**：verify_ezr 194/194、test_focus_style 58/58、
+     verify_footer_pad_scroll 11/11、smoke_v_sync 0 失败、
+     verify_scrollbar_universal 31/31、check_overlay_redraw 46/46、
+     check_popup_integrity 5/5、verify_close_btn_color ALL PASS
+
+17. **需求修订（panel/弹窗 padding 统一 + 通用设计规范提取）**
+   - **三档 padding 体系定版（§4.3 新增 / P12 原则）**：S1 边框附着元素
+     （标题/徽标/[✗]）前后各 1 空格；S2 内容区左右各 2 列、上下各 1 行；
+     S3 层次缩进 2 列步进——新增 §4.3 特例表（流量图区贴边、分割线贯通、
+     下拉紧凑高度、列表光标槽、按钮行居中）与 §4.4「新增 Panel/窗口设计
+     清单」（12 项核对表，后续扩展按规范设计）
+   - **主界面面板**：头部字段行/页签行左 2 列（页签命中矩形同步 +1）；
+     任务列表右 2 列（内容宽收窄，选中背景仍满行，百分比离右边框 2 列）；
+     任务详情行首 2 列（字段名热区 x+2、字段值热区 x+11、截断预算 −13）；
+     页脚 toast 左右 2 列（原 1 列）
+   - **弹窗**：添加 74×11→74×12、修改 74×9→74×10、删除 66×6→66×7
+     （底部补齐 1 行 padding，字段行/按钮行 y 不变；字段行 x+2、宽 −4）；
+     下拉选项左 2 列（前缀 2 空格，浮层定位同步 +1、高度「项数+2」不变）；
+     pieces 64×19→64×21（顶/底 padding 各 1 行、文本行与网格左 2 列，
+     每行 31→29 块、一屏 434→406）；帮助组标题 2 列/条目 4 列 + 内容区
+     上下各 1 行（窗体 70×24 不变，可视行 22→20）；字段值弹窗为 S2 基准
+     先例不变
+   - 脚本同步：check_popup_integrity.py（rects_for：74×12 / 66×7 / 64×21 /
+     下拉 x+1）、verify_footer_pad_scroll.py（A2 断言加强为 2 列 padding）
+   - 文档同步：《docs/ezr-demo UI界面及交互设计规范.md》头部修订说明、
+     §1 新增 P12、目录、§4.2.3/§4.2.6、**新增 §4.3/§4.4**、§5.1/5.2/5.3/5.5、
+     §6.1–6.8（尺寸/图示/padding 口径）
+   - **bin/ 预编译二进制已随本记录重建**（release, stripped）
+
+18. **需求修订（页脚快捷命令恢复 + toast 保留）**
+   - **页脚恢复双行**：行 1 常用命令图例 chips（A/D/M/Q/H）恢复保留 +
+     行 2 toast 反馈保留（总高 3 → 4，主区相应 −1 行）；chips 鼠标点击
+     通道（`footer_cmd_rects` / `footer_press` / `footer_flash` /
+     `run_footer_cmd`）与 5 处模态接管重置随之恢复，交互口径不变——按压
+     反色高亮 + 400ms 余辉、原地松开执行、拖出取消、与键盘快捷键同口径
+   - **设计原则口径校准**：P3/P10 明确「窗口不需要有提示信息」针对
+     panel/弹窗内容区——页脚 chips 是可点击的命令入口（P5 鼠标等价
+     通道，非提示文案）、toast 是反馈通道，二者为页脚既定功能；
+     panel/弹窗仍一律无提示信息，padding 沿用 §4.3 统一体系（页脚
+     chips/toast 左右 2 列不变）
+   - 帮助窗口【全局】组恢复「页脚命令」条目（内容 51 行，窗体 70×24
+     不变）；底部 note 提示行保持删除（P10）
+   - 脚本同步：verify_footer_pad_scroll.py（A 部分改回双行口径 + 恢复
+     chips 点击回归：点 H 开帮助、点 Q 退出）、test_focus_style.py
+     （K3a 反转回 chips 可见）、smoke_v_sync.py（页脚 chips 可见）
+   - 文档同步：《docs/ezr-demo UI界面及交互设计规范.md》头部修订说明、
+     P3/P10、目录、§3/§3.1、§4.3/§4.4、§5.5（页脚全节改回双行）、
+     §6.6、§7.3/§7.4、§10
+   - 回归全绿：verify_ezr 194/194、test_focus_style 58/58、
+     verify_footer_pad_scroll 14/14、check_popup_integrity 5/5、
+     verify_scrollbar_universal 31/31、check_overlay_redraw 46/46、
+     verify_close_btn_color ALL PASS、smoke_v_sync 0 失败
+   - **bin/ 预编译二进制已随本记录重建**（release, stripped）
+
+19. **bug 修正（HTTP(S) 不支持断点续传：文件大小未知展示口径）**
+   - **总大小未知模型（`Task::size_known`）**：不支持续传的 HTTP(S) =
+     流式下载（服务器不回 Content-Length），下载期间大小未知；进入
+     校验/后期处理/完成态（流结束）才得知实际大小；BT/其余协议恒已知
+   - **任务列表条目**：百分比显示 **`?%`**（占同宽列右对齐）；进度条无法
+     增长——下载中以 **循环滑动的走马灯色块** 替代填充进度（自左缘滑入、
+     每帧 2 列匀速右移、右缘滑出后重新滑入，块长 `clamp(宽/4, 4..8)`，
+     帧源 `App::frame` 与 spinner 同 10fps 节拍）；其余状态（等待中/
+     已暂停/已失败）大小未知时显示空轨道；统计行 `<已下载>/<总大小>`
+     显示 **`<已下载>/? B`**；剩余时间显示 `-`（ETA 无从估计，
+     `eta_secs` 对未知大小恒返回 None）
+   - **任务详情**：「大小」行 `<已下载> / ? B`（流结束后恢复实际大小）；
+     「分块」行对不支持分块下载的任务恒显示 `-`（与 P 功能门槛
+     `supports_pieces` 同口径）
+   - **并发连接面板**：下载中任务的连接明细**首帧即显示下载速度**
+     （demo 造数路径速度初值 = base_speed 均摊，不再出现首秒 `-`
+     空窗；首个采样点后由 1s 采样 EMA 接管；握手期「正在连接」行
+     `-` 语义保留）
+   - demo 数据注释同步（media-assets 的 total = 流结束时的实际大小，
+     完成后才得知）
+   - 文档同步：《docs/ezr-demo UI界面及交互设计规范.md》头部修订说明 +
+     §5.2 任务条目（`?%`/走马灯/`? B` 口径）+ §5.3 详情（大小/分块行）+
+     §5.4（连接速度首帧口径）
+   - 回归全绿：verify_ezr 194/194、test_focus_style 58/58、
+     verify_footer_pad_scroll 14/14、check_popup_integrity 5/5、
+     verify_scrollbar_universal 31/31、check_overlay_redraw 46/46、
+     verify_close_btn_color ALL PASS、smoke_v_sync 0 失败
+   - **bin/ 预编译二进制已随本记录重建**（release, stripped）
 
 ## 重新构建
 
@@ -187,11 +332,11 @@ Rust stable 工具链即可；依赖见 Cargo.lock。
 ## 回归/验证脚本
 
 ```bash
-python3 scripts/test_focus_style.py               # 聚焦/滚动条/拖拽 56 项
-python3 scripts/verify_scrollbar_universal.py     # 通用滚动条专项（字形/几何/拖拽/连发/键盘）21 项
+python3 scripts/test_focus_style.py               # 聚焦/滚动条/拖拽 58 项
+python3 scripts/verify_scrollbar_universal.py     # 通用滚动条专项（字形/几何/拖拽/连发/键盘）31 项
 python3 scripts/check_overlay_redraw.py     # 浮层翻转零清屏 + 残影检测 46 项
 python3 scripts/check_popup_integrity.py    # 浮层边框完整性（理想终端模型）5 项
-python3 scripts/verify_footer_pad_scroll.py # 页脚内边距 + 滚动修复专项 12 项
+python3 scripts/verify_footer_pad_scroll.py # 页脚单行化（toast）+ 滚动修复专项 11 项
 python3 scripts/smoke_v_sync.py             # 冒烟 + v-sync
-python3 scripts/verify_ezr.py               # 全场景回归 169 项
+python3 scripts/verify_ezr.py               # 全场景回归 194 项
 ```

@@ -302,7 +302,7 @@ impl TaskState {
 
     /// 是否显示并发连接明细：仅「下载中」与「做种中」任务持有活跃连接。
     /// 其余状态（等待中/已暂停/校验中/后期处理中/已失败/已完成）无并发明细，
-    /// 面板为空、活跃 0/0（演示口径：连接随任务开始下载建立、随任务离开
+    /// 面板为空、右上角徽标 0/y 项（演示口径：连接随任务开始下载建立、随任务离开
     /// 下载/做种状态断开；面板数据在状态下沉时冻结隐藏，恢复下载时原样续用，
     /// 保证暂停/断点续传的累计量口径不受影响）。
     pub fn shows_conns(&self) -> bool {
@@ -379,6 +379,21 @@ fn pseudo_transport(seed: u64, idx: usize) -> Transport {
     }
 }
 
+/// 并发连接阶段（活跃口径，本页重构）：
+/// 正在连接（Connecting，TCP/uTP 握手中，尚未传数据）/ 已连接（Connected，
+/// 握手完成，持有块在传）/ 已断开（Closed，块队列耗尽自然退出，非活跃）。
+/// 活跃并发 = 正在连接 或 已连接——并发连接面板明细只显示活跃并发，
+/// 右上角「x/y 项」的 x 与明细行数同源（y = 任务设置的最大并发数）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ConnPhase {
+    /// 正在连接（握手中，速度显示 `-`，不传数据）
+    Connecting,
+    /// 已连接（握手完成，持有块在传）
+    Connected,
+    /// 已断开（块队列耗尽后自然退出；面板明细不显示）
+    Closed,
+}
+
 /// 单个并发连接（分块）状态：一段连续的 byte range 由一个线程负责
 #[derive(Clone)]
 pub struct Connection {
@@ -407,6 +422,19 @@ pub struct Connection {
     pub cum_down: u64,
     /// 本次开始下载后的累计上传字节
     pub cum_up: u64,
+    /// 连接阶段（活跃口径，本页重构）：正在连接/已连接/已断开——
+    /// 活跃 = 前两者，面板明细只显示活跃并发
+    pub phase: ConnPhase,
+    /// 「正在连接」剩余秒数（>0 时握手中，到 0 转「已连接」；
+    /// 演示按槽位序确定性交错建连，其余阶段恒 0）
+    pub phase_in: f64,
+}
+
+impl Connection {
+    /// 是否活跃并发（正在连接 或 已连接）——并发连接面板明细只显示活跃连接
+    pub fn is_active(&self) -> bool {
+        matches!(self.phase, ConnPhase::Connecting | ConnPhase::Connected)
+    }
 }
 
 impl Connection {
@@ -549,7 +577,34 @@ impl Task {
         }
     }
 
+    /// 文件总大小是否已知（UI 展示口径，bug 修正：不支持续传的 HTTP(S) 显示
+    /// ?%/走马灯/? B）：
+    /// - BT：元信息自带大小，恒已知；
+    /// - HTTP(S)：支持断点续传 = 响应携带 Content-Length，已知；不支持续传 =
+    ///   流式下载（服务器不回 Content-Length），下载期间大小未知——直到流结束
+    ///   进入校验/后期处理/完成态才得知实际大小；
+    /// - 其余协议：按已知处理。
+    pub fn size_known(&self) -> bool {
+        if self.protocol.is_bt() {
+            return true;
+        }
+        if !matches!(self.protocol, Protocol::Http | Protocol::Https) {
+            return true;
+        }
+        if self.resumable {
+            return true;
+        }
+        matches!(
+            self.state,
+            TaskState::Verifying | TaskState::PostProcessing | TaskState::Completed
+        )
+    }
+
     pub fn eta_secs(&self) -> Option<u64> {
+        // 总大小未知（不支持续传的 HTTP(S) 流式下载）：剩余时间无从估计
+        if !self.size_known() {
+            return None;
+        }
         if self.speed <= 0.0 || self.state != TaskState::Downloading {
             return None;
         }
@@ -895,7 +950,7 @@ pub struct App {
     /// 同口径（§4.1.3）
     pub sb_pressed: Option<(SbKey, scrollbar::Arrow)>,
     /// 箭头点击高亮余辉（Down 即置 400ms）：快速单击松开后仍有一段可见的
-    /// 点击反馈，与页脚 chips 的 footer_flash 同机制
+    /// 点击反馈（400ms 高亮余辉机制）
     pub sb_flash: Option<(SbKey, scrollbar::Arrow, Instant)>,
     /// 是否显示右侧任务详情 / 并发连接面板（`G` 切换；头部流量图始终显示、不受影响）
     pub show_panes: bool,
@@ -965,8 +1020,8 @@ pub struct App {
     pub dlg_ck_rects: Vec<(Rect, usize)>,
     /// 代理下拉选项命中区域（v1.5/FR-01-86；鼠标点击选择）
     pub dlg_proxy_rects: Vec<(Rect, usize)>,
-    /// 页脚命令 chips 可点击区域（v0.2 页脚双行修订；由 ui 层每帧回填：
-    /// 行 1 常用命令图例 A/D/M/Q/H，左键按压高亮 = 点击效果、原地松开执行对应命令）
+    /// 页脚命令 chips 可点击区域（由 ui 层每帧回填：行 1 常用命令图例
+    /// A/D/M/Q/H，左键按压高亮 = 点击效果、原地松开执行对应命令）
     pub footer_cmd_rects: Vec<(Rect, usize)>,
     /// 页脚命令 chip 按压态（Down 记录、Up 原地松开消费；渲染层据此反色高亮）
     pub footer_press: Option<usize>,
@@ -1297,6 +1352,17 @@ impl App {
                     };
                     let n = t.connections.len().max(1) as f64;
                     for c in t.connections.iter_mut() {
+                        // 活跃口径（本页重构）：「正在连接」握手倒计时，到点转
+                        // 「已连接」；握手完成前不传数据（任务聚合速率随建连进度
+                        // 自然爬升，明细行先以 `-` 速度出现再开始跳动）
+                        if c.phase == ConnPhase::Connecting {
+                            c.phase_in -= dt;
+                            if c.phase_in <= 0.0 {
+                                c.phase = ConnPhase::Connected;
+                                c.phase_in = 0.0;
+                            }
+                            continue;
+                        }
                         if c.cap() > 0 && c.done < c.cap() {
                             let rate = (task_inst / n) * rng.range(0.88, 1.12);
                             let nd = ((c.done as f64 + rate * dt).min(c.cap() as f64) as u64)
@@ -1335,11 +1401,15 @@ impl App {
                                     // 避免领块瞬间归零造成明细速度闪烁
                                     next += 1;
                                 } else {
-                                    // 队列已空：连接待命（展示速度不动——下一采样点
+                                    // 队列已空：连接断开（展示速度不动——下一采样点
                                     // 零值速断，D33 最坏 1s 时延；数据面无字节进窗）
                                     c.start = 0;
                                     c.end = 0;
                                     c.done = 0;
+                                    // 活跃口径（本页重构）：无块可领 = 连接断开（非活跃），
+                                    // 明细不再显示（x/y 项 的 x 随队列耗尽逐行回落）
+                                    c.phase = ConnPhase::Closed;
+                                    c.phase_in = 0.0;
                                 }
                             }
                         }
@@ -1479,7 +1549,7 @@ impl App {
                             notices.push(format!("✓ 下载完成，开始后期处理: {}", t.name));
                         } else {
                             t.state = TaskState::Completed;
-                            // 已完成任务不保留并发连接明细（面板为空、活跃 0/0）
+                            // 已完成任务不保留并发连接明细（面板为空、徽标 0/y 项）
                             t.connections.clear();
                             notices.push(format!("✓ 下载完成: {}", t.name));
                         }
@@ -1518,7 +1588,7 @@ impl App {
                                     ));
                                 } else {
                                     t.state = TaskState::Completed;
-                                    // 已完成任务不保留并发连接明细（面板为空、活跃 0/0）
+                                    // 已完成任务不保留并发连接明细（面板为空、徽标 0/y 项）
                                     t.connections.clear();
                                     notices.push(format!("✓ {} 校验通过: {}", algo, t.name));
                                 }
@@ -1533,7 +1603,7 @@ impl App {
                             t.post_started = None;
                             t.speed = 0.0;
                             t.upload_speed = 0.0;
-                            // 已完成任务不保留并发连接明细（面板为空、活跃 0/0）
+                            // 已完成任务不保留并发连接明细（面板为空、徽标 0/y 项）
                             t.connections.clear();
                             notices.push(format!("✓ 后期处理完成: {}", t.name));
                         }
@@ -1557,7 +1627,7 @@ impl App {
                     if t.seed_left <= 0.0 {
                         t.state = TaskState::Completed;
                         t.upload_speed = 0.0;
-                        // 已完成任务不保留并发连接明细（面板为空、活跃 0/0）
+                        // 已完成任务不保留并发连接明细（面板为空、徽标 0/y 项）
                         t.connections.clear();
                         notices.push(format!("✓ 做种结束: {}", t.name));
                     }
@@ -1608,6 +1678,15 @@ impl App {
                                 c.cum_down = 0;
                                 c.cum_up = 0;
                                 c.up_speed = 0.0;
+                            }
+                            // 活跃口径（本页重构）：开始/续传下载 = 重新建连——
+                            // 各连接槽位按序交错进入「正在连接」（握手耗时随序
+                            // 递增、上限 1.5s），握手完成（数据面倒计时归零）转
+                            // 「已连接」开始传数据；明细行逐个出现，x/y 项 的 x
+                            // 同步爬升至 y
+                            for (i, c) in t.connections.iter_mut().enumerate() {
+                                c.phase = ConnPhase::Connecting;
+                                c.phase_in = (0.2 + 0.1 * i as f64).min(1.5);
                             }
                             let name = t.name.clone();
                             if t.fail_count > 0 {
@@ -1796,13 +1875,14 @@ impl App {
             self.conns_hscroll = 0; // 横向滚动同步归零（新任务列结构重新浏览）
         }
         // 仅「下载中」/「做种中」状态存在可视并发明细：
-        // 其余状态按 0 条处理（选中行与滚动自然归零）
+        // 其余状态按 0 条处理（选中行与滚动自然归零）；
+        // 明细行 = 活跃并发（正在连接/已连接，本页重构）
         let conns_visible = self
             .sel_task()
             .map(|t| t.state.shows_conns())
             .unwrap_or(false);
         let clen = if conns_visible {
-            self.sel_task().map(|t| t.connections.len()).unwrap_or(0)
+            self.active_conn_map().len()
         } else {
             0
         };
@@ -2015,12 +2095,28 @@ impl App {
         }
     }
 
-    /// 当前选中任务的并发明细条数（仅「下载中」/「做种中」任务有明细）
-    fn conn_count(&self) -> usize {
+    /// 当前选中任务的活跃并发明细（显示行 → connections 真实下标映射，本页重构）：
+    /// 仅「下载中」/「做种中」任务，且连接处于 正在连接/已连接 活跃阶段
+    ///（Connection::is_active）——明细只显示活跃并发，右上角 x/y 项 的 x
+    /// 与本映射长度同源
+    pub fn active_conn_map(&self) -> Vec<usize> {
         self.sel_task()
             .filter(|t| t.state.shows_conns())
-            .map(|t| t.connections.len())
-            .unwrap_or(0)
+            .map(|t| {
+                t.connections
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.is_active())
+                    .map(|(i, _)| i)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// 当前选中任务的活跃并发明细条数（明细行 = 正在连接/已连接 的连接，
+    /// 仅「下载中」/「做种中」任务有明细）
+    fn conn_count(&self) -> usize {
+        self.active_conn_map().len()
     }
 
     // -----------------------------------------------------------------------
@@ -3159,9 +3255,8 @@ impl App {
                         && m.row >= r.y
                         && m.row < r.y.saturating_add(r.height)
                 };
-                // 页脚命令 chips（v0.2 页脚双行修订）：Down 按压反色高亮
-                //（点击效果 + 400ms 余辉），原地松开执行对应命令（与键盘
-                // 快捷键同口径）；拖到别处松开 = 取消
+                // 页脚命令 chips：Down 按压反色高亮（点击效果 + 400ms 余辉），
+                // 原地松开执行对应命令（与键盘快捷键同口径）；拖到别处松开 = 取消
                 let footer_hit = self
                     .footer_cmd_rects
                     .iter()
@@ -3570,7 +3665,7 @@ impl App {
         )
     }
 
-    /// 页脚命令 chip 执行（v0.2 页脚双行修订）：与同名键盘快捷键完全同口径——
+    /// 页脚命令 chip 执行：与同名键盘快捷键完全同口径——
     /// A 添加 / D 删除 / M 修改 / Q 退出 / H 帮助。仅主界面态可达（模态浮层
     /// 打开时鼠标事件先交给浮层，P2 模态优先级）。
     fn run_footer_cmd(&mut self, i: usize) {
@@ -3646,7 +3741,8 @@ impl App {
         dlg_apply_paste(kind, d, focus, text);
     }
 
-    /// ↑/↓（并发连接面板聚焦时）：在并发明细中上下移动选中行（跟随滚动保持可见）
+    /// ↑/↓（并发连接面板聚焦时）：在并发明细中上下移动选中行（跟随滚动保持可见）。
+    /// 明细行 = 活跃并发（正在连接/已连接，本页重构），选中行号在活跃映射空间内钳制
     fn move_conn_sel(&mut self, delta: i32) {
         let Some(idx) = self.sel_idx() else { return };
         // 仅「下载中」/「做种中」任务有并发明细可选
@@ -3654,7 +3750,7 @@ impl App {
             self.set_toast("当前状态无并发明细（仅下载中/做种中可选）");
             return;
         }
-        let n = self.tasks[idx].connections.len();
+        let n = self.tasks[idx].connections.iter().filter(|c| c.is_active()).count();
         if n == 0 {
             self.set_toast("当前任务没有并发连接明细");
             return;
@@ -3671,6 +3767,8 @@ impl App {
     }
 
     /// B：断开（阻塞并移除）当前选中的并发连接（仅 BT 任务），明细行从屏幕移除。
+    /// 明细行 = 活跃并发（正在连接/已连接，本页重构）——选中行号为活跃明细
+    /// 行号，断开前先映射回 connections 真实下标再移除。
     /// 断开时未传完的块按「由其他节点补完」记入已完成块数（演示口径，
     /// 保证块队列持续推进、任务仍可正常完成；进度前跳不超过一个块）。
     fn disconnect_conn(&mut self) {
@@ -3684,26 +3782,35 @@ impl App {
             self.set_toast("仅 BT 任务支持断开并发连接（B）");
             return;
         }
-        if self.tasks[idx].connections.is_empty() {
+        // 活跃映射（显示行号 → 真实下标；明细只显示活跃并发）
+        let active_idx: Vec<usize> = self.tasks[idx]
+            .connections
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.is_active())
+            .map(|(i, _)| i)
+            .collect();
+        if active_idx.is_empty() {
             self.set_toast("当前任务没有可断开的并发连接");
             return;
         }
-        if self.conns_sel >= self.tasks[idx].connections.len() {
-            self.conns_sel = self.tasks[idx].connections.len() - 1;
-        }
+        let disp = self.conns_sel.min(active_idx.len() - 1);
+        self.conns_sel = disp;
+        let left = active_idx.len() - 1; // 断开后剩余活跃连接数
         let piece = chunk_size(self.tasks[idx].protocol);
-        let (masked, left) = {
+        let masked = {
             let t = &mut self.tasks[idx];
-            let c = t.connections.remove(self.conns_sel);
+            let c = t.connections.remove(active_idx[disp]);
             if c.cap() > 0 && c.done < c.cap() {
                 let y = chunk_total(t.total, piece);
                 t.chunk_done = (t.chunk_done + 1).min(y);
             }
-            if self.conns_sel >= t.connections.len() {
-                self.conns_sel = t.connections.len().saturating_sub(1);
-            }
-            (c.ip_masked(), t.connections.len())
+            c.ip_masked()
         };
+        // 选中行钳制到剩余活跃明细范围（末行断开回退一行）
+        if self.conns_sel >= left {
+            self.conns_sel = left.saturating_sub(1);
+        }
         self.set_toast(format!("✂ 已断开连接 {}（剩余 {} 条）", masked, left));
     }
 
@@ -3789,7 +3896,7 @@ impl App {
                 ));
             }
             TaskState::Seeding => {
-                // 做种中 → 暂停做种，进入「已完成」（并发连接明细清空、活跃 0/0）
+                // 做种中 → 暂停做种，进入「已完成」（并发连接明细清空、徽标 0/y 项）
                 self.tasks[idx].state = TaskState::Completed;
                 self.tasks[idx].upload_speed = 0.0;
                 self.tasks[idx].connections.clear();
@@ -4407,6 +4514,10 @@ fn make_chunk_conns_lease(
                 // 累计下载量以当前持有块内的进度为初值（演示任务从中途开始）
                 cum_down: partial,
                 cum_up: 0,
+                // 活跃口径（本页重构）：造数路径的连接均为已建立（持有块在传/待传）；
+                // 等待中任务开跑时由 tick 重新交错建连（转「正在连接」）
+                phase: ConnPhase::Connected,
+                phase_in: 0.0,
             }
         })
         .collect();
@@ -4430,8 +4541,17 @@ fn mk(
     let piece = chunk_size(protocol);
     let (mut connections, chunk_done) = make_chunk_conns(total, done, conns, piece, id as u64);
     if state == TaskState::Completed {
-        // 已完成任务不保留并发连接明细（面板为空、活跃 0/0）
+        // 已完成任务不保留并发连接明细（面板为空、徽标 0/y 项）
         connections.clear();
+    }
+    // 下载中任务的连接明细首帧即显示速度（连接为已建立、数据在传——展示速度
+    // 初值 = base_speed 均摊，避免首帧全部 `-`；首个采样点（1s）后由 EMA 接管；
+    // 等待中任务开跑时经 tick 重建连接，握手期 `-` 语义保留）
+    if state == TaskState::Downloading {
+        let per = base_speed / connections.len().max(1) as f64;
+        for c in &mut connections {
+            c.speed = per;
+        }
     }
     let downloaded = done.min(total);
     Task {
@@ -4494,7 +4614,9 @@ fn demo_tasks() -> Vec<Task> {
             14_500_000.0,
             "2026-02-10 09:32",
         ),
-        // 示例：HTTP 服务器不支持断点续传（仅能单线程下载，继续/重试只能从头开始）
+        // 示例：HTTP 服务器不支持断点续传（仅能单线程下载，继续/重试只能从头
+        // 开始；bug 修正口径：流式下载不回 Content-Length——下载中大小未知，
+        // UI 显示 ?%/走马灯/? B，total = 流结束时的实际大小，完成后才得知）
         mk(
             2,
             "media-assets-2026-pack.zip",
