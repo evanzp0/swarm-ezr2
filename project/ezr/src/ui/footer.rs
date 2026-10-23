@@ -7,7 +7,7 @@
 //! 命中矩形不含分隔符、每帧重建 footer_cmd_rects；终端过窄时放不下的 chip
 //! 整个不渲染，P7 不截断不越界）；
 //! 行 2 = toast 提示独占行（`◆ 消息` 黄色）。
-//! 两行内容左右各留 1 列内边距（与头部面板图区右留白同距，chips 与 toast
+//! 两行内容左右各留 2 列内边距（v1.34/FR-01-115 S2，原 1 列；chips 与 toast
 //! 起止列一致，不顶格贴边框）。完整快捷键说明仍收敛 H 帮助窗口（P3 原则）。
 
 use ratatui::layout::Rect;
@@ -36,9 +36,10 @@ pub(super) fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    // 左右内边距：各留 1 列空白，与头部面板右侧留白同距（图区右缘
-    // 到右边框 1 列）——内容不再顶格贴边框，行 1 chips 与行 2 toast 起止一致。
-    const PAD: u16 = 1;
+    // 左右内边距（v1.34/FR-01-115 S2，对齐 ezr-demo 重构版 padding 统一口径）：
+    // 各留 2 列空白（与其他 panel/弹窗内容区同宽，原 1 列）——行 1 chips 与
+    // 行 2 toast 起止一致，不顶格贴边框。
+    const PAD: u16 = 2;
     let row_x = inner.x + PAD;
     let row_w = inner.width.saturating_sub(PAD * 2);
     let row1 = Rect {
@@ -181,16 +182,17 @@ mod tests {
         app.shutdown().await;
     }
 
-    /// 左右各 1 列内边距：chips 起止列一致、不顶格贴边框（PAD=1）
+    /// 左右各 2 列内边距：chips 起止列一致、不顶格贴边框（v1.34/FR-01-115
+    /// S2，PAD=2，原 1 列）
     #[tokio::test]
-    async fn footer_content_has_one_col_padding() {
+    async fn footer_content_has_two_col_padding() {
         let mut app = testfx::make_app_in("ezr-footer", "pad");
         app.set_toast("内边距");
         let term = testfx::render_full(&mut app, 120, 34);
         let buf = term.backend().buffer();
         let h = 34;
         let top = h - 4;
-        // 边框在 x=0/x=119；内容区 x=1..118；行 1 chips 首字符应起于 x=2（PAD=1）
+        // 边框在 x=0/x=119；内容区 x=1..118；行 1 chips 首字符应起于 x=3（PAD=2）
         let first = (1..10)
             .find(|&x| {
                 buf.cell((x, top + 1))
@@ -198,8 +200,11 @@ mod tests {
                     .unwrap_or(false)
             })
             .expect("行 1 有内容");
-        assert_eq!(first, 2, "chips 首列 = 边框内 1 列内边距（PAD=1）");
-        // 行 2 toast 同样起于 x=2（chips 与 toast 起止列一致）
+        assert_eq!(
+            first, 3,
+            "chips 首列 = 边框内 2 列内边距（PAD=2，v1.34 S2）"
+        );
+        // 行 2 toast 同样起于 x=3（chips 与 toast 起止列一致）
         let first2 = (1..10)
             .find(|&x| {
                 buf.cell((x, top + 2))
@@ -207,7 +212,7 @@ mod tests {
                     .unwrap_or(false)
             })
             .expect("行 2 有内容");
-        assert_eq!(first2, 2, "toast 首列与 chips 对齐（PAD=1）");
+        assert_eq!(first2, 3, "toast 首列与 chips 对齐（PAD=2，v1.34 S2）");
         app.shutdown().await;
     }
 

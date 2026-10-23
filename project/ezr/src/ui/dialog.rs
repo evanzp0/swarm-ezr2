@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
 
-use super::btn::{clip_wide_at_edges, draw_button_row, overlay_rect};
+use super::btn::{clip_wide_at_edges, draw_button_row, draw_close_btn, overlay_rect};
 use super::delete::draw_delete_dialog;
 use super::text::{pad_right, truncate, w};
 use super::{panel_border_style, panel_title_style, ACCENT, DIM, DIM2, FG, YELLOW};
@@ -40,7 +40,9 @@ fn dropdown_rect(area: Rect, inner: Rect, type_row_y: u16, pw: u16, ph: u16) -> 
     if py + ph > area.y + area.height {
         py = type_row_y.saturating_sub(ph);
     }
-    let px = (inner.x + 8)
+    // v1.34/FR-01-115：px = 内框 + 9 = 字段行左 2 列 padding 后「> 」指示符所在列
+    //（与字段行相对对齐随 S2 同步 +1，原 +8）
+    let px = (inner.x + 9)
         .min(area.x + area.width.saturating_sub(pw + 1))
         .max(area.x + 1);
     let y = py.max(area.y);
@@ -94,8 +96,10 @@ fn dropdown_item(
         Color::Reset
     };
     let mut spans = vec![
+        // v1.34/FR-01-115 ⑤ 特例表：下拉浮层选项行仅执行 S2 左 2 列前缀缩进
+        //（高度「项数 + 2」紧凑特例不变；原 1 列前缀 +2）
         Span::styled(
-            format!(" {} ", if selected { "▸" } else { " " }),
+            format!("  {} ", if selected { "▸" } else { " " }),
             Style::default()
                 .fg(if selected { ACCENT } else { DIM2 })
                 .bg(bg),
@@ -196,10 +200,11 @@ struct Row {
 }
 
 /// 添加/修改任务对话框统一渲染（v1.5/FR-01-86/87；v1.15/FR-01-103 三钮；
-/// v1.30 修订）：字段行 + 按钮行 + 算法/代理下拉浮层。
-/// v1.30（FR-01-01/FR-01-107）：对话框 74×11（Add）/ 74×9（Modify）；
-/// 底部快捷键提示行删除（原提示行位于 n_rows + 3；下拉框操作提示同步移除，
-/// 交互说明统一收敛到 H 帮助窗口【弹窗】组）；模态浮层恒定绿色加粗边框。
+/// v1.30 修订；v1.34 padding 统一 FR-01-115）：字段行 + 按钮行 + 算法/代理下拉浮层。
+/// v1.34：对话框 74×12（Add）/ 74×10（Modify）（内框 = 顶 1 + 字段行 + 空 1 +
+/// 按钮 1 + 底 1——字段行/按钮行 y 不变、仅底部补齐 1 行 padding；字段行 x+2
+/// 宽 −4，S2）；右上角 [✗] 关闭按钮（FR-01-114，原地松开 = 取消）；模态浮层
+/// 恒定绿色加粗边框。
 ///
 /// * Add —— URL/保存到/并发/校验/校验码/代理（立即下载 6 仅添加 7 取消 8）
 /// * Modify —— 并发/校验/校验码/代理（确定 4 取消 5）
@@ -207,11 +212,12 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
     let is_add = kind == DialogKind::Add;
     // v1.32/FR-01-01/FR-01-87 修订（对齐 ezr-demo m3）：标题更名——
     // ` 添加下载任务 ` → ` 添加任务：HTTP(S) `、` 修改任务 ` →
-    // ` 修改任务：HTTP(S) `（尺寸不变 74×11 / 74×9）
+    // ` 修改任务：HTTP(S) `；v1.34/FR-01-115：尺寸 74×12 / 74×10
+    //（padding 统一：内框高 +1 底部补齐，字段行/按钮行 y 不变）
     let (title, dw, dh) = if is_add {
-        (" 添加任务：HTTP(S) ", 74u16, 11u16)
+        (" 添加任务：HTTP(S) ", 74u16, 12u16)
     } else {
-        (" 修改任务：HTTP(S) ", 74, 9)
+        (" 修改任务：HTTP(S) ", 74, 10)
     };
     let dlg = {
         // v133/D38：拖拽位置优先（钳制终端内），首帧居中并记忆；区域热区
@@ -233,7 +239,10 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         .title(Span::styled(title, panel_title_style(true)));
     let inner = block.inner(dlg);
     f.render_widget(block, dlg);
-    let min_h = if is_add { 9 } else { 7 };
+    // 右上角 [✗]（v1.34/FR-01-114：全部弹窗统一；原地松开 = 取消对话框，
+    // Esc 同口径；先于下拉浮层绘制，展开下拉时被覆盖、点击先收起下拉）
+    app.popup_close_rect = draw_close_btn(f, app, dlg, w(title));
+    let min_h = if is_add { 10 } else { 8 };
     if inner.width < 24 || inner.height < min_h {
         return;
     }
@@ -308,7 +317,10 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         kind: RowKind::ProxySel,
     });
 
-    let avail = (inner.width as usize).saturating_sub(12);
+    // 值显示宽预算：字段行 rect = x+2 宽−4（v1.34/FR-01-115 S2）内再扣
+    // label 7 列 + 指示符 "> " 2 列 → inner.width − 13（原宽−2 时代为 −12，
+    // padding 改版后同步 −1 防溢出 rect 右缘 1 列被 Paragraph 截尾）
+    let avail = (inner.width as usize).saturating_sub(13);
     let mut ck_row_y = inner.y;
     let mut proxy_row_y = inner.y;
     for (i, row) in rows.iter().enumerate() {
@@ -353,9 +365,10 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
             }
         }
         let rect = Rect {
-            x: inner.x + 1,
+            // v1.34/FR-01-115 S2：字段行 x+2、宽 −4（内容区左右各 2 列）
+            x: inner.x + 2,
             y: row_y,
-            width: inner.width.saturating_sub(2),
+            width: inner.width.saturating_sub(4),
             height: 1,
         };
         f.render_widget(Paragraph::new(Line::from(spans)), rect);
@@ -462,7 +475,7 @@ mod helper_tests {
         // 下方放得下：type_row_y + 1
         let r = dropdown_rect(area, inner, 15, 24, 9);
         assert_eq!(r.y, 16);
-        assert_eq!(r.x, 22); // inner.x + 8
+        assert_eq!(r.x, 23); // inner.x + 9（v1.34 S2：字段行左 2 列 padding 后指示符列）
                              // 底部放不下：改为上方展开
         let r = dropdown_rect(area, inner, 26, 24, 9);
         assert_eq!(r.y, 17); // 26 - 9
@@ -547,10 +560,10 @@ mod tests {
         app.open_add_dialog();
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
         term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-        // 74×11 居中于 100×30：x=(100−74)/2=13、y=(30−11)/2=9
+        // 74×12 居中于 100×30：x=(100−74)/2=13、y=(30−12)/2=9
         assert_eq!(app.dlg_pos, Some((13, 9)), "首帧居中并记忆");
         let a = app.dlg_area.expect("dlg_area 回填");
-        assert_eq!((a.x, a.y, a.width, a.height), (13, 9, 74, 11));
+        assert_eq!((a.x, a.y, a.width, a.height), (13, 9, 74, 12));
         app.shutdown().await;
     }
 
@@ -558,7 +571,7 @@ mod tests {
     async fn dialog_dragged_position_wins_and_clamps() {
         let mut app = testfx::make_app_in("ezr-dlgp", "drag");
         app.open_add_dialog();
-        // 越界拖拽点（90, 26）：绘制矩形钳制在终端内（74×11 → x≤26、y≤19），
+        // 越界拖拽点（90, 26）：绘制矩形钳制在终端内（74×12 → x≤26、y≤18），
         // 位置记忆保留原始拖拽点（与 pieces 渲染同口径）
         app.dlg_pos = Some((90, 26));
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
@@ -567,7 +580,7 @@ mod tests {
         let a = app.dlg_area.expect("dlg_area 回填");
         assert_eq!(
             (a.x, a.y, a.width, a.height),
-            (26, 19, 74, 11),
+            (26, 18, 74, 12),
             "绘制矩形钳制终端内"
         );
         let s = term.backend().to_string();

@@ -40,7 +40,10 @@ mod list;
 mod pieces;
 mod scrollable_panel;
 mod task_lines;
-mod text;
+// pub(crate)：断链纯函数 break_links/link_break_spans 供加固测试剥头副本壳
+// 转发（tests/hardening_ui_backfill.rs gen 壳同层级 use，v1.34/FR-01-113）
+pub(crate) mod text;
+mod val_popup;
 
 // 弱化色常量（DIM/DIM2）单源迁移：滚动条引擎（crate::scrollbar）自带其渲染
 // 弱化色，ui 调色板经 re-export 消费同一常量（v1.32/FR-01-109）
@@ -61,6 +64,7 @@ use pieces::draw_pieces;
 pub(crate) use text::{
     fmt_dur, fmt_eta, fmt_size, fmt_size_pair, fmt_speed, pad_right, truncate, w,
 };
+use val_popup::draw_val_popup;
 
 use crate::scrollbar::{DIM, DIM2};
 
@@ -204,10 +208,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             // 并发连接面板，任务列表占满整行
             app.conns_area = None;
             app.visible_conns_rows = 0;
-            // FR-01-101：详情字段名热区随面板收起清空（点击无动作）；
+            // FR-01-101/113：详情字段名/字段值热区随面板收起清空（点击无动作）；
             // 详情面板区域同步清空（点击聚焦失效，v1.30/FR-01-108）
             app.detail_url_rect = None;
             app.detail_ck_rect = None;
+            app.detail_fail_rect = None;
+            app.detail_save_rect = None;
+            app.detail_val_rects = Vec::new();
             app.detail_area = None;
             draw_list(f, app, outer[1]);
         }
@@ -215,9 +222,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         // 窄终端（< 100 列）：头部面板无图（分割线与页签行贯通全宽），任务列表占满整行
         app.conns_area = None;
         app.visible_conns_rows = 0;
-        // FR-01-101：详情不渲染 → 字段名热区清空；详情面板区域同步清空
+        // FR-01-101/113：详情不渲染 → 字段名/字段值热区清空；详情面板区域同步清空
         app.detail_url_rect = None;
         app.detail_ck_rect = None;
+        app.detail_fail_rect = None;
+        app.detail_save_rect = None;
+        app.detail_val_rects = Vec::new();
         app.detail_area = None;
         draw_header(f, app, outer[0], false);
         draw_list(f, app, outer[1]);
@@ -225,6 +235,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     draw_footer(f, app, outer[2]);
 
+    // 弹窗 [✗] 热区每帧重建（v1.34/FR-01-114：无弹窗打开 = None；
+    // 顶层弹窗绘制时回填，z 序后者覆盖）
+    app.popup_close_rect = None;
     // 对话框最后绘制（覆盖层）
     if app.dialog.is_some() {
         draw_dialogs(f, app, area);
@@ -245,6 +258,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // 关于窗口（v1.32/FR-01-111：z-order 最上层，叠于帮助之上；O 快捷键）
     if app.about_open {
         draw_about(f, app, area);
+    }
+
+    // 字段值弹窗（v1.34/FR-01-113：z-order 最上层 L6，叠于关于之上；
+    // 点击详情面板字段值打开，模态：打开时底层面板暗框）
+    if app.val_open {
+        draw_val_popup(f, app, area);
     }
 }
 
@@ -440,7 +459,14 @@ mod ui_tests {
         );
         assert!(s.contains("分块"), "分块行保留: {s}");
         assert!(s.contains("大小"), "大小行保留: {s}");
-        assert!(s.contains("保存"), "保存行保留: {s}");
+        // v1.34/FR-01-80：字段名精简「保存」→「路径」（「任务 ID」→「ID」、
+        // 「创建时间」→「创建」同步断言）
+        assert!(s.contains("路径"), "路径行保留: {s}");
+        assert!(!s.contains("保存 "), "「保存」字段名已精简: {s}");
+        assert!(s.contains(" ID "), "「ID」字段名精简在位: {s}");
+        assert!(s.contains(" 创建 "), "「创建」字段名精简在位: {s}");
+        assert!(!s.contains("任务 ID"), "「任务 ID」已精简: {s}");
+        assert!(!s.contains("创建时间"), "「创建时间」已精简: {s}");
         app.shutdown().await;
     }
 
@@ -1211,7 +1237,9 @@ mod ui_v113_tests {
         let rows = row_strings(&term);
         let s = term.backend().to_string();
         assert!(s.contains("并发连接"), "面板标题");
-        assert!(s.contains("活跃 0"), "待命连接速度 0 → 活跃 0");
+        // v1.34/FR-01-96 ⑦：活跃口径——3 条持块连接本轮无落盘字节 = 正在连接
+        //（活跃），徽标 = x/y 项（x = 活跃明细行数 3、y = 任务最大并发 4）
+        assert!(s.contains("3/4 项"), "活跃口径徽标 x/y 项: {s}");
         assert!(s.contains("序号"), "HTTP 表头 序号 列");
         assert!(s.contains("下载速度") && s.contains("累计下载"), "数据列");
         // v1.30/FR-01-107：提示行整体退役（P3 收敛，交互说明收敛帮助窗口）
@@ -1219,9 +1247,8 @@ mod ui_v113_tests {
         assert!(!s.contains("Ctrl+B"), "Ctrl+B 提示退役（v1.30）");
         assert!(!s.contains("（仅 BT）"), "「（仅 BT）」标注退役");
         assert!(
-            rows.iter()
-                .any(|r| r.trim().contains(" 1 ") && r.contains('-')),
-            "数据行按序号展示、待命速度显示 -"
+            rows.iter().any(|r| r.contains(" 1 ") && r.contains('-')),
+            "数据行按序号展示、正在连接速度显示 -"
         );
         // 详情定高 12 行（v1.20）：右列详情 y=5..17，明细面板标题在 y=17
         let row17: String = rows[17].replace(' ', "");
@@ -1230,12 +1257,12 @@ mod ui_v113_tests {
             "明细面板紧随详情 12 行: {}",
             rows[17]
         );
-        // 状态门槛：已暂停 → 空面板 + 活跃 0 + 面板不接收滚轮
+        // 状态门槛：已暂停 → 空面板 + x=0 徽标 + 面板不接收滚轮
         app.tasks[0].state = TaskState::Paused;
         let term = render(&mut app, 120, 40);
         let s = term.backend().to_string();
         assert!(s.contains("（无并发连接）"), "非下载态空面板: {s}");
-        assert!(s.contains("活跃 0"));
+        assert!(s.contains("0/4 项"), "非明细状态 x=0");
         assert!(app.conns_area.is_none(), "空明细面板不接收滚轮（穿透）");
         app.shutdown().await;
     }
@@ -1391,49 +1418,64 @@ mod ui_v114_tests {
         let term = render_detail(&mut app, 110, 24);
         let g = style_grid(&term);
 
-        // 行结构（inner y=1 起）：1 名 / 2 任务ID / 3 创建时间 / 4 类型 / 5 校验 /
-        // 6 大小 / 7 保存 / 8 URL / 9 分块（v1.20：任务 ID/创建时间拆两行）
+        // 行结构（inner y=1 起）：1 名 / 2 ID / 3 创建 / 4 类型 / 5 校验 /
+        // 6 大小 / 7 路径 / 8 URL / 9 分块（v1.20 拆两行 + v1.34 字段名精简）
         let underlined = |x: usize, y: usize| -> (Color, bool) {
             let (fg, m) = g[y][x];
             (fg, m.contains(Modifier::UNDERLINED))
         };
 
-        // 「校验」字段名（CJK 2 字各占 2 格，首格 x=2/4）：淡蓝 + 下划线
-        for x in [2, 4] {
+        // 「校验」字段名（行首 2 列 padding 后 CJK 2 字各占 2 格，首格 x=3/5）：
+        // 淡蓝 + 下划线（v1.34/FR-01-115 S2：行首 2 列，字段名列整体 +1）
+        for x in [3, 5] {
             let (fg, ul) = underlined(x, 5);
             assert_eq!(fg, LIGHT_BLUE, "校验字段名淡蓝 x={x}");
             assert!(ul, "校验字段名带下划线 x={x}");
         }
-        // 填充空格（x≥6）不带下划线（修订-6：下划线仅覆盖文字部分）
-        for x in [6, 7, 8] {
+        // 填充空格（x≥7）不带下划线（修订-6：下划线仅覆盖文字部分）
+        for x in [7, 8, 9] {
             let (_, ul) = underlined(x, 5);
             assert!(!ul, "校验填充空格无下划线 x={x}");
         }
-        // 「URL」字段名（x 2..5）：淡蓝 + 下划线；填充空格无下划线
-        for x in [2, 3, 4] {
+        // 「URL」字段名（x 3..6）：淡蓝 + 下划线；填充空格无下划线
+        for x in [3, 4, 5] {
             let (fg, ul) = underlined(x, 8);
             assert_eq!(fg, LIGHT_BLUE, "URL 字段名淡蓝 x={x}");
             assert!(ul, "URL 字段名带下划线 x={x}");
         }
-        for x in [5, 7, 9] {
+        for x in [6, 8, 10] {
             let (_, ul) = underlined(x, 8);
             assert!(!ul, "URL 填充空格无下划线 x={x}");
         }
         // 其余字段名仍暗灰无下划线（类型行「类」字）
-        let (fg, ul) = underlined(2, 4);
+        let (fg, ul) = underlined(3, 4);
         assert_eq!(fg, DIM, "类型标签仍暗灰");
         assert!(!ul, "类型标签无下划线");
 
-        // 热区回填：x = inner.x + 1 = 2、宽 9、高 1；y = inner.y + 行号
+        // 热区回填（v1.34）：x = inner.x + 2 = 3、宽 9、高 1；y = inner.y + 行号
         assert_eq!(
             app.detail_url_rect,
-            Some(ratatui::layout::Rect::new(2, 8, 9, 1)),
+            Some(ratatui::layout::Rect::new(3, 8, 9, 1)),
             "URL 热区"
         );
         assert_eq!(
             app.detail_ck_rect,
-            Some(ratatui::layout::Rect::new(2, 5, 9, 1)),
+            Some(ratatui::layout::Rect::new(3, 5, 9, 1)),
             "校验热区"
+        );
+        // v1.34：失败/路径 字段名热区同步回填（下载态无失败行 → fail None）
+        assert!(app.detail_fail_rect.is_none(), "下载态无失败行热区");
+        assert_eq!(
+            app.detail_save_rect,
+            Some(ratatui::layout::Rect::new(3, 7, 9, 1)),
+            "路径热区"
+        );
+        // v1.34/FR-01-113：值热区四项（校验/路径/URL；下载态无失败），
+        // x = inner.x + 11 = 12 起、宽 = 值显示宽
+        assert_eq!(app.detail_val_rects.len(), 3, "下载态值热区三项");
+        assert!(
+            app.detail_val_rects.iter().all(|(r, _)| r.x >= 12),
+            "值热区 x = 内框 + 11"
         );
         app.shutdown().await;
     }
@@ -1493,7 +1535,12 @@ mod ui_v114_tests {
         app.tasks.push(t);
         let term = render_detail(&mut app, 110, 24);
         let s = term.backend().to_string();
-        assert!(s.contains("失败原因"), "已失败态展示失败原因行: {s}");
+        // v1.34/FR-01-80：字段名精简「失败原因」→「失败」
+        assert!(s.contains("失败"), "已失败态展示失败行: {s}");
+        assert!(
+            !s.contains("失败原因"),
+            "字段名已精简（toast 文案除外）: {s}"
+        );
         assert!(s.contains("连接被重置"), "失败原因文本: {s}");
         app.shutdown().await;
 
@@ -1502,7 +1549,7 @@ mod ui_v114_tests {
         app2.tasks.push(task(2, "paused.bin", TaskState::Paused));
         let term2 = render_detail(&mut app2, 110, 24);
         let s2 = term2.backend().to_string();
-        assert!(!s2.contains("失败原因"), "非失败态不展示失败原因行: {s2}");
+        assert!(!s2.contains("失败"), "非失败态不展示失败行: {s2}");
         app2.shutdown().await;
     }
 }

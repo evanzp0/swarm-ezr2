@@ -24,6 +24,29 @@ impl App {
             // 统一进面板焦点模型：聚焦面板后 ↑↓ 选择、B 断开，v1.30/D37）
             return;
         }
+        // 字段值弹窗最上层模态（v1.34/FR-01-113）：Y 复制窗口全部内容 + toast、
+        // 滚动翻阅、Esc/q/Q 关闭（先关窗不退出）；Ctrl+C 退出优先级不变
+        if self.val_open {
+            match code {
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => self.close_val_popup(),
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    // Y 复制窗口全部内容（打开时快照的完整字段值）+ toast
+                    //（label 单源 DetailField::copy_label，与字段名点击同口径，D42）
+                    let label = self.val_field.copy_label();
+                    let text = self.val_text.clone();
+                    self.copy_to_clipboard(&text);
+                    self.set_toast(format!("已复制 {label}"));
+                }
+                KeyCode::Up => self.sb_scroll(SbKey::Val, -1),
+                KeyCode::Down => self.sb_scroll(SbKey::Val, 1),
+                KeyCode::PageUp => self.sb_scroll(SbKey::Val, -8),
+                KeyCode::PageDown => self.sb_scroll(SbKey::Val, 8),
+                KeyCode::Home => self.sb_set(SbKey::Val, 0),
+                KeyCode::End => self.sb_set(SbKey::Val, usize::MAX),
+                _ => {}
+            }
+            return;
+        }
         // 对话框打开时，按键优先交给对话框
         if self.dialog.is_some() {
             self.on_dialog_key(code);
@@ -189,10 +212,7 @@ impl App {
 
     /// 当前选中任务的并发明细条数（仅「下载中」/「做种中」任务有明细）
     pub(crate) fn conn_count(&self) -> usize {
-        self.sel_task()
-            .filter(|t| t.state.shows_conns())
-            .map(|t| t.connections.len())
-            .unwrap_or(0)
+        self.active_conn_ids().len()
     }
 
     /// `↑`/`↓`（并发面板聚焦，v1.30/FR-01-97）：在并发连接明细中上下移动
@@ -206,9 +226,9 @@ impl App {
             self.set_toast("当前状态无并发明细（仅下载中/做种中可选）");
             return;
         }
-        // 选择序号与展示序号同序（面板按连接 id 升序渲染，FR-01-96/97 同一口径）
-        let mut ids: Vec<usize> = self.tasks[idx].connections.iter().map(|c| c.id).collect();
-        ids.sort_unstable();
+        // 选择序号与展示序号同序（v1.34：面板只显示活跃并发，按连接 id 升序
+        // 渲染 = 连接池槽位号序，与 [`App::active_conn_ids`] 同源，FR-01-96 ⑦）
+        let ids = self.active_conn_ids();
         let n = ids.len();
         if n == 0 {
             self.set_toast("当前任务没有并发连接明细");
@@ -227,8 +247,11 @@ impl App {
 
     /// `B`（v1.30/FR-01-97 修订，原 `Ctrl+B`/D26）：断开选中连接——仅 BT 任务，
     /// 不限焦点面板。守卫链顺序固定：状态门槛 → 协议门槛 → 空明细。
-    /// 01 期无 BT 任务，协议门槛后的实际断开（连接移除 + 分块补完）属
-    /// phase-02 范围，此处为不可达臂。
+    /// v1.34/FR-01-96 ⑦：明细只显示活跃并发，选中行先经活跃映射
+    ///（[`App::active_conn_ids`]，显示行序 = 活跃 id 升序）映射回真实连接
+    /// 再移除——01 期无 BT 任务，协议门槛后的实际断开（连接移除 + 分块补完）
+    /// 属 phase-02 范围，此处为不可达臂；活跃映射已就位，phase-02 落地时
+    /// 按 `ids[conns_sel]` 取真实连接 id 发引擎断开命令。
     pub(crate) fn disconnect_conn(&mut self) {
         let Some(idx) = self.sel_idx() else {
             return;
@@ -242,10 +265,13 @@ impl App {
             self.set_toast("仅 BT 任务支持断开并发连接（B）");
             return;
         }
-        if self.tasks[idx].connections.is_empty() {
+        // 活跃映射（v1.34）：显示行 → 真实连接 id（选中行越界或空明细 = 无可断开）
+        let ids = self.active_conn_ids();
+        if self.conns_sel >= ids.len() {
             self.set_toast("当前任务没有可断开的并发连接");
+            return;
         }
-        // phase-02 落地点（D26）：BT 引擎断开命令 + 连接视图移除 + 分块补完语义
+        let _conn_id = ids[self.conns_sel]; // phase-02：真实连接 id → 引擎断开命令
     }
 
     fn move_sel(&mut self, delta: i32) {

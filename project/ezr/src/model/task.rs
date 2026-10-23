@@ -7,7 +7,8 @@ use super::{chunk, namegen, Checksum, FailKind, Protocol, TaskState};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Connection {
-    /// 连接序号（1 基）
+    /// 连接序号（1 基；连接池槽位号，稳定不随断连重编号——v1.34/FR-01-96 ③
+    /// HTTP 序号 = 连接在任务连接池中的槽位号）
     pub id: usize,
     /// 分块起始字节（含）
     pub start: u64,
@@ -17,11 +18,56 @@ pub struct Connection {
     pub done: u64,
 }
 
+/// 并发连接阶段（v1.34/FR-01-96 ⑦ 活跃口径，对齐 ezr-demo 重构版 ConnPhase）：
+/// 正在连接（Connecting，握手/建连准备中，尚未传数据）/ 已连接（Connected，
+/// 握手完成、持有块在传）/ 已断开（Closed，块队列耗尽后待命或自然退出，
+/// 非活跃）。活跃 = 正在连接 或 已连接——并发连接面板明细只显示活跃并发，
+/// 右上角「x/y 项」的 x、头部「并发」字段（FR-01-81 v1.34）与明细行数同源。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConnPhase {
+    /// 正在连接（握手中，尚未传数据）
+    Connecting,
+    /// 已连接（握手完成，持有块在传）
+    Connected,
+    /// 已断开/待命（块队列耗尽后自然退出；面板明细不显示）
+    Closed,
+}
+
+impl ConnPhase {
+    /// 是否活跃并发（正在连接 或 已连接）——活跃判定单源（FR-01-96/81 v1.34：
+    /// 并发面板明细行、右上角徽标 x 与头部「并发」字段严格同源）
+    #[must_use]
+    pub fn is_active(self) -> bool {
+        matches!(self, ConnPhase::Connecting | ConnPhase::Connected)
+    }
+}
+
 impl Connection {
     /// 该连接当前持有块的总字节
     #[must_use]
     pub fn cap(&self) -> u64 {
         self.end.saturating_sub(self.start)
+    }
+
+    /// 连接阶段派生（v1.34 活跃口径的数据面观测映射，纯函数单测面）。
+    ///
+    /// 引擎 Progress 视图只含持块/待命连接（连接序号 = 连接池槽位号，稳定），
+    /// 「正在连接 ⇄ 已连接」的握手边界引擎不单独上报——由本轮下载累计字节
+    /// （`cum_down`，App 消费侧 FR-01-99 ② 账本）观测派生：
+    /// - 持块为空（cap = 0，待命条目，块队列耗尽后存续至任务收尾）→ Closed；
+    /// - 持块但本轮尚无落盘字节（cum = 0）→ Connecting（建连/握手中，
+    ///   含续传恢复时已领续传块但请求尚在途的连接——新请求即重新建连）；
+    /// - 本轮已有落盘字节（cum > 0）→ Connected（此后保持：换块不清累计，
+    ///   FR-01-99 ②；传输停顿不降级——仍持块即仍在连接）。
+    #[must_use]
+    pub fn conn_phase(&self, cum_down: u64) -> ConnPhase {
+        if self.cap() == 0 {
+            ConnPhase::Closed
+        } else if cum_down > 0 {
+            ConnPhase::Connected
+        } else {
+            ConnPhase::Connecting
+        }
     }
 }
 
@@ -210,9 +256,39 @@ impl Task {
         }
     }
 
-    /// 剩余时间（秒；速度为 0 或非下载态返回 None）
+    /// 文件总大小是否已知（v1.34/FR-01-116 展示口径，对齐 ezr-demo 重构版
+    /// `Task::size_known` bug 修订）：
+    /// - BT：元信息自带大小，恒已知（phase-02）；
+    /// - 非 HTTP(S) 协议：按已知处理；
+    /// - HTTP(S) 支持断点续传（响应携带 Content-Length）：已知；
+    /// - HTTP(S) 不支持续传 = 流式下载（服务器不回 Content-Length）：
+    ///   下载期间总大小未知——直到流结束进入校验/后期处理/完成态
+    ///   （DownloadDone 携带实际字节数回填 total）才得知实际大小。
+    #[must_use]
+    pub fn size_known(&self) -> bool {
+        if self.protocol.is_bt() {
+            return true;
+        }
+        if !matches!(self.protocol, Protocol::Http | Protocol::Https) {
+            return true;
+        }
+        if self.resumable {
+            return true;
+        }
+        matches!(
+            self.state,
+            TaskState::Verifying | TaskState::PostProcessing | TaskState::Completed
+        )
+    }
+
+    /// 剩余时间（秒；速度为 0 或非下载态返回 None）。
+    /// v1.34/FR-01-116：总大小未知（不支持续传的 HTTP(S) 流式下载）时
+    /// 剩余时间无从估计，恒返回 None（展示层显示 `-`）。
     #[must_use]
     pub fn eta_secs(&self) -> Option<u64> {
+        if !self.size_known() {
+            return None;
+        }
         if self.speed <= 0.0 || self.state != TaskState::Downloading {
             return None;
         }
@@ -879,5 +955,114 @@ mod tests {
         assert_eq!(t.chunk_done, 0);
         t.apply_chunk_snapshot(1_000_000, 0);
         assert_eq!(t.chunk_done, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // v1.34/FR-01-96 ⑦ ConnPhase 活跃口径（对齐 ezr-demo 重构版）
+    // -----------------------------------------------------------------------
+
+    fn conn(id: usize, start: u64, end: u64, done: u64) -> Connection {
+        Connection {
+            id,
+            start,
+            end,
+            done,
+        }
+    }
+
+    /// 待命连接（cap = 0，块队列耗尽后存续至任务收尾）→ Closed，非活跃
+    #[test]
+    fn conn_phase_standby_is_closed() {
+        let c = conn(1, 0, 0, 0);
+        assert_eq!(c.conn_phase(0), ConnPhase::Closed);
+        assert!(!c.conn_phase(0).is_active());
+        // 防御：cap=0 但 done 异常非零（历史残留）仍 Closed（cap 权威）
+        assert_eq!(c.conn_phase(100), ConnPhase::Closed);
+    }
+
+    /// 持块但本轮尚无落盘字节 → Connecting（建连/握手中；含续传恢复
+    /// 已领块但请求在途——cum 按本轮清零重计）
+    #[test]
+    fn conn_phase_holding_block_without_bytes_is_connecting() {
+        // 新建连接：领块后请求在途
+        let c = conn(2, 0, 1_000_000, 0);
+        assert_eq!(c.conn_phase(0), ConnPhase::Connecting);
+        // 续传恢复：块内已有断点字节（done > 0）但本轮累计为 0 → 仍在建连
+        let r = conn(3, 0, 1_000_000, 400_000);
+        assert_eq!(r.conn_phase(0), ConnPhase::Connecting);
+        // 活跃判定：Connecting 属活跃（明细显示、速度列 -）
+        assert!(r.conn_phase(0).is_active());
+    }
+
+    /// 本轮已有落盘字节 → Connected；换块不清累计（FR-01-99 ②）持续 Connected；
+    /// 传输停顿不降级（仍持块即仍在连接）
+    #[test]
+    fn conn_phase_with_bytes_is_connected_and_stable() {
+        let c = conn(4, 0, 1_000_000, 100);
+        assert_eq!(c.conn_phase(1), ConnPhase::Connected);
+        assert!(c.conn_phase(1).is_active());
+        // 停顿（窗口老化、速度归零）不降级：仍持块 + cum > 0 → Connected
+        assert_eq!(c.conn_phase(1_000_000), ConnPhase::Connected);
+    }
+
+    /// is_active 单源三分支穷尽（活跃 = Connecting ∪ Connected，Closed 非活跃）
+    #[test]
+    fn conn_phase_is_active_exhaustive() {
+        assert!(ConnPhase::Connecting.is_active());
+        assert!(ConnPhase::Connected.is_active());
+        assert!(!ConnPhase::Closed.is_active());
+    }
+
+    // -----------------------------------------------------------------------
+    // v1.34/FR-01-116 总大小未知展示口径（Task::size_known / eta_secs）
+    // -----------------------------------------------------------------------
+
+    /// 不支持续传的 HTTP(S) 流式下载：下载期间大小未知，进入校验/后期
+    /// 处理/完成态（流结束）才得知实际大小
+    #[test]
+    fn size_known_streaming_http_unknown_until_stream_ends() {
+        let mut t = crate::model::sample_task();
+        t.protocol = Protocol::Http;
+        t.resumable = false;
+        t.state = TaskState::Downloading;
+        assert!(!t.size_known(), "流式下载期间大小未知");
+        t.state = TaskState::Queued;
+        assert!(!t.size_known(), "排队（重探窗口）同样未知");
+        t.state = TaskState::Paused;
+        assert!(!t.size_known(), "暂停未知");
+        t.state = TaskState::Failed;
+        assert!(!t.size_known(), "失败未知");
+        // 流结束：校验/后期处理/完成态已知
+        for st in [
+            TaskState::Verifying,
+            TaskState::PostProcessing,
+            TaskState::Completed,
+        ] {
+            t.state = st;
+            assert!(t.size_known(), "流结束态 {st:?} 大小已知");
+        }
+    }
+
+    /// 支持续传的 HTTP(S) 与 BT 恒已知；ETA 未知大小时恒 None
+    #[test]
+    fn size_known_resumable_and_bt_always_known_and_eta_gated() {
+        let mut t = crate::model::sample_task();
+        t.protocol = Protocol::Http;
+        t.resumable = true;
+        t.state = TaskState::Downloading;
+        assert!(t.size_known());
+        t.protocol = Protocol::Bt;
+        t.resumable = false;
+        assert!(t.size_known(), "BT 恒已知");
+        // ETA 门槛：未知大小 → None（即便速度 > 0 且下载中）
+        t.protocol = Protocol::Http;
+        t.resumable = true;
+        t.state = TaskState::Downloading;
+        t.total = 3_000_000;
+        t.downloaded = 1_000_000;
+        t.speed = 1_000_000.0;
+        assert!(t.eta_secs().is_some(), "已知大小时 ETA 正常");
+        t.resumable = false;
+        assert!(t.eta_secs().is_none(), "未知大小时 ETA 无从估计");
     }
 }

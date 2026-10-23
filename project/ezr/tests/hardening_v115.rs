@@ -115,13 +115,15 @@ async fn field_display_exact_width_shows_full_value() {
     let (mut a, reg) = app_with_add_dialog();
     {
         let d = a.dialog.as_mut().unwrap();
-        d.url = "x".repeat(60); // 恰等于 avail
+        // 恰等于 avail（v1.34：avail = inner.width−13 = 59，字段行宽−4 同步）
+        d.url = "x".repeat(59);
     }
     let buf = render(&mut a, 120, 40);
-    // 字段行 rect.x = inner.x+1 = 25；label 7 列 + "> " 2 列 → 值自 x=34 起
-    assert_eq!(cell(&buf, 34, 16), "x", "恰宽值首字符必须原样显示");
-    assert_eq!(cell(&buf, 93, 16), "x", "恰宽值末字符（34+59）");
-    assert_ne!(cell(&buf, 34, 16), "…", "不得进入尾部省略分支");
+    // v1.34/FR-01-115 S2：字段行 rect.x = inner.x+2 = 26；label 7 列 + "> " 2 列
+    // → 值自 x=35 起（avail = inner.width−13 = 59，防溢出 rect 右缘）
+    assert_eq!(cell(&buf, 35, 16), "x", "恰宽值首字符必须原样显示");
+    assert_eq!(cell(&buf, 93, 16), "x", "恰宽值末字符（35+58）");
+    assert_ne!(cell(&buf, 35, 16), "…", "不得进入尾部省略分支");
     a.shutdown().await;
     let _ = std::fs::remove_file(&reg);
 }
@@ -161,24 +163,25 @@ async fn add_dialog_below_min_width_renders_nothing() {
 // ui/dialog.rs —— 字段行几何与焦点（259:29/33 ×4、314:24 ×2、258:29）
 // ---------------------------------------------------------------------------
 
-/// 120×40：inner=(24,15,72,10)。六行的 y 恰为 inner.y+1+i：
-/// URL=16、保存到=17、并发=18、校验=19、校验码=20、代理=21；
-/// 行 rect.x 恰为 inner.x+1=25；焦点在 URL（i=0）→ 仅该行有光标 ▏。
+/// 120×40：v1.34 对话框 74×12（FR-01-115④ 底部补齐 1 行）→ inner=(24,15,72,10)。
+/// 六行的 y 恰为 inner.y+1+i：URL=16、保存到=17、并发=18、校验=19、校验码=20、
+/// 代理=21；行 rect.x 恰为 inner.x+2=26（S2 内容区左 2 列）；焦点在 URL（i=0）
+/// → 仅该行有光标 ▏。
 #[tokio::test]
 async fn add_dialog_field_rows_exact_geometry() {
     let (mut a, reg) = app_with_add_dialog();
     let buf = render(&mut a, 120, 40);
     assert!(row_text(&buf, 16, 120).contains("URL"), "URL 行 y=16");
     // CJK 渲染为带空格形态（「保 存 到」），逐格断言 label 首字
-    assert_eq!(cell(&buf, 25, 17), "保", "保存到行 y=17、label 自 x=25");
-    assert_eq!(cell(&buf, 25, 18), "并", "并发行 y=18");
-    assert_eq!(cell(&buf, 25, 19), "校", "校验行 y=19");
+    assert_eq!(cell(&buf, 26, 17), "保", "保存到行 y=17、label 自 x=26");
+    assert_eq!(cell(&buf, 26, 18), "并", "并发行 y=18");
+    assert_eq!(cell(&buf, 26, 19), "校", "校验行 y=19");
     assert!(
         row_text(&buf, 19, 120).contains("NONE"),
         "校验行显示默认 NONE（v1.32/FR-01-01：NONE 首行默认）"
     );
-    // 行首列：label 从 x=25 起（mutant x=inner.x*1=24 / inner.x-1=23 皆错位）
-    assert_eq!(cell(&buf, 25, 16), "U", "URL label 首字符恰在 x=25");
+    // 行首列：label 从 x=26 起（mutant x=inner.x*1=24 / inner.x+1=25 皆错位）
+    assert_eq!(cell(&buf, 26, 16), "U", "URL label 首字符恰在 x=26");
     // 焦点光标：URL 行有 ▏，并发行没有
     assert!(row_text(&buf, 16, 120).contains('▏'), "焦点行（URL）有光标");
     assert!(
@@ -228,11 +231,11 @@ async fn add_dialog_button_and_hint_rows_exact_geometry() {
 // ui/dialog.rs —— 校验算法下拉几何（36:16、41:21、123:21、363:37）
 // ---------------------------------------------------------------------------
 
-/// 120×21 终端（v1.32：下拉 8 项 = NONE + 7 算法，ph = 8+2 = 10）：
-/// dlg.y=5、inner.y=6、校验行 y=10、下拉 py=11、ph=10、px=inner.x+8=32
-///（未越界不触发钳制：py+ph=21 恰等于终端底，越界翻转守卫
-/// `py+ph > bottom` 为假）。选项行 y = pinner.y + i = 12+i
-///（NONE@12、MD5@13、SHA-1@14、Adler-32@19），底边框角 ╰ 在 (32,20)。
+/// 120×21 终端（v1.34：74×12 → dlg.y=4、inner.y=5；v1.32：下拉 8 项 = NONE +
+/// 7 算法，ph = 8+2 = 10）：校验行 y=9、下拉 py=10、ph=10、px=inner.x+9=33
+///（FR-01-115：px 随 S2 同步 +1，原 +8；未越界不翻转：py+ph=20 < 终端底 21）。
+/// 选项行 y = pinner.y + i = 11+i（NONE@11、MD5@12、SHA-1@13、Adler-32@18），
+/// 底边框角 ╰ 在 (33,19)。
 #[tokio::test]
 async fn ck_dropdown_exact_geometry() {
     let (mut a, reg) = app_with_add_dialog();
@@ -243,24 +246,24 @@ async fn ck_dropdown_exact_geometry() {
     }
     let buf = render(&mut a, 120, 21);
     assert_eq!(
-        cell(&buf, 32, 11),
+        cell(&buf, 33, 10),
         "╭",
-        "下拉框左上角必须在其 x=32、y=11（未越界不翻转）"
+        "下拉框左上角必须在其 x=33、y=10（未越界不翻转）"
     );
     assert!(
-        row_text(&buf, 12, 120).contains("NONE"),
-        "选项 0（NONE）行 y=12"
+        row_text(&buf, 11, 120).contains("NONE"),
+        "选项 0（NONE）行 y=11"
     );
-    assert!(row_text(&buf, 13, 120).contains("MD5"), "选项 1 行 y=13");
-    assert!(row_text(&buf, 14, 120).contains("SHA-1"), "选项 2 行 y=14");
+    assert!(row_text(&buf, 12, 120).contains("MD5"), "选项 1 行 y=12");
+    assert!(row_text(&buf, 13, 120).contains("SHA-1"), "选项 2 行 y=13");
     assert!(
-        row_text(&buf, 19, 120).contains("Adler-32"),
-        "选项 7 行 y=19（8 项末行）"
+        row_text(&buf, 18, 120).contains("Adler-32"),
+        "选项 7 行 y=18（8 项末行）"
     );
     assert_eq!(
-        cell(&buf, 32, 20),
+        cell(&buf, 33, 19),
         "╰",
-        "下拉框左下角 y=20（ph=10 收口于终端底）"
+        "下拉框左下角 y=19（ph=10 收口于终端底上一行）"
     );
     a.shutdown().await;
     let _ = std::fs::remove_file(&reg);
@@ -282,9 +285,10 @@ async fn proxy_dropdown_single_item_exact_geometry() {
         d.proxy_open = true;
     }
     let buf = render(&mut a, 120, 40);
-    assert_eq!(cell(&buf, 32, 22), "╭", "代理下拉左上角 (32,22)");
+    // v1.34：px = inner.x+9 = 33（FR-01-115 随 S2 同步 +1）
+    assert_eq!(cell(&buf, 33, 22), "╭", "代理下拉左上角 (33,22)");
     assert!(row_text(&buf, 23, 120).contains("直"), "唯一选项行 y=23");
-    assert_eq!(cell(&buf, 32, 24), "╰", "代理下拉左下角 (32,24)（ph=3）");
+    assert_eq!(cell(&buf, 33, 24), "╰", "代理下拉左下角 (33,24)（ph=3）");
     a.shutdown().await;
     let _ = std::fs::remove_file(&reg);
 }
@@ -1318,12 +1322,13 @@ async fn proxy_dropdown_no_panic_when_taller_than_terminal() {
     }
     // 修复前：Clear 越界 panic（prect 下缘 15 > 终端 12）
     let buf = render(&mut a, 80, 12);
+    // v1.34：px = inner.x+9 = 13（FR-01-115 随 S2 同步 +1，原 +8）
     assert_eq!(
-        cell(&buf, 12, 0),
+        cell(&buf, 13, 0),
         "╭",
-        "上移展开后浮层顶在 y=0（px=inner.x+8）"
+        "上移展开后浮层顶在 y=0（px=inner.x+9）"
     );
-    assert_eq!(cell(&buf, 12, 11), "╰", "浮层下缘钳在末行 y=11");
+    assert_eq!(cell(&buf, 13, 11), "╰", "浮层下缘钳在末行 y=11");
     a.shutdown().await;
     let _ = std::fs::remove_file(&reg);
 }

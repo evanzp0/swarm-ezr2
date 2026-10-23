@@ -6,7 +6,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use super::text::w;
-use super::{ACCENT, FG};
+use super::{panel_border_style, ACCENT, DIM2, FG, RED};
 use crate::app::App;
 
 pub(super) fn dialog_rect(area: Rect, dw: u16, dh: u16) -> Rect {
@@ -144,4 +144,69 @@ pub(super) fn clip_wide_at_edges(f: &mut Frame, area: Rect) {
         clip_left_edge(buf, x0, y);
         clip_right_edge(buf, xr, y);
     }
+}
+
+// ---------------------------------------------------------------------------
+// 弹窗右上角 [✗] 关闭按钮（v1.34/FR-01-114，对齐 ezr-demo 重构版
+// draw_close_btn：全部弹窗统一；[✗] 中括号内紧凑无 padding、中括号与
+// 边框线之间左右各留 1 列 padding；中括号与弹窗边框线同色、不随悬停变化，
+// 仅 ✗ 前景色高亮——D41 配色拆分）
+// ---------------------------------------------------------------------------
+
+/// 弹窗右上角 [✗] 关闭按钮：画在弹窗顶边框行右端——右角符内侧先留 1 列
+/// 边框 padding，再画 `[✗]`（3 列宽，**中括号内紧凑、不留空格**），`[✗]`
+/// 左侧再留 1 列边框 padding（不覆盖边框线；padding 取 1 列 = 与面板标题
+/// 「 任务详情 」自身首尾 1 空格 padding 同构，整体占用 5 列）；配色 =
+/// **中括号 `[`/`]` 与弹窗边框线同色**（panel_border_style(true) 绿+粗，
+/// 融入边框、不随悬停/按压变化），**高亮的只有 ✗**——常态 DIM2，指针
+/// 悬停或按压 = 仅前景色红+粗（无背景色/无反色，D41）；按下/松开判定与
+/// 关闭行为在 App 层（popup_close_rect / x_press，各弹窗鼠标分支各自关闭
+/// 自身）。返回命中热区（None = 弹窗过窄或与标题重叠，放弃绘制不设热区；
+/// 热区 = `[✗]` 自身 3 列，前后 padding 列保持边框线原样、不参与点击）。
+/// 按钮符号 = "[✗]"（✗ = U+2717 BALLOT X，单列宽）。
+pub(super) fn draw_close_btn(
+    f: &mut Frame,
+    app: &App,
+    popup: Rect,
+    title_w: usize,
+) -> Option<Rect> {
+    // 极小弹窗不绘制，避免挤掉标题/内容
+    if popup.width < 12 || popup.height < 3 {
+        return None;
+    }
+    let bx = popup.x + popup.width - 5; // [✗] 3 列：右 padding 1 列 + 右角符
+    if (bx as usize) < popup.x as usize + 1 + title_w + 2 {
+        return None; // 左 padding 列压到标题：放弃绘制
+    }
+    let r = Rect {
+        x: bx,
+        y: popup.y,
+        width: 3,
+        height: 1,
+    };
+    let hovered = app.pointer.is_some_and(|(px, py)| {
+        px >= r.x
+            && px < r.x.saturating_add(r.width)
+            && py >= r.y
+            && py < r.y.saturating_add(r.height)
+    });
+    let hot = app.x_press || hovered;
+    // 中括号 = 弹窗边框线同色（绿+粗），不随悬停/按压变化；
+    // 仅 ✗ 高亮：常态纯 DIM2（显式清除按钮覆盖在边框单元格上继承的 BOLD，
+    // 避免常态 ✗ 偏粗），悬停/按压 = 前景红+粗（无背景色/无反色）
+    let bracket = panel_border_style(true);
+    let x_st = if hot {
+        Style::default().fg(RED).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(DIM2).remove_modifier(Modifier::BOLD)
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("[", bracket),
+            Span::styled("✗", x_st),
+            Span::styled("]", bracket),
+        ])),
+        r,
+    );
+    Some(r)
 }

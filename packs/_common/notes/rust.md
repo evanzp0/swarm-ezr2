@@ -174,6 +174,20 @@ group_imports = "StdExternalCrate"
   `CARGO_PROFILE_DEV_DEBUG=0` 压制 debuginfo；长会话内每完成一个重构建阶段即复查一次。
   注意：删除 `target/` 后孤儿进程可能仍存活（运行中 inode 未释放），按「先杀进程、
   再删状态」次序处置（engineering.md「测试执行纪律」）。
+- **`ld terminated with signal 7 [Bus error]` ≈ 磁盘写满的归因信号**：链接期 collect2
+  SIGBUS 十有八九不是工具链坏了——`df -h /` 见 100% 即坐实（链接器 mmap 临时文件
+  写不进）。处置次序：先 `du -sh target/debug/*` 定位大头（`incremental` 增量缓存
+  与 `deps` 旧测试二进制通常占 5G+），删 `target/debug/incremental` 即释放数 GB 且
+  保留依赖编译缓存；`/tmp` 里的测试残留目录一并清。
+- **`cargo fmt` 会让 gen-drift 剥头副本重新漂移**：`tests/gen/*_stripped.rs` 与产品源
+  逐字比对，fmt 重排产品源后守卫测试必红——**重生成副本必须安排在 fmt 之后**（次序：
+  改产品 → fmt → 再 `tail -n +N src/<file>.rs > tests/gen/<file>_stripped.rs` → 跑守卫）；
+  把重生成放在 fmt 前会二次返工。
+- **剥头副本壳的符号转发要跟产品源可见性同步**：产品源重构把壳内直测的私有函数收编为
+  闭包/改名后，壳内 `include!` 副本的 `use super::X` 会连环编译失败（缺符号/私有模块
+  挡路）。处置：壳内按新产品结构补转发；产品侧 `pub(super)` 符号需被壳转发时放宽为
+  `pub(crate)`（注明测试用途），私有 `mod` 同理放宽 `pub(crate) mod`——放宽范围最小化、
+  行为零改动。
 
 ## 4. 编码实践
 
@@ -308,6 +322,11 @@ group_imports = "StdExternalCrate"
 - **双向拷贝代理（io::copy 两线程对拷）的单测必须显式关闭客户端写侧**：`shutdown(Write)`
   后代理的 client→upstream 拷贝得到 EOF、两个 copy 线程才能收尾、socket 才会 drop；
   否则 read_to_end 与 copy 线程互等，测试永久挂起（真实客户端通常天然关写侧，故线上不显）。
+- **真实 TCP stub 的 e2e 测试在高 `--test-threads` 下时序脆弱（假失败）**：滴流下载类
+  测试带真实 socket + 25s 级 deadline，默认线程数（=核数）并行时 CPU 竞争会拖慢
+  stub/事件泵，任务在预算内落 Failed/收不满连接 → 挂的测试每次还不一样（易误判回归）。
+  鉴别法：单测过滤重跑秒过、`--test-threads=1` 或 `=2` 全绿即坐实环境竞争而非代码缺陷；
+  全量收官验证用 `cargo test -- --test-threads=2`（4200+ 测试增量 <2 分钟）。
   桩上游的"读一次→回一包"契约要与被测流量方向对齐（CONNECT 隧道：客户端先发一笔
   再读回包），否则双向互等死锁。
 - **拆大文件（>100 变异点/行）时先机械分模块再提纯函数，两步各自全绿**：先按职责把

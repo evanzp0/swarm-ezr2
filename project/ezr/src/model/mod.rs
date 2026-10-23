@@ -173,7 +173,11 @@ mod timefmt;
 // 挂载测试 crate 不消费 product re-export，unused 属机制固有告警）。
 // architect v116：ProxyConfig 零消费者，从 re-export 移除（死 API 面清理）
 pub use config::{ProxyChoice, ProxyEndpoint};
-pub use task::{Connection, PieceState, Task};
+// ConnPhase 为对外 API 面（v1.34/FR-01-96 ⑦ 活跃判定单源枚举；产品面经
+// Connection::conn_phase 消费不直接具名，挂载测试 crate 不经 re-export——
+// unused 属机制固有告警，同 ProxyChoice 处置）
+#[allow(unused_imports)]
+pub use task::{ConnPhase, Connection, PieceState, Task};
 #[allow(unused_imports)] // 对外保留（01 期已暴露）
 pub use timefmt::fmt_created;
 pub use timefmt::unix_now;

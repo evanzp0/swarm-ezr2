@@ -20,8 +20,19 @@ pub(super) fn render_task(
     sel: bool,
     spinner: char,
     queue_pos: usize,
+    anim: u64,
 ) {
-    let text = task_lines(t, sel, spinner, area.width as usize, queue_pos);
+    // v1.34/FR-01-115 S2：任务列表左 2 列由光标槽承担、右 2 列由内容宽收窄
+    //（选中背景仍满行——渲染区域不变，百分比离右边框 2 列）；走马灯帧源
+    // anim（FR-01-116，与 spinner 同 10fps 节拍）
+    let text = task_lines(
+        t,
+        sel,
+        spinner,
+        (area.width as usize).saturating_sub(2),
+        queue_pos,
+        anim,
+    );
     let para = Paragraph::new(text).style(if sel {
         Style::default().bg(SEL_BG)
     } else {
@@ -93,7 +104,15 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             width: inner.width,
             height: ITEM_HEIGHT,
         };
-        render_task(f, t, row_area, ti == app.selected, spinner, qpos[ti]);
+        render_task(
+            f,
+            t,
+            row_area,
+            ti == app.selected,
+            spinner,
+            qpos[ti],
+            app.frame,
+        );
     }
 
     app.visible_rows = max_items;

@@ -202,8 +202,11 @@ async fn engine_conn_ledger_kills() {
         "下载中并发明细数据行速度列应显数值（mutant 恒 '-'）：{:?}",
         &mid_rows[15..=21]
     );
-    // ③ 靶 active_conn_count 6 点：cap×speed 合成矩阵（单速度账本连接 1；
-    //    real=1 对全部 mutant {0,0,0,3} 唯一）
+    // ③ 靶 active_conn_count 6 点（v1.34 ConnPhase 口径：持块即活跃——
+    //    Connected = 账本 cum>0、Connecting = 持块 cum=0、Closed = cap=0；
+    //    旧「cap×speed 合成矩阵」随 FR-01-96 v1.34 活跃口径改版退役）。
+    //    探针复用真实任务 task_id=1 的账本：(1,1) cum>0（真实单连接在传）、
+    //    (1,2)/(1,3) 无账本条目 cum=0。
     let mut probe = queued_task(1, "probe", "probe", 1);
     probe.state = TaskState::Downloading;
     probe.connections = vec![
@@ -212,46 +215,39 @@ async fn engine_conn_ledger_kills() {
             start: 0,
             end: 100,
             done: 0,
-        }, // cap>0, sp>0 → 计
+        }, // cap>0, 账本 cum>0 → Connected → 计
         Connection {
-            id: 2,
+            id: 3,
             start: 0,
             end: 0,
             done: 0,
-        }, // cap=0, sp=0 → 不计
+        }, // cap=0 → Closed → 不计
         Connection {
             id: 2,
             start: 0,
             end: 100,
             done: 0,
-        }, // cap>0, sp=0 → 不计
+        }, // cap>0, cum=0 → Connecting → 计
     ];
     assert_eq!(
         a.active_conn_count(&probe),
-        1,
-        "仅 cap>0 且 speed>0 计入（mutant: 0/0/0/3 皆异）"
+        2,
+        "持块即活跃（Connected+Connecting）+ cap=0 不计（mutant count-all/filter 丢失 → 3/1）"
     );
-    // 探针 B：cap=0 却有速度的连接 → real=0，杀 421:33（>→>=，mutant 误计 1）
+    // 探针 B：cap=0 但账本有累计（id=1 → (1,1) cum>0）→ cap 权威优先 →
+    // Closed 不计，杀 conn_phase 丢 cap 判定 / is_active 误纳 Closed 的 mutant
     let mut probe_b = queued_task(1, "probeb", "probeb", 1);
     probe_b.state = TaskState::Downloading;
-    probe_b.connections = vec![
-        Connection {
-            id: 1,
-            start: 0,
-            end: 0,
-            done: 0,
-        }, // cap=0, sp>0 → 不计（real=0）
-        Connection {
-            id: 2,
-            start: 0,
-            end: 100,
-            done: 0,
-        }, // cap>0, sp=0 → 不计
-    ];
+    probe_b.connections = vec![Connection {
+        id: 1,
+        start: 0,
+        end: 0,
+        done: 0,
+    }]; // cap=0（cum>0 不救）→ Closed → 不计（real=0）
     assert_eq!(
         a.active_conn_count(&probe_b),
         0,
-        "cap=0 连接不计（探针 B：mutant >= 误计 cap=0 正速度连接 → 1）"
+        "cap=0 连接不计（cap 权威；mutant 忽 cap 判 cum → 1）"
     );
     let mut idle = queued_task(2, "idle", "idle", 1);
     idle.state = TaskState::Queued;

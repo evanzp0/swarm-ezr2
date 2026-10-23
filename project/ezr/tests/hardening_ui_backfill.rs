@@ -104,8 +104,14 @@ mod btn_fix {
         pub(crate) use crate::ui::w;
     }
     use ratatui::style::Color;
+
+    // v1.34/FR-01-114：btn.rs 新增 draw_close_btn 依赖面板边框样板与 DIM2/RED
+    // ——panel_border_style/DIM2 单源转发（ui 层/scrollbar 引擎），RED 壳内同值复刻
+    pub(crate) use crate::scrollbar::DIM2;
+    pub(crate) use crate::ui::panel_border_style;
     pub const ACCENT: Color = Color::Cyan;
     pub const FG: Color = Color::Rgb(198, 208, 212);
+    pub const RED: Color = Color::Rgb(226, 92, 84);
     pub mod btn {
         include!("gen/btn_stripped.rs");
         pub fn clip_right(buf: &mut ratatui::buffer::Buffer, xr: u16, y: u16) {
@@ -118,6 +124,9 @@ mod btn_fix {
 /// 同值复刻（仅样式，断言不依赖色值）
 mod detail_fix {
     pub mod text {
+        // v1.34/FR-01-113④：break_links/link_break_spans 断链渲染（产品侧
+        // pub(crate)，剥头副本 use 同名转发）
+        pub(crate) use crate::ui::text::{break_links, link_break_spans};
         pub(crate) use crate::ui::{fmt_size, pad_right, truncate, w};
     }
     // 面板样板单源转发（coder cpd-tile-shared-helper 轮：detail.rs 改用 ui 层
@@ -145,8 +154,18 @@ mod detail_fix {
     }
     pub mod detail {
         include!("gen/detail_stripped.rs");
+        /// v1.34：产品源热区计算收编为 draw_detail 内闭包（剥头副本直测面
+        /// 随之消失）——本壳按产品新口径独立重写供边界测试：x = 内框 +2
+        /// （行首 2 列 padding，FR-01-115 S2）、宽 9、行号超内框不设；
+        /// 产品同位漂移由 gen-drift 守卫测试承担（副本逐字一致必红）
         pub fn hot(inner: Rect, line_idx: usize) -> Option<Rect> {
-            hot_rect(inner, line_idx)
+            let y = inner.y + line_idx as u16;
+            (y < inner.y + inner.height).then(|| Rect {
+                x: inner.x + 2,
+                y,
+                width: 9,
+                height: 1,
+            })
         }
     }
 }
@@ -753,12 +772,12 @@ fn hot_rect_boundary_line_exclusive() {
     assert_eq!(
         detail_fix::detail::hot(inner, 5),
         Some(Rect {
-            x: 4,
+            x: 5,
             y: 10,
             width: 9,
             height: 1
         }),
-        "行号 5 < 高度 6 → 设热区（正控）"
+        "行号 5 < 高度 6 → 设热区（正控；x = 内框 +2，v1.34 padding）"
     );
     assert!(
         detail_fix::detail::hot(inner, 6).is_none(),
@@ -782,7 +801,9 @@ fn hot_rect_boundary_line_exclusive() {
 
 // --------------------------------------------------------- ui/delete.rs 3 ---
 
-/// 靶 53:24 / 77:24（+→-）：提示行与按钮行 x 定位金样（80×24 整帧）
+/// 靶 53:24 / 77:24（+→-）：正文行与按钮行 x 定位金样（80×24 整帧；
+/// v1.34/FR-01-115 S2：正文 x=inner.x+2 宽−4、文本不再自带前导空格；
+/// FR-01-25 P10：底部提示行退役——rows[13] 改反向断言）
 #[tokio::test]
 async fn delete_dialog_position_golden() {
     let mut a = make_app_in("ezr-h118", "del");
@@ -797,19 +818,19 @@ async fn delete_dialog_position_golden() {
     let rows = row_strings(&render_full(&mut a, 80, 24));
     assert_eq!(
         rows[10],
-        "│      │  删 除 任 务  「 删 除 目 标 文 件 .bin」  ？                               │      │",
-        "标题行 x=inner.x+1 定位金样（靶 53:24，mutant x=inner.x-1 左移压边）"
+        "│      │  删 除 任 务  「 删 除 目 标 文 件 .bin」 ？                                │      │",
+        "正文行 x=inner.x+2 定位金样（靶 53:24，mutant 左移压边；「」后无空格、\
+         前导 2 列由定位承载——x 偏 1 列即红）"
     );
     assert_eq!(
         rows[12],
         "│      │        [ 仅 删 除 任 务  ]    [ 删 除 任 务 和 文 件  ]    [ 取 消  ]        │      │",
         "按钮行居中定位金样（mutant 整行左移 2 列）"
     );
-    assert_eq!(
-        rows[13],
-        "│      │  1/2/3 快 捷 选 择  · Enter 确 认  · Esc 取 消                         │      │",
-        "提示行（inner.y+4）x=inner.x+1 定位金样（靶 77:24，mutant x=inner.x-1 左移压边；\
-         77:24 只控制提示行，标题行 rows[10] 对其不敏感——须逐字断言本行）"
+    assert!(
+        !rows.iter().any(|r| r.contains("1/2/3 快 捷 选 择")),
+        "底部提示行退役（v1.34/FR-01-25 P10；靶 77:24 位点随行删除消失，\
+         x 定位由正文行金样承担）"
     );
     a.shutdown().await;
 }

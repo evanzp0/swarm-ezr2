@@ -85,8 +85,11 @@ pub(super) fn draw_header(f: &mut Frame, app: &mut App, area: Rect, with_chart: 
     let ulp = format!("↑ {}", fmt_speed(ulp_val));
     let sess = fmt_size(app.session_bytes);
 
-    // 字段行（内容行 1）：单行排列，顺序固定：并发 → 会话已下载 → 全局 → 峰值
+    // 字段行（内容行 1）：单行排列，顺序固定：并发 → 会话已下载 → 全局 → 峰值。
+    // v1.34/FR-01-115 S2（对齐 ezr-demo 重构版）：行首 1 空格 + 标签自带前导
+    // 1 空格 = 内容区左 2 列 padding（FR-01-94 v1.34）
     let fields = Line::from(vec![
+        Span::raw(" "),
         lab(" 并发 "),
         val(&conns_n.to_string()),
         lab("   会话已下载 "),
@@ -138,7 +141,9 @@ pub(super) fn draw_header(f: &mut Frame, app: &mut App, area: Rect, with_chart: 
         app.tab_rects.clear();
         for (i, label) in FILTERS.iter().enumerate() {
             let text = format!(" {} ({}) ", label, counts[i]);
-            let tab_x = inner.x + tabs_w;
+            // v1.34/FR-01-115 S2：页签行左 2 列 padding——渲染起点 inner.x + 1
+            //（页签自带前导空格），命中矩形随内容同步平移（点击语义不变）
+            let tab_x = inner.x + 1 + tabs_w;
             // 显示宽经 Span::width 计算（CJK 计宽；unicode-width 非直接依赖）
             let text_w = Span::raw(text.as_str()).width() as u16;
             let span = Span::styled(
@@ -194,9 +199,11 @@ pub(super) fn draw_header(f: &mut Frame, app: &mut App, area: Rect, with_chart: 
         f.render_widget(
             Paragraph::new(Line::from(spans)),
             Rect {
-                x: inner.x,
+                // v1.34/FR-01-115 S2：行首 1 空格 + 页签前导空格 = 左 2 列 padding
+                //（命中矩形随内容同步平移——tab_x 已按同基准计算，点击语义不变）
+                x: inner.x + 1,
                 y: row_y,
-                width: fields_w,
+                width: fields_w.saturating_sub(1),
                 height: 1,
             },
         );

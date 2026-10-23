@@ -16,12 +16,13 @@ pub(super) fn task_lines(
     spinner: char,
     width: usize,
     queue_pos: usize,
+    anim: u64,
 ) -> Vec<Line<'static>> {
     let width = width.max(20);
     let state_c = state_color(t.state);
     vec![
         Line::from(title_row(t, sel, width)),
-        Line::from(progress_row(t, width, state_c, spinner)),
+        Line::from(progress_row(t, width, state_c, spinner, anim)),
         Line::from(stat_row(t, queue_pos)),
         Line::from(vec![Span::raw("")]),
     ]
@@ -30,8 +31,15 @@ pub(super) fn task_lines(
 /// 行 1：光标 + 名称 + 徽标 + 右对齐百分比
 fn title_row(t: &Task, sel: bool, width: usize) -> Vec<Span<'static>> {
     let state_c = state_color(t.state);
-    // 等待中任务显示真实进度（可能持有断点进度）
-    let pct_txt = format!("{:>5.1}%", t.progress() * 100.0);
+    // 等待中任务显示真实进度（可能持有断点进度）；总大小未知（不支持续传的
+    // HTTP(S) 流式下载）百分比无从计算，右对齐占同宽列显示 ?%（v1.34/
+    // FR-01-116 ①）
+    let known = t.size_known();
+    let pct_txt = if known {
+        format!("{:>5.1}%", t.progress() * 100.0)
+    } else {
+        "    ?%".to_string()
+    };
     let proto_badge = format!("[{}]", t.protocol.label());
     // v1.22/v1.23 口径（操作者 20261012 直判）：徽标文案 = 状态名单源，失败挂起
     // 不再细分（展示与数据均与普通「已暂停」完全一致）
@@ -78,11 +86,27 @@ fn title_row(t: &Task, sel: bool, width: usize) -> Vec<Span<'static>> {
     l1
 }
 
-/// 行 2：整体进度条（不分块）+ 校验/后期处理活动提示
-fn progress_row(t: &Task, width: usize, state_c: Color, spinner: char) -> Vec<Span<'static>> {
+/// 行 2：整体进度条（不分块）+ 校验/后期处理活动提示。
+/// v1.34/FR-01-116 ①（对齐 ezr-demo 重构版）：总大小未知 + 下载中 = 走马灯
+/// 滑块（进度条无法增长，以循环滑动表达传输进行中，帧源与 spinner 同 10fps
+/// 节拍）；总大小未知 + 其余状态 = 空轨道（全 ░，无进度语义）；已知 = 填充
+/// 进度条
+fn progress_row(
+    t: &Task,
+    width: usize,
+    state_c: Color,
+    spinner: char,
+    anim: u64,
+) -> Vec<Span<'static>> {
     let bar_w = width.saturating_sub(4);
     let mut l2 = vec![Span::raw("  ")];
-    l2.extend(plain_bar(bar_w, t.progress(), state_c));
+    if !t.size_known() && t.state == TaskState::Downloading {
+        l2.extend(super::text::marquee_bar(bar_w, anim, state_c));
+    } else if t.size_known() {
+        l2.extend(plain_bar(bar_w, t.progress(), state_c));
+    } else {
+        l2.extend(plain_bar(bar_w, 0.0, state_c));
+    }
     // 行内动态提示（非状态文案，仅校验/后期处理的活动提示）
     match t.state {
         TaskState::Verifying => {
@@ -122,9 +146,10 @@ fn rest_dash_speed() -> Vec<Span<'static>> {
     vec![Span::raw("↓ "), Span::styled("-", Style::default().fg(DIM))]
 }
 
-/// 剩余时间片段：下载中显示 ETA，其余显示灰色 -
+/// 剩余时间片段：下载中显示 ETA（总大小未知时无从估计，恒 `-`——
+/// v1.34/FR-01-116 ①），其余显示灰色 -
 fn remaining_tail(t: &Task, downloading: bool) -> Vec<Span<'static>> {
-    if downloading {
+    if downloading && t.size_known() {
         vec![Span::styled(
             format!("  剩余 {}", fmt_eta(t.eta_secs())),
             Style::default().fg(DIM),
@@ -155,6 +180,16 @@ fn stat_row(t: &Task, queue_pos: usize) -> Vec<Span<'static>> {
     }
 }
 
+/// 已下载/总大小 对（v1.34/FR-01-116 ①）：总大小未知时以 `? B` 占位
+///（不支持续传的 HTTP(S) 流式下载，下载中拿不到文件大小）
+fn dl_total_txt(t: &Task) -> String {
+    if t.size_known() {
+        format!("{}/{}", fmt_size(t.downloaded), fmt_size(t.total))
+    } else {
+        format!("{}/? B", fmt_size(t.downloaded))
+    }
+}
+
 /// 已失败：已重试次数/上限 · 重试倒计时 · 已下载/需要下载
 fn stat_failed(t: &Task) -> Vec<Span<'static>> {
     let mut l3: Vec<Span<'static>> = vec![Span::raw("  ")];
@@ -175,10 +210,7 @@ fn stat_failed(t: &Task) -> Vec<Span<'static>> {
     l3.push(Span::styled(" · ", Style::default().fg(RED)));
     l3.push(Span::styled(countdown, Style::default().fg(RED)));
     l3.push(Span::styled(" · ", Style::default().fg(RED)));
-    l3.push(Span::styled(
-        format!("{}/{}", fmt_size(t.downloaded), fmt_size(t.total)),
-        Style::default().fg(RED),
-    ));
+    l3.push(Span::styled(dl_total_txt(t), Style::default().fg(RED)));
     l3
 }
 
@@ -286,7 +318,9 @@ fn stat_http_rest(t: &Task) -> Vec<Span<'static>> {
     let mut l3: Vec<Span<'static>> = vec![Span::raw("  ")];
     l3.extend(dl_speed_head(t, downloading));
     l3.push(Span::styled(
-        format!("  {}/{}", fmt_size(t.downloaded), fmt_size(t.total)),
+        // v1.34/FR-01-116 ①：总大小未知（不支持续传的 HTTP(S) 流式下载）
+        // 显示 `<已下载>/? B`（统计行口径与列表徽标同轮修订）
+        dl_total_txt(t),
         Style::default().fg(FG),
     ));
     l3.extend(remaining_tail(t, downloading));
@@ -340,16 +374,97 @@ mod tests {
     #[test]
     fn progress_row_activity_hints() {
         let t = mk(TaskState::Verifying, false);
-        let row = progress_row(&t, 60, state_color(t.state), '⠋');
+        let row = progress_row(&t, 60, state_color(t.state), '⠋', 0);
         let s = text_of(&row);
         assert!(s.contains("分块校验"), "校验提示: {s}");
         let t = mk(TaskState::PostProcessing, false);
-        let row = progress_row(&t, 60, state_color(t.state), '⠋');
+        let row = progress_row(&t, 60, state_color(t.state), '⠋', 0);
         assert!(text_of(&row).contains("后期处理中"));
         // 下载中无活动提示
         let t = mk(TaskState::Downloading, false);
-        let row = progress_row(&t, 60, state_color(t.state), '⠋');
+        let row = progress_row(&t, 60, state_color(t.state), '⠋', 0);
         assert!(!text_of(&row).contains("校验"));
+    }
+
+    // -----------------------------------------------------------------
+    // v1.34/FR-01-116 总大小未知展示口径（?%/走马灯/? B/剩余 -）
+    // -----------------------------------------------------------------
+
+    fn mk_streaming(state: TaskState) -> Task {
+        let mut t = mk(state, false);
+        t.resumable = false; // 不支持续传 = 流式下载，下载期间大小未知
+        t
+    }
+
+    #[test]
+    fn unknown_size_shows_question_percent() {
+        let t = mk_streaming(TaskState::Downloading);
+        let s = text_of(&title_row(&t, false, 60));
+        assert!(s.contains("?%"), "未知大小 ?%: {s}");
+        assert!(!s.contains("33.3%"), "不显示数值百分比: {s}");
+        // 右对齐同宽列：?% 占 6 列（含前导空格），与已知口径同宽
+        assert_eq!(w("    ?%"), w(&format!("{:>5.1}%", 33.3)));
+        // 支持续传对照：数值百分比正常
+        let t2 = mk(TaskState::Downloading, false);
+        assert!(text_of(&title_row(&t2, false, 60)).contains("33.3%"));
+    }
+
+    #[test]
+    fn unknown_size_marquee_when_downloading_else_empty_track() {
+        // 下载中：走马灯（有色块 █，帧随 anim 移动；anim=0 为空帧——滑块
+        // 尚未入场 head=0，与「右缘滑出空一帧重新滑入」同款空帧语义）
+        let t = mk_streaming(TaskState::Downloading);
+        let a0 = text_of(&progress_row(&t, 60, state_color(t.state), '⠋', 4));
+        let a5 = text_of(&progress_row(&t, 60, state_color(t.state), '⠋', 9));
+        assert!(a0.contains('█'), "下载中走马灯色块: {a0}");
+        assert_ne!(a0, a5, "滑块随帧移动");
+        // 其余状态：空轨道（全 ░，无 █）
+        for st in [TaskState::Paused, TaskState::Queued, TaskState::Failed] {
+            let t = mk_streaming(st);
+            let s = text_of(&progress_row(&t, 60, state_color(t.state), '⠋', 3));
+            assert!(!s.contains('█'), "{st:?} 空轨道无色块: {s}");
+            assert!(s.contains('░'), "{st:?} 空轨道 ░: {s}");
+        }
+        // 支持续传对照：填充进度条正常（33.3% 填充量 > 0）
+        let t2 = mk(TaskState::Downloading, false);
+        assert!(text_of(&progress_row(&t2, 60, state_color(t.state), '⠋', 0)).contains('█'));
+    }
+
+    #[test]
+    fn unknown_size_stat_rows_and_eta_dash() {
+        // HTTP rest（下载中）：统计行 <已下载>/? B、剩余 -
+        let mut t = mk_streaming(TaskState::Downloading);
+        t.speed = 1000.0;
+        let s = text_of(&stat_http_rest(&t));
+        assert!(s.contains("? B"), "统计行 ? B: {s}");
+        assert!(s.contains("剩余 -"), "剩余 -: {s}");
+        assert!(!s.contains("--:--"), "未知大小不显示 ETA 表盘: {s}");
+        // 已暂停同口径（空轨道 + ? B）
+        let t = mk_streaming(TaskState::Paused);
+        let s = text_of(&stat_row(&t, 0));
+        assert!(s.contains("? B"), "{s}");
+        assert!(s.contains("剩余 -"), "{s}");
+        // 已失败行同样 ? B
+        let t = mk_streaming(TaskState::Failed);
+        assert!(text_of(&stat_failed(&t)).contains("? B"));
+        // 支持续传对照：数值对 + ETA 正常
+        let mut t2 = mk(TaskState::Downloading, false);
+        t2.speed = 1_000_000.0;
+        let s2 = text_of(&stat_http_rest(&t2));
+        assert!(!s2.contains("? B"), "{s2}");
+        assert!(
+            s2.contains("剩余 ") && !s2.contains("剩余 -"),
+            "ETA 正常: {s2}"
+        );
+    }
+
+    #[test]
+    fn task_lines_anim_threading() {
+        // task_lines 全入口透传 anim（列表行调用点单参数源；anim=4 滑块入场）
+        let t = mk_streaming(TaskState::Downloading);
+        let l = task_lines(&t, false, '⠋', 60, 0, 4);
+        let joined: String = l[1].spans.iter().map(|x| x.content.as_ref()).collect();
+        assert!(joined.contains('█'));
     }
 
     /// v1.22/v1.23 口径（操作者 20261012 直判）：挂起态统计行与普通已暂停
@@ -454,7 +569,7 @@ mod tests {
     #[test]
     fn task_lines_width_floor_is_20() {
         let x = mk(TaskState::Downloading, false);
-        let lines = task_lines(&x, false, '⠋', 1, 0);
+        let lines = task_lines(&x, false, '⠋', 1, 0, 0);
         assert_eq!(lines.len(), 4);
         // 行内不 panic 即可（宽度下限收敛）
     }

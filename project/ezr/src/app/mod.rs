@@ -23,7 +23,7 @@ use crate::model::config::Config;
 use crate::model::registry::Registry;
 use crate::model::sidecar::Sidecar;
 use crate::model::speed::{SmoothedSpeed, SpeedWindow};
-use crate::model::{slots, Task};
+use crate::model::{slots, Connection, Task};
 // architect v116：原 `pub use crate::model::Task;` 死 re-export（crate::app::Task
 // 零消费者，各层均直用 crate::model::Task）降为模块内私有导入
 
@@ -75,6 +75,8 @@ pub enum SbKey {
     Pieces,
     /// 帮助窗口（垂直）
     Help,
+    /// 字段值弹窗（垂直，v1.34/FR-01-113）
+    Val,
 }
 
 impl SbKey {
@@ -96,6 +98,7 @@ impl SbKey {
             SbKey::ConnsH => app.conns_h_scrollbar,
             SbKey::Pieces => app.pieces_scrollbar,
             SbKey::Help => app.help_scrollbar,
+            SbKey::Val => app.val_scrollbar,
         }
     }
 }
@@ -173,6 +176,47 @@ impl Panel {
 
 /// 列表页签（仅两个）
 pub const FILTERS: [&str; 2] = ["正在下载", "已完成"];
+
+/// 任务详情可弹窗查看完整值的字段（v1.34/FR-01-113，对齐 ezr-demo 重构版
+/// DetailField）：字段名点击仍是复制（FR-01-101 v1.34 四项），字段值点击
+/// 打开完整值弹窗。字段与详情面板蓝色下划线链接字段一一对应；
+/// `title`/`copy_label` 为弹窗标题与复制 toast 文案的单源（D42）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DetailField {
+    /// 校验（完整校验码）
+    Checksum,
+    /// URL（完整下载地址）
+    Url,
+    /// 失败（完整错误文案；字段名原「失败原因」）
+    Failed,
+    /// 路径（完整保存路径；字段名原「保存」）
+    SavePath,
+}
+
+impl DetailField {
+    /// 弹窗标题（= 详情面板字段名，FR-01-80 v1.34 精简口径单源）
+    #[must_use]
+    pub fn title(self) -> &'static str {
+        match self {
+            DetailField::Checksum => "校验",
+            DetailField::Url => "URL",
+            DetailField::Failed => "失败",
+            DetailField::SavePath => "路径",
+        }
+    }
+
+    /// 复制 toast 文案（与字段名点击复制同 label 单源——描述被复制的值
+    /// 而非字段名显示文本，D42 钦定文案）
+    #[must_use]
+    pub fn copy_label(self) -> &'static str {
+        match self {
+            DetailField::Checksum => "校验码",
+            DetailField::Url => "url",
+            DetailField::Failed => "失败原因",
+            DetailField::SavePath => "保存路径",
+        }
+    }
+}
 
 /// braille 转轮字符（校验中/后期处理等动态效果）
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -296,6 +340,8 @@ pub struct App {
     pub pieces_scrollbar: Option<SbBar>,
     /// 帮助窗口滚动条命中几何（v1.32/FR-01-109）
     pub help_scrollbar: Option<SbBar>,
+    /// 字段值弹窗滚动条命中几何（v1.34/FR-01-113：仅垂直，内容超窗才显示）
+    pub val_scrollbar: Option<SbBar>,
     /// pieces 网格滚动上限（总行数 − 网格行数；ui 层每帧回填，与渲染层钳制同源）
     pub pieces_max_scroll: usize,
     /// 帮助窗口滚动上限（内容总行数 − 内框行数；ui 层每帧回填）
@@ -375,8 +421,43 @@ pub struct App {
     pub detail_url_rect: Option<Rect>,
     /// 任务详情面板「校验」字段名热区（ui 层每帧回填；点击复制校验码值，FR-01-101）
     pub detail_ck_rect: Option<Rect>,
+    /// 任务详情面板「失败」字段名热区（ui 层每帧回填；点击复制失败原因，
+    /// v1.34/FR-01-101 四项扩展）
+    pub detail_fail_rect: Option<Rect>,
+    /// 任务详情面板「路径」字段名热区（ui 层每帧回填；点击复制保存路径，
+    /// v1.34/FR-01-101 四项扩展）
+    pub detail_save_rect: Option<Rect>,
+    /// 任务详情面板字段值热区（ui 层每帧回填：悬停下划线 + 点击打开字段值
+    /// 弹窗，v1.34/FR-01-113；浮层打开时不响应）
+    pub detail_val_rects: Vec<(Rect, DetailField)>,
     /// 任务详情面板完整区域（ui 层每帧回填；点击面板任意处聚焦，v1.30/FR-01-108）
     pub detail_area: Option<Rect>,
+    /// 指针位置（v1.34/FR-01-113 悬停下划线判定：任意鼠标事件均携带坐标，
+    /// 供详情字段值悬停下划线与 [✗] 悬停高亮判定；TUI 无法感知指针离开
+    /// 终端，悬停态以最后一次上报位置为准）
+    pub pointer: Option<(u16, u16)>,
+    /// 弹窗右上角 [✗] 热区（v1.34/FR-01-114：ui 层每帧由顶层弹窗绘制回填，
+    /// 无弹窗打开 = None；热区 = [✗] 自身 3 列）
+    pub popup_close_rect: Option<Rect>,
+    /// [✗] 按压中（Down 记录、Drag 随动拖出取消、原地松开关闭弹窗，FR-01-114）
+    pub x_press: bool,
+    /// 字段值弹窗（v1.34/FR-01-113）是否打开
+    pub val_open: bool,
+    /// 字段值弹窗字段（弹窗标题与 Y 复制 toast 文案依据）
+    pub val_field: DetailField,
+    /// 字段值弹窗内容快照（打开时的完整字段值）
+    pub val_text: String,
+    /// 字段值弹窗内容滚动偏移（渲染层按内容行数钠制）
+    pub val_scroll: usize,
+    /// 字段值弹窗滚动上限（内容总行数 − 可视行数；ui 层每帧回填）
+    pub val_max_scroll: usize,
+    /// 字段值弹窗左上角位置（拖拽记忆；None = 打开时居中；关闭即清，
+    /// 同 pieces 口径）
+    pub val_pos: Option<(u16, u16)>,
+    /// 字段值弹窗拖拽中的抓取偏移（指针相对窗口左上角）
+    pub val_drag: Option<(u16, u16)>,
+    /// 字段值弹窗区域（ui 层每帧回填；拖拽/滚轮/点击外部命中测试）
+    pub val_area: Option<Rect>,
     /// 系统剪贴板实例（FR-01-101：懒初始化并复用，避免每次点击重建桌面连接）
     clipboard: Option<arboard::Clipboard>,
     /// 最近一次复制的内容（FR-01-101 诊断与测试断言复制内容用）
@@ -482,7 +563,21 @@ impl App {
             conns_area: None,
             detail_url_rect: None,
             detail_ck_rect: None,
+            detail_fail_rect: None,
+            detail_save_rect: None,
+            detail_val_rects: Vec::new(),
             detail_area: None,
+            pointer: None,
+            popup_close_rect: None,
+            x_press: false,
+            val_open: false,
+            val_field: DetailField::Url,
+            val_text: String::new(),
+            val_scroll: 0,
+            val_max_scroll: 0,
+            val_pos: None,
+            val_drag: None,
+            val_area: None,
             clipboard: None,
             last_copied: None,
             visible_conns_rows: 8,
@@ -494,6 +589,7 @@ impl App {
             conns_h_scrollbar: None,
             pieces_scrollbar: None,
             help_scrollbar: None,
+            val_scrollbar: None,
             pieces_max_scroll: 0,
             help_max_scroll: 0,
             sb_drag: None,
@@ -585,12 +681,17 @@ impl App {
         slots::queue_pos(&self.tasks, task_id)
     }
 
-    /// 是否存在浮层（对话框/pieces 弹窗/帮助窗口/关于窗口）。
+    /// 是否存在浮层（对话框/pieces 弹窗/帮助窗口/关于窗口/字段值弹窗）。
     /// 浮层打开时底层面板全部降级暗边框、页签高亮不再使用反色底。
-    /// v1.32/FR-01-108 注记：浮层集合含关于窗口（FR-01-111）。
+    /// v1.32/FR-01-108 注记：浮层集合含关于窗口（FR-01-111）；
+    /// v1.34/FR-01-113：浮层集合含字段值弹窗。
     #[must_use]
     pub fn overlay_open(&self) -> bool {
-        self.dialog.is_some() || self.pieces_open || self.help_open || self.about_open
+        self.dialog.is_some()
+            || self.pieces_open
+            || self.help_open
+            || self.about_open
+            || self.val_open
     }
 
     /// 打开关于窗口（O 快捷键，v1.32/FR-01-111）：居中显示 EZR Download v1.0.0
@@ -604,6 +705,50 @@ impl App {
         self.about_open = false;
         self.about_area = None;
         self.about_drag = None;
+    }
+
+    // -----------------------------------------------------------------------
+    // 字段值弹窗（v1.34/FR-01-113，对齐 ezr-demo 重构版 open/close_val_popup）
+    // -----------------------------------------------------------------------
+
+    /// 打开任务详情字段值弹窗（模态，L6 最上层）：快照对应字段的**完整值**
+    /// （完整校验码 / 完整 URL / 完整错误文案 / 完整保存路径），标题 = 字段名
+    ///（[`DetailField::title`] 单源）。字段不可用时（如未提供校验码）不打开；
+    /// 窗口内无提示（P10），操作说明收敛于 H 帮助窗口【字段值弹窗】组；
+    /// 位置关闭即清（同 pieces 口径，与帮助/关于跨次记忆不同）。
+    pub fn open_val_popup(&mut self, field: DetailField) {
+        let Some(t) = self.sel_task() else {
+            return;
+        };
+        let text = match field {
+            DetailField::Checksum => {
+                let Some(ck) = t.checksum.as_ref() else {
+                    return;
+                };
+                ck.value.clone()
+            }
+            DetailField::Url => t.url.clone(),
+            DetailField::Failed => t.error.clone().unwrap_or_else(|| "未知错误".to_string()),
+            DetailField::SavePath => t.target_path(),
+        };
+        self.val_open = true;
+        self.val_field = field;
+        self.val_text = text;
+        self.val_scroll = 0;
+        self.val_pos = None; // 打开时居中（渲染层首帧回填）
+        self.val_drag = None;
+        self.val_area = None;
+        self.val_scrollbar = None;
+        self.focus = Panel::Detail; // 同时聚焦详情面板（FR-01-113 ①）
+    }
+
+    /// 关闭字段值弹窗（位置即清：val_pos 重置，同 pieces 口径）
+    pub fn close_val_popup(&mut self) {
+        self.val_open = false;
+        self.val_area = None;
+        self.val_pos = None;
+        self.val_drag = None;
+        self.val_scrollbar = None;
     }
 
     // -----------------------------------------------------------------------
@@ -624,6 +769,7 @@ impl App {
             SbKey::ConnsH => self.conns_max_hscroll,
             SbKey::Pieces => self.pieces_max_scroll,
             SbKey::Help => self.help_max_scroll,
+            SbKey::Val => self.val_max_scroll,
         }
     }
 
@@ -638,6 +784,7 @@ impl App {
             SbKey::ConnsH => self.conns_hscroll = clamp(self.conns_hscroll as i64 + delta as i64),
             SbKey::Pieces => self.pieces_scroll = clamp(self.pieces_scroll as i64 + delta as i64),
             SbKey::Help => self.help_scroll = clamp(self.help_scroll as i64 + delta as i64),
+            SbKey::Val => self.val_scroll = clamp(self.val_scroll as i64 + delta as i64),
         }
     }
 
@@ -651,6 +798,7 @@ impl App {
             SbKey::ConnsH => self.conns_hscroll = v,
             SbKey::Pieces => self.pieces_scroll = v,
             SbKey::Help => self.help_scroll = v,
+            SbKey::Val => self.val_scroll = v,
         }
     }
 
@@ -932,19 +1080,26 @@ impl App {
             .sum()
     }
 
-    /// 头部「并发 N」口径（FR-01-94 ②/FR-01-96 数据面）：显示并发明细的任务
-    /// 连接总数（architect v116 自渲染路径提取）
+    /// 头部「并发」口径（FR-01-94 ②/FR-01-96 v1.34 活跃口径）：显示并发明细
+    /// 的任务的**活跃并发**连接总数（正在连接 + 已连接，[`ConnPhase::is_active`]
+    /// 单源——与并发连接面板明细行数、右上角徽标 x 严格同源；FR-01-81 v1.34：
+    /// 原「连接总数」口径退役，待命/已断开不再计入）
     #[must_use]
     pub fn conns_display_total(&self) -> usize {
         self.tasks
             .iter()
             .filter(|t| t.state.shows_conns())
-            .map(|t| t.connections.len())
+            .map(|t| {
+                t.connections
+                    .iter()
+                    .filter(|c| self.conn_is_active(t.id, c))
+                    .count()
+            })
             .sum()
     }
 
-    /// 并发面板「活跃 x」计数（FR-01-96）：明细状态下速度 > 0 的连接数；
-    /// 非明细状态恒 0（architect v116 自渲染路径提取，无头单测面）
+    /// 并发面板「x/y 项」的 x（FR-01-96 v1.34 活跃口径）：明细状态下活跃
+    /// 并发数（正在连接 + 已连接，ConnPhase 单源）；非明细状态恒 0
     #[must_use]
     pub fn active_conn_count(&self, t: &Task) -> usize {
         if !t.state.shows_conns() {
@@ -952,8 +1107,35 @@ impl App {
         }
         t.connections
             .iter()
-            .filter(|c| c.cap() > 0 && self.conn_speed_of(t.id, c.id) > 0.0)
+            .filter(|c| self.conn_is_active(t.id, c))
             .count()
+    }
+
+    /// 连接活跃判定（v1.34 ConnPhase 数据面派生的 App 消费口）：以本轮累计
+    /// 落盘字节（FR-01-99 ② 连接账本）派生连接阶段并判活跃
+    pub(crate) fn conn_is_active(&self, task_id: u32, c: &Connection) -> bool {
+        let cum = self.conn_cum.get(&(task_id, c.id)).copied().unwrap_or(0);
+        c.conn_phase(cum).is_active()
+    }
+
+    /// 当前选中任务的活跃并发明细（显示行 → 连接 id 映射，v1.34/FR-01-96 ⑦：
+    /// 明细只显示活跃并发——仅「下载中/做种中」任务，且连接处于 正在连接/
+    /// 已连接 活跃阶段；面板渲染行序、↑↓ 选择、B 断开映射与本表同源，
+    /// 按 id 升序 = 连接池槽位号序）
+    pub(crate) fn active_conn_ids(&self) -> Vec<usize> {
+        self.sel_task()
+            .filter(|t| t.state.shows_conns())
+            .map(|t| {
+                let mut ids: Vec<usize> = t
+                    .connections
+                    .iter()
+                    .filter(|c| self.conn_is_active(t.id, c))
+                    .map(|c| c.id)
+                    .collect();
+                ids.sort_unstable();
+                ids
+            })
+            .unwrap_or_default()
     }
 
     /// 页签计数（FR-01-94 ④ 页签行「正在下载 (n) │ 已完成 (n)」口径；

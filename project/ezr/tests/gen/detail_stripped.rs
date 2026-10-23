@@ -5,11 +5,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-use super::text::{fmt_size, pad_right, truncate, w};
+use super::text::{break_links, fmt_size, link_break_spans, pad_right, truncate, w};
 use super::{
     panel_border_style, panel_title_style, state_color, DIM, FG, GREEN, LIGHT_BLUE, RED, YELLOW,
 };
-use crate::app::{App, Panel};
+use crate::app::{App, DetailField, Panel};
 use crate::model::chunk::fmt_block_size;
 use crate::model::{Task, TaskState};
 
@@ -30,6 +30,15 @@ fn link_label(s: &str) -> Vec<Span<'static>> {
         ),
         Span::raw(" ".repeat(9 - w(s))),
     ]
+}
+
+/// 悬停下划线开关（FR-01-113：字段值悬停 = 下划线；浮层打开时不响应）
+fn with_underline(s: Style, on: bool) -> Style {
+    if on {
+        s.add_modifier(Modifier::UNDERLINED)
+    } else {
+        s
+    }
 }
 
 /// 排队详情文案（紧凑：保证「Space 暂停」提示在窄面板不被截断）
@@ -59,12 +68,14 @@ fn verify_status(verify_ok: Option<bool>, state: TaskState) -> (&'static str, Co
     }
 }
 
-/// 分块行：x/y（x=已完成分块数，y=总分块数）与块大小「N/块」；未探测/零块显示 -
+/// 分块行：x/y（x=已完成分块数，y=总分块数）与块大小「N/块」；未探测/零块/
+/// 不支持分块下载的任务（不支持续传的 HTTP(S)，与 P 功能门槛 supports_pieces
+/// 同口径——流式下载无块概念）恒显示 -（v1.34/FR-01-116 ②）
 fn chunk_row(t: &Task) -> Vec<Span<'static>> {
     let state_c = state_color(t.state);
     let (x, y, _) = t.chunk_info();
-    let mut l = vec![Span::raw(" "), dim_label("分块")];
-    if t.total == 0 || y == 0 {
+    let mut l = vec![Span::raw("  "), dim_label("分块")];
+    if t.total == 0 || y == 0 || !t.supports_pieces() {
         l.push(Span::styled("-".to_string(), Style::default().fg(DIM)));
     } else {
         l.push(Span::styled(
@@ -93,9 +104,12 @@ pub(super) fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     app.detail_area = Some(area);
 
     let Some(t) = app.sel_task() else {
-        // 无选中任务：字段名热区清空（FR-01-101）
+        // 无选中任务：字段名/字段值热区清空（FR-01-101/113）
         app.detail_url_rect = None;
         app.detail_ck_rect = None;
+        app.detail_fail_rect = None;
+        app.detail_save_rect = None;
+        app.detail_val_rects = Vec::new();
         f.render_widget(
             Paragraph::new(Span::styled("（未选中任务）", Style::default().fg(DIM)))
                 .alignment(Alignment::Center),
@@ -106,9 +120,43 @@ pub(super) fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
 
     let val = |s: String| Span::styled(s, Style::default().fg(FG));
 
+    // v1.34/FR-01-113：字段值悬停 = 下划线、点击 = 打开完整值弹窗。
+    // 悬停判定仅在无浮层时生效（浮层打开时详情面板处于模态降级态）；
+    // 值热区 = 行首 2 列 padding + 字段名 9 列之后、值文本实际显示宽 × 1 行，
+    // 由 ui 层每帧回填（detail_val_rects），点击行为见 on_mouse。
+    let hoverable = !app.overlay_open();
+    let val_rect = |idx: usize, vw: usize| -> Option<Rect> {
+        let y = inner.y + idx as u16;
+        (y < inner.y + inner.height).then(|| Rect {
+            x: inner.x + 11,
+            y,
+            width: vw.min(inner.width.saturating_sub(11) as usize) as u16,
+            height: 1,
+        })
+    };
+    let mut val_rects: Vec<(Rect, DetailField)> = Vec::new();
+    // 登记值热区并返回悬停态（idx = 该行在 lines 中的下标、vw = 值显示宽）
+    let mut val_hover = |idx: usize, vw: usize, field: DetailField| -> bool {
+        match val_rect(idx, vw) {
+            Some(r) => {
+                let hv = hoverable
+                    && app.pointer.is_some_and(|(px, py)| {
+                        px >= r.x
+                            && px < r.x.saturating_add(r.width)
+                            && py >= r.y
+                            && py < r.y.saturating_add(r.height)
+                    });
+                val_rects.push((r, field));
+                hv
+            }
+            None => false,
+        }
+    };
+
     let mut lines: Vec<Line> = Vec::new();
+    // 行首 2 列 padding（v1.34/FR-01-115 S2，原 1 列；字段名/值热区 x 同步 +1）
     lines.push(Line::from(vec![
-        Span::styled(" ", Style::default()),
+        Span::raw("  "),
         Span::styled(
             truncate(&t.name, (inner.width as usize).saturating_sub(4)),
             Style::default()
@@ -120,29 +168,28 @@ pub(super) fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     if t.state == TaskState::Queued {
         let vtxt = queued_value(app.queue_pos_of(t.id), app.used_slots(), app.max_slots);
         lines.push(Line::from(vec![
-            Span::raw(" "),
+            Span::raw("  "),
             dim_label("排队"),
             Span::styled(
-                truncate(&vtxt, (inner.width as usize).saturating_sub(12)),
+                truncate(&vtxt, (inner.width as usize).saturating_sub(13)),
                 Style::default().fg(YELLOW),
             ),
         ]));
     }
-    // 任务 ID 单独一行（v1.20 修订，操作者 20261011 指令：原「ID · 添加于」
-    // 合并行拆分；ID 为随机 u32，仅详情页展示，创建顺序由 added_at 承载）
+    // 任务 ID 单独一行（v1.20 修订拆行；v1.34/FR-01-80：字段名精简「任务 ID」→「ID」）
     lines.push(Line::from(vec![
-        Span::raw(" "),
-        dim_label("任务 ID"),
+        Span::raw("  "),
+        dim_label("ID"),
         Span::styled(format!("{id}", id = t.id), Style::default().fg(DIM)),
     ]));
-    // 创建时间单独一行（v1.20 修订，操作者 20261011 指令）
+    // 创建时间单独一行（v1.20 修订拆行；v1.34/FR-01-80：字段名精简「创建时间」→「创建」）
     lines.push(Line::from(vec![
-        Span::raw(" "),
-        dim_label("创建时间"),
+        Span::raw("  "),
+        dim_label("创建"),
         Span::styled(t.created.clone(), Style::default().fg(DIM)),
     ]));
     lines.push(Line::from(vec![
-        Span::raw(" "),
+        Span::raw("  "),
         dim_label("类型"),
         Span::styled(
             t.protocol.label().to_string(),
@@ -160,73 +207,99 @@ pub(super) fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
         },
     ]));
     // 校验行（提供了校验码的任务）：算法 · 校验码前缀 + 状态
-    // 前缀取 10 位、状态用短文案，保证 110 列窄面板也能完整显示
+    // 前缀取 10 位、状态用短文案，保证 110 列窄面板也能完整显示；
+    // v1.34/FR-01-113：值部分悬停下划线 + 点击打开完整值弹窗
     let mut ck_line_idx: Option<usize> = None;
     if let Some(ck) = &t.checksum {
         let vshort = checksum_value_short(&ck.value);
         let (st, stc) = verify_status(t.verify_ok, t.state);
         ck_line_idx = Some(lines.len());
-        let mut ck_line = vec![Span::raw(" ")];
+        // 值显示宽 = 算法 + " · " + 前缀 + 状态（CJK 感知）
+        let vw = w(ck.algo) + 3 + w(&vshort) + w(st);
+        let hv = val_hover(lines.len(), vw, DetailField::Checksum);
+        let mut ck_line = vec![Span::raw("  ")];
         // FR-01-101：字段名链接样式（淡蓝下划线，点击复制校验码值）
         ck_line.extend(link_label("校验"));
         ck_line.push(Span::styled(
             ck.algo.to_string(),
-            Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+            with_underline(Style::default().fg(YELLOW).add_modifier(Modifier::BOLD), hv),
         ));
         ck_line.push(Span::styled(
             format!(" · {vshort}"),
-            Style::default().fg(FG),
+            with_underline(Style::default().fg(FG), hv),
         ));
-        ck_line.push(Span::styled(st, Style::default().fg(stc)));
+        ck_line.push(Span::styled(
+            st,
+            with_underline(Style::default().fg(stc), hv),
+        ));
         lines.push(Line::from(ck_line));
     }
     lines.push(Line::from(vec![
-        Span::raw(" "),
+        Span::raw("  "),
         dim_label("大小"),
-        // v1.12/FR-01-80 修订（操作者第九批指令）：仅「已下载/总大小」，
-        // 不含「（剩余 …）」后缀（进度展示由列表行承载，FR-01-17 口径不变）
-        val(format!(
-            "{} / {}",
-            fmt_size(t.downloaded),
-            fmt_size(t.total)
-        )),
+        // v1.12/FR-01-80 修订：仅「已下载/总大小」，不含「（剩余 …）」后缀；
+        // v1.34/FR-01-116：总大小未知（不支持续传的 HTTP(S) 流式下载，bug 修正）
+        // 以 `? B` 占位（流结束后恢复实际大小）
+        val(if t.size_known() {
+            format!("{} / {}", fmt_size(t.downloaded), fmt_size(t.total))
+        } else {
+            format!("{} / ? B", fmt_size(t.downloaded))
+        }),
     ]));
-    // 失败原因：仅「已失败」态展示（v1.6/FR-01-92；v1.22/v1.23 操作者直判——
-    // 挂起态不再展示也不再持有错误信息，详情与普通已暂停完全一致）
+    // 失败：仅「已失败」态展示（v1.6/FR-01-92；v1.22/v1.23 挂起态不再展示）；
+    // v1.34/FR-01-80：字段名「失败原因」→「失败」；FR-01-101 v1.34：蓝色下划线
+    // 链接（点击复制）+ 值悬停下划线、点击打开完整值弹窗
+    let mut fail_line_idx: Option<usize> = None;
     if t.state == TaskState::Failed {
-        lines.push(Line::from(vec![
-            Span::raw(" "),
-            dim_label("失败原因"),
-            Span::styled(
-                truncate(
-                    t.error.as_deref().unwrap_or("未知错误"),
-                    (inner.width as usize).saturating_sub(12),
-                ),
-                Style::default().fg(RED),
-            ),
-        ]));
+        fail_line_idx = Some(lines.len());
+        let err_s = truncate(
+            t.error.as_deref().unwrap_or("未知错误"),
+            (inner.width as usize).saturating_sub(13),
+        );
+        let hv = val_hover(lines.len(), w(&err_s), DetailField::Failed);
+        let mut fail_line = vec![Span::raw("  ")];
+        fail_line.extend(link_label("失败"));
+        fail_line.push(Span::styled(
+            err_s,
+            with_underline(Style::default().fg(RED), hv),
+        ));
+        lines.push(Line::from(fail_line));
     }
-    lines.push(Line::from(vec![
-        Span::raw(" "),
-        dim_label("保存"),
-        val(truncate(
-            &t.target_path(),
-            (inner.width as usize).saturating_sub(12),
-        )),
-    ]));
-    // FR-01-101：URL 字段名可点击复制（淡蓝下划线）；记录行号供热区回填
+    // 路径：v1.34/FR-01-80：字段名原「保存」再简化为「路径」；FR-01-101 v1.34：
+    // 蓝色下划线链接（点击复制），值悬停下划线 + 点击打开完整值弹窗
+    let save_line_idx = lines.len();
+    let save_s = truncate(&t.target_path(), (inner.width as usize).saturating_sub(13));
+    let hv = val_hover(save_line_idx, w(&save_s), DetailField::SavePath);
+    let mut save_line = vec![Span::raw("  ")];
+    save_line.extend(link_label("路径"));
+    save_line.push(Span::styled(
+        save_s,
+        with_underline(Style::default().fg(FG), hv),
+    ));
+    lines.push(Line::from(save_line));
+    // URL 字段名可点击复制（淡蓝下划线）；v1.34/FR-01-113：值悬停下划线 +
+    // 点击打开完整值弹窗；记录行号供热区回填；FR-01-113 ④：显示值经
+    // break_links 注入 VS15 断链——终端不再叠加 http(s) 默认链接下划线
+    //（悬停时只剩 ezr 自身的 SGR 下划线，不再出现双下划线）；经
+    // link_break_spans 分段渲染兼容 pyte 类模拟器（文档见该函数）
     let url_line_idx = lines.len();
-    let mut url_line = vec![Span::raw(" ")];
-    url_line.extend(link_label("URL"));
-    url_line.push(val(truncate(
+    let url_s = break_links(&truncate(
         // v1.28：详情 URL = 原始 URL 单值（任务级最终 URL 已退役，FR-01-14/80/D27
         // v1.28「详情 URL 显示原始 URL」，规格 01-download-engine-08 修订）
         &t.url,
-        (inner.width as usize).saturating_sub(12),
-    )));
+        (inner.width as usize).saturating_sub(13),
+    ));
+    let hv = val_hover(url_line_idx, w(&url_s), DetailField::Url);
+    let mut url_line = vec![Span::raw("  ")];
+    url_line.extend(link_label("URL"));
+    url_line.extend(link_break_spans(
+        &url_s,
+        with_underline(Style::default().fg(FG), hv),
+    ));
     lines.push(Line::from(url_line));
 
-    // 分块：文字显示 x/y 与块大小「N/块」（块大小按协议写死）
+    // 分块：文字显示 x/y 与块大小「N/块」（块大小按协议写死）；不支持分块
+    // 下载的任务恒显示 -（v1.34/FR-01-116 ②）
     lines.push(Line::from(chunk_row(t)));
 
     // （FR-01-81 修订二）并发分块明细表已整体移除：详情面板止于任务级字段行；
@@ -234,20 +307,22 @@ pub(super) fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
 
     f.render_widget(Paragraph::new(lines), inner);
 
-    // FR-01-101：回填字段名热区（点击复制）。热区 = 行首空格后的字段名整段
-    // （pad_right 9 列，与下划线视觉一致）；y = 内框顶 + 行号，超出内框则不设
-    app.detail_url_rect = hot_rect(inner, url_line_idx);
-    app.detail_ck_rect = ck_line_idx.and_then(|idx| hot_rect(inner, idx));
-}
-
-/// FR-01-101 热区矩形：行首空格后的字段名整段 9 列（x = 内框左 + 1、宽 9、高 1）；
-/// 行号超出内框高度时不设（None）
-fn hot_rect(inner: Rect, line_idx: usize) -> Option<Rect> {
-    let y = inner.y + line_idx as u16;
-    (y < inner.y + inner.height).then_some(Rect {
-        x: inner.x + 1,
-        y,
-        width: 9,
-        height: 1,
-    })
+    // 回填字段名热区（点击复制，FR-01-101）。热区 = 行首 2 列 padding 后的
+    // 字段名整段（pad_right 9 列，与下划线视觉一致；x = 内框 +2，v1.34）；
+    // y = 内框顶 + 行号，超出内框则不设
+    let hot = |idx: usize| {
+        let y = inner.y + idx as u16;
+        (y < inner.y + inner.height).then(|| Rect {
+            x: inner.x + 2,
+            y,
+            width: 9,
+            height: 1,
+        })
+    };
+    app.detail_url_rect = hot(url_line_idx);
+    app.detail_ck_rect = ck_line_idx.and_then(hot);
+    // v1.34：失败/路径 字段名热区 + 字段值热区（悬停下划线/点击弹窗）
+    app.detail_fail_rect = fail_line_idx.and_then(hot);
+    app.detail_save_rect = hot(save_line_idx);
+    app.detail_val_rects = val_rects;
 }

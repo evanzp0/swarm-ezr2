@@ -13,7 +13,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use super::btn::{clip_wide_at_edges, dialog_rect};
+use super::btn::{clip_wide_at_edges, dialog_rect, draw_close_btn};
 use super::{panel_border_style, panel_title_style};
 use crate::app::App;
 
@@ -56,6 +56,8 @@ pub(super) fn draw_about(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     app.about_area = Some(rect);
+    // 右上角 [✗]（v1.34/FR-01-114：全部弹窗统一；原地松开 = 关闭关于窗口）
+    app.popup_close_rect = draw_close_btn(f, app, rect, super::text::w(" About "));
     if inner.width == 0 || inner.height == 0 {
         return;
     }

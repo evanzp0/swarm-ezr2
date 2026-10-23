@@ -1,19 +1,21 @@
 //! conns — 并发连接面板（FR-01-96，对齐 ezr-demo 定稿 5.5；v1.30 修订；
-//! v1.32 对齐 ezr-demo m3）
+//! v1.32 对齐 ezr-demo m3；v1.34 活跃口径重构）
 //!
 //! 位置 = 右列、任务详情正下方，占右列余下全部高度。可见性状态门槛（REQ-3.1）：
 //! 仅「下载中」（与 BT 预留「做种中」）显示逐连接明细，其余状态空面板居中提示
-//! 「（无并发连接）」+ 活跃 0（渲染层门槛：状态下沉时连接数据冻结隐藏，恢复下载
-//! 原样续用）。列定义（01 期 HTTP 三列，表头随协议自适应）：
-//! 序号（4 列，1 基 = 连接 id，按序号升序）/ 下载速度（8 列右对齐，待命显示 `-`）/
-//! 累计下载（8 列右对齐，自本次开始下载起算，FR-01-99）。
-//! **BT 七列为 phase-02 预留形态**（v1.32/FR-01-96 修订，对齐 ezr-demo m3）：
-//! 对端 IP 掩码 11 列 / 下载速度 8 / 累计下载 8 / 上传速度 8 / 累计上传 8 /
-//! 客户端 6 / 协议 4——客户端/协议两列置于末尾，内容宽 59 列超内框 → 底部
-//! 横向滚动条（通用滚动条组件，并发面板 = 唯一 Both 实例）+ ←/→ 键横向
-//! 滚动（±2 列）+ 切任务/切协议横向偏移归零（[`SbKey::ConnsH`]）；01 期无
-//! BT 任务，BT 臂不触发（列宽常量预留，数据源 phase-02 定夺）；HTTP 三列
-//! 内容 22 列不超宽 → 无水平滚动条、←/→ 无横向内容不响应（上限 0 钳制）。
+//! 「（无并发连接）」+ 徽标 x = 0（渲染层门槛：状态下沉时连接数据冻结隐藏，恢复下载
+//! 原样续用）。**v1.34/FR-01-96 ⑦：明细只显示活跃并发**（正在连接 = 握手中、
+//! 已连接 = 持块在传；待命/已断开不显示；ConnPhase::is_active 活跃判定单源）。
+//! 列定义（01 期 HTTP 三列，表头随协议自适应）：
+//! 序号（4 列，1 基 = 连接池槽位号，稳定不随断连重编号，明细可能不连续）/
+//! 下载速度（8 列右对齐，正在连接显示 `-`）/ 累计下载（8 列右对齐，自本次开始
+//! 下载起算，FR-01-99）。**BT 七列为 phase-02 预留形态**：对端 IP 掩码 11 列 /
+//! 下载速度 8 / 累计下载 8 / 上传速度 8 / 累计上传 8 / 客户端 6 / 协议 4——
+//! 内容宽 59 列超内框 → 底部横向滚动条（唯一 Both 实例）+ ←/→ 键横向滚动；
+//! v1.34：明细数据区左右各留 2 列 padding（S2）→ BT 视口宽相应 48→44 列。
+//! 右上角徽标 = ` x/y 项 `（v1.34：原「 活跃 x 」退役；x = 活跃明细行数、
+//! y = 任务设置的最大并发数 1–64，修改对话框热调；空态 ` 0/y 项 `）。
+//! 横向滚动上限放宽 1 列（内容宽 − 视口宽 + 1，末列宽字完整可见）。
 //! v1.30 修订：**面板无底部提示行**（P3 原则/FR-01-107）；选中行高亮仅本面板
 //! 聚焦时显示（FR-01-108）；滚动条按 FR-01-109 v1.32 通用组件绘制
 //! （ScrollablePanel Both 实例，滑块色随焦点）。
@@ -50,22 +52,25 @@ const HTTP_COLW: [usize; 3] = [4, 8, 8];
 /// 单源对应性由测试守卫；不超宽 → 无水平滚动条）
 const HTTP_CONTENT_W: usize = 22;
 
-/// 右上角活跃计数标题（v139：前后各 1 空格——右侧离边框 1 列、左侧留白 1 列，
-/// 与左标题 ` 并发连接 ` 前后各 1 空格对称；单源供渲染与形态守卫测试）
-fn active_title(active: usize) -> String {
-    format!(" 活跃 {active} ")
+/// 右上角徽标（v1.34/FR-01-96 ⑦：` 活跃 x ` → ` x/y 项 `——S1 前后各 1 空格：
+/// x = 活跃明细行数（活跃并发数，与明细行严格同源）、y = 任务设置的最大并发数
+/// 1–64（添加对话框设定、修改对话框热调；y 不是当前连接总数也不是分块总数）；
+/// 空态 ` 0/y 项 `。单源供渲染与形态守卫测试）
+fn active_title(active: usize, max_conc: usize) -> String {
+    format!(" {active}/{max_conc} 项 ")
 }
 
 pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
-    let (active, empty) = match app.sel_task() {
+    let (active, max_conc, empty) = match app.sel_task() {
         Some(t) => {
             // 状态门槛（REQ-3.1）：仅「下载中/做种中」显示明细，其余按空面板处理
             let shows = t.state.shows_conns();
-            let n = if shows { t.connections.len() } else { 0 };
-            // 「活跃 x」计数单源 App::active_conn_count（architect v116 自渲染路径提取）
-            (app.active_conn_count(t), n == 0)
+            // v1.34：x/y 徽标与明细行严格同源（活跃判定 ConnPhase 单源）
+            let x = app.active_conn_count(t);
+            let shows = if shows { x > 0 } else { false };
+            (x, t.concurrency, !shows)
         }
-        None => (0, true),
+        None => (0, 0, true),
     };
     // 聚焦边框（v1.30/FR-01-108）：并发面板聚焦且无浮层 → 绿色加粗，否则暗色
     let focused = app.focus == Panel::Conns && !app.overlay_open();
@@ -75,8 +80,11 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         .border_style(panel_border_style(focused))
         .title(Span::styled(" 并发连接 ", panel_title_style(focused)))
         .title(
-            Line::from(Span::styled(active_title(active), Style::default().fg(DIM)))
-                .alignment(Alignment::Right),
+            Line::from(Span::styled(
+                active_title(active, max_conc),
+                Style::default().fg(DIM),
+            ))
+            .alignment(Alignment::Right),
         );
     // v1.32/FR-01-109：ScrollablePanel 一体化组件（并发面板 = 唯一 Both 实例：
     // 垂直连接行 + 水平内容列）。滑块色随焦点；箭头按压高亮随 App 态。
@@ -87,7 +95,9 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = sb.render_block(f, area, block);
     app.conns_area = Some(inner);
 
-    let Some(t) = app.sel_task() else {
+    // v1.31/FR-01-96 ⑦ 空态二分：未选中任务 → 居中「（未选中任务）」；
+    // 选中但无活跃明细（状态门槛或全部待命/断开）→ 居中「（无并发连接）」
+    if app.sel_task().is_none() {
         app.visible_conns_rows = 0;
         // 未选中任务：面板不接收滚轮（指针悬停时滚轮滚任务列表）
         app.conns_area = None;
@@ -97,7 +107,23 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
             inner,
         );
         return;
-    };
+    }
+
+    // 明细数据（活跃口径）：选中任务的活跃连接行（已按 id 升序 = 连接池槽位
+    // 号序；先取拥有值再回填 app，借用收窄——notes/rust.md「路径敏感借用」纪律）
+    let rows_data: Vec<(usize, f64, u64, bool)> = app
+        .active_conn_ids()
+        .iter()
+        .filter_map(|cid| {
+            let t = app.sel_task()?;
+            t.connections.iter().find(|c| c.id == *cid)?;
+            let speed = app.conn_speed_of(t.id, *cid);
+            // 正在连接（握手/建连中）速度列显示 `-`（FR-01-116 ③：
+            // 「正在连接」阶段速度列 `-` 语义保留）
+            let cum = app.conn_cum_of(t.id, *cid);
+            Some((*cid, speed, cum, cum > 0))
+        })
+        .collect();
     if empty {
         app.visible_conns_rows = 0;
         // 明细为空：面板不接收滚轮（指针悬停时滚轮滚任务列表）
@@ -124,28 +150,21 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     ];
     let mut lines = vec![Line::from(head)];
 
-    // 数据行按序号（连接 id，1 基）升序展示（FR-01-96）。行数据先预计算为
-    // 拥有值（借用收窄：t 借用 app，下方 visible_conns_rows 可变赋值不得与
-    // 之重叠——notes/rust.md「路径敏感借用」纪律）
-    let n_conns = t.connections.len();
-    let mut rows_data: Vec<(usize, f64, u64, bool)> = t
-        .connections
-        .iter()
-        .map(|c| {
-            let speed = app.conn_speed_of(t.id, c.id);
-            (
-                c.id,
-                speed,
-                app.conn_cum_of(t.id, c.id),
-                c.cap() > 0 && speed > 0.0,
-            )
-        })
-        .collect();
-    rows_data.sort_by_key(|r| r.0);
+    // v1.34/FR-01-115 S2：明细数据区左右各收 2 列（表头与数据行在面板内框
+    // 基础上左右各收 2 列；滚动/命中/横向滚动条几何随数据区平移，点击与
+    // 键盘语义不变；BT 视口宽相应 48→44 列，phase-02 承接）
+    const PAD_X: u16 = 2;
+    let view = Rect {
+        x: inner.x.saturating_add(PAD_X),
+        y: inner.y,
+        width: inner.width.saturating_sub(PAD_X * 2),
+        height: inner.height,
+    };
 
     // v1.30：无底部提示行 → 数据行 = 内框高 - 表头 1 行
-    let rows = (inner.height as usize).saturating_sub(1);
+    let rows = (view.height as usize).saturating_sub(1);
     let data_rows = rows.max(1);
+    let n_conns = rows_data.len();
     // v1.31/FR-01-96/109 注记（滚到底闪烁修复第二道防线）：起点钳到
     // 「最后一个满窗」起点——连接数收缩的过渡帧不产生底部空白行
     //（顺带消除 len < rows 时的减法恐慌；第一道防线 = 滚轮向下事件内
@@ -156,7 +175,7 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     // 非聚焦面板不显示内部选中态，保证视觉焦点唯一）
     let show_sel = focused;
 
-    for (vi, (cid, speed, cum, active_conn)) in rows_data[start..end].iter().copied().enumerate() {
+    for (vi, (cid, speed, cum, transferring)) in rows_data[start..end].iter().copied().enumerate() {
         let i = start + vi;
         let sel = show_sel && i == app.conns_sel;
         // 选中行：深青背景高亮（同任务列表选中色）+ 首列白字（FR-01-97）
@@ -165,17 +184,19 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
             Span::styled(pad_left(&s, wd), Style::default().fg(col).bg(bg))
         };
         let spans = vec![
+            // v1.34/FR-01-96 ③：序号 = 连接池槽位号（1 基、稳定不随断连重编号，
+            // 明细可能不连续）；Active/Connecting 均属活跃（活跃过滤已上收）
             cell(format!("{cid}"), 4, if sel { Color::White } else { FG }),
             Span::styled(" ", Style::default().bg(bg)),
-            // 下载=淡蓝（同头部 ↓ 配色），待命显示 -
+            // 下载=淡蓝（同头部 ↓ 配色），正在连接（尚无落盘字节）显示 -
             cell(
-                if active_conn {
+                if transferring {
                     fmt_speed(speed)
                 } else {
                     "-".to_string()
                 },
                 8,
-                if active_conn { LIGHT_BLUE } else { DIM2 },
+                if transferring { LIGHT_BLUE } else { DIM2 },
             ),
             Span::styled(" ", Style::default().bg(bg)),
             cell(fmt_size(cum), 8, FG),
@@ -188,18 +209,20 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
 
     app.visible_conns_rows = data_rows;
     // v1.32/FR-01-96/109：横向滚动（唯一 Both 实例）——内容宽 = HTTP 22 列
-    // （BT 预留 59 列，phase-02 承接）；上限 = 内容宽 − 内框宽，偏移钳制后
-    // 整表（表头 + 数据）随视口平移；HTTP 22 列常态不超宽 → 上限 0、
-    // ←/→ 无横向内容不响应（sb_scroll 钳制归零）
+    // （BT 预留 59 列，phase-02 承接）；v1.34：上限 = 内容宽 − 视口宽 + 1
+    //（放宽 1 列，末列宽字完整可见），偏移钳制后整表（表头 + 数据）随视口
+    // 平移；HTTP 22 列常态不超宽 → 上限 0、←/→ 无横向内容不响应
     let content_w = HTTP_CONTENT_W;
-    app.conns_max_hscroll = content_w.saturating_sub(inner.width as usize);
+    app.conns_max_hscroll = content_w
+        .saturating_sub(view.width as usize)
+        .saturating_add(1);
     let hscroll = app.conns_hscroll.min(app.conns_max_hscroll) as u16;
-    f.render_widget(Paragraph::new(lines).scroll((0, hscroll)), inner);
+    f.render_widget(Paragraph::new(lines).scroll((0, hscroll)), view);
 
     // 滚动条叠画（v1.32/FR-01-109：ScrollablePanel 组件收口——垂直连接行 +
     // 水平内容列；显示条件由组件内判定）
     sb.vertical(n_conns, data_rows, app.conns_scroll)
-        .horizontal(content_w, inner.width as usize, app.conns_hscroll);
+        .horizontal(content_w, view.width as usize, app.conns_hscroll);
     let bars = sb.render_bars(f, area);
     app.conns_v_scrollbar = bars.vertical;
     app.conns_h_scrollbar = bars.horizontal;
@@ -284,14 +307,15 @@ mod tests {
         app.focus = Panel::Conns;
         let term = conns_render(&mut app, 60, 14);
         let buf = term.backend().buffer();
-        // 表头 y=1（inner.y），数据首行 y=2；选中行 = conns_sel=1 → y=3
-        let sel_cell = buf.cell((2, 3)).unwrap();
+        // 表头 y=1（inner.y），数据首行 y=2；选中行 = conns_sel=1 → y=3；
+        // v1.34 S2：明细数据区左右各 2 列 → 数据首列 x = inner.x+2 = 3
+        let sel_cell = buf.cell((3, 3)).unwrap();
         assert_eq!(sel_cell.bg, SEL_BG, "聚焦时选中行深青背景");
         // 列表聚焦：同位置无高亮（内部选中态不显示）
         app.focus = Panel::List;
         let term = conns_render(&mut app, 60, 14);
         let buf = term.backend().buffer();
-        let cell = buf.cell((2, 3)).unwrap();
+        let cell = buf.cell((3, 3)).unwrap();
         assert_ne!(cell.bg, SEL_BG, "非聚焦时选中行不高亮");
     }
 
@@ -364,12 +388,12 @@ mod tests {
         );
     }
 
-    /// v139：右上角活跃计数标题前后各 1 空格（左右 padding 对称，与左标题
-    /// ` 并发连接 ` 同口径）；单源 [`active_title`]，防字面量漂移回归
+    /// v1.34：右上角徽标 ` x/y 项 ` 前后各 1 空格（S1；x = 活跃明细行数、
+    /// y = 任务设置的最大并发数）；单源 [`active_title`]，防字面量漂移回归
     #[test]
     fn active_title_padded_both_sides() {
-        assert_eq!(super::active_title(0), " 活跃 0 ");
-        assert_eq!(super::active_title(7), " 活跃 7 ");
+        assert_eq!(super::active_title(0, 4), " 0/4 项 ");
+        assert_eq!(super::active_title(7, 64), " 7/64 项 ");
     }
 
     /// 表头仍在位（序号/下载速度/累计下载）
@@ -384,6 +408,7 @@ mod tests {
             text.contains("下载速度") && text.contains("累计下载"),
             "数据列: {text}"
         );
-        assert!(text.contains("活跃 0"), "待命活跃 0: {text}");
+        // v1.34：3 条持块连接（本轮无字节）= 正在连接（活跃）→ x/y 项徽标
+        assert!(text.contains("3/4 项"), "活跃口径徽标: {text}");
     }
 }
