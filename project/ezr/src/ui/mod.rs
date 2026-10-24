@@ -40,7 +40,7 @@ mod list;
 mod pieces;
 mod scrollable_panel;
 mod task_lines;
-// pub(crate)：断链纯函数 break_links/link_break_spans 供加固测试剥头副本壳
+// pub(crate)：断链纯函数 break_links_deep/link_break_spans 供加固测试剥头副本壳
 // 转发（tests/hardening_ui_backfill.rs gen 壳同层级 use，v1.34/FR-01-113）
 pub(crate) mod text;
 mod val_popup;
@@ -971,6 +971,7 @@ mod ui_tests {
             proxy_sel: 0,
             proxy_open: false,
             focus: 0,
+            cursor: 0,
             task_name: String::new(),
             task_id: None,
         });

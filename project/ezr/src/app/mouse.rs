@@ -346,7 +346,9 @@ impl App {
                     let ck_i = if kind == Some(DialogKind::Add) { 3 } else { 1 };
                     let proxy_i = if kind == Some(DialogKind::Add) { 5 } else { 3 };
                     let d = self.dialog.as_mut().unwrap();
-                    d.focus = i;
+                    // 焦点切换单源（focus_field）：光标随迁字段尾（点击聚焦
+                    // 惯例；命中下拉行时随后展开下拉覆盖）
+                    d.focus_field(i);
                     if i == ck_i {
                         d.ck_open = true;
                         d.ck_sel = d.ck_type;
@@ -355,7 +357,7 @@ impl App {
                     }
                 } else if let Some(btn) = hit(&btn_rects) {
                     if let Some(d) = self.dialog.as_mut() {
-                        d.focus = btn;
+                        d.focus_field(btn);
                     }
                     match kind {
                         Some(DialogKind::Add) => self.dlg_activate_add(btn),

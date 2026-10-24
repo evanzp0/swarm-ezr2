@@ -124,9 +124,10 @@ mod btn_fix {
 /// 同值复刻（仅样式，断言不依赖色值）
 mod detail_fix {
     pub mod text {
-        // v1.34/FR-01-113④：break_links/link_break_spans 断链渲染（产品侧
-        // pub(crate)，剥头副本 use 同名转发）
-        pub(crate) use crate::ui::text::{break_links, link_break_spans};
+        // v1.34/FR-01-113④：break_links_deep/link_break_spans 断链渲染（产品侧
+        // pub(crate)，剥头副本 use 同名转发；二批 bug 修订：scheme 锚点版
+        // break_links 退役，详情 URL 行升级逐字符深度断链）
+        pub(crate) use crate::ui::text::{break_links_deep, link_break_spans};
         pub(crate) use crate::ui::{fmt_size, pad_right, truncate, w};
     }
     // 面板样板单源转发（coder cpd-tile-shared-helper 轮：detail.rs 改用 ui 层
@@ -955,4 +956,65 @@ async fn add_dialog_button_row_centering_golden() {
         "按钮行居中金样（mutant % 使按钮组整体左移；v1.15 三钮口径）"
     );
     a.shutdown().await;
+}
+
+// ------------------------------------------------ 详情 URL 行深度断链（bug 二批）---
+
+/// v1.34 二批 bug 修订回归靶：详情 URL 行深度断链（操作者实证：www. 起始域名
+/// 悬停时终端仍叠加默认 URL 下划线 → 与 ezr 自身悬停下划线构成双线）。原因 =
+/// scheme 锚点版断链对 www. 形态识别无效（终端归一化透明化孤立组合符后仍匹配）；
+/// 升级逐字符深度断链后行内不存在任何 ≥2 字符连续裸串。缓冲区级锁定：URL 值区
+/// 每个可见字符格携带 VS15，行文本无任何裸 URL 片段。
+#[tokio::test]
+async fn detail_url_value_deep_broken_including_www() {
+    let url = "https://www.example.com/media-release.zip";
+    let dir = model::testenv::uniq_tmp_dir("ezr-detail-www-break");
+    let mut app = app::App::new(
+        model::config::Config::default(),
+        dir.join("registry.json").to_string_lossy().into_owned(),
+    );
+    let mut t = sample_task(1, "www.bin");
+    t.url = url.to_string();
+    t.state = model::TaskState::Paused;
+    app.tasks.push(t);
+    app.selected = 0;
+    let term = ui::testfx::render_full(&mut app, 110, 24);
+    let buf = term.backend().buffer();
+    let rows = ui::testfx::row_strings(&term);
+    // 定位 URL 行（字段名 label 行）
+    let y = rows
+        .iter()
+        .position(|r| r.contains("URL"))
+        .expect("详情面板有 URL 行");
+    let row = &rows[y];
+    // 行文本级：无任何 ≥2 字符连续裸 URL 片段（scheme / www 前缀 / 域名）
+    assert!(!row.contains("https"), "scheme 断链: {row:?}");
+    assert!(!row.contains("www."), "www 前缀断链: {row:?}");
+    assert!(!row.contains("example"), "域名断链: {row:?}");
+    // 缓冲区级：值区（label「URL」右侧 9 列起）每个可见字符格携带 VS15
+    let label_x = (0..110u16)
+        .find(|&x| {
+            buf.cell((x, y as u16))
+                .map(|c| c.symbol() == "U")
+                .unwrap_or(false)
+        })
+        .expect("URL label 起始列");
+    let value_x = label_x + 9;
+    let mut visible = 0usize;
+    let mut broken = 0usize;
+    for x in value_x..110u16 {
+        let sym = buf.cell((x, y as u16)).unwrap().symbol();
+        if sym == " " {
+            break; // 值区右缘 padding（值后无内容）
+        }
+        visible += 1;
+        if sym.contains('\u{FE0E}') {
+            broken += 1;
+        }
+    }
+    assert_eq!(broken, visible, "URL 值区每格携带 VS15（{visible} 格）");
+    assert!(
+        visible >= 20,
+        "URL 值区可见格数合理（110 列终端不触发截断）: {visible}"
+    );
 }

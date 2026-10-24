@@ -10,7 +10,8 @@ mod routing;
 // property_tests 触达（notes/rust.md「门面 re-export」手法，产品 API 面零增量）。
 use routing::kind_add;
 pub(crate) use routing::{
-    dropdown_open_key, proxy_dropdown_open_key, push_hex_capped, text_backspace, text_char,
+    cursor_insert, cursor_left, cursor_right, dropdown_open_key, proxy_dropdown_open_key,
+    push_hex_capped, text_backspace, text_char, text_field_at, TextField,
 };
 
 use super::{Dialog, DialogKind};
@@ -71,14 +72,49 @@ impl super::App {
         }
         match code {
             KeyCode::Esc => self.dialog = None,
-            KeyCode::Tab | KeyCode::Down | KeyCode::Right => {
+            // Tab/BackTab 恒为焦点跳转（v1.34 二批 bug 修订：方向键不再同臂——
+            // 文本字段内方向键 = 输入光标移动，见下）；focus_field 随迁光标
+            KeyCode::Tab | KeyCode::BackTab => {
                 if let Some(d) = self.dialog.as_mut() {
-                    d.focus = (d.focus + 1) % nfocus;
+                    let step = if code == KeyCode::Tab { 1 } else { nfocus - 1 };
+                    d.focus_field((d.focus + step) % nfocus);
                 }
             }
-            KeyCode::BackTab | KeyCode::Up | KeyCode::Left => {
+            // 方向键分流（v1.34 二批 bug 修订）：文本字段内 = 输入光标移动
+            //（Left/Right ±1 字符、Up 行首、Down 行尾——单行字段无纵向行，
+            // 映射 Home/End 语义；只动光标不跳焦点），非文本焦点（下拉行/
+            // 按钮/Delete 对话框）保持原 Tab 语义
+            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => {
+                let on_text = self
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|d| text_field_at(d.kind, d.focus).is_some());
                 if let Some(d) = self.dialog.as_mut() {
-                    d.focus = (d.focus + nfocus - 1) % nfocus;
+                    if on_text {
+                        let field = text_field_at(d.kind, d.focus);
+                        match (code, field) {
+                            (KeyCode::Left, _) => cursor_left(&mut d.cursor),
+                            (KeyCode::Right, Some(f)) => {
+                                let buf = match f {
+                                    TextField::Url => &d.url,
+                                    TextField::Dir => &d.dir,
+                                    TextField::Conns => &d.conns,
+                                    TextField::CkValue => &d.ck_value,
+                                };
+                                cursor_right(buf, &mut d.cursor);
+                            }
+                            (KeyCode::Up, _) => d.cursor = 0,
+                            (KeyCode::Down, Some(f)) => d.cursor_field_end(f),
+                            _ => {}
+                        }
+                    } else {
+                        let step = if code == KeyCode::Up || code == KeyCode::Left {
+                            nfocus - 1
+                        } else {
+                            1
+                        };
+                        d.focus_field((d.focus + step) % nfocus);
+                    }
                 }
             }
             KeyCode::Enter => match kind {
@@ -181,13 +217,15 @@ impl super::App {
     }
 
     /// Modify 对话框字符输入（v1.5/FR-01-87）：0 并发数字、1 空格展开算法
-    /// 下拉、2 校验码、3 空格展开代理下拉、4/5 空格激活按钮
+    /// 下拉、2 校验码、3 空格展开代理下拉、4/5 空格激活按钮。
+    /// v1.34 二批 bug 修订：并发臂改走 [`text_char`]（光标处插入——原内联
+    /// append 恒加末尾，光标语义与 Add 路径分叉）
     fn modify_dialog_char(&mut self, focus: usize, c: char) {
         if focus == 0 {
-            if c.is_ascii_digit() && self.dialog.as_ref().unwrap().conns.chars().count() < 2 {
-                let d = self.dialog.as_mut().unwrap();
-                d.conns.push(c);
-                d.conns_edited = true;
+            if !c.is_control() {
+                if let Some(d) = self.dialog.as_mut() {
+                    text_char(DialogKind::Modify, d, focus, c);
+                }
             }
         } else if focus == 1 {
             if c == ' ' {
@@ -277,17 +315,31 @@ mod dialog_key_tests {
     #[test]
     fn text_backspace_fields_and_gates() {
         let mut d = add_dlg();
+        // 键入态光标在字段尾：退格删光标前一字符（append/pop 时代的弹末尾）
         d.url.push_str("abc");
+        d.cursor = 3;
         assert!(text_backspace(DialogKind::Add, &mut d, 0));
         assert_eq!(d.url, "ab");
+        assert_eq!(d.cursor, 2, "退格后光标随迁");
+        // 中位退格：光标 1 → 删 'a'
+        d.cursor = 1;
+        assert!(text_backspace(DialogKind::Add, &mut d, 0));
+        assert_eq!(d.url, "b");
+        // 行首退格（cursor = 0）无操作
+        d.cursor = 0;
+        assert!(text_backspace(DialogKind::Add, &mut d, 0));
+        assert_eq!(d.url, "b");
         d.dir.push_str("xy");
+        d.cursor = 2;
         assert!(text_backspace(DialogKind::Add, &mut d, 1));
         assert_eq!(d.dir, "x");
         d.conns.push_str("12");
+        d.cursor = 2;
         assert!(text_backspace(DialogKind::Add, &mut d, 2));
         assert_eq!(d.conns, "1");
         assert!(d.conns_edited);
         d.ck_value.push_str("ff");
+        d.cursor = 2;
         assert!(text_backspace(DialogKind::Add, &mut d, 4));
         assert_eq!(d.ck_value, "f");
         // 焦点 3（算法下拉）/5/6（按钮）不消费
@@ -387,21 +439,31 @@ mod dialog_key_tests {
     }
 
     /// 对话框键盘导航与 Delete 对话框激活：焦点环绕、Esc 关闭、
-    /// 数字 1/3 触发删除/取消（FR-01-25 删除三选）
+    /// 数字 1/3 触发删除/取消（FR-01-25 删除三选）。v1.34 二批 bug 修订：
+    /// 文本字段内方向键已改光标语义（见 arrow_keys_move_cursor_in_text_fields），
+    /// 焦点导航以 Tab/BackTab 主通道验证；非文本焦点（按钮行）方向键保持
+    /// 原导航语义
     #[tokio::test]
     async fn dialog_key_navigates_and_activates_delete() {
         let mut app = make_app("dnav");
         app.dialog = Some(add_dlg());
 
-        // 焦点前进/后退与环绕（Add nfocus=9：v1.15/FR-01-103 增仅添加钮）
-        app.on_dialog_key(KeyCode::Down); // 1
-        app.on_dialog_key(KeyCode::Right); // 2
+        // 焦点前进/后退（Add nfocus=9：v1.15/FR-01-103 增仅添加钮）
+        app.on_dialog_key(KeyCode::Tab); // 1
+        app.on_dialog_key(KeyCode::Tab); // 2
         app.on_dialog_key(KeyCode::Tab); // 3
-        app.on_dialog_key(KeyCode::Up); // 2
-        app.on_dialog_key(KeyCode::Left); // 1
+        app.on_dialog_key(KeyCode::BackTab); // 2
+        app.on_dialog_key(KeyCode::BackTab); // 1
+        assert_eq!(app.dialog.as_ref().unwrap().focus, 1);
+        // BackTab 从 0 环绕到 8
         app.on_dialog_key(KeyCode::BackTab); // 0
-        app.on_dialog_key(KeyCode::Up); // 环绕到 8
-        assert_eq!(app.dialog.as_ref().unwrap().focus, 8, "Up 环绕到末位");
+        app.on_dialog_key(KeyCode::BackTab); // 环绕到 8
+        assert_eq!(app.dialog.as_ref().unwrap().focus, 8, "BackTab 环绕到末位");
+        // 非文本焦点（取消按钮）方向键保持焦点导航语义
+        app.on_dialog_key(KeyCode::Left); // 8 → 7
+        assert_eq!(app.dialog.as_ref().unwrap().focus, 7, "按钮行 Left 后退");
+        app.on_dialog_key(KeyCode::Down); // 7 → 8
+        assert_eq!(app.dialog.as_ref().unwrap().focus, 8, "按钮行 Down 前进");
 
         // Esc 关闭
         app.on_dialog_key(KeyCode::Esc);
@@ -520,14 +582,13 @@ mod dialog_key_tests {
         assert!(app.dialog.is_none(), "确认后关闭");
         assert_eq!(app.tasks[0].concurrency, 27, "并发立即生效");
 
-        // focus 5：空格激活取消按钮 → 直接关闭
+        // focus 5：空格激活取消按钮 → 直接关闭（文本字段内 Down 不跳焦点，
+        // 焦点导航走 Tab——v1.34 二批 bug 修订）
         app.selected = 0;
         app.on_key(KeyCode::Char('m'), crossterm::event::KeyModifiers::NONE);
-        app.on_dialog_key(KeyCode::Down);
-        app.on_dialog_key(KeyCode::Down);
-        app.on_dialog_key(KeyCode::Down);
-        app.on_dialog_key(KeyCode::Down);
-        app.on_dialog_key(KeyCode::Down); // focus 0 → 5
+        for _ in 0..5 {
+            app.on_dialog_key(KeyCode::Tab); // focus 0 → 5
+        }
         assert_eq!(app.dialog.as_ref().unwrap().focus, 5);
         app.on_dialog_key(KeyCode::Char(' '));
         assert!(app.dialog.is_none(), "取消按钮直接关闭");
@@ -555,15 +616,15 @@ mod dialog_key_tests {
         app.selected = 0;
         app.on_key(KeyCode::Char('m'), crossterm::event::KeyModifiers::NONE);
 
-        // focus 1 Enter：展开算法下拉
-        app.on_dialog_key(KeyCode::Down);
+        // focus 1 Enter：展开算法下拉（Tab 前进——文本字段内 Down 不跳焦点）
+        app.on_dialog_key(KeyCode::Tab);
         app.on_dialog_key(KeyCode::Enter);
         assert!(app.dialog.as_ref().unwrap().ck_open, "Enter 展开算法下拉");
         app.on_dialog_key(KeyCode::Esc);
 
         // focus 3 Enter：展开代理下拉
-        app.on_dialog_key(KeyCode::Down);
-        app.on_dialog_key(KeyCode::Down);
+        app.on_dialog_key(KeyCode::Tab);
+        app.on_dialog_key(KeyCode::Tab);
         app.on_dialog_key(KeyCode::Enter);
         assert!(
             app.dialog.as_ref().unwrap().proxy_open,
@@ -572,9 +633,9 @@ mod dialog_key_tests {
         app.on_dialog_key(KeyCode::Esc);
 
         // focus 0 Enter：确认 → 并发非法值钳制生效路径（空 = 保持当前 4）
-        app.on_dialog_key(KeyCode::Up); // 回 focus 3
-        app.on_dialog_key(KeyCode::Up);
-        app.on_dialog_key(KeyCode::Up); // 回 focus 0
+        app.on_dialog_key(KeyCode::BackTab); // 回 focus 2
+        app.on_dialog_key(KeyCode::BackTab); // 回 focus 1
+        app.on_dialog_key(KeyCode::BackTab); // 回 focus 0
         app.on_dialog_key(KeyCode::Enter);
         assert!(app.dialog.is_none(), "确认后关闭");
         assert_eq!(app.tasks[0].concurrency, 4, "并发空值保持当前");
@@ -583,7 +644,7 @@ mod dialog_key_tests {
         app.selected = 0;
         app.on_key(KeyCode::Char('m'), crossterm::event::KeyModifiers::NONE);
         for _ in 0..5 {
-            app.on_dialog_key(KeyCode::Down);
+            app.on_dialog_key(KeyCode::Tab);
         }
         app.on_dialog_key(KeyCode::Enter);
         assert!(app.dialog.is_none(), "取消焦点 Enter 关闭");
@@ -691,11 +752,98 @@ mod dialog_key_tests {
         assert!(app.dialog.is_none(), "确认按钮建任务");
         assert_eq!(app.tasks.len(), 1);
 
-        // focus 8：空格激活取消按钮 → 直接关闭
+        // focus 8：空格激活取消按钮 → 直接关闭（BackTab 从 0 环绕；文本
+        // 字段内 Up 不跳焦点——v1.34 二批 bug 修订）
         app.dialog = Some(add_dlg());
-        app.on_dialog_key(KeyCode::Up); // 环绕到 8
+        app.on_dialog_key(KeyCode::BackTab); // 环绕到 8
         app.on_dialog_key(KeyCode::Char(' '));
         assert!(app.dialog.is_none(), "取消按钮直接关闭");
+        app.shutdown().await;
+    }
+
+    /// v1.34 二批 bug 修订专项：文本字段内方向键 = 输入光标移动（不跳焦点）
+    /// ——Left/Right ±1 字符、Up 行首、Down 行尾（单行字段 End 语义）、
+    /// 边界钳制；中位插入与退格随光标生效
+    #[tokio::test]
+    async fn arrow_keys_move_cursor_in_text_fields() {
+        let mut app = make_app("cur");
+        app.dialog = Some(add_dlg());
+        // 键入 "abc"：光标随迁至 3（字段尾）
+        for c in ['a', 'b', 'c'] {
+            app.on_dialog_key(KeyCode::Char(c));
+        }
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.url, "abc");
+        assert_eq!(d.cursor, 3, "键入后光标在字段尾");
+
+        // Left：3 → 2；再键入 'X' → 中位插入 "abXc"
+        app.on_dialog_key(KeyCode::Left);
+        app.on_dialog_key(KeyCode::Char('X'));
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.url, "abXc", "中位插入落在光标列");
+        assert_eq!(d.cursor, 3);
+        assert_eq!(d.focus, 0, "方向键不跳焦点");
+
+        // Right 到尾 + 越界钳制
+        app.on_dialog_key(KeyCode::Right);
+        app.on_dialog_key(KeyCode::Right);
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.cursor, 4, "Right 到尾钳制");
+        // Down = 行尾语义（同值，焦点不动）
+        app.on_dialog_key(KeyCode::Down);
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.cursor, 4, "Down 行尾");
+        assert_eq!(d.focus, 0);
+        // Left 到头 + 越界钳制
+        for _ in 0..6 {
+            app.on_dialog_key(KeyCode::Left);
+        }
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.cursor, 0, "Left 到头钳制");
+        // Up = 行首语义（同值，焦点不动）
+        app.on_dialog_key(KeyCode::Up);
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.cursor, 0, "Up 行首");
+        assert_eq!(d.focus, 0);
+
+        // 光标 1 处退格：删 'a'
+        app.on_dialog_key(KeyCode::Right);
+        app.on_dialog_key(KeyCode::Backspace);
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.url, "bXc", "光标 1 处退格删前字符");
+        assert_eq!(d.cursor, 0);
+
+        // Tab 后光标随迁到新字段（dir 空 = 0）
+        app.on_dialog_key(KeyCode::Tab);
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.focus, 1);
+        assert_eq!(d.cursor, 0, "焦点切换单源：光标迁至新字段尾");
+
+        // Modify 并发字段（预填 "2"）：打开后光标在尾，Left+键入中位插入
+        app.dialog = None;
+        app.tasks.push(crate::model::Task::new_queued(
+            1,
+            "cur.bin".to_string(),
+            Protocol::Http,
+            "http://example.com/cur.bin".to_string(),
+            "/tmp".to_string(),
+            1024 * 1024,
+            2,
+            5,
+            None,
+            crate::model::config::ProxyChoice::Direct,
+            0,
+        ));
+        app.selected = 0;
+        app.on_key(KeyCode::Char('m'), crossterm::event::KeyModifiers::NONE);
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.conns, "2");
+        assert_eq!(d.cursor, 1, "预填字段光标在尾（open_modify_dialog）");
+        app.on_dialog_key(KeyCode::Left);
+        app.on_dialog_key(KeyCode::Char('9'));
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.conns, "92", "预填字段中位插入");
+        assert_eq!(d.focus, 0, "方向键不跳焦点（Modify）");
         app.shutdown().await;
     }
 }

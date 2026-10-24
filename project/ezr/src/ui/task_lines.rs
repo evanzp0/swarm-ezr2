@@ -298,8 +298,10 @@ fn stat_bt_rest(t: &Task) -> Vec<Span<'static>> {
             Style::default().fg(FG),
         ));
     } else {
-        // 非下载中（暂停/排队等）：速度缺失用 -，但 ↓/↑ 箭头保留
-        l3.extend(rest_dash_speed());
+        // 非下载中（暂停/排队等）：速度缺失用 -，但 ↓/↑ 箭头保留——
+        // 「↓ -」占位已由 dl_speed_head 非下载臂产出，此处不再重复（v1.34
+        // 排版修订对齐 ezr-demo：原 else 臂再 extend 一次 rest_dash_speed，
+        // 渲染成「↓ -↓ - ↑ -」双写）
         l3.push(Span::raw(" ↑ "));
         l3.push(Span::styled("-", Style::default().fg(DIM)));
         l3.push(Span::raw("  -/-"));
@@ -312,7 +314,10 @@ fn stat_bt_rest(t: &Task) -> Vec<Span<'static>> {
     l3
 }
 
-/// HTTP 其余状态：同下载中版式，缺失用 -
+/// HTTP 其余状态：同下载中版式，缺失用 -（v1.34 排版修订对齐 ezr-demo：
+/// 速度列与字节对之间以 2 列空格分隔——`↓ 1.2 MB/s  0.9 MB / 2.9 MB`，
+/// 原 `dl_total_txt` 直拼丢失分隔，速度数值与已下载字节粘连成
+/// `↓ 1.2 MB/s0.9 MB / 2.9 MB`）
 fn stat_http_rest(t: &Task) -> Vec<Span<'static>> {
     let downloading = t.state == TaskState::Downloading;
     let mut l3: Vec<Span<'static>> = vec![Span::raw("  ")];
@@ -320,7 +325,7 @@ fn stat_http_rest(t: &Task) -> Vec<Span<'static>> {
     l3.push(Span::styled(
         // v1.34/FR-01-116 ①：总大小未知（不支持续传的 HTTP(S) 流式下载）
         // 显示 `<已下载>/? B`（统计行口径与列表徽标同轮修订）
-        dl_total_txt(t),
+        format!("  {}", dl_total_txt(t)),
         Style::default().fg(FG),
     ));
     l3.extend(remaining_tail(t, downloading));
@@ -554,16 +559,60 @@ mod tests {
 
     #[test]
     fn stat_bt_rest_and_http_rest_dash_forms() {
-        // 暂停中的 BT：↓/↑ 与 - 占位并存
+        // 暂停中的 BT：↓/↑ 与 - 占位并存，且「↓ -」占位只出现一次（v1.34
+        // 排版修订：原 else 臂重复 extend 出「↓ -↓ -」双写）
         let x = mk(TaskState::Paused, true);
         let s = text_of(&stat_bt_rest(&x));
         assert!(s.contains("↓"), "{s}");
         assert!(s.contains("-/-"));
+        assert!(!s.contains("↓ -↓ -"), "速度占位不双写: {s}");
+        assert_eq!(s.matches("↓ ").count(), 1, "单个 ↓ 箭头: {s}");
         // 暂停中的 HTTP：↓ - 剩余 -
         let x = mk(TaskState::Paused, false);
         let s = text_of(&stat_http_rest(&x));
         assert!(s.contains("↓"), "{s}");
         assert!(s.contains("剩余"));
+    }
+
+    /// v1.34 排版修订（对齐 ezr-demo 统计行版式）：下载中速度列与字节对、
+    /// 字节对与剩余列之间以 2 列空格分隔，速度数值不得与已下载字节粘连
+    ///（原 stat_http_rest 改版漏补 `  ` 前缀 → `↓ 1.0 MB/s0.9 MB`）
+    #[test]
+    fn stat_http_downloading_layout_matches_demo_spacing() {
+        let mut t = mk(TaskState::Downloading, false);
+        t.speed = 1_000_000.0;
+        let s = text_of(&stat_http_rest(&t));
+        // 速度与字节对之间 2 列空格（demo 同式 `  {dl_total_txt}`）
+        assert!(s.contains("MB/s  "), "速度后 2 列分隔: {s}");
+        assert!(!s.contains("MB/s1.0"), "速度与字节不粘连: {s}");
+        // 速度 + 2 空格 + 已下载/总大小 + 2 空格 + 剩余 ETA 的列序
+        //（字节对 = `<已下载>/<总大小>` 单斜杠无空格，demo 同源 dl_total_txt）
+        assert!(s.contains("↓ 1.0 MB/s  1.0 MB/3.0 MB"), "列序: {s}");
+        // 总大小未知口径同版式（? B 仍带 2 列分隔）
+        let mut t = mk_streaming(TaskState::Downloading);
+        t.speed = 1000.0;
+        let s = text_of(&stat_http_rest(&t));
+        assert!(
+            s.contains("B/s  ") && s.contains("  1.0 MB/? B"),
+            "未知大小: {s}"
+        );
+    }
+
+    /// v1.34 排版修订：BT 下载中统计行与 demo 列序逐段一致
+    ///（↓ 速度 · ↑ 速度 · 种子/节点 · 字节对 · 剩余）
+    #[test]
+    fn stat_bt_downloading_layout_matches_demo_spacing() {
+        let mut t = mk(TaskState::Downloading, true);
+        t.speed = 2_000_000.0;
+        t.upload_speed = 300_000.0;
+        t.seeders = 3;
+        t.peers = 5;
+        let s = text_of(&stat_bt_rest(&t));
+        assert!(s.contains("↓ 2.0 MB/s"), "{s}");
+        assert!(s.contains(" ↑ 300 KB/s"), "{s}");
+        assert!(s.contains("  3/5"), "{s}");
+        assert!(s.contains("  1.0/3.0 MB"), "{s}");
+        assert!(s.contains("  剩余 "), "{s}");
     }
 
     #[test]

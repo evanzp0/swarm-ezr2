@@ -1,7 +1,10 @@
 //! paste — bracketed paste 输入路由（FR-01-06；v1.17 修订：Add/Modify 两对话框
-//! 文本字段同权接收）：纯函数便于单测
+//! 文本字段同权接收；v1.34 二批 bug 修订：光标处插入——与逐键输入同一光标
+//! 语义，粘贴后光标随迁）：纯函数便于单测
 
-use super::dialog_keys::{CAP_CK_HEX, CAP_CONNS_DIGITS, CAP_TEXT};
+use super::dialog_keys::{
+    cursor_insert, text_field_at, TextField, CAP_CK_HEX, CAP_CONNS_DIGITS, CAP_TEXT,
+};
 use super::{App, Dialog, DialogKind};
 use crate::model::checksum::CK_NONE;
 
@@ -41,42 +44,34 @@ fn paste_sanitize(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
 }
 
-/// 截断式追加：目标字符串不超过 `cap` 个字符（按 char 计数，不切分多字节字符）
-fn push_capped(dst: &mut String, src: &str, cap: usize) -> bool {
-    let room = cap.saturating_sub(dst.chars().count());
-    let taken: String = src.chars().take(room).collect();
-    let inserted = !taken.is_empty();
-    dst.push_str(&taken);
-    inserted
-}
-
-/// 将粘贴文本按当前焦点路由到对话框字段（FR-01-06）。
-/// kind 感知 (kind, focus) 矩阵，与 routing.rs text_backspace/text_char 同构：
-/// Add：0=URL 1=目录 2=并发 4=校验码；Modify：0=并发 2=校验码（v1.17）。
-/// 过滤规则与逐键输入一致（容量单源 dialog_keys 常量，architect v116）：
-/// URL/目录 ≤ CAP_TEXT 字符；并发仅数字 ≤ CAP_CONNS_DIGITS 位；
-/// 校验码仅十六进制 ≤ CAP_CK_HEX 位；按钮焦点与下拉行不接收。
+/// 将粘贴文本按当前焦点路由到对话框字段（FR-01-06；v1.34 二批：光标处
+/// 插入）。字段映射单源 [`text_field_at`]（与 routing 编辑函数同源，原
+/// (kind, focus) 矩阵退役）：Add：0=URL 1=目录 2=并发 4=校验码；
+/// Modify：0=并发 2=校验码。过滤规则与逐键输入一致（容量单源 dialog_keys
+/// 常量，architect v116）：URL/目录 ≤ CAP_TEXT 字符；并发仅数字 ≤
+/// CAP_CONNS_DIGITS 位；校验码仅十六进制 ≤ CAP_CK_HEX 位；按钮焦点与
+/// 下拉行不接收。插入后光标随迁（落在插入文本之后）。
 fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, text: &str) -> bool {
     let clean = paste_sanitize(text);
-    match (kind, focus) {
-        (DialogKind::Add, 0) => push_capped(&mut d.url, &clean, CAP_TEXT),
-        (DialogKind::Add, 1) => push_capped(&mut d.dir, &clean, CAP_TEXT),
-        (DialogKind::Add, 2) | (DialogKind::Modify, 0) => {
+    match text_field_at(kind, focus) {
+        Some(TextField::Url) => cursor_insert(&mut d.url, &mut d.cursor, &clean, CAP_TEXT) > 0,
+        Some(TextField::Dir) => cursor_insert(&mut d.dir, &mut d.cursor, &clean, CAP_TEXT) > 0,
+        Some(TextField::Conns) => {
             let digits: String = clean.chars().filter(|c| c.is_ascii_digit()).collect();
-            let inserted = push_capped(&mut d.conns, &digits, CAP_CONNS_DIGITS);
-            d.conns_edited |= inserted;
-            inserted
+            let inserted = cursor_insert(&mut d.conns, &mut d.cursor, &digits, CAP_CONNS_DIGITS);
+            d.conns_edited |= inserted > 0;
+            inserted > 0
         }
-        (DialogKind::Add, 4) | (DialogKind::Modify, 2) => {
+        Some(TextField::CkValue) => {
             // v1.32/FR-01-01：算法选中 NONE 时校验码不可输入（粘贴与逐键
             // 同拦截——NONE 臂直接吞掉粘贴内容）
             if d.ck_type == CK_NONE {
                 return false;
             }
             let hex: String = clean.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-            push_capped(&mut d.ck_value, &hex, CAP_CK_HEX)
+            cursor_insert(&mut d.ck_value, &mut d.cursor, &hex, CAP_CK_HEX) > 0
         }
-        _ => false,
+        None => false,
     }
 }
 
@@ -234,14 +229,32 @@ mod paste_tests {
         assert!(!paste_accepts(DialogKind::Delete, false, false));
     }
 
-    /// 截断式追加按字符计数，不切分多字节字符
+    /// 截断式插入按字符计数，不切分多字节字符（v1.34 二批：push_capped →
+    /// routing cursor_insert 光标语义，边界安全性单测保留在此）
     #[test]
-    fn push_capped_respects_char_boundary() {
+    fn cursor_insert_respects_char_boundary() {
         let mut s = String::from("下载");
-        assert!(push_capped(&mut s, "器abc", 3));
+        let mut cur = s.chars().count(); // 光标在尾
+        assert_eq!(cursor_insert(&mut s, &mut cur, "器abc", 3), 1);
         assert_eq!(s, "下载器");
-        assert!(!push_capped(&mut s, "x", 3));
+        assert_eq!(cur, 3);
+        assert_eq!(cursor_insert(&mut s, &mut cur, "x", 3), 0);
         assert_eq!(s, "下载器");
+    }
+
+    /// v1.34 二批：粘贴插入在光标处（非恒末尾追加）——URL 字段中位插入
+    #[test]
+    fn paste_inserts_at_cursor() {
+        let mut d = add_dialog(0);
+        d.url = "http://a.bin".to_string();
+        d.cursor = 7; // "http://" 之后
+        assert!(dlg_apply_paste(DialogKind::Add, &mut d, 0, "X"));
+        assert_eq!(d.url, "http://Xa.bin", "粘贴落在光标列");
+        assert_eq!(d.cursor, 8, "光标随迁至插入文本之后");
+        // 光标在 0：插到行首
+        d.cursor = 0;
+        assert!(dlg_apply_paste(DialogKind::Add, &mut d, 0, "S"));
+        assert_eq!(d.url, "Shttp://Xa.bin");
     }
 
     fn make_app(tag: &str) -> crate::app::App {

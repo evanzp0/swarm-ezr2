@@ -9,9 +9,13 @@
 //! （S2，FR-01-115）——字段名热区 x = 内框 +2、字段值热区 x = 内框 +11、
 //! 截断预算 −13；③可点击复制字段名扩展四项（校验/URL/失败/路径）；
 //! ④字段值悬停下划线 + 点击打开字段值弹窗（FR-01-113，值热区每帧回填
-//! detail_val_rects）；⑤URL 字段值 break_links 断链显示；⑥大小行总大小
-//! 未知（不支持续传的 HTTP(S) 流式下载）显示 `<已下载> / ? B`（FR-01-116）；
-//! ⑦「分块」行对不支持分块下载的任务恒显示 `-`（supports_pieces 同口径）。
+//! detail_val_rects）；⑤URL 字段值 break_links_deep 逐字符深度断链显示
+//!（v1.34 二批 bug 修订：原 break_links 仅 scheme 锚点注 VS15，终端对 www.
+//! 形态 URL 的识别在归一化后仍命中——www 起始域名悬停仍叠加终端默认下划线
+//! 形成双线；逐字符注入后任何 ≥2 字符连续裸串均不存在，任意终端识别形态
+//! 全断）；⑥大小行总大小未知（不支持续传的 HTTP(S) 流式下载）显示
+//! `<已下载> / ? B`（FR-01-116）；⑦「分块」行对不支持分块下载的任务恒显示
+//! `-`（supports_pieces 同口径）。
 
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -19,7 +23,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-use super::text::{break_links, fmt_size, link_break_spans, pad_right, truncate, w};
+use super::text::{break_links_deep, fmt_size, link_break_spans, pad_right, truncate, w};
 use super::{
     panel_border_style, panel_title_style, state_color, DIM, FG, GREEN, LIGHT_BLUE, RED, YELLOW,
 };
@@ -293,11 +297,12 @@ pub(super) fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     lines.push(Line::from(save_line));
     // URL 字段名可点击复制（淡蓝下划线）；v1.34/FR-01-113：值悬停下划线 +
     // 点击打开完整值弹窗；记录行号供热区回填；FR-01-113 ④：显示值经
-    // break_links 注入 VS15 断链——终端不再叠加 http(s) 默认链接下划线
-    //（悬停时只剩 ezr 自身的 SGR 下划线，不再出现双下划线）；经
+    // break_links_deep 逐字符注入 VS15 深度断链——终端对 http(s) 与 www.
+    // 形态的 URL 自动识别（含归一化后匹配）全断，不再叠加默认链接下划线
+    //（悬停时只剩 ezr 自身的 SGR 下划线，www 起始域名不再双下划线）；经
     // link_break_spans 分段渲染兼容 pyte 类模拟器（文档见该函数）
     let url_line_idx = lines.len();
-    let url_s = break_links(&truncate(
+    let url_s = break_links_deep(&truncate(
         // v1.28：详情 URL = 原始 URL 单值（任务级最终 URL 已退役，FR-01-14/80/D27
         // v1.28「详情 URL 显示原始 URL」，规格 01-download-engine-08 修订）
         &t.url,

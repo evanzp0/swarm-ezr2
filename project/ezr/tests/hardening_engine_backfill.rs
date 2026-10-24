@@ -413,4 +413,148 @@ fn update_conn_stats_pure_targets() {
         r_stale, 0.0,
         "老化清窗后单样本速率为 0（守卫删除 → 摊薄残留）: {r_stale}"
     );
+
+    // ⑤ 流式单连接（cap = 0 且 done > 0，FR-01-12 降级路径）：窗口正常推进
+    //    （v1.34 bug 修订靶：原 `cap > 0 && done < cap` 门对降级路径恒 false
+    //    → 面板对在传流式任务无速度样本）；与待命（cap = 0 且 done = 0）
+    //    的判别式 = done
+    let mut prev_s = HashMap::new();
+    let mut cum_s = HashMap::new();
+    let mut win_s: HashMap<(u32, usize), SpeedWindow> = HashMap::new();
+    let stream_view = |done: u64| ConnView {
+        id: 1,
+        block: 0,
+        start: 0,
+        end: 0,
+        done,
+    };
+    ucs_fix::call(&mut prev_s, &mut cum_s, &mut win_s, 9, &[stream_view(100)]);
+    std::thread::sleep(Duration::from_millis(100));
+    ucs_fix::call(&mut prev_s, &mut cum_s, &mut win_s, 9, &[stream_view(400)]);
+    assert_eq!(cum_s.get(&(9, 1)), Some(&400u64), "流式累计随增量累加");
+    let r_stream = win_s.get_mut(&(9, 1)).unwrap().rate();
+    assert!(
+        (2_500.0..3_500.0).contains(&r_stream),
+        "流式连接窗口速率 ≈ 3KB/s（原门恒 false → 无样本）: {r_stream}"
+    );
+    // 待命对照：cap = 0 且 done = 0 → 不建窗口条目（零值速断）
+    ucs_fix::call(
+        &mut prev_s,
+        &mut cum_s,
+        &mut win_s,
+        10,
+        &[ConnView {
+            id: 1,
+            block: 0,
+            start: 0,
+            end: 0,
+            done: 0,
+        }],
+    );
+    assert!(
+        !win_s.contains_key(&(10, 1)),
+        "待命连接（done=0）不推进窗口"
+    );
+}
+
+// --------------------------------------- 流式单连接并发明细（bug 修订 e2e）---
+
+/// 无 Content-Length 流式 mock（FR-01-12 降级路径的真实形态）：恒 200、
+/// 不带 Content-Length / Accept-Ranges，Connection: close 以连接关闭定界
+/// 响应体——探测拿不到大小与 Range 支持 → 单流降级，进度视图
+/// ConnView { start: 0, end: 0, done }（cap = 0）。
+fn mock_server_streaming(total: u64, slow: bool) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    std::thread::spawn(move || {
+        for conn in listener.incoming().flatten() {
+            std::thread::spawn(move || {
+                let mut w = conn.try_clone().unwrap();
+                let mut r = BufReader::new(conn);
+                let mut line = String::new();
+                if r.read_line(&mut line).is_err() || line.is_empty() {
+                    return;
+                }
+                loop {
+                    let mut h = String::new();
+                    if r.read_line(&mut h).is_err() || h.trim().is_empty() {
+                        break;
+                    }
+                }
+                let _ = write!(w, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n");
+                let mut buf = vec![0u8; 8192];
+                let mut pos = 0;
+                while pos < total {
+                    let n = (total - pos).min(8192) as usize;
+                    fill(&mut buf[..n], pos);
+                    if w.write_all(&buf[..n]).is_err() {
+                        break;
+                    }
+                    if slow {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    pos += n as u64;
+                }
+                // 连接关闭定界（Connection: close；drop(w) 即 EOF）
+            });
+        }
+    });
+    format!("http://{addr}/f.bin")
+}
+
+/// 不支持断点续传的下载中任务 = 一个下载线程（FR-01-12），并发连接面板
+/// 该显示其并发明细（v1.34 bug 修订 e2e）：无 Content-Length 流式下载
+/// （总大小未知，FR-01-116）期间——明细行 1 行（序号 1）、徽标 ` 1/1 项 `、
+/// 头部「并发」活跃计数 1（原 cap=0 一律 Closed → 面板恒空）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn streaming_single_thread_shows_in_conns_panel() {
+    // 4 MB 慢速（5ms/8KB ≈ 2.5s）拉长下载窗口，保证断言落在下载中态
+    let url = mock_server_streaming(4 * 1024 * 1024, true);
+    let dir = model::testenv::uniq_tmp_dir("ezr-v134-stream");
+    let reg = dir.join("registry.json").to_string_lossy().into_owned();
+    let mut a = App::new(Config::default(), reg);
+    a.tasks
+        .push(queued_task(1, &url, &dir.to_string_lossy(), 4));
+
+    // 等首个进度帧（连接账本 cum > 0 = 流式连接视图已被消费）
+    let mut guard = 0;
+    loop {
+        a.tick().await;
+        if a.conn_cum_of(1, 1) > 0 {
+            break;
+        }
+        if guard % 5 == 0 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        guard += 1;
+        assert!(guard < 60_000, "流式下载未在预算内产生连接账本");
+    }
+
+    // 活跃口径：流式单连接 Connected（cap=0、done>0）→ 计入活跃并发
+    assert_eq!(a.active_conn_count(&a.tasks[0]), 1, "活跃并发 = 1");
+    assert_eq!(a.conns_display_total(), 1, "头部并发计数 = 1");
+
+    // 展示面速度（v1.34 二批 bug 修订回归靶）：等 1s 采样节拍后 tick →
+    // 窗口速率经 EMA 立起（原展示采样门 `cap > 0 && done < cap` 漏流式臂 →
+    // 并发面板速度列恒 0；数据面/展示面在传判定已收口单源）
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    a.tick().await;
+    assert!(
+        a.conn_speed_of(1, 1) > 0.0,
+        "流式单连接面板速度非零（旧实现恒 0）: {}",
+        a.conn_speed_of(1, 1)
+    );
+
+    // 面板渲染：徽标 ` 1/1 项 `（x = 活跃明细行数、y = 任务并发设置）+
+    // 数据行序号 1（右对齐 4 列「   1」，表头行为「  序号」不含该形态）
+    let rows = ui::testfx::row_strings(&ui::testfx::render_full(&mut a, 100, 24));
+    assert!(
+        rows.iter().any(|r| r.contains("1/1 项")),
+        "徽标 1/1 项（原 0/4 项 = 恒空面板）: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|r| r.contains("   1 ") && !r.contains("序号")),
+        "流式并发明细行 1 行（序号 1）: {rows:?}"
+    );
 }

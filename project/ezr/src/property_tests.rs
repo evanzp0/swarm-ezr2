@@ -813,6 +813,37 @@ fn text_with_wide() -> impl proptest::strategy::Strategy<Value = String> {
         0..48,
     )
     .prop_map(|chars| chars.into_iter().collect())
+    // 宽度界属性论域 = 「每字符至少 1 列」的分支域：零宽字符（w() 按 0 计——
+    // v1.34 断链 VS15 注入的宽度口径，text.rs zero_width 单源）不属该论域，
+    // 由 prop_text_zero_width_is_free 专门覆盖（否则 any::<char>() 抽到
+    // U+FE0E/U+200B 等时下界 width ≥ n 假失败）
+    .prop_filter(
+        "排除零宽字符（w() 按 0 计，宽度下界不论及）",
+        |s: &String| {
+            !s.chars().any(|c| {
+                let u = c as u32;
+                (0xFE00..=0xFE0F).contains(&u)
+                    || (0x200B..=0x200F).contains(&u)
+                    || u == 0x2060
+                    || u == 0xFEFF
+            })
+        },
+    )
+}
+
+/// 纯零宽字符策略（w() 零宽分支的属性论域：VS15 族 / 零宽空格连接符族 /
+/// 词连接符 / BOM）
+fn zero_width_text() -> impl proptest::strategy::Strategy<Value = String> {
+    proptest::collection::vec(
+        prop_oneof![
+            proptest::char::range('\u{FE00}', '\u{FE0F}'),
+            proptest::char::range('\u{200B}', '\u{200F}'),
+            proptest::char::range('\u{2060}', '\u{2060}'),
+            proptest::char::range('\u{FEFF}', '\u{FEFF}'),
+        ],
+        0..48,
+    )
+    .prop_map(|chars| chars.into_iter().collect())
 }
 
 proptest! {
@@ -820,13 +851,21 @@ proptest! {
     // 覆盖维度：显示宽度不变量、截断/填充幂等、时长格式化往返、
     // 大小/速度格式化的单位后缀封闭域与「单位绑定总量」口径。
 
-    /// w() 显示宽度界：n ≤ w(s) ≤ 2n（CJK/全角按 2 计，其余按 1 计）
+    /// w() 显示宽度界：n ≤ w(s) ≤ 2n（CJK/全角按 2 计，其余按 1 计；
+    /// 零宽字符不论及——见 text_with_wide 论域注记）
     #[test]
     fn prop_text_width_within_bounds(s in text_with_wide()) {
         let n = s.chars().count();
         let width = crate::ui::w(&s);
         prop_assert!(width >= n, "宽度下界（每字符至少 1 列）");
         prop_assert!(width <= 2 * n, "宽度上界（每字符至多 2 列）");
+    }
+
+    /// 零宽字符域：纯零宽串显示宽恒 0（w() 零宽分支——断链 VS15 注入不
+    /// 改变行宽的宽度不变量，v1.34/FR-01-113）
+    #[test]
+    fn prop_text_zero_width_is_free(s in zero_width_text()) {
+        prop_assert_eq!(crate::ui::w(&s), 0, "纯零宽串显示宽为 0");
     }
 
     /// truncate 宽度界 + 幂等：w(truncate(s, max)) ≤ max（max ≥ 1；max=0 时
@@ -964,9 +1003,9 @@ fn dialog_key_seq() -> impl Strategy<Value = Vec<KeyCode>> {
 }
 
 proptest! {
-    /// text_char 消费矩阵与容量上限：仅文本字段消费（true），追加后
+    /// text_char 消费矩阵与容量上限：仅文本字段消费（true），光标处插入后
     /// URL/目录 ≤ 300 字符、并发 ≤ 2 位且仅数字；并发非空时 conns_edited
-    /// 必已置位（加数字路径全部置位，无清除路径）
+    /// 必已置位（加数字路径全部置位，无清除路径）；光标恒在字段长内
     #[test]
     fn prop_text_char_caps_and_consumption(
         kind in prop::sample::select(vec![DialogKind::Add, DialogKind::Modify]),
@@ -991,12 +1030,23 @@ proptest! {
             if !d.conns.is_empty() {
                 prop_assert!(d.conns_edited, "并发非空时 edited 必已置位");
             }
+            // 光标不变量（v1.34 二批）：恒在当前焦点字段长度内
+            let field_len = match crate::app::text_field_at(kind, focus) {
+                Some(crate::app::TextField::Url) => d.url.chars().count(),
+                Some(crate::app::TextField::Dir) => d.dir.chars().count(),
+                Some(crate::app::TextField::Conns) => d.conns.chars().count(),
+                Some(crate::app::TextField::CkValue) => d.ck_value.chars().count(),
+                None => 0,
+            };
+            prop_assert!(d.cursor <= field_len, "光标 ≤ 字段长 (focus={})", focus);
         }
     }
 
-    /// text_backspace 消费矩阵与「至多弹出一字符」：退格仅作用于文本字段
-    /// （Add 0/1/2/4，Modify 0/2），命中字段时长度 -1（空则不变）且返回 true，
-    /// 其余焦点零变化且返回 false；并发臂无条件置 conns_edited
+    /// text_backspace 消费矩阵与「至多删除一字符」：退格仅作用于文本字段
+    /// （Add 0/1/2/4，Modify 0/2），命中字段时删除光标前一字符（v1.34 二批
+    /// 光标语义：夹具置光标到靶字段尾 = 弹末尾；长度 -1（空则不变）且返回
+    /// true，其余焦点零变化且返回 false；并发臂无条件置 conns_edited；
+    /// 退格后光标随迁）
     #[test]
     fn prop_text_backspace_pops_at_most_one(
         kind in prop::sample::select(vec![DialogKind::Add, DialogKind::Modify]),
@@ -1009,6 +1059,13 @@ proptest! {
         d.dir = seed_s.clone();
         d.conns = "42".to_string();
         d.ck_value = seed_s.clone();
+        // 夹具置光标到靶字段尾（键入态；弹末尾字符口径与旧属性对齐）
+        d.cursor = match (kind, focus) {
+            (DialogKind::Add, 2) | (DialogKind::Modify, 0) => 2,
+            (DialogKind::Add, 0) | (DialogKind::Add, 1) | (DialogKind::Add, 4)
+            | (DialogKind::Modify, 2) => seed_s.chars().count(),
+            _ => 0,
+        };
         let is_bs_field = matches!(
             (kind, focus),
             (DialogKind::Add, 0)
@@ -1024,6 +1081,7 @@ proptest! {
             d.conns.clone(),
             d.ck_value.clone(),
         );
+        let cursor0 = d.cursor;
         let consumed = crate::app::text_backspace(kind, &mut d, focus);
         prop_assert_eq!(consumed, is_bs_field, "退格消费口径与字段矩阵一致 (focus={})", focus);
         let expect_pop = |before: &str, after: &str| {
@@ -1032,13 +1090,26 @@ proptest! {
             assert_eq!(after, expect);
         };
         match (kind, focus) {
-            (DialogKind::Add, 0) => expect_pop(&url0, &d.url),
-            (DialogKind::Add, 1) => expect_pop(&dir0, &d.dir),
-            (DialogKind::Add, 4) => expect_pop(&ck0, &d.ck_value),
-            (DialogKind::Modify, 2) => expect_pop(&ck0, &d.ck_value),
+            (DialogKind::Add, 0) => {
+                expect_pop(&url0, &d.url);
+                prop_assert_eq!(d.cursor, cursor0.saturating_sub(1).min(d.url.chars().count()), "退格后光标随迁");
+            }
+            (DialogKind::Add, 1) => {
+                expect_pop(&dir0, &d.dir);
+                prop_assert_eq!(d.cursor, cursor0.saturating_sub(1).min(d.dir.chars().count()), "退格后光标随迁");
+            }
+            (DialogKind::Add, 4) => {
+                expect_pop(&ck0, &d.ck_value);
+                prop_assert_eq!(d.cursor, cursor0.saturating_sub(1).min(d.ck_value.chars().count()), "退格后光标随迁");
+            }
+            (DialogKind::Modify, 2) => {
+                expect_pop(&ck0, &d.ck_value);
+                prop_assert_eq!(d.cursor, cursor0.saturating_sub(1).min(d.ck_value.chars().count()), "退格后光标随迁");
+            }
             (DialogKind::Add, 2) | (DialogKind::Modify, 0) => {
                 expect_pop(&conns0, &d.conns);
                 prop_assert!(d.conns_edited, "并发退格置 edited");
+                prop_assert_eq!(d.cursor, cursor0.saturating_sub(1).min(d.conns.chars().count()), "退格后光标随迁");
             }
             _ => {
                 prop_assert_eq!(&d.url, &url0, "非退格字段零变化");

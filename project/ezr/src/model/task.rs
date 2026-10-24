@@ -59,15 +59,45 @@ impl Connection {
     ///   含续传恢复时已领续传块但请求尚在途的连接——新请求即重新建连）；
     /// - 本轮已有落盘字节（cum > 0）→ Connected（此后保持：换块不清累计，
     ///   FR-01-99 ②；传输停顿不降级——仍持块即仍在连接）。
+    /// - **流式单连接例外（FR-01-12 降级 + FR-01-116：无 Content-Length 的
+    ///   HTTP(S) 流式下载）**：视图无块概念（start = end = 0、cap = 0），
+    ///   但 done = 已落盘字节持续增长——连接在传（Connected）。判别式 =
+    ///   done：待命条目 done 恒 0，流式连接每次进度帧 done > 0。不支持
+    ///   断点续传的任务恒有一个这样的单下载线程（FR-01-12），并发面板
+    ///   该显示其并发明细（一行、序号 1）。
     #[must_use]
     pub fn conn_phase(&self, cum_down: u64) -> ConnPhase {
         if self.cap() == 0 {
-            ConnPhase::Closed
+            if self.done > 0 {
+                ConnPhase::Connected
+            } else {
+                ConnPhase::Closed
+            }
         } else if cum_down > 0 {
             ConnPhase::Connected
         } else {
             ConnPhase::Connecting
         }
+    }
+}
+
+/// 连接在传判定门（连接级速度窗口推进的**单源判别式**，FR-01-102 数据面 +
+/// 展示面采样共用；`Connection`（UI 模型）与 `engine::ConnView`（事件视图）
+/// 两个同构形态的共享谓词，v1.34 bug 修订收口——原两处内联门漂移：数据面
+/// update_conn_stats 有流式臂、展示面 sample_conn_speed_display 漏掉，不支持
+/// 断点续传任务的唯一下载线程并发面板速度恒 0）。
+///
+/// 判别式：持块连接 = 未写满（cap > 0 且 done < cap）；流式单连接（FR-01-12
+/// 降级路径，无 Content-Length → cap = 0）= done > 0（待命条目 done 恒 0，
+/// 与 [`Connection::conn_phase`] 流式例外同一判别式）。待命（cap = 0 且
+/// done = 0）与块已完成（done ≥ cap，换块/退出前的过渡帧）均非在传——
+/// 速度窗口不推进、展示面归零（零值速断）。
+#[must_use]
+pub(crate) fn conn_transferring(cap: u64, done: u64) -> bool {
+    if cap == 0 {
+        done > 0
+    } else {
+        done < cap
     }
 }
 
@@ -976,8 +1006,29 @@ mod tests {
         let c = conn(1, 0, 0, 0);
         assert_eq!(c.conn_phase(0), ConnPhase::Closed);
         assert!(!c.conn_phase(0).is_active());
-        // 防御：cap=0 但 done 异常非零（历史残留）仍 Closed（cap 权威）
+        // 防御：cap=0 且 done=0 但账本 cum 异常非零（历史残留）仍 Closed
+        //（cap + done 双零才是待命签名）
         assert_eq!(c.conn_phase(100), ConnPhase::Closed);
+    }
+
+    /// 流式单连接（FR-01-12 降级：不支持断点续传的任务唯一下载线程，无
+    /// Content-Length → 视图 start = end = 0、cap = 0，done = 已落盘字节）：
+    /// done > 0 → Connected（活跃）——并发面板该显示其并发明细
+    ///（v1.34 bug 修订：原 cap=0 一律 Closed，面板对在传流式任务恒空）
+    #[test]
+    fn conn_phase_streaming_single_thread_is_connected() {
+        // 在传流式连接：cap=0 但 done = 已落盘字节 > 0 → Connected
+        let c = conn(1, 0, 0, 4096);
+        assert_eq!(c.conn_phase(0), ConnPhase::Connected);
+        assert_eq!(c.conn_phase(4096), ConnPhase::Connected);
+        assert!(c.conn_phase(4096).is_active());
+        // 与待命的判别式 = done：done 归 0（任务收尾清账）即 Closed
+        assert_eq!(conn(1, 0, 0, 0).conn_phase(4096), ConnPhase::Closed);
+        // cap 权威不变：持块连接不受本例外影响
+        assert_eq!(
+            conn(2, 0, 1_000_000, 0).conn_phase(0),
+            ConnPhase::Connecting
+        );
     }
 
     /// 持块但本轮尚无落盘字节 → Connecting（建连/握手中；含续传恢复
@@ -1011,6 +1062,28 @@ mod tests {
         assert!(ConnPhase::Connecting.is_active());
         assert!(ConnPhase::Connected.is_active());
         assert!(!ConnPhase::Closed.is_active());
+    }
+
+    /// 在传判定门单源四臂穷尽（v1.34 bug 修订：数据面/展示面速度窗口共用的
+    /// [`conn_transferring`]）——流式单连接（cap=0、done>0）在传、待命
+    ///（cap=0、done=0）非在传、持块未写满在传、块已完成（done ≥ cap）非在传
+    #[test]
+    fn conn_transferring_gate_all_arms() {
+        // 流式单连接（FR-01-12 降级，无 Content-Length）：done > 0 即在传
+        //（判别式 = done，与 conn_phase 流式例外同式）
+        assert!(conn_transferring(0, 1));
+        assert!(conn_transferring(0, 4096));
+        // 待命条目：cap、done 双零 = 非在传（速度窗口不推进/展示面归零）
+        assert!(!conn_transferring(0, 0));
+        // 持块连接：未写满 = 在传（含续传恢复 done 已有断点字节形态）
+        assert!(conn_transferring(1_000_000, 0));
+        assert!(conn_transferring(1_000_000, 400_000));
+        // 块已完成（done ≥ cap）：换块/退出前的过渡帧，非在传
+        assert!(!conn_transferring(1_000_000, 1_000_000));
+        assert!(!conn_transferring(1_000_000, 1_500_000));
+        // saturating 边界（start > end 的病态视图按 cap=0 处理走流式臂——
+        // conn_transferring 以入参 cap 为权威，不做二次防御）
+        assert!(!conn_transferring(0, 0));
     }
 
     // -----------------------------------------------------------------------

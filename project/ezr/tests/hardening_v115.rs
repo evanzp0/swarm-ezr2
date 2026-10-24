@@ -110,6 +110,8 @@ fn app_with_add_dialog() -> (App, std::path::PathBuf) {
 /// 120×40 终端：Add 对话框 dlg=(23,14,74,12)，inner=(24,15,72,10)，
 /// avail = 72-12 = 60。URL 值显示宽度恰为 60 时必须走"原样显示"分支
 /// （`w(val) > avail` 为假）；`>=` 变异体会改走尾部省略分支（首字符变 …）。
+/// v1.34 二批（光标渲染）：聚焦行显示面改光标锚定窗（预算 −1 容光标字形），
+/// field_display 恰宽边界靶点改经未聚焦行触发（焦点移至校验行）。
 #[tokio::test]
 async fn field_display_exact_width_shows_full_value() {
     let (mut a, reg) = app_with_add_dialog();
@@ -117,6 +119,9 @@ async fn field_display_exact_width_shows_full_value() {
         let d = a.dialog.as_mut().unwrap();
         // 恰等于 avail（v1.34：avail = inner.width−13 = 59，字段行宽−4 同步）
         d.url = "x".repeat(59);
+        // 焦点移至校验行（3）：URL 行未聚焦 → field_display 全宽分支
+        d.focus = 3;
+        d.cursor = 0;
     }
     let buf = render(&mut a, 120, 40);
     // v1.34/FR-01-115 S2：字段行 rect.x = inner.x+2 = 26；label 7 列 + "> " 2 列

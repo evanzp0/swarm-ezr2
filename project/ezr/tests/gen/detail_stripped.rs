@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-use super::text::{break_links, fmt_size, link_break_spans, pad_right, truncate, w};
+use super::text::{break_links_deep, fmt_size, link_break_spans, pad_right, truncate, w};
 use super::{
     panel_border_style, panel_title_style, state_color, DIM, FG, GREEN, LIGHT_BLUE, RED, YELLOW,
 };
@@ -279,11 +279,12 @@ pub(super) fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     lines.push(Line::from(save_line));
     // URL 字段名可点击复制（淡蓝下划线）；v1.34/FR-01-113：值悬停下划线 +
     // 点击打开完整值弹窗；记录行号供热区回填；FR-01-113 ④：显示值经
-    // break_links 注入 VS15 断链——终端不再叠加 http(s) 默认链接下划线
-    //（悬停时只剩 ezr 自身的 SGR 下划线，不再出现双下划线）；经
+    // break_links_deep 逐字符注入 VS15 深度断链——终端对 http(s) 与 www.
+    // 形态的 URL 自动识别（含归一化后匹配）全断，不再叠加默认链接下划线
+    //（悬停时只剩 ezr 自身的 SGR 下划线，www 起始域名不再双下划线）；经
     // link_break_spans 分段渲染兼容 pyte 类模拟器（文档见该函数）
     let url_line_idx = lines.len();
-    let url_s = break_links(&truncate(
+    let url_s = break_links_deep(&truncate(
         // v1.28：详情 URL = 原始 URL 单值（任务级最终 URL 已退役，FR-01-14/80/D27
         // v1.28「详情 URL 显示原始 URL」，规格 01-download-engine-08 修订）
         &t.url,

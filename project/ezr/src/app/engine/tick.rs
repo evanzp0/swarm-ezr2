@@ -170,9 +170,12 @@ impl App {
 
     /// 连接级速度展示采样（FR-01-102，tick ⑤ 每秒调用；pub(super) 供单测直驱）：
     /// 与任务速度同构流水线——数据面 1s 滑窗（update_conn_stats 推进）→ 每秒取
-    /// 窗口速率推入 EMA（α=1/5）。零值语义：任务非下载态的全部连接、下载中任务的
-    /// 待命/空连接（cap = 0 或块已完成）→ `zero()` 立即归零（无拖尾）；在传连接
-    /// 即使窗口速率为 0 也持续平滑（避免 `-` 闪烁，FR-01-99 ①语义保持）。
+    /// 窗口速率推入 EMA（α=1/5）。在传判定与数据面收口单源
+    ///（[`crate::model::conn_transferring`]）。零值语义：任务非下载态的
+    /// 全部连接、下载中任务的待命/空连接（cap = 0 且 done = 0）与块已完成连接
+    /// → `zero()` 立即归零（无拖尾）；在传连接（持块未写满，或流式单连接
+    /// done > 0——不支持续传任务的唯一下载线程）即使窗口速率为 0 也持续平滑
+    ///（避免 `-` 闪烁，FR-01-99 ①语义保持）。
     pub(super) fn sample_conn_speed_display(&mut self) {
         for t in &self.tasks {
             if t.state != TaskState::Downloading {
@@ -185,7 +188,11 @@ impl App {
             }
             for c in &t.connections {
                 let key = (t.id, c.id);
-                let active = c.cap() > 0 && c.done < c.cap();
+                // 在传判定（单源 [`crate::model::conn_transferring`]，与
+                // 数据面 update_conn_stats 同门）：持块未写满，或流式单连接
+                // done > 0——v1.34 bug 修订：原内联门 `cap > 0 && done < cap`
+                // 漏流式臂，不支持断点续传任务速度恒 0
+                let active = crate::model::conn_transferring(c.cap(), c.done);
                 let d = self.conn_speed.entry(key).or_default();
                 if !active {
                     d.zero();

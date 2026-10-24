@@ -175,26 +175,39 @@ pub(super) fn plain_bar(width: usize, frac: f64, fill: Color) -> Vec<Span<'stati
 }
 
 // ---------------------------------------------------------------------------
-// 断链显示（v1.34/FR-01-113 ④/FR-01-80 ⑤，对齐 ezr-demo 重构版 break_links）
+// 断链显示（v1.34/FR-01-113 ④/FR-01-80 ⑤，对齐 ezr-demo 重构版 break_links；
+// v1.34 二批 bug 修订：断链机制升级为逐字符深度断链 [`break_links_deep`]，
+// 原 scheme 锚点版 [`break_links`] 对 www. 形态 URL 识别无能为力、已随
+// 最后一个消费者（详情 URL 行）切换而退役删除）
 // ---------------------------------------------------------------------------
 
-/// 反链接显示变换：在 http(s)/www 链接特征串内注入变体选择符 VS15
+/// 反链接显示变换（深度断链）：在**每个字符之后**注入零宽 VS15
 ///（U+FE0E——零宽组合符号 Mn、Default_Ignorable，各主流终端均零宽渲染且
-/// 不产生可见字形），使「https://」「http://」「www.」不再与终端自身的 URL
-/// 自动识别正则匹配——终端因此不再对显示文本叠加默认的链接下划线（根治
-/// 「详情 URL 值悬停出现双下划线」「字段值弹窗内容带终端默认下划线」；
-/// ezr 自身的悬停下划线仍由 SGR 控制不受影响）。仅影响显示层：复制语义走
-/// App 状态原值（字段名点击 / Y 键），不经注入。VS15 与宿主字符构成同一
-/// grapheme 簇（零宽），[`w`]/[`truncate`]/[`wrap_text`] 及 ratatui 渲染
-/// 管线均按零宽透传。
+/// 不产生可见字形）——文本里不再存在任何 ≥2 字符的连续裸串（scheme、域名、
+/// 路径、www 前缀、任意片段均不可整体匹配）：终端自身的 URL 自动识别即便
+/// 把行内孤立组合符号透明化处理（归一化后正则匹配），也无从拼出连续匹配
+/// 串——显示文本因此不再被终端叠加默认链接下划线（根治「详情 URL 值悬停
+/// 出现双下划线（终端识别 + ezr 自身 SGR 下划线叠加）」「字段值弹窗内容带
+/// 终端默认下划线」；ezr 自身的悬停下划线仍由 SGR 控制不受影响）。仅影响
+/// 显示层：复制语义走 App 状态原值（字段名点击 / Y 键），不经注入。VS15 与
+/// 宿主字符构成同一 grapheme 簇（零宽），[`w`]/[`truncate`]/[`wrap_text`]
+/// 及 ratatui 渲染管线均按零宽透传。
+///
+/// 消费者：详情面板 URL 行（v1.34 二批 bug 修订自 scheme 锚点版升级）与
+/// 字段值弹窗内容行。
 ///
 /// **注意**：断链文本必须经 [`link_break_spans`] 渲染（而非直接作为单
 /// Span）——原因见该函数文档。
-pub(crate) fn break_links(s: &str) -> String {
+pub(crate) fn break_links_deep(s: &str) -> String {
     const VS15: &str = "\u{FE0E}";
-    s.replace("https://", &format!("https{VS15}://"))
-        .replace("http://", &format!("http{VS15}://"))
-        .replace("www.", &format!("www{VS15}."))
+    let mut out = String::with_capacity(s.len() + s.chars().count() * 3);
+    for ch in s.chars() {
+        out.push(ch);
+        if ch != '\u{FE0E}' {
+            out.push_str(VS15);
+        }
+    }
+    out
 }
 
 /// 影子前景色：与原色仅最低位灰度 ±1（肉眼不可见），唯一作用是让
@@ -387,37 +400,26 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // v1.34/FR-01-113 ④ 断链显示（break_links / link_break_spans）
+    // v1.34/FR-01-113 ④ 断链显示（break_links_deep / link_break_spans）
     // -------------------------------------------------------------------
 
-    #[test]
-    fn break_links_injects_vs15_into_url_prefixes() {
-        let s = break_links("https://example.com/www.bin");
-        assert!(s.contains("https\u{FE0E}://"), "https 断链: {s}");
-        assert!(!s.contains("https://"), "原串不再匹配终端 URL 正则: {s}");
-        assert!(s.contains("www\u{FE0E}."), "www 断链: {s}");
-        let s = break_links("http://a.b/c");
-        assert!(s.contains("http\u{FE0E}://"), "http 断链: {s}");
-        // 无特征串原样透传
-        assert_eq!(break_links("ftp://x/y"), "ftp://x/y");
-    }
-
-    #[test]
-    fn break_links_zero_width_does_not_change_display_width() {
-        let raw = "https://example.com/path";
-        let br = break_links(raw);
-        assert_eq!(w(&br), w(raw), "VS15 零宽：显示宽不变");
-        // wrap 折行结果不受注入影响（零宽透传）
-        assert_eq!(wrap_text(&br, 40), vec![br.clone()]);
+    /// 构造含 VS15 的通用样例（link_break_spans 分段测试用；覆盖多字符段）
+    fn vs15_sample() -> String {
+        "ab\u{FE0E}cd".to_string()
     }
 
     #[test]
     fn link_break_spans_segments_at_vs15_boundaries() {
-        let s = break_links("https://a.b/c");
+        let s = vs15_sample();
         let spans = link_break_spans(&s, Style::default().fg(FG));
-        // 至少两段（VS15 前/后），相邻段样式必不相同（影子色交替）
-        assert!(spans.len() >= 2, "按 VS15 切段: {spans:?}");
+        // 两段（VS15 前/后，多字符段），相邻段样式必不相同（影子色交替）
+        assert_eq!(spans.len(), 2, "按 VS15 切段: {spans:?}");
         assert_ne!(spans[0].style.fg, spans[1].style.fg, "相邻段影子色交替");
+        assert_eq!(
+            spans[0].content, "ab\u{FE0E}",
+            "VS15 落在段末（pyte 零丢失）"
+        );
+        assert_eq!(spans[1].content, "cd");
         // 拼回内容 = 原文（分段零损失）
         let joined: String = spans.iter().map(|x| x.content.as_ref()).collect();
         assert_eq!(joined, s);
@@ -425,6 +427,61 @@ mod tests {
         let spans = link_break_spans("plain", Style::default().fg(FG));
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].content, "plain");
+    }
+
+    // -------------------------------------------------------------------
+    // v1.34 bug 修订：深度断链（break_links_deep）——详情 URL 行 + 字段值
+    // 弹窗内容共用（www 形态识别归一化后仍命中的终端补强）
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn break_links_deep_injects_vs15_after_every_char() {
+        let raw = "https://www.example.com/f.bin";
+        let deep = break_links_deep(raw);
+        // 每个字符后都有 VS15：不存在任何 ≥2 字符的连续裸串
+        assert!(!deep.contains("https"), "scheme 断: {deep:?}");
+        assert!(!deep.contains("://"), "scheme 分隔断: {deep:?}");
+        assert!(
+            !deep.contains("www"),
+            "www 前缀断（二批 bug 靶点）: {deep:?}"
+        );
+        assert!(!deep.contains("example"), "域名断: {deep:?}");
+        assert!(!deep.contains(".bin"), "路径断: {deep:?}");
+        // 逐字符剥离 VS15 还原原文（显示内容零改变）
+        let restored: String = deep.chars().filter(|&c| c != '\u{FE0E}').collect();
+        assert_eq!(restored, raw);
+        // 显示宽度不变（VS15 零宽）
+        assert_eq!(w(&deep), w(raw), "VS15 零宽：显示宽不变");
+        // wrap 折行结果不受注入影响（零宽透传）
+        assert_eq!(wrap_text(&deep, 40), vec![deep.clone()]);
+        // 空串透传
+        assert_eq!(break_links_deep(""), "");
+        // CJK 同样逐字断（弹窗可能展示中文错误文案等）
+        let zh = break_links_deep("失败原因");
+        assert_eq!(w(&zh), 8);
+        assert_eq!(zh.chars().filter(|&c| c == '\u{FE0E}').count(), 4);
+    }
+
+    /// 深度断链经 link_break_spans 渲染：逐字符分段、相邻段影子色交替、
+    /// 拼回 = 断链原文（pyte 兼容形态：VS15 恒在各段末尾）
+    #[test]
+    fn deep_break_renders_via_link_break_spans() {
+        let deep = break_links_deep("http://a.b");
+        let spans = link_break_spans(&deep, Style::default().fg(FG));
+        // 每字符一段（10 段），段内容 = 单字符 + VS15
+        assert_eq!(spans.len(), 10, "逐字符分段: {spans:?}");
+        for (i, sp) in spans.iter().enumerate() {
+            assert!(
+                sp.content.ends_with('\u{FE0E}') && sp.content.chars().count() == 2,
+                "段 {i} = 单字符+VS15: {sp:?}"
+            );
+        }
+        // 相邻段样式必不相同（影子色交替——crossterm 逐段输出 SGR 切换）
+        for w in spans.windows(2) {
+            assert_ne!(w[0].style.fg, w[1].style.fg);
+        }
+        let joined: String = spans.iter().map(|x| x.content.as_ref()).collect();
+        assert_eq!(joined, deep, "分段零损失");
     }
 
     // -------------------------------------------------------------------

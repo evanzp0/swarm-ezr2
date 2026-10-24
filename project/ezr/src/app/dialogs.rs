@@ -42,7 +42,7 @@ impl App {
             // v1.32：非 NONE 算法校验码必填——空提交被拒绝并聚焦校验码字段
             self.set_toast(format!("⚠ {algo} 校验码不可为空（需 {need} 位十六进制）"));
             if let Some(d) = self.dialog.as_mut() {
-                d.focus = ck_focus;
+                d.focus_field(ck_focus);
             }
             return None;
         }
@@ -57,7 +57,7 @@ impl App {
                 let algo = CHECKSUM_ALGOS[algo_idx].0;
                 self.set_toast(format!("⚠ {algo} {e}"));
                 if let Some(d) = self.dialog.as_mut() {
-                    d.focus = ck_focus;
+                    d.focus_field(ck_focus);
                 }
                 None
             }
@@ -376,6 +376,8 @@ impl App {
             proxy_sel: self.default_proxy_sel,
             proxy_open: false,
             focus: 0,
+            // 光标初始在 URL 字段尾（空字段 = 0）
+            cursor: 0,
             task_name: String::new(),
             task_id: None,
         });
@@ -433,6 +435,8 @@ impl App {
             proxy_sel,
             proxy_open: false,
             focus: 0,
+            // 光标初始在并字段尾（预填并发值字符串长度）
+            cursor: concurrency.to_string().chars().count(),
             task_name: name,
             task_id: Some(id),
         });
@@ -457,6 +461,7 @@ impl App {
             proxy_sel: 0,
             proxy_open: false,
             focus: 0,
+            cursor: 0, // Delete 对话框无文本字段，光标不消费
             task_name: t.name.clone(),
             task_id: None,
         });
@@ -532,6 +537,7 @@ mod add_dialog_flow_tests {
             proxy_sel: 0,
             proxy_open: false,
             focus: 7,
+            cursor: 0, // 测试夹具：非文本焦点（按钮）
             task_name: String::new(),
             task_id: None,
         });
@@ -582,6 +588,7 @@ mod add_dialog_flow_tests {
             proxy_sel: 0,
             proxy_open: false,
             focus: 7,
+            cursor: 0, // 测试夹具：非文本焦点（按钮）
             task_name: String::new(),
             task_id: None,
         });
@@ -633,6 +640,7 @@ mod add_dialog_flow_tests {
             proxy_sel: 0,
             proxy_open: false,
             focus: 7,
+            cursor: 0, // 测试夹具：非文本焦点（按钮）
             task_name: String::new(),
             task_id: None,
         });
@@ -696,6 +704,7 @@ mod add_dialog_flow_tests {
             proxy_sel: 0,
             proxy_open: false,
             focus: 7,
+            cursor: 0, // 测试夹具：非文本焦点（按钮）
             task_name: String::new(),
             task_id: None,
         });

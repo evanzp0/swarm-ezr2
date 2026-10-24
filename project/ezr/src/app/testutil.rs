@@ -23,6 +23,8 @@ pub(crate) fn dialog(kind: DialogKind, focus: usize) -> Dialog {
         proxy_sel: 0,
         proxy_open: false,
         focus,
+        // 夹具光标在 0（字段空 = 尾）；需光标语义的测试按场景显式置位
+        cursor: 0,
         task_name: String::new(),
         task_id: None,
     }

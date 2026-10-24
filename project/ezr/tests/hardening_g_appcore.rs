@@ -534,6 +534,7 @@ fn add_dialog(focus: usize, ck_open: bool) -> Dialog {
         proxy_sel: 0,
         proxy_open: false,
         focus,
+        cursor: 0, // 夹具：空字段光标在尾（0）
         task_name: String::new(),
         task_id: None,
     }

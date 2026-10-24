@@ -173,6 +173,11 @@ mod timefmt;
 // 挂载测试 crate 不消费 product re-export，unused 属机制固有告警）。
 // architect v116：ProxyConfig 零消费者，从 re-export 移除（死 API 面清理）
 pub use config::{ProxyChoice, ProxyEndpoint};
+// conn_transferring 为跨层共享谓词（v1.34 二批 bug 修订：连接级速度窗口在传
+// 判定单源——app/engine 数据面与展示面两形态共用；产品面直接具名消费，
+// 挂载测试 crate 同样直接 use task:: 路径不经此 re-export）
+#[allow(unused_imports)]
+pub(crate) use task::conn_transferring;
 // ConnPhase 为对外 API 面（v1.34/FR-01-96 ⑦ 活跃判定单源枚举；产品面经
 // Connection::conn_phase 消费不直接具名，挂载测试 crate 不经 re-export——
 // unused 属机制固有告警，同 ProxyChoice 处置）

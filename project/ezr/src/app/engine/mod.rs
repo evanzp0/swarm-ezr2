@@ -48,10 +48,11 @@ type ConnObs = (u32, u64);
 /// 连接级账本推进（FR-01-99 ②累计 + FR-01-102 数据面，App 消费侧计量）：
 /// 按 (任务, 连接) 跟踪 Progress 事件的块内 done 增量——同块 = 差值；
 /// 换块/首次观测 = 新块内已写字节（本轮下载内的落盘量）；累计量随增量累加。
-/// 在传连接（cap > 0 且未写满）的 1s 滑窗以连接级累计字节读数推进（每次事件 push，
-/// 任务级 SpeedWindow 同构，FR-01-102 ①）；展示面采样（每秒一次 + EMA）在 tick ⑤。
-/// 待命/空连接（cap = 0 或块已完成）不推进窗口（展示面零值速断，FR-01-102 ③）；
-/// 窗口端点老化（停传 > 1s：暂停恢复、块间隙）先清窗再推，速率只测最近 1s 增量。
+/// 在传连接（持块未写满，或流式单连接 done > 0）的 1s 滑窗以连接级累计字节读数
+/// 推进（每次事件 push，任务级 SpeedWindow 同构，FR-01-102 ①）；展示面采样
+/// （每秒一次 + EMA）在 tick ⑤。待命/空连接（cap = 0 且 done = 0，或块已完成）
+/// 不推进窗口（展示面零值速断，FR-01-102 ③）；窗口端点老化（停传 > 1s：暂停
+/// 恢复、块间隙）先清窗再推，速率只测最近 1s 增量。
 fn update_conn_stats(
     conn_prev: &mut HashMap<ConnKey, ConnObs>,
     conn_cum: &mut HashMap<ConnKey, u64>,
@@ -69,7 +70,11 @@ fn update_conn_stats(
         };
         conn_prev.insert(key, (c.block, c.done));
         let cap = c.end.saturating_sub(c.start);
-        let active = cap > 0 && c.done < cap;
+        // 在传判定（单源 [`crate::model::conn_transferring`]）：持块连接 =
+        // 未写满（done < cap）；流式单连接（FR-01-12 降级路径，无 Content-Length
+        // → cap = 0）= done > 0——速度窗口正常推进，并发面板明细/头部并发随
+        // ConnPhase 活跃口径同步显示。展示面采样（tick ⑤）同门消费
+        let active = crate::model::conn_transferring(cap, c.done);
         if delta > 0 {
             *conn_cum.entry(key).or_insert(0) += delta;
         }
@@ -1736,6 +1741,28 @@ mod conn_stats_tests {
         progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 1000)]).await;
         app.sample_conn_speed_display();
         assert_eq!(app.conn_speed_of(1, 1), 0.0, "在传 → 待命：精确归零无拖尾");
+        app.shutdown().await;
+    }
+
+    /// 流式单连接展示速度立起（v1.34 bug 修订回归靶）：不支持断点续传任务
+    /// 唯一下载线程（FR-01-12 降级，无 Content-Length → 视图 start = end = 0、
+    /// cap = 0，done = 已落盘字节）——原展示采样门 `cap > 0 && done < cap`
+    /// 漏流式臂，并发面板速度恒 0；在传判定与数据面收口单源
+    ///（conn_transferring）后窗口速率正常经 EMA 立起
+    #[tokio::test]
+    async fn streaming_conn_speed_rises_in_display_sampling() {
+        let mut app = make_app("stream");
+        app.tasks.push(seed(1, "s.bin", TaskState::Downloading));
+        // 流式连接视图：cap = 0（end − start = 0）、done = 已落盘字节
+        progress(&mut app, 1, vec![cv(1, 0, 0, 0, 100)]).await;
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        progress(&mut app, 1, vec![cv(1, 0, 0, 0, 400)]).await;
+        assert_eq!(app.conn_cum_of(1, 1), 400, "流式累计随 done 增量累加");
+        app.sample_conn_speed_display();
+        assert!(
+            app.conn_speed_of(1, 1) > 0.0,
+            "流式单连接展示速度非零（旧实现恒 0）"
+        );
         app.shutdown().await;
     }
 

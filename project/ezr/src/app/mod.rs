@@ -53,6 +53,7 @@ pub(crate) mod testutil;
 #[cfg(test)]
 pub(crate) use dialog_keys::{
     dropdown_open_key, proxy_dropdown_open_key, push_hex_capped, text_backspace, text_char,
+    text_field_at, TextField,
 };
 
 /// 每个任务在列表中占用的行高（3 行内容 + 1 行空行分隔）
@@ -267,6 +268,11 @@ pub struct Dialog {
     /// Modify: 0=并发 1=算法 2=校验码 3=代理 4=确定 5=取消
     /// Delete: 0=仅删除任务 1=删除任务和文件 2=取消
     pub focus: usize,
+    /// 文本字段光标（v1.34 二批 bug 修订：当前焦点文本字段内的**字符偏移**
+    /// 0..=字段长——方向键在输入框内移动光标不再跳焦点；输入/退格/粘贴均
+    /// 在光标处生效。约定：焦点切换随 [`Dialog::focus_field`] 把光标迁到新
+    /// 字段文本尾；非文本焦点（下拉行/按钮）不消费该值）
+    pub cursor: usize,
     /// Delete 用：待删除任务名
     pub task_name: String,
     /// Modify 用：待修改任务 id（None = Add/Delete）
