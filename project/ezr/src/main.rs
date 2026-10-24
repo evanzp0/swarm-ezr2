@@ -1,7 +1,8 @@
 //! main.rs — EZR Downloader 入口（01：HTTP/HTTPS 真实下载内核与 TUI 正式版）
 //!
 //! 职责：CLI 参数解析（FR-01-01）、单实例文件锁（FR-01-72）、配置加载、
-//! 终端初始化（raw mode + alternate screen + bracketed paste FR-01-06 + 鼠标捕获）、
+//! 终端初始化（raw mode + alternate screen + bracketed paste FR-01-06 +
+//! 鼠标捕获 + 光标闪烁请求（v1.34 三批：输入框原生光标））、
 //! tokio 事件循环（键盘/鼠标/粘贴事件流 + 100ms tick）、优雅退出（恢复终端 + 保存状态，FR-01-73）、
 //! 终端哨兵武装与退场（FR-01-84：异常死亡后终端自恢复，机制见 sentinel.rs）。
 //!
@@ -62,6 +63,21 @@ pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "-01");
 
 fn restore_terminal() {
     let _ = restore_into(&mut io::stdout());
+}
+
+/// TUI 进入序列的可测内核（v1.34 三批 bug 修订：追加 `EnableBlinking`——
+/// 输入框光标改用终端原生光标后，显式请求闪烁模式，光标可见性不再依赖
+/// 终端默认值；不支持的终端忽略之，还原端不需要对称关闭——离开备用屏
+/// 即恢复终端默认光标状态）。顺序即调用序：备用屏 → 鼠标捕获 →
+/// bracketed paste → 闪烁请求（相互独立，无栈顺序约束）。
+fn enter_tui_sequence<W: std::io::Write>(w: &mut W) -> std::io::Result<()> {
+    execute!(
+        w,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste,
+        crossterm::cursor::EnableBlinking
+    )
 }
 
 /// 终端复原的可测内核（v137）：接受任意 Write，测试以 `Vec<u8>` 断言
@@ -369,12 +385,7 @@ async fn run_tui(app: &mut App) -> std::io::Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    if let Err(e) = execute!(
-        stdout,
-        EnterAlternateScreen,
-        EnableMouseCapture,
-        EnableBracketedPaste
-    ) {
+    if let Err(e) = enter_tui_sequence(&mut stdout) {
         restore_terminal();
         return Err(e);
     }
@@ -569,6 +580,26 @@ mod cli_parse_tests {
         assert!(pos_url("-d").is_err()); // 旗标形状先于 URL 校验
         assert!(opt_conns(None).is_err());
         assert!(opt_speed(None).is_err());
+    }
+
+    /// v1.34 三批回归（输入框光标闪烁）：进入序列必须显式请求终端闪烁
+    /// 模式（`ESC[?12h`，crossterm 0.28.1 EnableBlinking）——输入框光标改
+    /// 用终端原生光标后，可见性/闪烁由终端承载，Alacritty 等默认稳态光标
+    /// 的终端需显式请求。锁定顺序即调用序：备用屏 → 鼠标捕获 →
+    /// bracketed paste → 闪烁请求。
+    #[test]
+    fn enter_tui_sequence_requests_blinking_after_screen_setup() {
+        let mut buf: Vec<u8> = Vec::new();
+        enter_tui_sequence(&mut buf).expect("进入序列写入 Vec<u8> 不应报错");
+        let s = String::from_utf8_lossy(&buf);
+        let enter_alt = s.find("\u{1b}[?1049h").expect("备用屏进入在位");
+        let mouse_on = s.find("\u{1b}[?1000h").expect("鼠标捕获启用在位");
+        let paste_on = s.find("\u{1b}[?2004h").expect("bracketed paste 启用在位");
+        let blink_on = s.find("\u{1b}[?12h").expect("光标闪烁请求在位");
+        assert!(
+            enter_alt < mouse_on && mouse_on < paste_on && paste_on < blink_on,
+            "进入序列顺序（屏→鼠标→paste→闪烁）: {s:?}"
+        );
     }
 
     /// v137 回归（退出后鼠标序列泄漏到 shell）：复原序列必须**最先**关闭

@@ -10,48 +10,73 @@ use super::btn::{clip_wide_at_edges, draw_button_row, draw_close_btn, overlay_re
 use super::delete::draw_delete_dialog;
 use super::text::{pad_right, truncate, w};
 use super::{panel_border_style, panel_title_style, ACCENT, DIM, DIM2, FG, YELLOW};
-use crate::app::{App, DialogKind};
+use crate::app::{App, DialogKind, FieldWin};
 use crate::model::checksum::checksum_dropdown;
 
-/// 字段行显示值：空值显示占位提示；超宽显示尾部（…+末尾字符，便于核对校验码结尾）
-fn field_display(val: &str, ph: &str, avail: usize) -> String {
-    if val.is_empty() {
-        truncate(ph, avail)
-    } else if w(val) > avail {
-        let keep = avail.saturating_sub(1);
-        format!(
-            "…{}",
-            val.chars()
-                .skip(val.chars().count() - keep)
-                .collect::<String>()
-        )
-    } else {
-        val.to_string()
-    }
-}
-
-/// 聚焦文本字段的光标显示（v1.34 二批 bug 修订）：返回 (光标前串, 光标后串)，
-/// 二者拼接 = 显示内容，「▏」光标字形渲染在两串之间（光标列随
-/// [`crate::app::Dialog::cursor`]——原恒缀尾）。显示宽 ≤ budget：
-/// - 空值：pre 空 + post = 占位提示截断（光标在 0 列，占位提示属 post）；
-/// - 值宽不超预算：整值显示，pre = 前 cursor 个字符；
-/// - 超宽：以光标为锚取窗（窗内恒含光标边界）——先向右取满预算、余量向左
-///   回退；裁剪侧加 … 指示（指示占列，预算扣减重取至不动点；budget < 3 时
-///   放弃指示符）。字符原子取窗（CJK 宽字符不切半列）。
-fn cursor_field_display(val: &str, ph: &str, budget: usize, cursor: usize) -> (String, String) {
+/// 字段行取窗与点击/光标映射单源（v1.34 三批 bug 修订：field_display 与
+/// cursor_field_display 两同构实现收口）。返回 (光标前段, 光标后段, 窗口几何)：
+/// 二段拼接 = 显示内容，取窗以锚点为准——
+/// - 聚焦：锚 = 光标（[`crate::app::Dialog::cursor`]），pre/post 在锚处切分，
+///   光标屏幕列 = 值区起点 + w(pre)，由调用方发布
+///   [`crate::app::App::dlg_cursor_screen`]（终端原生光标，移动零位移、可
+///   闪烁；原内联「▏」字形占列导致后续文本随光标整体平移，退役）；
+/// - 未聚焦：锚 = 字段尾（= 原 field_display 尾窗语义，宽度口径修正为
+///   CJK 原子不溢出），pre 恒空、post = 整窗。
+///
+/// 预算内整值显示；超宽以锚点取窗（先向右取满、余量向左回退；裁剪侧 …
+/// 指示占列，预算扣减重取至不动点；budget < 3 放弃指示符）；空值显示
+/// 占位提示（截断，窗口空：cols = [0]，点击任意处光标 0）。
+///
+/// FieldWin.cols/win_lo/win_hi = 点击列→字符偏移映射与光标定位共用几何。
+fn field_window(
+    val: &str,
+    ph: &str,
+    budget: usize,
+    cursor: usize,
+    focused: bool,
+) -> (String, String, FieldWin) {
     let budget = budget.max(1);
+    let mut win = FieldWin {
+        value_x: 0,
+        left_cut: false,
+        cols: Vec::new(),
+        win_lo: 0,
+        win_hi: 0,
+    };
+    // cols 累积列回填（字符宽度原子累加，末位 = 窗口总宽）
+    fn fill_cols(win: &mut FieldWin, widths: &[usize]) {
+        win.cols.push(0);
+        let mut acc = 0u16;
+        for &cw in widths {
+            acc += cw as u16;
+            win.cols.push(acc);
+        }
+    }
     if val.is_empty() {
-        return (String::new(), truncate(ph, budget));
+        win.cols.push(0);
+        return (String::new(), truncate(ph, budget), win);
     }
     let chars: Vec<char> = val.chars().collect();
     let widths: Vec<usize> = chars.iter().map(|c| w(&c.to_string())).collect();
     let total: usize = widths.iter().sum();
-    let cursor = cursor.min(chars.len());
+    let anchor = if focused {
+        cursor.min(chars.len())
+    } else {
+        chars.len()
+    };
     if total <= budget {
-        return (
-            chars[..cursor].iter().collect(),
-            chars[cursor..].iter().collect(),
-        );
+        win.win_lo = 0;
+        win.win_hi = chars.len();
+        fill_cols(&mut win, &widths);
+        return if focused {
+            (
+                chars[..anchor].iter().collect(),
+                chars[anchor..].iter().collect(),
+                win,
+            )
+        } else {
+            (String::new(), val.to_string(), win)
+        };
     }
     // 超宽取窗：两轮不动点（指示符占列 → 扣减预算重取，直至裁剪侧数稳定）
     let mut reserve = 0usize;
@@ -59,12 +84,12 @@ fn cursor_field_display(val: &str, ph: &str, budget: usize, cursor: usize) -> (S
         let b = budget.saturating_sub(reserve).max(1);
         // 向右取满，余量向左回退（字符原子：宽字符放不下整列则不取）
         let mut acc = 0usize;
-        let mut hi = cursor;
+        let mut hi = anchor;
         while hi < chars.len() && acc + widths[hi] <= b {
             acc += widths[hi];
             hi += 1;
         }
-        let mut lo = cursor;
+        let mut lo = anchor;
         while lo > 0 && acc + widths[lo - 1] <= b {
             lo -= 1;
             acc += widths[lo];
@@ -73,17 +98,33 @@ fn cursor_field_display(val: &str, ph: &str, budget: usize, cursor: usize) -> (S
         let right_cut = hi < chars.len();
         let need = usize::from(left_cut) + usize::from(right_cut);
         if need == reserve || budget < 3 {
-            let pre = if left_cut {
-                format!("…{}", chars[lo..cursor].iter().collect::<String>())
+            win.win_lo = lo;
+            win.win_hi = hi;
+            win.left_cut = left_cut;
+            fill_cols(&mut win, &widths[lo..hi]);
+            let pre = if focused {
+                if left_cut {
+                    format!("…{}", chars[lo..anchor].iter().collect::<String>())
+                } else {
+                    chars[lo..anchor].iter().collect()
+                }
+            } else if left_cut {
+                "…".to_string()
             } else {
-                chars[lo..cursor].iter().collect()
+                String::new()
             };
-            let post = if right_cut {
-                format!("{}…", chars[cursor..hi].iter().collect::<String>())
+            let post = if focused {
+                if right_cut {
+                    format!("{}…", chars[anchor..hi].iter().collect::<String>())
+                } else {
+                    chars[anchor..hi].iter().collect()
+                }
+            } else if right_cut {
+                format!("{}…", chars[lo..hi].iter().collect::<String>())
             } else {
-                chars[cursor..hi].iter().collect()
+                chars[lo..hi].iter().collect()
             };
-            return (pre, post);
+            return (pre, post, win);
         }
         reserve = need;
     }
@@ -235,6 +276,8 @@ pub(super) fn draw_dialogs(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(d) = app.dialog.as_ref() else { return };
     app.dlg_btn_rects.clear();
     app.dlg_field_rects.clear();
+    app.dlg_field_wins.clear();
+    app.dlg_cursor_screen = None;
     app.dlg_ck_rects.clear();
     app.dlg_proxy_rects.clear();
     match d.kind {
@@ -398,6 +441,10 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
             ),
             Span::styled("> ".to_string(), Style::default().fg(DIM2)),
         ];
+        // 文本行取窗单源（field_window）：聚焦/未聚焦同源；窗口几何与光标位
+        // 在 rect 求得后回填（字段热区平行表 + 原生光标屏幕位）
+        let mut text_win: Option<FieldWin> = None;
+        let mut pre_cols = 0u16;
         match row.kind {
             RowKind::CkSel => {
                 push_selector_spans(&mut spans, algo_name, focused);
@@ -408,38 +455,24 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
                 push_selector_spans(&mut spans, &proxy_label, focused);
             }
             RowKind::Text => {
+                // 原生光标渲染（v1.34 三批 bug 修订）：pre/post 在光标处
+                // 切分直接拼接显示（不再插入「▏」字形占列——后续文本不再
+                // 随光标移动平移），终端原生光标由 ui::draw 收口绘制
+                let (pre, post, win) =
+                    field_window(&row.value, &row.placeholder, avail, cursor, focused);
+                let base = Style::default().fg(if row.value.is_empty() {
+                    DIM2
+                } else {
+                    Color::White
+                });
                 if focused {
-                    // 光标编辑渲染（v1.34 二批 bug 修订）：「▏」落在字段内
-                    // 光标列（原恒缀尾）；超宽值以光标为锚取窗 + … 指示；
-                    // 预算 −1 列容纳光标字形（label 7 + "> " 2 + 值 + 字形
-                    // = avail，不溢出字段行 rect 右缘）
-                    let (pre, post) = cursor_field_display(
-                        &row.value,
-                        &row.placeholder,
-                        avail.saturating_sub(1),
-                        cursor,
-                    );
-                    let base = Style::default().fg(if row.value.is_empty() {
-                        DIM2
-                    } else {
-                        Color::White
-                    });
+                    pre_cols = w(&pre) as u16;
                     spans.push(Span::styled(pre, base));
-                    spans.push(Span::styled(
-                        "▏",
-                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-                    ));
                     spans.push(Span::styled(post, base));
                 } else {
-                    spans.push(Span::styled(
-                        field_display(&row.value, &row.placeholder, avail),
-                        Style::default().fg(if row.value.is_empty() {
-                            DIM2
-                        } else {
-                            Color::White
-                        }),
-                    ));
+                    spans.push(Span::styled(format!("{pre}{post}"), base));
                 }
+                text_win = Some(win);
             }
         }
         let rect = Rect {
@@ -450,8 +483,18 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
             height: 1,
         };
         f.render_widget(Paragraph::new(Line::from(spans)), rect);
-        // 回填字段行命中区域（鼠标点击聚焦；下拉行点击展开）
+        // 回填字段行命中区域（鼠标点击聚焦/定位光标；下拉行点击展开）与
+        // 文本字段窗口几何（点击列→字符偏移映射单源载荷；value_x = rect.x
+        // + label 7 列 + "> " 2 列）；聚焦行另发布原生光标屏幕位
+        let mut win = text_win.take();
+        if let Some(w0) = win.as_mut() {
+            w0.value_x = rect.x + 9;
+            if focused {
+                app.dlg_cursor_screen = Some((rect.x + 9 + pre_cols, row_y));
+            }
+        }
         app.dlg_field_rects.push((rect, i));
+        app.dlg_field_wins.push(win);
     }
 
     let n_rows = rows.len() as u16;
@@ -524,60 +567,95 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
 mod helper_tests {
     use super::*;
 
-    /// v1.34 二批：光标显示三态（不超宽/超宽取窗/空值占位）——拼接 = 显示
-    /// 内容、光标恒在窗内、CJK 原子不切半
+    /// v1.34 三批：field_window 单源取窗三态（不超宽/超宽取窗/空值占位）
+    /// ——聚焦/未聚焦锚点、拼接 = 显示内容、光标恒在窗内、CJK 原子不切半、
+    /// cols 累积列与窗口边界自洽
     #[test]
-    fn cursor_field_display_windows_and_splits() {
-        // 不超宽：整值显示，pre 宽 = 光标列
-        let (pre, post) = cursor_field_display("abcdef", "", 10, 2);
+    fn field_window_windows_and_splits() {
+        // 聚焦不超宽：整值显示，pre 宽 = 光标列，窗口 = 全值
+        let (pre, post, win) = field_window("abcdef", "", 10, 2, true);
         assert_eq!(pre, "ab");
         assert_eq!(post, "cdef");
         assert_eq!(w(&pre) + w(&post), 6);
-        // 超宽（预算 6，值宽 16）：光标 8 为锚 → 窗内含光标、双缘 … 指示
+        assert_eq!(win.win_lo, 0);
+        assert_eq!(win.win_hi, 6);
+        assert!(!win.left_cut);
+        assert_eq!(win.cols, vec![0, 1, 2, 3, 4, 5, 6], "累积列含末位总宽");
+        // 未聚焦同值：锚在字段尾 → 整窗、pre 恒空
+        let (pre, post, win) = field_window("abcdef", "", 10, 0, false);
+        assert!(pre.is_empty() && post == "abcdef");
+        assert_eq!((win.win_lo, win.win_hi), (0, 6));
+        // 聚焦超宽（预算 6，值宽 16）：光标 8 为锚 → 窗内含光标、双缘 … 指示
         let val = "abcdefghijklmnop";
-        let (pre, post) = cursor_field_display(val, "", 6, 8);
+        let (pre, post, win) = field_window(val, "", 6, 8, true);
         assert!(
             pre.starts_with('…') && post.ends_with('…'),
             "双缘裁剪指示: {pre}|{post}"
         );
         assert_eq!(w(&pre) + w(&post), 6, "总宽 = 预算");
+        assert!(win.left_cut, "左缘裁剪指示发布");
+        assert_eq!(
+            win.cols.len(),
+            win.win_hi - win.win_lo + 1,
+            "cols = 窗内字符数 + 1"
+        );
         // 光标可见性：pre+post 还原后含 val[8]（'i'），且非占位空窗
         let joined = format!("{pre}{post}");
         assert!(joined.contains('i'), "窗内含光标字符: {joined}");
         // 光标在尾：窗贴右（无尾部 …）
-        let (pre, post) = cursor_field_display(val, "", 6, 16);
+        let (pre, post, win) = field_window(val, "", 6, 16, true);
         assert!(!post.ends_with('…'), "光标在尾右缘不裁: {pre}|{post}");
         assert!(pre.starts_with('…'));
+        assert_eq!(win.win_hi, 16);
         // 光标在 0：窗贴左（无首部 …）
-        let (pre, post) = cursor_field_display(val, "", 6, 0);
+        let (pre, post, win) = field_window(val, "", 6, 0, true);
         assert!(!pre.starts_with('…'), "光标在首左缘不裁: {pre}|{post}");
         assert!(post.ends_with('…'));
+        assert_eq!(win.win_lo, 0);
         // CJK 原子：宽 4 预算 3 → 单汉字 2 列可取，不切半
-        let (pre, post) = cursor_field_display("中文中文", "", 3, 4);
+        let (pre, post, _win) = field_window("中文中文", "", 3, 4, true);
         assert_eq!(
             w(&pre) + w(&post),
             3,
             "CJK 原子取窗（汉字 2 列 + … 1 列 = 预算）: {pre}|{post}"
         );
-        // 空值：占位提示在 post（光标 0 列在占位提示之前）
-        let (pre, post) = cursor_field_display("", "4", 6, 0);
+        // CJK cols 累积：宽字符占 2 列
+        let (_, _, win) = field_window("中文", "", 10, 2, true);
+        assert_eq!(win.cols, vec![0, 2, 4], "CJK 宽字符累积列");
+        // 未聚焦超宽：尾窗语义（= 原 field_display：… + 预算内尾部）——
+        // 指示符在 pre、窗口内容在 post，拼接 = 原显示形态
+        let (pre, post, win) = field_window("abcdef1234567890", "", 6, 0, false);
+        assert_eq!(pre, "…");
+        assert_eq!(post, "67890");
+        assert_eq!((win.win_lo, win.win_hi), (11, 16));
+        assert!(win.left_cut);
+        // 未聚焦超宽 CJK：宽度口径（原 field_display 按字符数计会溢出）——
+        // 预算 6 尾窗取 2 个汉字（宽 4 + … 1 = 5 ≤ 6），不取第 3 个
+        let (pre, post, win) = field_window("一二三四五", "", 6, 0, false);
+        assert_eq!(pre, "…");
+        assert_eq!(post, "四五", "CJK 原子尾窗: {pre}{post}");
+        assert_eq!((win.win_lo, win.win_hi), (3, 5));
+        // 空值：占位提示在 post（光标 0 列在占位提示之前），窗口空 cols = [0]
+        let (pre, post, win) = field_window("", "4", 6, 0, true);
         assert!(pre.is_empty() && post == "4");
+        assert_eq!(win.cols, vec![0]);
+        assert_eq!((win.win_lo, win.win_hi), (0, 0));
         // 光标越界钳制（陈旧偏移防御）：按字段长取尾
-        let (pre, post) = cursor_field_display("abc", "", 10, 99);
+        let (pre, post, win) = field_window("abc", "", 10, 99, true);
         assert_eq!(pre, "abc");
         assert!(post.is_empty());
+        assert_eq!(win.win_hi, 3);
     }
 
     #[test]
-    fn field_display_empty_long_and_normal() {
-        assert_eq!(field_display("", "占位提示", 20), truncate("占位提示", 20));
-        // 超宽：尾部省略（… + 末尾 keep 个字符）
-        let long = "abcdef1234567890";
-        let shown = field_display(long, "", 6);
-        assert!(shown.starts_with('…'));
-        assert!(shown.contains("890"));
-        // 正常宽度：原样
-        assert_eq!(field_display("abc", "", 6), "abc");
+    fn field_window_unfocused_placeholder_and_normal() {
+        // 未聚焦空值：占位提示整窗
+        let (pre, post, _) = field_window("", "占位提示", 20, 0, false);
+        assert!(pre.is_empty());
+        assert_eq!(post, truncate("占位提示", 20));
+        // 未聚焦正常宽度：原样
+        let (pre, post, _) = field_window("abc", "", 6, 0, false);
+        assert!(pre.is_empty() && post == "abc");
     }
 
     #[test]
@@ -670,11 +748,60 @@ mod helper_tests {
 mod tests {
     //! v133/D38 对话框拖拽渲染：首帧居中并记忆（dlg_pos/dlg_area 回填）、
     //! 拖拽位置优先渲染与终端钳制（位置记忆保留原始拖拽点，绘制矩形钳制）。
+    //! v1.34 三批：原生光标渲染集成（字形退役 / 光标屏幕位 / TestBackend
+    //! 收到 set_cursor_position / 窗口几何回填）。
 
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
     use super::super::testfx;
+
+    /// v1.34 三批：原生光标渲染集成——①无内联「▏」字形（后续文本不因
+    /// 光标存在平移）；②聚焦文本行发布光标屏幕位（值区起点 + pre 宽）；
+    /// ③Terminal 收口把光标位下发后端（TestBackend 可读回）；④字段窗口
+    /// 几何与热区平行回填（点击映射单源载荷在位）
+    #[tokio::test]
+    async fn dialog_native_cursor_published_and_positioned() {
+        let mut app = testfx::make_app_in("ezr-dlgcur", "cur");
+        app.open_add_dialog();
+        {
+            let d = app.dialog.as_mut().unwrap();
+            d.url = "https://ezr.dev/".to_string(); // 16 字符
+            d.focus_field(0);
+            d.cursor = 8; // "https://|ezr.dev/"
+        }
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        // 120×40：dlg=(23,14,74,12)、inner=(24,15,72,10)；URL 行 y=16、
+        // rect.x=26、值区起点 x=35；pre="https://" 宽 8 → 光标列 43
+        assert_eq!(
+            app.dlg_cursor_screen,
+            Some((43, 16)),
+            "聚焦文本行光标屏幕位（值区起点 + pre 宽）"
+        );
+        let pos = term.get_cursor_position().unwrap();
+        assert_eq!(
+            (pos.x, pos.y),
+            (43, 16),
+            "Terminal 收口把原生光标位下发后端"
+        );
+        // 字形退役：整屏无「▏」；文本原样显示（光标不占列）
+        let s = term.backend().to_string();
+        assert!(!s.contains('▏'), "内联字形光标退役: {s}");
+        assert!(s.contains("https://ezr.dev/"), "URL 原样显示: {s}");
+        // 窗口几何回填：URL 行 win 在位且 value_x = 35（点击映射单源载荷）
+        let win = app.dlg_field_wins[0].as_ref().expect("文本行 win 回填");
+        assert_eq!(win.value_x, 35);
+        assert_eq!((win.win_lo, win.win_hi), (0, 16));
+        assert_eq!(win.cols.last().copied(), Some(16), "cols 末位 = 窗口总宽");
+        // 非文本行 win = None（校验 = 行 3、代理 = 行 5）
+        assert!(app.dlg_field_wins[3].is_none(), "下拉行无窗口几何");
+        // 光标移动到中段：屏幕位随动（零位移——显示内容不变，仅光标位变）
+        app.dialog.as_mut().unwrap().cursor = 2;
+        term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        assert_eq!(app.dlg_cursor_screen, Some((37, 16)), "光标列随 cursor");
+        app.shutdown().await;
+    }
 
     #[tokio::test]
     async fn dialog_first_frame_centers_and_backfills() {

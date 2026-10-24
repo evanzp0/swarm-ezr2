@@ -5,8 +5,30 @@ use std::time::Instant;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
-use super::{App, DialogKind, Panel, SbKey, ITEM_HEIGHT};
+use super::{App, DialogKind, FieldWin, Panel, SbKey, ITEM_HEIGHT};
 use crate::model::checksum::CK_NONE;
+
+/// 点击列 → 字段文本字符偏移（v1.34 三批 bug 修订：鼠标点击在点击处落
+/// 光标——映射单源 = 渲染层发布的 [`FieldWin`] 累积列，与显示取窗同源，
+/// 不在鼠标层重算宽度）。rel = 点击列 − 值区起点（左缘 … 指示占列扣减）；
+/// cols 半开区间 (cols[k], cols[k+1]) 定位字符：落宽字符左半格 = 光标在
+/// 其前、右半格 = 在其后（终端鼠标以格为单位，两侧半格分置惯例）；
+/// rel ≤ 0 → 窗口首（win_lo）；越过窗口末（含尾部 … 指示/右侧 padding）
+/// → win_hi；空字段（cols = [0]）恒 0。
+fn click_cursor_offset(win: &FieldWin, col: u16) -> usize {
+    let rel = col
+        .saturating_sub(win.value_x)
+        .saturating_sub(u16::from(win.left_cut));
+    let mut k = 0usize;
+    while k + 1 < win.cols.len() {
+        let (lo_c, hi_c) = (win.cols[k], win.cols[k + 1]);
+        if rel >= lo_c && rel < hi_c {
+            return win.win_lo + k + usize::from(rel > lo_c);
+        }
+        k += 1;
+    }
+    win.win_hi
+}
 
 impl App {
     /// 鼠标事件入口（architect v116：分发核保持行为拆分——对话框态与主界面
@@ -349,6 +371,12 @@ impl App {
                     // 焦点切换单源（focus_field）：光标随迁字段尾（点击聚焦
                     // 惯例；命中下拉行时随后展开下拉覆盖）
                     d.focus_field(i);
+                    // v1.34 三批 bug 修订：文本字段点击 = 光标落点击处
+                    //（渲染层窗口几何在位时列→字符偏移映射；非文本行
+                    // win=None → 维持 focus_field 迁尾语义）
+                    if let Some(win) = self.dlg_field_wins.get(i).and_then(|w| w.as_ref()) {
+                        d.cursor = click_cursor_offset(win, m.column);
+                    }
                     if i == ck_i {
                         d.ck_open = true;
                         d.ck_sel = d.ck_type;
@@ -789,6 +817,133 @@ mod mouse_tests {
 
     fn dlg(kind: DialogKind, focus: usize) -> super::super::Dialog {
         crate::app::testutil::dialog(kind, focus)
+    }
+
+    /// v1.34 三批：点击列 → 字符偏移映射（渲染层 FieldWin 累积列单源）——
+    /// 逐字符定位、宽字符左右半格分置、越界钳制窗口首/尾、左缘 … 指示
+    /// 扣减、空字段恒 0
+    #[test]
+    fn click_cursor_offset_maps_columns_to_char_indices() {
+        // 窄字符 3 个（cols 末位 = 窗口总宽 3）
+        let narrow = FieldWin {
+            value_x: 35,
+            left_cut: false,
+            cols: vec![0, 1, 2, 3],
+            win_lo: 0,
+            win_hi: 3,
+        };
+        assert_eq!(click_cursor_offset(&narrow, 35), 0, "首字符列 → 前");
+        assert_eq!(click_cursor_offset(&narrow, 36), 1, "第 2 字符列 → 前");
+        assert_eq!(click_cursor_offset(&narrow, 37), 2, "第 3 字符列 → 前");
+        assert_eq!(click_cursor_offset(&narrow, 38), 3, "越末 → win_hi");
+        assert_eq!(click_cursor_offset(&narrow, 60), 3, "右侧 padding → win_hi");
+        assert_eq!(click_cursor_offset(&narrow, 34), 0, "label 区 → 窗口首");
+        // CJK 宽字符（cols [0,2,4]）：左半格 = 前、右半格 = 后
+        let wide = FieldWin {
+            value_x: 35,
+            left_cut: false,
+            cols: vec![0, 2, 4],
+            win_lo: 0,
+            win_hi: 2,
+        };
+        assert_eq!(click_cursor_offset(&wide, 35), 0, "宽字左半格 → 其前");
+        assert_eq!(click_cursor_offset(&wide, 36), 1, "宽字右半格 → 其后");
+        assert_eq!(click_cursor_offset(&wide, 37), 1, "第 2 宽字左半格 → 其前");
+        // 超宽尾窗（左缘 … 指示占 1 列扣减；win_lo = 7）
+        let cut = FieldWin {
+            value_x: 35,
+            left_cut: true,
+            cols: vec![0, 1, 2, 3],
+            win_lo: 7,
+            win_hi: 10,
+        };
+        assert_eq!(click_cursor_offset(&cut, 35), 7, "… 指示列 → 窗口首");
+        assert_eq!(click_cursor_offset(&cut, 36), 7, "窗口首字符列");
+        assert_eq!(click_cursor_offset(&cut, 37), 8, "第 2 可见字符列 → 7+1");
+        // 空字段（占位提示，cols = [0]）：任意点击 → 0
+        let empty = FieldWin {
+            value_x: 35,
+            left_cut: false,
+            cols: vec![0],
+            win_lo: 0,
+            win_hi: 0,
+        };
+        assert_eq!(click_cursor_offset(&empty, 35), 0, "空字段 → 0");
+        assert_eq!(click_cursor_offset(&empty, 50), 0, "空字段任意列 → 0");
+    }
+
+    /// v1.34 三批：对话框文本字段点击 = 聚焦 + 光标落点击处（列 → 字符
+    /// 映射消费渲染层发布的窗口几何）；非文本行（win=None）维持
+    /// focus_field 迁尾语义；字段热区夹具形态 = 120×40 真实帧回填几何
+    #[tokio::test]
+    async fn dialog_field_click_positions_cursor() {
+        let mut app = make_app("dlgcur");
+        app.dialog = Some(dlg(DialogKind::Add, 2));
+        {
+            let d = app.dialog.as_mut().unwrap();
+            d.url = "https://example.com/path".to_string(); // 24 字符
+            d.conns = "4".to_string();
+            d.focus_field(2); // 焦点先在并发（光标随迁 conns 尾 = 1）
+        }
+        // 渲染层每帧回填形态（dlg_field_wins 与行下标对齐；非文本行 None）
+        let win_url = FieldWin {
+            value_x: 35,
+            left_cut: false,
+            cols: (0..=24).collect(),
+            win_lo: 0,
+            win_hi: 24,
+        };
+        let win_conns = FieldWin {
+            value_x: 35,
+            left_cut: false,
+            cols: vec![0, 1],
+            win_lo: 0,
+            win_hi: 1,
+        };
+        app.dlg_field_wins = vec![
+            Some(win_url),   // 0 URL
+            None,            // 1 保存到
+            Some(win_conns), // 2 并发
+            None,            // 3 校验
+            None,            // 4 校验码
+            None,            // 5 代理
+        ];
+        app.dlg_field_rects = vec![
+            (
+                Rect {
+                    x: 26,
+                    y: 16,
+                    width: 68,
+                    height: 1,
+                },
+                0,
+            ),
+            (
+                Rect {
+                    x: 26,
+                    y: 18,
+                    width: 68,
+                    height: 1,
+                },
+                2,
+            ),
+        ];
+
+        // 点击 URL 值第 5 字符列（"https" 之后）→ 聚焦 URL + 光标 5
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 40, 16));
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.focus, 0, "点击聚焦 URL 行");
+        assert_eq!(d.cursor, 5, "光标落点击列对应字符偏移（: 前）");
+
+        // 点击 URL 值区右侧 padding → 光标钳到字段尾
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 90, 16));
+        assert_eq!(app.dialog.as_ref().unwrap().cursor, 24, "越末 → 字段尾");
+
+        // 点击并发行值区首列（未聚焦字段）→ 聚焦 + 光标落点击处（0）
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 35, 18));
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.focus, 2, "点击聚焦并发行");
+        assert_eq!(d.cursor, 0, "点击处映射覆盖迁尾（值首列 = 0）");
     }
 
     /// FR-01-101：详情字段名点击复制——URL/校验热区命中（toast 文案照录 demo 原文、

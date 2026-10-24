@@ -167,6 +167,10 @@ pub(super) fn bordered_block(fg: Color) -> Block<'static> {
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
+    // 原生光标屏幕位每帧重建（v1.34 三批 bug 修订：仅当帧内聚焦文本字段
+    // 渲染时回填；未回填 = 不调用 set_cursor_position = Terminal 每帧收尾
+    // 自动隐藏光标）
+    app.dlg_cursor_screen = None;
     // v1.32/FR-01-109：滚动条命中几何每帧重建——先清空、渲染时按显示条件
     // 收口回填（未绘制的实例本帧不可命中，杜绝陈旧几何误导命中测试）
     app.list_scrollbar = None;
@@ -264,6 +268,22 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // 点击详情面板字段值打开，模态：打开时底层面板暗框）
     if app.val_open {
         draw_val_popup(f, app, area);
+    }
+
+    // 原生终端光标收口（v1.34 三批 bug 修订）：对话框为顶层浮层且聚焦在
+    // 文本字段时，在对话框渲染层发布的屏幕位画终端原生光标——标准输入框
+    // 光标形态：移动零位移（无内联字形占列）、终端自身闪烁（启动序列已
+    // 显式 EnableBlinking）；更高浮层（pieces/help/about/val）在位时不画
+    //（光标屏位属屏幕坐标，不随图层遮挡消失，须按 z 序门控）
+    if app.dialog.is_some()
+        && !app.pieces_open
+        && !app.help_open
+        && !app.about_open
+        && !app.val_open
+    {
+        if let Some((x, y)) = app.dlg_cursor_screen {
+            f.set_cursor_position(ratatui::layout::Position { x, y });
+        }
     }
 }
 

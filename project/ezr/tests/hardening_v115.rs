@@ -110,8 +110,8 @@ fn app_with_add_dialog() -> (App, std::path::PathBuf) {
 /// 120×40 终端：Add 对话框 dlg=(23,14,74,12)，inner=(24,15,72,10)，
 /// avail = 72-12 = 60。URL 值显示宽度恰为 60 时必须走"原样显示"分支
 /// （`w(val) > avail` 为假）；`>=` 变异体会改走尾部省略分支（首字符变 …）。
-/// v1.34 二批（光标渲染）：聚焦行显示面改光标锚定窗（预算 −1 容光标字形），
-/// field_display 恰宽边界靶点改经未聚焦行触发（焦点移至校验行）。
+/// v1.34 三批（field_window 单源收口）：聚焦/未聚焦同源取窗，恰宽边界
+/// 靶点经未聚焦行触发（锚 = 字段尾尾窗，口径不变）。
 #[tokio::test]
 async fn field_display_exact_width_shows_full_value() {
     let (mut a, reg) = app_with_add_dialog();
@@ -171,7 +171,8 @@ async fn add_dialog_below_min_width_renders_nothing() {
 /// 120×40：v1.34 对话框 74×12（FR-01-115④ 底部补齐 1 行）→ inner=(24,15,72,10)。
 /// 六行的 y 恰为 inner.y+1+i：URL=16、保存到=17、并发=18、校验=19、校验码=20、
 /// 代理=21；行 rect.x 恰为 inner.x+2=26（S2 内容区左 2 列）；焦点在 URL（i=0）
-/// → 仅该行有光标 ▏。
+/// → 原生光标屏幕位（v1.34 三批：内联「▏」字形退役——字形占列导致后续
+/// 文本随光标移动平移；光标位 = rect.x+9+pre 宽，URL 空 = 35 列、行 y=16）。
 #[tokio::test]
 async fn add_dialog_field_rows_exact_geometry() {
     let (mut a, reg) = app_with_add_dialog();
@@ -187,11 +188,18 @@ async fn add_dialog_field_rows_exact_geometry() {
     );
     // 行首列：label 从 x=26 起（mutant x=inner.x*1=24 / inner.x+1=25 皆错位）
     assert_eq!(cell(&buf, 26, 16), "U", "URL label 首字符恰在 x=26");
-    // 焦点光标：URL 行有 ▏，并发行没有
-    assert!(row_text(&buf, 16, 120).contains('▏'), "焦点行（URL）有光标");
-    assert!(
-        !row_text(&buf, 18, 120).contains('▏'),
-        "非焦点行（并发）无光标"
+    // 原生光标（v1.34 三批）：字形退役——任何行不得再现内联「▏」；
+    // 聚焦 URL（空值）光标屏幕位 = 值区起点 26+9=35 列、行 16
+    for y in 14..26 {
+        assert!(
+            !row_text(&buf, y, 120).contains('▏'),
+            "内联字形光标已退役（行 {y}）"
+        );
+    }
+    assert_eq!(
+        a.dlg_cursor_screen,
+        Some((35, 16)),
+        "聚焦文本字段原生光标屏幕位（值区起点）"
     );
     a.shutdown().await;
     let _ = std::fs::remove_file(&reg);

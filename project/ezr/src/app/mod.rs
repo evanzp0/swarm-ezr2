@@ -239,6 +239,27 @@ pub enum DialogKind {
     Modify,
 }
 
+/// 对话框文本字段窗口几何（v1.34 三批 bug 修订：原生终端光标 + 鼠标点击
+/// 定位光标的映射单源载荷。ui 层每帧随 [`App::dlg_field_rects`] 平行回填，
+/// 鼠标层 [`crate::app::mouse`] 消费——点击列 → 字符偏移不经宽度重算，
+/// 与渲染显示取窗同源，杜绝双实现漂移）
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldWin {
+    /// 值区起始屏幕列（字段行 rect.x + label 7 列 + "> " 2 列）
+    pub value_x: u16,
+    /// 左缘裁剪指示（true = 值区首列是 … 指示符，点击映射扣 1 列）
+    pub left_cut: bool,
+    /// 可见字符的累积显示列半开边界（cols[0] = 0；cols[k+1] = cols[k] +
+    /// 第 k 个可见字符显示宽；末位 = 窗口总宽）——点击列按 (cols[k],
+    /// cols[k+1]) 半开区间定位：落宽字符左半格 = 光标在其前、右半格 =
+    /// 在其后（终端鼠标以格为单位的惯例语义）；越界钳制窗口首/尾
+    pub cols: Vec<u16>,
+    /// 可见窗口首字符在字段文本中的字符下标
+    pub win_lo: usize,
+    /// 可见窗口尾字符下标（不含）
+    pub win_hi: usize,
+}
+
 /// 对话框状态（结构沿用 demo 定稿）
 pub struct Dialog {
     /// 对话框种类
@@ -483,6 +504,14 @@ pub struct App {
     pub dlg_btn_rects: Vec<(Rect, usize)>,
     /// 对话框输入/选择行可点击区域（ui 层每帧回填）
     pub dlg_field_rects: Vec<(Rect, usize)>,
+    /// 文本字段窗口几何（v1.34 三批 bug 修订；与 `dlg_field_rects` 平行：
+    /// 每行一个，非文本行为 None；ui 层每帧回填，鼠标点击定位光标消费）
+    pub dlg_field_wins: Vec<Option<FieldWin>>,
+    /// 聚焦文本字段的原生光标屏幕位（v1.34 三批 bug 修订：内联字形光标
+    /// 退役后由终端原生光标承载——移动零位移、可闪烁；ui 层每帧回填，
+    /// ui::draw 收口按 z 序经 `Frame::set_cursor_position` 画光标；
+    /// None = 本帧无文本字段焦点或弹窗不在顶层）
+    pub dlg_cursor_screen: Option<(u16, u16)>,
     /// 校验算法下拉框选项可点击区域（ui 层每帧回填）
     pub dlg_ck_rects: Vec<(Rect, usize)>,
     /// 代理下拉选项命中区域（v1.5/FR-01-86；鼠标点击选择）
@@ -609,6 +638,8 @@ impl App {
             dialog: None,
             dlg_btn_rects: Vec::new(),
             dlg_field_rects: Vec::new(),
+            dlg_field_wins: Vec::new(),
+            dlg_cursor_screen: None,
             dlg_ck_rects: Vec::new(),
             dlg_proxy_rects: Vec::new(),
             dlg_area: None,
