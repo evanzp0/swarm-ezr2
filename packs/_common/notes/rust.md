@@ -388,7 +388,11 @@ group_imports = "StdExternalCrate"
   多份拷贝时报告只列部分配对（实测 16 份相同拷贝只报 2 对），"几处重复"以独立 grep 计数
   为准；② **Rust 词法器在 `/* */` 块注释内遇全角字符报 Lexical error（exit 5）**，
   `//` 行注释免疫——Rust 代码注释一律用行注释可保 CPD 可跑；exit 5（词法失败）与
-  exit 4（发现重复）语义不同，先看 `[ERROR]` 行再读结果。
+  exit 4（发现重复）语义不同，先看 `[ERROR]` 行再读结果；③ **XML 渲染器需要
+  xmlresolver jar**（Saxon-HE 12 的传递依赖，`-f xml` 报
+  `ClassNotFoundException: org.xmlresolver.Resolver` 且输出文件 0 字节）——
+  最小 jar 集组装时补 `org.xmlresolver:xmlresolver`（或直接用默认文本渲染器，
+  其行号/文件清单同样完整，无需额外依赖）。
 - **lint 姿态块去重：宏/include! 提取是死路，正确路径是「验证冗余 → 删除 → 单源 crate 根」**：
   模块级 `#![allow(...)]` 姿态块多拷贝时，提取共享文件的两条路都不可行——`include!()` 与
   `macro_rules!` 均不能拼接内部属性（探针实证：两者都报 "an inner attribute is not
@@ -884,6 +888,13 @@ group_imports = "StdExternalCrate"
   函数的具数据覆盖（不再是 NO_DA 型）——NO_DA 口径随环境漂移，对账时先探 fixture 源文件
   是否出现在 lcov 且 DA>0，再归因解析器或代码；测试 crate 自由函数（tests/ 下的 mock
   helper，不在 *_tests 模块内）是否计入门禁也属口径选择，跨轮登记口径要写明。
+  **FN 记录收集还有三处解析器边界**（v150 cleaner 轮实证）：① 同一起始行可同时存在
+  **闭包 FN 与具名 FN 记录**（`_RNC…` 与 `_RNv…`）——按「行 → 名」字典去重会让先出现的
+  闭包挤掉具名记录（表象：具名函数消失、其数据被并入前一函数跨距）；FN 记录用
+  (行, 名) 集合存储，闭包判别（`_RNC` 前缀）后置；② **泛型实例化副本**（`_RI…` 前缀）
+  与本体同起始行——不去重会产生零宽跨距的假 NO_DA 行；按起始行归并、FNDA 跨副本取
+  max；③ 被门禁排除的**测试模块函数仍须保留为跨距边界**（它们物理上位于产品代码之后，
+  剔出边界会让最后一个产品函数吞掉整个测试模块的 DA/BRDA，comp/cov 双双虚高）。
 
 - **保持行为的机械等价改造可让既有惯用样板跨过 CPD 阈值形成新 tile**：提取/内联/移动不改
   变重复逻辑本身，但行号漂移会让某组样板行与另一文件的既有样板恰好凑足
@@ -975,5 +986,5 @@ group_imports = "StdExternalCrate"
 - **crossterm 0.28 带超时 `event::poll` 的 `Ok(false)` 是混合语义：锁竞争失败 ≠ 队列空**（v150 coder 轮实证）：poll 先 `try_lock_internal_event_reader_for(timeout)`，EventStream 常驻后台线程在 `poll_internal(None, …)` 中持锁阻塞等事件、其 Drop 只置 shutdown 标志不 join——restore/drain 首轮 poll(0) 撞锁尾巴立即 Ok(false)，消费循环误判队列空直接退出，已排队字节原样留给继承 tty 的 shell 回显成乱码。drain 类循环 poll 预算至少 5ms（先等到锁再按队列真实状态判定），且按「是否消费到事件」返回 bool 供上层决定是否追加窗口。
 - **TUI 退出收尾的正确顺序：鼠标关最先 → settle 窗口 → drain → raw 关 → 其余关**（v150 coder 轮实证，`^[[<35;58;18M` 退出后 shell 乱码根治）：disable 序列 flush 后终端模拟器**异步**处理，处理完成前 1003 any-event 仍持续生成 motion 字节——「先 drain 后关鼠标」对该生成窗口无能为力（窗口内新字节排队在 tty 队列，进程退出即泄漏）。正确序：`DisableMouseCapture` flush → sleep ~50ms → drain → `disable_raw_mode` → 其余关闭命令。两条硬约束：① drain 必须在 raw mode 仍开启时做（canonical 模式下无换行的鼠标序列被内核 line discipline 攒行等 EOL，poll 永远 false、read 永远拿不到）；② 错误容忍——复原路径两段 execute! 都执行（前段失败不跳过后续关闭），按序上报首个 Err。哨兵/父死路径**不要** drain：与已恢复的 shell 竞争读队列会吞用户键入。
 - **TimedWriter：给字节流测试加时间戳以锁定「顺序 × 时序」复合契约**（v150 coder 轮实证）：`impl Write for 探针 Writer`，每次 `write` 记录 `(start.elapsed(), 内容)`——同一份字节流同时断言字节序（内容 find 比大小）与相对窗口时序（鼠标关 < 45ms < paste/alt 关，睡眠保证 ≥50ms 取 45ms 容差）。比「分开测顺序 + 信任 sleep」强：任何把 settle 挪到鼠标关之前/之后的回退即刻红，且无需真实终端（Vec 语境 poll 报错即无事件路径）。
-- **沙箱内 rustup 会卡网络解析，用环境变量直指工具链**（v150 coder 轮实证）：`rustup toolchain list` 等命令在受限沙箱可无限挂起（rsproxy 不可达时不快速失败）；绕过 `rust-toolchain.toml` 解析直接 `export RUSTUP_TOOLCHAIN=nightly-x86_64-unknown-linux-gnu`（工具链已在 `~/.rustup/toolchains/`）+ `PATH=$HOME/.cargo/bin:$PATH`，cargo/rustfmt/clippy 全部立即可用，无需等 rustup。
+- **沙箱内 rustup 会卡网络解析，用环境变量直指工具链**（v150 coder 轮实证）：`rustup toolchain list` 等命令在受限沙箱可无限挂起（rsproxy 不可达时不快速失败）；绕过 `rust-toolchain.toml` 解析直接 `export RUSTUP_TOOLCHAIN=nightly-x86_64-unknown-linux-gnu`（工具链已在 `~/.rustup/toolchains/`）+ `PATH=$HOME/.cargo/bin:$PATH`，cargo/rustfmt/clippy 全部立即可用，无需等 rustup。**`rustup component add` 同样必须每次带镜像环境变量**（`RUSTUP_DIST_SERVER`/`RUSTUP_UPDATE_ROOT`）：env 不跨调用持久，重开 shell 后裸调 `rustup component add` 会静默走官方源挂起（表象：超时零输出、llvm-tools 未落盘），带镜像重试即成——判别探针：`ls ~/.rustup/toolchains/<tc>/lib/rustlib/x86_64-unknown-linux-gnu/bin/` 有无 `llvm-cov`/`llvm-profdata`。
 - **长 pty 回归脚本连续全量跑会在中后段随机挂起（沙箱 flake），按场景子集分半跑可绕**（v150 coder 轮实证，沿 v135 轮同款）：verify_ezr 全量挂 R 场景起点（280s 超时），`verify_ezr.py r` 单独跑 10/10、按子集 `abcdefhijklmn` + `opqrs` 分半全绿 118+64；test_focus_style 同法 `fgi` + `hjkl` 得 26+32。判据：挂起点随运行漂移、挂起场景单独复跑通过、短套件（footer/smoke 等全生命周期 pty）全绿——环境性而非代码回归。单实例长时间跑前先 `ps aux | rg ezr-tui-demo` 清残留。

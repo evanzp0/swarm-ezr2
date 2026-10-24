@@ -303,17 +303,7 @@ impl App {
                     self.x_press = true;
                     return;
                 }
-                let hit = |rects: &[(Rect, usize)]| {
-                    rects
-                        .iter()
-                        .find(|(r, _)| {
-                            m.column >= r.x
-                                && m.column < r.x.saturating_add(r.width)
-                                && m.row >= r.y
-                                && m.row < r.y.saturating_add(r.height)
-                        })
-                        .map(|(_, i)| *i)
-                };
+                let hit = |rects: &[(Rect, usize)]| rect_hit(rects, m.column, m.row);
                 if ck_open {
                     let ck_rects = self.dlg_ck_rects.clone();
                     if let Some(i) = hit(&ck_rects) {
@@ -419,17 +409,7 @@ impl App {
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 // 矩形命中（footer_cmd_rects/tab_rects 共用；x/y 在矩形内）
-                let hit = |rects: &[(Rect, usize)]| {
-                    rects
-                        .iter()
-                        .find(|(r, _)| {
-                            m.column >= r.x
-                                && m.column < r.x.saturating_add(r.width)
-                                && m.row >= r.y
-                                && m.row < r.y.saturating_add(r.height)
-                        })
-                        .map(|(_, i)| *i)
-                };
+                let hit = |rects: &[(Rect, usize)]| rect_hit(rects, m.column, m.row);
                 // 页脚命令 chips（v1.31/FR-01-107①）：Down 按压反色高亮
                 //（点击效果 + 400ms 余辉），原地松开执行对应命令（与键盘
                 // 快捷键同口径）；拖到别处松开 = 取消。命中矩形不含分隔符、
@@ -504,17 +484,7 @@ impl App {
                 }
                 // v1.34/FR-01-113：字段值点击打开完整值弹窗（字段名点击仍是复制，
                 // 两种热区互不重叠；热区由 ui 层每帧回填 detail_val_rects）
-                if let Some(field) = self
-                    .detail_val_rects
-                    .iter()
-                    .find(|(r, _)| {
-                        m.column >= r.x
-                            && m.column < r.x.saturating_add(r.width)
-                            && m.row >= r.y
-                            && m.row < r.y.saturating_add(r.height)
-                    })
-                    .map(|(_, f)| *f)
-                {
+                if let Some(field) = rect_hit(&self.detail_val_rects, m.column, m.row) {
                     self.open_val_popup(field);
                     return;
                 }
@@ -618,6 +588,20 @@ fn pointer_in(area: &Option<Rect>, x: u16, y: u16) -> bool {
     area.is_some_and(|a| {
         x >= a.x && x < a.x.saturating_add(a.width) && y >= a.y && y < a.y.saturating_add(a.height)
     })
+}
+
+/// 矩形列表命中单源（dialog/main 命中闭包去重；返回载荷下标）：
+/// 返回首个包含 (x, y) 的矩形所附载荷（列下标或 [`DetailField`]）
+fn rect_hit<T: Copy>(rects: &[(Rect, T)], x: u16, y: u16) -> Option<T> {
+    rects
+        .iter()
+        .find(|(r, _)| {
+            x >= r.x
+                && x < r.x.saturating_add(r.width)
+                && y >= r.y
+                && y < r.y.saturating_add(r.height)
+        })
+        .map(|(_, v)| *v)
 }
 
 #[cfg(test)]
@@ -769,6 +753,7 @@ mod mouse_tests {
     use crossterm::event::KeyModifiers;
 
     use super::*;
+    use crate::app::DetailField;
     // FieldWin 仅测试消费（产品经 dlg_field_wins 类型间接使用），从组件
     // 单源引入（与 app 门面 re-export 同一类型）
     use crate::app::FieldWin;
@@ -1345,6 +1330,212 @@ mod mouse_tests {
         app.open_add_dialog();
         assert_eq!(app.dlg_pos, None, "再次打开重新居中");
         assert_eq!(app.dlg_drag, None);
+        app.shutdown().await;
+    }
+
+    /// about 弹窗夹具：打开 + 回填窗口区与 [✗] 热区（重开场景复用，避免
+    /// 脚手架同形克隆自配对 CPD tile）
+    fn open_about_with_rects(app: &mut crate::app::App) {
+        app.open_about();
+        app.about_area = Some(Rect {
+            x: 30,
+            y: 8,
+            width: 40,
+            height: 7,
+        });
+        app.popup_close_rect = Some(Rect {
+            x: 66,
+            y: 8,
+            width: 3,
+            height: 1,
+        });
+    }
+
+    /// 关于窗口命中臂（v1.32/FR-01-111 + v1.34/FR-01-114）：窗口内按下起拖 /
+    /// Drag 随动 / [✗] 按下高亮 + 原地松开关闭 / 拖出热区松开取消 /
+    /// 点外无操作（模态统一口径）；页脚 chip 按压态被模态接管清除。
+    #[tokio::test]
+    async fn about_window_mouse_paths() {
+        let mut app = make_app("abmouse");
+        open_about_with_rects(&mut app);
+        app.footer_press = Some(0);
+
+        // 窗口内按下 → 起拖（抓取偏移 = 指针 − 左上角）+ 页脚按压清除
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 35, 10));
+        assert_eq!(app.about_drag, Some((5, 2)), "窗口内按下起拖");
+        assert_eq!(app.footer_press, None, "模态接管清除页脚按压态");
+
+        // Drag 随动：about_pos = 指针 − 抓取偏移
+        app.on_mouse(mev(MouseEventKind::Drag(MouseButton::Left), 38, 12));
+        assert_eq!(app.about_pos, Some((33, 10)), "拖拽随动窗口左上角");
+
+        // [✗] 按下 → 高亮（x_press），不再起拖
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 67, 8));
+        assert!(app.x_press, "[✗] 按下高亮");
+        assert_eq!(app.about_drag, Some((5, 2)), "[✗] 按下不改拖拽态");
+
+        // [✗] 原地松开 → 关闭关于窗口
+        app.on_mouse(mev(MouseEventKind::Up(MouseButton::Left), 67, 8));
+        assert!(!app.about_open, "[✗] 原地松开关闭");
+        assert!(!app.x_press, "松开复位按压态");
+
+        // 重新打开：拖出热区松开 = 取消按压不关闭；点外无操作
+        open_about_with_rects(&mut app);
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 67, 8));
+        app.on_mouse(mev(MouseEventKind::Up(MouseButton::Left), 40, 20));
+        assert!(!app.x_press, "拖出热区松开复位按压");
+        assert!(app.about_open, "拖出热区松开不关闭");
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 2, 2));
+        assert!(app.about_open, "点外不关闭（模态统一口径）");
+        assert_eq!(app.about_drag, None, "窗外按下不起拖");
+        app.shutdown().await;
+    }
+
+    /// 字段值弹窗命中臂（v1.34/FR-01-113 + FR-01-114）：窗口内按下起拖 /
+    /// Drag 随动 / [✗] 原地松开关闭且位置即清 / 点外无操作 / 滚轮消费。
+    #[tokio::test]
+    async fn val_popup_mouse_paths() {
+        let mut app = make_app("valmouse");
+        app.tasks.push(task(1, "val.bin"));
+        app.selected = 0;
+        app.open_val_popup(DetailField::Url);
+        assert!(app.val_open, "有选中任务时 URL 字段弹窗打开");
+        app.val_area = Some(Rect {
+            x: 20,
+            y: 6,
+            width: 48,
+            height: 12,
+        });
+        app.popup_close_rect = Some(Rect {
+            x: 64,
+            y: 6,
+            width: 3,
+            height: 1,
+        });
+
+        // 窗口内按下 → 起拖；Drag 随动
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 30, 10));
+        assert_eq!(app.val_drag, Some((10, 4)), "窗口内按下起拖");
+        app.on_mouse(mev(MouseEventKind::Drag(MouseButton::Left), 25, 8));
+        assert_eq!(app.val_pos, Some((15, 4)), "拖拽随动窗口左上角");
+
+        // 滚轮：消费且钳制（无滚动内容 max=0）
+        app.on_mouse(mev(MouseEventKind::ScrollDown, 30, 10));
+        app.on_mouse(mev(MouseEventKind::ScrollUp, 30, 10));
+        assert_eq!(app.val_scroll, 0, "无内容滚动钳制 0");
+
+        // [✗] 按下高亮 → 原地松开关闭且位置即清（同 pieces 口径）
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 65, 6));
+        assert!(app.x_press, "[✗] 按下高亮");
+        app.on_mouse(mev(MouseEventKind::Up(MouseButton::Left), 65, 6));
+        assert!(!app.val_open, "[✗] 原地松开关闭");
+        assert_eq!(app.val_pos, None, "关闭位置即清");
+        assert_eq!(app.val_drag, None);
+
+        // 再开：点外无操作（不关闭、不起拖）
+        app.open_val_popup(DetailField::Url);
+        app.val_area = Some(Rect {
+            x: 20,
+            y: 6,
+            width: 48,
+            height: 12,
+        });
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 2, 2));
+        assert!(app.val_open, "点外不关闭（模态统一口径）");
+        assert_eq!(app.val_drag, None, "窗外按下不起拖");
+        app.shutdown().await;
+    }
+
+    /// 帮助窗口命中臂（v1.30/FR-01-107 + v1.34/FR-01-114）：滚轮滚动内容
+    /// ±1 行、窗口内按下起拖、Drag 随动、[✗] 原地松开关闭、拖出热区取消。
+    #[tokio::test]
+    async fn help_window_mouse_paths() {
+        let mut app = make_app("helpmouse");
+        app.help_open = true;
+        app.help_area = Some(Rect {
+            x: 25,
+            y: 3,
+            width: 70,
+            height: 20,
+        });
+        app.popup_close_rect = Some(Rect {
+            x: 89,
+            y: 3,
+            width: 3,
+            height: 1,
+        });
+
+        // 滚轮：帮助步长 ±1（FR-01-109）
+        app.on_mouse(mev(MouseEventKind::ScrollDown, 50, 10));
+        assert_eq!(app.help_scroll, 1, "下滚 1 行");
+        app.on_mouse(mev(MouseEventKind::ScrollUp, 50, 10));
+        assert_eq!(app.help_scroll, 0, "上滚 1 行");
+        app.on_mouse(mev(MouseEventKind::ScrollUp, 50, 10));
+        assert_eq!(app.help_scroll, 0, "上滚钳制 0");
+
+        // 窗口内按下起拖 + Drag 随动
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 30, 8));
+        assert_eq!(app.help_drag, Some((5, 5)), "窗口内按下起拖");
+        app.on_mouse(mev(MouseEventKind::Drag(MouseButton::Left), 28, 6));
+        assert_eq!(app.help_pos, Some((23, 1)), "拖拽随动窗口左上角");
+
+        // [✗] 按下高亮 → 原地松开关闭
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 90, 3));
+        assert!(app.x_press, "[✗] 按下高亮");
+        app.on_mouse(mev(MouseEventKind::Up(MouseButton::Left), 90, 3));
+        assert!(!app.help_open, "[✗] 原地松开关闭");
+
+        // 重新打开：拖出热区松开 = 取消按压不关闭
+        app.help_open = true;
+        app.popup_close_rect = Some(Rect {
+            x: 89,
+            y: 3,
+            width: 3,
+            height: 1,
+        });
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 90, 3));
+        app.on_mouse(mev(MouseEventKind::Up(MouseButton::Left), 50, 10));
+        assert!(!app.x_press, "拖出热区松开复位按压");
+        assert!(app.help_open, "拖出热区松开不关闭");
+        app.shutdown().await;
+    }
+
+    /// 对话框 [✗] 关闭臂（v1.34/FR-01-114 ③）：按下高亮 → 原地松开取消对话框
+    /// （与 Esc 同口径）、拖出热区松开不关闭；下拉展开时点击 [✗] 位置先收起
+    /// 下拉（不进入 [✗] 按压）。
+    #[tokio::test]
+    async fn dialog_close_btn_cancel_paths() {
+        let mut app = make_app("dlgx");
+        app.dialog = Some(dlg(DialogKind::Add, 0));
+        app.popup_close_rect = Some(Rect {
+            x: 70,
+            y: 5,
+            width: 3,
+            height: 1,
+        });
+
+        // [✗] 按下高亮 → 原地松开 = 取消对话框
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 71, 5));
+        assert!(app.x_press, "[✗] 按下高亮");
+        assert!(app.dialog.is_some(), "按下不关闭");
+        app.on_mouse(mev(MouseEventKind::Up(MouseButton::Left), 71, 5));
+        assert!(app.dialog.is_none(), "[✗] 原地松开取消对话框");
+        assert!(!app.x_press, "松开复位按压态");
+
+        // 拖出热区松开 = 取消按压不关闭
+        app.dialog = Some(dlg(DialogKind::Add, 0));
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 71, 5));
+        app.on_mouse(mev(MouseEventKind::Up(MouseButton::Left), 30, 9));
+        assert!(!app.x_press, "拖出热区复位按压");
+        assert!(app.dialog.is_some(), "拖出热区松开不关闭");
+
+        // 下拉展开时点击 [✗] 位置：先收起下拉（FR-01-114 ③ 守卫臂）
+        app.dialog = Some(dlg(DialogKind::Add, 3));
+        app.dialog.as_mut().unwrap().ck_open = true;
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 71, 5));
+        assert!(!app.dialog.as_ref().unwrap().ck_open, "下拉先收起");
+        assert!(!app.x_press, "守卫臂不进入 [✗] 按压");
+        assert!(app.dialog.is_some());
         app.shutdown().await;
     }
 }
