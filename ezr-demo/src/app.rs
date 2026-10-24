@@ -47,6 +47,7 @@ use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEven
 use ratatui::layout::Rect;
 
 use crate::scrollbar;
+use crate::textfield::{FieldWin, TextInput};
 
 /// 每个任务在列表中占用的行高（3 行内容 + 1 行空行分隔）
 pub const ITEM_HEIGHT: u16 = 4;
@@ -799,19 +800,23 @@ pub enum DialogKind {
     Modify,
 }
 
+/// 对话框状态（文本字段已升级为输入框组件实例——值 + 光标由
+/// [`TextInput`] 承载，编辑/取窗/点击映射走组件单源，与产品 ezr 同源）
 pub struct Dialog {
     pub kind: DialogKind,
-    pub url: String,
-    pub dir: String,
-    /// Add: 并发数输入缓冲（数字字符串；HTTP 默认 4 / BT 默认 20，可修改）
-    pub conns: String,
+    /// Add: URL 输入框组件（值 + 光标）
+    pub url: TextInput,
+    /// Add: 保存目录输入框组件（空 = 配置默认）
+    pub dir: TextInput,
+    /// Add: 并发数输入框组件（数字字符串；HTTP 默认 4 / BT 默认 20，可修改）
+    pub conns: TextInput,
     /// Add: 用户是否手动修改过并发数（未修改时随 URL 类型自动同步默认值）
     pub conns_edited: bool,
     /// Add: 校验算法在 CHECKSUM_ALGOS 中的下标（默认 NONE = 0，不校验）
     pub ck_type: usize,
-    /// Add: 校验码输入缓冲（十六进制；算法为 NONE 时清空且不可输入，
+    /// Add: 校验码输入框组件（十六进制；算法为 NONE 时清空且不可输入，
     /// 其余算法必填）
-    pub ck_value: String,
+    pub ck_value: TextInput,
     /// Add: 校验算法下拉框是否展开
     pub ck_open: bool,
     /// Add/Modify: 下拉框当前高亮项（↑↓ 导航，实时同步 ck_type）
@@ -828,6 +833,54 @@ pub struct Dialog {
     pub task_name: String,
     /// Modify 用：待修改任务 id（None = Add/Delete）
     pub task_id: Option<u32>,
+}
+
+impl Dialog {
+    /// 焦点 → 文本字段映射（单源：Add 0=URL 1=目录 2=并发 4=校验码；
+    /// Modify 0=并发 2=校验码；下拉行/按钮/Delete 对话框 = None——方向键/
+    /// 输入的「是否文本字段」判定与编辑路由共用本映射，防矩阵漂移）
+    pub fn text_field_at(&self, focus: usize) -> Option<TextField> {
+        match (self.kind, focus) {
+            (DialogKind::Add, 0) => Some(TextField::Url),
+            (DialogKind::Add, 1) => Some(TextField::Dir),
+            (DialogKind::Add, 2) | (DialogKind::Modify, 0) => Some(TextField::Conns),
+            (DialogKind::Add, 4) | (DialogKind::Modify, 2) => Some(TextField::CkValue),
+            _ => None,
+        }
+    }
+
+    /// 字段组件可变访问（编辑路由单源借用入口）
+    pub fn field_mut(&mut self, f: TextField) -> &mut TextInput {
+        match f {
+            TextField::Url => &mut self.url,
+            TextField::Dir => &mut self.dir,
+            TextField::Conns => &mut self.conns,
+            TextField::CkValue => &mut self.ck_value,
+        }
+    }
+
+    /// 焦点切换单源（光标随迁——置到新焦点字段文本尾，输入框惯例；
+    /// 非文本焦点不消费光标。全部焦点赋值点（Tab/BackTab、下拉跳焦、
+    /// 点击聚焦、校验失败回焦）必须走本方法）
+    pub fn focus_field(&mut self, f: usize) {
+        self.focus = f;
+        if let Some(t) = self.text_field_at(f) {
+            self.field_mut(t).cursor_end();
+        }
+    }
+}
+
+/// 对话框文本字段标识（焦点 → 字段映射的载荷）
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TextField {
+    /// Add URL 字段（focus 0）
+    Url,
+    /// Add 保存目录字段（focus 1）
+    Dir,
+    /// Add 并发（focus 2）/ Modify 并发（focus 0）
+    Conns,
+    /// Add 校验码（focus 4）/ Modify 校验码（focus 2）
+    CkValue,
 }
 
 // ---------------------------------------------------------------------------
@@ -1016,6 +1069,12 @@ pub struct App {
     /// 对话框输入行/选择行的可点击区域（由 ui 层每帧回填；点击聚焦，
     /// 校验算法行再点击可展开下拉框）
     pub dlg_field_rects: Vec<(Rect, usize)>,
+    /// 文本字段窗口几何（与 [`App::dlg_field_rects`] 平行回填，非文本行
+    /// None；点击列→字符偏移映射与渲染取窗同源——输入框组件单源载荷）
+    pub dlg_field_wins: Vec<Option<FieldWin>>,
+    /// 聚焦文本行的原生光标屏幕位（值区起点 + 光标前段显示宽；由 ui 层
+    /// 每帧发布、draw 收口 `Frame::set_cursor_position` 画终端原生光标）
+    pub dlg_cursor_screen: Option<(u16, u16)>,
     /// 校验算法下拉框各选项的可点击区域（由 ui 层每帧回填，仅展开时有效）
     pub dlg_ck_rects: Vec<(Rect, usize)>,
     /// 代理下拉选项命中区域（v1.5/FR-01-86；鼠标点击选择）
@@ -1143,6 +1202,8 @@ impl App {
             dialog_area: None,
             dlg_btn_rects: Vec::new(),
             dlg_field_rects: Vec::new(),
+            dlg_field_wins: Vec::new(),
+            dlg_cursor_screen: None,
             dlg_ck_rects: Vec::new(),
             dlg_proxy_rects: Vec::new(),
             footer_cmd_rects: Vec::new(),
@@ -1931,9 +1992,7 @@ impl App {
         // 窗口内无任何操作提示——交互说明收敛于 H 帮助窗口（P3 原则）
         if self.val_open {
             match code {
-                KeyCode::Esc
-                | KeyCode::Char('q')
-                | KeyCode::Char('Q') => self.close_val_popup(),
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => self.close_val_popup(),
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
                     let text = self.val_text.clone();
                     self.copy_to_clipboard(&text);
@@ -2123,7 +2182,7 @@ impl App {
     // 对话框键盘处理
     // -----------------------------------------------------------------------
 
-    fn on_dialog_key(&mut self, code: KeyCode) {
+    pub fn on_dialog_key(&mut self, code: KeyCode) {
         let (kind, focus) = match &self.dialog {
             Some(d) => (d.kind, d.focus),
             None => return,
@@ -2149,14 +2208,43 @@ impl App {
         }
         match code {
             KeyCode::Esc => self.dialog = None,
-            KeyCode::Tab | KeyCode::Down | KeyCode::Right => {
+            // Tab/BackTab 恒为焦点跳转（对齐产品 v1.34 二批修订：方向键不再
+            // 同臂——文本字段内方向键 = 输入光标移动，见下）；focus_field
+            // 随迁光标到新字段尾（输入框惯例）
+            KeyCode::Tab | KeyCode::BackTab => {
                 if let Some(d) = self.dialog.as_mut() {
-                    d.focus = (d.focus + 1) % nfocus;
+                    let step = if code == KeyCode::Tab { 1 } else { nfocus - 1 };
+                    d.focus_field((d.focus + step) % nfocus);
                 }
             }
-            KeyCode::BackTab | KeyCode::Up | KeyCode::Left => {
+            // 方向键分流（对齐产品 v1.34 二批修订）：文本字段内 = 输入光标
+            // 移动（Left/Right ±1 字符、Up 行首、Down 行尾——单行字段无纵向
+            // 行，映射 Home/End 语义；只动光标不跳焦点），非文本焦点（下拉
+            // 行/按钮/Delete 对话框）保持原 Tab 语义。光标操作走输入框组件
+            // 单源（crate::textfield::TextInput）
+            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => {
+                let on_text = self
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|d| d.text_field_at(d.focus).is_some());
                 if let Some(d) = self.dialog.as_mut() {
-                    d.focus = (d.focus + nfocus - 1) % nfocus;
+                    if on_text {
+                        let field = d.text_field_at(d.focus).unwrap();
+                        match code {
+                            KeyCode::Left => d.field_mut(field).left(),
+                            KeyCode::Right => d.field_mut(field).right(),
+                            KeyCode::Up => d.field_mut(field).cursor_home(),
+                            KeyCode::Down => d.field_mut(field).cursor_end(),
+                            _ => {}
+                        }
+                    } else {
+                        let step = if code == KeyCode::Up || code == KeyCode::Left {
+                            nfocus - 1
+                        } else {
+                            1
+                        };
+                        d.focus_field((d.focus + step) % nfocus);
+                    }
                 }
             }
             KeyCode::Enter => match kind {
@@ -2169,8 +2257,8 @@ impl App {
                     text_backspace(kind, d, focus);
                     // URL 变化时同步默认并发数（用户未手动修改过时，demo 体验保留）
                     if kind == DialogKind::Add && focus == 0 && !d.conns_edited {
-                        let (p, _) = parse_url_task(d.url.trim());
-                        d.conns = default_conns(p).to_string();
+                        let (p, _) = parse_url_task(d.url.value.trim());
+                        d.conns.set(default_conns(p).to_string());
                     }
                 }
             }
@@ -2238,24 +2326,21 @@ impl App {
                 let d = self.dialog.as_mut().unwrap();
                 match focus {
                     0 => {
-                        if d.url.chars().count() < 300 {
-                            d.url.push(c);
+                        // 组件 insert：光标处插入 + 容量钳制（字符数计）
+                        if d.url.insert(&c.to_string(), 300) > 0 {
                             // URL 变化时同步默认并发数（用户未手动修改过时）
                             if !d.conns_edited {
-                                let (p, _) = parse_url_task(d.url.trim());
-                                d.conns = default_conns(p).to_string();
+                                let (p, _) = parse_url_task(d.url.value.trim());
+                                d.conns.set(default_conns(p).to_string());
                             }
                         }
                     }
                     1 => {
-                        if d.dir.chars().count() < 300 {
-                            d.dir.push(c);
-                        }
+                        d.dir.insert(&c.to_string(), 300);
                     }
                     // 并发数：仅接受数字，最多 2 位（提交时钳制 1-64）
                     _ => {
-                        if c.is_ascii_digit() && d.conns.chars().count() < 2 {
-                            d.conns.push(c);
+                        if c.is_ascii_digit() && d.conns.insert(&c.to_string(), 2) > 0 {
                             d.conns_edited = true;
                         }
                     }
@@ -2270,12 +2355,14 @@ impl App {
             }
         } else if focus == 4 {
             // 校验码：仅接受十六进制字符，最多 128 位（SHA-512）；
-            // 算法为 NONE（不校验）时不可输入（需求：NONE 下校验码清空禁输入）
-            if self.dialog.as_ref().unwrap().ck_type != CK_NONE
-                && c.is_ascii_hexdigit()
-                && self.dialog.as_ref().unwrap().ck_value.chars().count() < 128
-            {
-                self.dialog.as_mut().unwrap().ck_value.push(c);
+            // 算法为 NONE（不校验）时不可输入（需求：NONE 下校验码清空禁输入）；
+            // 组件 insert：光标处插入
+            if self.dialog.as_ref().unwrap().ck_type != CK_NONE && c.is_ascii_hexdigit() {
+                self.dialog
+                    .as_mut()
+                    .unwrap()
+                    .ck_value
+                    .insert(&c.to_string(), 128);
             }
         } else if c == ' ' {
             if focus == 5 {
@@ -2291,10 +2378,16 @@ impl App {
     /// 下拉、2 校验码、3 空格展开代理下拉、4/5 空格激活按钮
     fn modify_dialog_char(&mut self, focus: usize, c: char) {
         if focus == 0 {
-            if c.is_ascii_digit() && self.dialog.as_ref().unwrap().conns.chars().count() < 2 {
-                let d = self.dialog.as_mut().unwrap();
-                d.conns.push(c);
-                d.conns_edited = true;
+            if c.is_ascii_digit()
+                && self
+                    .dialog
+                    .as_mut()
+                    .unwrap()
+                    .conns
+                    .insert(&c.to_string(), 2)
+                    > 0
+            {
+                self.dialog.as_mut().unwrap().conns_edited = true;
             }
         } else if focus == 1 {
             if c == ' ' {
@@ -2304,12 +2397,14 @@ impl App {
             }
         } else if focus == 2 {
             // 校验码：仅接受十六进制字符，最多 128 位（SHA-512）；
-            // 算法为 NONE（不校验）时不可输入（需求：NONE 下校验码清空禁输入）
-            if self.dialog.as_ref().unwrap().ck_type != CK_NONE
-                && c.is_ascii_hexdigit()
-                && self.dialog.as_ref().unwrap().ck_value.chars().count() < 128
-            {
-                self.dialog.as_mut().unwrap().ck_value.push(c);
+            // 算法为 NONE（不校验）时不可输入（需求：NONE 下校验码清空禁输入）；
+            // 组件 insert：光标处插入
+            if self.dialog.as_ref().unwrap().ck_type != CK_NONE && c.is_ascii_hexdigit() {
+                self.dialog
+                    .as_mut()
+                    .unwrap()
+                    .ck_value
+                    .insert(&c.to_string(), 128);
             }
         } else if c == ' ' {
             if focus == 3 {
@@ -2353,8 +2448,8 @@ impl App {
             self.dialog = None;
             return;
         };
-        let conns_raw = d.conns.trim().to_string();
-        let ck_raw = d.ck_value.trim().to_string();
+        let conns_raw = d.conns.value.trim().to_string();
+        let ck_raw = d.ck_value.value.trim().to_string();
         let ck_type = d.ck_type;
         let proxy_sel = d.proxy_sel.min(self.proxy_options.len().saturating_sub(1));
         let proxy = self.proxy_options[proxy_sel].clone();
@@ -2377,7 +2472,7 @@ impl App {
                 algo, need
             ));
             if let Some(d) = self.dialog.as_mut() {
-                d.focus = 2;
+                d.focus_field(2);
             }
             return;
         } else {
@@ -2479,14 +2574,14 @@ impl App {
         let Some(d) = self.dialog.as_ref() else {
             return;
         };
-        let url = d.url.trim().to_string();
+        let url = d.url.value.trim().to_string();
         if url.is_empty() {
             self.set_toast("⚠ 请输入下载 URL");
             return;
         }
-        let dir_raw = d.dir.trim().to_string();
-        let conns_raw = d.conns.trim().to_string();
-        let ck_raw = d.ck_value.trim().to_string();
+        let dir_raw = d.dir.value.trim().to_string();
+        let conns_raw = d.conns.value.trim().to_string();
+        let ck_raw = d.ck_value.value.trim().to_string();
         let ck_type = d.ck_type;
         // 代理选择一并先读出（借用收窄：后续 sync_sim_sidecars 需要 &mut self）
         let proxy_sel = d.proxy_sel.min(self.proxy_options.len() - 1);
@@ -2502,7 +2597,7 @@ impl App {
                 algo, need
             ));
             if let Some(d) = self.dialog.as_mut() {
-                d.focus = 4;
+                d.focus_field(4);
             }
             return;
         } else {
@@ -2554,7 +2649,9 @@ impl App {
         // 非完成腿与生产同构保留，实际多被前置的重复拒绝短路，防御性）；
         // demo 无续传一致性环节，误接续（异 URL 同名）由生产 FR-01-22 兜底，
         // 此处直接演示路径基接续的可观察面：同名接续 + 断点进度 + 钦定 toast
-        let resumed = self.sim_sidecars.contains(&(dir.clone(), base_name.clone()))
+        let resumed = self
+            .sim_sidecars
+            .contains(&(dir.clone(), base_name.clone()))
             || self.tasks.iter().any(|t| {
                 t.url == url
                     && save_dir_of(&t.save_path) == dir
@@ -2732,13 +2829,14 @@ impl App {
         self.dialog_drag_moved = false;
         self.dialog = Some(Dialog {
             kind: DialogKind::Add,
-            url: prefill.to_string(),
-            dir: "/srv/downloads".to_string(),
-            conns: default_conns(proto).to_string(),
+            // 输入框组件 with_value：预填值 + 光标迁尾（输入框惯例）
+            url: TextInput::with_value(prefill),
+            dir: TextInput::with_value("/srv/downloads"),
+            conns: TextInput::with_value(default_conns(proto).to_string()),
             conns_edited: false,
             // 校验算法默认 NONE（不校验，下拉首行；校验码清空且不可输入）
             ck_type: CK_NONE,
-            ck_value: String::new(),
+            ck_value: TextInput::new(),
             ck_open: false,
             ck_sel: CK_NONE,
             proxy_sel: self.default_proxy_sel,
@@ -2784,7 +2882,7 @@ impl App {
             .iter()
             .position(|(n, _)| checksum.as_ref().is_some_and(|c| c.algo == *n))
             .unwrap_or(CK_NONE); // 无校验码 → NONE（不校验）
-        // 选项表未收录时追加兜底项保证回显一致（正常流都在表内）
+                                 // 选项表未收录时追加兜底项保证回显一致（正常流都在表内）
         let proxy_sel = match self.proxy_options.iter().position(|o| o == &proxy) {
             Some(i) => i,
             None => {
@@ -2802,12 +2900,12 @@ impl App {
         self.dialog_drag_moved = false;
         self.dialog = Some(Dialog {
             kind: DialogKind::Modify,
-            url: String::new(),
-            dir: String::new(),
-            conns: concurrency.to_string(),
+            url: TextInput::new(),
+            dir: TextInput::new(),
+            conns: TextInput::with_value(concurrency.to_string()),
             conns_edited: false,
             ck_type,
-            ck_value: checksum.map(|c| c.value).unwrap_or_default(),
+            ck_value: TextInput::with_value(checksum.map(|c| c.value).unwrap_or_default()),
             ck_open: false,
             ck_sel: ck_type,
             proxy_sel,
@@ -2833,12 +2931,12 @@ impl App {
         self.dialog_drag_moved = false;
         self.dialog = Some(Dialog {
             kind: DialogKind::Delete,
-            url: String::new(),
-            dir: String::new(),
-            conns: String::new(),
+            url: TextInput::new(),
+            dir: TextInput::new(),
+            conns: TextInput::new(),
             conns_edited: false,
             ck_type: 0,
-            ck_value: String::new(),
+            ck_value: TextInput::new(),
             ck_open: false,
             ck_sel: 0,
             proxy_sel: 0,
@@ -2873,10 +2971,8 @@ impl App {
                     if Self::pointer_in(&self.about_area, m.column, m.row) {
                         // 开始拖拽：记录指针相对窗口左上角的抓取偏移
                         if let Some(r) = self.about_area {
-                            self.about_drag = Some((
-                                m.column.saturating_sub(r.x),
-                                m.row.saturating_sub(r.y),
-                            ));
+                            self.about_drag =
+                                Some((m.column.saturating_sub(r.x), m.row.saturating_sub(r.y)));
                         }
                     }
                 }
@@ -2885,10 +2981,8 @@ impl App {
                     if self.x_press {
                         self.x_press = Self::pointer_in(&self.popup_close_rect, m.column, m.row);
                     } else if let Some((dx, dy)) = self.about_drag {
-                        self.about_pos = Some((
-                            m.column.saturating_sub(dx),
-                            m.row.saturating_sub(dy),
-                        ));
+                        self.about_pos =
+                            Some((m.column.saturating_sub(dx), m.row.saturating_sub(dy)));
                     }
                 }
                 MouseEventKind::Up(MouseButton::Left) => {
@@ -2936,10 +3030,8 @@ impl App {
                     if Self::pointer_in(&self.val_area, m.column, m.row) {
                         // 开始拖拽：记录指针相对窗口左上角的抓取偏移
                         if let Some(r) = self.val_area {
-                            self.val_drag = Some((
-                                m.column.saturating_sub(r.x),
-                                m.row.saturating_sub(r.y),
-                            ));
+                            self.val_drag =
+                                Some((m.column.saturating_sub(r.x), m.row.saturating_sub(r.y)));
                         }
                     }
                 }
@@ -2955,10 +3047,8 @@ impl App {
                     if self.sb_drag.is_some() {
                         self.sb_drag_move(m);
                     } else if let Some((dx, dy)) = self.val_drag {
-                        self.val_pos = Some((
-                            m.column.saturating_sub(dx),
-                            m.row.saturating_sub(dy),
-                        ));
+                        self.val_pos =
+                            Some((m.column.saturating_sub(dx), m.row.saturating_sub(dy)));
                     }
                 }
                 MouseEventKind::Up(MouseButton::Left) => {
@@ -3007,10 +3097,8 @@ impl App {
                     if Self::pointer_in(&self.help_area, m.column, m.row) {
                         // 开始拖拽：记录指针相对窗口左上角的抓取偏移
                         if let Some(r) = self.help_area {
-                            self.help_drag = Some((
-                                m.column.saturating_sub(r.x),
-                                m.row.saturating_sub(r.y),
-                            ));
+                            self.help_drag =
+                                Some((m.column.saturating_sub(r.x), m.row.saturating_sub(r.y)));
                         }
                     }
                     // 点击窗口外部 = 无任何操作（模态统一口径：不关闭、不
@@ -3028,10 +3116,8 @@ impl App {
                     if self.sb_drag.is_some() {
                         self.sb_drag_move(m);
                     } else if let Some((dx, dy)) = self.help_drag {
-                        self.help_pos = Some((
-                            m.column.saturating_sub(dx),
-                            m.row.saturating_sub(dy),
-                        ));
+                        self.help_pos =
+                            Some((m.column.saturating_sub(dx), m.row.saturating_sub(dy)));
                     }
                 }
                 MouseEventKind::Up(MouseButton::Left) => {
@@ -3077,10 +3163,8 @@ impl App {
                     if Self::pointer_in(&self.pieces_area, m.column, m.row) {
                         // 开始拖拽：记录指针相对弹窗左上角的抓取偏移
                         if let Some(r) = self.pieces_area {
-                            self.pieces_drag = Some((
-                                m.column.saturating_sub(r.x),
-                                m.row.saturating_sub(r.y),
-                            ));
+                            self.pieces_drag =
+                                Some((m.column.saturating_sub(r.x), m.row.saturating_sub(r.y)));
                         }
                     }
                     // 点击弹窗外部 = 无任何操作（模态统一口径：不关闭、不
@@ -3099,10 +3183,8 @@ impl App {
                     if self.sb_drag.is_some() {
                         self.sb_drag_move(m);
                     } else if let Some((dx, dy)) = self.pieces_drag {
-                        self.pieces_pos = Some((
-                            m.column.saturating_sub(dx),
-                            m.row.saturating_sub(dy),
-                        ));
+                        self.pieces_pos =
+                            Some((m.column.saturating_sub(dx), m.row.saturating_sub(dy)));
                     }
                 }
                 MouseEventKind::Up(MouseButton::Left) => {
@@ -3193,10 +3275,8 @@ impl App {
                     // 弹窗外按下：忽略
                     if Self::pointer_in(&self.dialog_area, m.column, m.row) {
                         if let Some(r) = self.dialog_area {
-                            self.dialog_drag = Some((
-                                m.column.saturating_sub(r.x),
-                                m.row.saturating_sub(r.y),
-                            ));
+                            self.dialog_drag =
+                                Some((m.column.saturating_sub(r.x), m.row.saturating_sub(r.y)));
                             self.dialog_drag_moved = false;
                         }
                     }
@@ -3469,9 +3549,14 @@ impl App {
     fn sb_max(&self, key: SbKey) -> usize {
         match key {
             // 任务列表：条目数 − 可视块数（visible_rows 由 ui 层回填）
-            SbKey::List => self.filtered().len().saturating_sub(self.visible_rows.max(1)),
+            SbKey::List => self
+                .filtered()
+                .len()
+                .saturating_sub(self.visible_rows.max(1)),
             // 并发垂直：连接行数 − 可视行数（末页不空滚，同滚轮钳制口径）
-            SbKey::ConnsV => self.conn_count().saturating_sub(self.visible_conns_rows.max(1)),
+            SbKey::ConnsV => self
+                .conn_count()
+                .saturating_sub(self.visible_conns_rows.max(1)),
             // 并发水平：内容列宽 − 内框宽（ui 层每帧回填）
             SbKey::ConnsH => self.conns_max_hscroll,
             SbKey::Pieces => self.pieces_max_scroll,
@@ -3584,7 +3669,9 @@ impl App {
     /// 修复点：浮层（pieces/帮助）里拖滚动条此前会按「窗口拖拽」移动窗口，
     /// 现在拖滑块 = 滚动内容，拖空白处 = 移动窗口，两种拖拽互不干扰。
     fn sb_drag_move(&mut self, m: MouseEvent) {
-        let Some((key, grab)) = self.sb_drag else { return };
+        let Some((key, grab)) = self.sb_drag else {
+            return;
+        };
         let Some(bar) = key.bar(self) else { return };
         let t = bar.track_index_at(m.column, m.row);
         let pos = bar.pos_from_thumb(t.saturating_sub(grab));
@@ -3647,7 +3734,11 @@ impl App {
         if now < h.due() {
             return;
         }
-        let step = if h.page { self.sb_page(h.key) } else { h.key.step() };
+        let step = if h.page {
+            self.sb_page(h.key)
+        } else {
+            h.key.step()
+        };
         self.sb_scroll(h.key, h.dir * step);
         if let Some(h) = &mut self.sb_hold {
             h.last = now;
@@ -3703,7 +3794,18 @@ impl App {
         let btn_rects = self.dlg_btn_rects.clone();
         if let Some(i) = hit(&field_rects) {
             let d = self.dialog.as_mut().unwrap();
-            d.focus = i;
+            // 焦点切换单源（focus_field）：光标随迁字段尾（点击聚焦惯例；
+            // 命中下拉行时随后展开下拉覆盖）
+            d.focus_field(i);
+            // v1.34 三批同步：文本字段点击 = 光标落点击处（渲染层窗口几何
+            // 在位时列→字符偏移映射——组件 click_offset 消费 FieldWin 累积列，
+            // 与显示取窗同源；非文本行 win=None → 维持 focus_field 迁尾语义）
+            if let Some(win) = self.dlg_field_wins.get(i).and_then(|w| w.as_ref()) {
+                let off = TextInput::click_offset(win, m.column);
+                if let Some(f) = d.text_field_at(i) {
+                    d.field_mut(f).set_cursor(off);
+                }
+            }
             let ck_i = if kind == Some(DialogKind::Add) { 3 } else { 1 };
             let proxy_i = if kind == Some(DialogKind::Add) { 5 } else { 3 };
             if i == ck_i {
@@ -3714,7 +3816,7 @@ impl App {
             }
         } else if let Some(btn) = hit(&btn_rects) {
             if let Some(d) = self.dialog.as_mut() {
-                d.focus = btn;
+                d.focus_field(btn);
             }
             match kind {
                 Some(DialogKind::Add) => self.dlg_activate_add(btn),
@@ -3750,7 +3852,11 @@ impl App {
             self.set_toast("当前状态无并发明细（仅下载中/做种中可选）");
             return;
         }
-        let n = self.tasks[idx].connections.iter().filter(|c| c.is_active()).count();
+        let n = self.tasks[idx]
+            .connections
+            .iter()
+            .filter(|c| c.is_active())
+            .count();
         if n == 0 {
             self.set_toast("当前任务没有并发连接明细");
             return;
@@ -4110,11 +4216,11 @@ fn proxy_dropdown_open_key(d: &mut Dialog, n: usize, code: KeyCode) {
         KeyCode::Enter | KeyCode::Esc => d.proxy_open = false,
         KeyCode::Tab => {
             d.proxy_open = false;
-            d.focus = if d.kind == DialogKind::Add { 6 } else { 4 };
+            d.focus_field(if d.kind == DialogKind::Add { 6 } else { 4 });
         }
         KeyCode::BackTab => {
             d.proxy_open = false;
-            d.focus = if d.kind == DialogKind::Add { 4 } else { 2 };
+            d.focus_field(if d.kind == DialogKind::Add { 4 } else { 2 });
         }
         _ => d.proxy_open = false,
     }
@@ -4151,31 +4257,32 @@ fn ck_dropdown_open_key(d: &mut Dialog, code: KeyCode) {
         KeyCode::Enter | KeyCode::Esc => d.ck_open = false,
         KeyCode::Tab | KeyCode::BackTab => {
             d.ck_open = false;
-            d.focus = if code == KeyCode::Tab { 4 } else { 2 };
+            d.focus_field(if code == KeyCode::Tab { 4 } else { 2 });
         }
         _ => d.ck_open = false,
     }
 }
 
 /// 文本字段退格（kind 感知焦点映射：Add 0=URL 1=目录 2=并发 4=校验码；
-/// Modify 0=并发 2=校验码）
+/// Modify 0=并发 2=校验码）——组件 backspace：删除**光标前一字符**
+///（行首无操作；原 append/pop 式仅弹末尾字符，对齐产品 v1.34 二批修订）
 fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> bool {
     match (kind, focus) {
         (DialogKind::Add, 0) => {
-            d.url.pop();
+            d.url.backspace();
             true
         }
         (DialogKind::Add, 1) => {
-            d.dir.pop();
+            d.dir.backspace();
             true
         }
         (DialogKind::Add, 2) | (DialogKind::Modify, 0) => {
-            d.conns.pop();
+            d.conns.backspace();
             d.conns_edited = true;
             true
         }
         (DialogKind::Add, 4) | (DialogKind::Modify, 2) => {
-            d.ck_value.pop();
+            d.ck_value.backspace();
             true
         }
         _ => false,
@@ -4187,26 +4294,19 @@ fn paste_sanitize(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
 }
 
-/// 截断式追加：目标字符串不超过 `cap` 个字符（按 char 计数，不切分多字节字符）
-fn push_capped(dst: &mut String, src: &str, cap: usize) -> bool {
-    let room = cap.saturating_sub(dst.chars().count());
-    let taken: String = src.chars().take(room).collect();
-    let inserted = !taken.is_empty();
-    dst.push_str(&taken);
-    inserted
-}
-
 /// 将粘贴文本按 (kind, focus) 矩阵路由到对话框字段（FR-01-06 v1.17：
-/// Add 与 Modify 同权）。过滤规则与逐键输入一致：URL/目录 ≤300 字符；
-/// 并发仅数字 ≤2 位；校验码仅十六进制 ≤128 位；下拉行/按钮焦点不接收。
+/// Add 与 Modify 同权；对齐产品 v1.34 二批修订：**光标处插入**——组件
+/// [`TextInput::insert`] 单源，粘贴后光标随迁落在插入文本之后）。
+/// 过滤规则与逐键输入一致：URL/目录 ≤300 字符；并发仅数字 ≤2 位；
+/// 校验码仅十六进制 ≤128 位；下拉行/按钮焦点不接收。
 fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, text: &str) -> bool {
     let clean = paste_sanitize(text);
     match (kind, focus) {
-        (DialogKind::Add, 0) => push_capped(&mut d.url, &clean, 300),
-        (DialogKind::Add, 1) => push_capped(&mut d.dir, &clean, 300),
+        (DialogKind::Add, 0) => d.url.insert(&clean, 300) > 0,
+        (DialogKind::Add, 1) => d.dir.insert(&clean, 300) > 0,
         (DialogKind::Add, 2) | (DialogKind::Modify, 0) => {
             let digits: String = clean.chars().filter(|c| c.is_ascii_digit()).collect();
-            let inserted = push_capped(&mut d.conns, &digits, 2);
+            let inserted = d.conns.insert(&digits, 2) > 0;
             d.conns_edited |= inserted;
             inserted
         }
@@ -4216,7 +4316,7 @@ fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, text: &str) -
                 return false;
             }
             let hex: String = clean.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-            push_capped(&mut d.ck_value, &hex, 128)
+            d.ck_value.insert(&hex, 128) > 0
         }
         _ => false,
     }

@@ -94,6 +94,7 @@ use crate::app::{
     TaskState, CHECKSUM_ALGOS, FILTERS, ITEM_HEIGHT, MAX_DOWNLOAD_SLOTS,
 };
 use crate::scrollable_panel::{ScrollablePanel, ScrollbarMode};
+use crate::textfield::{FieldWin, TextInput};
 
 // ---------------------------------------------------------------------------
 // 调色板（语义状态色；下载中=淡蓝，暂停=白，等待=黄，失败=红，完成=绿，做种=粉）
@@ -255,7 +256,10 @@ fn link_break_spans(s: &str, style: Style) -> Vec<Span<'static>> {
     while let Some((i, c)) = rest.char_indices().find(|&(_, c)| c == '\u{FE0E}') {
         let (head, tail) = rest.split_at(i + c.len_utf8());
         let st = if shadow {
-            Style { fg: fg_shadow(style.fg), ..style }
+            Style {
+                fg: fg_shadow(style.fg),
+                ..style
+            }
         } else {
             style
         };
@@ -265,7 +269,10 @@ fn link_break_spans(s: &str, style: Style) -> Vec<Span<'static>> {
     }
     if !rest.is_empty() {
         let st = if shadow {
-            Style { fg: fg_shadow(style.fg), ..style }
+            Style {
+                fg: fg_shadow(style.fg),
+                ..style
+            }
         } else {
             style
         };
@@ -417,7 +424,7 @@ fn marquee_bar(width: usize, anim: u64, fill: Color) -> Vec<Span<'static>> {
     let period = width + block; // 滑块完全离场后一个空帧，再从左缘重新滑入
     let head = ((anim as usize * 2) % period) as isize; // 滑块头部（排他）
     let tail = head - block as isize; // 滑块尾部（含）
-    // 线性裁剪到轨道（不绕环）：滑块 = [tail, head) ∩ [0, width)
+                                      // 线性裁剪到轨道（不绕环）：滑块 = [tail, head) ∩ [0, width)
     let s = tail.clamp(0, width as isize) as usize;
     let e = head.clamp(0, width as isize) as usize;
     let mut spans = Vec::new();
@@ -697,7 +704,15 @@ fn task_lines(
     ]
 }
 
-fn render_task(f: &mut Frame, t: &Task, area: Rect, sel: bool, spinner: char, queue_pos: usize, anim: u64) {
+fn render_task(
+    f: &mut Frame,
+    t: &Task,
+    area: Rect,
+    sel: bool,
+    spinner: char,
+    queue_pos: usize,
+    anim: u64,
+) {
     // 内容宽 = 行宽 - 2：右侧 2 列 padding（§4.3 S2 本轮统一；左 2 列由
     // 选择光标槽「▌ 」承担）；Paragraph::style 仍作用于整个 area，
     // 选中背景保持满行，仅内容排版收窄（百分比离右边框 2 列）
@@ -876,9 +891,7 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect, with_chart: bool) {
                             .bg(ACCENT)
                             .add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default()
-                            .fg(ACCENT)
-                            .add_modifier(Modifier::BOLD)
+                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
                     }
                 } else {
                     Style::default().fg(FG)
@@ -1018,7 +1031,15 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             width: inner.width,
             height: (ih as u16).min(inner.bottom().saturating_sub(y)),
         };
-        render_task(f, t, row_area, ti == app.selected, spinner, qpos[ti], app.frame);
+        render_task(
+            f,
+            t,
+            row_area,
+            ti == app.selected,
+            spinner,
+            qpos[ti],
+            app.frame,
+        );
     }
 
     // 通用滚动条（任务数超出一屏才绘制——显示条件在组件内收口）；画在面板
@@ -1265,16 +1286,16 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
         ck_line.extend(label_link("校验"));
         ck_line.push(Span::styled(
             algo_s,
-            with_underline(
-                Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
-                hv,
-            ),
+            with_underline(Style::default().fg(YELLOW).add_modifier(Modifier::BOLD), hv),
         ));
         ck_line.push(Span::styled(
             format!(" · {}", vshort),
             with_underline(Style::default().fg(FG), hv),
         ));
-        ck_line.push(Span::styled(st, with_underline(Style::default().fg(stc), hv)));
+        ck_line.push(Span::styled(
+            st,
+            with_underline(Style::default().fg(stc), hv),
+        ));
         lines.push(Line::from(ck_line));
     }
     lines.push(Line::from(vec![
@@ -1302,20 +1323,23 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
         let hv = val_hover(lines.len(), w(&err_s), DetailField::Failed);
         let mut fail_line = vec![Span::raw("  ")];
         fail_line.extend(label_link("失败"));
-        fail_line.push(Span::styled(err_s, with_underline(Style::default().fg(RED), hv)));
+        fail_line.push(Span::styled(
+            err_s,
+            with_underline(Style::default().fg(RED), hv),
+        ));
         lines.push(Line::from(fail_line));
     }
     // 路径：本轮需求修订：字段名原「保存」再简化为「路径」，蓝色下划线链接
     // （点击复制），值悬停下划线 + 点击打开完整值弹窗
     let save_line_idx = lines.len();
-    let save_s = truncate(
-        &t.save_path,
-        (inner.width as usize).saturating_sub(13),
-    );
+    let save_s = truncate(&t.save_path, (inner.width as usize).saturating_sub(13));
     let hv = val_hover(save_line_idx, w(&save_s), DetailField::SavePath);
     let mut save_line = vec![Span::raw("  ")];
     save_line.extend(label_link("路径"));
-    save_line.push(Span::styled(save_s, with_underline(Style::default().fg(FG), hv)));
+    save_line.push(Span::styled(
+        save_s,
+        with_underline(Style::default().fg(FG), hv),
+    ));
     lines.push(Line::from(save_line));
     // 修订-5：URL 字段名可点击复制（蓝色下划线）；本轮需求修订：值悬停下划线
     // + 点击打开完整值弹窗；记录行号供热区回填；本轮 bug 修订：显示值经
@@ -1323,10 +1347,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     //（悬停时只剩 ezr-demo 自身的 SGR 下划线，不再出现双下划线）；
     // 经 link_break_spans 分段渲染兼容 pyte 类模拟器（文档见该函数）
     let url_line_idx = lines.len();
-    let url_s = break_links(&truncate(
-        &t.url,
-        (inner.width as usize).saturating_sub(13),
-    ));
+    let url_s = break_links(&truncate(&t.url, (inner.width as usize).saturating_sub(13)));
     let hv = val_hover(url_line_idx, w(&url_s), DetailField::Url);
     let mut url_line = vec![Span::raw("  ")];
     url_line.extend(label_link("URL"));
@@ -1625,8 +1646,8 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     for (ri, &ci) in rows_idx[start..end].iter().enumerate() {
         let disp = start + ri; // 显示行号（选中/滚动空间）
         let c = &t.connections[ci]; // 活跃映射指向的真实连接
-        // 选中行高亮仅在本面板聚焦时显示（lazygit 式：非聚焦面板不显示
-        // 内部选中态，视觉焦点唯一）；任务选中不受影响（主列表恒定高亮）
+                                    // 选中行高亮仅在本面板聚焦时显示（lazygit 式：非聚焦面板不显示
+                                    // 内部选中态，视觉焦点唯一）；任务选中不受影响（主列表恒定高亮）
         let sel = focused && disp == app.conns_sel;
         // 选中行：深青背景高亮（同任务列表选中色）
         let bg = if sel { SEL_BG } else { Color::Reset };
@@ -1681,7 +1702,11 @@ fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
             vec![
                 // 序号 = 连接在任务连接池中的槽位号（1 基，稳定不随断连重编号；
                 // 活跃明细可能不连续——已断开槽位的序号不显示）
-                cell(format!("{}", ci + 1), 4, if sel { Color::White } else { FG }),
+                cell(
+                    format!("{}", ci + 1),
+                    4,
+                    if sel { Color::White } else { FG },
+                ),
                 Span::styled(" ", Style::default().bg(bg)),
                 // 下载=淡蓝（同头部 ↓/详情速度配色），待命显示 -
                 cell(
@@ -1922,6 +1947,7 @@ fn draw_dialogs(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(d) = app.dialog.as_ref() else { return };
     app.dlg_btn_rects.clear();
     app.dlg_field_rects.clear();
+    app.dlg_field_wins.clear();
     app.dlg_ck_rects.clear();
     app.dlg_proxy_rects.clear();
     match d.kind {
@@ -1931,22 +1957,11 @@ fn draw_dialogs(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-/// 字段行显示值：空值显示占位提示；超宽显示尾部（…+末尾字符，便于核对校验码结尾）
-fn field_display(val: &str, ph: &str, avail: usize) -> String {
-    if val.is_empty() {
-        truncate(ph, avail)
-    } else if w(val) > avail {
-        let keep = avail.saturating_sub(1);
-        format!(
-            "…{}",
-            val.chars()
-                .skip(val.chars().count() - keep)
-                .collect::<String>()
-        )
-    } else {
-        val.to_string()
-    }
-}
+// 字段行取窗与点击/光标映射已收口为输入框组件单源
+//（crate::textfield::TextInput::field_window：聚焦锚=光标、未聚焦锚=字段尾、
+// CJK 原子、超宽两轮不动点取窗、窗口几何 = 点击映射载荷；原 field_display
+// 尾窗 + 内联「▏」字形退役——字形占列导致后续文本随光标整体平移），本文件
+// 只做 spans 装配与窗口几何/光标屏幕位回填。
 
 /// 下拉浮层定位：优先展开在选择行下方；超出终端底部则改为行上方；
 /// 横向钳制在终端内（左右各留 1 列边距）；px = 内框 + 9 = 字段行左 2 列
@@ -1976,7 +1991,8 @@ enum RowKind {
 
 struct Row {
     label: &'static str,
-    value: String,
+    /// 文本输入框组件实例（值 + 光标一并随行，取窗/光标位从组件单源读出）
+    input: TextInput,
     placeholder: String,
     kind: RowKind,
 }
@@ -2049,40 +2065,40 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
     if is_add {
         rows.push(Row {
             label: "URL",
-            value: url,
+            input: url,
             // 需求修订：URL 占位提示删除（空值不再显示示例地址）
             placeholder: String::new(),
             kind: RowKind::Text,
         });
         rows.push(Row {
             label: "保存到",
-            value: dir,
+            input: dir,
             placeholder: "/srv/downloads".to_string(),
             kind: RowKind::Text,
         });
     }
     rows.push(Row {
         label: "并发",
-        value: conns,
+        input: conns,
         placeholder: "4".to_string(),
         kind: RowKind::Text,
     });
     rows.push(Row {
         label: "校验",
-        value: String::new(),
+        input: TextInput::new(),
         placeholder: String::new(),
         kind: RowKind::CkSel,
     });
     rows.push(Row {
         label: "校验码",
-        value: ck_value,
+        input: ck_value,
         // 需求修订：校验码占位提示删除（算法要求以 H 帮助与提交校验为准）
         placeholder: String::new(),
         kind: RowKind::Text,
     });
     rows.push(Row {
         label: "代理",
-        value: String::new(),
+        input: TextInput::new(),
         placeholder: String::new(),
         kind: RowKind::ProxySel,
     });
@@ -2106,6 +2122,10 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
             ),
             Span::styled("> ".to_string(), Style::default().fg(DIM2)),
         ];
+        // 文本行取窗单源（组件 field_window）：聚焦/未聚焦同源；窗口几何与
+        // 光标位在 rect 求得后回填（字段热区平行表 + 原生光标屏幕位）
+        let mut text_win: Option<FieldWin> = None;
+        let mut pre_cols = 0u16;
         match row.kind {
             RowKind::CkSel => {
                 // 下拉选择行：算法名黄色加粗 + ▾ 指示
@@ -2130,20 +2150,24 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
                 ));
             }
             RowKind::Text => {
-                spans.push(Span::styled(
-                    field_display(&row.value, &row.placeholder, avail),
-                    Style::default().fg(if row.value.is_empty() {
-                        DIM2
-                    } else {
-                        Color::White
-                    }),
-                ));
+                // 原生光标渲染（v1.34 三批同步）：pre/post 在光标处切分直接
+                // 拼接显示（内联「▏」字形退役——后续文本不再随光标移动平移），
+                // 终端原生光标由 ui::draw 收口绘制；取窗走输入框组件单源
+                //（光标随组件实例，无全局 cursor 传参）
+                let fd = row.input.field_window(&row.placeholder, avail, focused);
+                let base = Style::default().fg(if row.input.is_empty() {
+                    DIM2
+                } else {
+                    Color::White
+                });
                 if focused {
-                    spans.push(Span::styled(
-                        "▏",
-                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-                    ));
+                    pre_cols = w(&fd.pre) as u16;
+                    spans.push(Span::styled(fd.pre, base));
+                    spans.push(Span::styled(fd.post, base));
+                } else {
+                    spans.push(Span::styled(format!("{}{}", fd.pre, fd.post), base));
                 }
+                text_win = Some(fd.win);
             }
         }
         let rect = Rect {
@@ -2153,8 +2177,18 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
             height: 1,
         };
         f.render_widget(Paragraph::new(Line::from(spans)), rect);
-        // 回填字段行命中区域（鼠标点击聚焦；下拉行点击展开）
+        // 回填字段行命中区域（鼠标点击聚焦/定位光标；下拉行点击展开）与
+        // 文本字段窗口几何（点击列→字符偏移映射单源载荷；value_x = rect.x
+        // + label 7 列 + "> " 2 列）；聚焦行另发布原生光标屏幕位
+        let mut win = text_win.take();
+        if let Some(w0) = win.as_mut() {
+            w0.value_x = rect.x + 9;
+            if focused {
+                app.dlg_cursor_screen = Some((rect.x + 9 + pre_cols, row_y));
+            }
+        }
         app.dlg_field_rects.push((rect, i));
+        app.dlg_field_wins.push(win);
     }
 
     let n_rows = rows.len() as u16;
@@ -2234,7 +2268,11 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
                 ),
                 Span::styled(
                     // NONE（不校验）无期望长度，右列显示占位破折号
-                    if *need == 0 { "—".to_string() } else { format!("{} 位", need) },
+                    if *need == 0 {
+                        "—".to_string()
+                    } else {
+                        format!("{} 位", need)
+                    },
                     Style::default().fg(if sel { ACCENT } else { DIM2 }).bg(bg),
                 ),
             ]);
@@ -2460,7 +2498,8 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
         .title(Span::styled(" 分块状态 ", panel_title_style(true)));
     // 弹窗框架 = ScrollablePanel（Vertical：右边框列 ↑│║│↓）
     let mut sb = ScrollablePanel::new(ScrollbarMode::Vertical);
-    sb.thumb(FOCUS_BORDER).pressed_v(app.sb_arrow_pressed(SbKey::Pieces));
+    sb.thumb(FOCUS_BORDER)
+        .pressed_v(app.sb_arrow_pressed(SbKey::Pieces));
     let inner = sb.render_block(f, rect, block);
     app.pieces_area = Some(rect);
     // 右上角 [✗]（本轮需求修订：全部弹窗统一；原地松开 = 关闭分块弹窗）
@@ -2496,9 +2535,7 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
         let frontier = x as usize / cols;
         app.pieces_scroll = frontier.saturating_sub(grid_h / 2);
     }
-    app.pieces_scroll = app
-        .pieces_scroll
-        .min(total_rows.saturating_sub(grid_h));
+    app.pieces_scroll = app.pieces_scroll.min(total_rows.saturating_sub(grid_h));
     let start_row = app.pieces_scroll;
 
     // 行 1：任务名（超宽截尾；预算 = 内框宽 − 左 2 − 右 2，§4.3 S2）
@@ -2608,9 +2645,7 @@ fn help_lines() -> Vec<Line<'static>> {
             Span::styled("    ", Style::default()),
             Span::styled(
                 pad_right(k, 16),
-                Style::default()
-                    .fg(ACCENT)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
             ),
             Span::styled(d.to_string(), Style::default().fg(FG)),
         ])
@@ -2653,7 +2688,10 @@ fn help_lines() -> Vec<Line<'static>> {
         kd("鼠标滚轮", "悬停并发面板 = 滚动连接明细（±2/格）"),
         kd("B", "阻塞并移除选中连接（仅 BT 任务）"),
         sec("滚动条（通用组件）"),
-        kd("拖拽滑块 ═║", "按住双线滑块拖动 = 比例滚动内容（浮层内同样滚内容）"),
+        kd(
+            "拖拽滑块 ═║",
+            "按住双线滑块拖动 = 比例滚动内容（浮层内同样滚内容）",
+        ),
         kd("点击 ↑↓←→", "步进滚动 1 格；按住不放自动连发"),
         kd("点击轨道", "朝点击方向整页滚动（可按住连发）"),
         kd("方向键", "面板聚焦时 ↑↓ 选择/纵向滚动、←→ 横向滚动（并发）"),
@@ -2701,7 +2739,8 @@ fn draw_help(f: &mut Frame, app: &mut App, area: Rect) {
         .title(Span::styled(" 帮助 ", panel_title_style(true)));
     // 弹窗框架 = ScrollablePanel（Vertical：右边框列 ↑│║│↓）
     let mut sb = ScrollablePanel::new(ScrollbarMode::Vertical);
-    sb.thumb(FOCUS_BORDER).pressed_v(app.sb_arrow_pressed(SbKey::Help));
+    sb.thumb(FOCUS_BORDER)
+        .pressed_v(app.sb_arrow_pressed(SbKey::Help));
     let inner = sb.render_block(f, rect, block);
     app.help_area = Some(rect);
     // 右上角 [✗]（本轮需求修订：全部弹窗统一；原地松开 = 关闭帮助窗口）
@@ -2917,10 +2956,13 @@ fn draw_val_popup(f: &mut Frame, app: &mut App, area: Rect) {
 // ---------------------------------------------------------------------------
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    // 原生光标屏幕位每帧重置：仅聚焦文本行渲染时重新发布（防陈旧位跨帧
+    // 残留——如焦点切到按钮行后旧位仍画光标）
+    app.dlg_cursor_screen = None;
     let area = f.area();
     let outer = Layout::vertical([
         Constraint::Length(5), // 顶部区：头部仪表面板（标题边框 + 字段/分割线/页签 3 内容行 + 底边框）
-        Constraint::Min(8),   // 主区：任务列表 | 任务详情 + 并发连接面板
+        Constraint::Min(8),    // 主区：任务列表 | 任务详情 + 并发连接面板
         Constraint::Length(4), // 页脚（双行：行1 快捷命令 chips + 行2 toast；chips 恢复保留）
     ])
     .split(area);
@@ -3000,5 +3042,171 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // 字段值弹窗（最上层；点击详情面板字段值打开，模态：打开时底层面板暗框）
     if app.val_open {
         draw_val_popup(f, app, area);
+    }
+
+    // 原生终端光标收口（v1.34 三批同步）：对话框聚焦文本行渲染时发布
+    // [`App::dlg_cursor_screen`]，此处按 z 序门控画终端原生光标——光标屏位
+    // 不随图层遮挡消失（浮层覆盖的行不发布）；每帧开头清空（见下），未回填
+    // = 不调用 set_cursor_position = Terminal 每帧收尾自然隐藏光标
+    if let Some((x, y)) = app.dlg_cursor_screen {
+        if !app.pieces_open && !app.help_open && !app.about_open && !app.val_open {
+            f.set_cursor_position(ratatui::layout::Position { x, y });
+        }
+    }
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    //! 输入框原生光标渲染集成（对齐产品 dialog_native_cursor 口径）：字形
+    //! 退役 / 光标屏幕位发布 / TestBackend 读回 / 窗口几何回填 / 点击定位。
+
+    use ratatui::{backend::TestBackend, Terminal};
+
+    use super::*;
+    use crate::app::DialogKind;
+    use crate::textfield::TextInput;
+
+    /// 原生光标渲染：①整屏无内联「▏」字形（后续文本不因光标存在平移）；
+    /// ②聚焦文本行发布光标屏幕位（值区起点 + pre 宽）；③Terminal 收口把
+    /// 光标位下发后端（TestBackend 可读回）；④字段窗口几何与热区平行回填
+    #[test]
+    fn dialog_native_cursor_published_and_positioned() {
+        let mut app = crate::app::App::new();
+        app.open_add_dialog();
+        {
+            let d = app.dialog.as_mut().unwrap();
+            assert_eq!(d.kind, DialogKind::Add);
+            d.url.set("https://ezr.dev/"); // 16 字符，光标随 set 迁尾
+            d.focus_field(0);
+            d.url.set_cursor(8); // "https://|ezr.dev/"
+        }
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| draw(f, &mut app)).unwrap();
+        // 120×40：dlg 居中 (23,14,74,12)；URL 行 y=16、rect.x=26、值区起点
+        // x=35；pre="https://" 宽 8 → 光标列 43
+        assert_eq!(
+            app.dlg_cursor_screen,
+            Some((43, 16)),
+            "聚焦文本行光标屏幕位（值区起点 + pre 宽）"
+        );
+        let pos = term.get_cursor_position().unwrap();
+        assert_eq!(
+            (pos.x, pos.y),
+            (43, 16),
+            "Terminal 收口把原生光标位下发后端"
+        );
+        // 字形退役：整屏无「▏」；文本原样显示（光标不占列）
+        let s = term.backend().to_string();
+        assert!(!s.contains('▏'), "内联字形光标退役: {s}");
+        assert!(s.contains("https://ezr.dev/"), "URL 原样显示: {s}");
+        // 窗口几何回填：URL 行 win 在位且 value_x = 35（点击映射单源载荷）
+        let win = app.dlg_field_wins[0].as_ref().expect("文本行 win 回填");
+        assert_eq!(win.value_x, 35);
+        assert_eq!((win.win_lo, win.win_hi), (0, 16));
+        assert_eq!(win.cols.last().copied(), Some(16), "cols 末位 = 窗口总宽");
+        // 非文本行 win = None（校验 = 行 3、代理 = 行 5）
+        assert!(app.dlg_field_wins[3].is_none(), "下拉行无窗口几何");
+        // 光标移动到中段：屏幕位随动（零位移——显示内容不变，仅光标位变）
+        app.dialog.as_mut().unwrap().url.set_cursor(2);
+        term.draw(|f| draw(f, &mut app)).unwrap();
+        assert_eq!(app.dlg_cursor_screen, Some((37, 16)), "光标列随 cursor");
+    }
+
+    /// 对话框文本字段点击 = 聚焦 + 光标落点击处（列 → 字符映射消费渲染层
+    /// 发布的窗口几何）；越末钳字段尾
+    #[test]
+    fn dialog_field_click_positions_cursor() {
+        let mut app = crate::app::App::new();
+        app.open_add_dialog();
+        {
+            let d = app.dialog.as_mut().unwrap();
+            d.url.set("https://example.com/path"); // 24 字符（光标随 set 迁尾）
+            d.focus_field(0);
+        }
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| draw(f, &mut app)).unwrap();
+        // 渲染层回填几何在位：URL 行 rect.y=16、值区起点 x=35
+        assert!(app.dlg_field_wins[0].is_some(), "渲染层窗口几何已回填");
+
+        use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        // demo 对话框点击语义：Down 记录按压、原地 Up（未拖动）= 点击
+        let mev = |kind: MouseEventKind, col: u16, row: u16| MouseEvent {
+            kind,
+            column: col,
+            row,
+            modifiers: KeyModifiers::empty(),
+        };
+        let click = |app: &mut crate::app::App, col: u16, row: u16| {
+            app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), col, row));
+            app.on_mouse(mev(MouseEventKind::Up(MouseButton::Left), col, row));
+        };
+        // 点击 URL 值第 5 字符列（"https" 之后，x=40）→ 聚焦 URL + 光标 5
+        click(&mut app, 40, 16);
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.focus, 0, "点击聚焦 URL 行");
+        assert_eq!(d.url.cursor, 5, "光标落点击列对应字符偏移（: 前）");
+        let _ = KeyCode::Esc;
+
+        // 点击值区右侧 padding（x=90）→ 光标钳到字段尾
+        click(&mut app, 90, 16);
+        assert_eq!(app.dialog.as_ref().unwrap().url.cursor, 24, "越末 → 字段尾");
+    }
+
+    /// 方向键在文本字段内移动光标不跳焦点（对齐产品 v1.34 二批修订）：
+    /// Left/Right ±1 字符、Up 行首、Down 行尾、中位插入与退格随光标生效
+    #[test]
+    fn arrow_keys_move_cursor_in_text_fields() {
+        let mut app = crate::app::App::new();
+        app.open_add_dialog();
+        use crossterm::event::KeyCode;
+        // 清空预填 URL（demo 添加对话框按预填池轮换预填）后从空键入
+        app.dialog.as_mut().unwrap().url.clear();
+        // 键入 "abc"：光标随迁至 3（字段尾）
+        for c in ['a', 'b', 'c'] {
+            app.on_dialog_key(KeyCode::Char(c));
+        }
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.url.value, "abc");
+        assert_eq!(d.url.cursor, 3, "键入后光标在字段尾");
+
+        // Left：3 → 2；再键入 'X' → 中位插入 "abXc"
+        app.on_dialog_key(KeyCode::Left);
+        app.on_dialog_key(KeyCode::Char('X'));
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.url.value, "abXc", "中位插入落在光标列");
+        assert_eq!(d.url.cursor, 3);
+        assert_eq!(d.focus, 0, "方向键不跳焦点");
+
+        // Right 到尾 + 越界钳制；Down = 行尾语义
+        app.on_dialog_key(KeyCode::Right);
+        app.on_dialog_key(KeyCode::Right);
+        app.on_dialog_key(KeyCode::Down);
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.url.cursor, 4, "Right/Down 到尾钳制（行尾）");
+        // Left 到头 + 越界钳制；Up = 行首语义
+        for _ in 0..6 {
+            app.on_dialog_key(KeyCode::Left);
+        }
+        app.on_dialog_key(KeyCode::Up);
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.url.cursor, 0, "Left/Up 到头钳制（行首）");
+
+        // 光标 1 处退格：删 'a'
+        app.on_dialog_key(KeyCode::Right);
+        app.on_dialog_key(KeyCode::Backspace);
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.url.value, "bXc", "光标 1 处退格删前字符");
+        assert_eq!(d.url.cursor, 0);
+
+        // Tab 后光标随迁到新字段尾（dir 预填 "/srv/downloads" = 14 字符）
+        app.on_dialog_key(KeyCode::Tab);
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.focus, 1);
+        assert_eq!(
+            d.dir.cursor,
+            d.dir.len_chars(),
+            "焦点切换单源：光标迁至新字段尾"
+        );
+        assert_eq!(d.dir.cursor, 14);
     }
 }

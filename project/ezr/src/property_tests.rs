@@ -1023,22 +1023,24 @@ proptest! {
         for c in &chars {
             let consumed = crate::app::text_char(kind, &mut d, focus, *c);
             prop_assert_eq!(consumed, is_text, "消费口径与文本字段矩阵一致 (focus={})", focus);
-            prop_assert!(d.url.chars().count() <= 300, "URL ≤ 300");
-            prop_assert!(d.dir.chars().count() <= 300, "目录 ≤ 300");
-            prop_assert!(d.conns.chars().count() <= 2, "并发 ≤ 2 位");
-            prop_assert!(d.conns.chars().all(|x| x.is_ascii_digit()), "并发仅数字");
+            prop_assert!(d.url.len_chars() <= 300, "URL ≤ 300");
+            prop_assert!(d.dir.len_chars() <= 300, "目录 ≤ 300");
+            prop_assert!(d.conns.len_chars() <= 2, "并发 ≤ 2 位");
+            prop_assert!(d.conns.value.chars().all(|x| x.is_ascii_digit()), "并发仅数字");
             if !d.conns.is_empty() {
                 prop_assert!(d.conns_edited, "并发非空时 edited 必已置位");
             }
-            // 光标不变量（v1.34 二批）：恒在当前焦点字段长度内
-            let field_len = match crate::app::text_field_at(kind, focus) {
-                Some(crate::app::TextField::Url) => d.url.chars().count(),
-                Some(crate::app::TextField::Dir) => d.dir.chars().count(),
-                Some(crate::app::TextField::Conns) => d.conns.chars().count(),
-                Some(crate::app::TextField::CkValue) => d.ck_value.chars().count(),
-                None => 0,
-            };
-            prop_assert!(d.cursor <= field_len, "光标 ≤ 字段长 (focus={})", focus);
+            // 光标不变量（v1.34 二批）：恒在所属字段长度内（光标随输入框
+            // 组件实例，各字段独立）
+            let fields = [
+                (crate::app::TextField::Url, d.url.len_chars(), d.url.cursor),
+                (crate::app::TextField::Dir, d.dir.len_chars(), d.dir.cursor),
+                (crate::app::TextField::Conns, d.conns.len_chars(), d.conns.cursor),
+                (crate::app::TextField::CkValue, d.ck_value.len_chars(), d.ck_value.cursor),
+            ];
+            for (f, len, cur) in fields {
+                prop_assert!(cur <= len, "{f:?} 光标 ≤ 字段长 (focus={})", focus);
+            }
         }
     }
 
@@ -1055,17 +1057,11 @@ proptest! {
     ) {
         let mut d = crate::app::testutil::dialog(kind, focus);
         let seed_s: String = seed.into_iter().collect();
-        d.url = seed_s.clone();
-        d.dir = seed_s.clone();
-        d.conns = "42".to_string();
-        d.ck_value = seed_s.clone();
-        // 夹具置光标到靶字段尾（键入态；弹末尾字符口径与旧属性对齐）
-        d.cursor = match (kind, focus) {
-            (DialogKind::Add, 2) | (DialogKind::Modify, 0) => 2,
-            (DialogKind::Add, 0) | (DialogKind::Add, 1) | (DialogKind::Add, 4)
-            | (DialogKind::Modify, 2) => seed_s.chars().count(),
-            _ => 0,
-        };
+        d.url.set(seed_s.clone());
+        d.dir.set(seed_s.clone());
+        d.conns.set("42");
+        d.ck_value.set(seed_s.clone());
+        // 夹具置光标到靶字段尾（键入态；set 迁尾口径与旧属性对齐）
         let is_bs_field = matches!(
             (kind, focus),
             (DialogKind::Add, 0)
@@ -1076,12 +1072,17 @@ proptest! {
                 | (DialogKind::Modify, 2)
         );
         let (url0, dir0, conns0, ck0) = (
-            d.url.clone(),
-            d.dir.clone(),
-            d.conns.clone(),
-            d.ck_value.clone(),
+            d.url.value.clone(),
+            d.dir.value.clone(),
+            d.conns.value.clone(),
+            d.ck_value.value.clone(),
         );
-        let cursor0 = d.cursor;
+        let cursor0 = (
+            d.url.cursor,
+            d.dir.cursor,
+            d.conns.cursor,
+            d.ck_value.cursor,
+        );
         let consumed = crate::app::text_backspace(kind, &mut d, focus);
         prop_assert_eq!(consumed, is_bs_field, "退格消费口径与字段矩阵一致 (focus={})", focus);
         let expect_pop = |before: &str, after: &str| {
@@ -1089,33 +1090,36 @@ proptest! {
             expect.pop();
             assert_eq!(after, expect);
         };
+        let follow = |before: usize, len: usize, after: usize| {
+            assert_eq!(after, before.saturating_sub(1).min(len), "退格后光标随迁");
+        };
         match (kind, focus) {
             (DialogKind::Add, 0) => {
-                expect_pop(&url0, &d.url);
-                prop_assert_eq!(d.cursor, cursor0.saturating_sub(1).min(d.url.chars().count()), "退格后光标随迁");
+                expect_pop(&url0, &d.url.value);
+                follow(cursor0.0, d.url.len_chars(), d.url.cursor);
             }
             (DialogKind::Add, 1) => {
-                expect_pop(&dir0, &d.dir);
-                prop_assert_eq!(d.cursor, cursor0.saturating_sub(1).min(d.dir.chars().count()), "退格后光标随迁");
+                expect_pop(&dir0, &d.dir.value);
+                follow(cursor0.1, d.dir.len_chars(), d.dir.cursor);
             }
             (DialogKind::Add, 4) => {
-                expect_pop(&ck0, &d.ck_value);
-                prop_assert_eq!(d.cursor, cursor0.saturating_sub(1).min(d.ck_value.chars().count()), "退格后光标随迁");
+                expect_pop(&ck0, &d.ck_value.value);
+                follow(cursor0.3, d.ck_value.len_chars(), d.ck_value.cursor);
             }
             (DialogKind::Modify, 2) => {
-                expect_pop(&ck0, &d.ck_value);
-                prop_assert_eq!(d.cursor, cursor0.saturating_sub(1).min(d.ck_value.chars().count()), "退格后光标随迁");
+                expect_pop(&ck0, &d.ck_value.value);
+                follow(cursor0.3, d.ck_value.len_chars(), d.ck_value.cursor);
             }
             (DialogKind::Add, 2) | (DialogKind::Modify, 0) => {
-                expect_pop(&conns0, &d.conns);
+                expect_pop(&conns0, &d.conns.value);
                 prop_assert!(d.conns_edited, "并发退格置 edited");
-                prop_assert_eq!(d.cursor, cursor0.saturating_sub(1).min(d.conns.chars().count()), "退格后光标随迁");
+                follow(cursor0.2, d.conns.len_chars(), d.conns.cursor);
             }
             _ => {
-                prop_assert_eq!(&d.url, &url0, "非退格字段零变化");
-                prop_assert_eq!(&d.dir, &dir0, "非退格字段零变化");
-                prop_assert_eq!(&d.conns, &conns0, "非退格字段零变化");
-                prop_assert_eq!(&d.ck_value, &ck0, "非退格字段零变化");
+                prop_assert_eq!(&d.url.value, &url0, "非退格字段零变化");
+                prop_assert_eq!(&d.dir.value, &dir0, "非退格字段零变化");
+                prop_assert_eq!(&d.conns.value, &conns0, "非退格字段零变化");
+                prop_assert_eq!(&d.ck_value.value, &ck0, "非退格字段零变化");
             }
         }
     }
@@ -1129,9 +1133,9 @@ proptest! {
         let mut d = crate::app::testutil::dialog(DialogKind::Add, 4);
         for c in &chars {
             crate::app::push_hex_capped(&mut d, *c);
-            prop_assert!(d.ck_value.chars().count() <= 128, "校验码 ≤ 128");
+            prop_assert!(d.ck_value.len_chars() <= 128, "校验码 ≤ 128");
             prop_assert!(
-                d.ck_value.chars().all(|x| x.is_ascii_hexdigit()),
+                d.ck_value.value.chars().all(|x| x.is_ascii_hexdigit()),
                 "仅十六进制字符"
             );
         }

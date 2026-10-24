@@ -211,6 +211,11 @@ group_imports = "StdExternalCrate"
   前缀极易出错，且报错位置远离笔误点。统一用"编码辅助函数 + 解析 round-trip 断言"
   （编码→解析→比对原文），笔误当场现形。
 
+- **clippy `wrong_self_convention`：原位修改方法不要 `to_*` 前缀**：`to_*` 命名
+  约定 = 转换并返回新值（`self` 按值取或 `&self` + 非 Copy 报警），`&mut self`
+  的原位操作用动词短语命名（`cursor_end()`/`cursor_home()`）或 `set_*`/`move_*`
+  前缀；组件 API 命名阶段避开，省得整目录改名。
+
 ## 5. 平台与 IPC
 
 - **`tokio::net::UnixListener`/`UnixStream` 仅 `cfg(unix)`，Windows 上编不过**：
@@ -499,6 +504,17 @@ group_imports = "StdExternalCrate"
   再按守卫口径重生成全部剥头副本 → 跑全量测试确认守卫绿；守卫断言报 diff 时先看
   两侧差异是否纯格式（缩进/换行），纯格式差异一律走重生成而非手改夹具。
 
+- **`#[path]` 部分收编的测试 crate 必须随产品新模块同步补挂**：测试 crate 挂载
+  产品源（如 `#[path = "../src/app/mod.rs"] mod app;`）后，产品再新增被挂载源
+  引用的顶层模块（组件/工具）时，每个挂载该源的测试 crate 都要补一段
+  `#[path = "../src/<新模块>.rs"] mod <新模块>;`——否则报错是使用点上的
+  E0433/E0599（找不到类型/方法），不在挂载点，容易误判为业务改动遗漏；
+  按「挂载了哪些源」反查需要补挂的 crate 清单。
+- **proptest 断言宏不能在普通闭包内使用**：`prop_assert*!` 展开为
+  `return Err(TestCaseError…)`，装进闭包后返回类型与 `()` 不符直接 E0308；
+  闭包内用 std `assert_eq!`（panic 会被 proptest 捕获并转为该案例失败），
+  或把断言内联回测试体。
+
 ## 8. 架构边界与适配器方向
 
 - **低层模块不得构造高层模块的展示类型（适配方向：high→low）**：低层的内部数据视图应
@@ -648,6 +664,12 @@ group_imports = "StdExternalCrate"
   文本字段内方向键只动光标（单行字段 Up/Down 映射行首/行尾），非文本焦点保持原
   导航语义——映射本身收进焦点切换单源方法防重复。
 
+- **同一交互域散落多层的实现收口为顶层零依赖组件**：状态层（编辑状态机）、
+  渲染层（取窗/显示）、交互层（点击映射）各持一份同域逻辑时，收口为单个
+  顶层组件模块（不依赖 ui/app，纯数据 + 纯函数），状态层与渲染层共同消费、
+  依赖方向都指向组件；既有引用路径用 re-export 保形（`pub use
+  crate::<组件>::<类型>`）零迁移。组件文件自包含（含自带单测）后，移植到
+  同源衍生项目 = 单文件复制。
 - **TUI 异常终止后的终端自恢复 = 存活哨兵子进程模式**：SIGKILL 进程内无法捕获
   （raw mode 关 ISIG → CTRL+C 失效；鼠标捕获未复位 → 终端持续上报 SGR 鼠标事件
   被 shell 回显成 `32;64;10M` 形态残影；备用屏幕未离开）。方案：TUI 启动前 spawn
@@ -949,3 +971,9 @@ group_imports = "StdExternalCrate"
 - **按连接序号门控 mock（`dropseq=N`）**：在既有 droponce（首连接半途断连）之外的
   请求臂失败形态——「探测成功、续传 Range 请求即断」需要第 N 个连接不回任何响应直接
   断开；连接级计数 + `continue`（不写响应直接落到底部关闭）即可，无需特殊 HTTP 状态。
+
+- **crossterm 0.28 带超时 `event::poll` 的 `Ok(false)` 是混合语义：锁竞争失败 ≠ 队列空**（v150 coder 轮实证）：poll 先 `try_lock_internal_event_reader_for(timeout)`，EventStream 常驻后台线程在 `poll_internal(None, …)` 中持锁阻塞等事件、其 Drop 只置 shutdown 标志不 join——restore/drain 首轮 poll(0) 撞锁尾巴立即 Ok(false)，消费循环误判队列空直接退出，已排队字节原样留给继承 tty 的 shell 回显成乱码。drain 类循环 poll 预算至少 5ms（先等到锁再按队列真实状态判定），且按「是否消费到事件」返回 bool 供上层决定是否追加窗口。
+- **TUI 退出收尾的正确顺序：鼠标关最先 → settle 窗口 → drain → raw 关 → 其余关**（v150 coder 轮实证，`^[[<35;58;18M` 退出后 shell 乱码根治）：disable 序列 flush 后终端模拟器**异步**处理，处理完成前 1003 any-event 仍持续生成 motion 字节——「先 drain 后关鼠标」对该生成窗口无能为力（窗口内新字节排队在 tty 队列，进程退出即泄漏）。正确序：`DisableMouseCapture` flush → sleep ~50ms → drain → `disable_raw_mode` → 其余关闭命令。两条硬约束：① drain 必须在 raw mode 仍开启时做（canonical 模式下无换行的鼠标序列被内核 line discipline 攒行等 EOL，poll 永远 false、read 永远拿不到）；② 错误容忍——复原路径两段 execute! 都执行（前段失败不跳过后续关闭），按序上报首个 Err。哨兵/父死路径**不要** drain：与已恢复的 shell 竞争读队列会吞用户键入。
+- **TimedWriter：给字节流测试加时间戳以锁定「顺序 × 时序」复合契约**（v150 coder 轮实证）：`impl Write for 探针 Writer`，每次 `write` 记录 `(start.elapsed(), 内容)`——同一份字节流同时断言字节序（内容 find 比大小）与相对窗口时序（鼠标关 < 45ms < paste/alt 关，睡眠保证 ≥50ms 取 45ms 容差）。比「分开测顺序 + 信任 sleep」强：任何把 settle 挪到鼠标关之前/之后的回退即刻红，且无需真实终端（Vec 语境 poll 报错即无事件路径）。
+- **沙箱内 rustup 会卡网络解析，用环境变量直指工具链**（v150 coder 轮实证）：`rustup toolchain list` 等命令在受限沙箱可无限挂起（rsproxy 不可达时不快速失败）；绕过 `rust-toolchain.toml` 解析直接 `export RUSTUP_TOOLCHAIN=nightly-x86_64-unknown-linux-gnu`（工具链已在 `~/.rustup/toolchains/`）+ `PATH=$HOME/.cargo/bin:$PATH`，cargo/rustfmt/clippy 全部立即可用，无需等 rustup。
+- **长 pty 回归脚本连续全量跑会在中后段随机挂起（沙箱 flake），按场景子集分半跑可绕**（v150 coder 轮实证，沿 v135 轮同款）：verify_ezr 全量挂 R 场景起点（280s 超时），`verify_ezr.py r` 单独跑 10/10、按子集 `abcdefhijklmn` + `opqrs` 分半全绿 118+64；test_focus_style 同法 `fgi` + `hjkl` 得 26+32。判据：挂起点随运行漂移、挂起场景单独复跑通过、短套件（footer/smoke 等全生命周期 pty）全绿——环境性而非代码回归。单实例长时间跑前先 `ps aux | rg ezr-tui-demo` 清残留。

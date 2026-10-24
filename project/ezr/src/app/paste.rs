@@ -2,9 +2,7 @@
 //! 文本字段同权接收；v1.34 二批 bug 修订：光标处插入——与逐键输入同一光标
 //! 语义，粘贴后光标随迁）：纯函数便于单测
 
-use super::dialog_keys::{
-    cursor_insert, text_field_at, TextField, CAP_CK_HEX, CAP_CONNS_DIGITS, CAP_TEXT,
-};
+use super::dialog_keys::{text_field_at, TextField, CAP_CK_HEX, CAP_CONNS_DIGITS, CAP_TEXT};
 use super::{App, Dialog, DialogKind};
 use crate::model::checksum::CK_NONE;
 
@@ -50,15 +48,16 @@ fn paste_sanitize(text: &str) -> String {
 /// Modify：0=并发 2=校验码。过滤规则与逐键输入一致（容量单源 dialog_keys
 /// 常量，architect v116）：URL/目录 ≤ CAP_TEXT 字符；并发仅数字 ≤
 /// CAP_CONNS_DIGITS 位；校验码仅十六进制 ≤ CAP_CK_HEX 位；按钮焦点与
-/// 下拉行不接收。插入后光标随迁（落在插入文本之后）。
+/// 下拉行不接收。插入后光标随迁（落在插入文本之后）——编辑走输入框
+/// 组件 [`TextInput::insert`] 单源。
 fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, text: &str) -> bool {
     let clean = paste_sanitize(text);
     match text_field_at(kind, focus) {
-        Some(TextField::Url) => cursor_insert(&mut d.url, &mut d.cursor, &clean, CAP_TEXT) > 0,
-        Some(TextField::Dir) => cursor_insert(&mut d.dir, &mut d.cursor, &clean, CAP_TEXT) > 0,
+        Some(TextField::Url) => d.url.insert(&clean, CAP_TEXT) > 0,
+        Some(TextField::Dir) => d.dir.insert(&clean, CAP_TEXT) > 0,
         Some(TextField::Conns) => {
             let digits: String = clean.chars().filter(|c| c.is_ascii_digit()).collect();
-            let inserted = cursor_insert(&mut d.conns, &mut d.cursor, &digits, CAP_CONNS_DIGITS);
+            let inserted = d.conns.insert(&digits, CAP_CONNS_DIGITS);
             d.conns_edited |= inserted > 0;
             inserted > 0
         }
@@ -69,7 +68,7 @@ fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, text: &str) -
                 return false;
             }
             let hex: String = clean.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-            cursor_insert(&mut d.ck_value, &mut d.cursor, &hex, CAP_CK_HEX) > 0
+            d.ck_value.insert(&hex, CAP_CK_HEX) > 0
         }
         None => false,
     }
@@ -94,7 +93,7 @@ mod paste_tests {
         let url = format!("http://example.com/{}", "a".repeat(180));
         assert_eq!(url.chars().count(), 199);
         assert!(dlg_apply_paste(DialogKind::Add, &mut d, 0, &url));
-        assert_eq!(d.url, url);
+        assert_eq!(d.url.value, url);
     }
 
     /// 粘贴携带换行/制表的剪贴板内容：控制字符被剔除
@@ -107,7 +106,7 @@ mod paste_tests {
             0,
             "http://example.com/f.bin\r\n"
         ));
-        assert_eq!(d.url, "http://example.com/f.bin");
+        assert_eq!(d.url.value, "http://example.com/f.bin");
     }
 
     /// URL 字段 300 字符上限与逐键输入一致
@@ -116,7 +115,7 @@ mod paste_tests {
         let mut d = add_dialog(0);
         let blob = "x".repeat(400);
         assert!(dlg_apply_paste(DialogKind::Add, &mut d, 0, &blob));
-        assert_eq!(d.url.chars().count(), 300);
+        assert_eq!(d.url.len_chars(), 300);
     }
 
     /// 校验码字段：仅十六进制被接收，最多 128 位（SHA-512）——Add
@@ -129,10 +128,10 @@ mod paste_tests {
             4,
             "  zzFF88ff00!dead-beef  "
         ));
-        assert_eq!(d.ck_value, "FF88ff00deadbeef");
+        assert_eq!(d.ck_value.value, "FF88ff00deadbeef");
         let blob = "f".repeat(200);
         assert!(dlg_apply_paste(DialogKind::Add, &mut d, 4, &blob));
-        assert_eq!(d.ck_value.chars().count(), 128);
+        assert_eq!(d.ck_value.len_chars(), 128);
     }
 
     /// v1.17（FR-01-06 修订，操作者缺陷 A 场景）：修改对话框校验码字段
@@ -144,10 +143,10 @@ mod paste_tests {
             dlg_apply_paste(DialogKind::Modify, &mut d, 2, "  zzFF88ff00!dead-beef  "),
             "旧实现门条件仅放行 Add，Modify 粘贴被整门拒绝（红路径）"
         );
-        assert_eq!(d.ck_value, "FF88ff00deadbeef");
+        assert_eq!(d.ck_value.value, "FF88ff00deadbeef");
         let blob = "f".repeat(200);
         assert!(dlg_apply_paste(DialogKind::Modify, &mut d, 2, &blob));
-        assert_eq!(d.ck_value.chars().count(), 128);
+        assert_eq!(d.ck_value.len_chars(), 128);
     }
 
     /// v1.17：修改对话框并发字段粘贴——仅数字 ≤2 位，edited 标记置位
@@ -155,11 +154,11 @@ mod paste_tests {
     fn paste_modify_conns_digits_and_cap() {
         let mut d = modify_dialog(0);
         assert!(dlg_apply_paste(DialogKind::Modify, &mut d, 0, "1a2b3"));
-        assert_eq!(d.conns, "12");
+        assert_eq!(d.conns.value, "12");
         assert!(d.conns_edited);
-        d.conns = "64".into();
+        d.conns.set("64");
         assert!(!dlg_apply_paste(DialogKind::Modify, &mut d, 0, "7"));
-        assert_eq!(d.conns, "64");
+        assert_eq!(d.conns.value, "64");
     }
 
     /// v1.17：修改对话框下拉行（1=算法 3=代理）与按钮焦点（4=确定 5=取消）
@@ -179,20 +178,20 @@ mod paste_tests {
     fn paste_conns_two_digits_only() {
         let mut d = add_dialog(2);
         assert!(dlg_apply_paste(DialogKind::Add, &mut d, 2, "1a2b3"));
-        assert_eq!(d.conns, "12");
+        assert_eq!(d.conns.value, "12");
         assert!(d.conns_edited);
-        d.conns = "9".into();
+        d.conns.set("9");
         assert!(dlg_apply_paste(DialogKind::Add, &mut d, 2, "42"));
-        assert_eq!(d.conns, "94");
+        assert_eq!(d.conns.value, "94");
     }
 
     /// 并发字段满 2 位后再粘贴：无变化（Add）
     #[test]
     fn paste_conns_full_rejects() {
         let mut d = add_dialog(2);
-        d.conns = "64".into();
+        d.conns.set("64");
         assert!(!dlg_apply_paste(DialogKind::Add, &mut d, 2, "7"));
-        assert_eq!(d.conns, "64");
+        assert_eq!(d.conns.value, "64");
     }
 
     /// 纯控制字符粘贴：无效果
@@ -229,32 +228,38 @@ mod paste_tests {
         assert!(!paste_accepts(DialogKind::Delete, false, false));
     }
 
-    /// 截断式插入按字符计数，不切分多字节字符（v1.34 二批：push_capped →
-    /// routing cursor_insert 光标语义，边界安全性单测保留在此）
+    /// 插入按字符计不切分多字节字符（v1.34 二批：push_capped → 光标语义；
+    /// 组件化后容量截断单测在 textfield 组件内，此处保留字段路径等价守卫：
+    /// hex 字段过滤剔除非十六进制字符 + 光标处插入随迁 + 并发字段数字过滤）
     #[test]
-    fn cursor_insert_respects_char_boundary() {
-        let mut s = String::from("下载");
-        let mut cur = s.chars().count(); // 光标在尾
-        assert_eq!(cursor_insert(&mut s, &mut cur, "器abc", 3), 1);
-        assert_eq!(s, "下载器");
-        assert_eq!(cur, 3);
-        assert_eq!(cursor_insert(&mut s, &mut cur, "x", 3), 0);
-        assert_eq!(s, "下载器");
+    fn field_insert_respects_char_boundary() {
+        let mut d = add_dialog(4);
+        d.ck_value.set("下载");
+        // 「器」非十六进制被字段过滤剔除、abc 通过；插入在光标（set 迁尾 = 2）处
+        assert!(dlg_apply_paste(DialogKind::Add, &mut d, 4, "器abc"));
+        assert_eq!(d.ck_value.value, "下载abc", "hex 过滤剔除非十六进制字符");
+        assert_eq!(d.ck_value.cursor, 5, "光标随迁插入文本之后");
+        let mut d2 = modify_dialog(0);
+        d2.conns.set("下载");
+        assert!(
+            !dlg_apply_paste(DialogKind::Modify, &mut d2, 0, "器"),
+            "并发字段数字过滤"
+        );
     }
 
     /// v1.34 二批：粘贴插入在光标处（非恒末尾追加）——URL 字段中位插入
     #[test]
     fn paste_inserts_at_cursor() {
         let mut d = add_dialog(0);
-        d.url = "http://a.bin".to_string();
-        d.cursor = 7; // "http://" 之后
+        d.url.set("http://a.bin");
+        d.url.set_cursor(7); // "http://" 之后
         assert!(dlg_apply_paste(DialogKind::Add, &mut d, 0, "X"));
-        assert_eq!(d.url, "http://Xa.bin", "粘贴落在光标列");
-        assert_eq!(d.cursor, 8, "光标随迁至插入文本之后");
+        assert_eq!(d.url.value, "http://Xa.bin", "粘贴落在光标列");
+        assert_eq!(d.url.cursor, 8, "光标随迁至插入文本之后");
         // 光标在 0：插到行首
-        d.cursor = 0;
+        d.url.set_cursor(0);
         assert!(dlg_apply_paste(DialogKind::Add, &mut d, 0, "S"));
-        assert_eq!(d.url, "Shttp://Xa.bin");
+        assert_eq!(d.url.value, "Shttp://Xa.bin");
     }
 
     fn make_app(tag: &str) -> crate::app::App {
@@ -276,7 +281,7 @@ mod paste_tests {
         app.dialog = Some(add_dialog(0));
         app.on_paste("http://example.com/p.bin\r\n");
         assert_eq!(
-            app.dialog.as_ref().unwrap().url,
+            app.dialog.as_ref().unwrap().url.value,
             "http://example.com/p.bin",
             "粘贴净化后进入 URL 字段"
         );
@@ -285,7 +290,7 @@ mod paste_tests {
         app.dialog.as_mut().unwrap().ck_open = true;
         app.on_paste("http://example.com/y.bin");
         assert_eq!(
-            app.dialog.as_ref().unwrap().url,
+            app.dialog.as_ref().unwrap().url.value,
             "http://example.com/p.bin",
             "下拉展开时不接收粘贴"
         );
@@ -295,7 +300,7 @@ mod paste_tests {
         app.dialog = Some(modify_dialog(2));
         app.on_paste("FF00dead\r\n");
         assert_eq!(
-            app.dialog.as_ref().unwrap().ck_value,
+            app.dialog.as_ref().unwrap().ck_value.value,
             "FF00dead",
             "修改对话框校验码字段接收粘贴（v1.17）"
         );

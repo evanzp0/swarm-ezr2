@@ -93,12 +93,24 @@ pub struct Bar {
 impl Bar {
     /// 垂直构造器
     pub fn vertical(panel: Rect, total: usize, page: usize, pos: usize) -> Self {
-        Self { panel, vertical: true, total, page, pos }
+        Self {
+            panel,
+            vertical: true,
+            total,
+            page,
+            pos,
+        }
     }
 
     /// 水平构造器
     pub fn horizontal(panel: Rect, total: usize, page: usize, pos: usize) -> Self {
-        Self { panel, vertical: false, total, page, pos }
+        Self {
+            panel,
+            vertical: false,
+            total,
+            page,
+            pos,
+        }
     }
 
     /// 最大滚动偏移（末页起点）
@@ -151,8 +163,7 @@ impl Bar {
     pub fn track_len(&self) -> usize {
         let (a, b) = self.arrow_span();
         // 闭区间 [a, b] 共 b-a+1 格，扣除 2 格箭头 + 两端各 arrow_pad 格留白
-        ((b.saturating_sub(a) + 1) as usize)
-            .saturating_sub(2 + 2 * self.arrow_pad() as usize)
+        ((b.saturating_sub(a) + 1) as usize).saturating_sub(2 + 2 * self.arrow_pad() as usize)
     }
 
     /// 滑块长度（按可视占比取整，至少 1 格，占比基准 = 整段轨道）。
@@ -289,7 +300,9 @@ pub fn render(f: &mut Frame, bar: &Bar, thumb_color: Color, pressed: Option<Arro
     let (a, b) = bar.arrow_span();
     let arrow_style = Style::default().fg(DIM);
     let track_style = Style::default().fg(DIM2);
-    let thumb_style = Style::default().fg(thumb_color).add_modifier(Modifier::BOLD);
+    let thumb_style = Style::default()
+        .fg(thumb_color)
+        .add_modifier(Modifier::BOLD);
     // 按压高亮 = 箭头前景色换成滑块同款（thumb_color + 加粗），无背景色
     let pressed_style = thumb_style;
     let blank_style = Style::default();
@@ -344,11 +357,7 @@ pub fn render(f: &mut Frame, bar: &Bar, thumb_color: Color, pressed: Option<Arro
                 (track_glyph, track_style)
             }
         };
-        let (col, row) = if bar.vertical {
-            (fixed, p)
-        } else {
-            (p, fixed)
-        };
+        let (col, row) = if bar.vertical { (fixed, p) } else { (p, fixed) };
         if let Some(cell) = f.buffer_mut().cell_mut((col, row)) {
             cell.set_symbol(sym);
             cell.set_style(style);

@@ -12,123 +12,12 @@ use super::text::{pad_right, truncate, w};
 use super::{panel_border_style, panel_title_style, ACCENT, DIM, DIM2, FG, YELLOW};
 use crate::app::{App, DialogKind, FieldWin};
 use crate::model::checksum::checksum_dropdown;
+use crate::textfield::TextInput;
 
-/// 字段行取窗与点击/光标映射单源（v1.34 三批 bug 修订：field_display 与
-/// cursor_field_display 两同构实现收口）。返回 (光标前段, 光标后段, 窗口几何)：
-/// 二段拼接 = 显示内容，取窗以锚点为准——
-/// - 聚焦：锚 = 光标（[`crate::app::Dialog::cursor`]），pre/post 在锚处切分，
-///   光标屏幕列 = 值区起点 + w(pre)，由调用方发布
-///   [`crate::app::App::dlg_cursor_screen`]（终端原生光标，移动零位移、可
-///   闪烁；原内联「▏」字形占列导致后续文本随光标整体平移，退役）；
-/// - 未聚焦：锚 = 字段尾（= 原 field_display 尾窗语义，宽度口径修正为
-///   CJK 原子不溢出），pre 恒空、post = 整窗。
-///
-/// 预算内整值显示；超宽以锚点取窗（先向右取满、余量向左回退；裁剪侧 …
-/// 指示占列，预算扣减重取至不动点；budget < 3 放弃指示符）；空值显示
-/// 占位提示（截断，窗口空：cols = [0]，点击任意处光标 0）。
-///
-/// FieldWin.cols/win_lo/win_hi = 点击列→字符偏移映射与光标定位共用几何。
-fn field_window(
-    val: &str,
-    ph: &str,
-    budget: usize,
-    cursor: usize,
-    focused: bool,
-) -> (String, String, FieldWin) {
-    let budget = budget.max(1);
-    let mut win = FieldWin {
-        value_x: 0,
-        left_cut: false,
-        cols: Vec::new(),
-        win_lo: 0,
-        win_hi: 0,
-    };
-    // cols 累积列回填（字符宽度原子累加，末位 = 窗口总宽）
-    fn fill_cols(win: &mut FieldWin, widths: &[usize]) {
-        win.cols.push(0);
-        let mut acc = 0u16;
-        for &cw in widths {
-            acc += cw as u16;
-            win.cols.push(acc);
-        }
-    }
-    if val.is_empty() {
-        win.cols.push(0);
-        return (String::new(), truncate(ph, budget), win);
-    }
-    let chars: Vec<char> = val.chars().collect();
-    let widths: Vec<usize> = chars.iter().map(|c| w(&c.to_string())).collect();
-    let total: usize = widths.iter().sum();
-    let anchor = if focused {
-        cursor.min(chars.len())
-    } else {
-        chars.len()
-    };
-    if total <= budget {
-        win.win_lo = 0;
-        win.win_hi = chars.len();
-        fill_cols(&mut win, &widths);
-        return if focused {
-            (
-                chars[..anchor].iter().collect(),
-                chars[anchor..].iter().collect(),
-                win,
-            )
-        } else {
-            (String::new(), val.to_string(), win)
-        };
-    }
-    // 超宽取窗：两轮不动点（指示符占列 → 扣减预算重取，直至裁剪侧数稳定）
-    let mut reserve = 0usize;
-    loop {
-        let b = budget.saturating_sub(reserve).max(1);
-        // 向右取满，余量向左回退（字符原子：宽字符放不下整列则不取）
-        let mut acc = 0usize;
-        let mut hi = anchor;
-        while hi < chars.len() && acc + widths[hi] <= b {
-            acc += widths[hi];
-            hi += 1;
-        }
-        let mut lo = anchor;
-        while lo > 0 && acc + widths[lo - 1] <= b {
-            lo -= 1;
-            acc += widths[lo];
-        }
-        let left_cut = lo > 0;
-        let right_cut = hi < chars.len();
-        let need = usize::from(left_cut) + usize::from(right_cut);
-        if need == reserve || budget < 3 {
-            win.win_lo = lo;
-            win.win_hi = hi;
-            win.left_cut = left_cut;
-            fill_cols(&mut win, &widths[lo..hi]);
-            let pre = if focused {
-                if left_cut {
-                    format!("…{}", chars[lo..anchor].iter().collect::<String>())
-                } else {
-                    chars[lo..anchor].iter().collect()
-                }
-            } else if left_cut {
-                "…".to_string()
-            } else {
-                String::new()
-            };
-            let post = if focused {
-                if right_cut {
-                    format!("{}…", chars[anchor..hi].iter().collect::<String>())
-                } else {
-                    chars[anchor..hi].iter().collect()
-                }
-            } else if right_cut {
-                format!("{}…", chars[lo..hi].iter().collect::<String>())
-            } else {
-                chars[lo..hi].iter().collect()
-            };
-            return (pre, post, win);
-        }
-        reserve = need;
-    }
-}
+// 字段行取窗与点击/光标映射已收口为输入框组件单源
+//（[`TextInput::field_window`]：聚焦锚=光标、未聚焦锚=字段尾、CJK 原子、
+// 超宽两轮不动点取窗、窗口几何 = 点击映射载荷），本文件只做 spans 装配
+// 与窗口几何/光标屏幕位回填。
 
 /// 校验算法下拉浮层定位：优先展开在校验算法行下方；超出终端底部则改为行上方；
 /// 横向钳制在终端内（左右各留 1 列边距）；宽/高最终钳制在终端内——窄终端
@@ -296,7 +185,8 @@ enum RowKind {
 
 struct Row {
     label: &'static str,
-    value: String,
+    /// 文本输入框组件实例（值 + 光标一并随行，取窗/光标位从组件单源读出）
+    input: TextInput,
     placeholder: String,
     kind: RowKind,
 }
@@ -349,7 +239,7 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         return;
     }
 
-    let (focus, url, dir, conns, ck_type, ck_value, ck_open, ck_sel, proxy_sel, proxy_open, cursor) = {
+    let (focus, url, dir, conns, ck_type, ck_value, ck_open, ck_sel, proxy_sel, proxy_open) = {
         let d = app.dialog.as_ref().unwrap();
         (
             d.focus,
@@ -362,7 +252,6 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
             d.ck_sel,
             d.proxy_sel,
             d.proxy_open,
-            d.cursor,
         )
     };
     // 校验下拉当前项（v1.32：下拉 8 项含首行 NONE——（显示名，期望位数）
@@ -384,38 +273,38 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
     if is_add {
         rows.push(Row {
             label: "URL",
-            value: url,
+            input: url,
             placeholder: String::new(),
             kind: RowKind::Text,
         });
         rows.push(Row {
             label: "保存到",
-            value: dir,
+            input: dir,
             placeholder: "/srv/downloads".to_string(),
             kind: RowKind::Text,
         });
     }
     rows.push(Row {
         label: "并发",
-        value: conns,
+        input: conns,
         placeholder: "4".to_string(),
         kind: RowKind::Text,
     });
     rows.push(Row {
         label: "校验",
-        value: String::new(),
+        input: TextInput::new(),
         placeholder: String::new(),
         kind: RowKind::CkSel,
     });
     rows.push(Row {
         label: "校验码",
-        value: ck_value,
+        input: ck_value,
         placeholder: String::new(),
         kind: RowKind::Text,
     });
     rows.push(Row {
         label: "代理",
-        value: String::new(),
+        input: TextInput::new(),
         placeholder: String::new(),
         kind: RowKind::ProxySel,
     });
@@ -457,22 +346,22 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
             RowKind::Text => {
                 // 原生光标渲染（v1.34 三批 bug 修订）：pre/post 在光标处
                 // 切分直接拼接显示（不再插入「▏」字形占列——后续文本不再
-                // 随光标移动平移），终端原生光标由 ui::draw 收口绘制
-                let (pre, post, win) =
-                    field_window(&row.value, &row.placeholder, avail, cursor, focused);
-                let base = Style::default().fg(if row.value.is_empty() {
+                // 随光标移动平移），终端原生光标由 ui::draw 收口绘制。
+                // 取窗走输入框组件单源（光标随组件实例，无全局 cursor 传参）
+                let fd = row.input.field_window(&row.placeholder, avail, focused);
+                let base = Style::default().fg(if row.input.is_empty() {
                     DIM2
                 } else {
                     Color::White
                 });
                 if focused {
-                    pre_cols = w(&pre) as u16;
-                    spans.push(Span::styled(pre, base));
-                    spans.push(Span::styled(post, base));
+                    pre_cols = w(&fd.pre) as u16;
+                    spans.push(Span::styled(fd.pre, base));
+                    spans.push(Span::styled(fd.post, base));
                 } else {
-                    spans.push(Span::styled(format!("{pre}{post}"), base));
+                    spans.push(Span::styled(format!("{}{}", fd.pre, fd.post), base));
                 }
-                text_win = Some(win);
+                text_win = Some(fd.win);
             }
         }
         let rect = Rect {
@@ -566,97 +455,6 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
 #[cfg(test)]
 mod helper_tests {
     use super::*;
-
-    /// v1.34 三批：field_window 单源取窗三态（不超宽/超宽取窗/空值占位）
-    /// ——聚焦/未聚焦锚点、拼接 = 显示内容、光标恒在窗内、CJK 原子不切半、
-    /// cols 累积列与窗口边界自洽
-    #[test]
-    fn field_window_windows_and_splits() {
-        // 聚焦不超宽：整值显示，pre 宽 = 光标列，窗口 = 全值
-        let (pre, post, win) = field_window("abcdef", "", 10, 2, true);
-        assert_eq!(pre, "ab");
-        assert_eq!(post, "cdef");
-        assert_eq!(w(&pre) + w(&post), 6);
-        assert_eq!(win.win_lo, 0);
-        assert_eq!(win.win_hi, 6);
-        assert!(!win.left_cut);
-        assert_eq!(win.cols, vec![0, 1, 2, 3, 4, 5, 6], "累积列含末位总宽");
-        // 未聚焦同值：锚在字段尾 → 整窗、pre 恒空
-        let (pre, post, win) = field_window("abcdef", "", 10, 0, false);
-        assert!(pre.is_empty() && post == "abcdef");
-        assert_eq!((win.win_lo, win.win_hi), (0, 6));
-        // 聚焦超宽（预算 6，值宽 16）：光标 8 为锚 → 窗内含光标、双缘 … 指示
-        let val = "abcdefghijklmnop";
-        let (pre, post, win) = field_window(val, "", 6, 8, true);
-        assert!(
-            pre.starts_with('…') && post.ends_with('…'),
-            "双缘裁剪指示: {pre}|{post}"
-        );
-        assert_eq!(w(&pre) + w(&post), 6, "总宽 = 预算");
-        assert!(win.left_cut, "左缘裁剪指示发布");
-        assert_eq!(
-            win.cols.len(),
-            win.win_hi - win.win_lo + 1,
-            "cols = 窗内字符数 + 1"
-        );
-        // 光标可见性：pre+post 还原后含 val[8]（'i'），且非占位空窗
-        let joined = format!("{pre}{post}");
-        assert!(joined.contains('i'), "窗内含光标字符: {joined}");
-        // 光标在尾：窗贴右（无尾部 …）
-        let (pre, post, win) = field_window(val, "", 6, 16, true);
-        assert!(!post.ends_with('…'), "光标在尾右缘不裁: {pre}|{post}");
-        assert!(pre.starts_with('…'));
-        assert_eq!(win.win_hi, 16);
-        // 光标在 0：窗贴左（无首部 …）
-        let (pre, post, win) = field_window(val, "", 6, 0, true);
-        assert!(!pre.starts_with('…'), "光标在首左缘不裁: {pre}|{post}");
-        assert!(post.ends_with('…'));
-        assert_eq!(win.win_lo, 0);
-        // CJK 原子：宽 4 预算 3 → 单汉字 2 列可取，不切半
-        let (pre, post, _win) = field_window("中文中文", "", 3, 4, true);
-        assert_eq!(
-            w(&pre) + w(&post),
-            3,
-            "CJK 原子取窗（汉字 2 列 + … 1 列 = 预算）: {pre}|{post}"
-        );
-        // CJK cols 累积：宽字符占 2 列
-        let (_, _, win) = field_window("中文", "", 10, 2, true);
-        assert_eq!(win.cols, vec![0, 2, 4], "CJK 宽字符累积列");
-        // 未聚焦超宽：尾窗语义（= 原 field_display：… + 预算内尾部）——
-        // 指示符在 pre、窗口内容在 post，拼接 = 原显示形态
-        let (pre, post, win) = field_window("abcdef1234567890", "", 6, 0, false);
-        assert_eq!(pre, "…");
-        assert_eq!(post, "67890");
-        assert_eq!((win.win_lo, win.win_hi), (11, 16));
-        assert!(win.left_cut);
-        // 未聚焦超宽 CJK：宽度口径（原 field_display 按字符数计会溢出）——
-        // 预算 6 尾窗取 2 个汉字（宽 4 + … 1 = 5 ≤ 6），不取第 3 个
-        let (pre, post, win) = field_window("一二三四五", "", 6, 0, false);
-        assert_eq!(pre, "…");
-        assert_eq!(post, "四五", "CJK 原子尾窗: {pre}{post}");
-        assert_eq!((win.win_lo, win.win_hi), (3, 5));
-        // 空值：占位提示在 post（光标 0 列在占位提示之前），窗口空 cols = [0]
-        let (pre, post, win) = field_window("", "4", 6, 0, true);
-        assert!(pre.is_empty() && post == "4");
-        assert_eq!(win.cols, vec![0]);
-        assert_eq!((win.win_lo, win.win_hi), (0, 0));
-        // 光标越界钳制（陈旧偏移防御）：按字段长取尾
-        let (pre, post, win) = field_window("abc", "", 10, 99, true);
-        assert_eq!(pre, "abc");
-        assert!(post.is_empty());
-        assert_eq!(win.win_hi, 3);
-    }
-
-    #[test]
-    fn field_window_unfocused_placeholder_and_normal() {
-        // 未聚焦空值：占位提示整窗
-        let (pre, post, _) = field_window("", "占位提示", 20, 0, false);
-        assert!(pre.is_empty());
-        assert_eq!(post, truncate("占位提示", 20));
-        // 未聚焦正常宽度：原样
-        let (pre, post, _) = field_window("abc", "", 6, 0, false);
-        assert!(pre.is_empty() && post == "abc");
-    }
 
     #[test]
     fn dropdown_rect_prefers_below_and_clamps() {
@@ -759,16 +557,17 @@ mod tests {
     /// v1.34 三批：原生光标渲染集成——①无内联「▏」字形（后续文本不因
     /// 光标存在平移）；②聚焦文本行发布光标屏幕位（值区起点 + pre 宽）；
     /// ③Terminal 收口把光标位下发后端（TestBackend 可读回）；④字段窗口
-    /// 几何与热区平行回填（点击映射单源载荷在位）
+    /// 几何与热区平行回填（点击映射单源载荷在位）。光标读写走输入框
+    /// 组件实例（crate::textfield::TextInput）
     #[tokio::test]
     async fn dialog_native_cursor_published_and_positioned() {
         let mut app = testfx::make_app_in("ezr-dlgcur", "cur");
         app.open_add_dialog();
         {
             let d = app.dialog.as_mut().unwrap();
-            d.url = "https://ezr.dev/".to_string(); // 16 字符
+            d.url.set("https://ezr.dev/"); // 16 字符，光标随 set 迁尾
             d.focus_field(0);
-            d.cursor = 8; // "https://|ezr.dev/"
+            d.url.set_cursor(8); // "https://|ezr.dev/"
         }
         let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
         term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
@@ -797,7 +596,7 @@ mod tests {
         // 非文本行 win = None（校验 = 行 3、代理 = 行 5）
         assert!(app.dlg_field_wins[3].is_none(), "下拉行无窗口几何");
         // 光标移动到中段：屏幕位随动（零位移——显示内容不变，仅光标位变）
-        app.dialog.as_mut().unwrap().cursor = 2;
+        app.dialog.as_mut().unwrap().url.set_cursor(2);
         term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         assert_eq!(app.dlg_cursor_screen, Some((37, 16)), "光标列随 cursor");
         app.shutdown().await;

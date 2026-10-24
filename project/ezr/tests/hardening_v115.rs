@@ -55,6 +55,9 @@ mod model;
 #[path = "../src/scrollbar.rs"]
 // v1.32/FR-01-109：滚动条引擎（app 状态机依赖的几何/命中类型单源）
 mod scrollbar;
+#[path = "../src/textfield.rs"]
+// 输入框组件（Dialog 文本字段实例化依赖的状态机/取窗/点击映射单源）
+mod textfield;
 #[path = "../src/ui/mod.rs"]
 mod ui;
 
@@ -118,10 +121,9 @@ async fn field_display_exact_width_shows_full_value() {
     {
         let d = a.dialog.as_mut().unwrap();
         // 恰等于 avail（v1.34：avail = inner.width−13 = 59，字段行宽−4 同步）
-        d.url = "x".repeat(59);
-        // 焦点移至校验行（3）：URL 行未聚焦 → field_display 全宽分支
+        d.url.set("x".repeat(59));
+        // 焦点移至校验行（3）：URL 行未聚焦 → 取窗尾锚全宽分支
         d.focus = 3;
-        d.cursor = 0;
     }
     let buf = render(&mut a, 120, 40);
     // v1.34/FR-01-115 S2：字段行 rect.x = inner.x+2 = 26；label 7 列 + "> " 2 列
@@ -734,7 +736,7 @@ async fn named_dead_proxy_fails_probe() {
     a.on_key(KeyCode::Char('a'), KeyModifiers::empty());
     {
         let d = a.dialog.as_mut().unwrap();
-        d.url = format!("http://{addr}/f.bin");
+        d.url.set(format!("http://{addr}/f.bin"));
         d.proxy_sel = 1; // 跳过「直连」（0），选第一个命名代理 dead
     }
     a.on_key(KeyCode::Enter, KeyModifiers::empty());

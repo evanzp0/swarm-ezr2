@@ -52,6 +52,9 @@ mod model;
 #[path = "../src/scrollbar.rs"]
 // v1.32/FR-01-109：滚动条引擎（app 状态机依赖的几何/命中类型单源）
 mod scrollbar;
+#[path = "../src/textfield.rs"]
+// 输入框组件（Dialog 文本字段实例化依赖的状态机/取窗/点击映射单源）
+mod textfield;
 #[path = "../src/ui/mod.rs"]
 mod ui;
 
@@ -243,8 +246,8 @@ fn tap(a: &mut app::App, code: KeyCode) {
 fn add_via_dialog(a: &mut app::App, url: &str, dir: &str) {
     tap(a, KeyCode::Char('a'));
     let d = a.dialog.as_mut().expect("A 打开添加对话框");
-    d.url = url.to_string();
-    d.dir = dir.to_string();
+    d.url.set(url);
+    d.dir.set(dir);
     tap(a, KeyCode::Enter);
 }
 
@@ -445,7 +448,7 @@ async fn confirm_add_clamps_out_of_range_proxy_sel() {
     let len = a.proxy_options.len();
     {
         let d = a.dialog.as_mut().expect("add dialog");
-        d.url = "http://example.com/px.bin".to_string();
+        d.url.set("http://example.com/px.bin");
         d.proxy_sel = len; // 越界（合法下标 0..len-1）
     }
     tap(&mut a, KeyCode::Enter);

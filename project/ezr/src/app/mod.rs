@@ -24,6 +24,7 @@ use crate::model::registry::Registry;
 use crate::model::sidecar::Sidecar;
 use crate::model::speed::{SmoothedSpeed, SpeedWindow};
 use crate::model::{slots, Connection, Task};
+use crate::textfield::TextInput;
 // architect v116：原 `pub use crate::model::Task;` 死 re-export（crate::app::Task
 // 零消费者，各层均直用 crate::model::Task）降为模块内私有导入
 
@@ -53,7 +54,7 @@ pub(crate) mod testutil;
 #[cfg(test)]
 pub(crate) use dialog_keys::{
     dropdown_open_key, proxy_dropdown_open_key, push_hex_capped, text_backspace, text_char,
-    text_field_at, TextField,
+    TextField,
 };
 
 /// 每个任务在列表中占用的行高（3 行内容 + 1 行空行分隔）
@@ -239,43 +240,31 @@ pub enum DialogKind {
     Modify,
 }
 
-/// 对话框文本字段窗口几何（v1.34 三批 bug 修订：原生终端光标 + 鼠标点击
-/// 定位光标的映射单源载荷。ui 层每帧随 [`App::dlg_field_rects`] 平行回填，
-/// 鼠标层 [`crate::app::mouse`] 消费——点击列 → 字符偏移不经宽度重算，
-/// 与渲染显示取窗同源，杜绝双实现漂移）
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FieldWin {
-    /// 值区起始屏幕列（字段行 rect.x + label 7 列 + "> " 2 列）
-    pub value_x: u16,
-    /// 左缘裁剪指示（true = 值区首列是 … 指示符，点击映射扣 1 列）
-    pub left_cut: bool,
-    /// 可见字符的累积显示列半开边界（cols[0] = 0；cols[k+1] = cols[k] +
-    /// 第 k 个可见字符显示宽；末位 = 窗口总宽）——点击列按 (cols[k],
-    /// cols[k+1]) 半开区间定位：落宽字符左半格 = 光标在其前、右半格 =
-    /// 在其后（终端鼠标以格为单位的惯例语义）；越界钳制窗口首/尾
-    pub cols: Vec<u16>,
-    /// 可见窗口首字符在字段文本中的字符下标
-    pub win_lo: usize,
-    /// 可见窗口尾字符下标（不含）
-    pub win_hi: usize,
-}
+/// 对话框文本字段窗口几何（原生终端光标 + 鼠标点击定位光标的映射单源
+/// 载荷）——实现已收口为文本输入框组件 crate 单源（`crate::textfield`：
+/// 状态机/取窗/点击映射/宽度工具全在组件模块），此处转发以保持既有
+/// `crate::app::FieldWin` 引用路径不变。ui 层每帧随 [`App::dlg_field_rects`]
+/// 平行回填，鼠标层 [`crate::app::mouse`] 消费——点击列 → 字符偏移不经
+/// 宽度重算，与渲染显示取窗同源，杜绝双实现漂移）
+pub use crate::textfield::FieldWin;
 
-/// 对话框状态（结构沿用 demo 定稿）
+/// 对话框状态（结构沿用 demo 定稿；文本字段已升级为输入框组件实例——
+/// 值 + 光标由 [`TextInput`] 承载，编辑/取窗/点击映射走组件单源）
 pub struct Dialog {
     /// 对话框种类
     pub kind: DialogKind,
-    /// Add: URL 输入缓冲
-    pub url: String,
-    /// Add: 保存目录输入缓冲（空 = 配置默认）
-    pub dir: String,
-    /// Add: 并发数输入缓冲（数字字符串）
-    pub conns: String,
+    /// Add: URL 输入框组件（值 + 光标）
+    pub url: TextInput,
+    /// Add: 保存目录输入框组件（空 = 配置默认）
+    pub dir: TextInput,
+    /// Add: 并发数输入框组件（数字字符串）
+    pub conns: TextInput,
     /// Add: 用户是否手动修改过并发数
     pub conns_edited: bool,
     /// Add: 校验算法在 CHECKSUM_ALGOS 中的下标（默认 SHA-256 = 3）
     pub ck_type: usize,
-    /// Add: 校验码输入缓冲（十六进制，可留空 = 不校验）
-    pub ck_value: String,
+    /// Add: 校验码输入框组件（十六进制，可留空 = 不校验）
+    pub ck_value: TextInput,
     /// Add: 校验算法下拉框是否展开
     pub ck_open: bool,
     /// Add: 下拉框当前高亮项
@@ -289,11 +278,6 @@ pub struct Dialog {
     /// Modify: 0=并发 1=算法 2=校验码 3=代理 4=确定 5=取消
     /// Delete: 0=仅删除任务 1=删除任务和文件 2=取消
     pub focus: usize,
-    /// 文本字段光标（v1.34 二批 bug 修订：当前焦点文本字段内的**字符偏移**
-    /// 0..=字段长——方向键在输入框内移动光标不再跳焦点；输入/退格/粘贴均
-    /// 在光标处生效。约定：焦点切换随 [`Dialog::focus_field`] 把光标迁到新
-    /// 字段文本尾；非文本焦点（下拉行/按钮）不消费该值）
-    pub cursor: usize,
     /// Delete 用：待删除任务名
     pub task_name: String,
     /// Modify 用：待修改任务 id（None = Add/Delete）

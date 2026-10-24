@@ -1,67 +1,15 @@
-//! text — 纯文本工具（显示宽度/截断/填充/规格化/进度条，全部可单元测试）
+//! text — 纯文本工具（填充/规格化/进度条，全部可单元测试）。
+//!
+//! 显示宽度 [`w`] 与宽度截断 [`truncate`] 已收口为单行文本输入框组件
+//! crate 单源（`crate::textfield`，输入框取窗/点击映射与全 ui 层共用同一
+//! 宽度口径），此处转发以保持既有 `super::text::{w, truncate}` 引用路径
+//! 不变（DRY：宽度/截断实现唯一）。
 
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 
 use super::EMPTY;
-
-/// CJK 全角区间表（显示宽度按 2 计的码点闭区间，FR-01 定稿宽度口径）
-const WIDE_RANGES: [(u32, u32); 6] = [
-    (0x2E80, 0xA4CF), // CJK 部首扩展 … 谚文音节前段
-    (0xAC00, 0xD7A3), // Hangul 音节
-    (0xF900, 0xFAFF), // CJK 兼容表意文字
-    (0xFF00, 0xFF60), // 全角形式
-    (0x3000, 0x303F), // CJK 符号与标点
-    (0xFFE0, 0xFFE6), // 全角补足
-];
-
-/// 码点显示宽度是否为 2（查表，短路任一区间命中）
-fn wide(c: u32) -> bool {
-    WIDE_RANGES.iter().any(|&(lo, hi)| lo <= c && c <= hi)
-}
-
-/// 码点是否零宽（v1.34/FR-01-113 bug 修订对齐 ezr-demo 重构版：URL 反链接
-/// 注入 VS15 后，宽度计算不得把它当占位字符，否则热区/wrap/truncate 全部
-/// 偏移）——变体选择符 U+FE00..=FE0F（含本应用使用的 VS15）、零宽空格/
-/// 连接符 U+200B..=200F、词连接符 U+2060、BOM U+FEFF——终端渲染均为零宽
-///（VS15 兼属组合符号 Mn，各终端零宽口径最稳）
-fn zero_width(c: u32) -> bool {
-    (0xFE00..=0xFE0F).contains(&c) || (0x200B..=0x200F).contains(&c) || c == 0x2060 || c == 0xFEFF
-}
-
-pub fn w(s: &str) -> usize {
-    s.chars()
-        .map(|c| {
-            let u = c as u32;
-            if zero_width(u) {
-                0
-            } else if wide(u) {
-                2
-            } else {
-                1
-            }
-        })
-        .sum()
-}
-
-pub fn truncate(s: &str, max: usize) -> String {
-    if w(s) <= max {
-        return s.to_string();
-    }
-    let budget = max.saturating_sub(1);
-    let mut out = String::new();
-    let mut acc = 0;
-    for ch in s.chars() {
-        let cw = w(&ch.to_string());
-        if acc + cw > budget {
-            break;
-        }
-        acc += cw;
-        out.push(ch);
-    }
-    out.push('…');
-    out
-}
+pub use crate::textfield::{truncate, w};
 
 /// 按终端显示宽度右填充空格（Rust format! 的宽度按字符数计，对 CJK 不准）
 pub fn pad_right(s: &str, width: usize) -> String {

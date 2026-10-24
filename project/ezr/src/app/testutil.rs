@@ -7,24 +7,25 @@
 //! 选中）。Delete 等特殊形态由调用方按差异字段覆盖，不再整段复制字面量。
 
 use super::{Dialog, DialogKind};
+use crate::textfield::TextInput;
 
 /// Add/Modify 对话框夹具：焦点 `focus`，其余字段为共享默认
 pub(crate) fn dialog(kind: DialogKind, focus: usize) -> Dialog {
     Dialog {
         kind,
-        url: String::new(),
-        dir: String::new(),
-        conns: String::new(),
+        // 输入框组件夹具：字段空 = 光标 0；需光标语义的测试按场景
+        // set_cursor 显式置位
+        url: TextInput::new(),
+        dir: TextInput::new(),
+        conns: TextInput::new(),
         conns_edited: false,
         ck_type: 4,
-        ck_value: String::new(),
+        ck_value: TextInput::new(),
         ck_open: false,
         ck_sel: 4,
         proxy_sel: 0,
         proxy_open: false,
         focus,
-        // 夹具光标在 0（字段空 = 尾）；需光标语义的测试按场景显式置位
-        cursor: 0,
         task_name: String::new(),
         task_id: None,
     }

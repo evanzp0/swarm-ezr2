@@ -43,11 +43,12 @@ const READY_BYTE: &[u8; 1] = b"R";
 const READY_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// 终端复原序列：逐字对应 crossterm 0.28.1 父进程正常收尾写入的三组关闭命令
-/// （v137 镜像 main.rs restore_into() 新顺序：DisableMouseCapture →
+/// （v150 延续镜像 main.rs restore_into()：DisableMouseCapture →
 /// DisableBracketedPaste → LeaveAlternateScreen，鼠标组按其源码
-/// `?1006l ?1015l ?1003l ?1002l ?1000l` 反序最先发出，与正常收尾路径的
-/// 退出竞态修复同形）；备用屏幕 `?1049l` 同时恢复进入前光标位置与可见性
-/// （DECSC 语义）。
+/// `?1006l ?1015l ?1003l ?1002l ?1000l` 反序最先发出；v150 在正常收尾路径
+/// 新增的 settle+drain 为父进程内部行为，不改变字节序——父死路径还原序列
+/// 与正常收尾同形的设计不变量保持）；备用屏幕 `?1049l` 同时恢复进入前
+/// 光标位置与可见性（DECSC 语义）。
 #[cfg(unix)]
 const RESTORE_SEQUENCE: &str = concat!(
     "\u{1b}[?1006l",

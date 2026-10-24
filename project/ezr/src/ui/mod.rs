@@ -980,18 +980,17 @@ mod ui_tests {
         // 对话框：字段点击聚焦 + 算法下拉点选 + 按钮激活
         app.dialog = Some(crate::app::Dialog {
             kind: crate::app::DialogKind::Add,
-            url: String::new(),
-            dir: String::new(),
-            conns: String::new(),
+            url: crate::textfield::TextInput::new(),
+            dir: crate::textfield::TextInput::new(),
+            conns: crate::textfield::TextInput::new(),
             conns_edited: false,
             ck_type: 0,
-            ck_value: String::new(),
+            ck_value: crate::textfield::TextInput::new(),
             ck_open: true,
             ck_sel: 0,
             proxy_sel: 0,
             proxy_open: false,
             focus: 0,
-            cursor: 0,
             task_name: String::new(),
             task_id: None,
         });

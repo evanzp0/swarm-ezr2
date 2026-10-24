@@ -37,6 +37,9 @@ mod model;
 #[path = "../src/scrollbar.rs"]
 // v1.32/FR-01-109：滚动条引擎（app 状态机依赖的几何/命中类型单源）
 mod scrollbar;
+#[path = "../src/textfield.rs"]
+// 输入框组件（Dialog 文本字段实例化依赖的状态机/取窗/点击映射单源）
+mod textfield;
 
 use app::{Dialog, DialogKind};
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -523,18 +526,17 @@ async fn toggle_pause_resume_missing_named_proxy_warns() {
 fn add_dialog(focus: usize, ck_open: bool) -> Dialog {
     Dialog {
         kind: DialogKind::Add,
-        url: String::new(),
-        dir: String::new(),
-        conns: String::new(),
+        url: textfield::TextInput::new(),
+        dir: textfield::TextInput::new(),
+        conns: textfield::TextInput::new(),
         conns_edited: false,
         ck_type: 3,
-        ck_value: String::new(),
+        ck_value: textfield::TextInput::new(),
         ck_open,
         ck_sel: 3,
         proxy_sel: 0,
         proxy_open: false,
         focus,
-        cursor: 0, // 夹具：空字段光标在尾（0）
         task_name: String::new(),
         task_id: None,
     }
@@ -546,7 +548,10 @@ async fn paste_routes_into_add_dialog_url() {
     let mut a = mkapp("paste-url");
     a.dialog = Some(add_dialog(0, false));
     a.on_paste("http://example.com/p.bin");
-    assert_eq!(a.dialog.as_ref().unwrap().url, "http://example.com/p.bin");
+    assert_eq!(
+        a.dialog.as_ref().unwrap().url.value,
+        "http://example.com/p.bin"
+    );
     shutdown(a).await;
 }
 
@@ -569,7 +574,7 @@ async fn paste_routes_into_dir_field() {
     let mut a = mkapp("paste-dir");
     a.dialog = Some(add_dialog(1, false));
     a.on_paste("/tmp/ezr-dl");
-    assert_eq!(a.dialog.as_ref().unwrap().dir, "/tmp/ezr-dl");
+    assert_eq!(a.dialog.as_ref().unwrap().dir.value, "/tmp/ezr-dl");
     assert!(a.dialog.as_ref().unwrap().url.is_empty());
     shutdown(a).await;
 }

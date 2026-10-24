@@ -40,6 +40,9 @@ mod app;
 #[path = "../src/scrollbar.rs"]
 // v1.32/FR-01-109：滚动条引擎（app 状态机依赖的几何/命中类型单源）
 mod scrollbar;
+#[path = "../src/textfield.rs"]
+// 输入框组件（Dialog 文本字段实例化依赖的状态机/取窗/点击映射单源）
+mod textfield;
 
 use app::App;
 

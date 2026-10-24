@@ -8,6 +8,7 @@ use crate::model::sidecar::Sidecar;
 use crate::model::{
     checksum, is_http_url, namegen, protocol_of_url, unix_now, Checksum, Task, TaskState,
 };
+use crate::textfield::TextInput;
 
 impl App {
     /// 打开对话框单源入口（v133/D38）：置入对话框状态并重置拖拽/位置——
@@ -97,8 +98,8 @@ impl App {
             self.dialog = None;
             return;
         };
-        let conns_raw = d.conns.trim().to_string();
-        let ck_raw = d.ck_value.trim().to_string();
+        let conns_raw = d.conns.value.trim().to_string();
+        let ck_raw = d.ck_value.value.trim().to_string();
         let ck_type = d.ck_type;
         let proxy_sel = d.proxy_sel.min(self.proxy_options.len().saturating_sub(1));
         let proxy = self.proxy_options[proxy_sel].clone();
@@ -163,7 +164,7 @@ impl App {
         let Some(d) = self.dialog.as_ref() else {
             return;
         };
-        let url = d.url.trim().to_string();
+        let url = d.url.value.trim().to_string();
         if url.is_empty() {
             self.set_toast("⚠ 请输入下载 URL");
             return;
@@ -173,9 +174,9 @@ impl App {
             self.set_toast("⚠ 仅支持 http:// 或 https:// 链接");
             return;
         }
-        let dir_raw = d.dir.trim().to_string();
-        let conns_raw = d.conns.trim().to_string();
-        let ck_raw = d.ck_value.trim().to_string();
+        let dir_raw = d.dir.value.trim().to_string();
+        let conns_raw = d.conns.value.trim().to_string();
+        let ck_raw = d.ck_value.value.trim().to_string();
         let ck_type = d.ck_type;
         // 代理选择先读出（借用收窄：后续 checksum_from_input 需要 &mut self）
         let proxy = self.proxy_options[d.proxy_sel.min(self.proxy_options.len() - 1)].clone();
@@ -365,19 +366,18 @@ impl App {
     pub fn open_add_dialog(&mut self) {
         self.set_dialog(Dialog {
             kind: DialogKind::Add,
-            url: String::new(),
-            dir: String::new(),
-            conns: String::new(),
+            // 输入框组件构造：空值 + 光标 0（随输入迁尾）
+            url: TextInput::new(),
+            dir: TextInput::new(),
+            conns: TextInput::new(),
             conns_edited: false,
             ck_type: CK_NONE,
-            ck_value: String::new(),
+            ck_value: TextInput::new(),
             ck_open: false,
             ck_sel: CK_NONE,
             proxy_sel: self.default_proxy_sel,
             proxy_open: false,
             focus: 0,
-            // 光标初始在 URL 字段尾（空字段 = 0）
-            cursor: 0,
             task_name: String::new(),
             task_id: None,
         });
@@ -424,19 +424,18 @@ impl App {
         };
         self.set_dialog(Dialog {
             kind: DialogKind::Modify,
-            url: String::new(),
-            dir: String::new(),
-            conns: concurrency.to_string(),
+            url: TextInput::new(),
+            dir: TextInput::new(),
+            // 组件 with_value：预填值 + 光标迁尾（输入框惯例）
+            conns: TextInput::with_value(concurrency.to_string()),
             conns_edited: false,
             ck_type,
-            ck_value: checksum.map(|c| c.value).unwrap_or_default(),
+            ck_value: TextInput::with_value(checksum.map(|c| c.value).unwrap_or_default()),
             ck_open: false,
             ck_sel: ck_type,
             proxy_sel,
             proxy_open: false,
             focus: 0,
-            // 光标初始在并字段尾（预填并发值字符串长度）
-            cursor: concurrency.to_string().chars().count(),
             task_name: name,
             task_id: Some(id),
         });
@@ -450,18 +449,17 @@ impl App {
         };
         self.set_dialog(Dialog {
             kind: DialogKind::Delete,
-            url: String::new(),
-            dir: String::new(),
-            conns: String::new(),
+            url: TextInput::new(),
+            dir: TextInput::new(),
+            conns: TextInput::new(),
             conns_edited: false,
             ck_type: 0,
-            ck_value: String::new(),
+            ck_value: TextInput::new(),
             ck_open: false,
             ck_sel: 0,
             proxy_sel: 0,
             proxy_open: false,
             focus: 0,
-            cursor: 0, // Delete 对话框无文本字段，光标不消费
             task_name: t.name.clone(),
             task_id: None,
         });
@@ -526,18 +524,17 @@ mod add_dialog_flow_tests {
         let mut app = App::new(Config::default(), reg);
         app.dialog = Some(Dialog {
             kind: DialogKind::Add,
-            url: "http://example.com/paused.bin".to_string(),
-            dir: dir.to_string_lossy().to_string(),
-            conns: String::new(),
+            url: TextInput::with_value("http://example.com/paused.bin"),
+            dir: TextInput::with_value(dir.to_string_lossy().to_string()),
+            conns: TextInput::new(),
             conns_edited: false,
             ck_type: CK_NONE,
-            ck_value: String::new(),
+            ck_value: TextInput::new(),
             ck_open: false,
             ck_sel: CK_NONE,
             proxy_sel: 0,
             proxy_open: false,
             focus: 7,
-            cursor: 0, // 测试夹具：非文本焦点（按钮）
             task_name: String::new(),
             task_id: None,
         });
@@ -577,18 +574,17 @@ mod add_dialog_flow_tests {
         );
         app.dialog = Some(Dialog {
             kind: DialogKind::Add,
-            url: "http://example.com/r.bin".to_string(),
-            dir: dir.to_string_lossy().into_owned(),
-            conns: String::new(),
+            url: TextInput::with_value("http://example.com/r.bin"),
+            dir: TextInput::with_value(dir.to_string_lossy().into_owned()),
+            conns: TextInput::new(),
             conns_edited: false,
             ck_type: CK_NONE,
-            ck_value: String::new(),
+            ck_value: TextInput::new(),
             ck_open: false,
             ck_sel: CK_NONE,
             proxy_sel: 0,
             proxy_open: false,
             focus: 7,
-            cursor: 0, // 测试夹具：非文本焦点（按钮）
             task_name: String::new(),
             task_id: None,
         });
@@ -629,18 +625,17 @@ mod add_dialog_flow_tests {
         );
         app.dialog = Some(Dialog {
             kind: DialogKind::Add,
-            url: "http://example.com/alias.bin".to_string(),
-            dir: dir.to_string_lossy().into_owned(),
-            conns: String::new(),
+            url: TextInput::with_value("http://example.com/alias.bin"),
+            dir: TextInput::with_value(dir.to_string_lossy().into_owned()),
+            conns: TextInput::new(),
             conns_edited: false,
             ck_type: CK_NONE,
-            ck_value: String::new(),
+            ck_value: TextInput::new(),
             ck_open: false,
             ck_sel: CK_NONE,
             proxy_sel: 0,
             proxy_open: false,
             focus: 7,
-            cursor: 0, // 测试夹具：非文本焦点（按钮）
             task_name: String::new(),
             task_id: None,
         });
@@ -693,18 +688,17 @@ mod add_dialog_flow_tests {
         );
         app.dialog = Some(Dialog {
             kind: DialogKind::Add,
-            url: "ftp://x/f.bin".to_string(),
-            dir: String::new(),
-            conns: String::new(),
+            url: TextInput::with_value("ftp://x/f.bin"),
+            dir: TextInput::new(),
+            conns: TextInput::new(),
             conns_edited: false,
             ck_type: CK_NONE,
-            ck_value: String::new(),
+            ck_value: TextInput::new(),
             ck_open: false,
             ck_sel: CK_NONE,
             proxy_sel: 0,
             proxy_open: false,
             focus: 7,
-            cursor: 0, // 测试夹具：非文本焦点（按钮）
             task_name: String::new(),
             task_id: None,
         });
@@ -751,7 +745,11 @@ mod add_dialog_flow_tests {
         app.open_add_dialog();
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.proxy_sel, 0, "默认选中恒「直连」（v1.6 两态）");
-        app.dialog.as_mut().unwrap().url = "http://example.com/p.bin".to_string();
+        app.dialog
+            .as_mut()
+            .unwrap()
+            .url
+            .set("http://example.com/p.bin");
         app.dlg_confirm_add();
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(
@@ -805,15 +803,15 @@ mod add_dialog_flow_tests {
         app.on_key(KeyCode::Char('m'), KeyModifiers::NONE);
         let d = app.dialog.as_ref().expect("m 打开修改对话框");
         assert_eq!(d.kind, DialogKind::Modify);
-        assert_eq!(d.conns, "2");
+        assert_eq!(d.conns.value, "2");
         // v1.32：下拉 8 项含首行 NONE——算法表下标 + 1（SHA-256 = 4）
         assert_eq!(d.ck_type, 4, "SHA-256 下拉下标（NONE 首行 + 1）");
-        assert_eq!(d.ck_value, "a".repeat(64));
+        assert_eq!(d.ck_value.value, "a".repeat(64));
         assert_eq!(d.proxy_sel, 0, "任务为 Direct → 预选直连");
         // 改并发 6 + 校验选 NONE（v1.32：清除校验改由 NONE 选项承载）+
         // 代理切命名 a → 确定
         let d = app.dialog.as_mut().unwrap();
-        d.conns = "6".to_string();
+        d.conns.set("6");
         d.ck_type = CK_NONE;
         d.ck_sel = CK_NONE;
         d.ck_value.clear();
