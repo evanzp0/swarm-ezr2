@@ -521,8 +521,9 @@ mod conn_key_tests {
     //! Esc 主界面无操作。
 
     use super::*;
+    use crate::app::testutil::task_with_conns;
     use crate::model::config::Config;
-    use crate::model::{Connection, TaskState};
+    use crate::model::TaskState;
 
     fn make_app(tag: &str) -> App {
         let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-ck-{tag}"));
@@ -530,21 +531,7 @@ mod conn_key_tests {
         App::new(Config::default(), reg)
     }
 
-    fn task_with_conns(id: u32, name: &str, state: TaskState, n: usize) -> crate::model::Task {
-        let mut t = crate::model::sample_task();
-        t.id = id;
-        t.name = name.to_string();
-        t.state = state;
-        t.connections = (1..=n)
-            .map(|i| Connection {
-                id: i,
-                start: (i as u64 - 1) * 1000,
-                end: i as u64 * 1000,
-                done: 100,
-            })
-            .collect();
-        t
-    }
+    // task_with_conns 夹具收敛至共享模块（与 mouse 测试同源单点，v152-clean）
 
     #[tokio::test]
     async fn plain_updown_moves_when_conns_focused() {

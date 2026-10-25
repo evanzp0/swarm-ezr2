@@ -47,6 +47,11 @@
 
 ## 资源与执行模型
 
+- **版本探针勿用 `-V`/`--version`（27.1.0 实测）**：版本旗标在 `cargo locate-project`
+  之后才解析——项目目录内 `cargo mutants -V` 不打印版本而是直接开扫（实测 30s 超时截断
+  时已报 "Found 3247 mutants to test"），项目外则报 locate-project 错误。版本口径取
+  发布 tag（`cargo search`/release 页），不要用版本探针触发一次全量扫描。
+
 - **`CARGO_PROFILE_DEV_DEBUG=0` 是磁盘与提速双赢的等价开关**：去 DWARF 调试信息
   （debug_assertions 仍开，测试行为不变、判定不变），target 体积减半、冷构建/链接显著提速。
   变异跑对行为敏感、对调试信息不敏感，磁盘紧张时优先开它。

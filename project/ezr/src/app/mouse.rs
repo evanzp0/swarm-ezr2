@@ -1661,4 +1661,72 @@ mod mouse_tests {
         assert_eq!(app.selected, 1, "列表点击按行选中任务");
         app.shutdown().await;
     }
+
+    // ---- 并发连接面板点击（main_down_conns 全臂，v152-clean 覆盖率收敛：
+    //      v151-arch 拆分后该臂 cov 23%、CRAP 46 越门禁，纯追加固化） ----
+
+    /// 并发面板点击测试夹具：播种 3 活跃连接的下载任务 + 面板矩形/可见行数
+    ///（两测共享构造点，消测试脚手架自配对 CPD tile）
+    fn seed_conns_panel(app: &mut crate::app::App, visible: usize) {
+        app.tasks.push(crate::app::testutil::task_with_conns(
+            1,
+            "a.bin",
+            crate::model::TaskState::Downloading,
+            3,
+        ));
+        app.selected = 0;
+        app.conns_area = Some(Rect {
+            x: 60,
+            y: 10,
+            width: 20,
+            height: 8,
+        });
+        app.visible_conns_rows = visible;
+    }
+
+    /// 面板内点击：命中即聚焦；表头行（data_top 之前）不选行；数据行选中
+    /// `ci = conns_scroll + idx`
+    #[tokio::test]
+    async fn conns_click_focuses_and_selects_data_row() {
+        let mut app = make_app("conns-sel");
+        seed_conns_panel(&mut app, 8);
+        // 表头行（row = a.y）：聚焦面板、不选行
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 65, 10));
+        assert_eq!(app.focus, Panel::Conns, "命中面板即聚焦");
+        assert_eq!(app.conns_sel, 0, "表头行不选行");
+        // 数据行 idx 2（row 13 = data_top 11 + 2）→ 选中 ci = scroll 0 + 2
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 65, 13));
+        assert_eq!(app.conns_sel, 2, "数据行选中（ci = scroll + idx）");
+        app.shutdown().await;
+    }
+
+    /// 未命中与钳制：面板缺省/矩形外点击不聚焦；`idx ≥ visible_conns_rows`、
+    /// `ci = scroll + idx ≥ 连接数` 钳制不选（选中行不越界）；回落界内正常选中
+    #[tokio::test]
+    async fn conns_click_clamps_selection_and_misses_outside() {
+        let mut app = make_app("conns-clamp");
+        // 面板缺省：Down 落空不聚焦（命中链末端列表面板无区亦无动作）
+        app.focus = Panel::Detail;
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 65, 12));
+        assert_eq!(app.focus, Panel::Detail, "面板缺省点击不聚焦并发面板");
+        // 矩形外（x 越右缘 80 = a.x+width / y 越上缘 9 < a.y）：不聚焦
+        seed_conns_panel(&mut app, 2);
+        app.focus = Panel::List;
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 80, 12));
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 65, 9));
+        assert_eq!(app.focus, Panel::List, "矩形外点击不聚焦");
+        // idx 2 ≥ visible 2：聚焦但钳制不选
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 65, 13));
+        assert_eq!(app.focus, Panel::Conns, "界内点击聚焦");
+        assert_eq!(app.conns_sel, 0, "越可见行数钳制不选");
+        // ci = scroll 2 + idx 1 = 3 ≥ 连接数 3：钳制不选
+        app.conns_scroll = 2;
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 65, 12));
+        assert_eq!(app.conns_sel, 0, "越连接数钳制不选");
+        // 回落界内：scroll 0 + idx 1 → 选中 1
+        app.conns_scroll = 0;
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 65, 12));
+        assert_eq!(app.conns_sel, 1, "回落界内正常选中");
+        app.shutdown().await;
+    }
 }

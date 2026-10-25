@@ -58,3 +58,27 @@ pub(crate) fn preset_resume_sidecar(dir: &std::path::Path) {
     );
     sc.save(&dir.join("r.bin.ezr").to_string_lossy()).ok();
 }
+
+/// 带活跃连接的任务夹具（并发面板交互测试共享构造点）：`n` 条连接按
+/// 1KB 段首尾排布（cap > 0 = 活跃相），配 `Downloading`/`Seeding` 等
+/// shows_conns 状态即可入并发面板口径。
+pub(crate) fn task_with_conns(
+    id: u32,
+    name: &str,
+    state: crate::model::TaskState,
+    n: usize,
+) -> crate::model::Task {
+    let mut t = crate::model::sample_task();
+    t.id = id;
+    t.name = name.to_string();
+    t.state = state;
+    t.connections = (1..=n)
+        .map(|i| crate::model::Connection {
+            id: i,
+            start: (i as u64 - 1) * 1000,
+            end: i as u64 * 1000,
+            done: 100,
+        })
+        .collect();
+    t
+}
