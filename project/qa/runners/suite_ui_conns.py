@@ -24,8 +24,8 @@ import time
 
 from harness import (
     Env, EzrApp, Suite, add_task_via_dialog, assert_in, assert_not_in,
-    chart_points, detail_text, expected_content, parse_speed, task_pct,
-    wait_file_size, QA_FILE_SIZES,
+    chart_points, conns_badge, detail_text, expected_content, parse_speed,
+    task_pct, wait_file_size, QA_FILE_SIZES,
 )
 
 LIGHT_BLUE = "7ab9f2"   # RGB(122,185,242) 下载淡蓝（峰值↓图例/链接字段名/连接速度）
@@ -502,11 +502,14 @@ class UiConnsSuite(Suite):
                     (i for i in range(c + 1, len(rows))
                      if "↑↓" in rows[i] or "选择" in rows[i]), len(rows))
                 assert footer_top - c >= 6, "明细面板应占右列余高"
-                # 详情字段（FR-01-80 v1.11/v1.12 口径）
+                # 详情字段（v1.34/FR-01-80 D42 字段名精简：任务 ID→ID、
+                # 创建时间→创建、保存→路径；字段行布局随精简漂移）
                 dtext = detail_text(app)
-                for f in ("任务 ID", "创建时间", "类型", "校验", "大小", "保存",
+                for f in ("ID", "创建", "类型", "校验", "大小", "路径",
                           "URL", "分块"):
                     assert_in(f, dtext, f"详情字段 {f}")
+                assert_not_in("任务 ID", dtext, "旧字段名 任务 ID 应已精简（v1.34/D42）")
+                assert_not_in("保存", dtext, "旧字段名 保存 应已精简（v1.34/D42）")
                 assert_not_in("状态", dtext, "详情无状态行（v1.11）")
                 assert_not_in("速度", dtext, "详情无速度行（v1.11）")
                 assert_not_in("（剩余", dtext, "大小行无剩余后缀（v1.12）")
@@ -514,7 +517,7 @@ class UiConnsSuite(Suite):
                 app.graceful_quit()
 
     def _case_08(self):
-        """QA-UC-08 并发连接面板三列结构：活跃计数、表头、1 基升序、提示行、待命 '-'。"""
+        """QA-UC-08 并发连接面板三列结构：x/y 项徽标（v1.34）、表头、1 基升序、无提示行。"""
         @self.case("QA-UC-08")
         def go(env: Env):
             app = EzrApp(env.home, save_dir=env.save_dir)
@@ -523,16 +526,18 @@ class UiConnsSuite(Suite):
                 add_task_via_dialog(
                     app, env, self._slow(env, "twelve-m.bin", 10), conns="4")
                 assert app.wait_for("下载中", 8)
-                # 活跃 x（1..4）：连接建立前标题已渲染「活跃 0」，先等首个非零
+                # x/y 项 徽标（v1.34/FR-01-96：原「活跃 x」退役——x = 活跃
+                # 明细行数，与明细严格同源）：连接建立前徽标已渲染 0/4 项，
+                # 先等首个非零 x（harness.conns_badge 区域锚定右栏标题行）
                 deadline = time.time() + 12
                 active = 0
                 while time.time() < deadline:
                     app.pump(0.2)
-                    m = re.search(r"活跃 (\d+)", _right_text(app, _title_row(app, "并发连接")))
-                    if m and 1 <= int(m.group(1)) <= 4:
-                        active = int(m.group(1))
+                    b = conns_badge(app)
+                    if b is not None and 1 <= b[0] <= 4:
+                        active = b[0]
                         break
-                assert active, "12s 内应出现活跃连接（标题右侧活跃 x）"
+                assert active, "12s 内应出现活跃连接（徽标 x/y 项 的 x 非零）"
                 c = _title_row(app, "并发连接")
                 # 表头三列：序号(4)/下载速度(8)/累计下载(8) 单空格分隔（列空间定位）
                 xs = _find_in_row(app, c + 1, "序号", start_col=64)
@@ -676,7 +681,7 @@ class UiConnsSuite(Suite):
                 app.graceful_quit()
 
     def _case_10(self):
-        """QA-UC-10 明细可见性状态门槛：五态空明细 + 活跃 0；空面板滚轮穿透列表。"""
+        """QA-UC-10 明细可见性状态门槛：五态空明细 + 徽标 0/y 项（v1.34）；空面板滚轮穿透列表。"""
         @self.case("QA-UC-10")
         def go(env: Env):
             app = EzrApp(env.home, save_dir=env.save_dir)
@@ -717,11 +722,12 @@ class UiConnsSuite(Suite):
                 app.pump(0.3)
                 app.send("space")
                 assert app.wait_for("已暂停", 6), "暂停应生效（已暂停态）"
-                # 五态逐个选中：明细空 + 居中「（无并发连接）」+ 活跃 0
+                # 五态逐个选中：明细空 + 居中「（无并发连接）」+ 徽标 0/y 项
                 def check_empty(label: str):
                     text = app.text()
-                    m = re.search(r"活跃 (\d+)", text)
-                    assert m and m.group(1) == "0", f"[{label}] 活跃应为 0: {m and m.group(1)}"
+                    b = conns_badge(app)
+                    assert b is not None and b[0] == 0, \
+                        f"[{label}] 空态徽标应为 0/y 项: {b}"
                     assert_in("（无并发连接）", text, f"[{label}] 明细应空且居中提示")
                 # 已暂停任务（home 后第 2 行）选中核查
                 app.send("home")
@@ -1160,8 +1166,10 @@ class UiConnsSuite(Suite):
                         assert not _cell_ul(app, y, xi), \
                             f"{label} 填充空格不应有下划线@{xi}"
                         xi += 1
-                # 其余字段名 DIM 无下划线
-                for label in ("任务 ID", "类型", "大小", "保存", "分块"):
+                # 其余字段名 DIM 无下划线（v1.34 字段名精简 D42：排队/ID/创建/
+                # 类型/大小/分块——旧「任务 ID/保存」名已退役；排队行仅等待态
+                # 渲染，缺位跳过）
+                for label in ("排队", "ID", "创建", "类型", "大小", "分块"):
                     pos = _label_pos(app, label)
                     if pos is None:
                         continue
@@ -1211,12 +1219,17 @@ class UiConnsSuite(Suite):
                 n_before = len(app.osc52_payloads())
                 # 校验字段名不应存在（无校验任务）
                 assert _label_pos(app, "校验") is None, "无校验任务不应有校验字段行"
-                # 点击原校验行区域（URL 行上方一格，即校验行历史位置）
-                pos_url = _label_pos(app, "URL")
-                _click(app, pos_url[0] - 1, pos_url[1])
+                # 点击非热区字段行（v1.34 热区扩展后原「URL 上方一格」= 路径
+                # 行属复制热区，锚点随字段行布局漂移退役）——改点「大小」字段
+                # 名（暗灰无下划线非热区，TD-25 集合），点击无动作
+                pos_size = _label_pos(app, "大小")
+                assert pos_size is not None, "大小字段名应可见"
+                _click(app, pos_size[0], pos_size[1])
                 app.pump(0.5)
                 assert len(app.osc52_payloads()) == n_before, "无热区点击不应复制"
                 assert_not_in("已复制", app.text(), "无热区点击不应 toast")
+                pos_url = _label_pos(app, "URL")
+                assert pos_url is not None, "URL 字段名应可见"
                 # ④ G 收起右栏后原位置点击：无动作（热区随面板收起清空）
                 app.send("up")
                 app.pump(0.4)  # 回到有校验码任务

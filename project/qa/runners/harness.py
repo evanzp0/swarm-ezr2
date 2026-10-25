@@ -797,6 +797,31 @@ def task_pct(app: "EzrApp") -> float | None:
     return None
 
 
+def conns_badge(app: "EzrApp") -> "tuple[int, int] | None":
+    """并发连接面板标题徽标 (x, y)（v1.34/FR-01-96：` x/y 项 `——x = 活跃
+    明细行数（正在连接 + 已连接，与明细严格同源）、y = 任务最大并发数；
+    面板未渲染返回 None）。
+
+    区域锚定（engineering.md「not_in 子串断言的区域必须与规格语义面板
+    对齐」）：「下载任务」面板标题徽标同为 `` x/y 项 `` 形态——必须锚定
+    「并发连接」标题行，全画面正则会撞列表面板计数。右栏 buffer 列空间
+    读取（左栏 CJK 宽字符会使 display 串列位漂移，同 detail_text 区域
+    纪律；跳过宽字符续位空格 data==""）。
+    """
+    for i in range(app.screen.lines):
+        right = "".join(
+            app.screen.buffer[i][x].data or ""
+            for x in range(64, app.screen.columns)
+        )
+        if "并发连接" not in right:
+            continue
+        m = re.search(r"(\d+)/(\d+) 项", right)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+        return None
+    return None
+
+
 def select_completed(app: "EzrApp", needles: list[str],
                      max_moves: int = 8) -> set[str]:
     """] 切「已完成」页签（v1.30：Tab 改面板焦点，页签键 ]/[/T 承载），

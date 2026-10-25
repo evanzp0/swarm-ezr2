@@ -23,9 +23,9 @@ import time
 
 from harness import (
     Env, EzrApp, Suite, TMP_ROOT, add_task_via_dialog, assert_file_content,
-    assert_in, assert_not_in, detail_text, expected_content, proxy_reqs,
-    sha256_hex, start_proxy, stop_proxy, task_pct, wait_file_size,
-    QA_FILE_SIZES,
+    assert_in, assert_not_in, conns_badge, detail_text, expected_content,
+    proxy_reqs, sha256_hex, start_proxy, stop_proxy, task_pct,
+    wait_file_size, QA_FILE_SIZES,
 )
 
 TWELVE_M = QA_FILE_SIZES["twelve-m.bin"]
@@ -34,14 +34,15 @@ SMALL = 1_024
 
 
 def _active_conns(app: EzrApp) -> int | None:
-    """并发连接面板标题右侧「活跃 x」（04-ui-conns-08：活跃 = 速度 > 0 的连接数）。
+    """并发连接面板标题徽标 x（v1.34/FR-01-96：` x/y 项 `——x = 活跃明细行数）。
 
-    注意口径：头部「并发 N」= 下载中任务的连接**总数**（04-ui-conns-04，
-    含已完成块待续的空闲连接）；「活跃」才是速度 > 0 的活跃连接数——
-    QA-MT-02 观测升降级调度效果以「活跃」为准（规程：活跃连接数）。
+    注意口径（v1.34 修订）：头部「并发 N」= 下载中任务正在连接 + 已连接的
+    **活跃并发总数**（FR-01-81 v1.34，与徽标 x、明细行数严格同源，is_active
+    单源；待命/已断开不计——旧「连接总数/速度 > 0」双口径退役）；
+    QA-MT-02 观测升降级调度效果以徽标 x 为准（harness.conns_badge 区域锚定）。
     """
-    m = re.search(r"活跃 (\d+)", app.text())
-    return int(m.group(1)) if m else None
+    b = conns_badge(app)
+    return b[0] if b is not None else None
 
 
 def _open_modify(app: EzrApp) -> None:
@@ -594,10 +595,13 @@ class ModifyTaskSuite(Suite):
                 assert_in(expect, app.text(),
                           f"校验码粘贴应仅收 hex ≤128 位（尾部 10 位 {expect}）")
                 assert_not_in("中文", app.text(), "控制字符/非 hex 不应进入字段")
-                # ③ 校验下拉展开时粘贴被忽略：焦点自校验码（2）上移至校验（1），
+                # ③ 校验下拉展开时粘贴被忽略：焦点自校验码（2）Tab 环绕回校验（1），
                 #    Enter 展开下拉；粘贴后下拉仍开、字段值不变（无副作用）。
+                #    （v1.34 二批修订：文本字段内方向键 = 光标移动（Up 行首），
+                #    不跳字段焦点——旧「up 上移」导航锚点退役，焦点导航只走
+                #    Tab 环绕：校验码2→代理3→确认4→取消5→并发0→校验1）
                 #    （画面全屏对比不可用——对话框外列表速度行逐秒刷新，属合法变化）
-                app.send("up")     # 焦点 2（校验码）→ 1（校验）
+                app.send(*(["tab"] * 5))  # 焦点 2 环绕一周到 1（校验）
                 app.pump(0.2)
                 app.send("enter")  # 展开校验下拉
                 assert app.wait_for("SHA-512", 3), "校验下拉应展开"

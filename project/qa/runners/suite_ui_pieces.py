@@ -7,8 +7,10 @@
 端到端 UI 层验证：伪终端逐单元格画面断言（色块 🟩🟦🟨⬜ 按宽字符列位还原）+
 按键/鼠标注入 + fixture 驱动真实下载状态；不使用项目内部 API。
 
-规程口径同步基线：v1.30（64×19、四色图例行、↑↓/B 回归键）、v1.31（未探测臂
-!probed && total == 0 收窄）、v1.32（通用滚动条 ↑│║│↓、点击外部 = 无任何操作）。
+规程口径同步基线：v1.30（四色图例行、↑↓/B 回归键）、v1.31（未探测臂
+!probed && total == 0 收窄）、v1.32（通用滚动条 ↑│║│↓、点击外部 = 无任何操作）、
+v1.35（弹窗 68×20/内框 66×18/内容八段、网格每行 31 块、一屏 341 块/11 行——
+QA v153-arch 交接批次同步；块大小口径沿 1 MB = 1024×1024，24 块计数不变）。
 
 S 登记口径（环境判据，规程「通过准则」允许）：
 - UP-04 前沿行垂直居中落位的逐行断言、↓ 箭头按压高亮/余辉的单元格级色彩断言：
@@ -184,7 +186,7 @@ class PiecesSuite(Suite):
         return self.results
 
     def _case_01(self):
-        """QA-UP-01 下载中按 P：64×19 居中、标题/元信息/四色图例（v1.30）、56×16 钳制。"""
+        """QA-UP-01 下载中按 P：68×20 居中、八段/元信息/四色图例（v1.35）、56×16 钳制。"""
         @self.case("QA-UP-01")
         def go(env: Env):
             app = EzrApp(env.home, save_dir=env.save_dir)
@@ -199,12 +201,14 @@ class PiecesSuite(Suite):
                 assert app.wait_for("下载中", 8)
                 app.pump(1.0)
                 ty, l, r = self._open_pieces(app)
-                assert r - l == 63, f"弹窗应 64 列（实测 {r - l + 1}）"
+                # v1.35/FR-01-106：弹窗 68×20（64×21→67×23→68×20 呼吸行 +
+                # 加宽 3 列 + 高度收缩；内框 66×18，内容八段）
+                assert r - l == 67, f"弹窗应 68 列（实测 {r - l + 1}）"
                 bottom = next(i for i in range(ty + 1, app.screen.lines)
                               if app.screen.buffer[i][l].data == "╰")
-                assert bottom - ty == 18, f"弹窗应 19 行（实测 {bottom - ty + 1}）"
-                # 居中：120 列下左右边距各 ≈28（(120-64)/2 = 28）
-                assert abs(l - (app.screen.columns - 64) // 2) <= 1, \
+                assert bottom - ty == 19, f"弹窗应 20 行（实测 {bottom - ty + 1}）"
+                # 居中：120 列下左右边距各 ≈26（(120-68)/2 = 26）
+                assert abs(l - (app.screen.columns - 68) // 2) <= 1, \
                     f"弹窗应水平居中（左界 {l}）"
                 text = app.text()
                 assert_in("分块状态", text, "标题")
@@ -347,7 +351,8 @@ class PiecesSuite(Suite):
                 # 2000 块：2 GiB 稀疏真实文件（非 swapsize——fixture 对 swapsize
                 # 物化进内存，2 GiB 会 OOM；truncate 稀疏文件 0 磁盘占用，
                 # fixture 按需 seek 供字节；ezr 目标文件 set_len 同为稀疏）
-                # 可见 14 行 → 滚程 51 行，↓×3/PgDn 8 行/End/Home 均有行程
+                # 可见 11 行（一屏 341 块，v1.35 68×20）→ 滚程 54 行，
+                # ↓×3/PgDn 8 行/End/Home 均有行程
                 # （520 块版仅 2 行滚程，PgDn 断言无从驱动——规程同步修订）
                 big = os.path.join(env.fixture_root, "piece-big.bin")
                 if not os.path.exists(big):
@@ -574,10 +579,11 @@ class PiecesSuite(Suite):
                 g2 = self._span(app)
                 assert g2 is not None and g2[0] == ty + 2, \
                     f"拖拽应随动（{ty} → {g2 and g2[0]}）"
-                # P 关闭重开：回到居中位（拖拽位置不保留，与帮助窗口不同）
+                # P 关闭重开：回到居中位（拖拽位置不保留，与帮助窗口不同；
+                # v1.35 68 列：center = (120-68)//2 = 26）
                 self._close_pieces(app, "p")
                 ty3, l3, r3 = self._open_pieces(app)
-                center = (app.screen.columns - 64) // 2
+                center = (app.screen.columns - 68) // 2
                 assert abs(l3 - center) <= 1, \
                     f"重开应回居中位（左界 {l3}，期望 ≈{center}；拖拽位置不保留）"
                 # 点击弹窗外部 = 无任何操作（v1.32 模态统一口径：不关闭不穿透）

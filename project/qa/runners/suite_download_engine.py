@@ -104,23 +104,22 @@ class DownloadEngineSuite(Suite):
                 url = env.fixture.url("three-m.bin?norange=1&speed=300000")
                 self._add_via_dialog(app, env, url)
                 assert app.wait_for("不支持断点续传", 8)
-                # 单流进度行（FR-01-17 展示面 1s 节拍 + 十进制口径）：以显示读数
-                # 字节值判定 ≥30%。精确锚定「1.0 MB」不可靠——300KB/s 下读数每秒
-                # 前进 ~300KB，而「1.0 MB」的显示窗仅 ~50KB 宽（0.995–1.05MB），
-                # 1s 节拍采样可能整段跳过（瞬时值陷阱，engineering.md 断言锚定
-                # 最终态条款的同源推论）。改解析任意已显示 progress 读数判定。
+                # ≥30% 进度判定（v1.34/FR-01-116 ① 口径）：不支持续传的流式
+                # 下载总大小未知，列表行百分比列恒 ?%、无字节进度文本——显示
+                # 读数口径退役（v1.30 套件的 `x/3.0 MB` 正则永远无法命中）。
+                # 改用磁盘落盘字节判定：单流顺序写 `<name>.downloading` 分部
+                # 文件（完成才改名目标），字节数即真实进度（断言锚持久证据）。
+                target = os.path.join(env.save_dir, "three-m.bin")
+                partial = target + ".downloading"
                 deadline = time.time() + 30
                 reached = False
                 while time.time() < deadline:
-                    app.pump(0.2)
-                    m = re.search(r"([\d.]+) (KB|MB)/3\.0 MB", app.text())
-                    if m:
-                        b = float(m.group(1)) * (
-                            1000.0 if m.group(2) == "KB" else 1_000_000.0)
-                        if b >= 900_000:  # 30% 阈值（显示量化 ±半格在容差内）
-                            reached = True
-                            break
-                assert reached, "未在窗口内到达 ≥30% 进度（显示读数口径）"
+                    app.pump(0.05)
+                    if (file_bytes(partial) or 0) + (file_bytes(target) or 0) \
+                            >= 900_000:  # 30% 阈值
+                        reached = True
+                        break
+                assert reached, "未在窗口内到达 ≥30% 进度（磁盘落盘口径）"
                 ts_pause = time.time()
                 app.send("space")
                 assert app.wait_for("已暂停", 5), "Space 后应转已暂停"

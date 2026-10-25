@@ -128,9 +128,12 @@ class TuiDisplaySuite(Suite):
                 add_task_via_dialog(app, env, self._slow(env, "three-m.bin", 1))
                 assert app.wait_for("下载中", 8)
                 d = detail_text(app)
-                for field in ("ID", "类型", "大小", "保存",
+                # v1.34/FR-01-80 D42 字段名精简：任务 ID→ID、创建时间→创建、
+                # 保存→路径（字段行布局随精简漂移）
+                for field in ("ID", "创建", "类型", "大小", "路径",
                               "URL", "分块"):
                     assert_in(field, d, f"详情字段 {field}")
+                assert_not_in("保存", d, "旧字段名 保存 应已精简（v1.34/D42）")
                 assert_in("1 MB/块", d, "默认块大小")
                 assert_in("支持断点续传", d, "续传标记")
                 assert_not_in("并发分块明细", d, "明细表应已移除（FR-01-81 修订二）")
@@ -859,7 +862,10 @@ class TuiDisplaySuite(Suite):
                 # 滚动：End 到末页钳制（末行提示常驻）
                 app.send("end")
                 app.pump(0.3)
-                assert_in("滚动本页", app.text(), "帮助末行提示")
+                # v1.34/FR-01-107 P10 定版：末行 note 滚动提示退役（全屏检索
+                # 该文案为零，产品单测同源锚定）——旧「末行提示在位」断言反相
+                assert_not_in("↑↓/滚轮 滚动本页", app.text(),
+                              "帮助末行 note 应已退役（v1.34/FR-01-107 P10）")
                 # 帮助内按 O = 关于叠于帮助之上；关闭后回帮助
                 app.send("o")
                 assert app.wait_for("EZR Download v1.0.0", 3), "帮助内 O 应叠开关于"
@@ -1070,8 +1076,10 @@ class TuiDisplaySuite(Suite):
                 text = app.text()
                 for btn in ("[ 仅删除任务 ]", "[ 删除任务和文件 ]", "[ 取消 ]"):
                     assert_in(btn, text, f"删除框按钮 {btn}")
-                assert_in("1/2/3 快捷选择 · Enter 确认 · Esc 取消", text,
-                          "底部提示行（全浮层唯一保留，v1.30）")
+                # v1.34/FR-01-25 P10 定版：底部提示行退役（全屏检索该文案为零，
+                # 原「全浮层唯一保留提示行」例外条款随之关闭）——旧断言反相
+                assert_not_in("1/2/3 快捷选择", text,
+                              "底部提示行应已退役（v1.34/FR-01-25 P10）")
                 # 数字键直选：2 = 删除任务和文件（文件与 sidecar 全删）
                 app.send("2")
                 assert app.wait_for("正在停止引擎并清理本地文件", 6)

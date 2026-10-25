@@ -336,7 +336,10 @@ class ThrottleProxySuite(Suite):
                 text = app.text()
                 assert_in("EZR Downloader", text, "标题")
                 assert_in("全局", text, "头部")
-                assert_in("Space 暂停/继续", text, "页脚")
+                # 页脚（v1.13/FR-01-107 页脚收敛：提示词 chips 化，「暂停」属
+                # footer.rs 退役词表——旧「Space 暂停/继续」断言随版退役）
+                assert_in("A 添加 · D 删除 · M 修改 · Q 退出 · H 帮助", text,
+                          "页脚命令 chips（v1.13 收敛定版）")
                 assert_not_in("限速", text.replace("max_speed", ""), "无限速控件")
                 assert_in("峰值 ↓", text, "头部流量图区块不变（v1.13 内嵌无标题，峰值图例）")
                 assert_in("并发连接", text, "并发连接面板区块不变")

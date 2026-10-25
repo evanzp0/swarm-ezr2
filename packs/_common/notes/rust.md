@@ -84,6 +84,22 @@
   `nightly-<日期>` 后项目内 cargo 命令仍会按 toolchain 文件自动安装 floating
   `nightly`（最新版）。收敛工具链漂移时直接以「当前沙箱解析到的 nightly」为收敛目标
   逐项归零警告/偏差并记录确切版本（`rustc --version`），不在别名桥接上花功夫。
+- **`rustup component add` 报 `detected conflict: 'bin/xxx'` = 部分安装残留，component
+  层无法自愈**：被超时/会话回收打断的 component 安装会留下半写入的 bin 桥接；
+  重试 `component add` 时 rustup 校验既有文件冲突，报 `detected conflict` 后
+  `rolling back changes`，add/uninstall 均解不掉（uninstall 报 not installed）。
+  正确修法：`rustup toolchain uninstall <tc>` 后 `rustup toolchain install <tc>
+  --profile minimal -c rustfmt -c clippy -c llvm-tools-preview` 一次性完整重装
+  （与「沙箱冷启动先一次性装全」条款同源——重装即该条款的执行形态）。
+- **cargo-llvm-cov 的独立 target-dir 是双倍构建树磁盘预算，分目标 lcov 分片可过单命令
+  超时**：`cargo llvm-cov` 在 `target/llvm-cov-target/` 另起全量构建树（含插桩产物，
+  与 `target/debug` 同量级）——磁盘受限沙箱先按 2× 构建树做预算；后续不再跑 e2e/
+  单测复跑时可先删 `target/debug` 腾盘（e2e 二进制住那里，删后需再跑则重 build）。
+  单命令超时受限环境按 `--test <t>` / `--bin <b>` 逐目标出 lcov 分片
+  （`--output-path <t>.info`，依赖首次调用全量插桩重编、后续秒级增量），
+  事后合并：DA 行取各目标命中最大值（并集口径）、BRDA 按 (line,block,branch)
+  求并、函数行跨按 FN 起始行排序归段；行覆盖率 = 合并后 LH/LF，
+  CRAP 近似 comp = 1 + 函数行跨内 BRDA 条数。
 
 ## 2. 强制配置模板
 
