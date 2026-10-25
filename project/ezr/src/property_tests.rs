@@ -528,6 +528,43 @@ fn slot_task(
     t
 }
 
+/// 六态任务状态向量策略（slots/registry 属性共享单源——生成分布不变；
+/// architect v153：策略体同形克隆自配对 tile 单源消解）
+fn arb_task_states(
+    n: usize,
+) -> impl proptest::strategy::Strategy<Value = Vec<crate::model::TaskState>> {
+    static STATES: &[crate::model::TaskState] = &[
+        crate::model::TaskState::Queued,
+        crate::model::TaskState::Downloading,
+        crate::model::TaskState::Paused,
+        crate::model::TaskState::Verifying,
+        crate::model::TaskState::Failed,
+        crate::model::TaskState::Completed,
+    ];
+    prop::collection::vec(prop::sample::select(STATES), n)
+}
+
+/// slot 属性共享播种：第 i 个任务 = slot_task(i+1, states[i], flags[i],
+/// retry[i])（architect v153：两属性测试体同构脚手架单源消解；向量长度
+/// ≥ n，与原 `0..n` 索引语义一致）
+fn slot_task_vec(
+    n: usize,
+    states: &[crate::model::TaskState],
+    flags: &[bool],
+    retry_in: &[Option<f64>],
+) -> Vec<crate::model::Task> {
+    (0..n)
+        .map(|i| {
+            slot_task(
+                u32::try_from(i).unwrap_or(0) + 1,
+                states[i],
+                flags[i],
+                retry_in[i],
+            )
+        })
+        .collect()
+}
+
 proptest! {
     /// allocate 幂等与封顶（全等待中队列）：一遍授予 = min(空闲, 未持槽数)、
     /// 授予后 used ≤ max_slots、二遍零授予、授予按列表序
@@ -539,9 +576,8 @@ proptest! {
     ) {
         use crate::model::slots;
         use crate::model::TaskState;
-        let mut tasks: Vec<_> = (0..n)
-            .map(|i| slot_task(u32::try_from(i).unwrap_or(0) + 1, TaskState::Queued, initial[i], None))
-            .collect();
+        let mut tasks: Vec<_> =
+            slot_task_vec(n, &[TaskState::Queued; 12], &initial, &[None; 12]);
         let used_before = slots::used(&tasks);
         let candidates = n - used_before; // 全等待中：未持槽者即可候选
         let free_before = max_slots.saturating_sub(used_before);
@@ -572,25 +608,13 @@ proptest! {
     #[test]
     fn prop_slots_enforce_idempotent_semantics(
         n in 0usize..12,
-        states in prop::collection::vec(
-            prop::sample::select(&[
-                crate::model::TaskState::Queued,
-                crate::model::TaskState::Downloading,
-                crate::model::TaskState::Paused,
-                crate::model::TaskState::Verifying,
-                crate::model::TaskState::Failed,
-                crate::model::TaskState::Completed,
-            ]),
-            12,
-        ),
+        states in arb_task_states(12),
         slots0 in prop::collection::vec(prop::bool::ANY, 12),
         retry_in in prop::collection::vec(proptest::option::of(1.0f64..600.0), 12),
     ) {
         use crate::model::slots;
         use crate::model::TaskState;
-        let mut tasks: Vec<_> = (0..n)
-            .map(|i| slot_task(u32::try_from(i).unwrap_or(0) + 1, states[i], slots0[i], retry_in[i]))
-            .collect();
+        let mut tasks: Vec<_> = slot_task_vec(n, &states, &slots0, &retry_in);
         slots::enforce_invariants(&mut tasks);
         let after_once: Vec<bool> = tasks.iter().map(|t| t.has_slot).collect();
         // 语义断言
@@ -733,17 +757,7 @@ proptest! {
     #[test]
     fn prop_registry_round_trip_and_projection(
         k in 0usize..6,
-        states in prop::collection::vec(
-            prop::sample::select(&[
-                crate::model::TaskState::Queued,
-                crate::model::TaskState::Downloading,
-                crate::model::TaskState::Paused,
-                crate::model::TaskState::Verifying,
-                crate::model::TaskState::Failed,
-                crate::model::TaskState::Completed,
-            ]),
-            6,
-        ),
+        states in arb_task_states(6),
         totals in prop::collection::vec(0u64..(1u64 << 40), 6),
         downloaded_frac in prop::collection::vec(0u64..101, 6),
         retries in prop::collection::vec(0u32..12, 6),
@@ -2158,6 +2172,19 @@ fn field_text_full() -> impl proptest::strategy::Strategy<Value = String> {
     .prop_map(|chars| chars.into_iter().collect())
 }
 
+/// field_window 属性共享构造（textfield 属性族：值 + 光标 → 取窗投影；
+/// architect v153：属性体同构脚手架单源消解）
+fn field_window_of(
+    s: &str,
+    cursor: usize,
+    budget: usize,
+    focused: bool,
+) -> crate::textfield::FieldDisplay {
+    let mut t = crate::textfield::TextInput::with_value(s.to_string());
+    t.set_cursor(cursor);
+    t.field_window("", budget, focused)
+}
+
 proptest! {
     /// 取窗切片恒等（round trip，全字母表论域——v151-arch 振荡缺陷修复后
     /// 扩域）：任意（光标, 预算, 聚焦）下，pre 剥头指示符 + post 剥尾指示符 =
@@ -2170,9 +2197,7 @@ proptest! {
         budget in 1usize..=30,
         focused in proptest::bool::ANY,
     ) {
-        let mut t = crate::textfield::TextInput::with_value(s.clone());
-        t.set_cursor(cursor);
-        let fd = t.field_window("", budget, focused);
+        let fd = field_window_of(&s, cursor, budget, focused);
         let pre_core = fd.pre.strip_prefix('…').unwrap_or(&fd.pre);
         let post_core = fd.post.strip_suffix('…').unwrap_or(&fd.post);
         let expect: String = s
@@ -2204,9 +2229,7 @@ proptest! {
         budget in 3usize..=30,
         focused in proptest::bool::ANY,
     ) {
-        let mut t = crate::textfield::TextInput::with_value(s.clone());
-        t.set_cursor(cursor);
-        let fd = t.field_window("", budget, focused);
+        let fd = field_window_of(&s, cursor, budget, focused);
         let shown = crate::textfield::w(&fd.pre) + crate::textfield::w(&fd.post);
         prop_assert!(shown <= budget, "显示宽 ≤ 预算（含指示符）");
         let narrow_only = s.chars().all(|c| (c as u32) < 0x80 || c == '\u{FE0E}');
@@ -2227,9 +2250,7 @@ proptest! {
         focused in proptest::bool::ANY,
     ) {
         let budget = crate::textfield::w(&s) + slack;
-        let mut t = crate::textfield::TextInput::with_value(s.clone());
-        t.set_cursor(cursor);
-        let fd = t.field_window("", budget, focused);
+        let fd = field_window_of(&s, cursor, budget, focused);
         let n = s.chars().count();
         prop_assert_eq!(fd.win.win_lo, 0, "整值可见：窗头 = 0");
         prop_assert_eq!(fd.win.win_hi, n, "整值可见：窗尾 = 字符数");
@@ -2249,9 +2270,7 @@ proptest! {
         col in 0u16..200u16,
     ) {
         let budget = crate::textfield::w(&s) + slack;
-        let mut t = crate::textfield::TextInput::with_value(s);
-        t.set_cursor(cursor);
-        let mut fd = t.field_window("", budget, true);
+        let mut fd = field_window_of(&s, cursor, budget, true);
         fd.win.value_x = 40;
         let off = crate::textfield::TextInput::click_offset(&fd.win, col);
         prop_assert!(

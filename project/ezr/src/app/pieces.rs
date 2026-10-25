@@ -80,26 +80,16 @@ mod tests {
     //! 滚动状态机单测。
 
     use super::*;
-    use crate::model::config::Config;
-    use crate::model::TaskState;
 
+    /// 夹具单源委托（app 树 App 夹具族收口 testutil，architect v153）
     fn make_app(tag: &str) -> App {
-        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-pieces-{tag}"));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        App::new(Config::default(), reg)
+        crate::app::testutil::make_app_in("ezr-pieces", tag)
     }
 
-    /// 可打开弹窗的基准任务：已探测、可续传、total 5 MB（5 块 ×1 MB）
+    /// 可打开弹窗的基准任务：已探测、可续传、total 5 MB（5 块 ×1 MB）——
+    /// 分块数学族口径单源 testutil（architect v153）
     fn openable(id: u32, name: &str) -> crate::model::Task {
-        let mut t = crate::model::sample_task();
-        t.id = id;
-        t.name = name.to_string();
-        t.state = TaskState::Downloading;
-        t.probed = true;
-        t.resumable = true;
-        t.total = 5_000_000;
-        t.block_size = 1_000_000;
-        t
+        crate::app::testutil::dl_task_mb(id, name)
     }
 
     /// D35 门槛序：未探测臂先于「不支持分块」「空内容」两臂——三条件同时

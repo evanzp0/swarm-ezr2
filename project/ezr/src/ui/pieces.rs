@@ -251,10 +251,9 @@ mod tests {
     use crate::app::App;
     use crate::model::{Connection, Task, TaskState};
 
+    /// 夹具单源委托（ui 层 testfx 单源，architect v153）
     fn make_app(tag: &str) -> App {
-        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-upieces-{tag}"));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        App::new(crate::model::config::Config::default(), reg)
+        crate::ui::testfx::make_app_in("ezr-upieces", tag)
     }
 
     fn dl_task(id: u32, name: &str, total: u64) -> Task {

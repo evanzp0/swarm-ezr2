@@ -222,11 +222,10 @@ mod tick_tests {
     use super::*;
     use crate::model::config::Config;
 
+    /// 夹具单源委托（app 树 App 夹具族收口 testutil，architect v153；
+    /// 目录进程内唯一化语义由 testenv 单源承载）
     fn make_app(tag: &str) -> App {
-        // 目录进程内唯一化（coder v116 隔离修复）：pid 复用不再撞残留 registry
-        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-tick-{tag}"));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        App::new(Config::default(), reg)
+        crate::app::testutil::make_app_in("ezr-tick", tag)
     }
 
     /// 02-named-proxy-05：命名代理引用失效 → 直连 + toast 提醒一次
@@ -746,12 +745,9 @@ mod evt_tests {
 
     use super::*;
     use crate::engine::ConnView;
-    use crate::model::config::Config;
-
+    /// 夹具单源委托（app 树 App 夹具族收口 testutil，architect v153）
     fn make_app(tag: &str) -> App {
-        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-evt-{tag}"));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        App::new(Config::default(), reg)
+        crate::app::testutil::make_app_in("ezr-evt", tag)
     }
 
     /// 种子任务：模型层 sample_task 改 id/名字（终态避免被 tick 自动推进；
@@ -1654,12 +1650,9 @@ mod conn_stats_tests {
 
     use super::*;
     use crate::engine::ConnView;
-    use crate::model::config::Config;
-
+    /// 夹具单源委托（app 树 App 夹具族收口 testutil，architect v153）
     fn make_app(tag: &str) -> App {
-        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-cc-{tag}"));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        App::new(Config::default(), reg)
+        crate::app::testutil::make_app_in("ezr-cc", tag)
     }
 
     fn seed(id: u32, name: &str, state: TaskState) -> Task {

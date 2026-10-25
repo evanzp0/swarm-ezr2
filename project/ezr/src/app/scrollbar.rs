@@ -316,23 +316,10 @@ mod sb_interaction_tests {
     use ratatui::layout::Rect;
 
     use super::*;
-    use crate::model::config::Config;
-    use crate::model::TaskState;
 
+    /// 夹具单源委托（app 树 App 夹具族收口 testutil，architect v153）
     fn make_app(tag: &str) -> App {
-        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-sb-{tag}"));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        App::new(Config::default(), reg)
-    }
-
-    fn dl_task(id: u32, name: &str) -> crate::model::Task {
-        let mut t = crate::model::sample_task();
-        t.id = id;
-        t.name = name.to_string();
-        t.state = TaskState::Downloading;
-        t.probed = true;
-        t.total = 5_000_000;
-        t
+        crate::app::testutil::make_app_in("ezr-sb", tag)
     }
 
     /// 40×20 面板的垂直滚动条几何（total=30、page=5 → max 25，与下方
@@ -340,6 +327,15 @@ mod sb_interaction_tests {
     /// 每帧回填的真实契约）
     fn vbar() -> SbBar {
         SbBar::vertical(Rect::new(0, 0, 40, 20), 30, 5, 0)
+    }
+
+    /// 四测共享脚手架（architect v153 脚手架单源）：回填 vbar 几何 +
+    /// 可视 5 行 + 30 排队播种，返回首帧几何
+    fn seed_scrollbar(app: &mut App) -> SbBar {
+        app.list_scrollbar = Some(vbar());
+        app.visible_rows = 5;
+        crate::app::testutil::seed_queued(app, 30);
+        app.list_scrollbar.unwrap()
     }
 
     /// 以当前 scroll 重建回填几何（模拟下一帧 ui 层回填：pos 字段随帧刷新）
@@ -355,16 +351,9 @@ mod sb_interaction_tests {
     #[tokio::test]
     async fn arrow_press_steps_and_focuses_panel() {
         let mut app = make_app("arrow");
-        app.list_scrollbar = Some(vbar());
-        app.visible_rows = 5;
-        for _ in 0..30 {
-            let mut t = dl_task(1, "t.bin");
-            t.state = TaskState::Queued;
-            app.tasks.push(t);
-        }
+        let bar = seed_scrollbar(&mut app);
         app.focus = Panel::Detail;
         // 尾箭头命中（几何：高 20 → 轨道 [2,17]；Tail 在行 18）
-        let bar = app.list_scrollbar.unwrap();
         let hit = bar.hit(39, 18);
         assert!(matches!(hit, Some(SbHit::Tail)));
         app.sb_press(SbKey::List, &bar, hit.unwrap());
@@ -394,14 +383,7 @@ mod sb_interaction_tests {
     #[tokio::test]
     async fn track_press_pages_toward_click_side() {
         let mut app = make_app("track");
-        app.list_scrollbar = Some(vbar());
-        app.visible_rows = 5;
-        for _ in 0..30 {
-            let mut t = dl_task(1, "t.bin");
-            t.state = TaskState::Queued;
-            app.tasks.push(t);
-        }
-        let bar = app.list_scrollbar.unwrap();
+        let bar = seed_scrollbar(&mut app);
         // 首屏（pos 0）：滑块在轨道头部 → 轨道下半段点击 = 朝尾翻页
         let hit = bar.hit(39, 10);
         assert!(matches!(hit, Some(SbHit::Track(_))));
@@ -425,14 +407,7 @@ mod sb_interaction_tests {
     #[tokio::test]
     async fn thumb_drag_inverse_and_release() {
         let mut app = make_app("thumb");
-        app.list_scrollbar = Some(vbar());
-        app.visible_rows = 5;
-        for _ in 0..30 {
-            let mut t = dl_task(1, "t.bin");
-            t.state = TaskState::Queued;
-            app.tasks.push(t);
-        }
-        let bar = app.list_scrollbar.unwrap();
+        let bar = seed_scrollbar(&mut app);
         // 滑块命中（首屏滑块在轨道首格：行 2）→ 抓取偏移 0
         let hit = bar.hit(39, 2);
         assert!(matches!(hit, Some(SbHit::Thumb(0))));
@@ -451,14 +426,7 @@ mod sb_interaction_tests {
     #[tokio::test]
     async fn hold_autorepeat_first_delay_then_period() {
         let mut app = make_app("hold");
-        app.list_scrollbar = Some(vbar());
-        app.visible_rows = 5;
-        for _ in 0..30 {
-            let mut t = dl_task(1, "t.bin");
-            t.state = TaskState::Queued;
-            app.tasks.push(t);
-        }
-        let bar = app.list_scrollbar.unwrap();
+        let bar = seed_scrollbar(&mut app);
         app.sb_press(SbKey::List, &bar, SbHit::Tail);
         assert_eq!(app.scroll, 1, "按下立即步进一次");
         // 起振前（<400ms）tick 不重复

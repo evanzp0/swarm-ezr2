@@ -248,13 +248,11 @@ mod dialog_key_tests {
     use crate::app::CHECKSUM_ALGOS;
     use crate::app::{Dialog, DialogKind};
     use crate::model::checksum::CK_NONE;
-    use crate::model::config::Config;
     use crate::model::Protocol;
 
+    /// 夹具单源委托（app 树 App 夹具族收口 testutil，architect v153）
     fn make_app(tag: &str) -> crate::app::App {
-        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-dlgkey-{tag}"));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        crate::app::App::new(Config::default(), reg)
+        crate::app::testutil::make_app_in("ezr-dlgkey", tag)
     }
 
     fn add_dlg() -> Dialog {

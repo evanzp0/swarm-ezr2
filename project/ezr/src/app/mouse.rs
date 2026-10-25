@@ -660,24 +660,16 @@ mod pieces_mouse_tests {
     use ratatui::layout::Rect;
 
     use super::*;
-    use crate::model::config::Config;
-    use crate::model::TaskState;
+    use crate::app::testutil::dl_task_mb;
 
+    /// 夹具单源委托（app 树 App 夹具族收口 testutil，architect v153）
     fn make_app(tag: &str) -> crate::app::App {
-        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-pmouse-{tag}"));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        crate::app::App::new(Config::default(), reg)
+        crate::app::testutil::make_app_in("ezr-pmouse", tag)
     }
 
     fn dl_task(id: u32, name: &str) -> crate::model::Task {
-        let mut t = crate::model::sample_task();
-        t.id = id;
-        t.name = name.to_string();
-        t.state = TaskState::Downloading;
-        t.probed = true;
-        t.total = 5_000_000;
-        t.block_size = 1_000_000;
-        t
+        // 分块数学族口径（block_size = 1 MB）单源 testutil（architect v153）
+        dl_task_mb(id, name)
     }
 
     fn popup_area() -> Rect {
@@ -814,10 +806,9 @@ mod mouse_tests {
         }
     }
 
+    /// 夹具单源委托（app 树 App 夹具族收口 testutil，architect v153）
     fn make_app(tag: &str) -> crate::app::App {
-        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-mouse-{tag}"));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        crate::app::App::new(crate::model::config::Config::default(), reg)
+        crate::app::testutil::make_app_in("ezr-mouse", tag)
     }
 
     fn task(id: u32, name: &str) -> crate::model::Task {

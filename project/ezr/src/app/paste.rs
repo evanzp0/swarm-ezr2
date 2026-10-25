@@ -262,10 +262,9 @@ mod paste_tests {
         assert_eq!(d.url.value, "Shttp://Xa.bin");
     }
 
+    /// 夹具单源委托（app 树 App 夹具族收口 testutil，architect v153）
     fn make_app(tag: &str) -> crate::app::App {
-        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-paste-{tag}"));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        crate::app::App::new(crate::model::config::Config::default(), reg)
+        crate::app::testutil::make_app_in("ezr-paste", tag)
     }
 
     /// App::on_paste 入口路由（FR-01-06）：Add/Modify 对话框文本字段接收粘贴；

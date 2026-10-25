@@ -912,10 +912,9 @@ mod tests {
     use super::*;
     use crate::model::TaskState;
 
+    /// 夹具单源委托（app 树 App 夹具族收口 testutil，architect v153）
     fn make_app(tag: &str) -> App {
-        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-app-{tag}"));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        App::new(Config::default(), reg)
+        crate::app::testutil::make_app_in("ezr-app", tag)
     }
 
     fn task(id: u32, name: &str, state: TaskState) -> Task {
@@ -981,23 +980,12 @@ mod interaction_tests {
     use crossterm::event::{KeyCode, KeyModifiers};
 
     use super::*;
-    use crate::model::config::Config;
-    use crate::model::TaskState;
+    use crate::app::testutil::dl_task;
 
+    /// 夹具单源委托（app 树 App 夹具族收口 testutil，architect v153；
+    /// prefix 沿用滚动条交互族历史命名）
     fn make_app(tag: &str) -> App {
-        let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-sb-{tag}"));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        App::new(Config::default(), reg)
-    }
-
-    fn dl_task(id: u32, name: &str) -> crate::model::Task {
-        let mut t = crate::model::sample_task();
-        t.id = id;
-        t.name = name.to_string();
-        t.state = TaskState::Downloading;
-        t.probed = true;
-        t.total = 5_000_000;
-        t
+        crate::app::testutil::make_app_in("ezr-sb", tag)
     }
 
     #[tokio::test]
