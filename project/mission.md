@@ -279,6 +279,19 @@
 > `features/03-modify-task.feature`（01 修订）、`features/05-ui-pieces.feature`（01/07 修订），
 > QA 套件 5 份同步。
 
+> v1.35（操作者指令「six-pack/specifier, ezr-demo 调整了分块窗口布局，请根据 ezr-demo 文档和
+> 代码同步到 ezr 项目」，与 phase-01 v1.35 同步）：**pieces 分块弹窗布局对齐 ezr-demo README
+> 变更记录 21+22**（提交 817bdb5「demo:adjust pieces window w*h」；权威文档
+> `ezr-demo/docs/ezr-demo UI界面及交互设计规范.md` §4.2.6/§4.3/§6.5 与 ezr-demo 源码，本轮
+> specifier 逐条经 ui.rs draw_pieces 源码核证，文档与源码一致无差异登记）：①**窗口 64×21 →
+> 68×20**（FR-01-106 v1.35 修订；两步演进 64×21→67×23 = 分块网格上下各空 1 行呼吸行 + 加宽
+> 3 列、67×23→68×20 = 高度收缩 3 行 + 网格右边扩 1 列；内框 62×19→66×18，内容左右各 2 列
+> padding 对称维持）；②**内部布局六段→八段**（呼吸行）：顶 padding / 任务名 / 元信息 / 上空行 /
+> 分块网格（Min）/ 下空行 / 图例行 / 底 padding；③**网格 14→11 行、每行 29→31 块**（视口
+> 62 列整除无余列）、**一屏 406→341 块**；其余（四态色块、前沿定位、滚动/滚动条、模态与关闭
+> 通道、鼠标交互）不变。规格 `features/05-ui-pieces.feature`（01/04 修订），QA 套件
+> `qa/05-ui-pieces-qa.md`（QA-UP-01/04 同步、环境前置 piece-big.bin 滚程口径收敛 54 行）。
+
 
 
 

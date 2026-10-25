@@ -1,19 +1,20 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/architect　会话：ezr-v151-arch（2026-10-24）
-> 上游交接：project/handoff.md（cleaner v150-clean 交接：mouse.rs 弹窗命中臂补测、
-> rect_hit 单源化、CRAP/DRY/变异点三项度量基线重建）
-> 当轮任务：v151-arch 架构轮——四阶段架构评审、模块边界收口、on_mouse_main
-> 保持行为拆分、属性测试补齐、架构护栏扩充（规格面零改动）。
+> 流程：six-pack　当前节点：six-pack/specifier　会话：ezr-v135-pieces-sync（2026-10-25）
+> 上游交接：project/handoff.md（architect v151-arch 交接：模块边界收口 scrollbar.rs、
+> on_mouse_main 保持行为拆分、属性测试 65→71、arch 16/16、全量 4532P/0F）
+> 当轮任务：v1.35 规格轮——pieces 分块弹窗布局对齐 ezr-demo README 变更记录 21+22
+> （提交 817bdb5「demo:adjust pieces window w*h」），逐条经 ui.rs draw_pieces 源码核证；
+> 纯规格修订轮，ezr 源码零改动。
 
 ## 一、产物历史完成情况
 
 ### 项目与需求
 - EZR Downloader（Rust / TUI 下载器，01 期：HTTP/HTTPS 真实下载内核与 TUI 正式版）。
-  需求权威来源 `project/mission.md`（v1.34，分期模式）+ `project/mission/phase-01.md`（v1.34）。
+  需求权威来源 `project/mission.md`（v1.35，分期模式）+ `project/mission/phase-01.md`（v1.35）。
 - 本轮后源码状态：v1.34 全条款落地 + 历轮 UI/加固/覆盖轮 + 输入框组件化 +
-  退出路径鼠标残序根治（v150）+ 清理批次（v150-clean）+ **本轮架构轮**
-  （保持行为，全量 **4532P/0F**；规格面不变，零条款改动）。
+  退出路径鼠标残序根治（v150）+ 清理批次（v150-clean）+ 架构轮（v151-arch，保持行为，
+  全量 **4532P/0F**）+ **本轮 v1.35 规格修订**（ezr 源码零改动，实现待 coder 轮落地）。
 
 ### 产物总账（流程开工以来累计，当前有效口径）
 | 节点/切片 | 产物 | 完成情况 | 验证状态 |
@@ -33,13 +34,15 @@
 | coder（v136/v137 中间轮） | 退出路径首轮防泄漏 | 已交付 | 操作者实测仍复现（v150 根因所据） |
 | coder（v150-quitmouse-impl） | 退出路径鼠标残序根治 + ezr-demo 全量同步 + TimedWriter 时序锁定测试 | 已交付 | ezr：4486P/0F、clippy 0、fmt clean；ezr-demo：20P/0F、回归 8 套件全绿 |
 | cleaner（v150-clean） | mouse.rs 弹窗命中臂 +4 测、CRAP 门禁 6→2、rect_hit 单源化、度量基线重建 | 已交付 | ezr：4518P/0F、clippy 0、fmt clean；覆盖率 95.1% 行 |
-| **architect（v151-arch，本轮）** | **①模块边界收口：滚动条交互状态机自 app/mod.rs 收口至 `app/scrollbar.rs`（SbKey/SbHold/sb_* 方法族 + 4 单测随迁；门面 re-export 保持 `crate::app::SbKey` 消费路径，ui/keys/mouse 零改动）；②on_mouse_main 保持行为拆分：分发核 + Down 命中链（footer/tab/detail_hits/conns/list 五段）+ Up + 滚轮各自成函数，`copy_detail_value` 四字段复制尾段单源；新增主界面命中链优先级锁定测试；③属性测试 65→71（+6：取窗切片恒等/预算守恒/整值可见/点击映射封闭/走马灯恒宽周期/wrap 损耗与行宽界）；④arch_check 15→16 规则：规则 16 engine/model 渲染框架禁入 + 规则 14 白名单扩展（dlg_field_wins/dlg_cursor_screen/val_scroll——v1.34 轮已入库的合法回填），均阳性对照实测；⑤边界裁决：textfield.rs 与 ui/text.rs 内聚不拆（单一概念/纯文本原语族，变异点密度非拆分信号）** | **已交付** | **ezr：4532P/0F（15 目标，+14 = +1 命中链锁定测 ×(1 bin + 7 挂载 crate) + 6 属性）、clippy 0、fmt clean、arch 16/16、属性 71P/0F（独立命令独立计数）；变异点 3219→3232（+13 = 拆分函数边界点）** |
+| architect（v151-arch） | 模块边界收口（scrollbar.rs）+ on_mouse_main 拆分 + 属性 71 + arch 16 规则 | 已交付 | ezr：4532P/0F（15 目标）、clippy 0、fmt clean、arch 16/16、属性 71P/0F；变异点 3232 |
+| **specifier（v135-pieces-sync，本轮）** | **v1.35 规格修订：pieces 弹窗布局对齐 ezr-demo README 记录 21+22——窗口 64×21→68×20（呼吸行+加宽+高度收缩，内框 66×18）、布局六段→八段、网格 14→11 行、每行 29→31 块（视口 62 列整除）、一屏 406→341；features/05-ui-pieces.feature（01/04）+ qa/05-ui-pieces-qa.md（QA-UP-01/04 + 环境前置滚程 54 行）+ mission/phase-01 v1.35 建档 + FR-01-106②/FR-01-115④ 修订** | **已交付（规格待 coder 实现落地）** | **逐字断言经 ezr-demo ui.rs 源码核证（文档与源码一致，无差异登记）；退役旧口径全仓反向自检零漏改点；沿袭测试基线 4532P/0F 不变（源码零改动）** |
 
 ### 遗留受限项（当前有效）
 - **APS 机检沿袭未执行**：v132 修订 3 份 + v149 修订 5 份 feature 未过
   `gherkin-ir-dry-checker`；本沙箱 GitHub 不可达，待环境可用时一并补跑。
-- **qa/runners/ e2e 套件未随 v1.34 同步（移交 QA）**：可执行套件仍为 v1.30–v1.32 口径，
-  对 v1.34 改版场景会 F，属预期——待 QA 轮同步。
+- **qa/runners/ e2e 套件欠账（移交 QA）**：`suite_ui_pieces.py` 仍为 v1.30 口径
+  （断言 64×19），05 规程已修订至 v1.35（68×20/31 块/341）——待 QA 轮随其余
+  套件（v1.30–v1.32 口径对 v1.34/35 场景会 F，属预期）一并同步。
 - **demo 回归长脚本沙箱卡顿（沿袭）**：verify_ezr / test_focus_style 连续全量跑在
   沙箱内中后段随机挂起，按场景子集分半跑全绿（v135/v150 两轮复证）；本轮未改动
   ezr-demo，未重跑 demo 回归（无触碰面）。
@@ -47,90 +50,71 @@
 - **dns.rs 覆盖率残余 3 行 / 观察受限突变体（沿袭登记）**：状态不变。
 - **ezr-proxy 测试基建豁免（沿袭登记）**：ezr-proxy.rs 覆盖率 82.0%、
   handle_socks5（CRAP 80.2）随此豁免登记。
-- **CRAP>30 残余口径更新（移交 hardender）**：`on_mouse_main`（comp 37、CRAP 132.9）
-  **本轮已完成保持行为拆分**（分发核 comp ≈6，五段命中链函数各自 comp ≤8）——
-  comp/cov/CRAP 重测口径待 hardender 轮 llvm-cov + crap 解析器复测落账（本轮未重建
-  覆盖率度量管线，沿袭 cleaner 口径）；`handle_socks5` 随 ezr-proxy 豁免不变。
+- **CRAP>30 残余口径（移交 hardender）**：`on_mouse_main` 拆分后 comp/cov/CRAP 重测
+  口径待 hardender 轮 llvm-cov + crap 解析器复测落账（v151-arch 未重建覆盖率度量
+  管线）；`handle_socks5` 随 ezr-proxy 豁免不变。
 - **孤儿 fixture `project/ezr/.tmp`（沿袭，移交裁决）**：hardender 轮误入库的
   sidecar 快照 JSON（512KB），src/tests 零消费点；删除动作影响归档内容，留操作者/下轮裁决。
 - **D40 / PC-09-场景09 待操作者裁决（沿袭）**：状态不变。
 
 ### 实现定义值登记（当前有效）
 - 沿袭有效：v1.28 全部口径、D26–D43、MOUSE_SETTLE=50ms / MOUSE_SETTLE_RETRY=20ms、
-  drain poll 超时 5ms。本轮零新增（保持行为轮；属性论域收窄为测试口径非产品契约）。
+  drain poll 超时 5ms。本轮零新增（纯规格同步轮；pieces 几何数字均经 demo 源码核证，
+  非实现定义值）。
 
-## 二、当前产出情况（architect v151-arch）
+## 二、当前产出情况（specifier v135-pieces-sync）
 
 ### 本会话产物清单
-- **`src/app/scrollbar.rs`（新增，边界收口）**：滚动条交互状态机单源——SbKey/SbHold
-  类型 + sb_max/sb_scroll/sb_set/sb_page/sb_press/sb_drag_move/sb_release/sb_hold_tick/
-  sb_arrow_pressed/sb_arrow_follow/sb_press_at 方法族 + sb_interaction_tests 4 测随迁
-  （纯机械迁移：私有方法按消费面最小可见性 pub(super) 化，有效可见域不变）；app/mod.rs
-  相应删减并以 `pub use scrollbar::{SbHold, SbKey}` 门面 re-export（消费路径零改动）。
-- **`src/app/mouse.rs`（拆分 + 锁定测试）**：on_mouse_main 分发核保持行为拆分——
-  `on_mouse_main_down`（页脚→页签→详情热区→滚动条→并发→列表命中链，命中即消费）、
-  `on_mouse_main_up`、`on_mouse_main_scroll`、`main_down_footer/tab/detail_hits/conns/list`
-  各段成函数；`copy_detail_value` 收口四个字段名复制臂同形尾段；新增
-  `main_down_dispatch_chain_priority` 锁定测试（命中链优先级 + 页脚按压清除 + 无值聚焦臂）。
-- **`src/property_tests.rs`（+6 属性）**：取窗切片恒等、预算守恒（窄字符超宽域取等）、
-  整值可见域（CJK 全字母表）、点击映射封闭性、走马灯恒宽 + 周期性、wrap 损耗与行宽界；
-  新增 `field_text_narrow`/`field_text_full` 论域策略（字母表卫生：排除 `…` 指示符歧义）。
-- **`src/ui/text.rs` / `src/ui/mod.rs`**：wrap_text/marquee_bar 可见性 pub(super)→pub(crate)
-  （crate 内属性测试经 ui 根 cfg(test) 门面消费，产品 API 面零增量）；门面清单扩展。
-- **`scripts/arch_check.sh`**：规则 16（engine/model 渲染框架禁入）+ 规则 14 白名单扩展
-  （dlg_field_wins/dlg_cursor_screen/val_scroll——v1.34 原生光标与字段值弹窗轮已入库的
-  合法渲染回填，沿袭 help/pieces_scroll 双写形态判例）；两处均阳性对照实测（探针行红 →
-  移除全绿）。
-- **`packs/_common/engineering.md`（经验沉淀 +2 条）**：①不动点循环退出谓词须论证单调
-  收敛否则设迭代上限；②边界护栏脚本属每轮最终验证序列固定一环，跳轮即漂移不知情。
+- **`features/05-ui-pieces.feature`（01/04 修订 + v1.35 同步注）**：场景 01 窗口
+  64×21→**68×20**、内容六段→**八段**（网格上下各空 1 行呼吸行）、Examples w/h 参数
+  68/20；场景 04 每行 **31 块**（视口 62 列整除无余列）、一屏最多 **341 块**（网格
+  **11 行**）；稳定序号不重排，历史修订注记保留。
+- **`qa/05-ui-pieces-qa.md`（QA-UP-01/04 同步 + 环境前置 + v1.35 同步注）**：QA-UP-01
+  弹窗 68×20/八段齐全；QA-UP-04 每行 31 块/一屏 341（11 行）；环境前置 piece-big.bin
+  （2000 块）滚程按算式收敛 `总行数 = ⌈2000 ÷ 31⌉ = 65`、`滚程 = 65 − 11 = 54 行`
+  （v1.34 环境前置行残留 v1.30 口径「一屏 14 行、滚程 51」一并按源码终态纠正）。
+- **`mission.md`（追加 v1.35 注记）**：操作者指令建档，与 phase-01 v1.35 同步。
+- **`mission/phase-01.md`（追加 v1.35 修订注记 + FR 现行条款修订）**：FR-01-106②
+  窗口形态改 68×20（两步演进链 64×21→67×23→68×20 与核证出处落档）、内容八段、
+  呼吸行条款；FR-01-115④ 补 pieces 尺寸链 v1.35 注记（现行口径指针回 FR-01-106）。
+- **`packs/six-pack/specifier/SKILL.md`（经验沉淀 +1 条）**：修订纪律新增「修订牵动
+  派生数字时同轮同步重算并写出算式」（跨项目纪律，含本轮 v1.34 环境前置残留旧口径
+  的教训归并）。
+- **环境（沙箱重建，随交接）**：rustup 1.29.2 + stable 1.99.1 + nightly
+  1.101.0-nightly（2026-10-24，rustfmt/clippy 组件齐）经 rsproxy.cn 镜像安装
+  （`RUSTUP_DIST_SERVER`/`RUSTUP_UPDATE_ROOT`）；`~/.cargo/config.toml` 已配
+  rsproxy-sparse crates 镜像。新 shell 需 `export PATH="$HOME/.cargo/bin:$PATH"`
+  补注入（notes/rust.md「PATH 注入不跨会话持久」）。
 
 ### 验证证据
 
-| 验证项 | 结果 | 命令（可复现） |
+| 验证项 | 结果 | 命令/方法（可复现） |
 |---|---|---|
-| ezr 全量测试 | **4532P / 0F**（15 目标；基线 4518 → +14） | `cargo test -- --test-threads=2`（project/ezr；超时分块时末两个 hardening 目标单独补跑，536P+542P） |
-| ezr clippy | 0 警告（全目标） | `cargo clippy --all-targets` |
-| ezr fmt | clean（nightly） | `cargo fmt --check` |
-| 架构检查 | **16/16 规则全绿**（规则 16 新增） | `bash scripts/arch_check.sh` |
-| 属性测试 | **71P / 0F**（基线 65 → +6；独立命令独立计数） | `cargo test --bin ezr property_tests` |
-| 变异点扫描 | 全量 3232 点（开工 3219，+13） | `cargo mutants --list --line-col=true`（27.1.0） |
-| 验收测试 | 不适用 | architect 不运行 QA 套件（SKILL 职责边界） |
+| 参照实现源码核证 | 全部字面断言与 `ezr-demo/src/ui.rs` draw_pieces 终态一致 | `PIECES_W=68 / PIECES_H=20`（ui.rs:2445-2446）；八行 Layout（ui.rs:2521-2531，grid=rows[4]、图例=rows[6]）；视口 66−4=62 列、cols=31（ui.rs:2534-2544）；一屏 11×31=341；README 记录 21/22 与规范 §4.2.6/§4.3/§6.5 逐条对源码复核一致 |
+| 退役标识反向自检 | 旧口径（64×21/406/434/每行 29/网格 14 行/六段/滚程 51）全仓检索，全部命中均为历史修订注记或本轮演进链描述，零漏改点 | `grep -rn "64×21\|406 块\|434\|每行 29\|网格 14 行\|内容四段\|内容六段\|滚程 51" project/` |
+| 规格面完整性 | 05-ui-pieces.feature 7 场景（08 退役留空）结构不变、稳定序号未重排；QA-UP-01..07 编号不变 | 逐文件 Read 复核 |
+| 沿袭测试基线 | 4532P/0F 不变（本轮 ezr 源码零改动，未重跑） | 沿袭 v151-arch 口径 `cargo test -- --test-threads=2`（project/ezr） |
 
-### 对账口径（与 v150-clean 基线）
-- 测试计数 4518 → 4532（**+14**）：新增 `main_down_dispatch_chain_priority` 1 测 ×
-  （bin 1 + 挂载 app 树的 hardening crate 7）= 8（挂载重复计入为机制固有，
-  notes/rust.md「挂载点测试计数对账法」）+ 属性 6 测（仅 bin，property_tests 不挂载）；
-  无删改既有测试。
-- 变异点 3219 → 3232（**+13**）：app/mod.rs 181 → 108（−73，滚动条状态机外移）+
-  app/scrollbar.rs +73（同码异位）+ mouse.rs 138 → 151（+13，拆分新增函数边界点）；
-  textfield.rs 125 / ui/text.rs 101 不变。文件级口径：scrollbar.rs（根，几何引擎）190、
-  mouse.rs 151、keys.rs 137、textfield.rs 125、app/mod.rs 108、ui/text.rs 101。
-- arch 规则 15 → 16：规则 16 新增（零发现 + 阳性对照生效）；规则 14 白名单扩展三处
-  均为 v1.34 轮已入库存量回填的判例对齐（非新增违规放行），扩展前实测三行即红。
+### 对账口径（与 v151-arch 基线）
+- 纯规格轮：ezr 源码、测试计数（4532P/0F）、变异点（3232）、arch 规则（16/16）
+  全部零变化；产物面仅 mission/features/qa/SKILL 四类文档 + 环境重建。
 
 ### 待办与待批（未决项）
-- **【缺陷移交 coder｜product-reachable】textfield 超宽取窗不动点振荡（本轮属性测试发现）**：
-  `TextInput::field_window` 两轮不动点循环（src/textfield.rs:290 起）在「锚点（光标）
-  落宽字符 + 双侧窄字符边界 + 特定预算」组合下预留量 1↔2 **振荡不终止**（TUI 挂死）。
-  最小复例：宽度序列 (1,2,1)、锚 1、预算 3；(1,2…₂ₖ…2,1) 族失败预算 = 2k+1——产品
-  可达路径：URL 字段输入中文串（如 `a` + 29 个宽字符 + `a`）且光标置于宽字串内 +
-  添加/修改对话框取窗预算 avail ≈ 59 = 2×29+1。**修法建议**（coder 裁决）：退出条件
-  改窗口区间 [lo,hi] 稳定判定或预留量单调化（`reserve = max(reserve, need)` 不充分，
-  需配窗口稳定判定）；或设迭代上限 + 保守收口。修复后扩属性论域：本轮
-  prop_field_window_slice_identity / budget_conserved 的溢出路径论域收窄为
-  「窄字符 + 零宽（ASCII + VS15）」（宽字符域穷举 L≤11 + 20 万随机实证振荡存在），
-  整值可见/点击封闭两属性保留 CJK 全字母表（预算与值耦合，恒走整值路径不进溢出循环）。
-  修复的验收 = 论域扩回全字母表后属性全绿 + 全量单测全绿。
+- **【缺陷移交 coder｜product-reachable，v151-arch 沿袭】textfield 超宽取窗不动点振荡**：
+  `TextInput::field_window` 两轮不动点循环在「锚点落宽字符 + 双侧窄字符边界 + 特定
+  预算」下 1↔2 振荡不终止（TUI 挂死），product-reachable（URL 字段输中文串）。
+  修法建议与扩属性论域验收口径见 v151-arch 待办原文（arch_check/属性测试
+  归属不动）；**建议在 v1.35 实现轮之前或同轮先行修复**。
+- **【实现移交 coder，本轮新增】v1.35 pieces 规格落地**：68×20（呼吸行八段布局、
+  31 块/行、341/屏）尚待实现——ezr 源码当前仍为 64×21 v1.34 形态，coder 轮按
+  FR-01-106② v1.35 修订条款实现 + 对应单测/快照调整。
 - **沿袭项全部不变**（见第一节遗留受限项）；本轮无新增阻塞。
-- **孤儿 fixture `project/ezr/.tmp` 处置待裁决**（沿袭，删/留；无消费点证据已列总账）。
 
 ### 移交建议
-- 建议下一步运行 `six-pack/hardender`：本轮边界收口后，变异点批次文件口径更新为
-  scrollbar.rs（根，190）、mouse.rs（151）、keys.rs（137）、textfield.rs（125）、
-  app/mod.rs（108）、ui/text.rs（101）——hardender `--file` 分块兑现收益；app/scrollbar.rs
-  （73 点，状态机内聚单元）与 on_mouse_main 拆分后的五段命中链函数（各 comp ≤8、
-  cov 待复测）是优先加固面；`main_down_dispatch_chain_priority` 锁定测试可直接作
-  分发序变异锚点。
-- **field_window 振荡缺陷为 product-reachable 挂死级，建议在 hardender 轮之前或同轮
-  先行 `six-pack/coder` 修复**（见待办第一项；修复属行为变更，architect 职责边界外）。
-- v150 交接建议继续有效：rect_hit 单源函数与 settle/drain 纯逻辑可做变异加固。
+- 建议下一步运行 `six-pack/coder`：①v1.35 pieces 布局实现（窗口 68×20、八行
+  Layout 插入两条 Length(1) 呼吸行、视口宽随内框 66−4、cols 推导 31/341 自然跟随——
+  实现面集中 `project/ezr/src/app/pieces.rs` 或 ui 侧 draw_pieces 对应物，含快照/
+  单测数字对账）；②field_window 振荡缺陷修复（v151-arch 待办，product-reachable），
+  可同轮或先行。
+- v151-arch 移交建议（hardender 优先加固面、`--file` 分块口径）继续有效，待
+  coder 轮完成后兑现。
