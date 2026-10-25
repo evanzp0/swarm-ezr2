@@ -80,6 +80,13 @@
 //! （74×11→74×12 / 74×9→74×10 / 66×6→66×7，字段行与按钮行 y 不变）；
 //! 流量图区紧贴分隔符与边框、分割线贯通全宽为既定图形/装饰特例；
 //! 字段值弹窗与并发明细（左右 2 列/上下 1 行）为本次统一的基准先例。
+//! 前轮需求修订（pieces 网格呼吸行 + 窗口加宽）：pieces 分块弹窗中，分块网格
+//! 与上方元信息行、下方图例行之间各空出 1 行，弹窗加宽 3 列（窗体
+//! 64×21→67×23：高度 +2 = 呼吸行、宽度 +3 = 加宽；内框 62×19→65×21）——
+//! 分块图上下各留 1 行呼吸距离，色块区与文本行视觉分离。
+//! 本轮需求修订（pieces 高度收缩 + 网格右边扩 1 列）：窗体 67×23→68×20
+//! （高度 −3 → 网格 14→11 行、宽度 +1 → 网格视口 61→62 列，保持内容
+//! 左右各 2 列 padding 对称），每行 31 块（视口整除无余列）/一屏 341 块。
 
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
@@ -2431,11 +2438,12 @@ fn piece_span(st: PieceState, n: usize) -> Span<'static> {
     Span::styled(ch.to_string().repeat(n), Style::default().fg(color))
 }
 
-/// pieces 弹窗固定尺寸（宽×高，含边框；本轮 padding 统一：高度 19→21——
-/// 底部快捷键提示行改为图例行后，再按 §4.3 S2 补齐上下各 1 行 padding，
-/// 网格仍 14 行）
-const PIECES_W: u16 = 64;
-const PIECES_H: u16 = 21;
+/// pieces 弹窗固定尺寸（宽×高，含边框；高度 19→21 为 §4.3 S2 padding 统一，
+/// 宽度 64→67、高度 21→23 为「呼吸行 + 加宽」修订——分块网格上下
+/// 各空 1 行，67×23→68×20 为本轮需求修订——高度收缩 3 行（网格
+/// 14→11 行）+ 分块网格右边扩 1 列（视口 61→62 列 → 每行 31 块））
+const PIECES_W: u16 = 68;
+const PIECES_H: u16 = 20;
 
 /// pieces 分块弹窗（P）：展示选中任务分块（piece）状态一览。
 ///
@@ -2445,8 +2453,11 @@ const PIECES_H: u16 = 21;
 /// 同一块「部分下载」且「正在下载」时只显示 🟦。
 ///
 /// 布局：任务名 / 元信息（协议 · 块大小 · x/y 块 · 并发）/
+/// 上空行 1（本轮需求修订：分块图上方空 1 行）/
 /// 分块网格（每块一个宽 2 列的色块字符；块数超出可视范围时
-/// 滚动翻看 + 右缘滚动条）/ 图例行（四色说明，需求修订：替代原快捷键提示行）。
+/// 滚动翻看 + 右缘滚动条）/
+/// 下空行 1（本轮需求修订：分块图下方空 1 行）/
+/// 图例行（四色说明，需求修订：替代原快捷键提示行）。
 /// 弹窗支持鼠标左键拖拽移动（按住弹窗内任意位置拖动，位置钳制在终端内；
 /// 打开时居中，位置记忆至关闭）。打开时定位到下载前沿（第一块未完成块
 /// 所在行滚动至网格垂直居中），此后滚动完全由用户控制，不自动跟随。
@@ -2465,9 +2476,11 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let y = y as usize;
 
-    // 弹窗尺寸 64×21（内框 62×19：顶 padding 1 + 名称/元信息/图例各 1 行 +
-    // 网格 14 行 + 底 padding 1；每行 29 块 → 一屏 406 块；本轮 padding 统一
-    // §4.3 S2：内容左右各 2 列、上下各 1 行）；位置优先取记忆的拖拽位置
+    // 弹窗尺寸 68×20（内框 66×18：顶 padding 1 + 名称/元信息/图例各 1 行 +
+    // 网格上下各空 1 行 + 网格 11 行 + 底 padding 1；每行 31 块 → 一屏 341 块；
+    // padding §4.3 S2：内容左右各 2 列、上下各 1 行；网格上下呼吸行与加宽 =
+    // 前轮需求修订，高度收缩 3 行 + 网格右边扩 1 列 = 本轮需求修订）；
+    // 位置优先取记忆的拖拽位置
     // （钳制在终端内），打开首帧居中并记忆；小终端钳制尺寸，网格行数随内框收缩
     let rect = match app.pieces_pos {
         Some((px, py)) => {
@@ -2509,12 +2522,14 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
         Constraint::Length(1), // 顶部 padding（§4.3 S2：内容区上 1 行）
         Constraint::Length(1), // 任务名
         Constraint::Length(1), // 元信息
+        Constraint::Length(1), // 网格上方空行（本轮需求修订：分块图上空 1 行）
         Constraint::Min(1),    // 分块网格
+        Constraint::Length(1), // 网格下方空行（本轮需求修订：分块图下空 1 行）
         Constraint::Length(1), // 图例行（四色说明；需求修订：替代快捷键提示）
         Constraint::Length(1), // 底部 padding（§4.3 S2：内容区下 1 行）
     ])
     .split(inner);
-    let grid = rows[3];
+    let grid = rows[4];
     let grid_h = grid.height as usize;
     // 网格视口（左 2 列、右 2 列 padding，§4.3 S2 本轮统一）
     let grid_view = Rect {
@@ -2524,7 +2539,8 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
         height: grid.height,
     };
     // 每行列数 = 视口宽 / 2（每块占 2 列）——块总数/前沿换算/行构建共用同一
-    // 份定义，保证行内容不超出收窄后的视口（64×21 下 = 29 块/行）
+    // 份定义，保证行内容不超出收窄后的视口（68×20 下视口 62 列 → 31 块/行，
+    // 整除无余列）
     let cols = (grid_view.width as usize / 2).max(1);
 
     let total_rows = y.div_ceil(cols);
@@ -2566,7 +2582,7 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Paragraph::new(Line::from(vec![meta])), rows[2]);
 
     // 行 3：分块网格（仅构建可视行；同状态连续块合并为单 span）；
-    // 行构建与视口共用同一 cols（29 块/行），不产生行尾裁切
+    // 行构建与视口共用同一 cols（31 块/行），不产生行尾裁切
     let mut lines: Vec<Line> = Vec::with_capacity(grid_h);
     for r in 0..grid_h {
         let s = (start_row + r) * cols;
@@ -2604,7 +2620,7 @@ fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
             Span::styled("⬜", Style::default().fg(EMPTY)),
             Span::styled(" 未下载", Style::default().fg(FG)),
         ])),
-        rows[4],
+        rows[6],
     );
 
     // 通用滚动条·垂直（块数超出一屏才绘制——显示条件在组件内收口；

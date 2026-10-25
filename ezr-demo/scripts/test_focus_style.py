@@ -549,7 +549,7 @@ def scenario_k():
             "关闭弹窗（右上角按钮可点击" in t11, t11[-400:] if len(t11) > 400 else "")
 
     # K12/K13 模态统一口径：浮层打开时点击窗口外部 = 无任何操作
-    #（帮助窗口 70x24 / pieces 64x21 在 120x44 下均远离左上角 (3,3)）
+    #（帮助窗口 70x24 / pieces 68x20 在 120x44 下均远离左上角 (3,3)）
     def click_outside_seq():
         return mouse(3, 3, True) + mouse(3, 3, False)
 
