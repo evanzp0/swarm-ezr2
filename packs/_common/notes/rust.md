@@ -312,6 +312,15 @@ group_imports = "StdExternalCrate"
   （cleaner 不运行）时，不要强行拆——把每文件计数登记 handoff 移交，hardender 全量变异前
   由 architect 先收模块边界（`--file` 可按文件分块跑变异，拆分收益在 hardender 兑现）。
 
+- **`#[path]` 源包含收编会使 src 内 cfg(test) 单测跨测试目标重复注册**：bin-only
+  crate 的集成测试目录（tests/*.rs）以 `#[path = "../src/xxx.rs"]` 挂载产品模块时
+  （mutants 口径产品树零改动的惯用法），被收编模块的 cfg(test) 单测在每个收编
+  目标各注册一次——`cargo test` 全量计数 = 各目标计数之和；在 src 模块新增 1 个
+  单测，全量增量为「收编该模块的目标数」而非 1（实测：某组件模块被 8 个目标
+  收编，新增 2 测 → 全量 +16）。对账含义：增量对账先按「新测数 × 收编目标数」
+  复算，勿把倍增增量误判为重复注册缺陷（同一目标内同名测试重复注册才是缺陷，
+  见 engineering.md「重复属性 #[test]」条）；基线口径随仓库结构变化（新增/删除
+  收编目标）漂移，跨轮对账先核对收编目标清单。
 - **交互层覆盖率可以在单测内打开（TestBackend + 桩服务器），不必依赖 PTY e2e**：ratatui 的
   draw_* 系函数用 `ratatui::backend::TestBackend`（0.29 无 feature 门控）直接渲染应用全状态
   并断言缓冲文本；事件处理用「非法输入 → 事件泵至错误终态」与「桩服务器 → 事件泵至成功

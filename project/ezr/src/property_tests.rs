@@ -2132,32 +2132,20 @@ proptest! {
 // 组件化输入框的属性面补齐——取窗/点击是全应用文字定位单源，round trip
 // 与封闭性是 SKILL「解析/格式化稳定性」维度的直接落点）
 //
-// **论域受限登记（缺陷移交）**：超宽取窗两轮不动点循环在「锚点宽字符 +
-// 双侧窄字符边界 + 特定预算」组合下 1↔2 预留振荡**不终止**（最小复例：
-// 宽度序列 (1,2,1)、锚 1、预算 3；(1,2…2,1) 族失败预算 = 2k+1）——产品
-// 可达（URL 字段中文 + 光标置于宽字串内 + 对话框预算 ≈59 = 2×29+1），
-// 已登记 project/handoff.md 移交 coder 修复。本节取窗属性的**溢出路径**
-// 论域收窄为「窄字符 + 零宽（ASCII + VS15）」（穷举 L≤11 + 20 万随机
-// 实证全部终止）；整值可见与点击映射属性保留 CJK 全字母表（预算与值
-// 耦合生成，恒走预算内整值路径，不进溢出循环）。缺陷修复后扩域。
+// **论域登记（coder v135-fix 轮修复后扩域）**：v151 轮登记的超宽取窗不动点
+// 振荡缺陷（预留量 1↔2 振荡不终止，最小复例宽度序列 (1,2,1) 锚 1 预算 3）
+// 已在本轮修复（原退出条件优先 + 窗口重现 + 不变量守卫双路退出 + 硬上限
+// 兜底，终止性论证见 textfield.rs 实现处注释）；取窗溢出路径论域扩回
+// **全字母表**（ASCII + CJK 宽字符 + VS15 零宽），确定性回归见
+// textfield.rs field_window_oscillation_* 两测（含产品可达复例：URL 字段
+// `a` + 29 宽字符 + `a`、预算 59 = 2×29+1）；预算守恒的「恰满预算」
+// 等式断言保留窄字符域门槛（宽字原子损耗下取等不成立，不等式断言覆盖
+// 全字母表）。
 // ---------------------------------------------------------------------
 
-/// 取窗溢出路径论域：ASCII 可打印 + VS15（零宽）——不含宽字符（超宽取窗
-/// 不动点对宽字符存在振荡缺陷，见上方登记）与 `…`（截断指示符，剥指示符
-/// 断言的字母表卫生——notes/rust.md「字母表与修剪口径对齐」）。
-fn field_text_narrow() -> impl proptest::strategy::Strategy<Value = String> {
-    proptest::collection::vec(
-        prop_oneof![
-            6 => proptest::char::range('\u{20}', '\u{7E}'),
-            1 => Just('\u{FE0E}'),
-        ],
-        1..40,
-    )
-    .prop_map(|chars| chars.into_iter().collect())
-}
-
-/// 取窗整值路径论域：ASCII + CJK + VS15 全字母表（预算与值耦合生成，
-/// 恒走预算内整值路径——溢出循环不进入，宽字符缺陷域不触及）。
+/// 取窗论域（全字母表）：ASCII 可打印 + CJK 宽字符 + VS15（零宽）——
+/// 不含 `…`（截断指示符，剥指示符断言的字母表卫生——notes/rust.md
+/// 「字母表与修剪口径对齐」）。
 fn field_text_full() -> impl proptest::strategy::Strategy<Value = String> {
     proptest::collection::vec(
         prop_oneof![
@@ -2171,12 +2159,13 @@ fn field_text_full() -> impl proptest::strategy::Strategy<Value = String> {
 }
 
 proptest! {
-    /// 取窗切片恒等（round trip，溢出路径论域）：任意（光标, 预算, 聚焦）
-    /// 下，pre 剥头指示符 + post 剥尾指示符 = value[win_lo..win_hi]——取窗
-    /// 只裁剪不重排，窗口内容恒为原值连续切片；聚焦锚（光标）恒在窗内。
+    /// 取窗切片恒等（round trip，全字母表论域——v151-arch 振荡缺陷修复后
+    /// 扩域）：任意（光标, 预算, 聚焦）下，pre 剥头指示符 + post 剥尾指示符 =
+    /// value[win_lo..win_hi]——取窗只裁剪不重排，窗口内容恒为原值连续切片；
+    /// 聚焦锚（光标）恒在窗内。
     #[test]
     fn prop_field_window_slice_identity(
-        s in field_text_narrow(),
+        s in field_text_full(),
         cursor in 0usize..48,
         budget in 1usize..=30,
         focused in proptest::bool::ANY,
@@ -2204,12 +2193,13 @@ proptest! {
         }
     }
 
-    /// 预算守恒（溢出路径论域）：取窗 pre+post 显示宽 ≤ 预算（含双缘指示
-    /// 符）；纯窄字符超宽域取等——两轮不动点退出条件 need == reserve ⇒
-    /// 内容 = 预算 − 指示符数（无宽字原子损耗时恰满预算）。
+    /// 预算守恒（全字母表论域——v151-arch 振荡缺陷修复后扩域）：取窗
+    /// pre+post 显示宽 ≤ 预算（含双缘指示符，全字母表不等式守恒——退出两路
+    /// 均以不变量守卫收口）；纯窄字符超宽域取等——不动点退出条件
+    /// need == reserve ⇒ 内容 = 预算 − 指示符数（无宽字原子损耗时恰满预算）。
     #[test]
     fn prop_field_window_budget_conserved(
-        s in field_text_narrow(),
+        s in field_text_full(),
         cursor in 0usize..48,
         budget in 3usize..=30,
         focused in proptest::bool::ANY,

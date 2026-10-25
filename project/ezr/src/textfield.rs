@@ -14,7 +14,8 @@
 //! - 光标 = 字符偏移 `0..=字符数`，方向键移动、输入/退格/粘贴均在光标处生效；
 //! - 聚焦取窗锚 = 光标（pre/post 两段拼接 = 显示内容，光标屏幕列 =
 //!   值区起点 + w(pre)，由调用方发布终端原生光标）；未聚焦锚 = 字段尾；
-//! - 超宽两轮不动点取窗（裁剪指示符占列扣预算重取）；CJK 原子不溢出；
+//! - 超宽不动点取窗（裁剪指示符占列扣预算重取；窗口重现 + 不变量守卫双路
+//!   退出保证终止，v151-arch 振荡缺陷已修）；CJK 原子不溢出；
 //! - 点击列按累积列半开区间定位（宽字符左右半格分置、越界钳制窗口首/尾）。
 
 /// CJK 全角区间表（显示宽度按 2 计的码点闭区间，FR-01 定稿宽度口径）
@@ -231,7 +232,8 @@ impl TextInput {
     /// - 未聚焦：锚 = 字段尾，pre 恒空、post = 整窗。
     ///
     /// 预算内整值显示；超宽以锚点取窗（先向右取满、余量向左回退；裁剪侧 …
-    /// 指示占列，预算扣减重取至不动点；budget < 3 放弃指示符）；空值显示
+    /// 指示占列，预算扣减重取至不动点——退出条件与终止性论证见实现处注释，
+    /// v151-arch 振荡缺陷已修；budget < 3 放弃指示符）；空值显示
     /// 占位提示（截断，窗口空：cols = [0]，点击任意处光标 0）。
     ///
     /// FieldWin.cols/win_lo/win_hi = 点击列→字符偏移映射与光标定位共用几何。
@@ -287,10 +289,22 @@ impl TextInput {
                 }
             };
         }
-        // 超宽取窗：两轮不动点（指示符占列 → 扣减预算重取，直至裁剪侧数稳定）
-        let mut reserve = 0usize;
-        loop {
-            let b = budget.saturating_sub(reserve).max(1);
+        // 超宽取窗：指示符占列 → 扣减预算重取的不动点迭代。
+        //
+        // 终止性论证（engineering.md「不动点循环退出谓词」条款）：need ∈
+        // {0,1,2} ⇒ reserve ∈ {0,1,2} ⇒ 预算 b = budget − reserve 至多 3 个
+        // 取值 ⇒ 窗口 (lo,hi) 为 b 的纯函数、至多 3 个取值，迭代必现窗口重现。
+        // 退出两路：
+        // ① need == reserve（原不动点口径，对既有收敛输入行为零变化）：内容宽
+        //    ≤ b = budget − reserve 且 need == reserve ⇒ 内容 + 指示符 ≤ 预算
+        //    （宽度不变量）；
+        // ② 窗口重现且 内容 + 指示符 ≤ 预算（振荡破除，v151-arch 移交缺陷：
+        //    预留量可在两窗间 1↔2 振荡——宽度序列 (1,2,1) 锚 1 预算 3 最小
+        //    复例；重现窗不满足不变量则继续绕行，振荡周期内必有 need 非严格
+        //    递减过渡，该过渡对应窗口必然不变量安全，故仍终止）。
+        // 另设硬上限兜底：超限按双指示符预留保守收口（内容 ≤ budget − 2、
+        // 指示符 ≤ 2 ⇒ 不变量无条件成立），防御未来演化破坏论证前提。
+        let window_for = |b: usize| -> (usize, usize, usize) {
             // 向右取满，余量向左回退（字符原子：宽字符放不下整列则不取）
             let mut acc = 0usize;
             let mut hi = anchor;
@@ -303,40 +317,59 @@ impl TextInput {
                 lo -= 1;
                 acc += widths[lo];
             }
-            let left_cut = lo > 0;
-            let right_cut = hi < chars.len();
-            let need = usize::from(left_cut) + usize::from(right_cut);
+            (lo, hi, acc)
+        };
+        let mut reserve = 0usize;
+        let mut seen: Vec<(usize, usize)> = Vec::new();
+        let mut steps = 0usize;
+        let (lo, hi) = loop {
+            steps += 1;
+            let b = budget.saturating_sub(reserve).max(1);
+            let (lo, hi, acc) = window_for(b);
+            let need = usize::from(lo > 0) + usize::from(hi < chars.len());
             if need == reserve || budget < 3 {
-                win.win_lo = lo;
-                win.win_hi = hi;
-                win.left_cut = left_cut;
-                fill_cols(&mut win, &widths[lo..hi]);
-                let pre = if focused {
-                    if left_cut {
-                        format!("…{}", chars[lo..anchor].iter().collect::<String>())
-                    } else {
-                        chars[lo..anchor].iter().collect()
-                    }
-                } else if left_cut {
-                    "…".to_string()
-                } else {
-                    String::new()
-                };
-                let post = if focused {
-                    if right_cut {
-                        format!("{}…", chars[anchor..hi].iter().collect::<String>())
-                    } else {
-                        chars[anchor..hi].iter().collect()
-                    }
-                } else if right_cut {
-                    format!("{}…", chars[lo..hi].iter().collect::<String>())
-                } else {
-                    chars[lo..hi].iter().collect()
-                };
-                return FieldDisplay { pre, post, win };
+                break (lo, hi);
             }
+            if acc + need <= budget && seen.contains(&(lo, hi)) {
+                break (lo, hi); // 振荡破除（不变量守恒的保守收口）
+            }
+            seen.push((lo, hi));
             reserve = need;
-        }
+            if steps > 8 {
+                // 硬上限兜底：双指示符预留重取（不变量无条件成立）
+                let (lo, hi, _) = window_for(budget.saturating_sub(2).max(1));
+                break (lo, hi);
+            }
+        };
+        let left_cut = lo > 0;
+        let right_cut = hi < chars.len();
+        win.win_lo = lo;
+        win.win_hi = hi;
+        win.left_cut = left_cut;
+        fill_cols(&mut win, &widths[lo..hi]);
+        let pre = if focused {
+            if left_cut {
+                format!("…{}", chars[lo..anchor].iter().collect::<String>())
+            } else {
+                chars[lo..anchor].iter().collect()
+            }
+        } else if left_cut {
+            "…".to_string()
+        } else {
+            String::new()
+        };
+        let post = if focused {
+            if right_cut {
+                format!("{}…", chars[anchor..hi].iter().collect::<String>())
+            } else {
+                chars[anchor..hi].iter().collect()
+            }
+        } else if right_cut {
+            format!("{}…", chars[lo..hi].iter().collect::<String>())
+        } else {
+            chars[lo..hi].iter().collect()
+        };
+        FieldDisplay { pre, post, win }
     }
 
     /// 点击列 → 字符偏移映射（原 app/mouse.rs click_cursor_offset）：
@@ -604,6 +637,72 @@ mod tests {
             cols,
             win_lo,
             win_hi,
+        }
+    }
+
+    // ---- 超宽取窗振荡缺陷回归（v151-arch 移交，本会话修复） ----
+
+    /// v151-arch 最小复例：宽度序列 (1,2,1)、锚 1、预算 3——修复前预留量
+    /// 1↔2 振荡不终止（TUI 挂死）。修复后必须终止且守取窗不变量
+    ///（窗口 = 原值连续切片、锚在窗内、显示宽 ≤ 预算）。
+    #[test]
+    fn field_window_oscillation_minimal_repro_terminates() {
+        let mut t = TextInput::with_value("a中a");
+        t.set_cursor(1);
+        let fd = t.field_window("", 3, true);
+        // 保守收口窗口 [0,1)：预留量振荡（1↔2）破除后按不变量安全窗返回
+        //（内容 "a" + 右指示符 …，宽 2 ≤ 预算 3）；锚（光标 1）恒在窗内
+        assert_eq!((fd.win.win_lo, fd.win.win_hi), (0, 1), "保守收口窗口");
+        assert_eq!(fd.pre, "a");
+        assert_eq!(fd.post, "…");
+        assert!(
+            w(&fd.pre) + w(&fd.post) <= 3,
+            "显示宽 ≤ 预算：{}+{}",
+            w(&fd.pre),
+            w(&fd.post)
+        );
+    }
+
+    /// 振荡族 + 产品可达路径（v151-arch 登记）：宽度序列 (1,2…₂ₖ…2,1) 的
+    /// 失败预算 = 2k+1；产品可达全形 = URL 字段 `a` + 29 宽字符 + `a`、
+    /// 光标置于宽字串内、对话框取窗预算 59 = 2×29+1。锚位扫宽串首/中/尾
+    ///（首锚 = 双侧窄字符边界振荡形态），修复后全族终止。
+    #[test]
+    fn field_window_oscillation_family_terminates() {
+        for k in 1..=15usize {
+            let val = format!("a{}a", "中".repeat(k));
+            let n = val.chars().count();
+            let budget = 2 * k + 1;
+            for &anchor in &[1usize, 1 + k / 2, k] {
+                let mut t = TextInput::with_value(val.clone());
+                t.set_cursor(anchor);
+                let fd = t.field_window("", budget, true);
+                assert!(
+                    fd.win.win_lo <= anchor && anchor <= fd.win.win_hi,
+                    "k={k} anchor={anchor}: 锚在窗内"
+                );
+                assert!(fd.win.win_hi <= n, "k={k} anchor={anchor}: 窗尾不越值域");
+                let shown = w(&fd.pre) + w(&fd.post);
+                assert!(
+                    shown <= budget,
+                    "k={k} anchor={anchor}: 显示宽 {shown} ≤ 预算 {budget}"
+                );
+            }
+        }
+        // 产品可达复例全形：29 宽字符 + 预算 59（v151-arch 移交原文口径）
+        let val = format!("a{}a", "中".repeat(29));
+        for &anchor in &[1usize, 15, 29] {
+            let mut t = TextInput::with_value(val.clone());
+            t.set_cursor(anchor);
+            let fd = t.field_window("", 59, true);
+            assert!(
+                fd.win.win_lo <= anchor && anchor <= fd.win.win_hi,
+                "anchor={anchor}: 锚在窗内"
+            );
+            assert!(
+                w(&fd.pre) + w(&fd.post) <= 59,
+                "anchor={anchor}: 显示宽 ≤ 预算"
+            );
         }
     }
 
