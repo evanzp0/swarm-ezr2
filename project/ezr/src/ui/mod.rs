@@ -62,7 +62,8 @@ use list::draw_list;
 use pieces::draw_pieces;
 #[cfg(test)]
 pub(crate) use text::{
-    fmt_dur, fmt_eta, fmt_size, fmt_size_pair, fmt_speed, pad_right, truncate, w,
+    fmt_dur, fmt_eta, fmt_size, fmt_size_pair, fmt_speed, marquee_bar, pad_right, truncate, w,
+    wrap_text,
 };
 use val_popup::draw_val_popup;
 

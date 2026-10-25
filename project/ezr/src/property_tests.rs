@@ -2126,3 +2126,189 @@ proptest! {
         prop_assert_eq!(merged, oracle, "全局去重保序 oracle");
     }
 }
+
+// ---------------------------------------------------------------------
+// textfield::TextInput — 取窗几何与点击映射（architect v151 追加：v135
+// 组件化输入框的属性面补齐——取窗/点击是全应用文字定位单源，round trip
+// 与封闭性是 SKILL「解析/格式化稳定性」维度的直接落点）
+//
+// **论域受限登记（缺陷移交）**：超宽取窗两轮不动点循环在「锚点宽字符 +
+// 双侧窄字符边界 + 特定预算」组合下 1↔2 预留振荡**不终止**（最小复例：
+// 宽度序列 (1,2,1)、锚 1、预算 3；(1,2…2,1) 族失败预算 = 2k+1）——产品
+// 可达（URL 字段中文 + 光标置于宽字串内 + 对话框预算 ≈59 = 2×29+1），
+// 已登记 project/handoff.md 移交 coder 修复。本节取窗属性的**溢出路径**
+// 论域收窄为「窄字符 + 零宽（ASCII + VS15）」（穷举 L≤11 + 20 万随机
+// 实证全部终止）；整值可见与点击映射属性保留 CJK 全字母表（预算与值
+// 耦合生成，恒走预算内整值路径，不进溢出循环）。缺陷修复后扩域。
+// ---------------------------------------------------------------------
+
+/// 取窗溢出路径论域：ASCII 可打印 + VS15（零宽）——不含宽字符（超宽取窗
+/// 不动点对宽字符存在振荡缺陷，见上方登记）与 `…`（截断指示符，剥指示符
+/// 断言的字母表卫生——notes/rust.md「字母表与修剪口径对齐」）。
+fn field_text_narrow() -> impl proptest::strategy::Strategy<Value = String> {
+    proptest::collection::vec(
+        prop_oneof![
+            6 => proptest::char::range('\u{20}', '\u{7E}'),
+            1 => Just('\u{FE0E}'),
+        ],
+        1..40,
+    )
+    .prop_map(|chars| chars.into_iter().collect())
+}
+
+/// 取窗整值路径论域：ASCII + CJK + VS15 全字母表（预算与值耦合生成，
+/// 恒走预算内整值路径——溢出循环不进入，宽字符缺陷域不触及）。
+fn field_text_full() -> impl proptest::strategy::Strategy<Value = String> {
+    proptest::collection::vec(
+        prop_oneof![
+            5 => proptest::char::range('\u{20}', '\u{7E}'),
+            2 => proptest::char::range('\u{4E00}', '\u{9FA5}'),
+            1 => Just('\u{FE0E}'),
+        ],
+        1..40,
+    )
+    .prop_map(|chars| chars.into_iter().collect())
+}
+
+proptest! {
+    /// 取窗切片恒等（round trip，溢出路径论域）：任意（光标, 预算, 聚焦）
+    /// 下，pre 剥头指示符 + post 剥尾指示符 = value[win_lo..win_hi]——取窗
+    /// 只裁剪不重排，窗口内容恒为原值连续切片；聚焦锚（光标）恒在窗内。
+    #[test]
+    fn prop_field_window_slice_identity(
+        s in field_text_narrow(),
+        cursor in 0usize..48,
+        budget in 1usize..=30,
+        focused in proptest::bool::ANY,
+    ) {
+        let mut t = crate::textfield::TextInput::with_value(s.clone());
+        t.set_cursor(cursor);
+        let fd = t.field_window("", budget, focused);
+        let pre_core = fd.pre.strip_prefix('…').unwrap_or(&fd.pre);
+        let post_core = fd.post.strip_suffix('…').unwrap_or(&fd.post);
+        let expect: String = s
+            .chars()
+            .skip(fd.win.win_lo)
+            .take(fd.win.win_hi - fd.win.win_lo)
+            .collect();
+        prop_assert_eq!(format!("{pre_core}{post_core}"), expect, "窗口内容 = 原值切片");
+        let n = s.chars().count();
+        prop_assert!(fd.win.win_lo <= fd.win.win_hi, "窗界有序");
+        prop_assert!(fd.win.win_hi <= n, "窗尾不越值域");
+        if focused {
+            let anchor = cursor.min(n);
+            prop_assert!(
+                fd.win.win_lo <= anchor && anchor <= fd.win.win_hi,
+                "聚焦锚（光标）在窗口内"
+            );
+        }
+    }
+
+    /// 预算守恒（溢出路径论域）：取窗 pre+post 显示宽 ≤ 预算（含双缘指示
+    /// 符）；纯窄字符超宽域取等——两轮不动点退出条件 need == reserve ⇒
+    /// 内容 = 预算 − 指示符数（无宽字原子损耗时恰满预算）。
+    #[test]
+    fn prop_field_window_budget_conserved(
+        s in field_text_narrow(),
+        cursor in 0usize..48,
+        budget in 3usize..=30,
+        focused in proptest::bool::ANY,
+    ) {
+        let mut t = crate::textfield::TextInput::with_value(s.clone());
+        t.set_cursor(cursor);
+        let fd = t.field_window("", budget, focused);
+        let shown = crate::textfield::w(&fd.pre) + crate::textfield::w(&fd.post);
+        prop_assert!(shown <= budget, "显示宽 ≤ 预算（含指示符）");
+        let narrow_only = s.chars().all(|c| (c as u32) < 0x80 || c == '\u{FE0E}');
+        if narrow_only && crate::textfield::w(&s) > budget {
+            prop_assert_eq!(shown, budget, "窄字符超宽域内容恰满预算（不动点口径）");
+        }
+    }
+
+    /// 整值可见域（预算与值耦合生成，notes/rust.md 长度耦合条款；CJK 全
+    /// 字母表——预算内整值路径不进溢出循环）：w(值) ≤ 预算 → 窗口覆盖全值
+    ///（win_lo=0、win_hi=字符数、cols 长度 = 字符数 + 1、pre+post 拼接 =
+    /// 原值——无指示符）。
+    #[test]
+    fn prop_field_window_fits_shows_all(
+        s in field_text_full(),
+        cursor in 0usize..48,
+        slack in 0usize..8,
+        focused in proptest::bool::ANY,
+    ) {
+        let budget = crate::textfield::w(&s) + slack;
+        let mut t = crate::textfield::TextInput::with_value(s.clone());
+        t.set_cursor(cursor);
+        let fd = t.field_window("", budget, focused);
+        let n = s.chars().count();
+        prop_assert_eq!(fd.win.win_lo, 0, "整值可见：窗头 = 0");
+        prop_assert_eq!(fd.win.win_hi, n, "整值可见：窗尾 = 字符数");
+        prop_assert_eq!(fd.win.cols.len(), n + 1, "cols = 字符数 + 1");
+        prop_assert_eq!(format!("{}{}", fd.pre, fd.post), s, "pre+post = 原值");
+    }
+
+    /// 点击映射封闭性（整值路径论域，budget 与值耦合——不进溢出循环）：
+    /// 任意探针列 click_offset ∈ [win_lo, win_hi]——半开区间定位 + 左右
+    /// 越界钳制保证鼠标点击永不产生窗口外光标（value_x 取非零回填值，
+    /// 覆盖 label 区/右侧 padding 两类越界域）。
+    #[test]
+    fn prop_click_offset_within_window(
+        s in field_text_full(),
+        cursor in 0usize..48,
+        slack in 0usize..8,
+        col in 0u16..200u16,
+    ) {
+        let budget = crate::textfield::w(&s) + slack;
+        let mut t = crate::textfield::TextInput::with_value(s);
+        t.set_cursor(cursor);
+        let mut fd = t.field_window("", budget, true);
+        fd.win.value_x = 40;
+        let off = crate::textfield::TextInput::click_offset(&fd.win, col);
+        prop_assert!(
+            fd.win.win_lo <= off && off <= fd.win.win_hi,
+            "点击映射封闭在 [win_lo, win_hi]"
+        );
+    }
+
+    /// 走马灯恒宽 + 周期性（FR-01-116 全域泛化，单测仅锚两宽度样本）：
+    /// 任意（宽, 帧）滑块 + 空槽总格数恒 = width；帧 anim 与 anim+period
+    /// 画面逐字节一致（全周期 = 宽 + 块长）。
+    #[test]
+    fn prop_marquee_constant_width_and_periodic(width in 1usize..=60, anim in 0u64..600u64) {
+        let color = ratatui::style::Color::Green;
+        let block = (width / 4).clamp(4, 8);
+        let period = (width + block) as u64;
+        let total: usize = crate::ui::marquee_bar(width, anim, color)
+            .iter()
+            .flat_map(|s| s.content.chars())
+            .filter(|c| *c == '█' || *c == '░')
+            .count();
+        prop_assert_eq!(total, width, "总格数恒定 = width");
+        let a: String = crate::ui::marquee_bar(width, anim, color)
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        let b: String = crate::ui::marquee_bar(width, anim + period, color)
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        prop_assert_eq!(a, b, "帧画面按周期循环");
+    }
+
+    /// wrap 折行损耗与行宽界：折行拼接 = 原文（零字符损耗）；每行显示宽
+    /// ≤ 折行宽（唯一豁免形态 = 单宽字整行——宽 1 窗放不下 2 列宽字，
+    /// demo 同形态）。
+    #[test]
+    fn prop_wrap_text_lossless_and_bounded(s in field_text_full(), width in 1usize..=40usize) {
+        let lines = crate::ui::wrap_text(&s, width);
+        let joined: String = lines.iter().map(|l| l.as_str()).collect::<Vec<_>>().concat();
+        prop_assert_eq!(&joined, &s, "折行零损耗");
+        for l in &lines {
+            let lw = crate::textfield::w(l);
+            prop_assert!(
+                lw <= width || l.chars().count() == 1,
+                "行宽 ≤ 折行宽（单宽字豁免）: {l:?} w={lw} width={width}"
+            );
+        }
+    }
+}

@@ -401,160 +401,214 @@ impl App {
     }
 
     /// 主界面命中（页签点击切换 / 详情热区复制与聚焦 / 并发面板聚焦与选行 /
-    /// 列表点击聚焦与选中 / 滚轮只移视口不动选中，v1.30/FR-01-108/109）
+    /// 列表点击聚焦与选中 / 滚轮只移视口不动选中，v1.30/FR-01-108/109）。
+    /// architect v151 分发核保持行为拆分（on_mouse v116 同法在主界面命中内
+    /// 复用）：Down/Up/滚轮各自成函数，分支语义不变——按下命中链 = 页脚 →
+    /// 页签 → 详情热区 → 滚动条 → 并发面板 → 列表（顺序即优先级，与拆分前
+    /// 逐 if 落空穿过完全一致）。
     fn on_mouse_main(&mut self, m: MouseEvent) {
         // 指针命中并发连接面板（FR-01-96：明细非空时面板接收滚轮）→ 滚动明细；
         // 空明细 / 未选中任务时 conns_area 为 None → 滚轮穿透滚动任务列表
         let over_conns = pointer_in(&self.conns_area, m.column, m.row);
         match m.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                // 矩形命中（footer_cmd_rects/tab_rects 共用；x/y 在矩形内）
-                let hit = |rects: &[(Rect, usize)]| rect_hit(rects, m.column, m.row);
-                // 页脚命令 chips（v1.31/FR-01-107①）：Down 按压反色高亮
-                //（点击效果 + 400ms 余辉），原地松开执行对应命令（与键盘
-                // 快捷键同口径）；拖到别处松开 = 取消。命中矩形不含分隔符、
-                // ui 层每帧重建（footer_cmd_rects）
-                let footer_hit = hit(&self.footer_cmd_rects);
-                if let Some(i) = footer_hit {
-                    self.footer_press = Some(i);
-                    self.footer_flash =
-                        Some((i, Instant::now() + std::time::Duration::from_millis(400)));
-                    return;
-                }
-                self.footer_press = None;
-                // 页签命中（ui 层每帧回填 tab_rects）：切换到该页签 + 聚焦列表
-                //（v1.30/FR-01-80：鼠标点击页签切换）
-                let tab_rects = self.tab_rects.clone();
-                if let Some(i) = hit(&tab_rects) {
-                    if i != self.filter {
-                        self.filter = i;
-                        self.scroll_to_selection();
-                    }
-                    // 页签归属任务列表面板：点击页签同时聚焦列表
-                    self.focus = Panel::List;
-                    return;
-                }
-                // FR-01-101：详情面板字段名点击复制（URL → url 展示值、校验 → 校验码值）。
-                // 热区由 ui 层每帧回填（None = 无热区：无校验行 / 面板收起 / 窄终端）；
-                // 面板本身无提示信息，反馈仅在底部 toast（文案照录 demo 原文，D26 同口径）；
-                // 点击复制同时聚焦详情面板（v1.30/FR-01-108 ⑤）
-                if pointer_in(&self.detail_url_rect, m.column, m.row) {
-                    // D27 v1.28：复制详情展示值 = 原始 URL 单值（任务级最终 URL
-                    // 已退役，FR-01-14 v1.28；「复制所见值」锚定不变）
-                    let url = self.sel_task().map(|t| t.url.clone());
-                    self.focus = Panel::Detail;
-                    if let Some(url) = url {
-                        self.copy_to_clipboard(&url);
-                        self.set_toast("已复制 url");
-                    }
-                    return;
-                }
-                if pointer_in(&self.detail_ck_rect, m.column, m.row) {
-                    let v = self
-                        .sel_task()
-                        .and_then(|t| t.checksum.as_ref().map(|c| c.value.clone()));
-                    self.focus = Panel::Detail;
-                    if let Some(v) = v {
-                        self.copy_to_clipboard(&v);
-                        self.set_toast("已复制 校验码");
-                    }
-                    return;
-                }
-                // v1.34/FR-01-101 四项扩展：失败/路径 字段名点击复制
-                //（toast 描述被复制的值，D42 钦定文案）
-                if pointer_in(&self.detail_fail_rect, m.column, m.row) {
-                    let v = self
-                        .sel_task()
-                        .map(|t| t.error.clone().unwrap_or_else(|| "未知错误".to_string()));
-                    self.focus = Panel::Detail;
-                    if let Some(v) = v {
-                        self.copy_to_clipboard(&v);
-                        self.set_toast("已复制 失败原因");
-                    }
-                    return;
-                }
-                if pointer_in(&self.detail_save_rect, m.column, m.row) {
-                    let v = self.sel_task().map(|t| t.target_path());
-                    self.focus = Panel::Detail;
-                    if let Some(v) = v {
-                        self.copy_to_clipboard(&v);
-                        self.set_toast("已复制 保存路径");
-                    }
-                    return;
-                }
-                // v1.34/FR-01-113：字段值点击打开完整值弹窗（字段名点击仍是复制，
-                // 两种热区互不重叠；热区由 ui 层每帧回填 detail_val_rects）
-                if let Some(field) = rect_hit(&self.detail_val_rects, m.column, m.row) {
-                    self.open_val_popup(field);
-                    return;
-                }
-                // 详情面板任意处点击 = 聚焦（FR-01-108 ⑤）
-                if pointer_in(&self.detail_area, m.column, m.row) {
-                    self.focus = Panel::Detail;
-                    return;
-                }
-                // 通用滚动条命中（v1.32/FR-01-109 ⑥：按下滚动条 = 交互同时
-                // 聚焦所属面板；滑块拖拽/箭头步进连发/轨道翻页，sb_press_at
-                // 依实例序检查 列表 → 并发垂直 → 并发水平；留白格不可点）
-                if self.sb_press_at(m.column, m.row) {
-                    return;
-                }
-                // 并发连接面板点击 = 聚焦 + 选行（表头 1 行之下为数据行，
-                // v1.30/FR-01-108 ⑤）
-                if let Some(a) = self.conns_area {
-                    let in_x = m.column >= a.x && m.column < a.x.saturating_add(a.width);
-                    let in_y = m.row >= a.y && m.row < a.y.saturating_add(a.height);
-                    if in_x && in_y {
-                        self.focus = Panel::Conns;
-                        let data_top = a.y + 1; // 表头行之下
-                        if m.row >= data_top {
-                            let idx = (m.row - data_top) as usize;
-                            if idx < self.visible_conns_rows {
-                                let n = self.conn_count();
-                                let ci = self.conns_scroll + idx;
-                                if ci < n {
-                                    self.conns_sel = ci;
-                                }
-                            }
+            MouseEventKind::Down(MouseButton::Left) => self.on_mouse_main_down(&m),
+            MouseEventKind::Up(MouseButton::Left) => self.on_mouse_main_up(&m),
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                self.on_mouse_main_scroll(&m, over_conns);
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                // 按住的箭头拖出/拖回高亮跟随（连发不中断，v1.32/FR-01-109 ⑥）；
+                // 滑块拖拽 = 比例滚动内容（主面板无窗口拖拽语义）
+                self.sb_arrow_follow(m.column, m.row);
+                self.sb_drag_move(m.column, m.row);
+            }
+            _ => {}
+        }
+    }
+
+    /// 主界面左键按下命中链（architect v151 自 [`Self::on_mouse_main`] 拆出）：
+    /// 各段命中即消费（返回 true = 事件已处理）；顺序 = 命中优先级。
+    fn on_mouse_main_down(&mut self, m: &MouseEvent) {
+        if self.main_down_footer(m) {
+            return;
+        }
+        if self.main_down_tab(m) {
+            return;
+        }
+        if self.main_down_detail_hits(m) {
+            return;
+        }
+        // 通用滚动条命中（v1.32/FR-01-109 ⑥：按下滚动条 = 交互同时
+        // 聚焦所属面板；滑块拖拽/箭头步进连发/轨道翻页，sb_press_at
+        // 依实例序检查 列表 → 并发垂直 → 并发水平；留白格不可点）
+        if self.sb_press_at(m.column, m.row) {
+            return;
+        }
+        if self.main_down_conns(m) {
+            return;
+        }
+        self.main_down_list(m);
+    }
+
+    /// 页脚命令 chips 命中（v1.31/FR-01-107①）：Down 按压反色高亮
+    ///（点击效果 + 400ms 余辉）；返回 true = 命中（原地松开时执行，见
+    /// [`Self::on_mouse_main_up`]）。未命中时清除按压态（按压后拖到
+    /// 别处再按下 = 取消上一次按压，与拆分前逐 if 穿越语义一致）。
+    fn main_down_footer(&mut self, m: &MouseEvent) -> bool {
+        // 命中矩形不含分隔符、ui 层每帧重建（footer_cmd_rects）
+        if let Some(i) = rect_hit(&self.footer_cmd_rects, m.column, m.row) {
+            self.footer_press = Some(i);
+            self.footer_flash = Some((i, Instant::now() + std::time::Duration::from_millis(400)));
+            return true;
+        }
+        self.footer_press = None;
+        false
+    }
+
+    /// 页签命中（ui 层每帧回填 tab_rects）：切换到该页签 + 聚焦列表
+    ///（v1.30/FR-01-80：鼠标点击页签切换）
+    fn main_down_tab(&mut self, m: &MouseEvent) -> bool {
+        let tab_rects = self.tab_rects.clone();
+        if let Some(i) = rect_hit(&tab_rects, m.column, m.row) {
+            if i != self.filter {
+                self.filter = i;
+                self.scroll_to_selection();
+            }
+            // 页签归属任务列表面板：点击页签同时聚焦列表
+            self.focus = Panel::List;
+            return true;
+        }
+        false
+    }
+
+    /// 详情面板热区命中（字段名点击复制 ×4 / 字段值点击弹窗 / 面板聚焦）。
+    /// FR-01-101：字段名点击复制——热区由 ui 层每帧回填（None = 无热区：
+    /// 无校验行 / 面板收起 / 窄终端）；面板本身无提示信息，反馈仅在底部
+    /// toast（文案照录 demo 原文，D26 同口径）；点击复制同时聚焦详情面板
+    ///（v1.30/FR-01-108 ⑤）。
+    fn main_down_detail_hits(&mut self, m: &MouseEvent) -> bool {
+        // D27 v1.28：复制详情展示值 = 原始 URL 单值（任务级最终 URL
+        // 已退役，FR-01-14 v1.28；「复制所见值」锚定不变）
+        if pointer_in(&self.detail_url_rect, m.column, m.row) {
+            let v = self.sel_task().map(|t| t.url.clone());
+            self.copy_detail_value(v, "已复制 url");
+            return true;
+        }
+        if pointer_in(&self.detail_ck_rect, m.column, m.row) {
+            let v = self
+                .sel_task()
+                .and_then(|t| t.checksum.as_ref().map(|c| c.value.clone()));
+            self.copy_detail_value(v, "已复制 校验码");
+            return true;
+        }
+        // v1.34/FR-01-101 四项扩展：失败/路径 字段名点击复制
+        //（toast 描述被复制的值，D42 钦定文案）
+        if pointer_in(&self.detail_fail_rect, m.column, m.row) {
+            let v = self
+                .sel_task()
+                .map(|t| t.error.clone().unwrap_or_else(|| "未知错误".to_string()));
+            self.copy_detail_value(v, "已复制 失败原因");
+            return true;
+        }
+        if pointer_in(&self.detail_save_rect, m.column, m.row) {
+            let v = self.sel_task().map(|t| t.target_path());
+            self.copy_detail_value(v, "已复制 保存路径");
+            return true;
+        }
+        // v1.34/FR-01-113：字段值点击打开完整值弹窗（字段名点击仍是复制，
+        // 两种热区互不重叠；热区由 ui 层每帧回填 detail_val_rects）
+        if let Some(field) = rect_hit(&self.detail_val_rects, m.column, m.row) {
+            self.open_val_popup(field);
+            return true;
+        }
+        // 详情面板任意处点击 = 聚焦（FR-01-108 ⑤）
+        if pointer_in(&self.detail_area, m.column, m.row) {
+            self.focus = Panel::Detail;
+            return true;
+        }
+        false
+    }
+
+    /// 详情字段名复制的共用收口（architect v151 单源：四个字段命中臂同形
+    /// 尾段——聚焦详情 + 有值才复制 + toast；无值仍聚焦，与拆分前一致）。
+    fn copy_detail_value(&mut self, v: Option<String>, toast: &str) {
+        self.focus = Panel::Detail;
+        if let Some(v) = v {
+            self.copy_to_clipboard(&v);
+            self.set_toast(toast);
+        }
+    }
+
+    /// 并发连接面板点击 = 聚焦 + 选行（表头 1 行之下为数据行，
+    /// v1.30/FR-01-108 ⑤）
+    fn main_down_conns(&mut self, m: &MouseEvent) -> bool {
+        if let Some(a) = self.conns_area {
+            let in_x = m.column >= a.x && m.column < a.x.saturating_add(a.width);
+            let in_y = m.row >= a.y && m.row < a.y.saturating_add(a.height);
+            if in_x && in_y {
+                self.focus = Panel::Conns;
+                let data_top = a.y + 1; // 表头行之下
+                if m.row >= data_top {
+                    let idx = (m.row - data_top) as usize;
+                    if idx < self.visible_conns_rows {
+                        let n = self.conn_count();
+                        let ci = self.conns_scroll + idx;
+                        if ci < n {
+                            self.conns_sel = ci;
                         }
-                        return;
                     }
                 }
-                if let Some(a) = self.list_area {
-                    let in_x = m.column >= a.x && m.column < a.x.saturating_add(a.width);
-                    let in_y = m.row >= a.y && m.row < a.y.saturating_add(a.height);
-                    if in_x && in_y {
-                        // 点击列表面板 = 聚焦列表 + 选中任务（FR-01-108 ⑤）
-                        self.focus = Panel::List;
-                        let idx = (m.row - a.y) as usize / ITEM_HEIGHT as usize;
-                        let ti = self.scroll + idx;
-                        if ti < self.filtered().len() {
-                            self.selected = ti;
-                        }
-                    }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 列表面板点击 = 聚焦列表 + 选中任务（FR-01-108 ⑤）
+    fn main_down_list(&mut self, m: &MouseEvent) {
+        if let Some(a) = self.list_area {
+            let in_x = m.column >= a.x && m.column < a.x.saturating_add(a.width);
+            let in_y = m.row >= a.y && m.row < a.y.saturating_add(a.height);
+            if in_x && in_y {
+                self.focus = Panel::List;
+                let idx = (m.row - a.y) as usize / ITEM_HEIGHT as usize;
+                let ti = self.scroll + idx;
+                if ti < self.filtered().len() {
+                    self.selected = ti;
                 }
             }
-            MouseEventKind::Up(MouseButton::Left) => {
-                // 通用滚动条：松开 = 结束拖拽/连发/按压高亮（任何位置，
-                // v1.32/FR-01-109 ⑥）；页脚命令 chip：按压后原地松开 = 执行
-                // 对应命令（与键盘快捷键同口径，P5 双通道等价）；拖到别处
-                // 松开 = 取消。其余 Up 事件主界面无语义（v1.31/FR-01-107①）
-                self.sb_release();
-                if let Some(pressed) = self.footer_press.take() {
-                    let still_on = self.footer_cmd_rects.iter().any(|(r, i)| {
-                        *i == pressed
-                            && m.column >= r.x
-                            && m.column < r.x.saturating_add(r.width)
-                            && m.row >= r.y
-                            && m.row < r.y.saturating_add(r.height)
-                    });
-                    if still_on {
-                        self.run_footer_cmd(pressed);
-                    }
-                }
+        }
+    }
+
+    /// 主界面左键松开（architect v151 自 [`Self::on_mouse_main`] 拆出）：
+    /// 通用滚动条松开收尾 + 页脚命令 chip 原地松开执行；其余 Up 事件
+    /// 主界面无语义（v1.31/FR-01-107①）
+    fn on_mouse_main_up(&mut self, m: &MouseEvent) {
+        // 通用滚动条：松开 = 结束拖拽/连发/按压高亮（任何位置，
+        // v1.32/FR-01-109 ⑥）；页脚命令 chip：按压后原地松开 = 执行
+        // 对应命令（与键盘快捷键同口径，P5 双通道等价）；拖到别处
+        // 松开 = 取消
+        self.sb_release();
+        if let Some(pressed) = self.footer_press.take() {
+            let still_on = self.footer_cmd_rects.iter().any(|(r, i)| {
+                *i == pressed
+                    && m.column >= r.x
+                    && m.column < r.x.saturating_add(r.width)
+                    && m.row >= r.y
+                    && m.row < r.y.saturating_add(r.height)
+            });
+            if still_on {
+                self.run_footer_cmd(pressed);
             }
+        }
+    }
+
+    /// 主界面滚轮（architect v151 自 [`Self::on_mouse_main`] 拆出）：
+    /// 滚轮只移视口不动选中项（v1.30/FR-01-109，自由浏览全表）——指针在
+    /// 并发面板上滚明细（活跃行数钳制，v1.34/FR-01-96 ⑦），否则滚任务列表
+    fn on_mouse_main_scroll(&mut self, m: &MouseEvent, over_conns: bool) {
+        match m.kind {
             MouseEventKind::ScrollUp if over_conns => {
-                // 滚轮只移视口不动选中项（v1.30/FR-01-109，自由浏览全表）
                 self.conns_scroll = self.conns_scroll.saturating_sub(2);
             }
             MouseEventKind::ScrollDown if over_conns => {
@@ -567,18 +621,11 @@ impl App {
             MouseEventKind::ScrollUp => {
                 self.scroll = self.scroll.saturating_sub(2);
             }
-            MouseEventKind::ScrollDown => {
+            _ => {
                 let vis = self.visible_rows.max(1);
                 let maxs = self.filtered().len().saturating_sub(vis);
                 self.scroll = (self.scroll + 2).min(maxs);
             }
-            MouseEventKind::Drag(MouseButton::Left) => {
-                // 按住的箭头拖出/拖回高亮跟随（连发不中断，v1.32/FR-01-109 ⑥）；
-                // 滑块拖拽 = 比例滚动内容（主面板无窗口拖拽语义）
-                self.sb_arrow_follow(m.column, m.row);
-                self.sb_drag_move(m.column, m.row);
-            }
-            _ => {}
         }
     }
 }
@@ -1536,6 +1583,82 @@ mod mouse_tests {
         assert!(!app.dialog.as_ref().unwrap().ck_open, "下拉先收起");
         assert!(!app.x_press, "守卫臂不进入 [✗] 按压");
         assert!(app.dialog.is_some());
+        app.shutdown().await;
+    }
+
+    /// architect v151：主界面按下命中链优先级锁定（on_mouse_main_down 拆分后
+    /// 语义基线，为 hardender 变异加固提供分发序锚点）——页脚 → 页签 → 详情
+    /// 热区 → 滚动条 → 并发面板 → 列表，命中即消费；页脚未命中清除按压态；
+    /// 无值字段名点击只聚焦不复制不 toast。
+    #[tokio::test]
+    async fn main_down_dispatch_chain_priority() {
+        let mut app = make_app("dispatch");
+        app.tasks.push(task(1, "chain.bin"));
+        app.selected = 0;
+        // ① 页脚 chip 与列表面板同格播种：命中页脚即消费——不聚焦、不选中
+        app.footer_cmd_rects = vec![(
+            Rect {
+                x: 2,
+                y: 2,
+                width: 4,
+                height: 1,
+            },
+            0,
+        )];
+        app.list_area = Some(Rect {
+            x: 2,
+            y: 2,
+            width: 20,
+            height: 10,
+        });
+        app.focus = Panel::Conns;
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 3, 2));
+        assert_eq!(app.footer_press, Some(0), "页脚命中：按压记录");
+        assert!(app.footer_flash.is_some(), "页脚命中：400ms 余辉");
+        assert_eq!(app.focus, Panel::Conns, "页脚命中不改变焦点");
+        assert_eq!(app.selected, 0, "页脚命中不选中任务");
+        // ② 未命中页脚的按下清除按压态（原地松开才执行——拖走换目标取消）
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 30, 5));
+        assert_eq!(app.footer_press, None, "未命中页脚：按压清除");
+        // ③ 详情字段名命中（选中越界 → sel_task() None = 无值臂；
+        //    tab_rects 未播种，页脚/列表均不覆盖该点）：
+        //    聚焦详情、不复制、不 toast（无值臂语义）
+        app.detail_url_rect = Some(Rect {
+            x: 0,
+            y: 0,
+            width: 6,
+            height: 1,
+        });
+        app.selected = 99;
+        let toast_before = app.toast.clone();
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 2, 0));
+        assert_eq!(app.focus, Panel::Detail, "字段名命中聚焦详情");
+        assert!(app.last_copied.is_none(), "无值不复制");
+        assert_eq!(app.toast, toast_before, "无值不 toast（启动 toast 不变）");
+        // ④ 页签命中（与详情热区同格播种）：命中即消费在页签段——不进入详情臂
+        //（选中恢复合法值：真实输入通路恒有钳制，scroll_to_selection 不越界）
+        app.tab_rects = vec![(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 5,
+                height: 1,
+            },
+            1,
+        )];
+        app.selected = 0;
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 2, 0));
+        assert_eq!(app.filter, 1, "页签切换（命中链先于详情热区）");
+        assert_eq!(app.focus, Panel::List, "页签命中聚焦列表");
+        // ⑤ 无任何热区命中：列表面板点击 = 聚焦 + 选中（命中链末端；
+        //    第 2 行任务条目 idx 1 = (row−a.y)/ITEM_HEIGHT）
+        app.tasks.push(task(2, "chain2.bin"));
+        app.filter = 0;
+        app.selected = 0;
+        app.focus = Panel::Conns;
+        app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 5, 6));
+        assert_eq!(app.focus, Panel::List, "列表点击聚焦");
+        assert_eq!(app.selected, 1, "列表点击按行选中任务");
         app.shutdown().await;
     }
 }

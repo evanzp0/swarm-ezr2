@@ -221,8 +221,10 @@ pub(crate) fn link_break_spans(s: &str, style: Style) -> Vec<Span<'static>> {
 
 /// CJK 感知 wrap text：按显示宽折行（超宽即断行，不做词边界回退——URL/校验码
 /// 等无空格长串与中文文案统一按列宽折行），供字段值弹窗完整展示字段值；
-/// 每行显示宽 ≤ width（width ≤ 1 时按 1 处理，极端窄窗退化为逐字符折行）
-pub(super) fn wrap_text(s: &str, width: usize) -> Vec<String> {
+/// 每行显示宽 ≤ width（width ≤ 1 时按 1 处理，极端窄窗退化为逐字符折行）。
+/// pub(crate)：crate 内可见（property_tests 属性测试经 ui 根 cfg(test) 门面
+/// 消费——architect v151；产品 API 面零增量，crate 外不可见）
+pub(crate) fn wrap_text(s: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let mut out: Vec<String> = Vec::new();
     let mut cur = String::new();
@@ -249,7 +251,7 @@ pub(super) fn wrap_text(s: &str, width: usize) -> Vec<String> {
 /// 色块（marquee）表达「传输进行中、进度不可知」：滑块自左缘滑入、匀速
 /// 右移、右缘滑出，空一帧后重新滑入循环。anim = App::frame（100ms/tick 的
 /// 10fps 节拍，与 spinner 同源）；每帧 2 列 → 全周期（宽+滑块长）≈ 3s。
-pub(super) fn marquee_bar(width: usize, anim: u64, fill: Color) -> Vec<Span<'static>> {
+pub(crate) fn marquee_bar(width: usize, anim: u64, fill: Color) -> Vec<Span<'static>> {
     let width = width.max(1);
     let block = (width / 4).clamp(4, 8);
     let period = width + block; // 滑块完全离场后一个空帧，再从左缘重新滑入

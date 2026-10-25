@@ -9,7 +9,9 @@
 # architect v126：新增规则 13——app 层零 ui 依赖（组装根在 main.rs）；
 # 规则 14——ui 渲染路径对 App 写操作只允许回填字段白名单，阳性对照实测本轮会话；
 # architect v145：新增规则 15——supervisor 目录化后实现子模块保持私有
-# （pub(super) 暴露纪律），阳性对照实测本轮会话）
+# （pub(super) 暴露纪律），阳性对照实测本轮会话；
+# architect v151：新增规则 16——engine/model 机制层禁入渲染框架导入，
+# 阳性对照实测本轮会话）
 #
 # 分层基线（依赖方向：低层指向高层，model 为最内层纯逻辑）：
 #   main.rs → app → engine → model；ui → app + model；model → ∅
@@ -166,7 +168,13 @@ fi
 #   _scrollbar（滚动条渲染态回填：conns_v/h、help、list、pieces_scrollbar）、
 #   max_hscroll/max_scroll（渲染派生滚动界回填：conns_max_hscroll、help/pieces_max_scroll）、
 #   follow（下载前沿跟随标志回填：pieces_follow）、
-#   (help|pieces)_scroll 面板滚动渲染期钳制（渲染期 min(max_scroll) 收口）。
+#   (help|pieces|val)_scroll 面板滚动渲染期钳制（渲染期 min(max_scroll) 收口；
+#   val_scroll 为 v1.34 字段值弹窗新增实例——与 help/pieces 同一「app 键盘
+#   写 + ui 渲染期钳制」双写形态，architect v151 白名单扩展），
+#   dlg_field_wins / dlg_cursor_screen（v1.34 原生光标轮渲染回填：字段
+#   取窗几何与光标屏幕位发布，鼠标点击映射与 ui::draw 光标绘制消费——
+#   命中几何回填同类，architect v151 白名单扩展，阳性对照实测本轮会话：
+#   扩展前三行即红、扩展后全绿）。
 #   注意：裸 scroll / conns_scroll / conns_hscroll 是键盘导航政策字段
 #   （app 层写、ui 只读），不豁免——未来 ui 渲染路径改写它们即红（白名单
 #   精确对齐判例，防误报压力放宽真规则，engineering.md）；新增面板的渲染钳制
@@ -176,13 +184,13 @@ ui_product_lines=$(for f in src/ui/*.rs; do
 done)
 hit=$(printf '%s\n' "$ui_product_lines" \
   | grep -E 'app\.[a-z_]+([[:space:]]*=[^=]|\.(push|clear|insert|remove|retain|swap|drain|resize|append|truncate)\()' \
-  | grep -vE 'app\.[a-z_]*(rect|area|visible|_pos|_scrollbar|max_hscroll|max_scroll|follow)' \
-  | grep -vE 'app\.(help|pieces)_scroll\b' \
+  | grep -vE 'app\.[a-z_]*(rect|area|visible|_pos|_scrollbar|max_hscroll|max_scroll|follow|dlg_field_wins|dlg_cursor_screen)' \
+  | grep -vE 'app\.(help|pieces|val)_scroll\b' \
   | grep -vE ':[0-9]+:[[:space:]]*//' || true)
 if [ -n "$hit" ]; then
   echo "[FAIL] ui 渲染路径改写非回填 App 字段（写面只限回填白名单，政策字段零豁免）:"; echo "$hit"; fails=$((fails+1))
 else
-  echo "[ OK ] ui 渲染路径只回填白名单字段（rect/area/visible/_pos/_scrollbar/max_*/follow/面板 scroll 钳制）"
+  echo "[ OK ] ui 渲染路径只回填白名单字段（rect/area/visible/_pos/_scrollbar/max_*/follow/面板 scroll 钳制/对话框字段几何与原生光标回填）"
 fi
 
 # 规则 15【窄接口】supervisor 实现子模块保持私有（architect v145：supervisor
@@ -194,6 +202,22 @@ if [ -n "$hit" ]; then
   echo "[FAIL] supervisor 实现子模块被 pub mod（窄接口破坏，应为私有 mod + pub(super) 暴露）:"; echo "$hit"; fails=$((fails+1))
 else
   echo "[ OK ] supervisor 实现子模块私有（内部仅 pub(super) 暴露）"
+fi
+
+# 规则 16【机制层纯度】engine/model 禁入渲染框架导入（architect v151：
+# engine 是贴近 IO 的机制层（网络/文件），model 是最内层纯同步逻辑——
+# 二者均无渲染职责；本轮评审实测零命中，规则化固化防漂移（engine 一旦
+# 引入 ratatui/crossterm 即跨入展示职责，分层基线 main→app→engine→model
+# 的「机制无 UI」前提失效）。扫描域 = 导入语句且只盯 ratatui/crossterm
+# 两渲染框架；tokio/reqwest 为 engine 合法 IO 依赖（规则 11 只约束 model）
+# 不在扫描域。依据条款：SKILL「把高层模块视为远离 IO 的部分」+
+# engineering.md「grep 级检查扫描域与判例对齐」）
+hit=$(grep -rnE '^[[:space:]]*use[[:space:]]+(ratatui|crossterm)' src/engine/ src/model/ \
+      --include='*.rs' || true)
+if [ -n "$hit" ]; then
+  echo "[FAIL] engine/model 层引入渲染框架导入（机制层无渲染职责）:"; echo "$hit"; fails=$((fails+1))
+else
+  echo "[ OK ] engine/model 层零渲染框架导入（机制层纯度）"
 fi
 
 if [ "$fails" -gt 0 ]; then
