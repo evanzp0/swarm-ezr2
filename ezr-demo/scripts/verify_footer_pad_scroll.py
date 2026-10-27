@@ -119,8 +119,8 @@ def main():
               f"got {screen.buffer[fr1][left_border_x + 1].data!r} "
               f"{screen.buffer[fr1][left_border_x + 2].data!r}")
         foot_text = lines[fr1]
-        check("A3 行 1 五枚命令 chips 全部可见（A 添加/D 删除/M 修改/Q 退出/H 帮助）",
-              all(s in foot_text for s in ("A 添加", "D 删除", "M 修改", "Q 退出", "H 帮助")),
+        check("A3 行 1 五枚命令 chips 全部可见（A 命令/D 删除/M 修改/Q 退出/H 帮助）",
+              all(s in foot_text for s in ("A 命令", "D 删除", "M 修改", "Q 退出", "H 帮助")),
               f"row={foot_text!r}")
         check("A4 行 2 启动欢迎 toast 可见（◆ 前缀，4s 内；行 1 无 ◆）",
               find_in_row(fr2, "◆") is not None and find_in_row(fr1, "◆") is None,

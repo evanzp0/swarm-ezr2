@@ -7,8 +7,13 @@ impl App {
         if mods.contains(KeyModifiers::CONTROL) {
             if code == KeyCode::Char('c') {
                 self.quit = true;
+                return;
             }
-
+            // 命令窗口确认键放行：Ctrl+J（\n 字节，普通终端的 Ctrl+Enter）与
+            // kitty 协议的 Ctrl+Enter（CSI 13;5u → Enter+CONTROL）
+            if self.cmd_open && (code == KeyCode::Char('j') || code == KeyCode::Enter) {
+                self.on_cmd_key(code, mods);
+            }
             return;
         }
 
@@ -21,6 +26,11 @@ impl App {
                 | KeyCode::Char('Q') => self.close_about(),
                 _ => {}
             }
+            return;
+        }
+
+        if self.cmd_open {
+            self.on_cmd_key(code, mods);
             return;
         }
 
@@ -45,7 +55,7 @@ impl App {
         }
 
         if self.dialog.is_some() {
-            self.on_dialog_key(code);
+            self.on_dialog_key(code, mods);
             return;
         }
 
@@ -161,7 +171,7 @@ impl App {
             KeyCode::Char('r') | KeyCode::Char('R') => self.retry(),
 
             KeyCode::Char('p') | KeyCode::Char('P') => self.open_pieces(),
-            KeyCode::Char('a') | KeyCode::Char('A') => self.open_add_dialog(),
+            KeyCode::Char('a') | KeyCode::Char('A') => self.open_cmd_window(),
             KeyCode::Char('m') | KeyCode::Char('M') => self.open_modify_dialog(),
             KeyCode::Char('d') | KeyCode::Char('D') => self.open_delete_dialog(),
             KeyCode::Char('c') | KeyCode::Char('C') => self.clear_completed(),
@@ -179,7 +189,9 @@ impl App {
     }
 }
 impl App {
-    pub fn on_dialog_key(&mut self, code: KeyCode) {
+    /// 对话框按键分发（mods 需透传：trackers 输入的 Alt+Enter / kitty 协议
+    /// Shift+Enter 换行依赖修饰键区分 Enter 语义）。
+    pub fn on_dialog_key(&mut self, code: KeyCode, mods: KeyModifiers) {
         let (kind, focus) = match &self.dialog {
             Some(d) => (d.kind, d.focus),
             None => return,
@@ -188,7 +200,18 @@ impl App {
             DialogKind::Add => 9,
             DialogKind::Modify => 6,
             DialogKind::Delete => 3,
+            DialogKind::AddBt => 9,
+            DialogKind::ModifyBt => 6,
         };
+
+        let on_bt_list = matches!(
+            (kind, focus),
+            (DialogKind::AddBt, 2) | (DialogKind::ModifyBt, 0)
+        );
+        let trackers_focused = self
+            .dialog
+            .as_ref()
+            .is_some_and(|d| d.trackers_focus() == Some(d.focus));
 
         if self.dialog.as_ref().is_some_and(|d| d.ck_open) {
             if let Some(d) = self.dialog.as_mut() {
@@ -214,35 +237,83 @@ impl App {
             }
 
             KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => {
-                let on_text = self
-                    .dialog
-                    .as_ref()
-                    .is_some_and(|d| d.text_field_at(d.focus).is_some());
-                if let Some(d) = self.dialog.as_mut() {
-                    if on_text {
-                        let field = d.text_field_at(d.focus).unwrap();
+                if trackers_focused {
+                    // trackers 多行输入：↑↓ 可视行导航（列保持，短行落行尾），
+                    // ←→ 行内移动，不跳焦点
+                    if let Some(d) = self.dialog.as_mut() {
                         match code {
-                            KeyCode::Left => d.field_mut(field).left(),
-                            KeyCode::Right => d.field_mut(field).right(),
-                            KeyCode::Up => d.field_mut(field).cursor_home(),
-                            KeyCode::Down => d.field_mut(field).cursor_end(),
+                            KeyCode::Up => d.trackers.up(),
+                            KeyCode::Down => d.trackers.down(),
+                            KeyCode::Left => d.trackers.left(),
+                            KeyCode::Right => d.trackers.right(),
                             _ => {}
                         }
-                    } else {
-                        let step = if code == KeyCode::Up || code == KeyCode::Left {
-                            nfocus - 1
+                    }
+                } else if on_bt_list {
+                    // 文件树焦点：↑↓ 移动光标，←→ 收拢/展开目录，不跳焦点
+                    if let Some(d) = self.dialog.as_mut() {
+                        match code {
+                            KeyCode::Up => d.bt_list_move(-1),
+                            KeyCode::Down => d.bt_list_move(1),
+                            KeyCode::Left => d.bt_expand_cursor(false),
+                            KeyCode::Right => d.bt_expand_cursor(true),
+                            _ => {}
+                        }
+                    }
+                } else {
+                    let on_text = self
+                        .dialog
+                        .as_ref()
+                        .is_some_and(|d| d.text_field_at(d.focus).is_some());
+                    if let Some(d) = self.dialog.as_mut() {
+                        if on_text {
+                            let field = d.text_field_at(d.focus).unwrap();
+                            match code {
+                                KeyCode::Left => d.field_mut(field).left(),
+                                KeyCode::Right => d.field_mut(field).right(),
+                                KeyCode::Up => d.field_mut(field).cursor_home(),
+                                KeyCode::Down => d.field_mut(field).cursor_end(),
+                                _ => {}
+                            }
                         } else {
-                            1
-                        };
-                        d.focus_field((d.focus + step) % nfocus);
+                            let step = if code == KeyCode::Up || code == KeyCode::Left {
+                                nfocus - 1
+                            } else {
+                                1
+                            };
+                            d.focus_field((d.focus + step) % nfocus);
+                        }
                     }
                 }
             }
-            KeyCode::Enter => match kind {
-                DialogKind::Add => self.add_dialog_enter(focus),
-                DialogKind::Modify => self.modify_dialog_enter(focus),
-                DialogKind::Delete => self.dlg_activate_delete(focus),
-            },
+            KeyCode::Enter => {
+                // trackers 焦点：Alt+Enter（ESC 前缀，任何终端可区分）/
+                // Shift+Enter（kitty 协议 CSI 13;2u）= 文本框内换行；
+                // 裸 Enter = 确认（与按钮 click 同义，与整窗口径一致）
+                if trackers_focused && mods.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) {
+                    if !self.dialog.as_mut().unwrap().trackers.newline() {
+                        self.set_toast("⚠ trackers 最多 64 行");
+                    }
+                } else {
+                    match kind {
+                        DialogKind::Add => self.add_dialog_enter(focus),
+                        DialogKind::Modify => self.modify_dialog_enter(focus),
+                        DialogKind::Delete => self.dlg_activate_delete(focus),
+                        DialogKind::AddBt => self.add_bt_dialog_enter(focus),
+                        DialogKind::ModifyBt => self.modify_bt_dialog_enter(focus),
+                    }
+                }
+            }
+            KeyCode::Home => {
+                if trackers_focused {
+                    self.dialog.as_mut().unwrap().trackers.to_first();
+                }
+            }
+            KeyCode::End => {
+                if trackers_focused {
+                    self.dialog.as_mut().unwrap().trackers.to_last();
+                }
+            }
             KeyCode::Backspace => {
                 if let Some(d) = self.dialog.as_mut() {
                     text_backspace(kind, d, focus);
@@ -253,29 +324,64 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char(c) => match kind {
-                DialogKind::Add => self.add_dialog_char(focus, c),
-                DialogKind::Modify => self.modify_dialog_char(focus, c),
-                DialogKind::Delete => match c {
-                    '1' => self.dlg_activate_delete(0),
-                    '2' => self.dlg_activate_delete(1),
-                    '3' | ' ' => self.dlg_activate_delete(2),
-                    _ => {}
-                },
-            },
+            KeyCode::Delete => {
+                if trackers_focused {
+                    self.dialog.as_mut().unwrap().trackers.delete();
+                }
+            }
+            KeyCode::Char(c) => {
+                if trackers_focused {
+                    // 字符插入在 add/modify_bt_dialog_char 内处理（控制字符忽略）
+                    match kind {
+                        DialogKind::AddBt => self.add_bt_dialog_char(focus, c),
+                        DialogKind::ModifyBt => self.modify_bt_dialog_char(focus, c),
+                        _ => {}
+                    }
+                } else {
+                    match kind {
+                        DialogKind::Add => self.add_dialog_char(focus, c),
+                        DialogKind::Modify => self.modify_dialog_char(focus, c),
+                        DialogKind::Delete => match c {
+                            '1' => self.dlg_activate_delete(0),
+                            '2' => self.dlg_activate_delete(1),
+                            '3' | ' ' => self.dlg_activate_delete(2),
+                            _ => {}
+                        },
+                        DialogKind::AddBt => self.add_bt_dialog_char(focus, c),
+                        DialogKind::ModifyBt => self.modify_bt_dialog_char(focus, c),
+                    }
+                }
+            }
             _ => {}
         }
     }
 }
 impl App {
     pub fn on_paste(&mut self, text: &str) {
+        if self.cmd_open {
+            if self.cmd_focus == 0 {
+                self.cmd_paste(text);
+            }
+            return;
+        }
         let Some(d) = self.dialog.as_mut() else {
             return;
         };
-        if !matches!(d.kind, DialogKind::Add | DialogKind::Modify) || d.ck_open || d.proxy_open {
+        if !matches!(
+            d.kind,
+            DialogKind::Add | DialogKind::Modify | DialogKind::AddBt | DialogKind::ModifyBt
+        ) || d.ck_open
+            || d.proxy_open
+        {
             return;
         }
         let (kind, focus) = (d.kind, d.focus);
+        // trackers 多行输入：粘贴保留换行分段（\n 拆行、段内过滤控制字符），
+        // 与命令窗口文本框同径；单行字段仍走 dlg_apply_paste（控制字符全剔除）
+        if d.trackers_focus() == Some(focus) {
+            d.trackers.insert_str(text);
+            return;
+        }
         dlg_apply_paste(kind, d, focus, text);
     }
 }

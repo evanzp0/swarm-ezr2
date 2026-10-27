@@ -19,12 +19,24 @@ pub enum SbKey {
     Help,
 
     Val,
+
+    /// 命令窗口文本区（可视行滚动）
+    CmdText,
+
+    /// BT 对话框文件树列表（可见行滚动）
+    BtFiles,
+
+    /// BT 对话框 trackers 输入框（可视行滚动）
+    BtTrackers,
+
+    /// BT 对话框 trackers 输入框（无 wrap 水平列滚动）
+    BtTrackersH,
 }
 
 impl SbKey {
     pub fn step(self) -> i32 {
         match self {
-            SbKey::ConnsH => 2,
+            SbKey::ConnsH | SbKey::BtTrackersH => 2,
             _ => 1,
         }
     }
@@ -37,6 +49,10 @@ impl SbKey {
             SbKey::Pieces => app.pieces_sb,
             SbKey::Help => app.help_sb,
             SbKey::Val => app.val_sb,
+            SbKey::CmdText => app.cmd_sb,
+            SbKey::BtFiles => app.dlg_bt_sb,
+            SbKey::BtTrackers => app.dlg_trackers_sb,
+            SbKey::BtTrackersH => app.dlg_trackers_h_sb,
         }
     }
 }
@@ -81,6 +97,22 @@ impl App {
             SbKey::Pieces => self.pieces_max_scroll,
             SbKey::Help => self.help_max_scroll,
             SbKey::Val => self.val_max_scroll,
+            SbKey::CmdText => self.cmd.max_scroll,
+            SbKey::BtFiles => self
+                .dialog
+                .as_ref()
+                .map(|d| d.bt_row_count().saturating_sub(self.dlg_bt_visible.max(1)))
+                .unwrap_or(0),
+            SbKey::BtTrackers => self
+                .dialog
+                .as_ref()
+                .map(|d| d.trackers.max_scroll)
+                .unwrap_or(0),
+            SbKey::BtTrackersH => self
+                .dialog
+                .as_ref()
+                .map(|d| d.trackers.max_scroll_x)
+                .unwrap_or(0),
         }
     }
 
@@ -105,6 +137,27 @@ impl App {
             SbKey::Val => {
                 self.val_scroll = clamp_offset(self.val_scroll as i64 + delta as i64, max);
             }
+            SbKey::CmdText => {
+                // 滚动条交互（箭头/轨道/拖拽）解除视口跟随：跟随只在光标移动时拉回，
+                // 否则每帧回贴光标会让滚动条"失效"
+                self.cmd.scroll_by(delta);
+            }
+            SbKey::BtFiles => {
+                if let Some(d) = self.dialog.as_mut() {
+                    d.bt_follow = false;
+                    d.bt_scroll = clamp_offset(d.bt_scroll as i64 + delta as i64, max);
+                }
+            }
+            SbKey::BtTrackers => {
+                if let Some(d) = self.dialog.as_mut() {
+                    d.trackers.scroll_by(delta);
+                }
+            }
+            SbKey::BtTrackersH => {
+                if let Some(d) = self.dialog.as_mut() {
+                    d.trackers.scroll_by_x(delta);
+                }
+            }
         }
     }
 
@@ -118,6 +171,25 @@ impl App {
             SbKey::Pieces => self.pieces_scroll = pos,
             SbKey::Help => self.help_scroll = pos,
             SbKey::Val => self.val_scroll = pos,
+            SbKey::CmdText => {
+                self.cmd.scroll_to(pos);
+            }
+            SbKey::BtFiles => {
+                if let Some(d) = self.dialog.as_mut() {
+                    d.bt_follow = false;
+                    d.bt_scroll = pos;
+                }
+            }
+            SbKey::BtTrackers => {
+                if let Some(d) = self.dialog.as_mut() {
+                    d.trackers.scroll_to(pos);
+                }
+            }
+            SbKey::BtTrackersH => {
+                if let Some(d) = self.dialog.as_mut() {
+                    d.trackers.scroll_x_to(pos);
+                }
+            }
         }
     }
 
@@ -126,6 +198,10 @@ impl App {
     }
 
     pub(super) fn sb_press(&mut self, key: SbKey, bar: &scrollbar::Bar, hit: scrollbar::Hit) {
+        // 单次取时：SbHold::due() 以 since == last 判定「尚未连发过」（首次连发
+        // 延迟 FIRST_DELAY=400ms）——两次独立 Instant::now() 差几微秒即不等，
+        // 会让首次连发提前到 120ms（按压瞬间多步进一格的根因）
+        let now = Instant::now();
         match hit {
             scrollbar::Hit::Thumb(grab) => {
                 self.sb_drag = Some((key, grab));
@@ -143,8 +219,8 @@ impl App {
                     key,
                     dir: -1,
                     page: false,
-                    since: Instant::now(),
-                    last: Instant::now(),
+                    since: now,
+                    last: now,
                 });
             }
             scrollbar::Hit::Tail => {
@@ -160,8 +236,8 @@ impl App {
                     key,
                     dir: 1,
                     page: false,
-                    since: Instant::now(),
-                    last: Instant::now(),
+                    since: now,
+                    last: now,
                 });
             }
             scrollbar::Hit::Track(t) => {
@@ -172,8 +248,8 @@ impl App {
                     key,
                     dir,
                     page: true,
-                    since: Instant::now(),
-                    last: Instant::now(),
+                    since: now,
+                    last: now,
                 });
             }
         }

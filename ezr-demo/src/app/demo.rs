@@ -70,6 +70,7 @@ pub(super) fn mk(
         verify_ok: None,
         proxy: ProxyChoice::Direct,
         created: created.to_string(),
+        bt_files: Vec::new(),
     }
 }
 
@@ -322,6 +323,25 @@ pub(super) fn demo_tasks() -> Vec<Task> {
     v[3].post_process = true;
     v[6].post_process = true;
     v[11].post_process = true;
+
+    // BT 任务内部文件列表（demo：按任务名确定性伪生成，大小合计 = 任务总大小；
+    // 默认全选，保证 sum(selected) == total 与既有断言一致）
+    {
+        let (name, total) = (v[2].name.clone(), v[2].total);
+        let mut files = pseudo_bt_files(&name, total);
+        for f in files.iter_mut() {
+            f.selected = true;
+        }
+        v[2].bt_files = files;
+    }
+    {
+        let (name, total) = (v[13].name.clone(), v[13].total);
+        let mut files = pseudo_bt_files(&name, total);
+        for f in files.iter_mut() {
+            f.selected = true;
+        }
+        v[13].bt_files = files;
+    }
 
     v[8].verify_ok = Some(true);
     v[8].checksum = Some(Checksum {

@@ -298,7 +298,7 @@ pub(crate) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
     if rows == 0 || idxs.is_empty() {
         let msg = if idxs.is_empty() {
-            "（此页签下没有任务，按 A 添加下载任务）"
+            "（此页签下没有任务，按 A 打开命令窗口添加任务）"
         } else {
             "（区域过小）"
         };

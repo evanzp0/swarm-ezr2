@@ -48,6 +48,13 @@ PENETRATE_WORDS = ("等待空闲", "排队第")
 PIECE_WIDE = ("⬜", "🟩", "🟨", "🟦")
 
 
+# phase2：A 键 = 命令窗口入口；打开添加对话框需输入 URL + Ctrl+J(\n) 分流
+# （phase2.6：命令窗口 Enter = 确认分流，Shift+Enter/Alt+Enter = 换行；
+#   此处用 \n=Ctrl+J 确认——普通终端上 Shift+Enter
+#  与 Enter 字节不可区分）
+URL = b"https://mirrors.edge.kernel.org/fedora/releases/42/Workstation/x86_64/iso/Fedora-Workstation-Live-x86_64-42.iso"
+
+
 def rects_for(cols: int):
     """按终端宽度重算浮层矩形（居中结果）。
 
@@ -239,7 +246,7 @@ def main() -> None:
     try:
         read(term, fd, 1.5)  # 启动稳定
         print(f"场景 1：添加对话框")
-        os.write(fd, b"a")
+        os.write(fd, b"a" + URL + b"\n")
         read(term, fd, 1.0)
         check_box(term, add_dlg, "添加对话框四边边框完整 + 无穿透", results, title_w=14)
         os.write(fd, b"\x1b")
@@ -253,12 +260,12 @@ def main() -> None:
         read(term, fd, 0.5)
 
         print("场景 3：校验算法下拉浮层")
-        os.write(fd, b"a")
+        os.write(fd, b"a" + URL + b"\n")
         read(term, fd, 0.5)
         for _ in range(3):
             os.write(fd, b"\t")
             time.sleep(0.15)
-        os.write(fd, b"\r")
+        os.write(fd, b"\r")  # 对话框内 Enter 打开校验下拉（对话框 Enter 语义不变）
         read(term, fd, 1.0)
         check_box(term, dropdown, "下拉浮层四边边框完整 + 无穿透", results, title_w=10)
         os.write(fd, b"\x1b")  # 收起下拉

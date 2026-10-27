@@ -250,7 +250,7 @@ def scenario_focus():
 
     # 第三段：对话框打开 → 底层全部暗框（bug 修复：弹窗后当前面板边框变暗）
     # （添加对话框居中时盖住并发面板顶边框 → 并发用底边框取样）
-    _, screen4 = V.run(120, 44, 5.0, keys=["a"], key_delay_frac=0.4)
+    _, screen4 = V.run(120, 44, 5.0, keys=["a", V.FEDORA_URL, "ctrlj"], key_delay_frac=0.4)
     l4 = top_border_fg(screen4, "下载任务")
     d4 = top_border_fg(screen4, "任务详情")
     c4 = bottom_border_fg(screen4, "任务详情")  # 同列锚：最后一个 ╰ = 并发面板底角
@@ -265,7 +265,7 @@ def scenario_focus():
             dlg_fg is not None and is_green(dlg_fg[3]), str(dlg_fg))
 
     # 第四段：Esc 关闭 → 列表恢复绿框
-    _, screen5 = V.run(120, 44, 5.0, keys=["a", "esc"], key_delay_frac=0.3)
+    _, screen5 = V.run(120, 44, 5.0, keys=["a", V.FEDORA_URL, "ctrlj", "esc"], key_delay_frac=0.3)
     l5 = top_border_fg(screen5, "下载任务")
     V.check("F5 Esc 关闭对话框后列表边框恢复绿色", l5 is not None and is_green(l5[3]), str(l5))
 
@@ -334,7 +334,7 @@ def scenario_drag():
     print("\n== H：对话框鼠标拖拽 + 点击判定 ==")
 
     # 第一轮：打开添加对话框，探测标题位置
-    _, screen1 = V.run(120, 44, 5.0, keys=["a"], key_delay_frac=0.4)
+    _, screen1 = V.run(120, 44, 5.0, keys=["a", V.FEDORA_URL, "ctrlj"], key_delay_frac=0.4)
     pos = V.find_text_pos(screen1, "添加任务：HTTP(S)")
     V.check("H1 添加对话框打开（标题定位）", pos is not None, str(pos))
     if pos is None:
@@ -351,7 +351,7 @@ def scenario_drag():
     )
     orig_kb = V.key_bytes
     V.key_bytes = lambda k: seq if k == "mdrag:seq" else orig_kb(k)
-    samples, screen2 = V.run(120, 44, 6.0, keys=["a", "mdrag:seq"], key_delay_frac=0.35)
+    samples, screen2 = V.run(120, 44, 6.0, keys=["a", V.FEDORA_URL, "ctrlj", "mdrag:seq"], key_delay_frac=0.35)
     V.key_bytes = orig_kb
     pos2 = V.find_text_pos(screen2, "添加任务：HTTP(S)")
     moved = pos2 is not None and (pos2[0] > ty and pos2[1] > tx)
@@ -360,7 +360,7 @@ def scenario_drag():
     V.check("H3 拖拽后对话框保持打开", "添加任务：HTTP(S)" in text2)
 
     # 第三轮：点击（按下+松开未移动）URL 字段聚焦后输入 → 值更新
-    _, screen3 = V.run(120, 44, 6.0, keys=["a"], key_delay_frac=0.4)
+    _, screen3 = V.run(120, 44, 6.0, keys=["a", V.FEDORA_URL, "ctrlj"], key_delay_frac=0.4)
     pos3 = V.find_text_pos(screen3, "URL")
     if pos3 is None:
         V.check("H4 点击聚焦 URL 字段（行定位）", False, "URL not found")
@@ -369,7 +369,7 @@ def scenario_drag():
     click = mouse(ux + 20, uy, True) + mouse(ux + 20, uy, False)
     V.key_bytes = lambda k: click if k == "mclick:seq" else orig_kb(k)
     samples3, _ = V.run(120, 44, 7.0,
-                        keys=["a", "mclick:seq", "x", "y", "z"],
+                        keys=["a", V.FEDORA_URL, "ctrlj", "mclick:seq", "x", "y", "z"],
                         key_delay_frac=0.3)
     V.key_bytes = orig_kb
     text4 = "\n".join(samples3[-1][1])
@@ -407,7 +407,7 @@ def scenario_unify_scroll():
             d1 is not None and is_green(d1[3]), str(d1))
 
     # J2 校验下拉浮层：边框绿色（原青色 → 与主面板聚焦色统一）
-    _, s2 = V.run(120, 44, 6.0, keys=["a", "tab", "tab", "tab", "enter"],
+    _, s2 = V.run(120, 44, 6.0, keys=["a", V.FEDORA_URL, "ctrlj", "tab", "tab", "tab", "enter"],
                   key_delay_frac=0.3)
     d2 = top_border_fg(s2, "校验算法")
     V.check("J2 校验下拉浮层边框绿色（与主面板高亮统一）",
@@ -467,7 +467,7 @@ def scenario_k():
     text2 = "\n".join(s2.display)
     V.check("K2 Esc 关闭帮助窗口", "【全局】" not in text2)
     V.check("K3a 页脚五枚命令 chips 可见（chips 恢复保留）",
-            "H 帮助" in text2 and "Q 退出" in text2 and "A 添加" in text2)
+            "H 帮助" in text2 and "Q 退出" in text2 and "A 命令" in text2)
     V.check("K3b 旧版多键页脚提示已删除", "暂停/继续" not in text2 and "清已完成" not in text2
             and "Esc 退出" not in text2)
 
@@ -479,7 +479,7 @@ def scenario_k():
     V.check("K4b pieces 快捷键提示已删除", "Esc/P 关闭" not in text4)
 
     # K5 添加对话框底部提示已删除
-    _, s5 = V.run(120, 44, 5.0, keys=["a"], key_delay_frac=0.4)
+    _, s5 = V.run(120, 44, 5.0, keys=["a", V.FEDORA_URL, "ctrlj"], key_delay_frac=0.4)
     text5 = "\n".join(s5.display)
     V.check("K5 添加对话框底部提示已删除",
             "校验码留空 = 不校验" not in text5 and "添加任务：HTTP(S)" in text5)

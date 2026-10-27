@@ -61,6 +61,9 @@ def smoke(name, keys_seq, check_fn, wait=1.2, rows=36, cols=112, key_delay=0.35)
             pass
 
 
+# phase2：A 键 = 命令窗口入口；打开添加对话框需输入 URL + Enter 分流
+URL = b"https://mirrors.edge.kernel.org/fedora/releases/42/Workstation/x86_64/iso/Fedora-Workstation-Live-x86_64-42.iso"
+
 total_bad = 0
 
 total_bad += smoke("主界面（详情精简）", [b"\x1b[B"] * 6, lambda t: [
@@ -73,7 +76,7 @@ total_bad += smoke("主界面（详情精简）", [b"\x1b[B"] * 6, lambda t: [
     ("页脚命令图例 chips 可见（chips 恢复 + toast 保留）", "H 帮助" in t and "Q 退出" in t),
 ])
 
-total_bad += smoke("添加对话框 6 字段", [b"a"], lambda t: [
+total_bad += smoke("添加对话框 6 字段", [b"a", URL, b"\n"], lambda t: [
     ("对话框打开", "添加任务：HTTP(S)" in t),
     ("代理行 直连 ▾", "代理" in t and "直连 ▾" in t),
     ("校验行默认 NONE ▾（需求修订）", "NONE ▾" in t),
@@ -81,7 +84,7 @@ total_bad += smoke("添加对话框 6 字段", [b"a"], lambda t: [
     ("底部提示行已删除（需求修订）", "校验码留空 = 不校验" not in t),
 ])
 
-total_bad += smoke("代理下拉", [b"a", b"\t", b"\t", b"\t", b"\t", b"\t", b"\r"],
+total_bad += smoke("代理下拉", [b"a", URL, b"\n", b"\t", b"\t", b"\t", b"\t", b"\t", b"\r"],
                    lambda t: [
     ("下拉标题「选择代理」", "选择代理" in t),
     ("直连选项", "直连" in t),

@@ -3,12 +3,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ratatui::layout::Rect;
 
+use crate::multiline::MultiLineBuf;
 use crate::scrollbar;
 use crate::textfield::FieldWin;
 
 pub const ITEM_HEIGHT: u16 = 4;
 
 mod clipboard;
+mod cmd;
 mod demo;
 mod dialog;
 mod dialogs;
@@ -198,6 +200,59 @@ pub struct App {
 
     pub dlg_proxy_rects: Vec<(Rect, usize)>,
 
+    /// （仅 BT 对话框）文件树可点击行热区（行号 = 可见行下标）
+    pub dlg_btfile_rects: Vec<(Rect, usize)>,
+
+    /// （仅 BT 对话框）文件列表框标题 [全选]/[全不选] 按钮热区（0=全选 1=全不选）
+    pub dlg_btbtn_rects: Vec<(Rect, usize)>,
+
+    /// （仅 BT 对话框）文件列表滚动条几何（拖拽/点击轨道）
+    pub dlg_bt_sb: Option<scrollbar::Bar>,
+
+    /// （仅 BT 对话框）文件列表内容区（滚轮滚动判定 + 行高）
+    pub dlg_bt_area: Option<Rect>,
+
+    /// （仅 BT 对话框）文件列表可视行数（滚轮/翻页步长）
+    pub dlg_bt_visible: usize,
+
+    /// （仅 BT 对话框）trackers 输入框垂直滚动条几何（拖拽/点击轨道）
+    pub dlg_trackers_sb: Option<scrollbar::Bar>,
+
+    /// （仅 BT 对话框）trackers 输入框水平滚动条几何（拖拽/点击轨道/箭头）
+    pub dlg_trackers_h_sb: Option<scrollbar::Bar>,
+
+    /// （仅 BT 对话框）trackers 输入框内容区（点击定位光标 / 滚轮滚动）
+    pub dlg_trackers_area: Option<Rect>,
+
+    /// 命令窗口（A 唤起）：多行文本框 + 确定按钮
+    pub cmd_open: bool,
+
+    /// 命令窗口多行文本缓冲（可复用 MultiLineBuf：逻辑行×TextInput + 光标行 + 视口）
+    pub cmd: MultiLineBuf,
+
+    /// 命令窗口焦点：0 = 文本框，1 = 确定按钮
+    pub cmd_focus: usize,
+
+    pub cmd_pos: Option<(u16, u16)>,
+
+    pub cmd_drag: Option<(u16, u16)>,
+
+    pub cmd_drag_moved: bool,
+
+    pub cmd_area: Option<Rect>,
+
+    /// 命令窗口文本框内容区（点击定位光标 / 滚轮滚动；不含滚动条列）
+    pub cmd_text_area: Option<Rect>,
+
+    /// 命令窗口文本区滚动条几何（拖拽/点击轨道）
+    pub cmd_sb: Option<scrollbar::Bar>,
+
+    /// 命令窗口确定按钮热区
+    pub cmd_btn_rect: Option<Rect>,
+
+    /// 命令窗口光标屏幕位（渲染层发布，draw 收口 set_cursor_position）
+    pub cmd_cursor_screen: Option<(u16, u16)>,
+
     pub footer_cmd_rects: Vec<(Rect, usize)>,
 
     pub footer_press: Option<usize>,
@@ -316,6 +371,25 @@ impl App {
             dlg_cursor_screen: None,
             dlg_ck_rects: Vec::new(),
             dlg_proxy_rects: Vec::new(),
+            dlg_btfile_rects: Vec::new(),
+            dlg_btbtn_rects: Vec::new(),
+            dlg_bt_sb: None,
+            dlg_bt_area: None,
+            dlg_bt_visible: 0,
+            dlg_trackers_sb: None,
+            dlg_trackers_h_sb: None,
+            dlg_trackers_area: None,
+            cmd_open: false,
+            cmd: MultiLineBuf::new(),
+            cmd_focus: 0,
+            cmd_pos: None,
+            cmd_drag: None,
+            cmd_drag_moved: false,
+            cmd_area: None,
+            cmd_text_area: None,
+            cmd_sb: None,
+            cmd_btn_rect: None,
+            cmd_cursor_screen: None,
             footer_cmd_rects: Vec::new(),
             footer_press: None,
             footer_flash: None,

@@ -8,21 +8,26 @@ use ratatui::{
 
 use crate::app::{App, Panel, TaskState};
 
+mod cmd;
 mod conns;
 mod detail;
 mod dialogs;
 mod footer;
 mod header;
 mod list;
+mod multiline;
 mod popups;
-
+mod tree;
+use cmd::*;
 use conns::*;
 use detail::*;
 use dialogs::*;
 use footer::*;
 use header::*;
 use list::*;
+use multiline::*;
 use popups::*;
+use tree::*;
 
 pub(crate) const BORDER: Color = Color::Rgb(56, 78, 86);
 pub(crate) const FG: Color = Color::Rgb(198, 208, 212);
@@ -43,7 +48,12 @@ const LIGHT_BLUE: Color = Color::Rgb(122, 185, 242);
 pub(crate) const FOCUS_BORDER: Color = Color::Green;
 
 pub(crate) fn overlay_open(app: &App) -> bool {
-    app.dialog.is_some() || app.pieces_open || app.help_open || app.about_open || app.val_open
+    app.dialog.is_some()
+        || app.cmd_open
+        || app.pieces_open
+        || app.help_open
+        || app.about_open
+        || app.val_open
 }
 
 pub(crate) fn panel_border_style(focused: bool) -> Style {
@@ -355,6 +365,7 @@ pub(crate) fn draw_close_btn(
     Some(r)
 }
 
+/// 裁剪弹窗左右边缘外溢的宽字符尾格（防宽字符跨边框渲染错位）。
 pub(crate) fn clip_wide_at_edges(f: &mut Frame, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -434,6 +445,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_dialogs(f, app, area);
     }
 
+    if app.cmd_open {
+        draw_cmd(f, app, area);
+    }
+
     if app.pieces_open {
         draw_pieces(f, app, area);
     }
@@ -451,9 +466,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     if let Some((x, y)) = app.dlg_cursor_screen {
-        if !app.pieces_open && !app.help_open && !app.about_open && !app.val_open {
+        if !app.pieces_open && !app.help_open && !app.about_open && !app.val_open && !app.cmd_open {
             f.set_cursor_position(ratatui::layout::Position { x, y });
         }
+    }
+
+    if app.cmd_open {
+        if let Some((x, y)) = app.cmd_cursor_screen {
+            f.set_cursor_position(ratatui::layout::Position { x, y });
+        }
+    } else {
+        app.cmd_cursor_screen = None;
     }
 }
 
@@ -548,44 +571,44 @@ mod cursor_tests {
     fn arrow_keys_move_cursor_in_text_fields() {
         let mut app = crate::app::App::new();
         app.open_add_dialog();
-        use crossterm::event::KeyCode;
+        use crossterm::event::{KeyCode, KeyModifiers};
 
         app.dialog.as_mut().unwrap().url.clear();
 
         for c in ['a', 'b', 'c'] {
-            app.on_dialog_key(KeyCode::Char(c));
+            app.on_dialog_key(KeyCode::Char(c), KeyModifiers::empty());
         }
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.url.value, "abc");
         assert_eq!(d.url.cursor, 3, "键入后光标在字段尾");
 
-        app.on_dialog_key(KeyCode::Left);
-        app.on_dialog_key(KeyCode::Char('X'));
+        app.on_dialog_key(KeyCode::Left, KeyModifiers::empty());
+        app.on_dialog_key(KeyCode::Char('X'), KeyModifiers::empty());
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.url.value, "abXc", "中位插入落在光标列");
         assert_eq!(d.url.cursor, 3);
         assert_eq!(d.focus, 0, "方向键不跳焦点");
 
-        app.on_dialog_key(KeyCode::Right);
-        app.on_dialog_key(KeyCode::Right);
-        app.on_dialog_key(KeyCode::Down);
+        app.on_dialog_key(KeyCode::Right, KeyModifiers::empty());
+        app.on_dialog_key(KeyCode::Right, KeyModifiers::empty());
+        app.on_dialog_key(KeyCode::Down, KeyModifiers::empty());
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.url.cursor, 4, "Right/Down 到尾钳制（行尾）");
 
         for _ in 0..6 {
-            app.on_dialog_key(KeyCode::Left);
+            app.on_dialog_key(KeyCode::Left, KeyModifiers::empty());
         }
-        app.on_dialog_key(KeyCode::Up);
+        app.on_dialog_key(KeyCode::Up, KeyModifiers::empty());
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.url.cursor, 0, "Left/Up 到头钳制（行首）");
 
-        app.on_dialog_key(KeyCode::Right);
-        app.on_dialog_key(KeyCode::Backspace);
+        app.on_dialog_key(KeyCode::Right, KeyModifiers::empty());
+        app.on_dialog_key(KeyCode::Backspace, KeyModifiers::empty());
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.url.value, "bXc", "光标 1 处退格删前字符");
         assert_eq!(d.url.cursor, 0);
 
-        app.on_dialog_key(KeyCode::Tab);
+        app.on_dialog_key(KeyCode::Tab, KeyModifiers::empty());
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.focus, 1);
         assert_eq!(

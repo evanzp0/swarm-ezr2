@@ -223,6 +223,11 @@ def cycle(tui, label, open_keys, close_keys, title, snapshot, mask):
 
 def main():
     program = sys.argv[1] if len(sys.argv) > 1 else "./target/release/ezr-tui-demo"
+    # phase2：A 键 = 命令窗口入口；打开添加对话框需输入 URL + Ctrl+J(\n) 分流
+    # （phase2.6：命令窗口 Enter = 确认分流，Shift+Enter/Alt+Enter = 换行，
+    #   此处用 \n=Ctrl+J 确认；对话框内 Enter 语义不变）
+    URL = b"https://mirrors.edge.kernel.org/fedora/releases/42/Workstation/x86_64/iso/Fedora-Workstation-Live-x86_64-42.iso"
+
 
     # ---- 场景 0：straddle 宽度扫描（112 = 历史复现宽度）----
     print("== 场景 0：straddle 宽度扫描（打开 A → 边框完整 → Esc → 还原） ==")
@@ -232,7 +237,9 @@ def main():
             tui.pump(1.5)
             mask, snap = animated_mask(tui)
             tui.mark()
-            tui.send(b"a", wait=0.6)
+            tui.send(b"a", wait=0.3)
+            tui.send(URL, wait=0.3)
+            tui.send(b"\n", wait=0.6)
             tui.pump(0.3)
             data = tui.bytes_since_mark
             ok_noclear = CLEAR_ALL not in data
@@ -256,10 +263,12 @@ def main():
         mask, snapshot = animated_mask(tui)
 
         print("== 场景 1：添加对话框 打开/关闭 ==")
-        cycle(tui, "添加对话框", [b"a"], [b"\x1b"], "添加任务：HTTP(S)", snapshot, mask)
+        cycle(tui, "添加对话框", [b"a", URL, b"\n"], [b"\x1b"], "添加任务：HTTP(S)", snapshot, mask)
 
         print("== 场景 2：校验算法下拉 展开/收起/关窗 ==")
-        tui.send(b"a", wait=0.5)
+        tui.send(b"a", wait=0.3)
+        tui.send(URL, wait=0.3)
+        tui.send(b"\n", wait=0.5)
         for _ in range(3):  # URL -> 目录 -> 并发 -> 校验
             tui.send(b"\t", wait=0.15)
         tui.mark()
@@ -293,7 +302,9 @@ def main():
         cycle(tui, "帮助窗口", [b"h"], [b"q"], "帮助", snapshot, mask)
 
         print("== 场景 7：浮层稳定期零清屏（允许动画输出） ==")
-        tui.send(b"a", wait=0.5)
+        tui.send(b"a", wait=0.3)
+        tui.send(URL, wait=0.3)
+        tui.send(b"\n", wait=0.5)
         tui.mark()
         tui.pump(1.0)
         stable = tui.bytes_since_mark

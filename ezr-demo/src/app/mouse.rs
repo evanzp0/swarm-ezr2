@@ -226,7 +226,136 @@ impl App {
             return;
         }
 
+        if self.cmd_open {
+            match m.kind {
+                MouseEventKind::ScrollUp => self.cmd.scroll_by(-1),
+                MouseEventKind::ScrollDown => self.cmd.scroll_by(1),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.footer_press = None;
+                    if Self::pointer_in(&self.popup_close_rect, m.column, m.row) {
+                        self.x_press = true;
+                        return;
+                    }
+                    if let Some(bar) = self.cmd_sb {
+                        if let Some(h) = bar.hit(m.column, m.row) {
+                            self.sb_press(SbKey::CmdText, &bar, h);
+                            return;
+                        }
+                    }
+                    if Self::pointer_in(&self.cmd_area, m.column, m.row) {
+                        if let Some(r) = self.cmd_area {
+                            self.cmd_drag =
+                                Some((m.column.saturating_sub(r.x), m.row.saturating_sub(r.y)));
+                            self.cmd_drag_moved = false;
+                        }
+                    }
+                }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    if self.x_press {
+                        self.x_press = Self::pointer_in(&self.popup_close_rect, m.column, m.row);
+                        return;
+                    }
+                    if self.sb_drag.is_some() {
+                        self.sb_drag_move(m);
+                        return;
+                    }
+                    if let Some((dx, dy)) = self.cmd_drag {
+                        let new = (m.column.saturating_sub(dx), m.row.saturating_sub(dy));
+                        if self.cmd_pos != Some(new) {
+                            self.cmd_pos = Some(new);
+                            self.cmd_drag_moved = true;
+                        }
+                    }
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    if self.x_press {
+                        let hit = Self::pointer_in(&self.popup_close_rect, m.column, m.row);
+                        self.x_press = false;
+                        self.sb_release();
+                        if hit {
+                            self.close_cmd_window();
+                        }
+                        return;
+                    }
+                    self.sb_release();
+                    if self.cmd_drag.is_some() {
+                        let moved = self.cmd_drag_moved;
+                        self.cmd_drag = None;
+                        self.cmd_drag_moved = false;
+                        if !moved {
+                            // 点击确定按钮 = 确认；点击文本框 = 定位光标
+                            if Self::pointer_in(&self.cmd_btn_rect, m.column, m.row) {
+                                self.cmd_focus = 1;
+                                self.cmd_confirm();
+                            } else if Self::pointer_in(&self.cmd_text_area, m.column, m.row) {
+                                self.cmd_focus = 0;
+                                // 点击定位光标 = 光标移动：重新拉回视口跟随
+                                if let Some(a) = self.cmd_text_area {
+                                    // 可视行 → (逻辑行, 字符偏移)：与渲染共用同一 wrap 布局
+                                    self.cmd.click_at(
+                                        a.width as usize,
+                                        (m.row - a.y) as usize,
+                                        m.column,
+                                        a.x,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
         if self.dialog.is_some() {
+            match m.kind {
+                MouseEventKind::ScrollUp => {
+                    if Self::pointer_in(&self.dlg_trackers_area, m.column, m.row) {
+                        // 滚轮滚动 trackers 视口（scroll_by 内部解除跟随）
+                        self.sb_scroll(SbKey::BtTrackers, -1);
+                        return;
+                    }
+                    if Self::pointer_in(&self.dlg_bt_area, m.column, m.row) {
+                        if let Some(d) = self.dialog.as_mut() {
+                            // 滚轮滚动解除视口跟随（滚动条同），否则下一帧被拉回光标处
+                            d.bt_follow = false;
+                            d.bt_scroll = d.bt_scroll.saturating_sub(1);
+                        }
+                        return;
+                    }
+                }
+                MouseEventKind::ScrollDown => {
+                    if Self::pointer_in(&self.dlg_trackers_area, m.column, m.row) {
+                        self.sb_scroll(SbKey::BtTrackers, 1);
+                        return;
+                    }
+                    if Self::pointer_in(&self.dlg_bt_area, m.column, m.row) {
+                        if let Some(d) = self.dialog.as_mut() {
+                            d.bt_follow = false;
+                            let max = d
+                                .bt_row_count()
+                                .saturating_sub(self.dlg_bt_visible.max(1));
+                            d.bt_scroll = (d.bt_scroll + 1).min(max);
+                        }
+                        return;
+                    }
+                }
+                MouseEventKind::ScrollLeft => {
+                    if Self::pointer_in(&self.dlg_trackers_area, m.column, m.row) {
+                        // 水平滚轮（部分终端 shift+滚轮映射）：trackers 视口左移
+                        self.sb_scroll(SbKey::BtTrackersH, -1);
+                        return;
+                    }
+                }
+                MouseEventKind::ScrollRight => {
+                    if Self::pointer_in(&self.dlg_trackers_area, m.column, m.row) {
+                        self.sb_scroll(SbKey::BtTrackersH, 1);
+                        return;
+                    }
+                }
+                _ => {}
+            }
             match m.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
                     let ck_open = self.dialog.as_ref().is_some_and(|d| d.ck_open);
@@ -288,6 +417,27 @@ impl App {
                         return;
                     }
 
+                    if let Some(bar) = self.dlg_bt_sb {
+                        if let Some(h) = bar.hit(m.column, m.row) {
+                            self.sb_press(SbKey::BtFiles, &bar, h);
+                            return;
+                        }
+                    }
+
+                    if let Some(bar) = self.dlg_trackers_sb {
+                        if let Some(h) = bar.hit(m.column, m.row) {
+                            self.sb_press(SbKey::BtTrackers, &bar, h);
+                            return;
+                        }
+                    }
+
+                    if let Some(bar) = self.dlg_trackers_h_sb {
+                        if let Some(h) = bar.hit(m.column, m.row) {
+                            self.sb_press(SbKey::BtTrackersH, &bar, h);
+                            return;
+                        }
+                    }
+
                     if Self::pointer_in(&self.dialog_area, m.column, m.row) {
                         if let Some(r) = self.dialog_area {
                             self.dialog_drag =
@@ -299,6 +449,11 @@ impl App {
                 MouseEventKind::Drag(MouseButton::Left) => {
                     if self.x_press {
                         self.x_press = Self::pointer_in(&self.popup_close_rect, m.column, m.row);
+                        return;
+                    }
+
+                    if self.sb_drag.is_some() {
+                        self.sb_drag_move(m);
                         return;
                     }
 
@@ -536,7 +691,7 @@ impl App {
 
     fn run_footer_cmd(&mut self, i: usize) {
         match i {
-            0 => self.open_add_dialog(),
+            0 => self.open_cmd_window(),
             1 => self.open_delete_dialog(),
             2 => self.open_modify_dialog(),
             3 => self.quit = true,
@@ -561,26 +716,113 @@ impl App {
                 })
                 .map(|(_, i)| *i)
         };
+        let hit_with_rect = |rects: &[(Rect, usize)]| {
+            rects
+                .iter()
+                .find(|(r, _)| {
+                    m.column >= r.x
+                        && m.column < r.x.saturating_add(r.width)
+                        && m.row >= r.y
+                        && m.row < r.y.saturating_add(r.height)
+                })
+                .copied()
+        };
+        // 文件列表框标题 [全选]/[全不选] 按钮（0=全选 1=全不选）
+        let btbtn_rects = self.dlg_btbtn_rects.clone();
+        if let Some(i) = hit(&btbtn_rects) {
+            if let Some(d) = self.dialog.as_mut() {
+                d.focus = Dialog::bt_list_focus(d.kind);
+            }
+            match i {
+                0 => {
+                    if let Some(d) = self.dialog.as_mut() {
+                        d.bt_select_all(true);
+                    }
+                }
+                1 => {
+                    if let Some(d) = self.dialog.as_mut() {
+                        d.bt_select_all(false);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         let field_rects = self.dlg_field_rects.clone();
         let btn_rects = self.dlg_btn_rects.clone();
-        if let Some(i) = hit(&field_rects) {
-            let d = self.dialog.as_mut().unwrap();
-
-            d.focus_field(i);
-
-            if let Some(win) = self.dlg_field_wins.get(i).and_then(|w| w.as_ref()) {
-                let off = TextInput::click_offset(win, m.column);
-                if let Some(f) = d.text_field_at(i) {
-                    d.field_mut(f).set_cursor(off);
+        let btfile_rects = self.dlg_btfile_rects.clone();
+        if let Some((rect, i)) = hit_with_rect(&btfile_rects) {
+            let list_focus = match kind {
+                Some(DialogKind::AddBt) => 2,
+                Some(DialogKind::ModifyBt) => 0,
+                _ => 0,
+            };
+            let meta = self.dialog.as_ref().and_then(|d| {
+                d.bt_rows()
+                    .get(i)
+                    .map(|(_, n)| (n.is_dir, n.depth))
+            });
+            if let Some(d) = self.dialog.as_mut() {
+                d.focus = list_focus;
+                d.bt_cursor = i;
+                // 点击选中行 = 光标移动：重新拉回视口跟随
+                d.bt_follow = true;
+                let (is_dir, depth) = meta.unwrap_or((false, 0));
+                // 复选框列 = [行首 padding 2 + 缩进, +3)：点击勾选；目录行其余区域点击 = 展开/收拢
+                let cb_lo = rect.x + 2 + (depth.min(8) * 2) as u16;
+                let cb_hi = cb_lo.saturating_add(3);
+                let on_checkbox = m.column >= cb_lo && m.column < cb_hi;
+                if is_dir && !on_checkbox {
+                    d.bt_toggle_expand_at_cursor();
+                } else {
+                    d.bt_toggle_cursor();
                 }
             }
-            let ck_i = if kind == Some(DialogKind::Add) { 3 } else { 1 };
-            let proxy_i = if kind == Some(DialogKind::Add) { 5 } else { 3 };
+            return;
+        }
+        if let Some(i) = hit(&field_rects) {
+            let is_trackers =
+                self.dialog.as_ref().is_some_and(|d| d.trackers_focus() == Some(i));
+            let trackers_area = self.dlg_trackers_area;
+            {
+                let d = self.dialog.as_mut().unwrap();
+
+                d.focus_field(i);
+
+                if is_trackers {
+                    // 点击 trackers 文本区 = 定位光标（与命令窗口同约定；
+                    // 无 wrap 模式：行 = 视口 + 相对行，列 = view_x + 点击列）
+                    if let Some(a) = trackers_area {
+                        if m.row >= a.y && m.row < a.y.saturating_add(a.height) {
+                            d.trackers
+                                .click_at_nowrap((m.row - a.y) as usize, m.column, a.x);
+                        }
+                    }
+                } else if let Some(win) = self.dlg_field_wins.get(i).and_then(|w| w.as_ref()) {
+                    let off = TextInput::click_offset(win, m.column);
+                    if let Some(f) = d.text_field_at(i) {
+                        d.field_mut(f).set_cursor(off);
+                    }
+                }
+            }
+            let ck_i = match kind {
+                Some(DialogKind::Add) => 3,
+                Some(DialogKind::Modify) => 1,
+                _ => usize::MAX,
+            };
+            let proxy_i = match kind {
+                Some(DialogKind::Add) => 5,
+                Some(DialogKind::Modify) => 3,
+                Some(DialogKind::AddBt) => 4,
+                Some(DialogKind::ModifyBt) => 2,
+                _ => usize::MAX,
+            };
             if i == ck_i {
+                let d = self.dialog.as_mut().unwrap();
                 d.ck_open = true;
                 d.ck_sel = d.ck_type;
             } else if i == proxy_i {
-                d.proxy_open = true;
+                self.dialog.as_mut().unwrap().proxy_open = true;
             }
         } else if let Some(btn) = hit(&btn_rects) {
             if let Some(d) = self.dialog.as_mut() {
@@ -590,6 +832,8 @@ impl App {
                 Some(DialogKind::Add) => self.dlg_activate_add(btn),
                 Some(DialogKind::Modify) => self.dlg_activate_modify(btn),
                 Some(DialogKind::Delete) => self.dlg_activate_delete(btn),
+                Some(DialogKind::AddBt) => self.dlg_activate_add_bt(btn),
+                Some(DialogKind::ModifyBt) => self.dlg_activate_modify_bt(btn),
                 None => {}
             }
         }

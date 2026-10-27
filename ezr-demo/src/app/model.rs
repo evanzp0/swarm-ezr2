@@ -295,6 +295,9 @@ pub struct Task {
 
     pub proxy: ProxyChoice,
     pub created: String,
+
+    /// BT 任务内部文件列表（非 BT 任务恒空；demo 由任务名确定性伪生成）
+    pub bt_files: Vec<BtFile>,
 }
 
 impl Task {
@@ -519,6 +522,373 @@ pub(super) fn pseudo_total(name: &str) -> u64 {
     80_000_000 + h % 5_000_000_000
 }
 
+/// BT 种子内的单个文件（demo：由任务名确定性伪生成，大小合计 = 任务总大小）。
+#[derive(Clone, Debug)]
+pub struct BtFile {
+    pub path: String,
+
+    pub size: u64,
+
+    pub selected: bool,
+}
+
+pub(super) fn bt_selected_total(files: &[BtFile]) -> u64 {
+    files.iter().filter(|f| f.selected).map(|f| f.size).sum()
+}
+
+/// BT 内部文件树节点：目录聚合大小并维护三态勾选（全选/全不选/部分选择），
+/// 支持展开/收拢（默认收拢）；文件为叶子。
+#[derive(Clone, Debug)]
+pub struct BtNode {
+    pub name: String,
+
+    /// 目录 = 无尾斜杠路径前缀；文件 = 完整相对路径
+    pub path: String,
+
+    pub is_dir: bool,
+
+    /// 文件 = 自身大小；目录 = 子树聚合
+    pub size: u64,
+
+    pub depth: usize,
+
+    pub expanded: bool,
+
+    /// 文件 = 自身勾选；目录 = 子树全部选中
+    pub selected: bool,
+
+    /// 仅目录：子树部分选中
+    pub partial: bool,
+
+    pub children: Vec<BtNode>,
+}
+
+/// 由扁平文件列表构建文件树（按 `/` 分段；目录默认收拢），
+/// 随后自底向上聚合目录大小与三态。
+pub(super) fn bt_build_tree(files: &[BtFile]) -> Vec<BtNode> {
+    let mut roots: Vec<BtNode> = Vec::new();
+    for f in files {
+        let segs: Vec<&str> = f.path.split('/').filter(|s| !s.is_empty()).collect();
+        bt_tree_insert(&mut roots, &segs, 0, "", f.size, f.selected);
+    }
+    bt_sync_dir_states(&mut roots);
+    roots
+}
+
+fn bt_tree_insert(
+    nodes: &mut Vec<BtNode>,
+    segs: &[&str],
+    depth: usize,
+    prefix: &str,
+    size: u64,
+    selected: bool,
+) {
+    let Some(name) = segs.first() else {
+        return;
+    };
+    let path = if prefix.is_empty() {
+        (*name).to_string()
+    } else {
+        format!("{prefix}/{name}")
+    };
+    if segs.len() == 1 {
+        nodes.push(BtNode {
+            name: (*name).to_string(),
+            path,
+            is_dir: false,
+            size,
+            depth,
+            expanded: false,
+            selected,
+            partial: false,
+            children: Vec::new(),
+        });
+        return;
+    }
+    if let Some(dir) = nodes.iter_mut().find(|n| n.is_dir && n.name == *name) {
+        bt_tree_insert(&mut dir.children, &segs[1..], depth + 1, &path, size, selected);
+    } else {
+        let mut dir = BtNode {
+            name: (*name).to_string(),
+            path: path.clone(),
+            is_dir: true,
+            size: 0,
+            depth,
+            expanded: false,
+            selected: false,
+            partial: false,
+            children: Vec::new(),
+        };
+        bt_tree_insert(&mut dir.children, &segs[1..], depth + 1, &path, size, selected);
+        nodes.push(dir);
+    }
+}
+
+/// 自底向上同步目录聚合：大小 = 子树合计；勾选态 = 全选/部分选择/全不选。
+pub(super) fn bt_sync_dir_states(nodes: &mut [BtNode]) {
+    for n in nodes.iter_mut() {
+        if n.is_dir {
+            bt_sync_dir_states(&mut n.children);
+            n.size = n.children.iter().map(|c| c.size).sum();
+            let (sel, total) = bt_count_files(&n.children);
+            n.selected = total > 0 && sel == total;
+            n.partial = sel > 0 && sel < total;
+        }
+    }
+}
+
+/// 递归设置全部文件勾选态（目录三态随后由 sync 重算）。
+pub(super) fn bt_set_all(nodes: &mut [BtNode], on: bool) {
+    for n in nodes.iter_mut() {
+        if n.is_dir {
+            bt_set_all(&mut n.children, on);
+        } else {
+            n.selected = on;
+        }
+    }
+}
+
+pub(super) fn bt_invert_all(nodes: &mut [BtNode]) {
+    for n in nodes.iter_mut() {
+        if n.is_dir {
+            bt_invert_all(&mut n.children);
+        } else {
+            n.selected = !n.selected;
+        }
+    }
+}
+
+/// 按可见行索引路径切换勾选：文件翻转自身；目录 全选⇄全不选（部分 → 全选）。
+pub(super) fn bt_toggle_node(nodes: &mut [BtNode], path: &[usize]) {
+    let Some(&idx) = path.first() else {
+        return;
+    };
+    let Some(n) = nodes.get_mut(idx) else {
+        return;
+    };
+    if path.len() == 1 {
+        if n.is_dir {
+            let on = !(n.selected && !n.partial);
+            bt_set_all(&mut n.children, on);
+        } else {
+            n.selected = !n.selected;
+        }
+    } else {
+        bt_toggle_node(&mut n.children, &path[1..]);
+    }
+}
+
+/// 设置指定路径节点的展开/收拢（仅目录生效）。
+pub(super) fn bt_set_expanded(nodes: &mut [BtNode], path: &[usize], expanded: bool) {
+    let Some(&idx) = path.first() else {
+        return;
+    };
+    let Some(n) = nodes.get_mut(idx) else {
+        return;
+    };
+    if path.len() == 1 {
+        if n.is_dir {
+            n.expanded = expanded;
+        }
+    } else {
+        bt_set_expanded(&mut n.children, &path[1..], expanded);
+    }
+}
+
+/// 深度优先收集可见行（收拢目录跳过子树）：(索引路径, 节点引用)。
+pub(super) fn bt_visible_rows<'a>(
+    nodes: &'a [BtNode],
+    prefix: &mut Vec<usize>,
+    out: &mut Vec<(Vec<usize>, &'a BtNode)>,
+) {
+    for (i, n) in nodes.iter().enumerate() {
+        prefix.push(i);
+        out.push((prefix.clone(), n));
+        if n.is_dir && n.expanded {
+            bt_visible_rows(&n.children, prefix, out);
+        }
+        prefix.pop();
+    }
+}
+
+/// 当前展开状态下的可见行数。
+pub(super) fn bt_row_count(nodes: &[BtNode]) -> usize {
+    nodes
+        .iter()
+        .map(|n| {
+            1 + if n.is_dir && n.expanded {
+                bt_row_count(&n.children)
+            } else {
+                0
+            }
+        })
+        .sum()
+}
+
+/// 统计（已选文件数, 文件总数）——目录不计数。
+pub(super) fn bt_count_files(nodes: &[BtNode]) -> (usize, usize) {
+    let mut sel = 0usize;
+    let mut total = 0usize;
+    for n in nodes {
+        if n.is_dir {
+            let (s, t) = bt_count_files(&n.children);
+            sel += s;
+            total += t;
+        } else {
+            total += 1;
+            if n.selected {
+                sel += 1;
+            }
+        }
+    }
+    (sel, total)
+}
+
+/// 已选文件的字节合计（目录节点不直接累加——其 size 是子树总量而非已选量，
+/// 需下钻到文件叶子按勾选态取值；隐藏在收拢目录下的文件同样计入）。
+pub(super) fn bt_selected_bytes(nodes: &[BtNode]) -> u64 {
+    nodes
+        .iter()
+        .map(|n| {
+            if n.is_dir {
+                bt_selected_bytes(&n.children)
+            } else if n.selected {
+                n.size
+            } else {
+                0
+            }
+        })
+        .sum()
+}
+
+/// 深度优先摊平为扁平文件列表（保持插入顺序；目录态不落盘）。
+pub(super) fn bt_tree_files(nodes: &[BtNode], out: &mut Vec<BtFile>) {
+    for n in nodes {
+        if n.is_dir {
+            bt_tree_files(&n.children, out);
+        } else {
+            out.push(BtFile {
+                path: n.path.clone(),
+                size: n.size,
+                selected: n.selected,
+            });
+        }
+    }
+}
+
+const BT_DIRS: [&str; 10] = [
+    "", "", "", "docs/", "sample/", "subs/", "video/season-01/", "video/season-02/",
+    "docs/notes/", "artwork/",
+];
+
+const BT_NAMES: [&str; 18] = [
+    "track01.flac",
+    "cover.jpg",
+    "episode-01.mkv",
+    "episode-02.mkv",
+    "manual.pdf",
+    "readme.txt",
+    "assets-pack.zip",
+    "data-0001.bin",
+    "data-0002.bin",
+    "source.tar.gz",
+    "checksums.sha256",
+    "artwork.png",
+    "changelog.md",
+    "license.txt",
+    "sample-1080p.mkv",
+    "subtitles-chs.srt",
+    "subtitles-eng.srt",
+    "notes.md",
+];
+
+/// 由种子名/磁力名确定性伪生成 BT 内部文件列表（大小合计恰好 = total）。
+pub(super) fn pseudo_bt_files(name: &str, total: u64) -> Vec<BtFile> {
+    let mix = |mut x: u64| {
+        x ^= x >> 33;
+        x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        x ^= x >> 33;
+        x
+    };
+    let mut h = mix(total ^ 0x9E37_79B9_7F4A_7C15);
+    for b in name.bytes() {
+        h = mix(h ^ (b as u64).wrapping_mul(0x100_0000_01b3));
+    }
+
+    let n = 6 + (h % 9) as usize;
+    let mut weights: Vec<f64> = (0..n)
+        .map(|i| {
+            let w = mix(h ^ (i as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15)) % 1000;
+            0.02 + (w as f64) / 1000.0 * 0.38
+        })
+        .collect();
+    let wsum: f64 = weights.iter().sum();
+
+    let mut files = Vec::with_capacity(n);
+    let mut assigned: u64 = 0;
+    for (i, wt) in weights.iter_mut().enumerate() {
+        let dir = BT_DIRS[(mix(h ^ (i as u64 * 31 + 7)) % BT_DIRS.len() as u64) as usize];
+        let nm = BT_NAMES[(mix(h ^ (i as u64 * 131 + 17)) % BT_NAMES.len() as u64) as usize];
+        let path = if dir.is_empty() {
+            nm.to_string()
+        } else {
+            format!("{dir}{nm}")
+        };
+        let size = if i + 1 == n {
+            total.saturating_sub(assigned)
+        } else {
+            let s = ((total as f64) * (*wt / wsum)) as u64;
+            let s = s.min(total.saturating_sub(assigned + (n - i - 1) as u64));
+            s.max(64 * 1024).min(total)
+        };
+        assigned += size;
+        files.push(BtFile {
+            path,
+            size,
+            selected: true,
+        });
+    }
+
+    // 演示口径：按哈希默认取消 1–2 个小文件的选择（体现「可选文件下载」能力；
+    // 确认时校验至少选中一个，用户可再勾回）
+    let unsel = 1 + (h % 2) as usize;
+    let mut idxs: Vec<usize> = (0..n).collect();
+    idxs.sort_by_key(|&i| files[i].size);
+    for &i in idxs.iter().take(unsel) {
+        files[i].selected = false;
+    }
+    if !files.iter().any(|f| f.selected) {
+        if let Some(big) = files.iter_mut().max_by_key(|f| f.size) {
+            big.selected = true;
+        }
+    }
+    files
+}
+
+/// 从命令窗口输入（本地 .torrent 路径 / 磁力链接）推导任务名。
+pub fn bt_task_name(source: &str) -> String {
+    if let Some(rest) = source.trim().strip_prefix("magnet:") {
+        let dn = rest
+            .split('&')
+            .find_map(|p| p.strip_prefix("dn="))
+            .filter(|s| !s.is_empty())
+            .unwrap_or("bt-task");
+        return dn.to_string();
+    }
+    let base = source
+        .trim()
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("");
+    let base = base.strip_suffix(".torrent").unwrap_or(base);
+    if base.is_empty() {
+        "bt-task".to_string()
+    } else {
+        base.to_string()
+    }
+}
+
 pub(super) fn is_archive(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
     n.ends_with(".zip")
@@ -562,6 +932,7 @@ pub(super) fn fail_case(n: u32) -> (&'static str, FailKind, Option<f64>) {
     }
 }
 
+#[allow(dead_code)]
 pub(super) const ADD_POOL: [&str; 6] = [
     "https://developer.download.nvidia.com/compute/cuda/12.8.0/cuda_12.8.0_linux.tar.xz",
     "https://dl.k8s.io/v1.32.2/kubernetes-server-linux-amd64.tar.gz",

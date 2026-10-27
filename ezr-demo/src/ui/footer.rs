@@ -40,7 +40,7 @@ pub(crate) fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
 
     app.footer_cmd_rects.clear();
     let cmds = [
-        ("A", "添加"),
+        ("A", "命令"),
         ("D", "删除"),
         ("M", "修改"),
         ("Q", "退出"),

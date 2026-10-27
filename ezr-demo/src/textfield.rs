@@ -49,6 +49,98 @@ pub fn truncate(s: &str, max: usize) -> String {
     out
 }
 
+/// 按显示宽对单行做贪心 word wrap，返回可视段 `[(字符起始, 字符长度)]`。
+///
+/// - 优先在段内最后一个空格处断行，断行点后的空格并入换行符丢弃；
+/// - 无空格的超长 token 硬断行；
+/// - 空行返回单个空段占位（保证占一行）。
+pub fn wrap_segments(line: &str, width: usize) -> Vec<(usize, usize)> {
+    let width = width.max(1);
+    let chars: Vec<char> = line.chars().collect();
+    if chars.is_empty() {
+        return vec![(0, 0)];
+    }
+    let mut segs: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0usize; // 当前段字符起点
+    let mut acc = 0usize; // 当前段显示宽
+    let mut brk: Option<usize> = None; // 段内最后一个空格（可断点，字符下标）
+    let mut i = 0usize;
+    while i < chars.len() {
+        let cwid = w(&chars[i].to_string());
+        if acc + cwid > width {
+            if let Some(b) = brk {
+                if b > start {
+                    segs.push((start, b - start));
+                    let mut j = b + 1;
+                    while j < chars.len() && chars[j] == ' ' {
+                        j += 1;
+                    }
+                    start = j;
+                    acc = 0;
+                    brk = None;
+                    i = j;
+                    continue;
+                }
+            }
+            if i == start {
+                // 单字符即超宽（宽字符遇极窄宽度）：硬放一个字符
+                segs.push((start, 1));
+                start += 1;
+                acc = 0;
+                brk = None;
+                i += 1;
+                continue;
+            }
+            segs.push((start, i - start));
+            start = i;
+            acc = 0;
+            brk = None;
+        }
+        if chars[i] == ' ' {
+            brk = Some(i);
+        }
+        acc += cwid;
+        i += 1;
+    }
+    if start < chars.len() {
+        segs.push((start, chars.len() - start));
+    }
+    if segs.is_empty() {
+        segs.push((0, 0));
+    }
+    segs
+}
+
+/// 按显示宽取窗口文本：跳过前 `start` 列，最多取 `cols` 列（无 wrap 水平视口切片）。
+///
+/// 跨越窗口边界的宽字符整字符舍弃（左缘不渲染半格、右缘不溢出折行），
+/// 与 [`TextInput::click_offset`] 的「宽字左半格在前」约定配套。
+pub fn disp_window(s: &str, start: usize, cols: usize) -> String {
+    if cols == 0 {
+        return String::new();
+    }
+    let mut acc = 0usize;
+    let mut out = String::new();
+    for c in s.chars() {
+        let cw = w(&c.to_string());
+        if acc + cw <= start {
+            acc += cw;
+            continue;
+        }
+        if acc < start {
+            // 宽字符跨越左缘：整字符跳过，避免渲染出断开的半格
+            acc += cw;
+            continue;
+        }
+        if acc - start + cw > cols {
+            break;
+        }
+        out.push(c);
+        acc += cw;
+    }
+    out
+}
+
 fn char_byte_offset(s: &str, n: usize) -> usize {
     s.chars().take(n).map(char::len_utf8).sum()
 }
@@ -156,6 +248,34 @@ impl TextInput {
             let off = char_byte_offset(&self.value, self.cursor - 1);
             self.value.remove(off);
             self.cursor -= 1;
+        }
+    }
+
+    /// 删除光标处一个字符（行尾为 no-op）
+    pub fn delete_at_cursor(&mut self) {
+        if self.cursor < self.len_chars() {
+            let off = char_byte_offset(&self.value, self.cursor);
+            self.value.remove(off);
+        }
+    }
+
+    /// 无上限插入（多行编辑等组件内部使用；仍从光标处生效）
+    pub fn insert_at_cursor(&mut self, text: &str) {
+        let mut off = char_byte_offset(&self.value, self.cursor);
+        for c in text.chars() {
+            self.value.insert(off, c);
+            off += c.len_utf8();
+            self.cursor += 1;
+        }
+    }
+
+    /// 从光标处切分：后半段返回为新实例，自身截断为前半段（多行编辑换行用）
+    pub fn split_at_cursor(&mut self) -> TextInput {
+        let tail: String = self.value.chars().skip(self.cursor).collect();
+        self.value = self.value.chars().take(self.cursor).collect();
+        TextInput {
+            value: tail,
+            cursor: 0,
         }
     }
 

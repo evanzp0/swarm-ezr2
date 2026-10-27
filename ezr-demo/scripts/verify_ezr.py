@@ -152,6 +152,11 @@ FAIL: list[str] = []
 CHUNK_RE = re.compile(r"分块\s+(\d+)/(\d+) · (\d+(?:\.\d+)?) ([KMG]B)/块")
 
 
+# phase2：A 键改为命令窗口入口——打开「添加任务：HTTP(S)」需先经命令窗口
+# 输入 URL 并 Ctrl+J（\n 字节）确认分流（phase2.6：Enter 亦确认——命令窗口
+# Enter = 触发 [确定] 按钮 click；Ctrl+J/Ctrl+Enter 同效），随后再回车确认添加。
+FEDORA_URL = "https://mirrors.edge.kernel.org/fedora/releases/42/Workstation/x86_64/iso/Fedora-Workstation-Live-x86_64-42.iso"
+
 def check(name: str, ok: bool, detail: str = "") -> None:
     (PASS if ok else FAIL).append(f"{name}{' :: ' + detail if detail else ''}")
     print(f"  [{'OK' if ok else 'FAIL'}] {name}" + (f"  ({detail})" if detail else ""))
@@ -160,7 +165,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 def key_bytes(k: str) -> bytes:
     named = {
         "up": b"\x1b[A", "down": b"\x1b[B", "right": b"\x1b[C", "left": b"\x1b[D",
-        "enter": b"\r", "esc": b"\x1b", "tab": b"\t", "space": b" ",
+        "enter": b"\r", "ctrlj": b"\n", "esc": b"\x1b", "tab": b"\t", "space": b" ",
         "pgup": b"\x1b[5~", "pgdn": b"\x1b[6~", "home": b"\x1b[H", "end": b"\x1b[F",
         "bs": b"\x7f", "backtab": b"\x1b[Z",
     }
@@ -383,7 +388,9 @@ def scenario_c():
     # 预填轮换 prefill_seq=100 → ADD_POOL[100 % 6] = Fedora（v1.20：任务 ID
     # 已改随机分配，本序号仅驱动预填池轮换，推进口径不变）
     name = "Fedora-Workstation-Live-x86_64-42.iso"
-    samples, _ = run(120, 44, 9.0, keys=["a", "enter", "d", "2"], key_delay_frac=0.3)
+    samples, _ = run(120, 44, 9.0,
+                     keys=["a", FEDORA_URL, "ctrlj", "enter", "d", "2"],
+                     key_delay_frac=0.3)
     added_seen = False
     added_wait = False
     added_queue_pos = False
@@ -432,7 +439,7 @@ def scenario_d():
 
 def scenario_e():
     print("\n== 场景 E：添加对话框——三按钮（v1.15/FR-01-103）+ 6 字段，默认 NONE ==")
-    samples, _ = run(120, 44, 5.0, keys=["a"], key_delay_frac=0.3)
+    samples, _ = run(120, 44, 5.0, keys=["a", FEDORA_URL, "ctrlj"], key_delay_frac=0.3)
     # 取按键后的最后几帧（对话框稳定可见）
     final_rows = samples[-1][1]
     final = "\n".join(final_rows)
@@ -478,13 +485,16 @@ def find_text_pos(screen, needle: str):
 
 def scenario_i():
     print("\n== 场景 I：校验下拉键盘流（NONE 默认/必填校验码/NONE 输入拦截）+ MD5 建任务 ==")
-    keys = (["a", "tab", "tab", "tab", "enter", "down", "enter", "tab"]
+    keys = (["a", FEDORA_URL, "ctrlj", "tab", "tab", "tab", "enter", "down", "enter", "tab"]
             + ["a", "b", "c", "d", "enter"]          # MD5 + 仅 4 位校验码 → 长度报错
             + ["bs"] * 4                              # 清空校验码
             + ["enter"]                               # 空校验码提交 → 必填报错（需求修订）
             + list("d41d8cd98f00b204e9800998ecf8427e")       # 合法 32 位
             + ["enter"]                               # 确认建任务（MD5 校验）
-            + ["a", "tab", "tab", "tab", "enter", "home", "enter", "tab"]  # 下拉切 NONE（校验码清空）
+            # 第二轮 URL 追加 "2"：原版场景依赖 App 打开对话框时的 prefill 轮换
+            # （两轮 URL 天然不同）；命令窗口分流后两轮同为显式 URL，会命中
+            # 「⚠ 任务已存在」去重守卫导致对话框不再关闭（I3/I6 误报）。
+            + ["a", FEDORA_URL + "2", "ctrlj", "tab", "tab", "tab", "enter", "home", "enter", "tab"]  # 重开对话框，下拉切 NONE（校验码清空）
             + list("d41d8cd98f00b204e9800998ecf8427e")       # NONE 下输入被拦截（需求修订）
             + ["enter"])                              # 确认建任务（NONE = 不校验）
     # 键序拉长（两轮建任务），key_interval 压到 0.08s 保证 17s 内全部发完
@@ -514,7 +524,7 @@ def scenario_i():
 def scenario_j():
     print("\n== 场景 J：鼠标点击展开校验算法下拉框并选择 SHA-512 ==")
     # 第一轮：仅打开对话框，探测「NONE ▾」（默认选中）字段与下拉项坐标（布局确定性复用）
-    _, screen1 = run(120, 44, 5.0, keys=["a"], key_delay_frac=0.3)
+    _, screen1 = run(120, 44, 5.0, keys=["a", FEDORA_URL, "ctrlj"], key_delay_frac=0.3)
     pos_field = find_text_pos(screen1, "NONE ▾")
     check("J1 第一轮定位校验算法字段", pos_field is not None, str(pos_field))
     if pos_field is None:
@@ -522,7 +532,7 @@ def scenario_j():
     fy, fx = pos_field
     # 第二轮：a 打开 → 点击字段展开下拉框（保持展开以便定位选项）
     samples, screen2 = run(120, 44, 6.0,
-                           keys=["a", f"mclick:{fx + 1}:{fy + 1}"],
+                           keys=["a", FEDORA_URL, "ctrlj", f"mclick:{fx + 1}:{fy + 1}"],
                            key_delay_frac=0.25)
     all_text = "\n".join("".join(rows) for _, rows in samples)
     # 下拉框曾展开（标题出现）；随后重新定位 SHA-512 选项坐标再点击
@@ -533,7 +543,7 @@ def scenario_j():
         return
     iy, ix = pos_item
     samples3, screen3 = run(120, 44, 7.0,
-                            keys=["a", f"mclick:{fx + 1}:{fy + 1}", f"mclick:{ix + 1}:{iy + 1}"],
+                            keys=["a", FEDORA_URL, "ctrlj", f"mclick:{fx + 1}:{fy + 1}", f"mclick:{ix + 1}:{iy + 1}"],
                             key_delay_frac=0.25)
     final3 = "\n".join(samples3[-1][1])
     check("J4 点击 SHA-512 后字段变为「SHA-512 ▾」", "SHA-512 ▾" in final3)
@@ -1149,7 +1159,8 @@ def scenario_r():
     print("\n== 场景 R：v1.28 生产同步轮八（重复拒绝 + 路径基断点接续）==")
 
     def clear_and_type(url: str) -> list:
-        """清空预填 URL（130 次退格覆盖最长预填）后逐键输入 url。"""
+        """phase2：先按 a 打开命令窗口（空行，退格为 no-op），逐键输入 url ——
+        第一个 Ctrl+J（ctrlj，\n 字节）确认命令窗口（分流打开添加对话框），第二个 enter 确认添加。"""
         return ["bs"] * 130 + list(url)
 
     # 预填池轮换：首开 ADD_POOL[100%6]=Fedora（99 字符）、次开 magnet、三开 cuda，
@@ -1159,11 +1170,11 @@ def scenario_r():
 
     # ---- R1 正路径：重复拒绝 + 保留文件删除 → 异 URL 同名接续 ----
     keys = (
-        ["a"] + clear_and_type(url_a) + ["enter"]  # 添加任务（等待中）
-        + ["a"] + clear_and_type(url_a) + ["enter"]  # 同 URL 同目录重复添加 → 拒绝
+        ["a"] + clear_and_type(url_a) + ["ctrlj", "enter"]  # 命令窗口确认分流 → 添加任务（等待中）
+        + ["a"] + clear_and_type(url_a) + ["ctrlj", "enter"]  # 同 URL 同目录重复添加 → 拒绝
         + ["esc"]  # 关闭保持打开的对话框
         + ["d", "1"]  # 仅删除任务（保留文件）→ 模拟盘 sidecar 残留
-        + ["a"] + clear_and_type(url_b) + ["enter"]  # 异 URL 同推导名 → 路径基接续
+        + ["a"] + clear_and_type(url_b) + ["ctrlj", "enter"]  # 异 URL 同推导名 → 路径基接续
     )
     dur = 4.0 + len(keys) * 0.05 + 8.0
     samples1, _screen1 = run(120, 44, dur, keys=keys, key_delay_frac=0.03,
@@ -1194,9 +1205,9 @@ def scenario_r():
 
     # ---- R2 反路径：删除任务及本地文件 → 同名 URL 再添加不接续 ----
     keys2 = (
-        ["a"] + clear_and_type(url_a) + ["enter"]  # 添加
+        ["a"] + clear_and_type(url_a) + ["ctrlj", "enter"]  # 命令窗口确认分流 → 添加
         + ["d", "2"]  # 删除任务及本地文件（sidecar 一并清理）
-        + ["a"] + clear_and_type(url_a) + ["enter"]  # 再添加 → 无断点可接续
+        + ["a"] + clear_and_type(url_a) + ["ctrlj", "enter"]  # 再添加 → 无断点可接续
     )
     dur2 = 4.0 + len(keys2) * 0.05 + 8.0
     samples2, _screen2 = run(120, 44, dur2, keys=keys2, key_delay_frac=0.03,

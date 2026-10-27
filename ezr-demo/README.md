@@ -23,7 +23,7 @@ chmod +x bin/ezr-tui-demo
 ## 变更记录（相对上游）
 
 1. **页脚双行重构（m2）**
-   - 第一行：常用命令图例 `A 添加 · D 删除 · M 修改 · Q 退出 · H 帮助`，
+   - 第一行：常用命令图例 `A 命令 · D 删除 · M 修改 · Q 退出 · H 帮助`，
      鼠标点击执行对应命令（按压反色高亮 + 400ms 余辉 = 点击效果，与键盘同口径）
    - 第二行：toast 提示独占一行（◆ 黄色）
 2. **页脚左右内边距（m2 补丁）**
@@ -220,7 +220,7 @@ chmod +x bin/ezr-tui-demo
      任何窗口（面板/页脚/弹窗）内不渲染操作提示/快捷键图例，操作反馈走
      toast，交互说明唯一入口 = H 帮助窗口；全部弹窗统一右上角 [✗] 关闭
      按钮（常驻可见的鼠标关闭通道，不依赖提示行告知）
-   - **主界面页脚单行化**：常用命令图例 chips（A 添加 / D 删除 / M 修改 /
+   - **主界面页脚单行化**：常用命令图例 chips（A 命令 / D 删除 / M 修改 /
      Q 退出 / H 帮助）删除，页脚只保留 toast 反馈，总高 4 → 3（主区相应
      +1 行）；chips 的鼠标点击通道（`footer_cmd_rects` / `footer_press` /
      `footer_flash` / `footer_chip_hot` / `run_footer_cmd`）随之一并移除
@@ -371,6 +371,322 @@ chmod +x bin/ezr-tui-demo
      §6.5（尺寸/网格行数/块数/图示按 68 列重排）
    - **bin/ 预编译二进制已随本记录重建**（release, stripped）
 
+23. **需求修订（phase2：BT 任务对话框 + 命令窗口）**
+   - **添加任务：BT 对话框（`DialogKind::AddBt`，78×16）**：字段行 =
+     种子（本地 `.torrent` 路径 / 磁力链接，文本行）/ 保存到 / **文件列表框**
+     （6 可视行，勾选要下载的内部文件）/ 并发 / 代理，按钮 `[ 立即下载 ]`
+     `[ 仅添加 ]` `[ 取消 ]`（焦点 5/6/7，nfocus=8）
+     - **文件列表**：demo 由任务名+总大小确定性伪生成 6–14 个内部文件
+       （`BtFile`：相对路径 / 大小 / 选中，大小合计恰 = 任务总大小；默认按
+       哈希取消 1–2 个小文件的选中）；行渲染 = `[x]`（绿）/ `[ ]`（DIM2）+
+       相对路径 + 右对齐大小，光标行 SEL_BG 满行；框标题实时显示
+       ` 文件列表（选中 k/n · 已选 X / 共 Y） `
+     - **键盘**：↑↓ 移动光标（焦点在列表时不跳焦点）、Space 勾选/取消、
+       `A`/`N`/`I` 全选/全不选/反选（列表焦点下）、Tab/BackTab 焦点循环、
+       Enter 确认；**鼠标**：点击文件行 = 勾选/取消（`dlg_btfile_rects`）、
+       滚轮悬停列表框滚动（`dlg_bt_area`）
+     - **确认**：种子来源为空 → toast 拒绝并聚焦；选中 0 个文件 →
+       toast `⚠ 请至少选择一个要下载的文件（空格勾选）`；任务 total =
+       选中文件大小合计、任务名 = 种子文件名去 `.torrent`（磁力 = `dn=`），
+       重名/重复任务口径与 HTTP 添加一致；toast
+       `✓ 已添加任务 #id: name（BT，已选 k/n 文件）`
+   - **修改任务：BT 对话框（`DialogKind::ModifyBt`，78×15）**：M 键对 BT
+     任务分流进入（HTTP 任务仍开修改任务：HTTP(S)）；任务名静态行 +
+     文件列表框（预填任务当前勾选）/ 并发 / 代理 + `[ 确定 ]` `[ 取消 ]`
+     （焦点 3/4，nfocus=5）；确认后重算 total = 选中合计（≤ 原已下载量钳制）、
+     按需重建分块连接（沿用 `make_chunk_conns_lease` 保速度续传口径）、toast
+     `✓ BT 任务已更新：k/n 文件 · 共 X（立即生效）`
+   - **命令窗口（A 键新入口，`cmd_open` + `src/app/cmd.rs` / `src/ui/cmd.rs`，
+     78×16）**：大多行文本框（独立圆角子边框、8 可视行、行数超窗滚动）+
+     `[ 确定 ]` 按钮（Tab 切焦点，Enter 任意焦点下均确认）
+     - **输入**：http(s) URL / 本地 torrent 文件 path / 磁力链接；
+       `Shift+Enter` 换行（kitty 键盘协议 `DISAMBIGUATE_ESCAPE_CODES` 下
+       可区分上报；不支持协议的终端以 `Ctrl+J` 换行兜底——启动序列已
+       Push、退出恢复序列已 Pop）；多行确认只取第一个非空行，其余行
+       toast 提示忽略
+     - **Shift+Tab 路径补全**（readline 式）：对光标前 whitespace 分隔的
+       token 补全——仅对「像本地路径」的 token（`/`、`./`、`../`、`~`、含 `/`）
+       生效；支持 `~` 展开；唯一候选直接补全（目录补尾随 `/`），多候选
+       补到最长公共前缀 + toast 列出候选（至多 5 个 + 「等 N 项」）；
+       无匹配 toast `无匹配：<token>`
+     - **确认分流**：`http(s)://` → 打开 `添加任务：HTTP(S)` 并预填 URL
+       （`open_add_dialog_with`）；其余（本地种子路径 / 磁力链接）→ 打开
+       `添加任务：BT` 并预填种子来源（`open_add_bt_dialog_with`）；
+       空输入确认 = 仅关闭窗口
+     - **交互同契约**：Esc/q/Q/[✗] 关闭、可拖拽（位置关闭即清）、点击文本框
+       定位光标（列→字符偏移按显示宽映射）、滚轮滚动行、bracketed paste
+       多行粘贴（`\n` 分行入编辑器）；光标 = 终端原生光标（z 序收口）
+   - **入口调整**：A 键与页脚 `A 命令` chip 改为打开命令窗口（原直接开
+     HTTP 添加框的 `open_add_dialog` 保留给测试与直加通道）；帮助窗口
+     新增【命令窗口（A）】【BT 对话框（添加/修改：BT）】两组说明
+   - **键盘协议**：`main.rs` 启动 Push `KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES`
+     （Shift+Enter 可区分）、退出 `PopKeyboardEnhancementFlags`（恢复序列
+     先于鼠标捕获关闭）
+   - 脚本同步（A 键入口全链路）：verify_ezr.py（场景 C/E/I/J 改经命令窗口
+     输入 URL 分流；场景 R 的 clear_and_type 改输入命令窗口 + 双 Enter）、
+     test_focus_style.py（F4/F5/H1–H4/J2/K5）、smoke_v_sync.py（添加对话框/
+     代理下拉）、check_overlay_redraw.py（场景 0/1/2/7）、
+     check_popup_integrity.py（场景 1/3）
+   - 文档同步：《docs/ezr-demo UI界面及交互设计规范.md》头部修订说明、
+     §3.1 图层 L2、§4.2.1/§4.2.6 实例表、§4.3 弹窗尺寸速查、
+     新增 §6.9 添加任务：BT / §6.10 修改任务：BT / §6.11 命令窗口、
+     §6.6 帮助内容、§7.2/§7.3/§7.4、§10 速查表
+   - **bin/ 预编译二进制已随本记录重建**（release, stripped）
+
+24. **需求再修订（phase2.1：命令窗口输入体验 + BT 文件列表树状化）**
+   - **命令窗口**：标题改为 **` 请输入命令或链接 `**（旧标题「命令窗口」退役）；
+     内嵌文本框删除「 输入 」小标题（无标题圆角子框），空缓冲显示占位提示
+     `输入 http(s) 链接 / 磁力链接 / 本地 .torrent 路径，Enter 确认…`；
+     **word wrap**：`textfield::wrap_segments` 按显示宽贪心换行（空格优先断行、
+     无空格超长 token 硬断行），逻辑行/可视行分离——视口按可视行跟随光标、
+     点击定位与原生光标位均按同一 wrap 布局映射（`App::cmd_wrap_rows` 渲染与
+     命中共用）；**垂直滚动条**：文本区右缘通用滚动条（`SbKey::CmdText`：
+     滚轮 / 滑块拖拽 / 箭头连发 / 轨道翻页全可用，`cmd_max_scroll` 渲染层发布）
+   - **BT 对话框文件树**（添加/修改同口径）：`BtNode` 树模型（`bt_build_tree`
+     按 `/` 分段构树、目录聚合子树大小、`bt_sync_dir_states` 自底向上重算三态）
+     —— 目录行 `▸/▾` 展开·收拢（**默认收拢**；列表焦点 `←`/`→`，鼠标点击目录行
+     复选框以外区域切换）+ 目录名 `/` + 右对齐聚合大小；**三态勾选**：目录
+     `[x]` 全选 / **`[-]` 部分选择（黄）** / `[ ]` 全不选，Space/点击复选框
+     对目录 = 整目录 全选⇄全不选（部分 → 全选）；文件行单选
+     - **左标题只显示 `(x/y)`**（已选文件数/文件总数，目录不计数；删除旧
+       「文件列表（选中 k/n · 已选/共」文案）；**右标题 `[全选]` `[全不选]`
+       按钮**（悬停黄色高亮下划线，`dlg_btbtn_rects` 命中；键盘 A/N/I 保留，
+       I = 反选仅键盘）
+     - **垂直滚动条**（`SbKey::BtFiles`）：可见行 > 6 时内容区右缘绘制，
+       滚轮/拖拽/轨道全可用；行渲染**移除旧版光标行前置空格位移效果**
+       （内容列对齐不变），光标行改为 Paragraph 级 SEL_BG 整行背景（含行尾）
+     - 确认口径不变：树摊平为扁平 `BtFile`（`bt_flatten`，深度优先序）随任务
+       保存，total = 选中合计；demo 伪数据目录升级为多级（`video/season-01/`、
+       `docs/notes/` 等，体现多层树）
+   - **入口/文案同步**：页脚 chip `A 添加` → `A 命令`；列表空态提示改为
+     「按 A 打开命令窗口添加任务」；帮助窗口【命令窗口（A）】【BT 对话框】
+     两组条目更新（新增 ←/→、[全选]/[全不选]、滚轮/滚动条说明，共 15 条）
+   - **脚本**：新增 `scripts/verify_phase2_ui.py`（PTY 级 24 项断言：命令窗口
+     标题/无输入小标题/word wrap 90 字符硬换行/Ctrl+J 换行/种子分流；BT 树
+     默认收拢/逐行 → 全展开/三态 `[-]`/(x/y) 计数联动/滚动条/首行无位移；
+     修改 BT 同口径）；verify_footer_pad_scroll.py、test_focus_style.py 页脚
+     断言同步 `A 命令`
+   - 文档同步：《docs/ezr-demo UI界面及交互设计规范.md》头部 phase2.1 修订说明、
+     §5.2 空态、§6.6 帮助内容表、§6.9（文件树全量重写）/§6.10/§6.11（标题/
+     word wrap/滚动条）、§7.3 页脚 chips、§7.2 模态按键表
+
+25. **缺陷修复（phase2.2：命令窗口输入细节 + BT 文件列表面板再调整）**
+   - **命令窗口鼠标点击定位偏后**：点击列→字符偏移的边界判定由
+     `acc + cw/2` 改为 `acc + (cw+1)/2`——与单行字段
+     `TextInput::click_offset` 同约定（点在窄字符格上 = 光标停其前；
+     宽字左半格在前、右半格在后；旧版点字符格会停在其后一字）
+   - **取消输入字符数上限**：删除 `CMD_MAX_COLS = 300` 单行容量上限，
+     键入/粘贴改走无上限 `insert_at_cursor`（展示由 word wrap 负责，
+     64 行上限保留）
+   - **换行降级增强**：`Alt+Enter`（ESC 前缀，几乎全终端可用）加入
+     换行键位（与 `Shift+Enter` kitty 协议、`Ctrl+J` 字节降级并列）；
+     占位提示与帮助窗口同步列出换行键
+   - **BT 文件列表面板左标题**：`(x/y)` 改为 **`已选 <x> 个文件，共 <z>`**
+     （x = 已选文件数；z = 已选文件字节合计，新增 `bt_selected_bytes`
+     下钻文件叶子按勾选态取值——目录聚合 size 是子树总量不能直接用，
+     收拢目录下的已选文件同样计入）
+   - **BT 文件列表滚动条上移到 panel 层级**：由内容区最右列改绘在
+     **列表框右边框上**（`sb_rect` = 右边框列 × 内框高，轨道/箭头/滑块
+     覆盖边框字形，角落保留），内容行恢复占满内框全宽（不再预留 1 列）
+   - **面板加高**：文件列表可视行 6 → **8 行**（对话框 AddBt 78×16 →
+     **78×18**、ModifyBt 78×15 → **78×17**；小终端按剩余高度自适应收缩，
+     不低于 1 行）
+   - 脚本同步：verify_phase2_ui.py（A3 改 400 字符验证无上限、新增 A4b
+     Alt+Enter / A6+A6b 鼠标点击定位光标；B/C 新标题/新几何/滚动条在
+     右边框列断言）；verify_ezr.py 场景 I 第二轮 URL 追加后缀修复
+     「任务已存在」去重守卫导致的误报（原版场景依赖 prefill 轮换，
+     命令窗口分流后两轮同为显式 URL）
+   - 文档同步：《docs/ezr-demo UI界面及交互设计规范.md》头部 phase2.2
+     修订说明、§4.3 弹窗尺寸速查、§6.9/§6.10/§6.11
+   - **bin/ 预编译二进制已随本记录重建**（release, stripped）
+
+26. **缺陷修复（phase2.3：命令窗口键位普适化 + 两处滚动条 ScrollPanel 同构）**
+   - **命令窗口 Shift+Enter 直接确认分流（缺陷根因）**：不支持 kitty 键盘
+     协议的终端上 Shift+Enter 与 Enter 字节不可区分（同为 `\r`），旧版
+     「Shift+Enter 换行、Enter 确认」在该类终端退化为「Shift+Enter 直接
+     确认分流」。改为**普适终端口径（IM 惯例）**：`Enter` / `Shift+Enter` /
+     `Alt+Enter` = 换行（任何终端行为一致）；**`Ctrl+Enter` / `Ctrl+J` =
+     确认分流**（kitty 终端 CSI 13;5u 上报 Enter+CONTROL、普通终端
+     Ctrl+Enter 发送 `\n` 字节（= Ctrl+J）——双路径在 `on_cmd_key`
+     汇合，`keys.rs` CONTROL 门同步放行）；`[确定]` 按钮点击 / Tab 后
+     按钮焦点下 Enter 亦确认；占位提示改为
+     `输入 http(s)/磁力/.torrent，Enter 换行，Ctrl+Enter 确认…`，
+     按钮行右端新增常驻 DIM2 键位提示 `Enter 换行 · Ctrl+Enter 确认`，
+     帮助窗口命令窗口条目同步
+   - **命令窗口文本框滚动条上移到 panel 层级（ScrollablePanel 同构）**：
+     文本框改由 `ScrollablePanel` 渲染（与任务列表 ScrollPanel 同构）——
+     滚动条绘制在**文本框右边框上**（箭头在首/末内容行、轨道居中、
+     同内边距几何），内容区不再预留滚动条列（可视宽度 69 → **70 列**），
+     拖拽/轨道/箭头/滚轮全可用
+   - **BT 文件列表框同步改用 ScrollablePanel**：滚动条几何与主列表
+     完全一致（旧自绘 `render_vscrollbar` 箭头/轨道各内缩 1 行的
+     padding 不一致问题消除；该辅助函数随之删除）
+   - **[全选]/[全不选] 悬停去下划线**：悬停反馈改为黄色加亮
+     （`YELLOW`+`BOLD`），不再叠加 `UNDERLINED`
+   - 脚本同步：verify_phase2_ui.py（A2 新占位文案、A3 改 70 列宽、
+     A4 改 Enter 换行、新增 A7 文本框滚动条在边框列断言、A5 确认改
+     Ctrl+J、B 段确认改 Ctrl+J、B8 滚动条范围含箭头）；verify_ezr.py /
+     test_focus_style.py / check_popup_integrity.py /
+     check_overlay_redraw.py / smoke_v_sync.py 全部命令窗口确认流
+     `\r` → `\n`（Ctrl+J；对话框内 Enter 语义不变）
+   - 文档同步：《docs/ezr-demo UI界面及交互设计规范.md》头部 phase2.3
+     修订说明、§6.9/§6.10（滚动条同构 + 悬停去下划线）、§6.11（键位
+     普适化 / ScrollablePanel / 键位提示）、§6.6 帮助窗口条目、§7.2/§7.3
+   - **bin/ 预编译二进制已随本记录重建**（release, stripped）
+
+27. **缺陷修复（phase2.4：滚动条活性 + BT 弹窗 padding 规范化 + 去输入提示）**
+   - **命令窗口滚动条"死"（根因修复）**：旧版渲染每帧调用 `cmd_scroll_follow`
+     强制视口回贴光标——滚动条箭头/轨道/滑块拖拽的滚动下一帧即被拉回，
+     用户视角即"滚动条点了没反应"。改为**视口按需跟随**（`cmd_follow`）：
+     光标移动/编辑/点击定位/粘贴时拉回一次；滚动条交互与滚轮滚动后视口
+     停留原处，直到下一次光标移动
+   - **BT 文件列表同类缺陷修复**：光标停在最后一行时视口被钉死在底部、
+     滚动条无法上滚（`bt_scroll_follow` 每帧强制回贴）。同样改按需跟随
+     （`Dialog::bt_follow`）：光标移动/树结构变化（展开收拢/点击选中）时拉回
+   - **命令窗口删除空缓冲占位输入提示**：空缓冲 = 空白文本框；键位自说明
+     仅保留按钮行右端 `Enter 换行 · Ctrl+Enter 确认` 一处
+   - **BT 添加/修改对话框补齐 §4.3 S2 padding 规范**：新增顶部 1 行
+     padding 与按钮行前空行（对话框 78×18→**78×20**、78×17→**78×19**，
+     与 HTTP 对话框同构）；文件列表内容区新增**行首 2 列 + 行尾 2 列**
+     padding（与任务列表「左 2 光标槽 / 右 2 收窄」同构；顺带修复旧版
+     行内容比行宽多 1 列导致末字符被裁的 off-by-one；复选框热区随
+     padding 右移 2 列）
+   - 回归：cargo test 20/20、verify_phase2_ui 36/36（新增 A8/B9 滚动条
+     活性回归：点 ↑ 箭头视口上滚且多帧后不回弹）、verify_ezr 169/169、
+     focus 58/58、overlay 46/46、popup 5/5、footer 14/14、scrollbar 31/31、
+     close_btn ALL PASS、smoke 0 失败
+   - 文档同步：规范文档头部 phase2.4 修订说明、§4.2.6/§4.3 尺寸表、
+     §6.9/§6.10（padding 规范化 + 按需跟随 + S2 行内边距）、§6.11
+     （去输入提示 + 按需跟随）、§10 键位速查（修正 phase2.3 遗留的
+     「Enter = 确认」过时描述）
+   - **bin/ 预编译二进制已随本记录重建**（release, stripped）
+
+28. **缺陷修复（phase2.5：去命令窗口按钮行键位提示）**
+   - **命令窗口按钮行右端常驻键位提示移除**：`[ 确定 ]` 按钮右侧的
+     `Enter 换行 · Ctrl+Enter 确认` DIM2 提示删除（phase2.3 引入、
+     phase2.4 曾保留为唯一自说明）——窗口内不再有任何操作提示，与
+     空缓冲无占位提示的口径一致；键位口径仍见帮助窗口（?）
+   - 脚本同步：verify_phase2_ui.py A2b 断言反转（按钮行无键位提示）
+   - 文档同步：规范文档头部 phase2.5 修订说明、§6.11（标题 tag +
+     布局段重写——窗口内不再有任何操作提示，自说明仅窗口标题与
+     帮助窗口）
+   - **bin/ 预编译二进制已随本记录重建**（release, stripped）
+
+29. **缺陷修复（phase2.6：命令窗口键位回归原始设计）**
+   - **Enter = 确认分流**：命令窗口多行文本框内 Enter 恢复为确认
+     （= 触发左侧第一个按钮 `[确定]` 的 click，同一确认分支——文本框
+     焦点与按钮焦点同义；phase2.3 曾改为「Enter 换行」普适口径）
+   - **Shift+Enter = 文本框内换行**（kitty 协议 CSI 13;2u 区分上报）；
+     **Alt+Enter（ESC 前缀）降级同效**——不支持 kitty 协议的终端上
+     Shift+Enter 与 Enter 字节不可区分（同为 `\r`），需换行时用
+     Alt+Enter；`Ctrl+Enter` / `Ctrl+J`（`\n` 字节）确认同效不变
+   - 脚本同步：verify_phase2_ui.py（A4 改 Shift+Enter 换行——kitty
+     CSI 13;2u 序列模拟；A8 十行输入分隔符 `\r` → Shift+Enter；
+     A5/B 段命令窗口确认改回 `\r` = Enter）；verify_ezr.py /
+     check_overlay_redraw.py / check_popup_integrity.py 注释同步
+     （其 `\n`=Ctrl+J 确认流不受影响）
+   - 文档同步：规范文档头部 phase2.6 修订说明、§6.11（标题 tag +
+     编辑/确认 bullets 重写 + 帮助窗口表行）、§6.8 分流描述、
+     §7.2/§7.3 键位表、§10 键位速查（Enter/Shift+Enter/Ctrl+Enter 三行）
+   - **bin/ 预编译二进制已随本记录重建**（release, stripped）
+
+30. **功能调整（phase2.7：BT 弹窗组件化 + trackers 输入 + 顶 padding 修复）**
+   - **修复「添加/修改 BT 任务」窗口顶 padding 缺失**：首行内容（种子/
+     任务名）不再贴上边框——首行内容 = 内框 y+1（§4.3 S2，与 HTTP 对话框
+     同构；phase2.4 曾把 padding 行错放在字段行与列表框之间）
+   - **「多行文本输入」panel 封装为可复用组件**：`src/multiline.rs`
+     `MultiLineBuf` 多行编辑模型（逻辑行×TextInput + 光标行 + 视口 + 按需
+     跟随）+ `src/ui/multiline.rs` `draw_multi_line_input` 渲染组件
+     （支持 title 与空缓冲占位提示；滚动条在右边框上，ScrollablePanel
+     同构）；**命令窗口文本框改用该组件**（行为不变：无标题、无占位提示）
+   - **文件树列表封装为可复用 TreePanel 组件**（`src/ui/tree.rs`
+     `draw_tree_panel`：title + 右下动态统计 + 树行渲染 + 滚动条 + 热区
+     回填，渲染与树状态解耦）；**「选择文件」panel 标题固定为
+     ` 选择下载文件 `**，原动态统计 `已选 <x> 个文件，共 <z>` **移至该
+     panel 右下角**（底边框右侧，不覆盖框角字符）
+   - **BT 添加/修改对话框新增 trackers 多行文本输入**：title
+     ` trackers `；空缓冲占位提示 `可输入多行 traker，使用 ALT+ENTER 换行`；
+     **Alt+Enter（任何终端）/ Shift+Enter（kitty 协议终端）= 框内换行，
+     Enter = 确认**（与按钮 click 同义）；多行导航/滚动/粘贴分行/上限 64；
+     修改对话框预填 4 行演示 tracker；焦点表 AddBt 0–8（trackers=5）、
+     ModifyBt 0–5（trackers=3）
+   - 对话框加高：添加 78×20→**78×24**、修改 78×19→**78×22**（文件列表
+     8/7 可视行不变；小终端自适应收缩）
+   - 脚本同步：verify_phase2_ui.py B1/C1 改断言「标题固定 = 选择下载文件 +
+     右下角统计 + 框角完整」，新增 B-TP（顶 padding）、B-TR（trackers
+     title/占位提示/Alt+Enter 换行/焦点 Enter 确认）、C-TR（trackers 预填）
+     断言，36→45 项
+   - 文档同步：规范文档头部 phase2.7 修订说明、§4.2.6/§4.3 尺寸表
+     （78×24/78×22）、§6.9/§6.10 重写（TreePanel/trackers/顶 padding）、
+     §6.11（文本框组件化 tag）、§6.6 帮助窗口表行、§10 键位速查
+     （Shift+Enter/Alt+Enter 与粘贴行扩展 trackers）、头部模块清单同步
+   - **bin/ 预编译二进制已随本记录重建**（release, stripped）
+
+31. **功能调整（phase2.8：trackers 输入框 5 可视行 + 无 wrap 水平/垂直双向滚动）**
+   - **「添加/修改 BT 任务」trackers 输入框改为 5 可视行、不做 word wrap**：
+     逻辑行 1:1 渲染，每行占一行；行内超宽内容由水平视口（显示列偏移）滚动，
+     溢出 5 行由垂直滚动条承接；为给 trackers 让位，**文件列表框收缩为
+     5 可视行（修改框 4）**（窗口尺寸不变 78×24/78×22；小终端自适应收缩不变）
+   - **水平滚动条（下边框）**：ScrollablePanel Both 模式同构——←→ 箭头
+     （步长 2 列，按住连发）/轨道点击翻页/滑块拖拽；水平滚轮
+     （ScrollLeft/Right，部分终端 shift+滚轮映射）= ±1 列；内容未超宽自动隐藏；
+     水平视口跟随与垂直同口径（编辑/光标移动拉回、滚动后停留不回弹）
+   - 组件层：`draw_multi_line_input` 增加 `wrap` 开关与 `pressed_h` 参数
+     （wrap = true 命令窗口 word wrap 口径不变；wrap = false trackers 无 wrap）；
+     `MultiLineBuf` 新增 `view_x`/`max_scroll_x` 水平视口字段与
+     `nowrap_rows`/`cursor_visual_nowrap`/`scroll_follow_nowrap`/`scroll_by_x`/
+     `scroll_x_to`/`click_at_nowrap`（点击定位 = view_x + 点击列显示宽走查）；
+     `textfield::disp_window` 按显示宽取窗口文本（跨缘宽字符整字符舍弃）；
+     顺带修复：行尾插入点在长行末端时原生光标不可见（现钳到最后可视列
+     显示，与 wrap 模式 cursor_visual 同约定）
+   - 接线层：App 新增 `dlg_trackers_h_sb` 水平条几何；`SbKey::BtTrackersH`
+     （步长 2，与 ConnsH 同）；鼠标：水平条按压/拖拽、trackers 区
+     ScrollLeft/Right、点击定位改无 wrap 口径
+   - 脚本同步：verify_phase2_ui.py bt_listbox 5/4 行、B-TR/C-TR 几何更新，
+     新增断言：trackers 框高 7（5 可视行）、91 字符长行不折行（第二行为空）、
+     水平滚动条在下边框、Home 水平回贴、点 → 箭头右移 2 列且不回弹、
+     预填 4 行全可见，45→54 项
+   - 文档同步：规范文档头部 phase2.8 修订说明、§4.2.6/§4.3、§6.9/§6.10
+     （列表 5/4 行 + trackers 5 行无 wrap 双向滚动 + 布局图）、§6.11
+     （组件 wrap 开关参数化）、§10 键位表；README 本条
+   - **bin/ 预编译二进制已随本记录重建**（release, stripped）
+
+32. **bug 修复（phase2.9：多行编辑 ↑↓ 可视行导航 + 滚动条箭头连发首延迟）**
+   - **↑↓ 改为可视行导航**（命令窗口 / trackers 输入共用 MultiLineBuf）：
+     上/下移到**相邻可视行**——word wrap 模式含 wrap 分段行（无 wrap 模式即
+     相邻逻辑行）；**列保持**：目标行当前列有字符 → 光标停该列字符位置处
+     （宽字符中点归属与点击定位同约定），当前列超出目标行内容（该列无
+     字符）→ 光标落在目标行末尾（回归旧版「无条件跳行尾、列位置丢失」）；
+     `MultiLineBuf` 新增 `visual_pos`/`move_to_visual_row` 与 `wrap`/`text_w`
+     视口口径字段（渲染层发布），新增单测 10 项（无 wrap 列保持/短行落行尾/
+     空行/宽字符/边缘 no-op + wrap 跨段行/段内列保持/行尾落段尾等）
+   - **修复滚动条箭头按住连发首延迟失效**：`SbHold` 构造时两次独立
+     `Instant::now()` 导致 `since != last`，`due()` 误走 120ms 重复分支，
+     首次连发在按压后 ~120ms 即触发（应 400ms 后）——单击箭头偶发多步进
+     （verify_phase2_ui B-TR「点 → 箭头右移 2 列」间歇性失败的根因）；
+     现单次取时保证首延迟生效（影响全部滚动条箭头连发）
+   - 帮助窗口键位行同步（↑↓ = 上/下可视行，列保持，短行落行尾）；
+     verify_phase2_ui.py 新增 A-UD 断言 3 项（↑ 列保持插字 / ↓ 短行落行尾 /
+     ↑ 跨 wrap 段行）与 B-TR ↑↓ 列保持导航断言，54→58 项；
+     新增 scripts/repro_a6.py（A-UD 序列后跟 A6 点击定位的最小重现）
+   - 文档同步：规范文档头部 phase2.9 修订说明、§6.6/§6.10 键位 bullet、
+     §10 键位表（命令窗口 / BT 对话框）；README 本条
+   - **bin/ 预编译二进制已随本记录重建**（release, stripped）
+
+33. **功能调整（phase2.10：BT「选择下载文件」panel 加高 2 行）**
+   - **添加/修改 BT 任务对话框文件列表框加高 2 行**：可视行
+     **5→7（修改框 4→6，框高 7/6→9/8）**；对话框同步加高
+     **78×24→78×26、78×22→78×24**（trackers 5 可视行与无 wrap 双向
+     滚动不变；小终端按剩余高度自适应收缩、不低于 1 行的口径不变）
+   - 脚本同步：verify_phase2_ui.py 几何断言适配（bt_listbox 框高
+     7/6→9/8、B8 滚动条扫描范围改按框高、B-TR/C-TR trackers 框 y 重算），
+     项数不变 58；全量回归全绿（cargo test 30/30、verify_phase2_ui 58/58、
+     verify_ezr 169/169 等）
+   - 文档同步：规范文档头部 phase2.10 修订说明、§4.2.6/§4.3 尺寸表
+     （78×26/78×24）、§6.9/§6.10（布局图/列表框 9 行高/垂直条触发 >7/6）；
+     README 本条 + 脚本清单计数修正（54→58）
+   - **bin/ 预编译二进制已随本记录重建**（release, stripped）
+
 ## 重新构建
 
 ```bash
@@ -387,7 +703,8 @@ python3 scripts/test_focus_style.py               # 聚焦/滚动条/拖拽 58 �
 python3 scripts/verify_scrollbar_universal.py     # 通用滚动条专项（字形/几何/拖拽/连发/键盘）31 项
 python3 scripts/check_overlay_redraw.py     # 浮层翻转零清屏 + 残影检测 46 项
 python3 scripts/check_popup_integrity.py    # 浮层边框完整性（理想终端模型）5 项
-python3 scripts/verify_footer_pad_scroll.py # 页脚单行化（toast）+ 滚动修复专项 11 项
+python3 scripts/verify_footer_pad_scroll.py # 页脚单行化（toast）+ 滚动修复专项 14 项
 python3 scripts/smoke_v_sync.py             # 冒烟 + v-sync
-python3 scripts/verify_ezr.py               # 全场景回归 194 项
+python3 scripts/verify_ezr.py               # 全场景回归 169 项
+python3 scripts/verify_phase2_ui.py         # phase2 UI：命令窗口 + BT 文件树/trackers 58 项
 ```

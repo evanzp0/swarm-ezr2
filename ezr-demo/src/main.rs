@@ -1,4 +1,5 @@
 mod app;
+mod multiline;
 mod scrollable_panel;
 mod scrollbar;
 
@@ -10,7 +11,8 @@ use std::io;
 use crossterm::{
     event::{
         poll, read, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
-        EnableMouseCapture, Event, EventStream, KeyEventKind,
+        EnableMouseCapture, Event, EventStream, KeyboardEnhancementFlags, KeyEventKind,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -29,11 +31,12 @@ const MOUSE_SETTLE: std::time::Duration = std::time::Duration::from_millis(50);
 const MOUSE_SETTLE_RETRY: std::time::Duration = std::time::Duration::from_millis(20);
 
 fn restore_into<W: std::io::Write>(w: &mut W) -> std::io::Result<()> {
+    let kbd_off = execute!(w, PopKeyboardEnhancementFlags);
     let mouse_off = execute!(w, DisableMouseCapture);
     settle_and_drain();
     let _ = disable_raw_mode();
     let rest = execute!(w, DisableBracketedPaste, LeaveAlternateScreen);
-    mouse_off.and(rest)
+    kbd_off.and(mouse_off).and(rest)
 }
 
 fn settle_and_drain() {
@@ -83,7 +86,12 @@ async fn main() -> std::io::Result<()> {
         EnterAlternateScreen,
         EnableBracketedPaste,
         EnableMouseCapture,
-        crossterm::cursor::EnableBlinking
+        crossterm::cursor::EnableBlinking,
+        // disambiguate escape codes：支持 kitty 键盘协议的终端上 Shift+Enter
+        // 可区分上报（命令窗口换行）；不支持的终端降级为 Ctrl+J 换行
+        PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        )
     )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
