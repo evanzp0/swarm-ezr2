@@ -9,12 +9,6 @@
   near-duplicate / possible-synonym 因此大面积误报。按其 spec「findings 为 advisory、
   synonym 须人工复核后处置」的规则逐条人工复核后判定为假阳性、不修改规格文本即可；
   不要据此改写中文规格或绕开 dry-check。
-- **dry-check 验收口径 = 错误级 0 + 增量对账防退化**：findings 全部为 advisory
-  （near-duplicate / possible-synonym，medium confidence），「通过」的判定 = 无 error 级
-  finding；修订既有 feature 后把 findings 数与修改前基线（归档包/上一版）对比——存量
-  提示不代表退化，**增量提示**才是复核对象：逐条审为语义性差异（不同守卫臂/不同文案）
-  即通过，非意外漂移不归一化。直接拿全量 findings 数当错误数、或以「提示数 >0」判失败，
-  都是对 advisory 性质的误读。
 - **IR 场景行数与 feature 场景名计数口径不同**：gherkin-parser 的 IR 把 Scenario
   Outline 按 Examples 行展开，IR 场景行数 > feature 内场景名个数——对账 pass/skip
   增量时先统一口径（执行行数 vs 场景数），差异属展开口径而非丢场景。
@@ -22,16 +16,12 @@
   每次新会话需从 `parse.sh` 全量 IR 重建（按 feature 序号取子集拼块）；块目录名与
   分块脚本内引用名要一致，断点续跑只补未完成块。
 - **沙箱后台进程不跨工具调用存活，验收块必须前台逐块跑**：setsid/nohup/disown 均
-  逃不过会话回收（实测探针分钟级即死；v138 复证：setsid+nohup+timeout 包装同样在
-  跨调用后被回收，勿依赖任何 detach 形态）；块跑一半无声消失时优先怀疑此因。网关
+  逃不过会话回收（实测探针分钟级即死）；块跑一半无声消失时优先怀疑此因。网关
   「context canceled」只代表调用回报丢失，runner 常已完赛——以日志 summary 与进程
   表核实现场再决定续跑，勿盲目整块重跑。注意网关故障有两种后果需区分：仅回报
   丢失（日志完整含 `== summary ==`，勿重跑）与前台 shell 被回收连带杀死 runner
   （日志截断无 summary，需补跑该轮；若死在场景中逃还会留下孤儿 daemon——
-  `pgrep -af 'ezr __daemon'` 是被杀中逃的铁证，续跑前先清场删 socket）。长任务的
-  可靠形态不是后台化而是**可续跑分段**：把任务设计成幂等增量（跑块断点续跑、构建
-  工具的缓存累积开关如 `--no-clean`），前台窗口内做完多少算多少，进程被回收后产物
-  与缓存仍在，下一窗口从断点续（v138 llvm-cov 3.3G 全量插桩即此配方完成）。
+  `pgrep -af 'ezr __daemon'` 是被杀中逃的铁证，续跑前先清场删 socket）。
 - **清场 pgrep/pkill 模式必须匹配真实命令行**：daemon 实例命令行是
   `<bin>/ezr __daemon-worker`（不含 `ezr-daemon` 字样），按 `ezr-daemon` 模式清场
   必漏；判定实例用 `pgrep -af ezr` + 固定 socket（`$HOME/.ezr/ezr.sock`）探测。
@@ -60,24 +50,3 @@
   peer（只绑不答的 listener）——拨入成功、握手 reply 无超时挂起，worker 必活至
   kill9，stop 确定性胜出；Given 收尾再重武装真 seeder。凡「构造无 peer 停止态」
   的 fixture 均适用，不要依赖空 peer/死 peer 让任务「稳定停留 downloading」。
-- **bb 任务调用式（APS gherkin-parser 实跑配方）**：`.tools/Acceptance-Pipeline-Specification`
-  内 `bb` 是源码目录不是二进制，可执行 bb 在 PATH（/usr/local/bin/bb）；任务表在根 `bb.edn`
-  （`gherkin-parser`/`gherkin-ir-dry-checker`/`gherkin-mutator`）。正确调用 = **cwd 切到 APS 根
-  目录用 `bb run <task> <in> <out>`**（bb 靠 cwd 探测 bb.edn；`bb --project <dir> run ...` 在该版
-  本会把 `--project` 当任务参数漏进 CLI 报 File does not exist）。解析器要求恰好 2 参数
-  （feature 路径、JSON 输出路径），异常退出码 2=参数错、1=解析失败，输出为 JSON（不是 EDN）。
-- **Babashka 静态二进制安装配方（v1.13.226 实证，2026-10）**：GitHub release
-  资产文件名**不带 `v` 前缀**（tag `v1.13.226` → 资产
-  `babashka-1.13.226-linux-amd64-static.tar.gz`，按 tag 名拼 URL 会 404）。
-  发布资产 CDN 在受限网络可慢至 ~15KB/s 但**支持断点续传**：`curl -sSL -C -`
-  循环续传即可完成，完整性判据用 `tar -tzf`（exit 0 = 流完整）——**不要用
-  Content-Length 推算总大小做完成判断**，跨多次续传窗口的数学合计会算错。
-  APS 工具仓本体 `git clone` 被 TLS 掐断（GnuTLS -110）时，用 codeload tarball
-  替代：`https://codeload.github.com/<owner>/<repo>/tar.gz/refs/heads/<branch>`
-  （分支名先经 GitHub API `default_branch` 查证，勿臆测 master）。
-- **dry-checker `duplicate-in-scenario`（high）有两类合法重复形态**：①两段式
-  场景——同场景内「操作 → 确认 → 验证」执行两轮（如留空/带值各确认一次），
-  `按 Enter 确认` 类步骤天然重复；②逐臂同断言——枚举多个等价路径（如 q/Q/Esc
-  各关一次窗）后每臂重复同一条 Then 断言，重复即场景意图。复核到这两类属
-  正常规格形态，不修改规格文本；除此之外的 exact-duplicate 才是复制粘贴漂移
-  疑似项。

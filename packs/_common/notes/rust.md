@@ -6,36 +6,6 @@
 
 ## 1. 工具链与环境
 
-- **受限网络的 rustup/crates 官方源停滞，换镜像而非盲等**：rustup-init 官方脚本
-  （static.rust-lang.org）在限速网络下「downloading installer」可停滞 10 分钟以上，
-  `cargo test` 的「Updating crates.io index」同理。先 `curl -o /dev/null -w %{speed_download}`
-  探测镜像速率再切换，勿反复重试官方源浪费时间：①工具链——下载 rustup-init 二进制
-  （`RUSTUP_UPDATE_ROOT` 对应的 dist 路径直链，21MB 探得 4MB/s）后以环境变量
-  `RUSTUP_DIST_SERVER=https://mirrors.tuna.tsinghua.edu.cn/rustup` +
-  `RUSTUP_UPDATE_ROOT=https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup` 运行安装；
-  ②crates——`~/.cargo/config.toml` 配 `[source.crates-io] replace-with = 'rsproxy-sparse'`
-  （`sparse+https://rsproxy.cn/index/`）后索引秒级可编译。注意区分"脚本卡在下载
-  installer"与"本体已装"：`pgrep -af rustup` + `~/.cargo/bin` 目录探针归因，别对空目录
-  重复 install。
-  **镜像按源择优组合、dist 服务器要另探 manifest 完整性**（2026-10 重装轮实证）：
-  各镜像同一源不同端点速率差两个数量级（实测 rustup-init 直链 rsproxy 33MB/s ≫
-  USTC 6.7MB/s ≫ tuna/aliyun 低于可用），逐端点 `curl -r 0-3000000 -w %{speed_download}`
-  探速后择快下载 rustup-init；但 **dist 服务器（RUSTUP_DIST_SERVER）与 rustup-init 下载
-  是两个独立源**——rsproxy 的 dist nightly channel manifest 可损坏（rustup-init 报
-  `Malformed manifest date: ""` panic），换 USTC（`RUSTUP_DIST_SERVER=
-  https://mirrors.ustc.edu.cn/rust-static` +
-  `RUSTUP_UPDATE_ROOT=https://mirrors.ustc.edu.cn/rust-static/rustup`）即装成；
-  先 `curl -sw '%{http_code}' <dist>/dist/<日期>/channel-rust-nightly.toml` 探 200 再跑
-  安装。安装脚本失败先看输出（nohup 重定向到 0 字节日志 = 进程被沙箱回收，换
-  前台 `</dev/null` 暴露真实报错）。
-- **`rust-toolchain.toml` 钉 nightly 的沙箱冷启动：先一次性装全 nightly 再跑任何 cargo**：
-  新沙箱（`~/.rustup` 不存在）里项目钉 nightly 时，每个 cargo 调用都会触发 rustup shim
-  自动安装 nightly；该安装被 timeout/会话回收打断后工具链残缺，下次调用又触发
-  `recovering from a partially installed toolchain` 重装，与在跑的 cargo 并发互踩
-  （表象：rustc/cargo 二进制时有时无、编译中途报工具链组件丢失、反复下载 6 组件）。
-  解法：开工第一步以前台完整执行 `rustup toolchain install nightly --profile minimal
-  --component rustfmt,clippy`（拉满超时预算，中途勿杀），`rustc --version` 复核在位
-  后再跑任何 cargo 命令；与「区分丢注入与本体丢失」条目配套使用（先探针再按需装）。
 - **PATH 注入不跨会话持久**：会话恢复/新 shell 中 `cargo` 会 not found（工具链本体
   完好，丢的是注入）。任何 cargo 命令前先 `command -v cargo` 探测；失败则
   `export PATH="$HOME/.cargo/bin:$PATH"` 补注入，再 `cargo --version` 复核在位。
@@ -49,57 +19,16 @@
 - **区分「丢注入」与「本体丢失」**：环境核验先探针安装目录（如 `ls ~/.cargo/bin`）——
   目录在位是丢 PATH 注入（export 即恢复）；目录不存在是全新沙箱/本体丢失，需完整重装
   （rustup minimal profile + clippy + rustfmt），交接记录的安装位置只对同机有效。
-  **重装清单必须包含 `~/.cargo/config.toml` 镜像配置**（rsproxy-sparse 等）：该文件
-  与 registry 缓存同属全局 home 目录，随沙箱清理一起丢——重装工具链后漏写它，
-  cargo 会走官方 crates.io 源，表象是 fetch 长时间零字节（`transfer too slow: failed
-  to transfer more than 10 bytes in 30s`），极易误归因为「镜像抖动」反复重试。
-  归因探针：看任意下载日志行的 `(registry `X`)` 括号里生效源名——不是配置的镜像名
-  即配置缺失/未生效，先补配置再重试，勿浪费时间换镜像。
 - **无 lld 环境的零改动桥接**：rustfmt/clippy 约束模板配套的 `-fuse-ld=lld` 在无 lld
   且无 root 装包权限的环境会挂掉一切链接。解法：用工具链自带 rust-lld 做符号链接——
   `ln -sf ~/.rustup/toolchains/<tc>/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld
   ~/.local/bin/ld.lld`（gcc 按 PATH 找 `ld.lld`），不改基线配置；该符号链接目录必须
   在 PATH 中，且零改动的增量构建会静默跳过链接阶段掩盖其缺失，验证见
   engineering.md「环境不跨会话持久」的强制重做条款。
-- **rustup 非交互重装的单行形态**：`sh rustup-init.sh -y --default-toolchain nightly
-  --profile minimal -c rustfmt -c clippy -c llvm-tools-preview`——组件用**重复 `-c`**
-  逐个传递（`--component a b` 两值连写会落入 init 的 usage 报错退出）；安装脚本先
-  `curl -sSf https://sh.rustup.rs -o` 落盘再执行，避免管道子 shell 吞交互错误输出。
 - **交互式安装器的首次运行提示是长验证挂死的隐形根因**：`cargo llvm-cov` 首跑会交互
   询问是否安装 `llvm-tools-preview`，非交互会话表现为"600s 超时零产出"。装工具阶段先
   `rustup component add llvm-tools-preview`，或统一 `< /dev/null` 暴露错误
   （engineering.md「失败先归因」的挂起类形态）。
-- **rustup-init 直链 ELF 二进制直接执行，`sh` 仅适用 .sh 包装脚本**：官方
-  `sh rustup-init.sh -y …` 单行配方针对脚本包装形态；直链下载的 rustup-init
-  是 ELF 二进制，`sh rustup-init -y …` 报 `ELF: not found`（sh 当脚本解析）——
-  chmod +x 后直接执行。
-- **`url::Url::parse` 归一化协议默认端口，端口保真断言用 `port_or_known_default()`**：
-  `http://[::1]:80` 解析后 `port()` 返回 `None`（默认端口被归一化剥除）——
-  属性测试对端口 1..=65535 全域断言 `port() == Some(p)` 会在 p=80（http）/443
-  （https）等默认端口上假失败（proptest 反例固化前表现为低概率偶发，疑似
-  flake；固化后确定性失败）。产品无错时改断言为 `port_or_known_default() ==
-  Some(p)`，生成域全域成立。
-- **`rust-toolchain.toml` 钉 `channel = "nightly"` 时无法用日期版工具链做别名桥接**：
-  `rustup toolchain link nightly <已装目录>` 被拒绝（`nightly` 是保留通道名），装好
-  `nightly-<日期>` 后项目内 cargo 命令仍会按 toolchain 文件自动安装 floating
-  `nightly`（最新版）。收敛工具链漂移时直接以「当前沙箱解析到的 nightly」为收敛目标
-  逐项归零警告/偏差并记录确切版本（`rustc --version`），不在别名桥接上花功夫。
-- **`rustup component add` 报 `detected conflict: 'bin/xxx'` = 部分安装残留，component
-  层无法自愈**：被超时/会话回收打断的 component 安装会留下半写入的 bin 桥接；
-  重试 `component add` 时 rustup 校验既有文件冲突，报 `detected conflict` 后
-  `rolling back changes`，add/uninstall 均解不掉（uninstall 报 not installed）。
-  正确修法：`rustup toolchain uninstall <tc>` 后 `rustup toolchain install <tc>
-  --profile minimal -c rustfmt -c clippy -c llvm-tools-preview` 一次性完整重装
-  （与「沙箱冷启动先一次性装全」条款同源——重装即该条款的执行形态）。
-- **cargo-llvm-cov 的独立 target-dir 是双倍构建树磁盘预算，分目标 lcov 分片可过单命令
-  超时**：`cargo llvm-cov` 在 `target/llvm-cov-target/` 另起全量构建树（含插桩产物，
-  与 `target/debug` 同量级）——磁盘受限沙箱先按 2× 构建树做预算；后续不再跑 e2e/
-  单测复跑时可先删 `target/debug` 腾盘（e2e 二进制住那里，删后需再跑则重 build）。
-  单命令超时受限环境按 `--test <t>` / `--bin <b>` 逐目标出 lcov 分片
-  （`--output-path <t>.info`，依赖首次调用全量插桩重编、后续秒级增量），
-  事后合并：DA 行取各目标命中最大值（并集口径）、BRDA 按 (line,block,branch)
-  求并、函数行跨按 FN 起始行排序归段；行覆盖率 = 合并后 LH/LF，
-  CRAP 近似 comp = 1 + 函数行跨内 BRDA 条数。
 
 ## 2. 强制配置模板
 
@@ -158,79 +87,26 @@ group_imports = "StdExternalCrate"
 
 ## 3. 编译、lint 与磁盘
 
-- **给被 `#[path]` 挂载的产品源新增跨模块依赖时，先盘点全部挂载点同步补挂**：产品源
-  新增 `use crate::新模块`（如把几何/类型引擎提为新顶层模块供 app 与 ui 共同消费）后，
-  一切 `#[path] = "../src/<该文件>"` 挂载它的测试 harness 都会 `unresolved import`
-  （产品 bin 编译通过≠测试编译通过）。防法：动手前 `rg -l '#\[path.*<文件>' tests/`
-  盘点挂载者清单，逐一补 `#[path = "../src/<新模块>.rs"] mod <新模块>;`；新模块本身
-  应收敛为只依赖低层（ratatui/标准库）的叶子，否则挂载链会继续向上蔓延（引擎自带
-  其渲染常量、不被消费方 re-export 反向依赖，是阻断蔓延的关键决策）。
-- **`#[path]` 收编产品源的测试 crate 必须镜像产品 bin 的 crate 级 lint 姿态**：产品入口
-  （main.rs）的 crate 级 allow（pedantic/nursery/cast 系等）不随 `#[path]` 模块收编进入
-  测试 crate，同一份产品源在测试编译下会重燃产品面本已为 0 的警告；挂载机制还固有产生
-  三类告警：`dead_code`（部分收编的产物项在该测试 crate 无消费者）、`duplicate_mod`
-  （挂载壳与直挂同文件）、`unused_imports`（产品跨模块 re-export 在部分挂载下无消费者）。
-  三分法处置：① 机制固有告警在测试 crate 根部 allow 并注明依据（产品源零改动）；
-  ② 测试文件自身写法类警告机械修正；③ 测试文件真实死代码以编译器警告为证据删除。
-  盲目 `clippy --fix` 或放任告警都会破坏「产品面 0 + 测试面 0」双口径。
-
 - **生成代码要自带 lint allow，否则警告噪音淹没真实信号**：生成的测试/代码若函数名
   不符 `snake_case` 等约定，会一次产生大量 lint 警告。入口生成器必须在生成文件头部加
   `#![allow(non_snake_case)]`（或按需精确 allow）——排查失败时警告噪音是实打实的成本。
 - **中断的重跑靠增量编译低成本恢复**：cargo 的 target 缓存使"测试跑到一半被取消"后
   重跑只重编改动部分；配合 engineering.md「预告 + tee 落盘日志 + 增量重跑」使用，
   长测试被交互消息打断的损失可控制在分钟级。
-- **中文文档注释的续行以半角 `+`/`-`/`*` 开头会被 clippy 解析为 markdown 列表**：
-  （doc_lazy_continuation）清单式说明换行后，续行内容顶格写会被判「列表项未缩进的
-  懒续行」告警（测试 crate 挂载同一文件时重复出现，一处源 N 份告警）。防法：数学
-  表达式与正文同段时不要让换行落在 `+`/`-` 前（改顿号/「加」或调整断行点）；
-  真要列清单就统一缩进（`  - `）。出现告警时按行首字符归因，勿当成普通文本误判。
 - **构建目录膨胀会写满磁盘并挂死构建**：长会话多轮增量构建后 `target/` 可膨胀至数 GB。
   构建前查 `df -h /`（余量 <1.5G 先 `cargo clean`，确认无在跑构建）；持续带
   `CARGO_PROFILE_DEV_DEBUG=0` 压制 debuginfo；长会话内每完成一个重构建阶段即复查一次。
   注意：删除 `target/` 后孤儿进程可能仍存活（运行中 inode 未释放），按「先杀进程、
   再删状态」次序处置（engineering.md「测试执行纪律」）。
-- **`ld terminated with signal 7 [Bus error]` ≈ 磁盘写满的归因信号**：链接期 collect2
-  SIGBUS 十有八九不是工具链坏了——`df -h /` 见 100% 即坐实（链接器 mmap 临时文件
-  写不进）。处置次序：先 `du -sh target/debug/*` 定位大头（`incremental` 增量缓存
-  与 `deps` 旧测试二进制通常占 5G+），删 `target/debug/incremental` 即释放数 GB 且
-  保留依赖编译缓存；`/tmp` 里的测试残留目录一并清。
-- **`cargo fmt` 会让 gen-drift 剥头副本重新漂移**：`tests/gen/*_stripped.rs` 与产品源
-  逐字比对，fmt 重排产品源后守卫测试必红——**重生成副本必须安排在 fmt 之后**（次序：
-  改产品 → fmt → 再 `tail -n +N src/<file>.rs > tests/gen/<file>_stripped.rs` → 跑守卫）；
-  把重生成放在 fmt 前会二次返工。
-- **剥头副本壳的符号转发要跟产品源可见性同步**：产品源重构把壳内直测的私有函数收编为
-  闭包/改名后，壳内 `include!` 副本的 `use super::X` 会连环编译失败（缺符号/私有模块
-  挡路）。处置：壳内按新产品结构补转发；产品侧 `pub(super)` 符号需被壳转发时放宽为
-  `pub(crate)`（注明测试用途），私有 `mod` 同理放宽 `pub(crate) mod`——放宽范围最小化、
-  行为零改动。
 
 ## 4. 编码实践
 
-- **serde 枚举变体删除 = 全档不兼容的硬失败，加字段 = 零成本兼容，二者代价截然不同**：
-  持久化 enum 删变体后，含旧值的文件反序列化**整体失败**（`load` 返回 None → 按全新档
-  处理），而非跳过该字段；新增标量字段配 `#[serde(default)]` 则旧文件照常加载。演进
-  持久化 schema 时先按这条估代价：能用"字段承载状态细分"（如 `Paused + has_error` 布尔）
-  就别"新增/删除枚举变体"（如独立 FailedPaused 态）——前者旧档零迁移、后者整档作废；
-  若必须删变体，须明确登记"不兼容"裁决与降级路径（全新档处理），并用测试钉住
-  （旧值注入 → load 返回 None）。
-- **serde 结构体字段退役 = 零成本兼容（与删枚举变体代价相反）**：删掉持久化 struct 的
-  字段后，旧档中的同名多余键反序列化时被静默忽略（serde 默认不 deny_unknown_fields），
-  其余字段照常加载——"退役字段 + 新增替身字段（`#[serde(default)]`）"可组成零迁移的
-  字段替换（实测 v1.28：`final_url` 退役 + `name_locked` 替身，v1.27 旧档照常恢复）。
-  配套测试锚点：①旧档注入退役键 → load 成功；②新序列化文本不含退役键
-  （`!text.contains("final_url")`，防"读侧忽略、写侧仍写回"的半退役）。
 - **`let _ = x;` 是通配符丢弃、不移动值**：`_` 模式不绑定所有权，`let _ = s;`（String）后
   `s` 仍可用。它贴在"下方实际在用"的变量上时是无操作死语句（多为历史未用抑制器残留），
   直接删除即可——不要因 E0382 直觉误判而不敢删；真正的未用抑制要用 `_var` 或改签名。
 - **bencode/二进制协议手工编码一律走 builder 辅助，不手拼长度前缀**：手写字节串长度
   前缀极易出错，且报错位置远离笔误点。统一用"编码辅助函数 + 解析 round-trip 断言"
   （编码→解析→比对原文），笔误当场现形。
-
-- **clippy `wrong_self_convention`：原位修改方法不要 `to_*` 前缀**：`to_*` 命名
-  约定 = 转换并返回新值（`self` 按值取或 `&self` + 非 Copy 报警），`&mut self`
-  的原位操作用动词短语命名（`cursor_end()`/`cursor_home()`）或 `set_*`/`move_*`
-  前缀；组件 API 命名阶段避开，省得整目录改名。
 
 ## 5. 平台与 IPC
 
@@ -270,73 +146,17 @@ group_imports = "StdExternalCrate"
 - **`cargo fix` 会误删测试专用导入**：cfg(test) 代码使用的符号在非 test 编译下视为
   未使用，`cargo fix` 跑完可能删掉 `use` 导致测试编译失败——跑完 fix 必须再跑一次
   `cargo test` 兜底（fix 的 diff 也要过目）。
-- **模块拆分隐式断掉测试模块的 `use super::*` 间接路径**：把 `xxx.rs` 目录化为
-  `xxx/mod.rs` + 子模块（如把自由函数下沉 `xxx/routing.rs`）时，原来定义在 mod.rs
-  顶层、被测试模块经 `use super::*` 间接消费的 `use` 导入（如常量）会随产品路径收敛
-  而失效——非 test 编译 0 警告（该导入确实无人用），`--all-targets` 下测试编译才报
-  E0425。防法：拆分后先跑 `cargo test`（不是只 `cargo build`），测试模块对拆分前
-  依赖的符号**显式补导入**，不依赖 glob 隐式传递。挂载兼容性本身无忧：`#[path]`
-  挂载 mod.rs 时，`mod 子模块;` 对 `xxx.rs` 与 `xxx/mod.rs` 两种形态解析等价。
-- **重复失败分支提取为 `&mut self` 方法会暴露 NLL 的路径敏感借用**：内联的
-  `Err(e) => { self.set_toast(..); return; }` 型重复块（`&self` 借用在错误路径上
-  提前 return 终止，NLL 按控制流路径判定不冲突）提取成共用方法后，`&mut self`
-  变成主路径无条件借用，与同函数内尚在存活的 `&self` 长借用撞 E0502。防法：方法
-  化前先把调用点后续要用的借用字段**读出为局部值**（收窄借用窗口），再调用方法；
-  这是机械等价变换，不改变行为。
 - **rustc 1.87+ 的 `u64::is_multiple_of`** 可替换 `x % m == 0`（clippy manual_is_multiple_of
   会提示）；`checked_div` 用于除数可能为 0 的展示算术。
-- **tokio 长循环内的阻塞段必须把所有控制信号纳入同层 `select!`**：仅在任务外层循环边界
-  检查的 watch 控制变量（如目标并发配额），对卡在内层传输循环（逐 chunk select 仅监听
-  停止信号）的 worker 不生效——控制变更要等当前工作单元自然结束才被观察到，大工作单元
-  （大块/慢速）下表现为「修改不生效」。防法：控制通道与停止信号同层监听（`_ =
-  quota_rx.changed() =>` 分支判定后置 abort 标志）， abort 路径保留已写进度后再退出。
-- **reqwest 自定义 DNS 解析器（Chrome 式内置 async DNS）实现形态**：`ClientBuilder::dns_resolver(Arc<R>)`
-  （R: `reqwest::dns::Resolve`）整体替换默认 GaiResolver；系统配置单源用
-  `hickory_resolver::TokioAsyncResolver::tokio_from_system_conf()`（unix = `/etc/resolv.conf`、
-  windows = 适配器配置；无 `ResolverOpts::from_system_conf`，勿臆造）。三个坑：①hickory 0.24
-  lookup（`ipv4_lookup/ipv6_lookup`）迭代项是 rdata 新类型 `A`/`AAAA`（取 `.0` 得
-  Ipv4Addr/Ipv6Addr），不是直接迭代 IP；②`Resolve::resolve` 返回的 boxed future 必须 Send——
-  async 内跨 await 持有另一腿 `Pin<&mut dyn Future>` 时必须擦除为 `+ Send` 并给泛型腿补
-  `Send` 界，否则整个 future 非 Send 编译失败（报错点在远处的 cast，难定位）；③Send 报错链
-  指向 `impl Future` 而非具体字段，按报错里的 async 块类型名反查代码定位。
-- **`#[tokio::test(start_paused = true)]` 的两个前置**：①需 dev-dependencies 加
-  `tokio = { version = "1", features = ["test-util"] }`（缺 feature 报
-  `no method named start_paused`）；②暂停时钟下计时断言必须用 `tokio::time::Instant`——
-  `std::time::Instant` 走真实钟，测得微秒级「没等」假象；暂停钟自动推进
-  （全部任务 idle 时虚拟时间跳跃），`assert_eq!(t.elapsed(), GRACE)` 可精确相等。
-- **DNS 解析器双腿接线测试用不可达 nameserver 构造确定性失败，免 mock DNS 服务器**：
-  reqwest 自定义解析器（hickory `TokioAsyncResolver`）的 A/AAAA 查询+映射胶水，
-  client 级用例常被 hosts 拦截臂短路而零执行（覆盖率假缺口先用 FNDA 交叉证伪非
-  度量伪影）。失败路径注入：`NameServerConfigGroup::from(vec![NameServerConfig::new(
-  SocketAddr::from(([127,0,0,1],1)), Protocol::Udp)])` + `ResolverOpts` 短 timeout
-  （150ms）低 attempts（1）——双腿各自失败→合并空集→回落臂，client 级再断言
-  `.invalid` 假域名请求必败（证明 builtin 臂→fallback 臂全链接通）。免协议 mock、
-  确定性快（本机端口立即拒答）；成功映射臂仍需真实 DNS 应答，登记受限不硬凑。
-  注意 `ResolverOpts` 为 `#[non_exhaustive]`，跨 crate 不可用结构体字面量
-  （含 `..Default::default()`），必须 `Default::default()` 后逐字段赋值。
 
 ## 7. 测试与变异度量
 
 - **cargo-mutants 的每文件变异点数与文件行数近似线性（约 0.2 点/行）**：千行级交互层
-  文件单文件即可产出 300+ 变异点（scan 模式 `cargo mutants --list` 直接统计，无需跑变异；
-  27.x 起 `--list` 输出 `文件:行:列: 变异描述` 文本清单，需附 `--line-col=true`，旧
-  `--line-counts` 已移除，按行首文件名聚合即得每文件计数）。
-  **线性近似只对产品代码行成立**：cfg(test) 模块（`tests` / `*_tests` 命名变体）被工具
-  整段跳过、不产点——测试侧膨胀的大文件（如 1400 行中仅 170 行产品代码的编排模块实测
-  仅 5 点）按总行数估算会严重高估，预判「>100 门槛」前先数产品区行数而非总行数。
+  文件单文件即可产出 300+ 变异点（scan 模式 `cargo mutants --list` 直接统计，无需跑变异）。
   SKILL 的「>100 变异点做保持行为拆分」在模块边界上依赖 architect 裁决、验证依赖 e2e 套件
   （cleaner 不运行）时，不要强行拆——把每文件计数登记 handoff 移交，hardender 全量变异前
   由 architect 先收模块边界（`--file` 可按文件分块跑变异，拆分收益在 hardender 兑现）。
 
-- **`#[path]` 源包含收编会使 src 内 cfg(test) 单测跨测试目标重复注册**：bin-only
-  crate 的集成测试目录（tests/*.rs）以 `#[path = "../src/xxx.rs"]` 挂载产品模块时
-  （mutants 口径产品树零改动的惯用法），被收编模块的 cfg(test) 单测在每个收编
-  目标各注册一次——`cargo test` 全量计数 = 各目标计数之和；在 src 模块新增 1 个
-  单测，全量增量为「收编该模块的目标数」而非 1（实测：某组件模块被 8 个目标
-  收编，新增 2 测 → 全量 +16）。对账含义：增量对账先按「新测数 × 收编目标数」
-  复算，勿把倍增增量误判为重复注册缺陷（同一目标内同名测试重复注册才是缺陷，
-  见 engineering.md「重复属性 #[test]」条）；基线口径随仓库结构变化（新增/删除
-  收编目标）漂移，跨轮对账先核对收编目标清单。
 - **交互层覆盖率可以在单测内打开（TestBackend + 桩服务器），不必依赖 PTY e2e**：ratatui 的
   draw_* 系函数用 `ratatui::backend::TestBackend`（0.29 无 feature 门控）直接渲染应用全状态
   并断言缓冲文本；事件处理用「非法输入 → 事件泵至错误终态」与「桩服务器 → 事件泵至成功
@@ -344,43 +164,18 @@ group_imports = "StdExternalCrate"
   的 `Display` 会把宽字符半格单元隐藏并附 `Hidden by multi-width symbols` 注记——断言锚定
   不被 CJK 截断的稳定文本（如 ASCII 名称、选中行标记），不要断言与 CJK 相邻的边框/标题。
 - **输出管道会吞 `#[m` 形态字符**：日志采集/展示层按 CSI 转义清洗 `[m` 等序列时，
-  源码中的 `#[must_use]` 会显示成 `#ust_use]`（可复现、可误导“文件损坏”判断）。
-  伪影可出现在包括 `cat -A` 在内的一切经管道/工具层回显的输出里——`cat -A` 并非
-  字节级证据（v146 实证：od 直读与 cat -A 回显对同一行给出不同形态），字节级审计
-  以 `od -c`/`xxd` 直读文件为准，不信显示层。条目文本自身也可能被吞（本条初版即
-  受害者，v146 修复）。
+  源码中的 `#[must_use]` 会显示成 `#ust_use]`（可复现、可误导"文件损坏"判断）。
+  审计源码一律以 `od -c`/`xxd` 字节为准，不信显示层。
 - **双向拷贝代理（io::copy 两线程对拷）的单测必须显式关闭客户端写侧**：`shutdown(Write)`
   后代理的 client→upstream 拷贝得到 EOF、两个 copy 线程才能收尾、socket 才会 drop；
   否则 read_to_end 与 copy 线程互等，测试永久挂起（真实客户端通常天然关写侧，故线上不显）。
-- **真实 TCP stub 的 e2e 测试在高 `--test-threads` 下时序脆弱（假失败）**：滴流下载类
-  测试带真实 socket + 25s 级 deadline，默认线程数（=核数）并行时 CPU 竞争会拖慢
-  stub/事件泵，任务在预算内落 Failed/收不满连接 → 挂的测试每次还不一样（易误判回归）。
-  鉴别法：单测过滤重跑秒过、`--test-threads=1` 或 `=2` 全绿即坐实环境竞争而非代码缺陷；
-  全量收官验证用 `cargo test -- --test-threads=2`（4200+ 测试增量 <2 分钟）。
   桩上游的"读一次→回一包"契约要与被测流量方向对齐（CONNECT 隧道：客户端先发一笔
   再读回包），否则双向互等死锁。
 - **拆大文件（>100 变异点/行）时先机械分模块再提纯函数，两步各自全绿**：先按职责把
   impl 块切到子模块（同 crate 多 impl 合法、子模块可见父私有项），用 `git diff --stat`
   与全量测试确认"纯移动"；再做表驱动等数据化的纯函数抽取。切分脚本
   对 doc 注释/属性边界的 off-by-one 高发——每刀后先 `cargo build` 再继续，孤儿 doc 与
-  双重 impl 头都是必踩点。两件低成本佐证：① `cargo mutants --list` 总点数在拆分前后
-  **守恒**是"零逻辑增删"的强信号（点数随产品行走，测试模块不产点）——分拆后按文件计数
-  即得 hardender `--file` 分块的分层依据；② 测试模块对拆分符号的补导入清单以编译器
-  unused-import 警告为准逐个收敛，不要用 grep 预判——注释提及与 `std::` 全路径引用
-  都会让 grep 高估（实测预判 7 项、实际仅需 3 项）。
-- **单文件升级为目录模块（mod.rs + 子文件）的四个机械点**（比同文件分模块多出的坑）：
-  ① `#[path]` 挂载测试壳经父模块 `mod engine;` 解析时 `engine.rs` 与 `engine/mod.rs`
-  两形态等价（见上文挂载兼容条），目录内新增子模块文件对挂载壳透明——既有挂载测试
-  无需改动；② 跨文件 impl 块的私有方法可见性 = 定义模块的子树——兄弟文件互调
-  （如 tick.rs 调 evt.rs 的 on_evt）需 `pub(super)`（= pub(in 父模块)，父层不可见，
-  窄接口不破坏）；③ 留在 mod.rs 的 cfg(test) 测试模块经 `use super::*` 消费的符号若
-  产品构建无消费者（如 Evt/SpeedWindow 仅测试用），导入要 `#[cfg(test)]` 门控防
-  产品构建 unused 警告；④ **路径深度不对称**：原单文件对父级兄弟项的 `super::X`
-  （如 engine::error），目录化后 mod.rs 仍是 `super::X`（父不变），孙层文件一律变为
-  `super::super::X`——同批编译错误两档深度并存，按错误清单逐个收敛最快，不要凭
-  "统一改成一种"直觉批量替换。按行号切段重装时，先 `grep -n` 锁定结构边界（impl 开闭/
-  函数 doc 行）再切——凭记忆的行号在会话内既有编辑后必然漂移，切段截断函数体的
-  症状是 E0433/E0624 连环报，先核对切段区间再改代码。
+  双重 impl 头都是必踩点。
 - **`cargo llvm-cov --lcov` 的 FNDA 行只有两字段（命中数, 符号名），不含行号**：做函数级
   覆盖率/受限近似 CRAP 分析时，行号必须从对应 `FN:<行>,<符号>` 记录取，再按"函数起始行
   ≤ 数据行 ≤ 下一起始行"归属 DA 行；`--hide-instantiations` 只合并泛型实例化，嵌套闭包
@@ -388,169 +183,6 @@ group_imports = "StdExternalCrate"
   外层函数与闭包，函数级 CRAP 口径要把闭包记录与外层视为同一逻辑函数（取极值）再计算，
   否则分派器类函数的复杂度被重复放大（engineering.md「符号级输出不可直接精确匹配」的
   lcov 维度延伸）。
-- **`cargo llvm-cov --lcov` 默认不输出 BRDA（分支数据整条缺失）**：需要分支计数口径的
-  受限近似（如 CRAP 的 comp 代入）必须加 `--branch` 重新生成 lcov；"零发现"前先对已知
-  多分支低覆盖函数做阳性对照（BRDA>0 才算数据在位），否则全 crate 函数 comp 都会
-  塌缩成 1、CRAP 全绿假象。
-  **BRDA 有无由插桩期决定，不由导出期决定**：`llvm-cov export` 本身无分支开关（rust.md
-  「勿传 --branch」），profdata 生成时若未带 `--branch`（`-Z coverage-options=branch`
-  插桩），export 同样整条缺 BRDA——先验 profdata 含分支数据再写解析器；重跑 `cargo
-  llvm-cov --branch` 会因 RUSTFLAGS 变化触发全量重编译，磁盘预算先算（engineering.md
-  「重 scratch 工具开工前先做磁盘预算」）。
-- **BRDA 分支计数做 comp 近似的两个偏差方向**：① `?` 操作符不产生 BRDA——早退密集的
-  入口胶水（main/run_tui 类）comp 被低估、CRAP 假性达标，登记偏差方向留 hardender 以
-  变异为准；② 测试代码 `assert!` 宏展开为每个断言生成分支记录——测试函数 comp 虚增，
-  CRAP 门禁按 mangled 名排除测试模块，且测试模块在 lcov 里有**两种 mangled 形态**：
-  `…tests` 后接 `s<n>_` 消歧（形如 `cli_add_testss_31…`）与长度前缀段 `5tests<len><名>`
-  （形如 `…5tests11mock_server…`）——只匹配 `testss_` 会漏掉第二种（实测 supervisor
-  测试模块漏网），须双形态（`testss_` ∪ `5tests\d`）排除（勿只匹配 `mod tests`）。
-- **PMD 7.x 的获取与调用**：Maven Central 上 `pmd-dist` 只有 maven jar（无 bin zip），
-  bin 发行包在 GitHub releases（tag 形如 `pmd_releases/<版本>`，资产
-  `pmd-dist-<版本>-bin.zip`）；GitHub API 限流时按已知 tag 拼直链下载，勿据 404 误判
-  "未发布"。CPD 无独立启动器，用 `pmd cpd` 子命令（`-l rust` 必带，见 engineering.md
-  「静默空输出」条）；输入用位置参数（7.28 无 `--files` 选项），发现重复时 exit 4 属
-  正常语义（非调用失败）。另有两个坑：① **报告文件清单 ≠ 全部拷贝清单**——同一 tile
-  多份拷贝时报告只列部分配对（实测 16 份相同拷贝只报 2 对），"几处重复"以独立 grep 计数
-  为准；② **Rust 词法器在 `/* */` 块注释内遇全角字符报 Lexical error（exit 5）**，
-  `//` 行注释免疫——Rust 代码注释一律用行注释可保 CPD 可跑；exit 5（词法失败）与
-  exit 4（发现重复）语义不同，先看 `[ERROR]` 行再读结果；③ **XML 渲染器需要
-  xmlresolver jar**（Saxon-HE 12 的传递依赖，`-f xml` 报
-  `ClassNotFoundException: org.xmlresolver.Resolver` 且输出文件 0 字节）——
-  最小 jar 集组装时补 `org.xmlresolver:xmlresolver`（或直接用默认文本渲染器，
-  其行号/文件清单同样完整，无需额外依赖）。
-- **lint 姿态块去重：宏/include! 提取是死路，正确路径是「验证冗余 → 删除 → 单源 crate 根」**：
-  模块级 `#![allow(...)]` 姿态块多拷贝时，提取共享文件的两条路都不可行——`include!()` 与
-  `macro_rules!` 均不能拼接内部属性（探针实证：两者都报 "an inner attribute is not
-  permitted in this context"）。先验证冗余性再动手：把 crate 级 posture（bin 入口 crate
-  根）与各实现子模块块的 allow 清单逐一对照，子模块块全部被 crate 根覆盖时（含 pedantic/
-  nursery 传递覆盖的子 lint）直接删除即可，clippy --all-targets 0 即闭环实证；只把子模块
-  块中 crate 根没有的个别 lint（及依据注释）收敛回 crate 根。注意 bin-only crate 的
-  `src/bin/*` 是独立编译单元，其 crate 根姿态不被主入口覆盖，不属冗余；带具体依据注释的
-  定点 allow（如单文件复杂度豁免）是窄作用域豁免，不属姿态块，保留。
-- **`#[path]` 挂载测试与产品 crate 的模块私有化联动**：产品侧把引擎实现子模块私有化
-  （`pub mod` → `mod` + 门面 re-export）会断掉挂载同一 mod.rs 的测试 crate 的内部路径
-  （E0603）。解法：产品 mod.rs 加 `#[cfg(test)] pub use` 门面 re-export——挂载测试 crate
-  整体在 cfg(test) 下编译（re-export 生效），产品非测试构建不产生该路径（窄接口不破坏）；
-  产品 crate 自身测试编译不消费该路径时的 `unused_imports` 属挂载机制固有告警，按三分法 ①
-  在 re-export 处精确 allow 并注明依据。re-export 不可超越项自身可见性（E0364）：
-  `pub(super)` 项要先在定义处升 `pub`（私有模块内不外泄）再 `#[cfg(test)] pub(crate) use`。
-- **`#[path]` 挂载 crate 会连带执行产品源里的 `#[cfg(test)]` 模块，全量计数按编译上下文倍增**：
-  加固类测试 crate 挂载产品 mod.rs 时，产品文件内联测试模块随挂载编译执行——在产品文件里
-  新增 N 个单测，`cargo test` 总数增加 N ×（产品 bin 1 份 + 挂载该模块的 crate 数），
-  不是 N。对账按各测试二进制 "test result" 行复算自洽（同名测试在多 crate 各出现一次属
-  机制固有，`duplicate_mod` allow 已在挂载壳声明）；判断计数异常先数编译上下文再找测试。
-- **纯文本工具的属性测试模板**（显示宽度表/格式化函数，CJK 混排终端 UI 高发）：
-  宽度表函数锁「n ≤ w(s) ≤ 2n」界 + 截断/填充幂等（truncate 二次调用恒等、pad 恰达
-  max(w, width)）；时长/日期格式化锁 parse-back 往返（格式化→按格式解析→原值）与
-  Option 包装同口径；字节/速度格式化锁后缀封闭域（单位后缀只取固定集合）+「单位绑定
-  总量」（配对展示的单位只由 total 决定）+ 负零归一。宽度界属性注意 `max=0` 边界：单
-  字符省略号使 w(truncate(s,0))=1>0 属既有契约，属性域排除该点并在 doc 注明。
-  **生成域必须与宽度表的零宽分支对齐**：宽度表含零宽分支（变体选择符 U+FE00..FE0F、
-  零宽空格/连接符 U+200B..200F、U+2060、BOM——终端反链接注入等场景 deliberate 按 0 计）
-  时，「每字符至少 1 列」的下界论域不再全 Unicode——`any::<char>()` 抽到零宽码点即假红
-  （低概率随机红，回归固化后必现；同「生成域 ⊆ 规格域」族）。处置：界属性
-  `prop_filter` 排除零宽字符，零宽分支另立专门属性（纯零宽串 w=0）覆盖，不放宽断言。
-- **proptest 生成域与被测代码的资源分配维度必须解耦**：被测入口按某输入维度分配
-  内存（如 `Blocks::new` 按块数分配 written 向量）时，对该维度用独立随机大区间采样
-  （如 piece、total 各自随机到 2^20/2^40）会生成「极小块 × 极大总量」的天文块数组合——
-  表象是属性测试挂死/OOM 而非断言失败（无 panic 栈可归因，与测试逻辑无关）。正确形态：
-  把资源维度直接作为有界采样参数（如 `n_blocks in 1..=4096`），其余输入由它推导
-  （`total = (n-1)*piece+1`，顺带锁定块数构造口径），属性语义不变而内存可控。
-- **字符串解析属性的生成字母表要与「修剪/卫生」口径对齐**：被测函数先 trim 或过滤
-  控制字符再判空时（如 Content-Disposition 文件名提取），字母表含空白/`\0`/`\u{b}`
-  等可修剪字符会使「非空输入必提取成功」假红——反例全是「产品正确拒绝了生成器以为的
-  合法输入」（trim 剥空后为空 → None，两次缩字母表才收敛）。要么字母表收窄到非空白
-  可打印字符，要么把卫生分支并入 oracle（None ⟺ trim 后为空 ∪ 含拒绝字符）。与
-  「属性字母表要排除可被解析器吞掉的词」（饱和 cast 条）同族：生成域 ⊆ 规格域。
-- **复合结构的属性生成：逐段合法 ≠ 整体合法，可解析断言锁合法形态、纯格式契约才用任意域**：
-  由多段拼接的复合标识（IPv6 段串、路径、限界日期时间）逐段生成合法片段时，组合结果仍可能
-  整体非法（如 2 段无 `::` 压缩的 `A:0` 不是合法 IPv6 地址）——对「整体可解析/可被下游接受」
-  类断言，属性随机红的真实根因是生成域越界而非产品缺陷（产品正确拒绝生成器以为的合法输入）。
-  处置：把属性拆两层——纯格式契约（如「输出含 `[` ⟺ 输入含 `:`」，任意域成立）与整体合法性
-  契约（生成域锁全 8 段等合法形态），两层各自报告，不放宽断言迁就非法生成域。同族：
-  生成域 ⊆ 规格域在复合结构维度的延伸。另注：属性体内早退不能写裸 `return;`（proptest
-  闭包返回 `TestResult` 非 `()`，E0069）——用 if/else 分支收束或 `return TestResult::failed()`。
-- **proptest 多参数的长度必须耦合**：一个属性同时生成「数量 n」与「逐项数据 vec」时，
-  两个独立策略（`n in 0..N` + `vec(..., 0..N)`）长度各随机，测试体内按 `[i]` 索引必
-  越界 panic（表现为属性随机红，缩小到 `n > vec.len()` 才现形）。正确形态：定长 vec
-  （`vec(..., N)`）+ 测试体内切片 `[..n]`，或把数量并入 vec 后取 `len()`。同理，策略
-  只能在参数位置声明，不能在测试体内按迭代采样（对 `select(...)` 逐次"抽一个"的
-  `lift()` 形态不存在）——需要"N 个随机 X"就用 `collection::vec(select(&[..]), N)`
-  作为参数生成。
-- **`f64 → 整数` 的 `as` 转换是饱和语义，属性字母表要排除可被解析器吞掉的词**：
-  `NaN as u64 = 0`、`inf as u64 = u64::MAX`（Rust 浮点转整数为饱和 cast，非截断回绕）。
-  「非法输入 → 0」类属性若输入字母表含 `inf`/`infinity` 这类能被 `f64` 合法解析的词
-  （如速度解析 `parse_speed("inf")` 实得 u64::MAX），属性会红——这是口径选择问题而非
-  产品缺陷：要么收紧生成字母表（如正则排除 `i`），要么把饱和路径显式纳入规格口径，
-  二选一并在属性 doc 注明，不得默默排除后当作"已验证非法面"。
-- **`#[path]` 收编源的 cfg(test) 代码按测试 crate 解析 crate 路径**：产品源经 `#[path]`
-  挂载进独立测试 crate 时，其 cfg(test) 模块里的 `crate::xxx` 引用按**该测试 crate** 的根
-  解析，而非产品 bin 的根——挂载壳必须提供同名路径点（如在测试侧的 `mod model` 壳内
-  `#[path]` 再挂同一个工具模块），漏一处就是「只在部分测试目标编译失败」。首个暴露信号
-  常是 `cargo fmt` 报 `failed to resolve mod`，而非 cargo test。
-- **嵌套 mod 文件内的 `#[path]` 相对该文件所在目录解析**：`tests/a/b/mod.rs` 里的
-  `#[path = "../../src/x.rs"]` 实际解析为 `tests/a/src/x.rs`（相对 `b/` 上跳两级），不是
-  相对 crate 根——层级按 mod 文件自身位置数。tests 根处 `#[path = "../src/..."]` 只上跳
-  一级，两者极易混淆，解析失败先数层数再改路径。
-
-- **llvm-cov lcov 节内 FN 行全在 FNDA/BRDA/DA 之前，流式挂"当前函数"会把全文件
-  数据挂到最后一个函数**：lcov 每节顺序是 SF → 全部 FN:<起始行>,<符号> → 全部
-  FNDA → 全部 BRDA → 全部 DA → end_of_record——逐行流式解析时若在 FN 行上切换
-  "当前函数"再收 DA/BRDA，整个文件的数据都会落到该文件最后一个 FN 记录上
-  （症状：函数数 ≈ 文件数、单函数 DA 行数等于全文件行数、其余函数全部"零覆盖"）。
-  正确两段式：先按文件收集 FN 清单与文件级 DA/BRDA 映射，再按「起始行 ≤ 数据行 <
-  下一起始行」归属；解析后先做阳性对照（已知被测函数 FNDA>0 且 cov 合理）再采信。
-- **async fn 的多份单态化副本按逻辑名聚合（剥后缀、按文件归并、取极值）**：
-  async fn 与闭包在 llvm-cov 里裂成多个编译实例（符号名带 `s<n>_`、`0B<n>_` 等
-  后缀，跨挂载 crate 再各成一份，crate-disambiguator 哈希不同）——FNDA=0 的副本
-  常是"另一份被调用"的单态化噪音，不是真缺口。按（文件, 逻辑名）聚合：逻辑名取
-  mangled 串中最后一个「长度前缀小写标识符」并循环剥尾部 `s<n>_/_<m>`/`0B<n>_`
-  片段；聚合口径 FNDA=max、comp=max、cov=min（取极值）；阳性对照：已知被测函数
-  聚合后 FNDA>0。与「符号级输出不可直接精确匹配」（engineering.md）同源。
-- **lcov 同一 FN 起始行可有多个实例化副本，函数归属必须 list 语义**：crate
-  disambiguator 不同的多份编译（`Cs<hash>` 各异）在同一 SF 节内产生同起始行的多条
-  `FN:<行>,<符号>`——按行建「行→符号」标量映射时后写覆盖前写，FNDA 查到的是
-  FNDA=0 的那份副本，命中数假 0（表象：高覆盖闭包显示「从未被调用」）。行→符号列表
-  逐条并入聚合（FNDA 取极值）才不丢实例。**rustfilt 对 v0 闭包符号输出单括号形态
-  `::{closure#N}`**（非记忆中的 `{{closure}}`），剥闭包尾缀需按单括号模式迭代剥尽；
-  comp 受限近似公式 = BRDA 记录数 + 1（分支存在静态计数 + 圈复杂度基线偏移 1）。
-  **comp 口径漂移是门禁对账的最大误差源，登记基线必须连换算式一起登记**（v152 cleaner 轮实证）：
-  同一代码库两代解析器并存过两种 comp 口径——「BRDA 记录数 + 1」（上界筛选口径，
-  每个短路项/断言记真/假两条 BRDA，comp 虚高约一倍）与「1 + BRDA 记录数/2」
-  （真/假对折 ≈ 源码决策点数，与 notes 501-511 「门禁判定以源码决策点数为准」同向）；
-  两种口径对同一 lcov 的 CRAP>30 清单可差 10 倍（实测 20 条 vs 2 条）。反推手法：
-  用历史登记的函数级 CRAP 读数（如 handle_socks5 = 80.2）代入 CRAP 公式反解 comp，
-  与当前解析器两种口径逐一比对，精确复现登记值者即上游口径；复现成功后把换算式
-  连同门禁清单一起写入交接，下游不再重复反推。
-- **BRDA 计数近似圈复杂度时 `&&`/`||` 短路链每项记 2 个分支**：BRDA 是"分支存在"
-  的静态计数（每条短路项产生真/假两个分支记录），据此算出的 comp 是真圈复杂度的
-  上界近似（N 条件的守卫链 comp 虚高约一倍）——CRAP 门禁判定（comp≤6）对 3–4 条件
-  守卫链会出现"BRDA comp=13 但源码 comp≈6"的假阳性；以源码决策点数（if/match 臂/
-  短路项）复核后再登记，不据此硬拆守卫链。
-  **`tokio::select!` 各臂不落 BRDA 记录，方向与短路链相反**：宏展开的内部分派不被
-  行归属，select! 本身零 BRDA，而同函数内普通 if/else 每处仍记 2 条——select 密集
-  的 async fn 上 BRDA comp 既非上界也非下界（实测：select! 二臂 + 三处 if/else 的
-  函数 BRDA comp=7、源码 comp=5），门禁判定一律以源码决策点数为准，BRDA 读数
-  只作交叉参考；若分支记录全部已命中（taken>0），cov=100% 下 CRAP=comp 源码口径
-  即门禁值，无需为宏口径偏差拆函数。
-- **生成式（剥头副本）夹具的再生成是收尾链的最后一环，必须排在 rustfmt 之后**：剥头
-  夹具（gen fixture）要求与产品源码逐字一致，任何后续格式化/微调都会让源码行形态漂移
-  使守卫红（实测：功能改完后先重生成夹具、再跑 fmt 收尾 → fmt 把多行
-  `Span::styled(format!(…))` 折回单行 → gen-drift 守卫红一次）。正确次序：源码定稿 →
-  `cargo fmt` →
-  再按守卫口径重生成全部剥头副本 → 跑全量测试确认守卫绿；守卫断言报 diff 时先看
-  两侧差异是否纯格式（缩进/换行），纯格式差异一律走重生成而非手改夹具。
-
-- **`#[path]` 部分收编的测试 crate 必须随产品新模块同步补挂**：测试 crate 挂载
-  产品源（如 `#[path = "../src/app/mod.rs"] mod app;`）后，产品再新增被挂载源
-  引用的顶层模块（组件/工具）时，每个挂载该源的测试 crate 都要补一段
-  `#[path = "../src/<新模块>.rs"] mod <新模块>;`——否则报错是使用点上的
-  E0433/E0599（找不到类型/方法），不在挂载点，容易误判为业务改动遗漏；
-  按「挂载了哪些源」反查需要补挂的 crate 清单。
-- **proptest 断言宏不能在普通闭包内使用**：`prop_assert*!` 展开为
-  `return Err(TestCaseError…)`，装进闭包后返回类型与 `()` 不符直接 E0308；
-  闭包内用 std `assert_eq!`（panic 会被 proptest 捕获并转为该案例失败），
-  或把断言内联回测试体。
 
 ## 8. 架构边界与适配器方向
 
@@ -593,31 +225,10 @@ group_imports = "StdExternalCrate"
   `#[cfg(test)] pub(crate) use`；直接对 `pub(super)` 项做 `pub(crate) use`
   会报 E0364（re-export 不可超越项自身可见性），以及非测试构建报 unused import——
   `#[cfg(test)]` 门控一并解决。零外部 API 面增量的测试基建手法。
-  **自 async IO 外壳提取纯策略时的三件套要一次到位**（实测：策略数学提为纯函数
-  当轮只补了函数 re-export，属性测试编译即 E0603/E0364 连环）：① 纯函数定义处
-  升 `pub`（私有模块内）；② `#[cfg(test)]` 门面 re-export；③ **策略常量随函数
-  一并外借**（容量/阈值类 const 经同一门面 re-export）——属性测试的 oracle 需要
-  容量与下限口径时，若常量不外借，测试侧只能复写字面量成双源，产品调参即静默漂移。
 
 - **`proptest::sample::select` 需要借用或 `Cow<'static, [T]>`**：`select([a, b])`
   会因数组不是 `Cow` 而编译失败；正确形态 `select(&[a, b])`（借用切片）或
   `select(vec![a, b])`（`Vec` 实现 `Into<Cow>`）。自定义枚举类型需 `Clone + Debug + 'static`。
-
-- **proptest 的 `prop_union` 要求两侧同型**：`A.prop_union(B)` 签名为
-  `other: Self`——枚举键 `select` 策略与 `any::<char>().prop_map(KeyCode::Char)`
-  这类不同型策略不能直接 union（E0308：`Select<T>` ≠ `Map<CharStrategy, _>`）。
-  正确形态：两侧各自 `.boxed()` 统一为 `BoxedStrategy<T>` 后经
-  `prop::strategy::Union::new_weighted(vec![(w, a), (w, b)])` 合并（顺带控制
-  键类占比，如导航键 8 / 字符键 2）。
-
-- **两处以上克隆同一参数表的调用点收敛为「参数对象 + 方法」**：N 参函数在
-  多个调用点逐参 clone（worker spawn 表、批次提交表）时，把共享句柄收进
-  `#[derive(Clone)] struct`，调用点只构造一次结构体、spawn 经方法克隆整包；
-  被调函数以结构体为参、函数体首解构（`let Struct { field, mut rx, .. } = deps`）——
-  镜像参数表消失、`too_many_arguments` 豁免随之删除；字段清单唯一登记于
-  结构体定义，构造点与消费点的漂移由编译器锁定（新增字段漏初始化/漏消费均
-  编译错）。watch::Receiver 等句柄均 Clone，逐字段 clone 与整包 clone 语义
-  等价，行为保持。
 
 - **轻量架构检查脚本用 grep 即可覆盖大多数分层规则**：Rust 的 `use crate::xxx` 语句
   是依赖方向的显式标记，`grep -rnE "^[[:space:]]*use[[:space:]]+crate::(<高层模块名枚举>)"`
@@ -625,403 +236,3 @@ group_imports = "StdExternalCrate"
   `///` 注释行（文档可提及类型名，代码不得构造）。脚本放在 `project/<crate>/scripts/arch_check.sh`，CI 集成为 `&&` 链的一环；
   比起 `cargo-deny`/`cargo-modules` 等重量级工具，grep 脚本零依赖、可读、易维护，
   适合"分层依赖方向"这类规则简单的检查（复杂规则如 trait impl 方向才需重量级工具）。
-  白名单类规则的豁免形态与产品代码同文件时，扫描域按**文件内区域**切分而非目录：
-  先用 awk 在每个文件首个 `#[cfg(test)]` 标记处截断、只取产品区行（行号前缀保留可定位），
-  再套白名单过滤——测试夹具播种状态（如测试模块里 `app.tasks.push`）是合法豁免形态，
-  目录级过滤放不掉同文件混排的产品/测试两区。写面白名单规则（如「ui 渲染路径对某状态
-  结构的写操作只允许回填字段」）同时要枚举容器方法形态（push/clear/insert/retain/…），
-  只盯 `=` 赋值会漏掉方法调用式改写；经别名改写（先借 `as_mut()` 再经别名赋值）登记为
-  已知豁免，不为它把 grep 升级成解析器。
-  **白名单扩展前先枚举同词族字段并逐个判定属性，同形政策字段必须收窄为精确词族**：
-  交接建议的宽泛词族（如 `scroll|pos|follow`）直接套用时，先 grep 该词族在状态结构体
-  全部字段中的命中清单，逐个区分回填/政策属性——同形政策字段（如裸 `scroll` 与面板
-  `_scroll` 同形）不得随词族豁免，改用精确形态（`(help|pieces)_scroll`、`_pos`、
-  `_scrollbar`、`max_` 前缀）收窄；豁免放宽的验证是双向阳性对照：回填存量全部收口
-  全绿 + 政策同形字段注入探针必须仍红。新增面板/字段的同类写入响亮失败、显式扩
-  白名单，是护栏设计行为而非缺陷。
-- **新增模块的平台 env 读取必须预先收口适配缝（arch 规则「环境变量收口」形态）**：
-  机制层遇到平台差异路径（如 Windows hosts 表 `%SystemRoot%`）时，本地 `std::env::var_os`
-  会命中「业务/机制层不直读环境变量」规则（env 收口仅 model/config.rs 等适配缝）；
-  防法 = 把路径解析直接写进既有缝函数（如 config.rs 增 `hosts_file_path()`），机制层只
-  调缝不碰 env——写码前先查 arch_check.sh 的白名单 grep 范围再落位，避免实现完返工。
-
-## 9. 终端与 TTY（TUI）
-
-- **内联字形光标的两大顽疾根治 = 终端原生光标（`Frame::set_cursor_position`），
-  换输入 crate 不解决**（v1.34 三批 bug 修订实证）：把光标画成文本流内字形（如
-  「▏」占 1 列）有两个固有缺陷——①光标移动时其**后所有字符整体平移 1 列**
-  （字形插入文本流的几何后果，移动越多抖动感越强）；②字形光标**不可能闪烁**
-  （缓冲区内容，无终端光标态）。加上鼠标点击不定位光标，三类缺陷同属渲染层/
-  鼠标层/终端层，与输入状态机无关——tui-input/tui-textarea 等成熟 crate 只管
-  状态机（其官方示例渲染同样要手动 `set_cursor_position`），接入它们不修任何
-  一项。正解：渲染层不画字形（pre/post 直接拼接，取窗预算从「−1 容字形」
-  归还全额），`Frame::set_cursor_position(Position{..})` 画终端原生光标；
-  ratatui 每帧收尾自动 show/定位、未调用即 hide（对话框关闭即消失，无需手工
-  隐藏）；光标屏幕列 = 值区起点 + w(pre)——恒落字符边界首格（宽字符续格不可
-  能命中）。闪烁经启动序列 `crossterm::cursor::EnableBlinking` 显式请求
-  （Alacritty 等默认稳态光标终端不请求不闪；还原端无需对称 DisableBlinking，
-  离开备用屏即复位终端默认）。测试：TestBackend 记录光标位，绘制后
-  `Terminal::get_cursor_position()` 读回断言；启动序列抽 `<W: Write>` 可测
-  内核以 `Vec<u8>` 断言 `ESC[?12h` 在位（与 restore_into 同一口径）。
-- **点击列 → 字符偏移映射必须以渲染层发布的窗口几何为单源，鼠标层不重算宽度**：
-  鼠标点击定位光标需要「哪些字符可见、各占几列」——该几何只有渲染层取窗时
-  有（超宽字段有锚定窗口 + … 指示占列），鼠标层用宽度函数重算必然与显示
-  取窗双实现漂移（窗口起点/指示符/宽字符任一变更即错位）。单源形态：渲染层
-  每帧把窗口几何发布为**累积列半开边界**（`cols[0]=0; cols[k+1]=cols[k]+宽`，
-  末位=窗口总宽）+ 窗口首尾字符下标（win_lo/win_hi）+ 值区起点列；鼠标层按
-  半开区间 `(cols[k], cols[k+1])` 定位——点击落宽字符**左半格 = 光标在其前、
-  右半格 = 在其后**（终端鼠标以格为单位，两侧半格分置惯例），rel ≤ 0 钳窗口
-  首、越过末位钳 win_hi。零宽度计算依赖，纯函数可穷举单测。焦点切换仍走
-  focus_field 单源迁尾，点击映射在其后覆盖（点击处语义优先）。
-- **原生光标屏位是屏幕坐标，必须按浮层 z 序门控**：光标位一旦 set 就显示在
-  终端那个格子，不随更高浮层（帮助/关于/值弹窗）遮挡消失——draw() 收口处
-  仅当「对话框是顶层浮层」时才调用 set_cursor_position；对话框渲染层只负责
-  每帧发布 `Option<(u16,u16)>` 屏幕位（每帧开头清空，防陈旧位跨帧残留）。
-- **发布渲染几何给交互层时用平行表 + 宽松读取，旧手工夹具零迁移**：渲染层
-  每帧回填的命中几何表（如字段热区 `Vec<(Rect, usize)>`）扩展新载荷（窗口
-  几何）时，用与原表**平行**的新表（逐行 Option，非文本行为 None）而非改元组
-  形态——既有手工夹具（测试里手填热区的用例）零破坏；交互层
-  `new_table.get(i).and_then(|w| w.as_ref())` 宽松读取，None 回退旧行为
-  （迁尾），缺夹具的旧用例自动保持原语义。
-
-- **append/pop 式文本输入升级光标编辑的迁移清单**（TUI 输入框从「只能追加/退格弹尾」
-  升级为「方向键在框内移动光标、任意位置插入删除」时的高发坑，逐项核对）：
-  ①char 边界——光标按**字符**计数，字节偏移 = 前 n 字符 `len_utf8` 之和，
-  `String::insert/remove` 才不 panic；逐字符序列插入要按插入点**递进**字节偏移
-  （同偏移循环插入会倒序）。②双向钳制——Left/Backspace 到 0、Right/Down 到字段尾
-  均钳制 no-op，插入/删除后光标随迁。③焦点切换单源——光标状态随焦点切换迁到新
-  字段文本尾，**全部**焦点赋值点（Tab/BackTab、下拉跳焦、鼠标点击、校验失败回焦）
-  走同一方法，防陈旧偏移越位。④同一编辑动作的多条路由必须同源（逐键/粘贴/内联
-  处理臂）——升级时漏改某一臂产生行为分叉（表象：一个入口光标生效、另一入口仍恒
-  加末尾），收口到单一编辑函数再分发。⑤渲染——光标字形占一列，聚焦行显示预算 −1
-  防溢出行 rect；超宽文本以光标为锚取窗（先向右取满预算、余量向左回退，字符原子
-  不切宽字），裁剪缘加 … 指示且**指示符占列需扣减预算重取至不动点**。⑥测试迁移——
-  旧「弹末尾」断言把夹具光标置到靶字段尾即可保留；新增光标不变量
-  （cursor ≤ 字段长）断言进既有属性测试。⑦方向键分流按「焦点是否文本字段」判定：
-  文本字段内方向键只动光标（单行字段 Up/Down 映射行首/行尾），非文本焦点保持原
-  导航语义——映射本身收进焦点切换单源方法防重复。
-
-- **同一交互域散落多层的实现收口为顶层零依赖组件**：状态层（编辑状态机）、
-  渲染层（取窗/显示）、交互层（点击映射）各持一份同域逻辑时，收口为单个
-  顶层组件模块（不依赖 ui/app，纯数据 + 纯函数），状态层与渲染层共同消费、
-  依赖方向都指向组件；既有引用路径用 re-export 保形（`pub use
-  crate::<组件>::<类型>`）零迁移。组件文件自包含（含自带单测）后，移植到
-  同源衍生项目 = 单文件复制。
-- **TUI 异常终止后的终端自恢复 = 存活哨兵子进程模式**：SIGKILL 进程内无法捕获
-  （raw mode 关 ISIG → CTRL+C 失效；鼠标捕获未复位 → 终端持续上报 SGR 鼠标事件
-  被 shell 回显成 `32;64;10M` 形态残影；备用屏幕未离开）。方案：TUI 启动前 spawn
-  同一二进制的哨兵子进程——①ready 握手防竞态（子进程先捕获 cooked termios、写
-  ready 字节后，父进程才 enable_raw_mode）；②子进程阻塞等 wake 管道：读到数据 =
-  父进程正常收尾（静默退出），EOF = 父进程死亡（SIGKILL/崩溃/exit 皆触发）→
-  还原 termios + 写终端复原序列后退出。零 unsafe 实现口径：termios 还原用
-  `stty -g` 可移植编码往返（Linux/macOS 皆内置），管道用 `std::io::pipe` +
-  `PipeReader/PipeWriter: Into<Stdio>` 安全转换，无需裸 fd 与 libc。
-- **哨兵必须独立进程组（`Command::process_group(0)`）**：会话首死亡时内核向
-  **前台进程组**广播 SIGHUP——留在父进程组的哨兵会被同波及死，还原代码无机会执行
-  （表象：哨兵已武装、kill -9 后无任何还原、无残留进程）。独立成组后哨兵凭管道
-  EOF 而非信号感知死亡，正是设计语义；该坑在带 pty 的端到端验证前完全不可见，
-  单测全绿照常通过。
-- **`/dev/tty` 必须读写打开（`OpenOptions::new().read(true).write(true)`）**：
-  `File::open` 只读，只读 fd 上 `write()` 返回 EBADF，而 `tcsetattr` 类 ioctl
-  （如 `stty <saved>`）在只读 fd 上照样成功——"termios 已还原但复原序列写入失败"
-  的假象即由此而来。诊断线索：持有中的 fd 突发 EBADF，先怀疑打开权限位而非"fd 被
-  谁关了"。
-- **pty 测试 harness 的会话首假象**：测试脚本里对被测 TUI 直接 setsid+TIOCSCTTY
-  使其自任会话首时，kill 它会触发内核 tty hangup（后续写 /dev/tty 得 EIO）——真实
-  场景会话首是操作者 shell（始终存活），不会有 hangup。harness 应用 bash 作会话首、
-  被测 TUI 作前台作业（`bash -c "<tui>; echo done"`，尾缀真实命令防止 bash exec
-  优化改变进程树形态）。进程识别用「exe 路径 + ppid 拓扑」（同二进制的哨兵与主进程
-  exe 相同，按"父是否 ezr 进程"区分；跨轮次 pid 复用会以单 pid 断言制造假失败，
-  套件启动先清理上一轮孤儿进程）。
-- **TUI 正常退出的事件字节泄漏 = 复原序列只阻未来上报、不消费已排队输入**：
-  退出瞬间（如按 q）SGR any-event 模式下高频 motion 事件字节可能已排队在 tty
-  内核缓冲，restore 发出 DisableMouseCapture 只阻止后续上报——进程退出后残留
-  字节被继承 tty 的 shell（zle）当作输入回显成 `^[[<b;x;yM` 类乱码（表象：
-  退出后 shell 提示符前后出现转义残影，与程序崩溃无关）。双修法：①复原前
-  在 raw mode 仍开启时以非阻塞 `poll(0)`/`read()` 循环消费输入队列（非规范
-  模式字节立即可读；disable 之后再 drain 无效——canonical 模式 read 等换行、
-  鼠标序列无换行会永久阻塞在内核行规程）；②关闭命令把鼠标组放最前
-  （DisableMouseCapture → paste → LeaveAlternateScreen），disable 传播延迟
-  窗口内不再产生新鼠标字节。复原序列要可测：抽 `restore_into<W: Write>`
-  内核，测试以 `Vec<u8>` 断言字节顺序；端到端验证用 pty 冒烟——同批写入
-  q + motion 字节，退出后由 `cat -v`（模拟 shell）读 tty 残留断言 0 字节。
-
-- **TestBackend 金样断言用 `backend().to_string()`，逐 cell 拼接会掺入续格空格**：
-  TestBackend 缓冲区里宽字符（CJK/emoji）占两格、续格符号非空，逐 cell 把
-  `symbol()` 拼接成行会得到「选 择」式掺空格文本，`contains("选择")`/`contains("🟩🟩")`
-  必失配（表象：断言报"实际文本"里每个宽字后多个空格）。两个正确口径：①整行/全文
-  断言用 `term.backend().to_string()`（终端语义：宽字符占两格只印一次）；②几何类
-  断言（某列是什么边框、滑块在哪列）绕开文本，直接 `buf.cell((x, y)).unwrap().symbol()`
-  逐格取值。另注意 `to_string()` 不保留前导空格语义，"第 28 列起是弹窗"这类位置
-  断言只能走 ②。
-- **右对齐标题的前导空格在渲染 buffer 上不可判定，形态守卫上移到单源构造函数**
-  （v139 coder 轮实证）：`Alignment::Right` 的 Line 若无显式前导空格，「活」字左侧
-  本来就是默认空白单元格，与显式空格在 `to_string()`/逐格比对下完全同形——
-  `contains(" 活跃 N ")` 对前导空格有无**零判定力**（永远绿，形同虚设）。防法：
-  把此类带 padding 的标题文本提取成模块级构造函数（如 `fn active_title(n)
-  -> String`），渲染与测试共用单源，测试直接断言返回值形态（`assert_eq!` 字面量），
-  不经渲染路径。与上文 TestBackend 口径条目配套：buffer 断言管几何/字形，
-  文本形态管构造层。
-- **TestBackend 跨帧 diff 比对（浮层翻转类测试）必须豁免宽字续格**（v134 coder 轮实证）：
-  同一 Terminal 上多帧复绘后逐格比对模拟屏（`backend().buffer()`）时，当前帧宽字主格的
-  续格被 `Buffer::diff` 的 to_skip 吞掉、永不下发更新（真实终端由宽字符双格覆盖语义
-  兜底，模拟屏不模拟覆盖）——前帧浮层边框曾占据的续格在后续帧模拟屏上残留旧符号，
-  表象是「关帧 ≠ 首帧」的假残影（差集恰为前帧浮层边框与后帧宽字续格的交集）。
-  正确口径：逐格比对按「前帧宽字主格的续格（x+1）豁免」，其余任意残影即红；宽字
-  边界清扫机制本身（clip 系助手）已有 buffer 级单测承载，勿在此重复。
-- **TUI 浮层开/关/拖拽整屏闪烁的根治路径是缓冲区级边界清扫，不是全屏 clear**
-  （v134 coder 轮退役全屏 clear 口径）：清屏类修法（翻转帧 `terminal.clear()`）在
-  浮层出现/消失/移动的瞬间清空整个终端 = 可感闪烁；残影的真因是增量 diff 跳过被
-  浮层覆盖的宽字尾格——修法 = 每处浮层 Clear 后调用边界清扫（左缘外一格宽字主格
-  截断为空格、右缘外一格孤立半格补空格），前后帧缓冲区模型自洽后，任何图层翻转
-  由增量 diff 直接绘制，清屏与「翻转检测签名」机制一并退役。判据：同 Terminal
-  多帧复绘关帧可复现首帧（见上条豁免口径）。
-- **构造即拉起异步组件的应用夹具，渲染测试必须 `#[tokio::test]`**：App 构造函数内
-  `tokio::spawn` 引擎主循环（`EngineHandle::start`），`#[test]` 同步测试里调
-  `App::new` 即 panic "there is no reactor running"——凡触达 App 构造的测试一律
-  `#[tokio::test] async fn`，纯函数测试（不构造 App）才可用 `#[test]`。
-- **渲染函数回写的一次性状态（follow/消费标记），测试先渲染一帧再模拟后续输入**：
-  首帧定位类状态（打开时居中到下载前沿）由渲染层每帧消费一次并改写滚动——测试
-  若在渲染前预设 `scroll = usize::MAX`（模拟 End 键），首帧消费会把它覆盖为定位值，
-  断言失败且误导为"钳制失效"。正确次序：先渲染一帧（消费 follow、断言
-  `!follow`），再注入键效、二次渲染后断言钳制结果。
-
-- **reqwest 代理是 client 级、请求不可逐个指派**：`reqwest::Proxy` 只能在
-  `ClientBuilder` 上设置，`RequestBuilder` 无 per-request 代理 API。「任务/会话级
-  代理」的标准实现 = client 缓存池：`Arc<Mutex<HashMap<ProxyKey, Client>>>`（key =
-  代理 url + 账号三元组；None key = 直连 client），按请求前查池 get_or_build；
-  切换代理 ⇒ 下一次查池即新 client，在途请求持旧 client 自然完成（无中断语义免费
-  获得）。注意 `Client` 构建成本不低且池无淘汰，key 必须把账号算进指纹，否则同
-  url 不同密码会撞池；构建失败回退直连 + toast 与既有全局代理口径一致。
-- **socks 代理的认证只能走 url userinfo，`Proxy::basic_auth` 对 socks 代理静默无效**：
-  `Proxy::basic_auth(user, pass)` 仅在 HTTP 代理场景注入 `Proxy-Authorization: Basic`
-  头；socks 代理不经过 HTTP 头协商，该调用对 `socks5://` 代理不产生任何认证效果
-  （reqwest 0.12 源码实证）——表象是「socks5 配了账号密码却认证被拒/静默失效」，且无
-  警告可循。正确形态：把凭证编码进代理 url 的 userinfo（`socks5://user:pass@host:port`），
-  reqwest 解析 socks url 时对 userinfo percent-decode 后走 RFC 1929 user/pass 子协商。
-  配置层若将凭证与 url 分字段存放（无凭证 url 用于展示/落盘，避免凭证明文进界面与日志），
-  必须在引擎构建 client 时对 socks 型内部拼装认证 url，不要把无凭证 url 直接喂给
-  `Proxy::all` 了事；`basic_auth` 只留给 http 型代理。
-- **https 型代理 = TLS 包裹的 HTTP 代理；IPv6 字面量进 url 必须加方括号**：代理 url 取
-  `https://host:port` 形态时 reqwest `Proxy::all` 原生支持——客户端与代理之间整体走 TLS，
-  HTTP 代理语义（CONNECT 隧道、`Proxy::basic_auth` 产生 Proxy-Authorization）在 TLS 会话内
-  照常生效，无需按 scheme 写分支或特殊处理。ip 与 url 分字段存放、由 type+ip+port 拼装代理
-  url 的配置模型中，ip 为 IPv6 字面量（含 `:`）时必须拼成 `scheme://[::1]:port`（带 userinfo
-  同理 `scheme://user:pass@[::1]:port`），否则 url 解析失败或主机歧义——方括号收口在单一
-  url 构造函数即可三类型（http/https/socks5）全覆盖。
-
-- **HTTP 探测响应体不读会钉死串行服务端**：`GET Range: bytes=0-` 探测只读头部，
-  响应体（= 整文件流）若不释放，reqwest Response 存活期间连接一直挂着——串行
-  accept 的服务端（测试 fixture 常见形态）会阻塞在写体上，后续连接全部排队；
-  小文件（KB 级，未塞满 socket 缓冲）完全无感，MB 级测试文件才暴露。修法：
-  捕获最终 URL 后立即 `drop(resp)`（reqwest drop → 关闭连接 → 服务端写失败
-  脱阻塞）。单流降级路径例外：探测响应体本身就是下载流，必须移交续读。
-  推广纪律：凡是"读头部拿元数据、body 另起连接取"的下载器模式，探测响应
-  必须显式释放，且 e2e 至少留一个 MB 级用例兜底。
-
-- **多 target 目录的磁盘归属要先辨再清**：`cargo llvm-cov`、`cargo mutants` 各自使用
-  独立 target 目录（`target/llvm-cov-target/` 等），主 `target/debug/build/`（build
-  script 产物，常达 GB 级）只服务主 target——删它不影响 llvm-cov/mutants 的增量性，
-  反之删 llvm-cov-target 则下次需 2.5G+ 全量重建、磁盘紧张沙箱直接放不下。清缓存前
-  按「下一步要跑什么工具」决定归属，别按目录名直觉。
-  **同会话多阶段的时间预算排布（10G 级沙箱实证）**：llvm-cov 与主 debug 目标并存
-  预算不足时，按「主 target 先 clean → llvm-cov 一次跑完并提取度量（lcov.out 等
-  解析产物落 `.work/tmp/`）→ 立即删 llvm-cov-target 还盘 → 终验走主 target 增量」
-  排布——度量解析产物与构建目录分离，删除构建目录不损失已提取数据；跳过此排布
-  会让终验在链接期 `cc failed`（磁盘满的典型症状，非测试失败），先查 df 再归因。
-  **单调用超时预算不够时用 `--no-report` 分块累积 profraw，但必须同构建指纹**：
-  大测试集插桩超单调用预算时，按测试目标分块 `cargo llvm-cov --no-report`（profraw
-  落 coverage 目录累积），末了 `cargo llvm-cov report --lcov --branch` 统一合并——
-  但跨块构建指纹必须一致：CARGO_INCREMENTAL 切换/RUSTFLAGS 变化触发重链，旧 profraw
-  与新二进制混排会报 `malformed instrumentation profile data: symbol name is empty`
-  且无法定位哪个文件——切换任何构建环境变量后全量重跑（先 `rm *.profraw`）。
-  另外报告的对象列表是 build/<hash>/out 的全量 glob：磁盘满被杀的链接会残留损坏
-  `.tmp*` 产物与陈旧 hash 目录一并入选（表象同名报错但根因是对象列表污染）——
-  按 mtime 清理早于统一构建起点的 `build/<crate>/<旧hash>/` 目录后重跑 report。
-  报告期错误先分辨「profraw 坏」还是「对象列表脏」：后者删目录即愈，不必重跑测试。
-
-- **PMD 7 的 cpd 子命令用 `--dir`（`--files` 已废弃）**：`pmd cpd -l rust
-  --minimum-tokens 50 --dir <src>`；退出码 4 = 发现重复（正常语义，不是失败），
-  0 = 无重复。重复块计数口径随目录参数变化，src-only 与 src+tests 是两套数字
-  （对账纪律见 engineering.md「度量数字对账先核口径」）。
-  **GitHub 不可达沙箱的 PMD 7 组装路径（Maven Central 直连）**：repo1.maven.org
-  直连可达时无需 bin zip——`pmd-cli` + `pmd-rust`（外加 pmd-core 传递依赖）三个
-  artifact 即可组装 CPD：Maven（TUNA apache 镜像取二进制包）`dependency:copy-
-  dependencies` 收 jar 到 lib/，启动器 `java -cp "lib/*" net.sourceforge.pmd.cli.
-  PmdCli cpd ...`；**勿依赖 pmd-dist**——它会拉全语言模块 ~150MB（数十语言 jar），
-  单次解析超时。阳性对照先行：两个 >50 token 同构文件验证 CPD 真能报重复，
-  再采信零发现结果。
-
-- **llvm-cov 的 lcov 输出是标准 lcov 格式（冒号+逗号混合分隔）**：记录行为
-  `FN:<line>,<name>`、`BRDA:<line>,<block>,<branch>,<taken>`、`DA:<line>,<count>`——
-  自写解析器（如 CRAP 近似脚本）时 `FN:`/`BRDA:` 先以冒号切前缀再按逗号切字段，
-  直接 `split(":")` 取三段会在标准格式上崩；名字段本身可含逗号，只切第一个逗号。
-
-- **llvm-cov JSON 同源函数跨 crate 实例化必须剥 crate-disambiguator 再聚合**：
-  同一源函数被多个测试 crate（`#[path]` 挂载树）编译时，每个实例化的 mangled
-  name 带 crate hash（`Cs<hash>` 段），粗规范化会把同一函数拆成多个键、零覆盖
-  实例在「取极值」聚合下冒充未覆盖——函数级覆盖率/CRAP 度量先把 `Cs[0-9A-Za-z]+`
-  归一为 `Cs` 再提取可读名，按（文件, 规范化名）合并后取「任一实例覆盖即覆盖」。
-  阳性对照：某已知被测函数（如 UI 渲染助手）在未剥 hash 的报告里常显示 cov=0。
-
-- **对账时挂载树内的 cfg(test) 测试会在每个挂载它的测试 crate 重复注册（合法）**：
-  `#[path]` 收编的产品源里 `#[cfg(test)]` 测试随挂载树进入每个引用它的测试
-  crate，全量 `cargo test` 计数比「新增测试数」多出「新增测试 × 挂载该源的
-  crate 数」——增量对账按 cargo test 输出逐目标列出并按挂载关系解释，勿与
-  「重复 #[test] 属性虚增」（engineering.md 条款）混淆：后者是同 crate 内双注册，
-  前者是跨 crate 合法副本（`--list | sort | uniq -d` 在跨 crate 场景会误报）。
-
-- **`&mut self` 方法调用与字段级不相交借用不可混用（事件臂改造高发）**：在同一函数里
-  持有 `self.tasks.iter_mut().find()` 返回的 `&mut Task` 期间，对同结构体**其他字段的
-  直接访问**（`self.windows.remove(..)`）因字段不相交而合法；但换成 **`&mut self` 方法**
-  （如 `self.clear_stats(id)`）会借走整个 self，与仍在存活期的 `t` 冲突（E0499）。改造
-  事件处理臂时，收口型 helper 调用要么放在任务借用的最后一次使用之后，要么在方法内
-  部改用字段级访问。判别：报错行是方法调用、且同块内另有 `&mut` 迭代借用存活。
-- **ratatui TestBackend 断言的两个坑（CJK 跳过单元 / Cell 字段访问）**：①缓冲区里宽字符
-  （CJK）占两格——第二格是空符号的跳过单元，逐格拼行文本会在宽字符间混入空格，
-  `contains("并发")` 类断言必须先把行文本 `replace(' ', "")` 再匹配（顺序断言用压缩后
-  下标）；`TestBackend::to_string()`（buffer_view）自动跳过续格，全文 `contains` 可直接
-  用 CJK 连续文本。②`Cell` 的前景色是**公开字段 `fg`**（0.29 无 `fg()` 方法），取格用
-  `buffer.cell((x, y)) -> Option<&Cell>`（`Buffer::get` 已 deprecated），配色断言遍历
-  用 `cell(..).expect("界内")` 解包。配色断言**只锚定宽字符首格**——续格 fg=Reset、
-  修饰为空（视觉由首格承载）；逐格配色遍历遇 Reset 即续格，跳过即可。
-- **cargo-llvm-cov 导出的 lcov 缺 `#[path]` 挂载测试 crate 的覆盖上下文，函数级覆盖率/CRAP
-  对挂载源文件严重失真**：集成测试 crate 经 `#[path = "../src/…"]` 挂载产品源时，覆盖映射
-  把源路径记录为非规范形（`tests/../src/app/x.rs`，SF 节按路径分立）；cargo-llvm-cov 0.9.x
-  导出的 lcov 实测只含 bin harness 上下文，挂载副本的 FN/FNDA/DA 整体缺失——表象是
-  「集成测试明明通过，对应分支体 cov=0/FNDA 偏低」（分支体 DA 全 0 而该臂单测断言通过即
-  应怀疑此因）。解法：用工具链自带 llvm-cov 直接导出——`llvm-cov export --object <每个测试
-  二进制>… --instr-profile=<target/llvm-cov-target 下的 .profdata> --format=lcov`（测试二进制
-  在 `target/llvm-cov-target/debug/build/<pkg>/<hash>/out/`；勿给 llvm-cov export 传
-  `--branch`——那是 cargo-llvm-cov 包装层 flag，export 本身报 Unknown argument，且 BRDA
-  默认输出、`--skip-branches` 才关闭）。解析侧三个合并口径：① SF 路径先 normpath 再合并
-  同名节（不规范化会把产品文件按 `tests/` 前缀误判为测试文件排除）；② 同节内同线号 DA
-  重复记录（多 object 按映射交错输出）按线号去重取 max，BRDA 按（线号, block, branch）
-  去重取 max（'-' 视 0）；③ 同一起始行跨 crate 副本 FNDA 取 max（list 语义；标量映射
-  后写覆盖前写 → 命中数假 0，阳性对照应选「明显被大量测试调用的函数」核 FNDA>0）。
-  **SF 归一的稳健锚点取「最后一个 /src/」**：挂载副本路径形态跨环境漂移（`tests/../src/…`
-  与 `tests/src/…` 直拼形态均见，normpath 只解前者），按「最后一个 /src/」截取对两形态
-  均稳（产品文件不含嵌套 src/；tests 自身文件取「最后一个 /tests/」锚，仅用于展示分组）。
-- **lcov 函数级归属必须按「具名函数跨距」，不能按「下一起始行」**：闭包的 FN 记录无结束
-  边界，按「起始行 ≤ 数据行 < 下一起始行」归属时，函数体内最后一个闭包会吞掉其后全部
-  数据行（外层函数后半段的 DA/BRDA 全记到闭包头上，cov/comp 双双失真、闭包 FNDA 显示
-  异常）。正确口径：按反消歧区分具名函数与闭包（rustfilt v0 输出含 `{closure#N}`），
-  闭包 FN 记录忽略，数据行按「具名函数起始行 ≤ 行 < 下一个具名函数起始行」并入外层
-  （闭包与外层本就同一逻辑函数，comp/cov 随跨距天然合并，无需再对闭包单独取极值）；
-  具名函数跨 crate 多副本按起始行去重。与上文「闭包的 DA 会同时计入外层与闭包」条互为
-  补充：那条管 FNDA 归属视角，本条管行级数据归属视角。
-- **CRAP 近似解析器重建与上游基线对账出 ±few 偏差时，先查两处排除边界再疑产品**：
-  ① **无 DA 数据函数**——fixture bin、TUI 入口等 cargo test 不执行的编译单元，函数跨距内
-  0 行 DA → cov=0 → CRAP 满值假性上榜（登记为 NO_DA 型，不算新增高 comp 点）；② **测试模块
-  名形态不止 `tests`**——`cli_parse_tests`/`ui_v113_tests` 等 `*_tests` 段同为 cfg(test)
-  模块，`assert!` 宏展开的 BRDA 虚增 comp，门禁须一并排除。两边界补齐前 78 条、补齐后
-  72 条与上游精确一致（实测案例）；解析器每轮重建属常态，对账差异先归因口径再归因代码。
-  **跨环境对账还有第三处环境边界**：被测系统 spawn 的子进程二进制（fixture/代理 mock）
-  在部分环境会继承 LLVM_PROFILE_FILE 把自身覆盖并入 profdata，同一份解析器读到 fixture
-  函数的具数据覆盖（不再是 NO_DA 型）——NO_DA 口径随环境漂移，对账时先探 fixture 源文件
-  是否出现在 lcov 且 DA>0，再归因解析器或代码；测试 crate 自由函数（tests/ 下的 mock
-  helper，不在 *_tests 模块内）是否计入门禁也属口径选择，跨轮登记口径要写明。
-  **FN 记录收集还有三处解析器边界**（v150 cleaner 轮实证）：① 同一起始行可同时存在
-  **闭包 FN 与具名 FN 记录**（`_RNC…` 与 `_RNv…`）——按「行 → 名」字典去重会让先出现的
-  闭包挤掉具名记录（表象：具名函数消失、其数据被并入前一函数跨距）；FN 记录用
-  (行, 名) 集合存储，闭包判别（`_RNC` 前缀）后置；② **泛型实例化副本**（`_RI…` 前缀）
-  与本体同起始行——不去重会产生零宽跨距的假 NO_DA 行；按起始行归并、FNDA 跨副本取
-  max；③ 被门禁排除的**测试模块函数仍须保留为跨距边界**（它们物理上位于产品代码之后，
-  剔出边界会让最后一个产品函数吞掉整个测试模块的 DA/BRDA，comp/cov 双双虚高）；
-  ④ **嵌套命名 fn（产品代码内的 fn 定义）也是 FN 记录、其 mangled 名是父名路径扩展**
-  （v152 cleaner 轮实证：`field_window` 内嵌 `fill_cols`，子名 = 父名 + `9fill_cols`）
-  ——照具名函数切跨距会把父函数主体的 DA/BRDA 全部划给嵌套函数（父 comp 塌缩、嵌套
-  函数 comp 虚高）；按「子名以父名为前缀」把嵌套命名 fn 归并进父函数跨距。
-
-- **保持行为的机械等价改造可让既有惯用样板跨过 CPD 阈值形成新 tile**：提取/内联/移动不改
-  变重复逻辑本身，但行号漂移会让某组样板行与另一文件的既有样板恰好凑足
-  `--minimum-tokens` 形成新 tile（实测 `Block::default()` 惯用样板在访问器提取轮 +1，
-  4 文件拷贝中 2 处位于当轮触碰文件）。**新增测试同样能制造 +1 tile**：新测试的
-  渲染/构造脚手架若与既有测试同形态（同尺寸 TestBackend + draw + to_string），会给
-  原本无配对的既有脚手架引入首个配对（实测 110×34 对话框金样脚手架轮 +1）——处置：
-  测试脚手架提取共享 helper（testfx 类模块）消解，产品样板收口路径不变。属性测试的
-  策略构造脚手架同理：proptest 策略体（prop_oneof/vec+prop_map 组合）在同会话多个
-  新属性间同形克隆即凑足 50 token 自配对（v146 实测一次 +2）——生成策略提取
-  `fn arb_xxx() -> impl Strategy<Value = T>` 单源 helper 消解（生成分布不变）。
-  CPD 增量对账见
-  +1 时先核 tile 形态：全部拷贝均为惯用样板/夹具形态 → 登记既有形态移交，非真重复回归；
-  勿据此回头拆样板。
-  操作者裁决拆样板时（移交 coder 执行），实证路径：差异点参数化成共享父模块 helper
-  （如 `fn bordered_block(fg: Color) -> Block<'static>`），各拷贝原地一行委托、后续
-  builder 链原样续接（builder 语义下调用次序不影响终态）；同 crate 内既有剥头副本
-  夹具壳须同步——壳内补 helper 真实现转发（非同值复刻）+ 按守卫口径重生成副本，否则
-  gen-drift 守卫红。验收三件套：全链测试/clippy/fmt/arch + CPD 复跑对账 + 独立 grep
-  单源计数（样板仅剩 helper 本体 1 处）。对账按族计不按登记条目计：单源化一并消解
-  同族全部部分配对 tile（实测 56→52，登记 2 个 + 未点名配对 2 个同时消失），且
-  src+tests 口径的夹具副本拷贝同步消失（115→111）。
-
-- **pty 平面截图扫描必须按窗格列宽切片，任务名会被右侧面板复制**：TUI 双栏布局下
-  （任务列表左 + 详情面板右），把整屏 `screen.display` 拼成平面文本后按任务名搜「第一个
-  命中行」会命中**详情面板标题**（选中任务的名称在右栏复现，且行号可能早于列表项）——
-  返回的「任务块」实为详情字段块，状态徽标断言恒假（实测：选中 win11 后 60s 轮询
-  `[已失败]` 永不命中，实为在读详情块）。处置：列表项断言只在**列表窗格列宽内**匹配
-  （如 `needle in row[:63]`，列宽 = 列表面板实际宽度），光标定位（`▌`）同理；整屏级
-  断言（如「全屏无某文案」）不受影响。配套经验：折叠区目标任务的自动化定位 =
-  `home` 后逐行 `down` + 每步短轮询（光标随视图滚动，到位即选中，天然为后续 Space
-  操作备好焦点），比静态计算行号 + 盲发按键健壮（列表项动态增删会漂移）。
-  （v136 展示统一轮 ezr-demo pty 回归实证）
-
-- serde 快照**字段删除 = 零迁移兼容**（v1.23 补全 v1.21 条目的另一半）：枚举变体删除是硬失败（反序列化遇未知值整体 None），而**结构体删字段**后旧档的多余键被 serde 静默忽略、`#[serde(default)]` 一并退役——旧档加载成功且按新语义处理。钉住手法：序列化文本断言不含旧键 + 旧形态注入（`raw.replace` 插入多余键）后 load 成功断言降级行为（registry `legacy_has_error_field_is_ignored`）。
-
-- **llvm-cov 函数级覆盖读数必须跨实例 MAX 归并，async fn 的行级 segments 会系统性低估**（v137 hardender 轮实证）：同一产品源经 `#[path]` 挂载进多个测试 crate（bin + 各 hardening_g_*），llvm-cov JSON 导出里同一源函数出现**多份 function 条目**（每编译实例一份，计数各不相同）——按任一单条目读数、或取 MIN、或「最后写入者」，都会把「在 A 套件执行过、在 B 套件未执行」的臂误判为未覆盖（假存活/假零发现）。正确口径：函数级覆盖 = 对该源函数的**全部实例条目**逐行取 MAX 归并；async fn 尤甚——`tokio::select!` 各臂闭包独立成 function 条目、文件级 `segments` 行读数与协程 poll 实际执行面脱节（实测：文件 segments 报 84/122 行覆盖，实例 regions 归并后实为 98/122）。`branches` 数组仅在 `cargo llvm-cov --branch` 下非空，用它做圈复杂度（comp = 1 + 分支区数）前先核对开关，否则全表 comp 恒 1、CRAP 恒 ≤ 2 的「全绿」是假绿。
-
-- **cargo-llvm-cov 默认每次运行先清理自身构建产物，跨窗口增量必须 `--no-clean`**（v138 QA 轮实证）：全量插桩重建在单次前台调用超时的受限沙箱里，裸跑 `cargo llvm-cov …` 反复执行会每轮从零重编（表象：多轮超时后 `target/llvm-cov-target` 仍近空）。配方：目标命令直接加 `--no-clean` 前台分段跑——构建增量累积跨窗口存续，构建完成后那个窗口自动进入跑测试与出报告；`--no-run` 已废弃且**与 `--no-clean` 互斥**（error: may not be used together），不要再用它做「先建后跑」两段式。跑后清 `target/llvm-cov-target`（~3.3G）还磁盘。
-
-- **llvm 导出 JSON 的 regions 无 hasCount 字段，把 r[5] 当 hasCount 用会全表清零出假绿「门禁 0」**（v138 QA 轮实证）：`cargo llvm-cov --json` 的 function 条目只有 `{branches, mcdc_records, count, filenames, name, regions}`，行覆盖要从 **regions**（`[行起,列起,行止,列止,count,fileID,expandedFileID,kind]`，`fileID` 恒 0）取行区间归并——segments 只在 files 条目上；若照搬 segments 的 6 元组形态把 `r[5]`（fileID）当 hasCount 做判空跳过，所有 region 被静默跳过、函数分组全空，「CRAP 门禁 0 条」是分组为零的假绿（阳性对照：已知压线函数应能复现量级，如 v137 的 block_worker 在本口径下 21.96）。
-
-- **llvm 导出 JSON 的 name 是 v0 mangled，跨 crate 实例归并要剥 crate 段留模块尾**（v138 QA 轮实证，衔接上条 MAX 归并口径）：形如 `_RNvNtNtCs<hash>_<len><crate_name><len><seg>…`——正则取 `Cs[A-Za-z0-9]+_` 之后的 `<len>` 数字，按其长度跳过 crate 名 token，余下模块尾（如 `3app5mouse10pointer_in`）+ 规范化文件路径（剥 `tests/../`、归一 `/src/` 后取 `src/…`）作分组键，才能把 `#[path]` 挂载产生的多 crate 实例 MAX 归并成单函数行；闭包/泛型实例后缀（`.s<n>_`、`0s<n>_`、泛型参数段）不剥离则各自成行（小行数、comp=1，CRAP ≤ 2 的噪声行，不碍门禁但读数时须知）。
-
-- **`#[path]` 挂载点的测试计数对账法：1 条新测试按挂载点数重复计入全量**（v138 QA 轮实证）：产品源内嵌 `#[cfg(test)]` 测试经 `#[path]` 收编进独立测试 crate 时，同一测试在「bin 单测 + 每个挂载该树的测试 crate」各计 1 次——全量计数对账公式 = 静态 `#[test]`/`#[tokio::test]` 属性计数 ×（1 + 挂载该树的 crate 数）；对账用 `cargo test --all-targets -- --list` 的编译期总数与逐 crate 分项核对（实测：1 条 tasks.rs 新测试在 bin + 5 个挂载 app 树的 hardening_* crate 共计 6 次）。上轮交接总数差 ±1 这类残差，先走此法再怀疑漏改。
-  **静态挂载图推导后必须抽点实证校准**（v128 cleaner 轮实证）：顶层 `tests/*.rs` 的
-  `#[path]` grep 会漏掉**壳层再挂载**——挂载壳文件（如 `tests/hardening/namegen_hard.rs`）
-  内部再 `#[path = "../../src/model/namegen.rs"]` 收编产品源，该源的内嵌测试在壳宿
-  crate 也复制一份，顶层 grep 扫不到。校准手法：对每条新测试用
-  `cargo test --test <crate> -- <测试名>` 逐 crate 数命中（每个编译语境恰 1 次），
-  实测计数 ≠ 静态推导时以实测为准重画挂载图，再对总分对账。
-
-- **剥头副本（gen-stripped fixture）再生成必须用 Rust `lines()` 语义且排在 `cargo fmt` 之后**（v132 coder 轮实证）：gen-drift 守卫按「产品源去掉 `//!` 头块后逐字比对」校验 `tests/gen/*_stripped.rs`，再生成脚本若用 Python `read().split('\n')` 计算剥头起点会在文件尾多算一个空元素（Rust `lines()` 不含 EOF 换行后的空元素），写出的副本多一个尾空行、比对恒红——用 `splitlines()`（与 `lines()` 同语义）拼回。时序上 `cargo fmt` 会重排 import（单行 `use super::{…}` 超宽折多行），fmt 后未再生成的副本即刻漂移——**副本再生成是产品源定稿（含 fmt）后的最后一步**，别在 fmt 前生成。
-- **全局布局行数变化会让硬编码行号的渲染金样断言整体移位**（v132 coder 轮实证）：改 `Constraint::Length`（如页脚 4→3 行）后，布局求解器在受限终端（如 100×24 下 `Length(12)+Min(6)>可用`）的分派比例随之变化，测试里 `rows[N]`/`cell((x,y))` 形态的硬编码行号断言（含 `#[path]` 挂载的 hardening 套件）整体错一行——症状是「并发面板表头出现在原数据行位置」。改布局行数后先 `rg "rows\[[0-9]+\]|cell\(\(" tests/ src/` 清点行号锚点逐一重算，或把单行断言改为数据行区间扫描（区间任一命中即达标，对变异守卫同样有效）。**重算锚点不能按 Length 声明值推**：Length+Min 合计超出可用空间时求解器优先保 Min（v134 轮实证：100×24 页脚 3→4 行后右列 `Length(12)+Min(6)` 求解为 detail 9 行 + conns 6 行，而非按 Length 先分 12）——先实渲染一帧取真实行位再重锚，失败断言输出的实际行文本即锚点依据。
-
-- **tokio 异步化网络型 fixture（std 线程版迁移）三坑（v140 QA 轮实证，ezr-proxy 重写）**：①
-  新版 tokio `TcpStream::from_std` 注册前必须显式 `set_nonblocking(true)`（否则 panic
-  「Registering a blocking socket ... unsupported」）；② 测试里客户端用阻塞 std I/O 时
-  runtime 必须 `new_multi_thread`（current_thread 下阻塞调用饿死 spawn 的分派任务 →
-  表现为读超时）；③ 隧道类双向中继直接 `tokio::io::copy_bidirectional`（替代手工双线程
-  try_clone，TLS 流不可 clone 的问题随之消解）。
-- **reqwest(rustls-tls-native-roots) 测试信任链注入零产品改动手法**：rustls-native-certs
-  0.8 经 openssl-probe 优先读 `SSL_CERT_FILE` 环境变量 → 测试进程注入桩自签证书 PEM 即可。
-  两个硬约束：① 证书必须是规范终端实体形态（`BasicConstraints CA:FALSE` + `serverAuth`
-  EKU + IP SAN）——自签 CA:TRUE 叶子 openssl s_client 判 OK 但 webpki 拒绝（严格度差异，
-  报错只会泛化为「证书校验失败」，先比对 openssl 再怀疑注入）；② reqwest 仅在「有解析
-  错误且零有效」时报错，空文件/无 PEM 块文件静默当空信任库——用垃圾文件判别 env 是否生效
-  不可靠，直接看 `/proc/<pid>/environ`。
-- **SOCKS5 RFC 1929 帧序**：认证子协商为 `ver(1) ulen(1) uname plen(1) passwd`——server 侧
-  先读 ver 再读 ulen，漏读 ver 会把 ver 当 ulen 整体错位挂死（v140 实测：python 探针在
-  auth 应答处超时）。方法协商 `ver(5) nmethods methods[]` 中 0xFF 表示无可接受方法。
-- **reqwest 的 `RequestBuilder` 不可 `Clone`**（新版仅 `try_clone() -> Option<Self>`，
-  请求体不可克隆时返回 None）：`select!` 循环里「命令打断后重试请求」直接在循环体内
-  重建 builder（`loop { select! { r = make_req(..).send() => .., cmd = rx.recv() => .. } }`），
-  不要 `.clone()`——编译失败或退化为 Option 解包都徒增噪音；builder 构建成本可忽略。
-- **`tokio::select!` 多分支同时就绪时随机选择**：依赖「某事件必先于另一事件被处理」的
-  确定性测试不能建立在分支顺序上（如预入队取消 + 立即可读的响应头，两者就绪顺序
-  50/50）。要么让被断言的事件只有一个就绪来源，要么把顺序敏感断言放宽为集合式断言
-  （只断言「二者都到达 + 禁止项未出现」），不要用 sleep 对齐赌调度。
-- **HTTP/1.1 响应缺 `Content-Length` 且无 `Transfer-Encoding` 时 body 以连接关闭定界**：
-  reqwest `chunk()` 正常产出字节流直到 Err——「降级服务器」（过载网关/错误页）常以
-  无 CL 响应出现；客户端侧 CL 头解析得 0 ≠ 传输失败，两条路径必须分别处置（头部缺 CL
-  → 探测不可靠；连接提前关闭 → 传输中断）。mock 门控造该形态：发头后按需截断写体即可
-  （Connection: close），无需 chunked 编码。
-- **按连接序号门控 mock（`dropseq=N`）**：在既有 droponce（首连接半途断连）之外的
-  请求臂失败形态——「探测成功、续传 Range 请求即断」需要第 N 个连接不回任何响应直接
-  断开；连接级计数 + `continue`（不写响应直接落到底部关闭）即可，无需特殊 HTTP 状态。
-
-- **crossterm 0.28 带超时 `event::poll` 的 `Ok(false)` 是混合语义：锁竞争失败 ≠ 队列空**（v150 coder 轮实证）：poll 先 `try_lock_internal_event_reader_for(timeout)`，EventStream 常驻后台线程在 `poll_internal(None, …)` 中持锁阻塞等事件、其 Drop 只置 shutdown 标志不 join——restore/drain 首轮 poll(0) 撞锁尾巴立即 Ok(false)，消费循环误判队列空直接退出，已排队字节原样留给继承 tty 的 shell 回显成乱码。drain 类循环 poll 预算至少 5ms（先等到锁再按队列真实状态判定），且按「是否消费到事件」返回 bool 供上层决定是否追加窗口。
-- **TUI 退出收尾的正确顺序：鼠标关最先 → settle 窗口 → drain → raw 关 → 其余关**（v150 coder 轮实证，`^[[<35;58;18M` 退出后 shell 乱码根治）：disable 序列 flush 后终端模拟器**异步**处理，处理完成前 1003 any-event 仍持续生成 motion 字节——「先 drain 后关鼠标」对该生成窗口无能为力（窗口内新字节排队在 tty 队列，进程退出即泄漏）。正确序：`DisableMouseCapture` flush → sleep ~50ms → drain → `disable_raw_mode` → 其余关闭命令。两条硬约束：① drain 必须在 raw mode 仍开启时做（canonical 模式下无换行的鼠标序列被内核 line discipline 攒行等 EOL，poll 永远 false、read 永远拿不到）；② 错误容忍——复原路径两段 execute! 都执行（前段失败不跳过后续关闭），按序上报首个 Err。哨兵/父死路径**不要** drain：与已恢复的 shell 竞争读队列会吞用户键入。
-- **TimedWriter：给字节流测试加时间戳以锁定「顺序 × 时序」复合契约**（v150 coder 轮实证）：`impl Write for 探针 Writer`，每次 `write` 记录 `(start.elapsed(), 内容)`——同一份字节流同时断言字节序（内容 find 比大小）与相对窗口时序（鼠标关 < 45ms < paste/alt 关，睡眠保证 ≥50ms 取 45ms 容差）。比「分开测顺序 + 信任 sleep」强：任何把 settle 挪到鼠标关之前/之后的回退即刻红，且无需真实终端（Vec 语境 poll 报错即无事件路径）。
-- **沙箱内 rustup 会卡网络解析，用环境变量直指工具链**（v150 coder 轮实证）：`rustup toolchain list` 等命令在受限沙箱可无限挂起（rsproxy 不可达时不快速失败）；绕过 `rust-toolchain.toml` 解析直接 `export RUSTUP_TOOLCHAIN=nightly-x86_64-unknown-linux-gnu`（工具链已在 `~/.rustup/toolchains/`）+ `PATH=$HOME/.cargo/bin:$PATH`，cargo/rustfmt/clippy 全部立即可用，无需等 rustup。**`rustup component add` 同样必须每次带镜像环境变量**（`RUSTUP_DIST_SERVER`/`RUSTUP_UPDATE_ROOT`）：env 不跨调用持久，重开 shell 后裸调 `rustup component add` 会静默走官方源挂起（表象：超时零输出、llvm-tools 未落盘），带镜像重试即成——判别探针：`ls ~/.rustup/toolchains/<tc>/lib/rustlib/x86_64-unknown-linux-gnu/bin/` 有无 `llvm-cov`/`llvm-profdata`。
-- **长 pty 回归脚本连续全量跑会在中后段随机挂起（沙箱 flake），按场景子集分半跑可绕**（v150 coder 轮实证，沿 v135 轮同款）：verify_ezr 全量挂 R 场景起点（280s 超时），`verify_ezr.py r` 单独跑 10/10、按子集 `abcdefhijklmn` + `opqrs` 分半全绿 118+64；test_focus_style 同法 `fgi` + `hjkl` 得 26+32。判据：挂起点随运行漂移、挂起场景单独复跑通过、短套件（footer/smoke 等全生命周期 pty）全绿——环境性而非代码回归。单实例长时间跑前先 `ps aux | rg ezr-tui-demo` 清残留。

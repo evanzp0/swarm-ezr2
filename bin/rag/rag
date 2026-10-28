@@ -1,0 +1,882 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+rag —— 本地结构化 RAG 工具（BM25 全文排序）
+============================================
+
+对指定目录下指定类型的文本/源码文件建立本地结构化倒排索引（默认落 `.work/rag/`），
+用 BM25 对分块（chunk）做全文排序检索，返回命中文件、行号范围与片段。
+纯 Python 3 标准库实现：无第三方依赖、无网络访问、无守护进程。
+
+用法:
+  rag index  [目录] [--types py,md,...] [--out DIR] [--rebuild]
+             [--chunk-lines N] [--overlap-lines N] [--include-hidden] [--json]
+  rag search <查询词...> [--index DIR] [--top N] [--full] [--json]
+  rag status [--index DIR] [--json]     # 检查索引是否丢失/损坏/过期（中断恢复用）
+  rag verify [--index DIR]              # 索引一致性深检（结构 + 词频逐项复核）
+  rag files  [--index DIR] [--json]     # 列出已索引文件
+  rag show   <chunk_id> [--index DIR]   # 按分块 id 打印原文
+  rag help                              # 详细用法与示例
+
+索引目录结构（结构化索引，均为 UTF-8 JSON / JSONL）:
+  <索引目录>/manifest.json   索引元数据：根目录、类型列表、BM25 参数、统计与计数器
+  <索引目录>/files.json      文件账本：路径 → {hash,size,mtime,chunk_ids,n_tokens,type}
+  <索引目录>/chunks.jsonl    分块正文：每行一个 {id,path,start_line,end_line,n_tokens,text}
+  <索引目录>/postings.json   倒排索引：词项 → {chunk_id: tf}
+
+退出码: 0 成功；1 错误（用法/IO/索引缺失或损坏）；3 索引过期（仅 status）。
+制度性规则（自动索引、检索优先走索引、中断恢复查索引）见 CONSTITUTION.md 第一章。
+"""
+
+import argparse
+import hashlib
+import json
+import math
+import os
+import re
+import sys
+import time
+from collections import Counter
+
+VERSION = "1.0.0"
+TOOL_TAG = "[rag]"
+
+DEFAULT_TARGET_DIR = "project"          # 默认索引目标：swarm 唯一工作区
+DEFAULT_INDEX_DIR = os.path.join(".work", "rag")  # 默认索引目录（相对当前工作目录）
+
+# 默认索引的文件类型（源码 + 文档 + 配置）；--types '*' 可索引全部文件
+DEFAULT_TYPES_STR = (
+    "c,cc,cpp,cs,css,cfg,clj,edn,ex,exs,go,groovy,h,hh,hpp,hs,html,htm,ini,"
+    "java,js,json,jsx,kt,lua,m,md,markdown,mjs,php,pl,pm,ps1,py,rb,rst,rs,"
+    "sass,scala,scss,sh,sql,swift,svelte,tf,toml,ts,tsx,txt,vue,xml,yaml,yml,zsh"
+)
+
+MAX_FILE_BYTES = 2 * 1024 * 1024        # 超过 2MB 的文件跳过（防巨型/二进制文件）
+MAX_TOKEN_LEN = 40                      # 单词元长度上限（防哈希串污染索引）
+K1 = 1.5                                # BM25 k1
+B = 0.75                                # BM25 b
+CHUNK_LINES = 60                        # 分块行数
+OVERLAP_LINES = 10                      # 相邻分块重叠行数
+SNIPPET_LINES = 6                       # 检索结果每块默认展示的命中行数
+LINE_DISPLAY_MAX = 160                  # 展示行截断长度
+
+# 扫描时固定跳过的目录（构建缓存/依赖/VCS 等）
+EXCLUDE_DIRS = {
+    ".git", ".hg", ".svn", ".work", ".tools", ".idea", ".vscode", ".next",
+    ".nuxt", ".gradle", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    ".venv", "venv", "virtualenv", "node_modules", "__pycache__",
+    "target", "build", "dist", "out", "vendor", ".tox", ".eggs",
+    ".cache", "coverage", ".terraform", ".DS_Store",
+}
+
+RE_WORD = re.compile(r"[A-Za-z0-9_]+")
+RE_CAMEL = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]+|[a-z0-9]+")
+RE_CJK = re.compile(r"[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]+")
+
+
+class RagIndexError(Exception):
+    """索引缺失或结构损坏。"""
+
+
+# ---------------------------------------------------------------------------
+# 输出辅助
+# ---------------------------------------------------------------------------
+
+def info(msg):
+    print(f"{TOOL_TAG} {msg}")
+
+
+def warn(msg):
+    print(f"{TOOL_TAG} 警告: {msg}", file=sys.stderr)
+
+
+def die(msg, code=1):
+    print(f"{TOOL_TAG} 错误: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+# ---------------------------------------------------------------------------
+# 分词与分块
+# ---------------------------------------------------------------------------
+
+def tokenize(text):
+    """分词器（索引与查询必须共用）：
+    - 拉丁/数字词：整词小写保留；snake_case / camelCase 额外拆子词（子词长度 >= 2）；
+    - CJK 连续段：拆二元组（bigram），单字段落为单字词元。
+    """
+    out = []
+    for m in RE_WORD.finditer(text):
+        raw = m.group(0)
+        low = raw.lower()
+        if len(low) <= MAX_TOKEN_LEN:
+            out.append(low)
+        if "_" in low:
+            for p in low.split("_"):
+                if 2 <= len(p) <= MAX_TOKEN_LEN:
+                    out.append(p)
+        elif any(c.isupper() for c in raw):
+            for p in RE_CAMEL.findall(raw):
+                p = p.lower()
+                if 2 <= len(p) <= MAX_TOKEN_LEN:
+                    out.append(p)
+    for m in RE_CJK.finditer(text):
+        s = m.group(0)
+        if len(s) == 1:
+            out.append(s)
+        else:
+            for i in range(len(s) - 1):
+                out.append(s[i:i + 2])
+    return out
+
+
+def chunk_text(text, chunk_lines, overlap_lines):
+    """按行窗口分块：返回 [(start_line, end_line, text)]（行号 1 基、闭区间）。"""
+    lines = text.splitlines()
+    n = len(lines)
+    if n == 0:
+        return []
+    step = max(1, chunk_lines - overlap_lines)
+    chunks = []
+    start = 0
+    while True:
+        end = min(start + chunk_lines, n)  # 闭区间右端（1 基）
+        chunks.append((start + 1, end, "\n".join(lines[start:end])))
+        if end >= n:
+            break
+        start += step
+    return chunks
+
+
+# ---------------------------------------------------------------------------
+# 文件扫描与读取
+# ---------------------------------------------------------------------------
+
+def parse_types(spec):
+    """解析 --types：'*'/'all' → None（全部文件）；否则为小写扩展名集合。"""
+    spec = (spec or "").strip()
+    if not spec:
+        die("--types 不能为空（用逗号分隔的扩展名列表，或 '*' 表示全部文件）")
+    if spec in ("*", "all", "全部"):
+        return None
+    types = set()
+    for part in re.split(r"[,，\s]+", spec):
+        part = part.strip().lstrip(".").lower()
+        if part:
+            types.add(part)
+    if not types:
+        die(f"--types 未解析出任何文件类型: {spec!r}")
+    return types
+
+
+def types_label(types):
+    return "全部文件（*）" if types is None else ",".join(sorted(types))
+
+
+def is_excluded_dir(name, include_hidden):
+    if name in EXCLUDE_DIRS:
+        return True
+    return not include_hidden and name.startswith(".")
+
+
+def scan_files(root, types, include_hidden=False, exclude_abs=()):
+    """扫描目录：返回排序后的相对路径列表（'/' 分隔）。
+    - 跳过 EXCLUDE_DIRS、隐藏目录（--include-hidden 可关）与 exclude_abs 中的目录；
+    - types 为 None 时索引全部文件（仍受二进制检测约束）。
+    """
+    exclude_abs = {os.path.abspath(p) for p in exclude_abs}
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        keep = []
+        for d in sorted(dirnames):
+            full = os.path.abspath(os.path.join(dirpath, d))
+            if full in exclude_abs:
+                continue
+            if is_excluded_dir(d, include_hidden):
+                continue
+            keep.append(d)
+        dirnames[:] = keep
+        rel_dir = os.path.relpath(dirpath, root)
+        for fn in sorted(filenames):
+            rel = fn if rel_dir == "." else os.path.join(rel_dir, fn)
+            if types is not None:
+                ext = os.path.splitext(fn)[1].lstrip(".").lower()
+                if ext not in types:
+                    continue
+            found.append(rel.replace(os.sep, "/"))
+    return sorted(found)
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(65536), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def read_text_file(path):
+    """读文本文件；二进制（前 8KB 含 NUL）或超大文件返回 None。"""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(MAX_FILE_BYTES + 1)
+    except OSError:
+        return None
+    if len(data) > MAX_FILE_BYTES:
+        return None
+    if b"\x00" in data[:8192]:
+        return None
+    return data.decode("utf-8", errors="replace")
+
+
+def _is_subpath(child, parent):
+    child = os.path.abspath(child)
+    parent = os.path.abspath(parent)
+    return child == parent or child.startswith(parent.rstrip(os.sep) + os.sep)
+
+
+# ---------------------------------------------------------------------------
+# 索引读写
+# ---------------------------------------------------------------------------
+
+def _p_manifest(out):
+    return os.path.join(out, "manifest.json")
+
+
+def _p_files(out):
+    return os.path.join(out, "files.json")
+
+
+def _p_chunks(out):
+    return os.path.join(out, "chunks.jsonl")
+
+
+def _p_postings(out):
+    return os.path.join(out, "postings.json")
+
+
+def _atomic_write(path, data_bytes):
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data_bytes)
+    os.replace(tmp, path)
+
+
+def _dump_json(obj):
+    return (json.dumps(obj, ensure_ascii=False, indent=1, sort_keys=False) + "\n").encode("utf-8")
+
+
+def save_index(out, manifest, files, chunks, postings):
+    """原子化落盘：先写数据文件，最后写 manifest（manifest 存在 = 索引完整提交）。"""
+    os.makedirs(out, exist_ok=True)
+    _atomic_write(_p_chunks(out),
+                  "".join(json.dumps(chunks[cid], ensure_ascii=False) + "\n"
+                          for cid in sorted(chunks)).encode("utf-8"))
+    _atomic_write(_p_postings(out), _dump_json(postings))
+    _atomic_write(_p_files(out), _dump_json(files))
+    _atomic_write(_p_manifest(out), _dump_json(manifest))
+
+
+def load_index(out, need_chunks=True):
+    """加载索引；缺失/损坏抛 RagIndexError（消息面向操作者）。"""
+    if not os.path.isfile(_p_manifest(out)):
+        raise RagIndexError(f"索引不存在于 {os.path.abspath(out)}"
+                            f"（先用 bin/rag/rag index <目录> --types <类型列表> 建立）")
+    try:
+        with open(_p_manifest(out), "rb") as f:
+            manifest = json.loads(f.read().decode("utf-8"))
+        with open(_p_files(out), "rb") as f:
+            files = json.loads(f.read().decode("utf-8"))
+        with open(_p_postings(out), "rb") as f:
+            raw_postings = json.loads(f.read().decode("utf-8"))
+        postings = {}
+        for term, tfmap in raw_postings.items():
+            postings[term] = {int(cid): tf for cid, tf in tfmap.items()}
+        chunks = {}
+        if need_chunks:
+            with open(_p_chunks(out), "rb") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    row = json.loads(line.decode("utf-8"))
+                    chunks[int(row["id"])] = row
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise RagIndexError(f"索引损坏（{exc}）——可用 index --rebuild 重建")
+    return manifest, files, chunks, postings
+
+
+def _empty_state():
+    return {"files": {}, "chunks": {}, "postings": {}, "next_chunk_id": 0}
+
+
+def _index_one_file(state, root, rel, file_hash, params):
+    """把单个文件分块并入索引 state；返回 (n_chunks_added, skipped_reason|None)。
+    二进制/超大文件：不产生分块，但登记 skipped 台账记录（凭 hash 稳定追踪，
+    避免每次增量都被误判为新增文件）。"""
+    abspath = os.path.join(root, rel)
+    st = os.stat(abspath)
+    text = read_text_file(abspath)
+    if text is None:
+        ext = os.path.splitext(rel)[1].lstrip(".").lower()
+        state["files"][rel] = {
+            "type": ext, "size": st.st_size, "mtime": int(st.st_mtime),
+            "hash": file_hash, "n_tokens": 0, "chunk_ids": [], "skipped": True,
+        }
+        return 0, "binary_or_oversized"
+    added = 0
+    chunk_ids = []
+    total_tokens = 0
+    for (start, end, seg) in chunk_text(text, params["chunk_lines"], params["overlap_lines"]):
+        toks = tokenize(seg)
+        if not toks:
+            continue  # 全空分块不入索引
+        cid = state["next_chunk_id"]
+        state["next_chunk_id"] = cid + 1
+        state["chunks"][cid] = {
+            "id": cid, "path": rel, "start": start, "end": end,
+            "n_tokens": len(toks), "text": seg,
+        }
+        tf = Counter(toks)
+        for term, cnt in tf.items():
+            state["postings"].setdefault(term, {})[cid] = cnt
+        chunk_ids.append(cid)
+        total_tokens += len(toks)
+        added += 1
+    ext = os.path.splitext(rel)[1].lstrip(".").lower()
+    state["files"][rel] = {
+        "type": ext,
+        "size": st.st_size,
+        "mtime": int(st.st_mtime),
+        "hash": file_hash,
+        "n_tokens": total_tokens,
+        "chunk_ids": chunk_ids,
+    }
+    return added, None
+
+
+def _remove_one_file(state, rel):
+    """把文件的全部分块从索引中移除（按旧分块文本重分词以回撤倒排项）。"""
+    rec = state["files"].pop(rel, None)
+    if rec is None:
+        return
+    for cid in rec.get("chunk_ids", []):
+        row = state["chunks"].pop(cid, None)
+        if row is None:
+            continue
+        for term in tokenize(row["text"]):
+            tfmap = state["postings"].get(term)
+            if tfmap is not None:
+                tfmap.pop(cid, None)
+                if not tfmap:
+                    del state["postings"][term]
+
+
+def compute_stats(state):
+    n_chunks = len(state["chunks"])
+    total_tokens = sum(row["n_tokens"] for row in state["chunks"].values())
+    skipped = sum(1 for rec in state["files"].values() if rec.get("skipped"))
+    return {
+        "files": len(state["files"]) - skipped,
+        "skipped_files": skipped,
+        "chunks": n_chunks,
+        "terms": len(state["postings"]),
+        "tokens": total_tokens,
+        "avgdl": round(total_tokens / n_chunks, 2) if n_chunks else 0.0,
+    }
+
+
+def make_manifest(root, types, params, include_hidden, state, created_at=None):
+    now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    return {
+        "tool": "rag",
+        "version": VERSION,
+        "root": root,
+        "types": "*" if types is None else sorted(types),
+        "params": params,
+        "include_hidden": include_hidden,
+        "created_at": created_at or now,
+        "updated_at": now,
+        "next_chunk_id": state["next_chunk_id"],
+        "stats": compute_stats(state),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 子命令：index
+# ---------------------------------------------------------------------------
+
+def cmd_index(args):
+    t0 = time.time()
+    if args.chunk_lines < 1:
+        die("--chunk-lines 必须 >= 1")
+    if args.overlap_lines < 0 or args.overlap_lines >= args.chunk_lines:
+        die("--overlap-lines 必须满足 0 <= overlap < chunk-lines")
+    root = os.path.abspath(args.target)
+    if not os.path.isdir(root):
+        die(f"目标目录不存在: {root}")
+    out = os.path.abspath(args.out or DEFAULT_INDEX_DIR)
+    if out == root:
+        die("索引输出目录不能等于目标目录")
+    if _is_subpath(root, out):
+        die(f"目标目录 {root} 位于索引目录 {out} 内部——请更换 --out 位置")
+
+    types = parse_types(args.types if args.types is not None else DEFAULT_TYPES_STR)
+    params = {"k1": K1, "b": B,
+              "chunk_lines": args.chunk_lines, "overlap_lines": args.overlap_lines}
+
+    # 载入旧索引（增量），不兼容或损坏则全新建立
+    mode = "fresh"
+    state = _empty_state()
+    created_at = None
+    if not args.rebuild and os.path.isfile(_p_manifest(out)):
+        try:
+            manifest, files, chunks, postings = load_index(out, need_chunks=True)
+            old_root = manifest.get("root")
+            old_params = manifest.get("params", {})
+            if old_root != root:
+                info(f"索引根目录不同（{old_root} → {root}），改为全新建立。")
+            elif any(old_params.get(k) != v for k, v in params.items()):
+                info("分块/BM25 参数与旧索引不同，改为全新建立。")
+            else:
+                state = {"files": files, "chunks": chunks,
+                         "postings": postings,
+                         "next_chunk_id": int(manifest.get("next_chunk_id", 0))}
+                created_at = manifest.get("created_at")
+                mode = "incremental"
+        except RagIndexError as exc:
+            warn(f"{exc}；改为全新建立。")
+            mode = "fresh"
+
+    cur_list = scan_files(root, types, args.include_hidden, exclude_abs=(out,))
+    cur_set = set(cur_list)
+    old_set = set(state["files"])
+
+    removed = sorted(old_set - cur_set)
+    added = sorted(cur_set - old_set)
+    changed = []
+    unchanged = 0
+    for rel in sorted(cur_set & old_set):
+        try:
+            h = sha256_file(os.path.join(root, rel))
+        except OSError:
+            removed.append(rel)
+            continue
+        if h == state["files"][rel].get("hash"):
+            unchanged += 1
+        else:
+            changed.append(rel)
+
+    for rel in removed:
+        _remove_one_file(state, rel)
+    for rel in changed:
+        _remove_one_file(state, rel)
+
+    n_added_chunks = 0
+    skipped_binary = 0
+    for rel in added + changed:
+        abspath = os.path.join(root, rel)
+        try:
+            h = sha256_file(abspath)
+        except OSError:
+            continue
+        n, reason = _index_one_file(state, root, rel, h, params)
+        n_added_chunks += n
+        if reason == "binary_or_oversized":
+            skipped_binary += 1
+
+    manifest = make_manifest(root, types, params, args.include_hidden,
+                             state, created_at=created_at)
+    save_index(out, manifest, state["files"], state["chunks"], state["postings"])
+
+    stats = manifest["stats"]
+    elapsed = time.time() - t0
+    if args.json:
+        print(json.dumps({
+            "mode": mode, "root": root, "index_dir": out,
+            "types": manifest["types"],
+            "scanned": len(cur_list), "added_files": len(added),
+            "changed_files": len(changed), "removed_files": len(removed),
+            "unchanged_files": unchanged, "skipped_binary": skipped_binary,
+            "added_chunks": n_added_chunks, "stats": stats,
+            "elapsed_ms": int(elapsed * 1000),
+        }, ensure_ascii=False, indent=1))
+    else:
+        info(f"目标: {root}   类型: {types_label(types)}")
+        info(f"索引目录: {out}（{'全新建立' if mode == 'fresh' else '增量更新'}）")
+        info(f"扫描 {len(cur_list)} 个文件：新增 {len(added)} / 变更 {len(changed)} / "
+             f"删除 {len(removed)} / 未变 {unchanged}"
+             + (f" / 跳过二进制或超大 {skipped_binary}" if skipped_binary else ""))
+        info(f"索引完成: {stats['files']} 个文件 / {stats['chunks']} 个分块 / "
+             f"{stats['tokens']} 个词元 / {stats['terms']} 个词项，"
+             f"新增分块 {n_added_chunks}，用时 {elapsed:.2f}s")
+
+
+# ---------------------------------------------------------------------------
+# 子命令：search
+# ---------------------------------------------------------------------------
+
+def _bm25_scores(manifest, chunks, postings, query_tokens):
+    """BM25 打分：score(D,Q) = Σ_t IDF(t) · tf·(k1+1) / (tf + k1·(1−b+b·|D|/avgdl))，
+    IDF(t) = ln(1 + (N − df + 0.5) / (df + 0.5))（恒为正，Lucene 口径）。"""
+    stats = manifest.get("stats", {})
+    n = max(1, int(stats.get("chunks", 0)))
+    avgdl = float(stats.get("avgdl") or 1.0) or 1.0
+    scores = {}
+    for term in sorted(set(query_tokens)):
+        tfmap = postings.get(term)
+        if not tfmap:
+            continue
+        df = len(tfmap)
+        idf = math.log(1.0 + (n - df + 0.5) / (df + 0.5))
+        for cid, tf in tfmap.items():
+            row = chunks.get(cid)
+            if row is None:
+                continue  # 倒排与分块不一致（损坏），跳过；verify 可诊断
+            dl = max(1, int(row.get("n_tokens", 1)))
+            denom = tf + K1 * (1.0 - B + B * dl / avgdl)
+            scores[cid] = scores.get(cid, 0.0) + idf * (tf * (K1 + 1.0)) / denom
+    return scores
+
+
+def _matched_lines(row, qtokens):
+    """从分块文本里挑出含查询词元的行（最多 SNIPPET_LINES 行；无命中给前 3 行）。"""
+    hits = []
+    for i, line in enumerate(row["text"].splitlines()):
+        if set(tokenize(line)) & qtokens:
+            hits.append((row["start"] + i, line))
+            if len(hits) >= SNIPPET_LINES:
+                break
+    if not hits:
+        for i, line in enumerate(row["text"].splitlines()[:3]):
+            hits.append((row["start"] + i, line))
+    return hits
+
+
+def _display_line(line):
+    line = line.rstrip()
+    return line if len(line) <= LINE_DISPLAY_MAX else line[:LINE_DISPLAY_MAX] + "…"
+
+
+def cmd_search(args):
+    t0 = time.time()
+    out = os.path.abspath(args.index or DEFAULT_INDEX_DIR)
+    try:
+        manifest, files, chunks, postings = load_index(out, need_chunks=True)
+    except RagIndexError as exc:
+        die(str(exc), code=1)
+    root = manifest.get("root", "")
+    if not os.path.isdir(root):
+        warn(f"索引根目录已不存在: {root}（检索照常进行；可确认后重建索引）")
+
+    query = " ".join(args.query).strip()
+    qtokens = tokenize(query)
+    if not qtokens:
+        die(f"查询词没有可检索的分词: {query!r}")
+    qset = set(qtokens)
+
+    scores = _bm25_scores(manifest, chunks, postings, qtokens)
+    ranked = sorted(scores.items(),
+                    key=lambda kv: (-kv[1], chunks[kv[0]]["path"], chunks[kv[0]]["start"]))
+    ranked = ranked[: max(0, args.top)]
+    elapsed_ms = int((time.time() - t0) * 1000)
+
+    if args.json:
+        hits = []
+        for cid, score in ranked:
+            row = chunks[cid]
+            hit = {
+                "chunk_id": cid, "score": round(score, 4),
+                "path": row["path"], "start_line": row["start"], "end_line": row["end"],
+                "matched_lines": [{"line": ln, "text": _display_line(txt)}
+                                  for ln, txt in _matched_lines(row, qset)],
+            }
+            if args.full:
+                hit["text"] = row["text"]
+            hits.append(hit)
+        print(json.dumps({
+            "query": query, "terms": sorted(qset), "index_dir": out,
+            "root": root, "hits": hits,
+            "total_scored_chunks": len(scores), "elapsed_ms": elapsed_ms,
+        }, ensure_ascii=False, indent=1))
+        return
+
+    stats = manifest.get("stats", {})
+    info(f"查询: {query!r}  词元: {' '.join(sorted(qset))}")
+    info(f"索引: {out} （{stats.get('files', 0)} 个文件 / {stats.get('chunks', 0)} 个分块，"
+         f"命中 {len(scores)} 块，展示前 {len(ranked)}，{elapsed_ms}ms）")
+    if not ranked:
+        info("无命中结果。可换关键词，或检查索引是否过期（bin/rag/rag status）。")
+        return
+    for i, (cid, score) in enumerate(ranked, 1):
+        row = chunks[cid]
+        n_lines = row["end"] - row["start"] + 1
+        print(f"{i:>3}. #{cid} score={score:7.2f}  {row['path']}  "
+              f"L{row['start']}-{row['end']}（{n_lines} 行）")
+        for ln, txt in _matched_lines(row, qset):
+            print(f"        {ln}: {_display_line(txt)}")
+    info("提示: bin/rag/rag show <chunk_id> 看整块原文；--json 供脚本消费；--full 输出整块。")
+
+
+# ---------------------------------------------------------------------------
+# 子命令：status（中断恢复时检查索引是否丢失/损坏/过期）
+# ---------------------------------------------------------------------------
+
+def cmd_status(args):
+    out = os.path.abspath(args.index or DEFAULT_INDEX_DIR)
+    result = {"index_dir": out, "state": "missing", "ok": False}
+    try:
+        manifest, files, chunks, postings = load_index(out, need_chunks=False)
+    except RagIndexError as exc:
+        if args.json:
+            print(json.dumps({**result, "reason": str(exc)}, ensure_ascii=False, indent=1))
+        die(str(exc), code=1)
+
+    root = manifest.get("root", "")
+    types = manifest.get("types", "*")
+    types_set = None if types == "*" else set(types)
+    result.update({
+        "state": "healthy", "ok": True, "root": root, "types": types,
+        "params": manifest.get("params"), "version": manifest.get("version"),
+        "created_at": manifest.get("created_at"), "updated_at": manifest.get("updated_at"),
+        "stats": manifest.get("stats"),
+    })
+
+    problems = []
+    root_missing = not os.path.isdir(root)
+    if root_missing:
+        problems.append(f"索引根目录已不存在: {root}")
+    missing_on_disk, new_on_disk, changed = [], [], []
+    if not root_missing:
+        cur = set(scan_files(root, types_set, manifest.get("include_hidden", False),
+                             exclude_abs=(out,)))
+        old = set(files)
+        missing_on_disk = sorted(old - cur)
+        new_on_disk = sorted(cur - old)
+        for rel in sorted(cur & old):
+            try:
+                if sha256_file(os.path.join(root, rel)) != files[rel].get("hash"):
+                    changed.append(rel)
+            except OSError:
+                missing_on_disk.append(rel)
+        if missing_on_disk:
+            problems.append(f"索引中有 {len(missing_on_disk)} 个文件已从磁盘消失")
+        if new_on_disk:
+            problems.append(f"磁盘上有 {len(new_on_disk)} 个新文件未入索引")
+        if changed:
+            problems.append(f"{len(changed)} 个文件内容已变更（hash 不一致）")
+    stale = bool(problems)
+    result.update({
+        "root_missing": root_missing,
+        "missing_on_disk": missing_on_disk, "new_on_disk": new_on_disk,
+        "changed_files": changed,
+        "state": "stale" if stale else "healthy",
+        "ok": not stale,
+        "problems": problems,
+    })
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=1))
+    else:
+        info(f"索引目录: {out}")
+        info(f"索引根: {root}   类型: {types_label(types_set)}")
+        info(f"建库时间: {manifest.get('created_at')}   更新时间: {manifest.get('updated_at')}")
+        s = manifest.get("stats", {})
+        info(f"规模: {s.get('files', 0)} 个文件 / {s.get('chunks', 0)} 个分块 / "
+             f"{s.get('terms', 0)} 个词项")
+        if stale:
+            warn(f"索引过期（{'；'.join(problems)}）——运行 bin/rag/rag index 增量刷新或 --rebuild 重建。")
+        else:
+            info("索引健康。")
+    sys.exit(3 if stale else 0)
+
+
+# ---------------------------------------------------------------------------
+# 子命令：verify（一致性深检）
+# ---------------------------------------------------------------------------
+
+def cmd_verify(args):
+    out = os.path.abspath(args.index or DEFAULT_INDEX_DIR)
+    try:
+        manifest, files, chunks, postings = load_index(out, need_chunks=True)
+    except RagIndexError as exc:
+        die(str(exc), code=1)
+
+    problems = []
+    # 1) 分块 ↔ 文件账本互指完整
+    for cid, row in chunks.items():
+        rec = files.get(row["path"])
+        if rec is None:
+            problems.append(f"分块 #{cid} 的文件 {row['path']} 不在 files.json")
+        elif cid not in rec.get("chunk_ids", []):
+            problems.append(f"分块 #{cid} 未登记在其文件 {row['path']} 的 chunk_ids")
+    for path, rec in files.items():
+        for cid in rec.get("chunk_ids", []):
+            if cid not in chunks:
+                problems.append(f"{path} 引用的分块 #{cid} 不存在于 chunks.jsonl")
+    # 2) 词频逐项复核：重分词全部分块，与 postings 精确对账
+    expected = {}
+    for cid, row in chunks.items():
+        toks = tokenize(row["text"])
+        if len(toks) != row.get("n_tokens"):
+            problems.append(f"分块 #{cid} n_tokens={row.get('n_tokens')} 与实际 {len(toks)} 不符")
+        for term, cnt in Counter(toks).items():
+            expected.setdefault(term, {})[cid] = cnt
+    for term, tfmap in postings.items():
+        exp = expected.get(term)
+        if exp is None:
+            problems.append(f"词项 {term!r} 在重分词后不存在（多余倒排项，{len(tfmap)} 个）")
+            continue
+        if set(tfmap) != set(exp):
+            problems.append(f"词项 {term!r} 的 chunk 集合不一致（索引 {len(tfmap)} vs 实际 {len(exp)}）")
+        else:
+            for cid, tf in exp.items():
+                if tfmap[cid] != tf:
+                    problems.append(f"词项 {term!r} 分块 #{cid} tf 不一致（{tfmap[cid]} vs {tf}）")
+    missing_terms = set(expected) - set(postings)
+    for term in sorted(missing_terms)[:10]:
+        problems.append(f"词项 {term!r} 缺失倒排项（{len(expected[term])} 个分块）")
+
+    if args.json:
+        print(json.dumps({"ok": not problems, "problems": problems[:50],
+                          "problem_count": len(problems),
+                          "stats": manifest.get("stats")},
+                         ensure_ascii=False, indent=1))
+    else:
+        if problems:
+            warn(f"一致性检查未通过，共 {len(problems)} 处不一致（前 10 处）：")
+            for p in problems[:10]:
+                print(f"  - {p}")
+            info("建议重建索引：bin/rag/rag index --rebuild")
+            sys.exit(1)
+        info(f"一致性检查通过 ✓ （{manifest['stats']['files']} 个文件 / "
+             f"{manifest['stats']['chunks']} 个分块 / {manifest['stats']['terms']} 个词项逐项对账一致）")
+
+
+# ---------------------------------------------------------------------------
+# 子命令：files / show / help
+# ---------------------------------------------------------------------------
+
+def cmd_files(args):
+    out = os.path.abspath(args.index or DEFAULT_INDEX_DIR)
+    try:
+        manifest, files, _, _ = load_index(out, need_chunks=False)
+    except RagIndexError as exc:
+        die(str(exc), code=1)
+    if args.json:
+        print(json.dumps({"index_dir": out, "root": manifest.get("root"),
+                          "files": files}, ensure_ascii=False, indent=1))
+        return
+    n_indexed = sum(1 for rec in files.values() if not rec.get("skipped"))
+    n_skipped = len(files) - n_indexed
+    info(f"索引 {out}（根 {manifest.get('root')}）共 {n_indexed} 个文件"
+         + (f"（另有 {n_skipped} 个跳过：二进制/超大）" if n_skipped else "") + "：")
+    for path in sorted(files):
+        rec = files[path]
+        marker = "  [跳过:二进制/超大]" if rec.get("skipped") else ""
+        print(f"  {path}  [.{rec.get('type', '')}]{marker}  {rec.get('n_tokens', 0)} 词元 / "
+              f"{len(rec.get('chunk_ids', []))} 块")
+
+
+def cmd_show(args):
+    out = os.path.abspath(args.index or DEFAULT_INDEX_DIR)
+    try:
+        _, _, chunks, _ = load_index(out, need_chunks=True)
+    except RagIndexError as exc:
+        die(str(exc), code=1)
+    try:
+        cid = int(args.chunk_id)
+    except ValueError:
+        die(f"chunk_id 必须是整数: {args.chunk_id!r}")
+    row = chunks.get(cid)
+    if row is None:
+        die(f"分块不存在: #{cid}（bin/rag/rag files 查看已索引文件）")
+    print(f"# {row['path']}  L{row['start']}-{row['end']}  "
+          f"（{row['n_tokens']} 词元，chunk #{cid}）")
+    print(row["text"])
+
+
+def cmd_help(_args=None):
+    print(__doc__.strip())
+
+
+# ---------------------------------------------------------------------------
+# 入口
+# ---------------------------------------------------------------------------
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        prog="bin/rag/rag",
+        description="本地结构化 RAG 工具（BM25 全文排序）——索引目录默认 .work/rag")
+    p.add_argument("--version", action="version", version=f"rag {VERSION}")
+    sub = p.add_subparsers(dest="cmd", metavar="<命令>")
+
+    pi = sub.add_parser("index", help="对指定目录指定类型文件建立/增量更新索引")
+    pi.add_argument("target", nargs="?", default=DEFAULT_TARGET_DIR,
+                    help=f"要索引的目录（默认 {DEFAULT_TARGET_DIR}）")
+    pi.add_argument("--types", default=None,
+                    help="文件类型列表，逗号分隔（如 py,md,txt）；'*'=全部文件；缺省用内置类型集")
+    pi.add_argument("--out", default=None,
+                    help=f"索引输出目录（默认 {DEFAULT_INDEX_DIR}）")
+    pi.add_argument("--rebuild", action="store_true", help="丢弃旧索引，完全重建")
+    pi.add_argument("--chunk-lines", type=int, default=CHUNK_LINES,
+                    help=f"分块行数（默认 {CHUNK_LINES}）")
+    pi.add_argument("--overlap-lines", type=int, default=OVERLAP_LINES,
+                    help=f"相邻分块重叠行数（默认 {OVERLAP_LINES}）")
+    pi.add_argument("--include-hidden", action="store_true", help="不跳过隐藏目录")
+    pi.add_argument("--json", action="store_true", help="机器可读输出")
+    pi.set_defaults(func=cmd_index)
+
+    ps = sub.add_parser("search", help="BM25 全文排序检索")
+    ps.add_argument("query", nargs="+", help="查询词（多个词空格分隔）")
+    ps.add_argument("--index", default=None, help=f"索引目录（默认 {DEFAULT_INDEX_DIR}）")
+    ps.add_argument("--top", type=int, default=10, help="返回前 N 个命中（默认 10）")
+    ps.add_argument("--full", action="store_true", help="输出整个分块文本（默认只给命中行）")
+    ps.add_argument("--json", action="store_true", help="机器可读输出")
+    ps.set_defaults(func=cmd_search)
+
+    pst = sub.add_parser("status", help="检查索引是否存在/健康/过期（中断恢复用）")
+    pst.add_argument("--index", default=None, help=f"索引目录（默认 {DEFAULT_INDEX_DIR}）")
+    pst.add_argument("--json", action="store_true", help="机器可读输出")
+    pst.set_defaults(func=cmd_status)
+
+    pv = sub.add_parser("verify", help="索引一致性深检（结构互指 + 词频逐项对账）")
+    pv.add_argument("--index", default=None, help=f"索引目录（默认 {DEFAULT_INDEX_DIR}）")
+    pv.add_argument("--json", action="store_true", help="机器可读输出")
+    pv.set_defaults(func=cmd_verify)
+
+    pf = sub.add_parser("files", help="列出已索引文件")
+    pf.add_argument("--index", default=None, help=f"索引目录（默认 {DEFAULT_INDEX_DIR}）")
+    pf.add_argument("--json", action="store_true", help="机器可读输出")
+    pf.set_defaults(func=cmd_files)
+
+    psh = sub.add_parser("show", help="按 chunk id 打印分块原文")
+    psh.add_argument("chunk_id", help="分块 id（search 结果中的 #N）")
+    psh.add_argument("--index", default=None, help=f"索引目录（默认 {DEFAULT_INDEX_DIR}）")
+    psh.set_defaults(func=cmd_show)
+
+    ph = sub.add_parser("help", help="详细用法与示例")
+    ph.set_defaults(func=cmd_help)
+    return p
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    func = getattr(args, "func", None)
+    if func is None:
+        cmd_help()
+        return
+    func(args)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except BrokenPipeError:
+        # 输出管道被下游关闭（如 `rag search ... | head`）：按 SIGPIPE 惯例静默退出
+        try:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+        except OSError:
+            pass
+        sys.exit(141)

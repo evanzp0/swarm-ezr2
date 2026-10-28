@@ -15,7 +15,7 @@
 # 上游交接（宪法第一章）: 角色会话开始时，若 project/handoff.md 存在，则以该文件为上游交接内容；
 #                  若不存在，则以操作者在 chat 中输入的内容为上游交接内容。
 # 目录约定:
-#   project/   唯一工作区（跨会话保留）：mission.md、mission/（分期详述）、handoff.md 与角色产出
+#   project/   唯一工作区（跨会话保留）：mission.md、mission/（分期详述）、notes/（项目经验库）、handoff.md 与角色产出
 #   .work/     当前工作流状态（运行时产物）：session、plan.md、tmp/
 # 全局约束: CONSTITUTION.md（总纲、计划制度、工作区纪律、项目使命 mission.md 与需求存放两模式）
 #           packs/INDEX.md（工作流→角色→技能路径总目录，供 LLM 按需读取）
@@ -157,10 +157,12 @@ cmd_begin() {
   done
   [ -n "$task" ] || task="${wf}-${role}-$(date '+%Y%m%d-%H%M%S')"
 
-  # 记录 packs/_common/ 当前最新 mtime，供 complete 时检测本会话经验沉淀（宪法第三章）
-  local exp_base
+  # 记录 packs/_common/ 与 project/notes/ 当前最新 mtime，供 complete 时检测本会话经验沉淀（宪法第三章）
+  local exp_base notes_base
   exp_base="$(find "$PACKS/_common" -type f -printf '%T@\n' 2>/dev/null | sort -n | tail -n1)"
   [ -n "$exp_base" ] || exp_base="0"
+  notes_base="$(find "$PROJECT/notes" -type f -printf '%T@\n' 2>/dev/null | sort -n | tail -n1)"
+  [ -n "$notes_base" ] || notes_base="0"
 
   # 上游交接来源提示（宪法第一章「上游交接双来源」）
   echo
@@ -197,6 +199,7 @@ SESSION_TASK="$task"
 SESSION_HANDOFF="$(handoff_source_label)"
 SESSION_STARTED="$(date '+%Y-%m-%d %H:%M:%S')"
 EXPERIENCE_BASE="$exp_base"
+NOTES_BASE="$notes_base"
 EOF
 
   ok "会话已开始：$wf/$role （任务: $task）"
@@ -206,7 +209,7 @@ EOF
   echo "  2. 阅读上游交接内容（project/handoff.md 存在时以该文件为准，否则为操作者 chat 输入）与 project/mission.md（如存在；分期模式含 project/mission/ 分期详述，宪法第一章「需求存放两模式」），明确本任务；"
   echo "  3. 按根目录 CONSTITUTION.md 先生成工作计划 .work/plan.md，再开始操作（步骤完成即时勾选，中断可凭 plan.md 续做）；"
   echo "  4. 在 project/ 内完成角色工作（只访问 project/ 下的文件；临时文件在 .work/tmp/）；"
-  echo "  5. 交接前把本轮可复用经验写入 packs/_common/：通用纪律归 engineering.md，语言/工具/框架专项归 notes/ 分类文件（无合适文件可新建，宪法第三章）；"
+  echo "  5. 交接前把本轮可复用经验按归属分流写入：项目经验入 project/notes/（分类文件 + INDEX.md 索引），跨项目通用纪律归 packs/_common/engineering.md，语言/工具/框架专项归 packs/_common/notes/ 分类文件（宪法第三章）；"
   echo "  6. 完成后由操作者运行 bin/swarm complete 清理并打包归档。"
 }
 
@@ -258,15 +261,19 @@ cmd_complete() {
     warn ".work/plan.md 缺失 —— 本次会话未遵循 CONSTITUTION.md 第二章的计划制度。"
   fi
 
-  # 宪法第三章经验沉淀检测：对比会话开始时记录的基线 mtime
-  local exp_base exp_now
+  # 宪法第三章经验沉淀检测：对比会话开始时记录的基线 mtime（项目经验→project/notes/，跨项目通用→packs/_common/）
+  local exp_base exp_now notes_base notes_now
   exp_base="$(session_field EXPERIENCE_BASE)"; exp_base="${exp_base:-0}"
   exp_now="$(find "$PACKS/_common" -type f -printf '%T@\n' 2>/dev/null | sort -n | tail -n1)"; exp_now="${exp_now:-0}"
+  notes_base="$(session_field NOTES_BASE)"; notes_base="${notes_base:-0}"
+  notes_now="$(find "$PROJECT/notes" -type f -printf '%T@\n' 2>/dev/null | sort -n | tail -n1)"; notes_now="${notes_now:-0}"
   echo
   if awk "BEGIN{exit !($exp_now > $exp_base)}"; then
     ok "经验沉淀检测：packs/_common/ 本会话有写入 ✓（宪法第三章）"
+  elif awk "BEGIN{exit !($notes_now > $notes_base)}"; then
+    ok "经验沉淀检测：project/notes/ 本会话有写入 ✓（宪法第三章）"
   else
-    warn "经验沉淀检测：packs/_common/ 本会话无写入 —— 若有可复用经验请补写（通用纪律→engineering.md，专项→notes/ 分类文件，宪法第三章）；确无经验可忽略。"
+    warn "经验沉淀检测：packs/_common/ 与 project/notes/ 本会话均无写入 —— 若有可复用经验请按归属补写（项目经验→project/notes/ 分类文件并同步 INDEX.md，通用纪律→engineering.md，专项→packs/_common/notes/ 分类文件，宪法第三章）；确无经验可忽略。"
   fi
 
   # 下游交接检查：下一角色将以 project/handoff.md 为上游交接内容（宪法第一章）
@@ -362,7 +369,7 @@ cmd_status() {
 }
 
 # reset 只作废当前会话：清除会话级状态（session/plan/tmp）。
-# project/ 是唯一工作区、跨会话保留——其中的 mission.md、mission/、handoff.md 与角色产出
+# project/ 是唯一工作区、跨会话保留——其中的 mission.md、mission/、notes/、handoff.md 与角色产出
 # 直接供下一流程沿用（宪法第一章「上游交接双来源」据此判定），reset 一律不清空。
 cmd_reset() {
   if [ -f "$STATE" ]; then

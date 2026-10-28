@@ -78,13 +78,11 @@
 | `packs/_common/notes/rust.md` | Rust 专项注意事项（含 Rust 的角色开工前先读）：工具链/PATH、lld 桥接、强制配置模板（Cargo.toml lints、clippy.toml、rustfmt.toml）、编译 lint、编码实践、跨平台 IPC 事实 |
 | `packs/_common/notes/aps.md` | APS 验收流水线与 Babashka 专项注意事项：dry-checker 中文假阳性、IR 展开行口径、跑块目录重建 |
 | `packs/_common/notes/mutation-hardening.md` | 变异加固策略（语言无关）：会话隔离（含 worker 副本隔离与真实树零接触）、pristine 备份、基线同语境、清单制差分变异、分轮收敛、存活突变体与等价论证高频模式库（随复盘开放增长）、加固测试写法、交接四要素；six-pack/hardender 与 squad/hardener 引用 |
-| `packs/_common/notes/cargo-mutants.md` | cargo-mutants 专项注意事项：resume 状态文件与增量落盘口径、判定污染（盘满假 unviable/假 caught）的外科修复、挂死突变体与超时钳位、DEBUG=0 等价缩盘开关、冷构建税与 `-j` 上限、`-f`/`-F` 组合与 shard 边界 |
-| `packs/_common/notes/pmd.md` | PMD（CPD/DRY）专项注意事项：退出码语义（4=发现重复）、XML 命名空间解析、`-l rust` 显式作用域 |
 | `packs/_common/notes/packaging.md` | 打包与交付专项注意事项：`bin/swarm complete` 的 git 索引清单口径（先 `git add -A` 再 complete、gitignore 静默排除）、交付 tarball 覆盖解压的过期文件风险 |
 | `packs/squad/reference/clean-architecture.md` | squad 各角色：模块边界与依赖方向 |
 | `packs/squad/reference/tool-table.edn` | squad 各角色：语言工具表（变异/CRAP/DRY/APS） |
 
-角色上下文从一手资料获取：上游交接来源（`project/handoff.md` 存在 → 以该文件为上游交接内容；不存在 → 以操作者 chat 输入为上游交接内容，宪法第一章「上游交接双来源」）、`project/mission.md`（项目原始需求档案，各工作流第一个角色按「需求存放两模式」建档、其他角色只读；分期模式含 `project/mission/` 分期详述，宪法第一章）、`project/`（既有产物与角色产出跨会话保留在工作区，角色只访问 `project/` 下的文件）与本索引所列技能文件；交接说明写入 `project/handoff.md`（下游角色以其为上游交接内容；结构与书写规则见 `packs/_common/handoff-rule.md`；技术经验由角色在交接前直接写入 `packs/_common/` 工具侧——通用纪律归 `engineering.md`、语言/工具/框架专项归 `notes/` 分类文件，不写入交接文件）。流水线用法、目录结构、命令速查与工作区纪律：见根目录 `CONSTITUTION.md`。
+角色上下文从一手资料获取：上游交接来源（`project/handoff.md` 存在 → 以该文件为上游交接内容；不存在 → 以操作者 chat 输入为上游交接内容，宪法第一章「上游交接双来源」）、`project/mission.md`（项目原始需求档案，各工作流第一个角色按「需求存放两模式」建档、其他角色只读；分期模式含 `project/mission/` 分期详述，宪法第一章）、`project/notes/`（项目经验库，从其 `INDEX.md` 进入按主题查阅既有项目经验，宪法第三章「项目经验库」）、`project/`（既有产物与角色产出跨会话保留在工作区，角色只访问 `project/` 下的文件）与本索引所列技能文件；交接说明写入 `project/handoff.md`（下游角色以其为上游交接内容；结构与书写规则见 `packs/_common/handoff-rule.md`；技术经验由角色在交接前按归属分流写入——与本项目绑定的项目经验归 `project/notes/`（分类文件 + `notes/INDEX.md` 索引，宪法第三章「项目经验库」），跨项目通用纪律归 `engineering.md`、语言/工具/框架专项归 `notes/` 分类文件；均不写入交接文件）。流水线用法、目录结构、命令速查与工作区纪律：见根目录 `CONSTITUTION.md`。
 
 ## 编程语言配置约束
 - rust
