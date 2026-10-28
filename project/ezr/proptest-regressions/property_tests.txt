@@ -8,3 +8,4 @@ cc a503133ec483e6c043ed9b873f1e3fd7089d9bf1818746783746ffa9d9001c4b # shrinks to
 cc ab49671b6fcf056c604acb018dc29bfe4cff4169fd493995fbe0a76e9de44133 # shrinks to disp = "", name = "\u{b}"
 cc b734fadaf5fc8be604222ad407cfcd75e54279ffc2fe22ee34a3c2612941d56a # shrinks to n_blocks = 157, piece = 1, extra = 0, done_bytes = 157, old_done = 0
 cc 6c427491b426f43ae5e09d64e972920548585d2d40e91b42d27850736d04dd0b # shrinks to segs = ["0", "A", "0", "a", "a", "0", "A", "A"], port = 80
+cc 9d8880f1dcac367a7862cf67f2828e08a43741d765bc8d901c1a790380faaaff # shrinks to rate = 974653866.2169033, tokens = 0.0, elapsed = 6522.336027645068, remaining = 218429487.2377582

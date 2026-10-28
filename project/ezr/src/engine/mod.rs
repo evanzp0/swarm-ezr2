@@ -286,6 +286,11 @@ impl EngineHandle {
     pub async fn send(&self, cmd: Cmd) {
         let _ = self.cmd_tx.send(cmd).await;
     }
+
+    #[cfg(test)]
+    pub(crate) fn from_sender(cmd_tx: mpsc::Sender<Cmd>) -> EngineHandle {
+        EngineHandle { cmd_tx }
+    }
 }
 
 async fn main_loop(

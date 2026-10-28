@@ -410,7 +410,6 @@ impl App {
         if paused {
             t.state = TaskState::Paused;
         }
-        let spec = (!paused).then(|| Box::new(self.make_bt_spec(&t, &meta)));
         self.tasks.push(t);
         self.dialog = None;
 
@@ -418,13 +417,6 @@ impl App {
         let flen = self.filtered().len();
         if flen > 0 {
             self.selected = flen - 1;
-        }
-
-        if let Some(spec) = spec {
-            let engine = self.engine.clone();
-            tokio::spawn(async move {
-                engine.send(Cmd::StartBt { spec }).await;
-            });
         }
 
         if paused {

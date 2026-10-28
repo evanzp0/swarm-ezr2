@@ -1516,7 +1516,10 @@ proptest! {
         let (tokens_after, taken, wait) =
             crate::engine::bucket_step(rate, tokens, elapsed, remaining);
         prop_assert_eq!(taken, remaining.min(available), "取走 = min(remaining, 可用)");
-        prop_assert_eq!(taken + tokens_after, available, "预算守恒");
+        prop_assert!(
+            (taken + tokens_after - available).abs() <= available.abs() * 1e-9,
+            "预算守恒（相对容差 1e-9，f64 极端量级存在 1-ULP 舍入差）: taken={taken} after={tokens_after} avail={available}"
+        );
         prop_assert!(tokens_after >= 0.0 && tokens_after <= cap, "桶余钳制 [0, cap]");
         if remaining <= available {
             prop_assert_eq!(wait, 0, "取足收束");

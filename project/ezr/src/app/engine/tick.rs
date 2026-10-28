@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use crate::app::App;
 use crate::engine::Cmd;
 use crate::model::speed::SpeedWindow;
-use crate::model::{slots, TaskState};
+use crate::model::{slots, FailKind, Protocol, TaskState};
 
 const SPEED_TICK: Duration = Duration::from_secs(1);
 
@@ -48,11 +48,42 @@ impl App {
                 continue;
             }
             self.tasks[idx].probed = false;
+            if self.tasks[idx].protocol == Protocol::Bt {
+                self.start_bt_from_slot(idx).await;
+                continue;
+            }
             let choice = self.tasks[idx].proxy.clone();
             let endpoint = self.resolve_endpoint(&choice);
             let spec = self.make_spec(&self.tasks[idx], endpoint);
             self.engine.send(Cmd::Start { spec }).await;
         }
+    }
+
+    async fn start_bt_from_slot(&mut self, idx: usize) {
+        let source = self.tasks[idx]
+            .bt
+            .as_ref()
+            .map(|b| b.source.clone())
+            .unwrap_or_else(|| self.tasks[idx].url.clone());
+        let meta = std::fs::read(crate::model::config::expand_tilde(&source))
+            .ok()
+            .and_then(|b| crate::bt::metainfo::TorrentMeta::parse(&b).ok());
+        let Some(meta) = meta else {
+            let t = &mut self.tasks[idx];
+            t.state = TaskState::Failed;
+            t.fail_kind = Some(FailKind::Fatal);
+            t.retry_in = None;
+            t.has_slot = false;
+            t.error = Some(format!("无法读取种子文件：{source}"));
+            let name = t.name.clone();
+            self.set_toast(format!(
+                "✘ 无法读取种子文件：{name}，不自动重试，按 R 手动重试"
+            ));
+            return;
+        };
+        self.tasks[idx].state = TaskState::Downloading;
+        let spec = Box::new(self.make_bt_spec(&self.tasks[idx], &meta));
+        self.engine.send(Cmd::StartBt { spec }).await;
     }
 
     async fn tick_retry_countdown(&mut self, dt: f64) {
@@ -215,6 +246,14 @@ impl App {
         let Some(idx) = self.tasks.iter().position(|t| t.id == id) else {
             return;
         };
+        if self.tasks[idx].protocol == Protocol::Bt {
+            if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
+                t.made_progress = false;
+                t.probed = false;
+            }
+            self.start_bt_from_slot(idx).await;
+            return;
+        }
         let choice = self.tasks[idx].proxy.clone();
         let endpoint = self.resolve_endpoint(&choice);
         let spec = self.make_spec(&self.tasks[idx], endpoint);
@@ -223,5 +262,194 @@ impl App {
             t.made_progress = false;
             t.probed = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod bt_route_tests {
+    use tokio::sync::mpsc;
+
+    use super::*;
+    use crate::engine::EngineHandle;
+    use crate::model::BtTaskData;
+
+    fn make_app(tag: &str) -> App {
+        crate::app::testutil::make_app_in("ezr-btroute", tag)
+    }
+
+    fn write_torrent(dir: &std::path::Path, file_name: &str) -> String {
+        let pieces = [0u8; 20];
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"d8:announce14:udp://seed/ann");
+        buf.extend_from_slice(b"13:announce-listl");
+        buf.extend_from_slice(b"l12:udp://l1/annee");
+        buf.extend_from_slice(b"4:infod6:lengthi12e4:name3:tor12:piece lengthi4e6:pieces20:");
+        buf.extend_from_slice(&pieces);
+        buf.push(b'e');
+        buf.push(b'e');
+        let path = dir.join(file_name);
+        std::fs::write(&path, &buf).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    fn bt_task(id: u32, source: &str) -> crate::model::Task {
+        let mut t = crate::model::Task::new_queued(
+            id,
+            "tor".to_string(),
+            crate::model::Protocol::Bt,
+            source.to_string(),
+            "/dl".to_string(),
+            4,
+            20,
+            3,
+            None,
+            crate::model::ProxyChoice::Direct,
+            crate::model::unix_now(),
+        );
+        t.probed = true;
+        t.total = 12;
+        t.bt = Some(BtTaskData {
+            source: source.to_string(),
+            trackers: vec!["udp://seed/ann".to_string()],
+            piece_length: 4,
+            files: vec![crate::model::BtFile {
+                path: "tor".to_string(),
+                size: 12,
+                selected: true,
+            }],
+            done_pieces: Vec::new(),
+        });
+        t
+    }
+
+    async fn recv_cmd(rx: &mut mpsc::Receiver<Cmd>) -> Cmd {
+        tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("引擎命令应在超时前到达")
+            .expect("发送端存活，命令应为 Some")
+    }
+
+    async fn assert_no_cmd(rx: &mut mpsc::Receiver<Cmd>) {
+        let got = tokio::time::timeout(std::time::Duration::from_millis(120), rx.recv()).await;
+        assert!(
+            got.is_err(),
+            "不应向引擎发送命令，实际收到: {:?}",
+            got.ok().flatten()
+        );
+    }
+
+    #[tokio::test]
+    async fn bt_task_granted_slot_starts_bt_engine_not_http() {
+        let mut app = make_app("grant-bt");
+        let (spy_tx, mut spy_rx) = mpsc::channel::<Cmd>(8);
+        app.engine = EngineHandle::from_sender(spy_tx);
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btroute-grant");
+        let path = write_torrent(&dir, "a.torrent");
+        app.tasks.push(bt_task(1, &path));
+        app.tick_grant_and_start().await;
+        match recv_cmd(&mut spy_rx).await {
+            Cmd::StartBt { spec } => {
+                assert_eq!(spec.id, 1);
+                assert_eq!(spec.source, path, "BT 启动必须携带种子来源");
+            }
+            other => panic!("BT 任务获槽应发 StartBt，实际: {other:?}"),
+        }
+        assert_eq!(
+            app.tasks[0].state,
+            TaskState::Downloading,
+            "BT 无探测流程：获槽启动即转下载中"
+        );
+        assert!(app.tasks[0].has_slot);
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn http_task_granted_slot_keeps_http_start() {
+        let mut app = make_app("grant-http");
+        let (spy_tx, mut spy_rx) = mpsc::channel::<Cmd>(8);
+        app.engine = EngineHandle::from_sender(spy_tx);
+        app.tasks.push(crate::model::sample_task());
+        app.tick_grant_and_start().await;
+        match recv_cmd(&mut spy_rx).await {
+            Cmd::Start { spec } => {
+                assert_eq!(spec.id, 1);
+                assert_eq!(spec.url, "http://x/f.bin", "HTTP 任务获槽仍走 HTTP 引擎");
+            }
+            other => panic!("HTTP 任务获槽应发 Start，实际: {other:?}"),
+        }
+        assert_eq!(app.tasks[0].state, TaskState::Queued, "HTTP 等探测事件转态");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn bt_task_with_missing_torrent_fails_fatal_without_engine_cmd() {
+        let mut app = make_app("grant-bt-missing");
+        let (spy_tx, mut spy_rx) = mpsc::channel::<Cmd>(8);
+        app.engine = EngineHandle::from_sender(spy_tx);
+        app.tasks.push(bt_task(1, "/nonexistent/dir/a.torrent"));
+        app.tick_grant_and_start().await;
+        assert_no_cmd(&mut spy_rx).await;
+        let t = &app.tasks[0];
+        assert_eq!(t.state, TaskState::Failed, "种子不可读 = 启动失败");
+        assert_eq!(t.fail_kind, Some(FailKind::Fatal));
+        assert!(!t.has_slot, "失败释放槽位");
+        assert!(
+            t.error
+                .as_deref()
+                .is_some_and(|m| m.contains("无法读取种子文件")),
+            "错误文案: {:?}",
+            t.error
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn bt_retry_start_routes_to_bt_engine() {
+        let mut app = make_app("retry-bt");
+        let (spy_tx, mut spy_rx) = mpsc::channel::<Cmd>(8);
+        app.engine = EngineHandle::from_sender(spy_tx);
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btroute-retry");
+        let path = write_torrent(&dir, "r.torrent");
+        let mut t = bt_task(7, &path);
+        t.state = TaskState::Queued;
+        t.has_slot = true;
+        app.tasks.push(t);
+        app.send_retry_start(7).await;
+        match recv_cmd(&mut spy_rx).await {
+            Cmd::StartBt { spec } => assert_eq!(spec.id, 7, "BT 自动重试必须走 BT 引擎"),
+            other => panic!("BT 重试应发 StartBt，实际: {other:?}"),
+        }
+        assert_eq!(app.tasks[0].state, TaskState::Downloading);
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn confirm_add_bt_defers_engine_start_to_slot_grant() {
+        let mut app = make_app("add-bt-defer");
+        let (spy_tx, mut spy_rx) = mpsc::channel::<Cmd>(8);
+        app.engine = EngineHandle::from_sender(spy_tx);
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btroute-add");
+        let path = write_torrent(&dir, "a.torrent");
+        let bytes = std::fs::read(&path).unwrap();
+        let meta = crate::bt::metainfo::TorrentMeta::parse(&bytes).unwrap();
+        app.open_add_bt_dialog_with(&path, &meta);
+        app.dlg_confirm_add_bt(false);
+        assert_eq!(app.tasks.len(), 1);
+        assert_eq!(
+            app.tasks[0].state,
+            TaskState::Queued,
+            "确认后任务入等待队列（与 HTTP 同一排队口径）"
+        );
+        assert_no_cmd(&mut spy_rx).await;
+        app.tick_grant_and_start().await;
+        match recv_cmd(&mut spy_rx).await {
+            Cmd::StartBt { spec } => assert_eq!(spec.id, app.tasks[0].id),
+            other => panic!("获槽后应发 StartBt，实际: {other:?}"),
+        }
+        assert_eq!(app.tasks[0].state, TaskState::Downloading);
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
