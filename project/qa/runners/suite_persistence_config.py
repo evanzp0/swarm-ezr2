@@ -376,10 +376,11 @@ class PersistenceConfigSuite(Suite):
     def _case_09(self):
         """QA-PC-09 Esc 主界面无操作 + Ctrl+C 优雅退出：停传、保断点、存注册表、无花屏。
 
-        v1.30 退出语义改版同步（01-tui-display-10：Esc 主界面无任何动作，
-        退出仅 Q/Ctrl+C；Ctrl+C 全局直通 = 优雅退出，keys.rs 同 q 置 quit，
-        AC-9 终端哨兵照常覆盖）。01-persistence-config-09 feature 场景标题
-        仍为旧「Esc 与 Ctrl+C 优雅退出」口径，偏差已记 handoff 待操作者裁决。
+        退出语义（01-tui-display-07 v1.30 口径，操作者 20261027 裁决定稿）：
+        Esc 主界面无任何动作，退出仅 Q/Ctrl+C；Ctrl+C 全局直通 = 优雅退出，
+        keys.rs 同 q 置 quit，AC-9 终端哨兵照常覆盖。
+        01-persistence-config-09 feature 场景已按裁决同步修订
+        （Esc 主界面无动作 + Ctrl+C 优雅退出）。
         """
         @self.case("QA-PC-09")
         def go(env: Env):

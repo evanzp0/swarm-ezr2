@@ -1,8 +1,3 @@
-//! engine::evt — 引擎事件消费（状态机权威转换点 on_evt）与失败统一处理
-//!
-//! 自单文件按职责拆出（architect v116，纯移动）。各事件臂自包含、由
-//! evt_tests 全量回归锁定；臂间无共享局部量，臂内借用次序注释原样保留。
-
 use std::time::Instant;
 
 use super::{conn_from_view, update_conn_stats};
@@ -12,8 +7,6 @@ use crate::model::speed::SpeedWindow;
 use crate::model::{namegen, FailKind, TaskState};
 
 impl App {
-    /// 引擎事件处理（状态机权威转换点）。pub(super)：tick 段（兄弟文件）消费；
-    /// 可见性限 app::engine 子树，app 层其余文件不可达。
     pub(super) async fn on_evt(&mut self, evt: Evt) {
         match evt {
             Evt::Probed {
@@ -24,11 +17,6 @@ impl App {
                 etag,
                 last_modified,
             } => {
-                // CD 命名回写：引擎侧已在建文件前对盘上去重（derive→dedupe 先于
-                // 文件创建），App 只需对其它任务同名去重。此处不得再查盘：事件
-                // 异步处理时引擎可能已建 <名字>.downloading，盘查会把自己当
-                // 占用者而漂移新名（m4.bin → m4.bin.1），使 sidecar 落盘名与
-                // 任务名错位、下轮续传一致性检查被跳过（FR-01-22 违例）。
                 let rename_to = {
                     let cur = self.tasks.iter().find(|t| t.id == id);
                     match cur {
@@ -47,9 +35,6 @@ impl App {
                     if let Some(nn) = rename_to {
                         t.name = nn;
                     }
-                    // v1.28：任务级最终 URL 退役（FR-01-14 ④）——Probed 置位
-                    // 「首次探测已定名」标记（keep_name 口径原 final_url.is_some()
-                    // 的替身；置位后不再重置，失效重下沿用既有名防漂移）
                     t.name_locked = true;
                     t.total = total;
                     t.resumable = resumable;
@@ -57,9 +42,6 @@ impl App {
                     t.etag = etag;
                     t.last_modified = last_modified;
                     if t.state == TaskState::Queued {
-                        // 进入下载 = 新的一次下载（首次启动 / 重试重新排队 /
-                        // 失效重下 / 暂停后恢复，v1.21 统一队列路径）：连接级
-                        // 累计从零重计（FR-01-99 ②）
                         t.state = TaskState::Downloading;
                         t.made_progress = false;
                         self.clear_conn_stats(id);
@@ -75,17 +57,10 @@ impl App {
                 partial_blocks,
             } => {
                 let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else {
-                    // 已删除/未知任务的幽灵进度：不建滑窗、不聚合（删除后引擎停止确认前的兜底）
                     self.windows.remove(&id);
                     self.speed_display.remove(&id);
                     return;
                 };
-                // v1.25 幽灵进度防线：非「下载中」任务的 Progress 一律忽略——
-                // 迟到/重复回报不得改写已下载字节、连接视图与断点数（历史
-                // 缺陷：已失败任务的存活幽灵 supervisor 持续发 Progress，
-                // 红色进度条无并发增长；多幽灵基线不一导致进度回退跳变）。
-                // 正常路径不受影响：同一 supervisor 的事件按通道序先于其
-                // Failed/PausedDone 到达；Probed 先于首个 Progress 置下载中。
                 if t.state != TaskState::Downloading {
                     return;
                 }
@@ -98,16 +73,9 @@ impl App {
                 }
                 t.downloaded = downloaded;
                 t.chunk_done = chunk_done;
-                // 逐块完成集合全量重铺（引擎 Blocks 逐块真值；乱序完成安全，
-                // pieces 弹窗 🟩 权威口径）
                 t.done_blocks = done_blocks;
-                // 逐块部分集合全量重铺（引擎 Blocks 逐块真值；pieces 弹窗 🟨
-                // 权威口径，v131：暂停/失败后投影租约外的真部分块不再白屏）
                 t.partial_blocks = partial_blocks;
                 t.connections = conns.iter().map(conn_from_view).collect();
-                // 重锚消费（04-ui-conns-09 R 臂，QA v138 缺陷修复）：重试重启后
-                // 首个观测的块内 done 为续传检查点偏移——以当前观测重锚上一观
-                // 测位（该次增量 = 0），其后增量只计新一次下载的真实落盘
                 if self.conn_rebase.remove(&id) {
                     for c in &conns {
                         self.conn_prev.insert((id, c.id), (c.block, c.done));
@@ -134,10 +102,7 @@ impl App {
                     t.downloaded = downloaded.max(t.downloaded);
                     t.speed = 0.0;
                     t.has_slot = false;
-                    // 逐块部分集合终态快照重铺（stop_workers 后引擎 Blocks
-                    // 终态：收尾与最后 Progress tick 间的尾部字节不缺，v131）
                     t.partial_blocks = partial_blocks;
-                    // 断点视图快照（详情页分块表）；含被覆盖的 t.chunk_done 中间写
                     t.apply_chunk_snapshot(downloaded, chunk_done);
                 }
                 self.windows.remove(&id);
@@ -164,12 +129,9 @@ impl App {
                 );
             }
             Evt::Invalidated { id } => {
-                // 续传一致性失效（FR-01-22）：断点作废、从头重下、不计失败；
-                // 连续 3 次转停等失败（防循环）
                 let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else {
                     return;
                 };
-                // 防循环计数（FR-01-22）：连续 3 次失效转停等失败
                 let (streak, stop_wait) =
                     crate::model::retry::invalidate_streak(t.invalidation_streak);
                 t.invalidation_streak = streak;
@@ -181,8 +143,6 @@ impl App {
                 t.connections.clear();
                 t.speed = 0.0;
                 self.windows.remove(&id);
-                // 会话累计账本同步重置基线：失效重下的全部字节都属本次运行
-                // 下载（若保留旧基线，重下进度超过旧值前会被漏计）
                 self.session_seen.insert(id, 0);
                 if stop_wait {
                     t.state = TaskState::Failed;
@@ -196,16 +156,11 @@ impl App {
                 } else {
                     t.state = TaskState::Queued;
                     t.probed = false;
-                    // 引擎任务已随 Flow::Invalidated 结束：必须释放槽位，
-                    // 调度器才能重新分配并重启（FR-01-22「从头重新下载」；
-                    // slots::allocate 只补 !has_slot 的等待任务，不释放则永久卡等）
                     t.has_slot = false;
                     self.set_toast(format!(
                         "⚠ 服务器内容已更新，断点已作废，从头重新下载: {name}"
                     ));
                 }
-                // 连接级账本同步作废（从头重下 = 新的一次下载，FR-01-99 ②）；
-                // 置于任务借用结束之后（&mut self 方法借用与字段借用不交叠）
                 self.clear_conn_stats(id);
             }
             Evt::DownloadDone { id, total } => {
@@ -217,25 +172,16 @@ impl App {
                 t.speed = 0.0;
                 self.windows.remove(&id);
                 let name = t.name.clone();
-                // D19「完成校验用最新值」：是否校验以任务当前 checksum 为准，
-                // 不用事件携带的 spec 快照标志 —— 下载中经修改对话框清空/设置
-                // 校验码（Reconfigure 不携带 checksum）后，spec 标志已过期：
-                // 按过期标志校验会以空期望值产生假性「校验失败」（QA-MT-05
-                // 端到端指纹）或跳过新设校验（QA-MT-04）。TDD 回归测试锁定。
-                // 引擎侧收尾（改名 + 删 sidecar）按 spec 快照执行：快照过期时
-                // 由 App 按文件实际位置补齐/对齐，两侧操作均幂等。
                 let verify_now = t.checksum.is_some();
                 if verify_now {
                     let dl = t.downloading_path();
                     let fin = t.target_path();
-                    // 校验目标以文件实际位置为准（spec 无校验快照时引擎已先行改名）
                     let path = if std::path::Path::new(&fin).exists() {
                         fin
                     } else {
                         dl
                     };
                     let algo = t.checksum.as_ref().map_or("SHA-256", |c| c.algo);
-                    // 校验中占槽位（D12：不释放）
                     t.state = TaskState::Verifying;
                     t.has_slot = true;
                     let expected = t
@@ -253,9 +199,6 @@ impl App {
                     self.engine.send(Cmd::Verify { spec }).await;
                     self.set_toast(format!("✓ 下载完成，开始校验: {name}"));
                 } else {
-                    // 无校验值直接完成。引擎已按 spec 收尾时此处为空操作；
-                    // spec 有校验快照（引擎未收尾）→ App 幂等补收尾
-                    // （去 `.downloading` 扩展名 + 删 sidecar，FR-01-24/20）
                     let dl = t.downloading_path();
                     let fin = t.target_path();
                     if std::path::Path::new(&dl).exists() {
@@ -296,7 +239,7 @@ impl App {
                     t.state = TaskState::Failed;
                     t.fail_kind = Some(FailKind::Verify);
                     t.retry_in = None;
-                    t.has_slot = false; // 校验失败释放槽位（FR-01-51）
+                    t.has_slot = false;
                     t.error = Some(format!("{algo} 校验失败：内容与校验值不符"));
                     self.set_toast(format!(
                         "✘ {algo} 校验失败：不自动重试，按 R 重新校验（computed={computed} expected={expected}）: {name}"
@@ -305,18 +248,84 @@ impl App {
                 self.save_registry();
             }
             Evt::Cancelled { id } => {
-                // 引擎已确认停止：执行延迟文件删除（「删除任务和文件」），未知 id 忽略
                 if let Some((dir, name)) = self.pending_deletes.remove(&id) {
                     Self::delete_task_files(&dir, &name);
                 }
             }
             Evt::Toast(msg) => self.set_toast(msg),
+            Evt::BtPeers {
+                id,
+                complete,
+                incomplete,
+            } => {
+                if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
+                    t.seeders = complete as usize;
+                    t.peers = incomplete as usize;
+                }
+            }
+            Evt::BtConns { id, conns } => {
+                let active = self
+                    .tasks
+                    .iter()
+                    .any(|t| t.id == id && t.state.shows_conns());
+                if active {
+                    self.bt_conns.insert(
+                        id,
+                        conns
+                            .into_iter()
+                            .map(|c| crate::app::BtConnRow {
+                                id: c.id,
+                                addr: c.addr,
+                                down_speed: c.down_speed,
+                                cum_down: c.cum_down,
+                                up_speed: c.up_speed,
+                                cum_up: c.cum_up,
+                                client: c.client,
+                            })
+                            .collect(),
+                    );
+                } else {
+                    self.bt_conns.remove(&id);
+                }
+            }
+            Evt::BtProgress {
+                id,
+                downloaded,
+                chunk_done,
+                done_blocks,
+                partial_blocks,
+                uploaded,
+                upload_speed,
+            } => {
+                self.on_bt_progress(
+                    id,
+                    downloaded,
+                    chunk_done,
+                    done_blocks,
+                    partial_blocks,
+                    uploaded,
+                    upload_speed,
+                );
+            }
+            Evt::BtDone { id, total } => {
+                self.on_bt_done(id, total);
+            }
+            Evt::BtStopped {
+                id,
+                downloaded,
+                done_pieces,
+                partial_pieces,
+            } => {
+                self.on_bt_stopped(id, downloaded, done_pieces, partial_pieces);
+            }
+            Evt::BtFailed { id, kind, reason } => {
+                self.on_bt_failed(id, kind, reason);
+            }
         }
     }
 
-    /// 失败统一处理（FR-01-41/42/43：连续性规则 + 退避 + 停等分类）
     #[allow(clippy::too_many_arguments)]
-    fn handle_failure(
+    pub(super) fn handle_failure(
         &mut self,
         id: u32,
         kind: FailKind,
@@ -330,17 +339,6 @@ impl App {
         let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else {
             return;
         };
-        // v1.6/FR-01-92；v1.21 合并口径：用户已手动挂起 → 迟到失败事件不得
-        // 转回失败态或恢复自动重试（否则挂起语义被竞态覆盖）；v1.23（操作者
-        // 20261012 bug 报告直判）：守卫扩为 Paused 全态且**整体忽略**——不写
-        // error（挂起时已重置 error=None/retries=1，写回会污染注册表快照，
-        // 违背「error=null」口径）；v1.25（操作者 bug 报告：重试 10/5）：
-        // 守卫再扩为 Paused ∪ Failed 且前置到一切字段写入之前——任务已失败
-        // 后的迟到/重复失败事件（同一尝试的重复回报或幽灵 supervisor 的迟到
-        // 回报）整体忽略：不重复推进重试计数（冲破上限观感）、不重挂倒计时、
-        // 不改写已下载字节/断点视图/错误信息；新一轮尝试的失败必然发生在
-        // Queued/Downloading 态（4a 到点重排/R 手动重试后），不受此守卫影响
-        // （FR-01-41 语义不变）
         if matches!(t.state, TaskState::Paused | TaskState::Failed) {
             return;
         }
@@ -348,11 +346,7 @@ impl App {
             t.downloaded = downloaded.max(t.downloaded);
         }
         t.speed = 0.0;
-        // 逐块部分集合终态快照重铺（失败台账逐块真值；v131，与 PausedDone
-        // 同口径——收尾与最后 Progress tick 间的尾部字节不缺）
         t.partial_blocks = partial_blocks;
-        // 重试决策（FR-01-41/42/43）：连续性规则 + 退避/Retry-After + 分类，
-        // 策略唯一来源在 model::retry（DRY）
         let (auto_retry, max_retries) = (self.cfg.auto_retry, t.max_retries);
         let (new_retries, decision) = crate::model::retry::decide(
             kind,
@@ -368,7 +362,6 @@ impl App {
         t.fail_kind = Some(kind);
         t.error = Some(reason.clone());
         let name = t.name.clone();
-        // max_retries 已在决策前读定（处理中不变），此处仅取更新后的计数供文案
         let retries = t.retries;
         let toast = match decision {
             crate::model::retry::RetryDecision {
@@ -377,7 +370,7 @@ impl App {
                 ..
             } => {
                 t.retry_in = Some(delay_secs);
-                t.has_slot = true; // 待自动重试：继续占用槽位
+                t.has_slot = true;
                 format!(
                     "✘ 下载失败（{reason}），{delay_secs:.0}s 后自动重试（{retries}/{max_retries}）: {name}"
                 )
@@ -391,13 +384,11 @@ impl App {
             }
             _ => {
                 t.retry_in = None;
-                t.has_slot = false; // 停等：释放槽位
+                t.has_slot = false;
                 format!("✘ {reason}：不自动重试，按 R 手动重试: {name}")
             }
         };
-        // 断点视图快照
         t.apply_chunk_snapshot(t.downloaded, chunk_done);
-        // t（可变借用）在此作用域结束后自然释放
         self.windows.remove(&id);
         self.set_toast(toast);
         self.save_registry();

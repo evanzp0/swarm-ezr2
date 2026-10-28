@@ -22,6 +22,10 @@ path = "src/bin/ezr-fixture/main.rs"
 name = "ezr-proxy"
 path = "src/bin/ezr-proxy.rs"
 
+[[bin]]
+name = "ezr-mktorrent"
+path = "src/bin/ezr-mktorrent.rs"
+
 [dependencies]
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }

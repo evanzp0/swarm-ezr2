@@ -1,5 +1,3 @@
-//! dialogs — 对话框确认流（添加/删除按钮激活、任务创建、文件删除）
-
 use super::{App, Dialog, DialogKind, CHECKSUM_ALGOS};
 use crate::engine::Cmd;
 use crate::model::checksum::CK_NONE;
@@ -11,22 +9,12 @@ use crate::model::{
 use crate::textfield::TextInput;
 
 impl App {
-    /// 打开对话框单源入口（v133/D38）：置入对话框状态并重置拖拽/位置——
-    /// 每次打开重新居中（与 pieces 弹窗同口径），上个会话遗留的拖拽态不清场。
     pub(crate) fn set_dialog(&mut self, d: Dialog) {
         self.dialog = Some(d);
         self.dlg_pos = None;
         self.dlg_drag = None;
         self.dlg_area = None;
     }
-    /// 校验码输入共识（Add/Modify 共用，DRY 收敛；v1.32/FR-01-01 修订）：
-    /// **NONE = 不校验**（创建/修改清除校验——原「留空 = 清除」路径改由
-    /// NONE 选项承载）；**非 NONE 算法校验码必填**——空提交被拒绝，toast
-    /// `⚠ {算法} 校验码不可为空（需 N 位十六进制）` 并聚焦校验码字段
-    /// （Add focus 4 / Modify focus 2）；非空按算法合法性校验，合法构造
-    /// Checksum；非法 → toast 提示并聚焦回校验码字段。外层 Some(None) =
-    /// 清除校验、Some(Some(..)) = 设置、None = 流程中止（不生效）。
-    /// `ck_type` 为下拉 8 项下标（0 = NONE，1..=7 = CHECKSUM_ALGOS）。
     fn checksum_from_input(
         &mut self,
         ck_type: usize,
@@ -36,18 +24,15 @@ impl App {
         let entries = checksum::checksum_dropdown();
         let (algo, need) = entries[ck_type.min(entries.len() - 1)];
         if ck_type == CK_NONE {
-            // NONE = 不校验（校验码输入已被实时禁用，此处扫尾空值路径）
             return Some(None);
         }
         if ck_raw.is_empty() {
-            // v1.32：非 NONE 算法校验码必填——空提交被拒绝并聚焦校验码字段
             self.set_toast(format!("⚠ {algo} 校验码不可为空（需 {need} 位十六进制）"));
             if let Some(d) = self.dialog.as_mut() {
                 d.focus_field(ck_focus);
             }
             return None;
         }
-        // 算法表下标 = 下拉下标 − 1（首行 NONE 占位，v1.32）
         let algo_idx = ck_type - 1;
         match checksum::validate_value(algo_idx, ck_raw) {
             Ok(v) => Some(Some(Checksum {
@@ -65,7 +50,6 @@ impl App {
         }
     }
 
-    /// 添加对话框按钮激活（v1.15/FR-01-103：6=立即下载 7=仅添加 8=取消）
     pub(super) fn dlg_activate_add(&mut self, btn: usize) {
         match btn {
             6 => self.dlg_confirm_add(),
@@ -75,7 +59,6 @@ impl App {
         }
     }
 
-    /// 修改任务按钮激活（v1.5/FR-01-87：4=确认 5=取消）
     pub(super) fn dlg_activate_modify(&mut self, btn: usize) {
         match btn {
             4 => self.dlg_confirm_modify(),
@@ -84,9 +67,6 @@ impl App {
         }
     }
 
-    /// 确认修改（v1.5/FR-01-87，D19/D20）：并发（空=保持，非法钳制 1–64）、
-    /// 校验（空=清除，非法聚焦提示不生效）、代理（下拉选择）；立即生效
-    /// = 引擎 Reconfigure（运行中）+ 任务字段更新 + 注册表落盘 + toast
     pub(super) fn dlg_confirm_modify(&mut self) {
         let Some(d) = self.dialog.as_ref() else {
             return;
@@ -104,15 +84,12 @@ impl App {
         let proxy_sel = d.proxy_sel.min(self.proxy_options.len().saturating_sub(1));
         let proxy = self.proxy_options[proxy_sel].clone();
 
-        // 并发：空 = 保持当前；非空按 1–64 钳制（口径同 QA-PC-04 裁决）
         let concurrency = if conns_raw.is_empty() {
             self.tasks[idx].concurrency
         } else {
             conns_raw.parse::<usize>().unwrap_or(0).clamp(1, 64)
         };
 
-        // 校验：空 = 清除（03-modify-task-05）；非空同添加对话框合法性口径，
-        // 非法 → 不生效 + 聚焦校验码字段（03-modify-task-06）
         let Some(checksum) = self.checksum_from_input(ck_type, &ck_raw, 2) else {
             return;
         };
@@ -124,7 +101,6 @@ impl App {
             }
         }
 
-        // 应用任务字段（DownloadDone 前更新 ⇒ 完成校验用最新值，D19）
         {
             let t = &mut self.tasks[idx];
             t.concurrency = concurrency;
@@ -132,8 +108,6 @@ impl App {
             t.proxy = proxy;
         }
         self.dialog = None;
-        // 运行中任务热调（未知/已停句柄引擎侧静默忽略；排队/暂停任务在
-        // 下次 Start 经 make_spec 按新值生效）
         let engine = self.engine.clone();
         tokio::spawn(async move {
             engine
@@ -148,18 +122,14 @@ impl App {
         self.save_registry();
     }
 
-    /// 确认添加（FR-01-01/03/04/05/26：URL 校验、目录默认、并发钳制、校验码校验、断点接续）
     pub(super) fn dlg_confirm_add(&mut self) {
         self.dlg_finish_add(false);
     }
 
-    /// 仅添加（v1.15/FR-01-103，D28）：校验与创建链路与立即下载完全一致，唯一
-    /// 差异 = 创建后任务落「已暂停」态（不占槽位、不被调度自动启动，空格开始）
     pub(super) fn dlg_add_only(&mut self) {
         self.dlg_finish_add(true);
     }
 
-    /// 添加对话框共同收尾（FR-01-103 重构收口：两路径唯一分叉 = 落态与 toast）
     fn dlg_finish_add(&mut self, paused: bool) {
         let Some(d) = self.dialog.as_ref() else {
             return;
@@ -169,7 +139,6 @@ impl App {
             self.set_toast("⚠ 请输入下载 URL");
             return;
         }
-        // FR-01-05：仅接受 http:// / https://（口径单源 model::is_http_url）
         if !is_http_url(&url) {
             self.set_toast("⚠ 仅支持 http:// 或 https:// 链接");
             return;
@@ -178,17 +147,12 @@ impl App {
         let conns_raw = d.conns.value.trim().to_string();
         let ck_raw = d.ck_value.value.trim().to_string();
         let ck_type = d.ck_type;
-        // 代理选择先读出（借用收窄：后续 checksum_from_input 需要 &mut self）
         let proxy = self.proxy_options[d.proxy_sel.min(self.proxy_options.len() - 1)].clone();
 
-        // 校验码（可留空 = 不校验；输入统一小写，位数与算法匹配）；
-        // 非法 → toast 提示并聚焦回校验码字段（Add focus 4）
         let Some(checksum) = self.checksum_from_input(ck_type, &ck_raw, 4) else {
             return;
         };
 
-        // 保存目录（FR-01-03）：留空 = 配置 download_dir；缺省 = ~/Downloads；
-        // 统一去尾斜杠（trim 幂等，归一一次全函数共用）
         let dir = if dir_raw.is_empty() {
             self.cfg
                 .download_dir
@@ -200,22 +164,12 @@ impl App {
         let dir = dir.trim_end_matches('/').to_string();
 
         let protocol = protocol_of_url(&url);
-        // 重复任务拒绝（Gherkin 01-add-task-16）：同 URL 同保存目录已在列表 →
-        // toast「任务已存在」，不创建新任务（对话框保持打开，与其他校验失败一致）
         if self.tasks.iter().any(|t| t.url == url && t.save_dir == dir) {
             self.set_toast("⚠ 任务已存在");
             return;
         }
         let base_name = namegen::derive_name(None, None, &url);
-        // v1.20：任务 ID = u32 随机数 + 任务全集查重（model::idgen），不再顺序自增
         let id = self.alloc_task_id();
-        // FR-01-26 断点自动接续（v1.28 路径基）：保存目录存在与推导名同名的
-        // 有效 sidecar 即接续（sidecar 不存储任何 URL，FR-01-20 v1.28——不再
-        // 做「同 URL」校验；AIR2 口径：控制文件按路径关联，URI 由添加输入重供。
-        // 异 URL 同推导名的误接续由 FR-01-22 一致性检查兜底：探测后
-        // ETag/Last-Modified/大小不符 → 作废从头重下，规格 01-resume-sidecar-14）
-        //（扩展名单源 namegen::SIDECAR_EXT，architect v116；join 语义保持本点
-        // 历史口径：目录尾 '/' 已归一，'\\' 不归一）
         let resumed = Sidecar::load(&format!("{dir}/{base_name}{SIDECAR_EXT}")).is_some()
             || self.tasks.iter().any(|t| {
                 t.url == url
@@ -226,20 +180,16 @@ impl App {
         let name = if resumed {
             base_name.clone()
         } else {
-            // 重名检测：任务表 + 盘上（文件/.downloading/sidecar）→ 自动追加序号
             let tasks = &self.tasks;
             namegen::dedupe(&base_name, |n| {
                 tasks.iter().any(|t| t.name == n && t.save_dir == dir)
                     || namegen::exists_on_disk(&dir, n)
             })
         };
-        // 并发数（FR-01-04）：非 1–64 范围（留空/0/65/非数字）一律回退配置默认
-        // （Gherkin 01-add-task-06：留空/0/65/abc → 均回退默认 4，非钳制）
         let conns = match conns_raw.parse::<usize>() {
             Ok(v) if (1..=64).contains(&v) => v,
             _ => self.cfg.http_concurrency,
         };
-        // 校验值来源②（FR-01-50/D14）：未显式提供时查保存目录伴随文件
         let checksum = Self::resolve_checksum(&dir, &name, checksum);
         let ts = unix_now();
         let mut t = Task::new_queued(
@@ -255,14 +205,9 @@ impl App {
             proxy,
             ts,
         );
-        // FR-01-103/D28：仅添加 → 已暂停（不占下载槽位、不被槽位调度自动启动）
         if paused {
             t.state = TaskState::Paused;
         }
-        // v1.28/FR-01-26：路径基接续的任务名随接续定稿（沿用既有名）——
-        // 首探前的一致性失效重下不得重新去重（TaskSpec.keep_name 钉名；
-        // 否则残留 .downloading 会把任务名漂移成 <name>.1，违反规格
-        // 01-resume-sidecar-14「沿用既有名」，QA-RS-14 实证）
         if resumed {
             t.name_locked = true;
         }
@@ -273,7 +218,6 @@ impl App {
         if flen > 0 {
             self.selected = flen - 1;
         }
-        // toast（D29 钦定文案）：立即下载路径维持原两态；仅添加 ⏸ + 空格引导
         if paused {
             if resumed {
                 self.set_toast(format!(
@@ -305,16 +249,14 @@ impl App {
         };
         match btn {
             0 => {
-                // 仅删除任务：文件与 sidecar 保留（FR-01-25）；引擎任务取消（停写 sidecar）
                 self.remove_task(idx, id, false);
                 self.set_toast(format!("🗑 已删除任务（保留文件）: {name}"));
-                self.dialog = None; // 操作完成即关闭对话框
+                self.dialog = None;
             }
             1 => {
-                // 删除任务和文件：记录即时删除；文件在引擎 Cancelled 确认后删除（防重建竞态）
                 self.remove_task(idx, id, true);
                 self.set_toast(format!("🗑 已删除任务，正在停止引擎并清理本地文件: {name}"));
-                self.dialog = None; // 操作完成即关闭对话框
+                self.dialog = None;
             }
             _ => {
                 self.dialog = None;
@@ -326,10 +268,6 @@ impl App {
         }
     }
 
-    /// 从任务表移除并取消引擎任务（删除对话框两路共用）。
-    /// `delete_files` = true 时登记延迟删除：引擎回报 [`Evt::Cancelled`]（supervisor
-    /// 已完全退出、不再写盘）后再删目标文件/.downloading/.ezr，避免与引擎在途
-    /// 写入竞态导致 sidecar/文件被重新创建。
     pub(super) fn remove_task(&mut self, idx: usize, id: u32, delete_files: bool) {
         let (save_dir, name) = {
             let t = &self.tasks[idx];
@@ -343,13 +281,12 @@ impl App {
         }
         let engine = self.engine.clone();
         tokio::spawn(async move {
+            engine.send(Cmd::CancelBt { id }).await;
             engine.send(Cmd::Cancel { id }).await;
         });
         self.save_registry();
     }
 
-    /// 删除任务的三类本地文件：目标文件、.downloading、.ezr sidecar（FR-01-25「删除任务和文件」；
-    /// 后缀单源 namegen 常量，architect v116）
     pub(super) fn delete_task_files(save_dir: &str, name: &str) {
         let base = save_dir.trim_end_matches('/');
         for path in [
@@ -361,12 +298,10 @@ impl App {
         }
     }
 
-    /// 打开添加对话框（v1.32/FR-01-01：校验默认 NONE（不校验）——原
-    /// 「默认 SHA-256」退役；空预填；URL/目录留空由用户输入）
+    #[allow(dead_code)]
     pub fn open_add_dialog(&mut self) {
         self.set_dialog(Dialog {
             kind: DialogKind::Add,
-            // 输入框组件构造：空值 + 光标 0（随输入迁尾）
             url: TextInput::new(),
             dir: TextInput::new(),
             conns: TextInput::new(),
@@ -380,13 +315,16 @@ impl App {
             focus: 0,
             task_name: String::new(),
             task_id: None,
+            torrent: TextInput::new(),
+            bt_tree: Vec::new(),
+            bt_cursor: 0,
+            bt_scroll: 0,
+            bt_follow: true,
+            trackers: crate::multiline::MultiLineBuf::new(),
         });
     }
 
-    /// 打开修改任务对话框（v1.5/FR-01-87）：四字段预填当前值；
-    /// 已完成任务拒绝（D20，toast 提示）；无选中任务 toast 提示
     pub fn open_modify_dialog(&mut self) {
-        // 先取选中任务的 owned 快照（借用期只读任务表；选项表追加在快照后）
         let Some(t) = self.sel_task() else {
             self.set_toast("没有选中的任务");
             return;
@@ -402,16 +340,10 @@ impl App {
             t.checksum.clone(),
             t.proxy.clone(),
         );
-        // 规范名回查单源 checksum::algo_index_exact_or_default（architect v116：
-        // 原内联 exact-match 与引擎 verify 重复）。v1.32/FR-01-87：下拉 8 项含
-        // 首行 NONE——有校验任务预填 = 算法表下标 + 1；无校验任务预填 NONE
-        //（v1.32：原 unwrap_or(3) SHA-256 退役）
         let ck_type = checksum
             .as_ref()
             .map(|c| checksum::algo_index_exact_or_default(c.algo) + 1)
             .unwrap_or(CK_NONE);
-        // 选项表未收录时追加兜底项保证回显一致（命名代理被从配置删除的
-        // 存量任务；正常流都在表内）
         let proxy_sel = match self.proxy_options.iter().position(|o| o == &proxy) {
             Some(i) => i,
             None => {
@@ -426,7 +358,6 @@ impl App {
             kind: DialogKind::Modify,
             url: TextInput::new(),
             dir: TextInput::new(),
-            // 组件 with_value：预填值 + 光标迁尾（输入框惯例）
             conns: TextInput::with_value(concurrency.to_string()),
             conns_edited: false,
             ck_type,
@@ -438,10 +369,15 @@ impl App {
             focus: 0,
             task_name: name,
             task_id: Some(id),
+            torrent: TextInput::new(),
+            bt_tree: Vec::new(),
+            bt_cursor: 0,
+            bt_scroll: 0,
+            bt_follow: true,
+            trackers: crate::multiline::MultiLineBuf::new(),
         });
     }
 
-    /// 打开删除对话框（三选：仅任务/任务和文件/取消）
     pub fn open_delete_dialog(&mut self) {
         let Some(t) = self.sel_task() else {
             self.set_toast("没有选中的任务");
@@ -462,6 +398,12 @@ impl App {
             focus: 0,
             task_name: t.name.clone(),
             task_id: None,
+            torrent: TextInput::new(),
+            bt_tree: Vec::new(),
+            bt_cursor: 0,
+            bt_scroll: 0,
+            bt_follow: true,
+            trackers: crate::multiline::MultiLineBuf::new(),
         });
     }
 }
@@ -474,27 +416,21 @@ mod add_dialog_flow_tests {
     use crate::model::config::Config;
     use crate::model::Protocol;
 
-    /// 添加对话框全流程：输入 URL/目录 → Enter 确认 → 任务入列；
-    /// 保存目录尾斜杠归一（FR-01-03，目录归一单点化的行为锚定）
     #[tokio::test]
     async fn add_dialog_confirm_creates_task_with_normalized_dir() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-app-dlg");
         let reg = dir.join("registry.json").to_string_lossy().to_string();
         let mut app = App::new(Config::default(), reg);
 
-        // A 打开添加对话框
-        app.on_key(KeyCode::Char('a'), KeyModifiers::NONE);
+        app.open_add_dialog();
         assert!(app.dialog.is_some());
-        // 输入 URL（focus 0）
         for c in "http://example.com/f.bin".chars() {
             app.on_key(KeyCode::Char(c), KeyModifiers::NONE);
         }
-        // Tab 到目录字段，输入带尾斜杠的目录
         app.on_key(KeyCode::Tab, KeyModifiers::NONE);
         for c in format!("{}/", dir.to_string_lossy()).chars() {
             app.on_key(KeyCode::Char(c), KeyModifiers::NONE);
         }
-        // Enter（非算法/取消焦点）= 确认添加
         app.on_key(KeyCode::Enter, KeyModifiers::NONE);
         assert!(app.dialog.is_none());
         assert_eq!(app.tasks.len(), 1);
@@ -514,9 +450,6 @@ mod add_dialog_flow_tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// v1.15/FR-01-103（D28/D29）：仅添加按钮——校验与创建链路与立即下载一致，
-    /// 唯一差异 = 任务落「已暂停」态（不占槽位、不自动启动）+ 钦定 toast；
-    /// 空格继续走既有 FR-01-33 链路（v1.21 修订：一律重新排队）
     #[tokio::test]
     async fn add_only_button_creates_paused_task() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-addonly");
@@ -537,6 +470,12 @@ mod add_dialog_flow_tests {
             focus: 7,
             task_name: String::new(),
             task_id: None,
+            torrent: TextInput::new(),
+            bt_tree: Vec::new(),
+            bt_cursor: 0,
+            bt_scroll: 0,
+            bt_follow: true,
+            trackers: crate::multiline::MultiLineBuf::new(),
         });
         app.dlg_activate_add(7);
         assert!(app.dialog.is_none(), "仅添加后关闭对话框");
@@ -552,7 +491,6 @@ mod add_dialog_flow_tests {
             "toast 钦定文案（D29）：{:?}",
             app.toast
         );
-        // 空格继续（FR-01-33 既有链路）：一律重新排队（v1.21 修订）
         app.selected = 0;
         app.toggle_pause();
         assert_eq!(
@@ -564,7 +502,6 @@ mod add_dialog_flow_tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// v1.15/FR-01-103：仅添加 + 有效断点 → 接续原名 + 钦定 toast（按空格继续）
     #[tokio::test]
     async fn add_only_with_sidecar_resume_keeps_paused() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-addonly-sc");
@@ -587,8 +524,13 @@ mod add_dialog_flow_tests {
             focus: 7,
             task_name: String::new(),
             task_id: None,
+            torrent: TextInput::new(),
+            bt_tree: Vec::new(),
+            bt_cursor: 0,
+            bt_scroll: 0,
+            bt_follow: true,
+            trackers: crate::multiline::MultiLineBuf::new(),
         });
-        // 预置同 URL sidecar（断点接续）——夹具单源 testutil
         crate::app::testutil::preset_resume_sidecar(&dir);
         app.dlg_activate_add(7);
         assert!(app.dialog.is_none(), "仅添加后关闭");
@@ -609,13 +551,6 @@ mod add_dialog_flow_tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// v1.28/FR-01-26 回归（规格 01-resume-sidecar-14 前置）：断点接续匹配改
-    /// **路径基**——保存目录存在与推导名同名的有效 sidecar 即接续，**不再校验
-    /// 同 URL**（sidecar 不存储任何 URL，FR-01-20 v1.28）。异 URL 同推导名的
-    /// 误接续由 FR-01-22 一致性检查兜底（探测后三要素不符 → 作废从头下）。
-    /// 本用例用 v1.27 形态 sidecar（含旧 url 键、URL 与本次添加不同）锁定：
-    /// 接续照常发生、沿用推导原名（旧实现 sc.url == url 不符 → 拒接续 →
-    /// 盘上 sidecar 占用推导名 → 漂移 alias.bin.1）。
     #[tokio::test]
     async fn confirm_add_resumes_by_path_even_with_different_url() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-pathbase");
@@ -638,8 +573,13 @@ mod add_dialog_flow_tests {
             focus: 7,
             task_name: String::new(),
             task_id: None,
+            torrent: TextInput::new(),
+            bt_tree: Vec::new(),
+            bt_cursor: 0,
+            bt_scroll: 0,
+            bt_follow: true,
+            trackers: crate::multiline::MultiLineBuf::new(),
         });
-        // 预置 v1.27 形态 sidecar（含 url 键，URL 与本次添加不同——路径基下仍接续）
         let legacy = serde_json::json!({
             "version": 1,
             "url": "http://other.example/alias.bin",
@@ -677,8 +617,6 @@ mod add_dialog_flow_tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// v1.15/FR-01-103：仅添加路径校验链与立即下载一致——非法 URL 拒绝、
-    /// 对话框保持、无任务创建
     #[tokio::test]
     async fn add_only_rejects_invalid_url_same_as_confirm() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-addonly-bad");
@@ -701,6 +639,12 @@ mod add_dialog_flow_tests {
             focus: 7,
             task_name: String::new(),
             task_id: None,
+            torrent: TextInput::new(),
+            bt_tree: Vec::new(),
+            bt_cursor: 0,
+            bt_scroll: 0,
+            bt_follow: true,
+            trackers: crate::multiline::MultiLineBuf::new(),
         });
         app.dlg_activate_add(7);
         assert!(app.dialog.is_some(), "非法 URL 拒绝，对话框保持");
@@ -713,16 +657,11 @@ mod add_dialog_flow_tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// v1.6/FR-01-86/90（D18 两态）：添加对话框代理下拉 = 直连 + 命名条目
-    ///（含类型标注，v1.9 三值 http/https/socks5），默认选中恒直连；确认后写入任务
     #[tokio::test]
     async fn add_dialog_proxy_options_two_states() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-pdef");
         let reg = dir.join("registry.json").to_string_lossy().to_string();
         let mut cfg = Config::from_toml(
-            // v1.9/FR-01-86/89：夹具按 ip/port/type 字段形态（url 键退役）；
-            // v1.8/FR-01-93：socks5 型凭证必填，夹具补齐 username/password 保持
-            // 「合法条目」意图（a/b/c 显示为带类型标注的命名代理）
             "[[proxies]]\nname = \"a\"\ntype = \"socks5\"\nip = \"a\"\nport = 2\nusername = \"u\"\npassword = \"p\"\n[[proxies]]\nname = \"b\"\ntype = \"http\"\nip = \"b\"\nport = 3\n[[proxies]]\nname = \"c\"\ntype = \"https\"\nip = \"c\"\nport = 4\n",
         );
         cfg.warnings.clear();
@@ -760,7 +699,6 @@ mod add_dialog_flow_tests {
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
 
-        // 空配置 → 下拉仅「直连」
         let reg2 = dir.join("registry2.json").to_string_lossy().to_string();
         let mut app2 = App::new(Config::default(), reg2);
         app2.open_add_dialog();
@@ -770,14 +708,11 @@ mod add_dialog_flow_tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// v1.5/FR-01-87：m 修改对话框——预填当前值、确定后立即生效（并发/
-    /// 校验/代理写入任务）+ toast + 注册表落盘；已完成任务拒绝（D20）
     #[tokio::test]
     async fn modify_dialog_prefills_applies_and_rejects_completed() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-mod");
         let reg = dir.join("registry.json").to_string_lossy().to_string();
         let mut cfg = Config::from_toml(
-            // v1.9/FR-01-86/89：夹具按 ip/port/type 字段形态（url 键退役）
             "[[proxies]]\nname = \"a\"\ntype = \"http\"\nip = \"a\"\nport = 2\n[[proxies]]\nname = \"b\"\ntype = \"http\"\nip = \"b\"\nport = 3\n",
         );
         cfg.warnings.clear();
@@ -799,17 +734,13 @@ mod add_dialog_flow_tests {
             0,
         ));
         app.selected = 0;
-        // 按 m 打开：预填并发 2 / SHA-256 / 校验码 / 直连
         app.on_key(KeyCode::Char('m'), KeyModifiers::NONE);
         let d = app.dialog.as_ref().expect("m 打开修改对话框");
         assert_eq!(d.kind, DialogKind::Modify);
         assert_eq!(d.conns.value, "2");
-        // v1.32：下拉 8 项含首行 NONE——算法表下标 + 1（SHA-256 = 4）
         assert_eq!(d.ck_type, 4, "SHA-256 下拉下标（NONE 首行 + 1）");
         assert_eq!(d.ck_value.value, "a".repeat(64));
         assert_eq!(d.proxy_sel, 0, "任务为 Direct → 预选直连");
-        // 改并发 6 + 校验选 NONE（v1.32：清除校验改由 NONE 选项承载）+
-        // 代理切命名 a → 确定
         let d = app.dialog.as_mut().unwrap();
         d.conns.set("6");
         d.ck_type = CK_NONE;
@@ -829,7 +760,6 @@ mod add_dialog_flow_tests {
         assert!(dir.join("registry.json").exists(), "注册表已落盘");
         app.shutdown().await;
 
-        // 已完成任务按 m 拒绝（D20）
         let reg2 = dir.join("registry2.json").to_string_lossy().to_string();
         let mut app2 = App::new(Config::default(), reg2);
         app2.tasks.push(crate::model::Task::new_queued(
@@ -847,7 +777,7 @@ mod add_dialog_flow_tests {
         ));
         app2.tasks[0].state = TaskState::Completed;
         app2.selected = 0;
-        app2.filter = 1; // 「已完成」页签（D20：已完成任务按 m 拒绝的场景入口）
+        app2.filter = 1;
         app2.on_key(KeyCode::Char('m'), KeyModifiers::NONE);
         assert!(app2.dialog.is_none(), "已完成任务不弹对话框");
         assert!(app2

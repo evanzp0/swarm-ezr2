@@ -1,10 +1,3 @@
-//! 加固测试（six-pack/hardender 步骤 7 批次 4）：app 层（mod/keys/tasks/paste/cli）存活体杀灭。
-//! 布局：#[path] 挂载 app/mod.rs（其 mod 声明自动带 keys/tasks/cli/paste/dialogs/…
-//! 子模块与各自带的产品单测）；App 字段为 pub，断言直接读状态。
-//! 等价/环境型论证（不写测试）见 .work/tmp/step7/EQUIVALENCE.md：
-//! sentinel.rs 9 点（进程级 TTY 语义）与 main.rs 58:5/68:5/339:5/347:16、overlay_sig 331:22。
-// lint 姿态与产品 bin（src/main.rs crate 级 allow）对齐：#[path] 收编的产品源
-// 在本测试 crate 内沿用产品面的豁免口径（产品面 clippy 0 的同一合同）。
 #![allow(missing_docs)]
 #![allow(clippy::multiple_crate_versions)]
 #![allow(clippy::pedantic)]
@@ -20,25 +13,25 @@
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap
 )]
-// 测试挂载机制固有豁免：产品源经 #[path] 部分收编进独立测试 crate，部分产物项
-// 在本 crate 上下文无消费者或被重复挂载（产品全量编译下均非死代码）。
 #![allow(dead_code)]
 #![allow(clippy::duplicate_mod)]
 #![allow(unused_imports)]
 
 #[path = "../src/app/mod.rs"]
 mod app;
+#[path = "../src/bt/mod.rs"]
+mod bt;
 #[path = "../src/engine/mod.rs"]
 mod engine;
 #[path = "common/fixture.rs"]
 mod fixture;
 #[path = "../src/model/mod.rs"]
 mod model;
+#[path = "../src/multiline.rs"]
+mod multiline;
 #[path = "../src/scrollbar.rs"]
-// v1.32/FR-01-109：滚动条引擎（app 状态机依赖的几何/命中类型单源）
 mod scrollbar;
 #[path = "../src/textfield.rs"]
-// 输入框组件（Dialog 文本字段实例化依赖的状态机/取窗/点击映射单源）
 mod textfield;
 
 use app::{Dialog, DialogKind};
@@ -49,13 +42,11 @@ use model::{unix_now, Protocol, Task, TaskState};
 
 type App = app::App;
 
-/// 构建空 App（临时注册表；引擎随 App 启动，测试收尾 shutdown）
 fn mkapp(tag: &str) -> App {
     let reg = std::env::temp_dir().join(format!("ezr-hard-app-{}-{tag}.json", std::process::id()));
     App::new(Config::default(), reg.to_string_lossy().into_owned())
 }
 
-/// 直接入列 n 个排队任务（id = 1..=n，name t{n}.bin）
 fn push_tasks(a: &mut App, n: u32) {
     for i in 1..=n {
         let t = Task::new_queued(
@@ -83,9 +74,6 @@ async fn shutdown(mut a: App) {
     a.shutdown().await;
 }
 
-// ---------------------------------------------------------------- keys.rs ---
-
-/// 靶 keys 22:13/24:13/25:13/25:46/26:13/27:13/48:9/49:17：方向键导航全家桶
 #[tokio::test]
 async fn keys_navigation_moves_selection() {
     let mut a = mkapp("nav");
@@ -109,7 +97,6 @@ async fn keys_navigation_moves_selection() {
     shutdown(a).await;
 }
 
-/// 靶 keys 29:25（`>→==`/`>→>=`）：空表按 End 不得把 selected 下溢成 -1
 #[tokio::test]
 async fn keys_end_on_empty_list_is_noop() {
     let mut a = mkapp("end-empty");
@@ -121,7 +108,6 @@ async fn keys_end_on_empty_list_is_noop() {
     shutdown(a).await;
 }
 
-/// 靶 keys 35:13：空格在排队任务上触发暂停/继续
 #[tokio::test]
 async fn keys_space_toggles_pause_on_queued() {
     let mut a = mkapp("space");
@@ -140,7 +126,6 @@ async fn keys_space_toggles_pause_on_queued() {
     shutdown(a).await;
 }
 
-/// 靶 keys 36:13：R 在非失败任务上给出提示文案
 #[tokio::test]
 async fn keys_r_on_queued_toasts_retry_hint() {
     let mut a = mkapp("retry-hint");
@@ -154,7 +139,6 @@ async fn keys_r_on_queued_toasts_retry_hint() {
     shutdown(a).await;
 }
 
-/// 靶 keys 38:13：D 打开删除对话框
 #[tokio::test]
 async fn keys_d_opens_delete_dialog() {
     let mut a = mkapp("dlg-del");
@@ -165,7 +149,6 @@ async fn keys_d_opens_delete_dialog() {
     shutdown(a).await;
 }
 
-/// 靶 keys 39:13：C 清理已完成任务
 #[tokio::test]
 async fn keys_c_clears_completed() {
     let mut a = mkapp("clear");
@@ -177,7 +160,6 @@ async fn keys_c_clears_completed() {
     shutdown(a).await;
 }
 
-/// 靶 keys 42:13/41:71：U 上移任务（换位语义）
 #[tokio::test]
 async fn keys_u_moves_task_up() {
     let mut a = mkapp("move-up");
@@ -191,10 +173,6 @@ async fn keys_u_moves_task_up() {
     shutdown(a).await;
 }
 
-// ------------------------------------------------------------- app/mod.rs ---
-
-/// 靶 v1.20 替换（原 mod 210:9 next_id 延续靶随顺序自增退役）：restore 必须
-/// 从注册表恢复任务及其随机 ID（ID 跨会话保留 = sidecar task.id 关联的前提）
 #[tokio::test]
 async fn restore_keeps_tasks_and_ids() {
     let reg = std::env::temp_dir().join(format!("ezr-hard-restore-{}.json", std::process::id()));
@@ -228,7 +206,6 @@ async fn restore_keeps_tasks_and_ids() {
     let _ = std::fs::remove_file(&reg);
 }
 
-/// 测试夹具：手写 Sidecar（字段全 pub；version 用产品常量；v1.28：无 URL 字段）
 fn fixture_sidecar(_url: &str, save_dir: &str, non_resumable: bool) -> Sidecar {
     Sidecar {
         version: SIDECAR_VERSION,
@@ -251,7 +228,6 @@ fn fixture_sidecar(_url: &str, save_dir: &str, non_resumable: bool) -> Sidecar {
     }
 }
 
-/// 靶 mod 219:31（delete `!`）：sidecar non_resumable=true → 恢复后不可续传
 #[tokio::test]
 async fn restore_merges_nonresumable_sidecar() {
     let reg = std::env::temp_dir().join(format!("ezr-hard-scr-{}.json", std::process::id()));
@@ -281,7 +257,6 @@ async fn restore_merges_nonresumable_sidecar() {
     let _ = std::fs::remove_file(&reg);
 }
 
-/// 靶 mod 228:9/228:39：spinner 按 frame 取 braille 表（% 语义）
 #[tokio::test]
 async fn spinner_cycles_braille_table() {
     let mut a = mkapp("spinner");
@@ -298,7 +273,6 @@ async fn spinner_cycles_braille_table() {
     shutdown(a).await;
 }
 
-/// 靶 mod 234:9：used_slots 统计占槽任务（Downloading + Queued&has_slot）
 #[tokio::test]
 async fn used_slots_counts_active_tasks() {
     let mut a = mkapp("slots");
@@ -314,7 +288,6 @@ async fn used_slots_counts_active_tasks() {
     shutdown(a).await;
 }
 
-/// 靶 mod 240:9：queue_pos 1 基位次；未排队返回 None
 #[tokio::test]
 async fn queue_pos_orders_waiting_tasks() {
     let mut a = mkapp("qpos");
@@ -334,7 +307,6 @@ async fn queue_pos_orders_waiting_tasks() {
     shutdown(a).await;
 }
 
-/// 靶 mod 250:17：页签 1 = 已完成视图
 #[tokio::test]
 async fn filtered_tab1_shows_completed_only() {
     let mut a = mkapp("filter");
@@ -351,7 +323,6 @@ async fn filtered_tab1_shows_completed_only() {
     shutdown(a).await;
 }
 
-/// 靶 mod 260:9：sel_idx 空表 None、跟随选中
 #[tokio::test]
 async fn sel_idx_follows_selection() {
     let a = mkapp("sel-empty");
@@ -364,7 +335,6 @@ async fn sel_idx_follows_selection() {
     shutdown(b).await;
 }
 
-/// 靶 mod 271:48：set_toast 的 toast_until = now + 3s（`+→-` 变异体立即过期）
 #[tokio::test]
 async fn set_toast_survives_immediate_tick() {
     let mut a = mkapp("toast");
@@ -374,7 +344,6 @@ async fn set_toast_survives_immediate_tick() {
     shutdown(a).await;
 }
 
-/// 靶 mod 280:38（`/→%`/`/→*`）：push_hist 按字节→KB 换算
 #[tokio::test]
 async fn push_hist_scales_bytes_to_kb() {
     let mut a = mkapp("hist");
@@ -392,9 +361,6 @@ async fn push_hist_scales_bytes_to_kb() {
     shutdown(a).await;
 }
 
-// ------------------------------------------------------------- tasks.rs ---
-
-/// 靶 tasks 166:24（`-→+`/`-→/`）：清理数量 toast 精确
 #[tokio::test]
 async fn clear_completed_toasts_exact_count() {
     let mut a = mkapp("clear-count");
@@ -411,7 +377,6 @@ async fn clear_completed_toasts_exact_count() {
     shutdown(a).await;
 }
 
-/// 靶 tasks 167:14（`>→==`/`>→>=`/`>→<`）：无可清理时给提示而非「已清理 0 个」
 #[tokio::test]
 async fn clear_completed_none_toasts_hint() {
     let mut a = mkapp("clear-none");
@@ -435,10 +400,6 @@ async fn clear_completed_none_toasts_hint() {
     shutdown(b).await;
 }
 
-/// 靶 tasks 82:13（v1.6/FR-01-92 行为变更登记；v1.21 合并口径；v1.23 数据
-/// 重置口径）：Failed 任务按空格 = 暂停挂起（转 Paused、清倒计时，error/retries
-/// 即时重置与普通暂停数据一致）；再按空格 = 恢复重新排队（原「重新排队」口径
-/// 由恢复动作承接，变异体仍落到兜底提示臂）
 #[tokio::test]
 async fn toggle_pause_on_failed_suspends_then_resume_requeues() {
     let mut a = mkapp("pause-failed");
@@ -464,7 +425,6 @@ async fn toggle_pause_on_failed_suspends_then_resume_requeues() {
         a.tasks[0].retries, 1,
         "挂起即重置重试计数（v1.23：retries=1）"
     );
-    // 再按空格 = 恢复 → 重新排队（原 requeue 口径承接）
     tap(&mut a, KeyCode::Char(' '));
     assert_eq!(
         a.tasks[0].state,
@@ -474,13 +434,12 @@ async fn toggle_pause_on_failed_suspends_then_resume_requeues() {
     shutdown(a).await;
 }
 
-/// 靶 tasks 85:13：Completed 任务按空格给提示
 #[tokio::test]
 async fn toggle_pause_on_completed_hints() {
     let mut a = mkapp("pause-done");
     push_tasks(&mut a, 1);
     a.tasks[0].state = TaskState::Completed;
-    a.filter = 1; // 已完成页签下任务才可见（sel_idx 走 filtered 视图）
+    a.filter = 1;
     a.selected = 0;
     tap(&mut a, KeyCode::Char(' '));
     assert!(
@@ -491,11 +450,6 @@ async fn toggle_pause_on_completed_hints() {
     shutdown(a).await;
 }
 
-/// 靶 tasks Paused 恢复臂（QA 终局轮 · 02-named-proxy-05 缺陷修复；v1.21 统一
-/// 队列路径适配）：恢复 = 一律重新排队，按键时刻不再触发代理解析（resolve
-/// 随启动点移至 tick 获槽时）——缺失引用提醒的发射与可见性由产品树
-/// resolve_endpoint_missing_named_proxy_warns 锁定，时序为恢复提示先行、
-/// 提醒后发覆盖（02-named-proxy-05「提醒一次、后发覆盖先发」口径不变）
 #[tokio::test]
 async fn toggle_pause_resume_missing_named_proxy_warns() {
     let mut a = mkapp("pause-gone-proxy");
@@ -521,8 +475,6 @@ async fn toggle_pause_resume_missing_named_proxy_warns() {
     shutdown(a).await;
 }
 
-// ------------------------------------------------------------- paste.rs ---
-
 fn add_dialog(focus: usize, ck_open: bool) -> Dialog {
     Dialog {
         kind: DialogKind::Add,
@@ -539,10 +491,15 @@ fn add_dialog(focus: usize, ck_open: bool) -> Dialog {
         focus,
         task_name: String::new(),
         task_id: None,
+        torrent: textfield::TextInput::new(),
+        bt_tree: Vec::new(),
+        bt_cursor: 0,
+        bt_scroll: 0,
+        bt_follow: true,
+        trackers: multiline::MultiLineBuf::new(),
     }
 }
 
-/// 靶 paste 9:9：on_paste 把文本路由进 Add 对话框 URL 字段
 #[tokio::test]
 async fn paste_routes_into_add_dialog_url() {
     let mut a = mkapp("paste-url");
@@ -555,7 +512,6 @@ async fn paste_routes_into_add_dialog_url() {
     shutdown(a).await;
 }
 
-/// 靶 paste 12:12（delete `!`）：下拉框展开时粘贴必须被忽略
 #[tokio::test]
 async fn paste_ignored_when_dropdown_open() {
     let mut a = mkapp("paste-open");
@@ -568,7 +524,6 @@ async fn paste_ignored_when_dropdown_open() {
     shutdown(a).await;
 }
 
-/// 靶 paste 46:9：focus=1 粘贴进目录字段（delete-arm 变异体落到 `_ => false`）
 #[tokio::test]
 async fn paste_routes_into_dir_field() {
     let mut a = mkapp("paste-dir");
@@ -579,9 +534,6 @@ async fn paste_routes_into_dir_field() {
     shutdown(a).await;
 }
 
-// -------------------------------------------------------------- cli.rs ---
-
-/// 靶 cli 35:36（`==→!=`）：同 URL 有效 sidecar → 断点接续 toast + 沿用原名
 #[tokio::test]
 async fn add_cli_task_resumes_with_matching_sidecar() {
     let dir = std::env::temp_dir().join(format!("ezr-hard-cli-{}", std::process::id()));
@@ -607,10 +559,6 @@ async fn add_cli_task_resumes_with_matching_sidecar() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 靶 tasks.rs requeue_failed verify_fail 臂（FR-01-51 v1.17 三分支③ + D34，
-/// 操作者 20261009 第十四批指令缺陷 B）：校验失败任务清空校验码后 R = 不校验
-/// ——落「等待中」正常重新排队（旧实现仍发空期望 Verify、落「校验中」，空串
-/// 比对恒败，R 后仍「校验失败」——旧实现语义下 state==Verifying，红）
 #[tokio::test]
 async fn retry_verify_failed_cleared_checksum_requeues_without_verify() {
     let dir = crate::model::testenv::uniq_tmp_dir("ezr-retry-cleared-ck");
@@ -618,7 +566,7 @@ async fn retry_verify_failed_cleared_checksum_requeues_without_verify() {
     push_tasks(&mut a, 1);
     a.tasks[0].state = TaskState::Failed;
     a.tasks[0].fail_kind = Some(model::FailKind::Verify);
-    a.tasks[0].checksum = None; // 已按 03-modify-task-05 清空（修改对话框清码确定）
+    a.tasks[0].checksum = None;
     a.tasks[0].save_dir = dir.to_string_lossy().into_owned();
     a.selected = 0;
     a.retry();
@@ -637,11 +585,6 @@ async fn retry_verify_failed_cleared_checksum_requeues_without_verify() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 靶 tasks.rs requeue_failed verify_fail 臂分支③ v1.18 直判臂（FR-01-51 v1.18
-/// 修订 B，操作者 20261009 第十六批指令缺陷改判）：文件在且大小与 total 一致 →
-/// 不经引擎直接收尾「已完成/无校验」——`.downloading` 改名目标、删 sidecar、
-/// verify_ok=None、速度归零、清连接（旧实现落 Queued 经引擎恢复过期 sidecar
-/// 回退重传尾巴，红）
 #[tokio::test]
 async fn retry_verify_failed_cleared_checksum_completes_directly_when_file_intact() {
     let dir = crate::model::testenv::uniq_tmp_dir("ezr-retry-direct-hit");
@@ -649,11 +592,10 @@ async fn retry_verify_failed_cleared_checksum_completes_directly_when_file_intac
     push_tasks(&mut a, 1);
     a.tasks[0].state = TaskState::Failed;
     a.tasks[0].fail_kind = Some(model::FailKind::Verify);
-    a.tasks[0].checksum = None; // 已按 03-modify-task-05 清空
+    a.tasks[0].checksum = None;
     a.tasks[0].total = 1024;
     a.tasks[0].downloaded = 1024;
     a.tasks[0].save_dir = dir.to_string_lossy().into_owned();
-    // 盘上预置完整 `.downloading`（1024 B = total）与 sidecar
     std::fs::write(dir.join("t1.bin.downloading"), vec![0u8; 1024]).unwrap();
     std::fs::write(dir.join("t1.bin.ezr"), b"sidecar").unwrap();
     a.selected = 0;
@@ -684,10 +626,6 @@ async fn retry_verify_failed_cleared_checksum_completes_directly_when_file_intac
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 靶 tasks.rs requeue_failed verify_fail 臂分支③ v1.18 fallback 臂（FR-01-51
-/// v1.18 修订 B；作废语义 FR-01-22 同源）：文件大小与 total 不符（外部改动，
-/// 台账与磁盘脱节）→ 删 sidecar 作废断点、清零进度/块视图、落「等待中」从头
-/// 重下（旧实现经引擎恢复过期 sidecar 回退重传，红）
 #[tokio::test]
 async fn retry_verify_failed_cleared_checksum_discards_checkpoint_when_file_short() {
     let dir = crate::model::testenv::uniq_tmp_dir("ezr-retry-discards-ck");
@@ -700,7 +638,6 @@ async fn retry_verify_failed_cleared_checksum_discards_checkpoint_when_file_shor
     a.tasks[0].downloaded = 1024;
     a.tasks[0].chunk_done = 1;
     a.tasks[0].save_dir = dir.to_string_lossy().into_owned();
-    // 盘上 `.downloading` 只有 100 B（大小不符）+ sidecar 预置
     std::fs::write(dir.join("t1.bin.downloading"), vec![0u8; 100]).unwrap();
     std::fs::write(dir.join("t1.bin.ezr"), b"sidecar").unwrap();
     a.selected = 0;
@@ -723,8 +660,6 @@ async fn retry_verify_failed_cleared_checksum_discards_checkpoint_when_file_shor
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 靶 tasks.rs requeue_failed（FR-01-51 v1.17 三分支①，D10 不回归）：伴随文件
-/// 存在 → 期望值取伴随现值并走重校验（Verifying）
 #[tokio::test]
 async fn retry_verify_failed_with_companion_reverifies_with_companion_value() {
     let dir = crate::model::testenv::uniq_tmp_dir("ezr-retry-companion");
@@ -756,8 +691,6 @@ async fn retry_verify_failed_with_companion_reverifies_with_companion_value() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 靶 tasks.rs requeue_failed（FR-01-51 v1.17 三分支②，原口径不回归）：伴随
-/// 缺失、任务显式校验值在 → 按显式值重校验（Verifying，期望值原样保留）
 #[tokio::test]
 async fn retry_verify_failed_with_explicit_checksum_reverifies() {
     let dir = crate::model::testenv::uniq_tmp_dir("ezr-retry-explicit-ck");
@@ -787,10 +720,6 @@ async fn retry_verify_failed_with_explicit_checksum_reverifies() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 靶 tasks.rs direct_finalize_or_discard 223:19（v137 hardender 轮）：intact
-/// 闭包的 `total > 0` 下界——total=0（大小未知）时磁盘上 len==0 的同名文件
-/// **不构成**「文件已完整」直判依据（`>=` 变异恒真会误判直判完成），必须走
-/// 作废断点从头重下的 fallback 臂。
 #[tokio::test]
 async fn direct_finalize_total_zero_empty_file_not_intact() {
     let dir = crate::model::testenv::uniq_tmp_dir("ezr-hard-df-total0");
@@ -803,7 +732,6 @@ async fn direct_finalize_total_zero_empty_file_not_intact() {
     a.tasks[0].total = 0;
     a.tasks[0].downloaded = 0;
     a.tasks[0].checksum = None;
-    // 分支③前置：无伴随、无显式值（resolve_checksum → None）
     let dl_path = format!("{}/df0.bin.downloading", dir.to_string_lossy());
     std::fs::write(&dl_path, b"").expect("写入 len==0 的 .downloading 文件");
     a.selected = 0;
@@ -822,11 +750,6 @@ async fn direct_finalize_total_zero_empty_file_not_intact() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 靶 tasks.rs clear_completed 272:33（v137 hardender 轮）：removed 收集与
-/// retain 同口径（仅 Completed）——清理不得波及未完成任务的连接级账本
-/// （FR-01-99 连接级累计读数；`==`→`!=` 变异清错对象）。连接账本无直写
-/// 通道（仅引擎 Speed 事件填充），经 ezr-fixture 慢速门控真实下载自然
-/// 填充后，用 `conn_cum_of`（pub(crate) 公开观察点）断言保留。
 #[tokio::test]
 async fn clear_completed_spares_live_task_conn_ledger() {
     let root = crate::model::testenv::uniq_tmp_dir("ezr-hard-cc-root");
@@ -856,7 +779,6 @@ async fn clear_completed_spares_live_task_conn_ledger() {
     a.tasks.push(slow);
     a.selected = 0;
 
-    // 门控等待：tick 驱动授予→启动→Speed 事件 → 连接级累计 > 0
     let mut populated = false;
     for _ in 0..100 {
         a.tick().await;

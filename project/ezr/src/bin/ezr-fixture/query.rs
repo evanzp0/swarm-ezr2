@@ -1,6 +1,3 @@
-//! query — fixture URL 查询参数解析（纯函数）
-
-/// 简单查询参数解析（k=v&k=v；值不解码——fixture 路径约定为 ASCII）
 pub fn parse_query(url: &str) -> (String, Vec<(String, String)>) {
     let (path, q) = match url.split_once('?') {
         Some((p, q)) => (p.to_string(), q),
@@ -17,7 +14,6 @@ pub fn parse_query(url: &str) -> (String, Vec<(String, String)>) {
     (path, kv)
 }
 
-/// 取查询参数值（首次出现者优先）
 pub fn qget<'a>(kv: &'a [(String, String)], k: &str) -> Option<&'a str> {
     kv.iter().find(|(key, _)| key == k).map(|(_, v)| v.as_str())
 }

@@ -1,40 +1,11 @@
-//! registry — 任务注册表持久化（FR-01-70：`~/.ezr/state/`，原子写，崩溃恢复）
-//!
-//! 全部任务（含已完成/已失败历史）跨会话保留；启动时恢复任务列表与历史，
-//! 「下载中」任务重启后回到「等待中」按序排队（FR-01-23）。
-//!
-//! 兼容性（v1.28，FR-01-14 ④）：`final_url` 快照字段退役——任务模型与注册表
-//! 不再持有/持久化跳转落点（原始 URL = 任务级唯一 URL 权威，AIR2 口径）；
-//! v1.27 及更早产物注册表的多余 `final_url` 键反序列化时被忽略（零迁移）。
-//! 新增 `name_locked`（首次探测已定名标记，`#[serde(default)]`：旧档缺省
-//! false，首个 Probed 后置位并随快照保留——接续原 `final_url.is_some()`
-//! 作为 keep_name 依据的口径）。
-//! 兼容性（v1.23，操作者 20261012 指令）：`has_error` 快照字段退役——失败挂起
-//! 在数据层与普通暂停完全一致（挂起时即重置 error=None、retries=1）；v1.21
-//! 产物注册表的多余 `has_error` 字段反序列化时被忽略（零迁移，Paused 任务
-//! 按普通暂停处理）。
-//! 兼容性（v1.21，操作者 20261012 指令）：FailedPaused 独立状态退役并入
-//! Paused——**旧版注册表不兼容**：含 `"FailedPaused"` 状态值的旧 JSON 反序列化
-//! 失败 → 按全新注册表处理（操作者钦定不迁移）。
-//! 兼容性（v1.20，操作者 20261011 指令）：任务 ID 改随机 u32 分配
-//! （`model::idgen`），注册表不再持久化 `next_id`——旧版 JSON 的多余
-//! `next_id` 字段反序列化时被忽略（零迁移）；新文件缺该字段，旧版程序加载
-//! 会因缺字段失败 → 按全新注册表处理（回滚降级可接受）。格式版本保持 1
-//! （字段集随版本演进不漂移，版本闸门语义不变）。
-
 use serde::{Deserialize, Serialize};
 
 use super::config::ProxyChoice;
 use super::sidecar::ChecksumCompat;
 use super::{Checksum, FailKind, Protocol, Task, TaskState};
 
-/// 注册表文件格式版本
 pub const REGISTRY_VERSION: u32 = 1;
 
-/// 任务级代理选择的注册表持久化形态（v1.5/FR-01-86；v1.6 两态）。
-/// 字符串编码：`direct` / `named:<name>`（写入）；读取兼容旧 `global` 值映射
-/// `direct`（FR-01-90，零迁移）；反序列化遇未知形态一律回退 `direct`
-/// （容错口径同注册表其余字段）。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProxyChoiceCompat(pub String);
 
@@ -56,7 +27,6 @@ impl From<&ProxyChoice> for ProxyChoiceCompat {
 impl From<ProxyChoiceCompat> for ProxyChoice {
     fn from(c: ProxyChoiceCompat) -> Self {
         match c.0.as_str() {
-            // v1.6/FR-01-90：旧 "global" 值（全局键已退役）映射直连（零迁移）
             "direct" | "global" => ProxyChoice::Direct,
             s => s
                 .strip_prefix("named:")
@@ -66,69 +36,46 @@ impl From<ProxyChoiceCompat> for ProxyChoice {
     }
 }
 
-/// 注册表（JSON 持久化；原子写同 sidecar）
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Registry {
-    /// 格式版本
     pub version: u32,
-    /// 任务快照（含已完成/已失败历史；任务 ID 随快照保留，随机 u32）
     pub tasks: Vec<TaskSnapshot>,
 }
 
-/// 任务快照（注册表持久化形态；运行时 `Task` 的可序列化投影）
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TaskSnapshot {
-    /// 任务 ID
     pub id: u32,
-    /// 文件名
     pub name: String,
-    /// 协议
     pub protocol: Protocol,
-    /// 原始 URL（v1.28：唯一持久化 URL——任务级权威，FR-01-70）
     pub url: String,
-    /// 首次探测已定名标记（v1.28；旧档缺该字段 → 反序列化默认 false）
     #[serde(default)]
     pub name_locked: bool,
-    /// 保存目录
     pub save_dir: String,
-    /// 总大小
     pub total: u64,
-    /// 已下载
     pub downloaded: u64,
-    /// 状态
     pub state: TaskState,
-    /// 是否支持续传
     pub resumable: bool,
-    /// 是否已探测
     pub probed: bool,
-    /// 块大小
     pub block_size: u64,
-    /// 并发数
     pub concurrency: usize,
-    /// 重试计数
     pub retries: u32,
-    /// 自动重试上限
     pub max_retries: u32,
-    /// 一致性失效连击
     pub invalidation_streak: u32,
-    /// 校验期望
     pub checksum: Option<ChecksumCompat>,
-    /// 任务级代理选择（v1.5/FR-01-86；旧注册表缺该字段 → 反序列化默认 = Global，
-    /// v1.6 两态（direct/named:<name>；旧 "global" 值加载映射 direct，FR-01-90））
     #[serde(default)]
     pub proxy: ProxyChoiceCompat,
-    /// 校验结果
     pub verify_ok: Option<bool>,
-    /// ETag
     pub etag: Option<String>,
-    /// Last-Modified
     pub last_modified: Option<String>,
-    /// 失败原因
     pub error: Option<String>,
-    /// 添加时间显示串
     pub created: String,
-    /// 添加时间 Unix 秒
     pub added_at: u64,
+    #[serde(default)]
+    pub uploaded: u64,
+    #[serde(default)]
+    pub seed_left: f64,
+    #[serde(default)]
+    pub bt: Option<super::bt::BtTaskData>,
 }
 
 impl From<&Task> for TaskSnapshot {
@@ -158,6 +105,9 @@ impl From<&Task> for TaskSnapshot {
             error: t.error.clone(),
             created: t.created.clone(),
             added_at: t.added_at,
+            uploaded: t.uploaded,
+            seed_left: t.seed_left,
+            bt: t.bt.clone(),
         }
     }
 }
@@ -200,18 +150,18 @@ impl From<&TaskSnapshot> for Task {
             last_modified: s.last_modified.clone(),
             has_slot: false,
             upload_speed: 0.0,
-            uploaded: 0,
+            uploaded: s.uploaded,
             seeders: 0,
             peers: 0,
-            seed_left: 0.0,
+            seed_left: s.seed_left,
             created: s.created.clone(),
             added_at: s.added_at,
+            bt: s.bt.clone(),
         }
     }
 }
 
 impl Registry {
-    /// 空注册表
     #[must_use]
     pub fn new() -> Registry {
         Registry {
@@ -220,8 +170,6 @@ impl Registry {
         }
     }
 
-    /// 从运行时任务列表构建（v1.20：ID 改随机分配，不再持久化 `next_id`——
-    /// 任务 ID 唯一性由分配期查重保证（`model::idgen`），恢复侧无需派生）
     #[must_use]
     pub fn from_tasks(tasks: &[Task]) -> Registry {
         Registry {
@@ -230,9 +178,6 @@ impl Registry {
         }
     }
 
-    /// 崩溃恢复投影（FR-01-23）：快照 → 运行时任务；
-    /// 「下载中 / 校验中」重启后回「等待中」按序排队（has_slot 清空、清空连接视图）；
-    /// 已完成/已失败历史原样保留（失败任务不自动重试，需手动 R）。
     #[must_use]
     pub fn restore_tasks(&self) -> Vec<Task> {
         self.tasks
@@ -244,7 +189,6 @@ impl Registry {
                     t.has_slot = false;
                     t.connections.clear();
                     t.speed = 0.0;
-                    // 重启时校验结果视为未定（重新校验/续传后重判）
                     if t.verify_ok != Some(true) {
                         t.verify_ok = None;
                     }
@@ -254,16 +198,10 @@ impl Registry {
             .collect()
     }
 
-    /// 原子写（temp + rename，FR-01-20；实现见 `save_json_atomic`）；
-    /// 内容与盘上一致时跳过写盘（幂等，空闲期周期保存零写放大）
-    ///
-    /// # Errors
-    /// 写临时文件或 rename 失败时返回 IO 错误。
     pub fn save(&self, path: &str) -> std::io::Result<()> {
         super::save_json_atomic(self, path)
     }
 
-    /// 读取（文件缺失/损坏/版本不符 → None，按全新注册表处理）
     #[must_use]
     pub fn load(path: &str) -> Option<Registry> {
         let text = std::fs::read_to_string(path).ok()?;
@@ -286,8 +224,6 @@ mod tests {
     use super::*;
     use crate::model::sample_task;
 
-    /// v1.20 兼容：旧版注册表 JSON 含 next_id 字段 → 反序列化忽略未知字段
-    /// 照常加载（零迁移；任务 ID 随快照保留）
     #[test]
     fn legacy_registry_with_next_id_field_still_loads() {
         let mut t = sample_task();
@@ -296,7 +232,6 @@ mod tests {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg-legacy");
         let p = dir.join("registry.json");
         reg.save(p.to_str().unwrap()).unwrap();
-        // 注入旧版 next_id 字段（模拟 v1.19 及更早产物）
         let legacy = std::fs::read_to_string(&p)
             .unwrap()
             .replacen('{', "{ \"next_id\": 23,", 1);
@@ -329,9 +264,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// v1.23（操作者 20261012 直判）：`has_error` 快照字段退役——新序列化不再
-    /// 写出该键；v1.21 产物注册表的多余 `has_error` 字段反序列化被忽略（零迁移，
-    /// Paused 任务按普通暂停处理，error/retries 随快照保留、恢复时重置）
     #[test]
     fn legacy_has_error_field_is_ignored() {
         let mut t = sample_task();
@@ -345,7 +277,6 @@ mod tests {
             !raw.contains("has_error"),
             "新序列化不再写 has_error 键: {raw}"
         );
-        // 模拟 v1.21 产物：同一快照注入多余 has_error 字段
         let v121 = raw.replace(
             "\"state\":\"Paused\"",
             "\"state\":\"Paused\",\"has_error\":true",
@@ -370,16 +301,11 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// v1.28（FR-01-14 ④）：`final_url` 快照字段退役——任务模型与注册表不再
-    /// 持有/持久化跳转落点（原始 URL = 唯一权威）。v1.27 及更早产物注册表的
-    /// 多余 `final_url` 键反序列化忽略（零迁移），新序列化不再写出该键。
     #[test]
     fn legacy_final_url_field_is_ignored_and_not_written() {
         let mut t = sample_task();
         t.id = 5;
         let reg = Registry::from_tasks(&[t]);
-        // 注入 v1.27 产物的 final_url 键（任务快照内，模拟旧档字段集；
-        // 紧凑序列化直写，与 has_error 兼容用例同口径）
         let raw = serde_json::to_string(&reg).unwrap();
         let legacy = raw.replace(
             "\"url\":\"http://x/f.bin\"",
@@ -391,7 +317,6 @@ mod tests {
         std::fs::write(&p, legacy).unwrap();
         let loaded =
             Registry::load(p.to_str().unwrap()).expect("旧注册表（含 final_url）应兼容加载");
-        // 重新落盘：新序列化不得写回 final_url 键
         let p2 = dir.join("rewritten.json");
         loaded.save(p2.to_str().unwrap()).unwrap();
         let text = std::fs::read_to_string(&p2).unwrap();
@@ -402,9 +327,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// v1.21（操作者钦定不迁移）：含旧版 FailedPaused 状态值的注册表反序列化
-    /// 失败 → `Registry::load` 返回 None → 按全新注册表处理（FR-01-70 崩溃恢复
-    /// 降级口径，与文件损坏同路径）
     #[test]
     fn legacy_failed_paused_variant_is_rejected() {
         let mut t = sample_task();
@@ -412,7 +334,6 @@ mod tests {
         t.error = Some("连接超时".to_string());
         let reg = Registry::from_tasks(&[t]);
         let raw = serde_json::to_string(&reg).unwrap();
-        // 模拟 v1.20 及更早产物：状态值回写为旧枚举名
         let legacy = raw.replace("\"state\":\"Paused\"", "\"state\":\"FailedPaused\"");
         assert!(legacy.contains("FailedPaused"), "旧值注入应生效");
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg-fp-legacy");
@@ -425,9 +346,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// v1.6/FR-01-90：旧注册表 "global" 代理值加载映射直连（零迁移）。
-    /// 构造方式：现行快照序列化文本中把 proxy 值替换回旧 "global"（模拟 v1.5
-    /// 产物注册表，字段集随版本演进不漂移）
     #[test]
     fn legacy_global_proxy_value_maps_to_direct() {
         let mut t = sample_task();
@@ -489,8 +407,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// 内容未变化时保存不重写文件（空闲期零写放大）：周期兜底保存反复触发时，
-    /// 字节一致的序列化结果必须短路跳过 temp+rename（mtime 不变为证）
     #[test]
     fn save_skips_rewrite_when_content_unchanged() {
         let mut t = sample_task();
@@ -513,7 +429,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// 内容变化时保存仍须写盘（防过度跳过）：跳过短路只对字节一致内容生效
     #[test]
     fn save_writes_when_content_changes() {
         let mut t = sample_task();
@@ -541,7 +456,6 @@ mod tests {
 
     #[test]
     fn proxy_choice_compat_legacy_global_maps_to_direct() {
-        // v1.6/FR-01-90：旧 "global" 值（全局键已退役）映射直连（零迁移）
         assert_eq!(
             ProxyChoice::from(ProxyChoiceCompat("global".to_string())),
             ProxyChoice::Direct
@@ -550,7 +464,6 @@ mod tests {
 
     #[test]
     fn proxy_choice_compat_unknown_falls_back_to_direct() {
-        // 反序列化遇未知形态一律回退 direct（容错口径同注册表其余字段）
         assert_eq!(
             ProxyChoice::from(ProxyChoiceCompat("bogus".to_string())),
             ProxyChoice::Direct
@@ -568,7 +481,6 @@ mod tests {
 
     #[test]
     fn load_rejects_version_mismatch() {
-        // 版本不符 → None，按全新注册表处理（FR-01-23）
         let reg = Registry::from_tasks(&[sample_task()]);
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg-version");
         let p = dir.join("registry.json");
@@ -586,8 +498,6 @@ mod tests {
 
     #[test]
     fn restore_resets_unverified_checksum_result() {
-        // 「下载中」重启 → 等待中；校验结果非 Some(true) 一律重置为未定
-        // （重启时校验结果视为未定，重新校验/续传后重判）
         let mut t = sample_task();
         t.state = TaskState::Downloading;
         t.verify_ok = Some(false);

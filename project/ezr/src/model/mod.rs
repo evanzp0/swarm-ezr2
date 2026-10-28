@@ -1,28 +1,4 @@
-//! model — EZR Downloader 领域模型层（纯逻辑，全部可单元测试）
-//!
-//! 包含：任务/状态机基础模型（`Task`）、AIR2 分块计算（`chunk`）、重试策略
-//! （`retry`）、速度滑窗（`speed`）、校验算法表（`checksum`）、sidecar 元数据
-//! （`sidecar`）、续传一致性检查（`consistency`）、配置（`config`）、文件名
-//! 推导（`namegen`）、槽位调度（`slots`）、任务 ID 生成（`idgen`，v1.20 随机
-//! u32 口径）与任务注册表（`registry`）。
-//!
-//! 状态机口径（phase-01 FR-01-30）：01 实际出现 6 态——等待中/下载中/已暂停/
-//! 校验中/已失败/已完成；「后期处理中」与「做种中」为后续期预留（枚举与配色
-//! 保留、01 内无触发路径）。不存在「连接中」状态。
-//!
-//! v1.21（操作者 20261012 指令）：原「已暂停（失败）」（FailedPaused）独立状态
-//! 退役并入「已暂停」（v1.21 曾由 `has_error` 布尔承载挂起语义）。
-//!
-//! v1.22（操作者 20261012 bug 报告直判）：挂起态 UI 展示与普通「已暂停」
-//! 完全一致（徽标/列表统计行/详情失败原因行三处差异化展示退役），错误信息
-//! 仅在「已失败」态详情展示。
-//!
-//! v1.23（操作者 20261012 bug 报告直判）：失败挂起在数据层也与普通暂停完全
-//! 一致——Failed 按空格挂起时即重置 error=None、retries=1（注册表快照同
-//! 口径）；`has_error` 字段整体退役（迟到失败守卫改按 Paused 全态忽略、
-//! 恢复 toast 回归续传双臂），v1.21 产物注册表的多余 `has_error` 字段
-//! 反序列化时被忽略（零迁移）。
-
+pub mod bt;
 pub mod checksum;
 pub mod chunk;
 pub mod config;
@@ -32,28 +8,22 @@ pub mod namegen;
 pub mod registry;
 pub mod retry;
 pub mod sidecar;
+pub mod sizefmt;
 pub mod slots;
 pub mod speed;
 
-/// 测试专用临时目录唯一化（仅 cfg(test) 编译；src 内全部测试临时目录的
-/// 单一事实来源——被全部测试 crate 收编，app/ui/engine 对其依赖合规）
 #[cfg(test)]
 pub(crate) mod testenv;
 
-/// 传输协议（01 仅 HTTP/HTTPS；`Bt` 为 phase-02 预留枚举，01 无触发路径）
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Protocol {
-    /// HTTP
     Http,
-    /// HTTPS
     Https,
-    /// BT（phase-02 预留，01 不出现）
     #[allow(dead_code)]
     Bt,
 }
 
 impl Protocol {
-    /// 协议徽标显示名（UI 黄色徽标用）
     #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
@@ -63,38 +33,27 @@ impl Protocol {
         }
     }
 
-    /// 是否 BT（01 恒为 false）
     #[must_use]
     pub fn is_bt(&self) -> bool {
         matches!(self, Protocol::Bt)
     }
 }
 
-/// 任务状态（phase-01 FR-01-30 六态 + 两预留态）
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum TaskState {
-    /// 排队等待（含失败重试后的重新排队）
     Queued,
-    /// 下载中
     Downloading,
-    /// 已暂停（v1.22 起挂起态展示不细分、v1.23 起数据层也不细分）
     Paused,
-    /// 完整性校验中（占下载槽位，FR-01-31/D12）
     Verifying,
-    /// 后期处理（02+ 预留，01 无触发路径）
     #[allow(dead_code)]
     PostProcessing,
-    /// 已完成
     Completed,
-    /// 已失败
     Failed,
-    /// 做种（BT，02+ 预留，01 无触发路径）
     #[allow(dead_code)]
     Seeding,
 }
 
 impl TaskState {
-    /// 状态显示名（列表徽标与详情字段）
     #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
@@ -109,31 +68,22 @@ impl TaskState {
         }
     }
 
-    /// 是否属于「已完成」页签
     #[must_use]
     pub fn is_done(&self) -> bool {
         matches!(self, TaskState::Completed | TaskState::Seeding)
     }
 
-    /// 是否显示并发连接明细（FR-01-96）：仅「下载中」与「做种中」（BT 二期预留）
-    /// 持有活跃连接；其余状态明细为空、活跃 0（渲染层门槛——状态下沉时连接
-    /// 数据冻结隐藏，恢复下载原样续用，保证暂停续传的累计量口径不受影响）。
     #[must_use]
     pub fn shows_conns(&self) -> bool {
         matches!(self, TaskState::Downloading | TaskState::Seeding)
     }
 }
 
-/// URL scheme 校验（FR-01-05 口径单一来源）：01 期仅接受 http:// 与 https://。
-/// 消费点：入口 CLI 解析（pos_url）、添加对话框确认、CLI 添加任务（architect
-/// v116 收口——原三处手拼 starts_with 判定）。
 #[must_use]
 pub fn is_http_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
 }
 
-/// URL scheme 推导协议（https → HTTPS，其余 → HTTP；与 [`is_http_url`] 配对使用，
-/// 消费点：添加对话框确认与 CLI 添加任务的 protocol 字段）
 #[must_use]
 pub fn protocol_of_url(s: &str) -> Protocol {
     if s.starts_with("https://") {
@@ -143,62 +93,36 @@ pub fn protocol_of_url(s: &str) -> Protocol {
     }
 }
 
-/// 失败类别（FR-01-40/43/44/51/22）：决定自动重试行为与列表行文案
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum FailKind {
-    /// 临时性错误（网络错误 / HTTP 408·429·5xx / 文件大小不符）：
-    /// 按指数退避自动重试，`Retry-After` 存在时优先采用（R2：无 60s 上限）
     Transient,
-    /// 语义性错误（HTTP 4xx 除 408/429 / 磁盘空间不足 / 服务器内容持续变化）：
-    /// 不自动重试，直接停等（「已达上限」式），仅可 R 手动重试
     Fatal,
-    /// 完整性校验失败：不自动重试；按 R 重新校验（断点保留，D10）
     Verify,
 }
 
-/// 任务的完整性校验期望（添加对话框显式提供 / CLI `-x` / 伴随文件，FR-01-50）
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Checksum {
-    /// 算法显示名（`checksum::CHECKSUM_ALGOS` 中的名称）
     pub algo: &'static str,
-    /// 十六进制校验码（统一小写）
     pub value: String,
 }
 
-/// 单个并发连接（分块）状态：一段连续的 byte range 由一个 worker 负责
 mod task;
 mod timefmt;
 
-#[allow(unused_imports)] // ProxyChoice/ProxyEndpoint 为对外 API 面（v1.5 配置项类型；
-// 挂载测试 crate 不消费 product re-export，unused 属机制固有告警）。
-// architect v116：ProxyConfig 零消费者，从 re-export 移除（死 API 面清理）
+pub use bt::{BtFile, BtTaskData};
+#[allow(unused_imports)]
 pub use config::{ProxyChoice, ProxyEndpoint};
-// conn_transferring 为跨层共享谓词（v1.34 二批 bug 修订：连接级速度窗口在传
-// 判定单源——app/engine 数据面与展示面两形态共用；产品面直接具名消费，
-// 挂载测试 crate 同样直接 use task:: 路径不经此 re-export）
 #[allow(unused_imports)]
 pub(crate) use task::conn_transferring;
-// ConnPhase 为对外 API 面（v1.34/FR-01-96 ⑦ 活跃判定单源枚举；产品面经
-// Connection::conn_phase 消费不直接具名，挂载测试 crate 不经 re-export——
-// unused 属机制固有告警，同 ProxyChoice 处置）
 #[allow(unused_imports)]
 pub use task::{ConnPhase, Connection, PieceState, Task};
-#[allow(unused_imports)] // 对外保留（01 期已暴露）
+#[allow(unused_imports)]
 pub use timefmt::fmt_created;
 pub use timefmt::unix_now;
 
-/// JSON 原子写（先写 `<path>.tmp` 再 rename；任意时刻断电不损坏，FR-01-20）。
-/// 注册表与 sidecar 持久化共用（DRY 单源）。
-/// 内容幂等短路：序列化结果与盘上现有文件字节一致时跳过写盘——周期兜底保存
-/// （如注册表 5s 兜底）在无变更的空闲期不再产生写放大（无谓 temp+rename 与
-/// mtime 抖动）；内容有差异（含文件缺失/损坏）时照常原子落盘。
-///
-/// # Errors
-/// 序列化或临时文件写入/rename 失败时返回 IO 错误。
 pub(crate) fn save_json_atomic<T: serde::Serialize>(value: &T, path: &str) -> std::io::Result<()> {
     let json = serde_json::to_string_pretty(value)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    // 盘上现有内容与本次序列化结果字节一致 → 跳过写盘（读失败视为不一致照常写）
     if std::fs::read_to_string(path).is_ok_and(|old| old == json) {
         return Ok(());
     }
@@ -208,7 +132,6 @@ pub(crate) fn save_json_atomic<T: serde::Serialize>(value: &T, path: &str) -> st
     Ok(())
 }
 
-/// 测试夹具：默认任务（各模块单测共用）
 #[cfg(test)]
 pub(crate) fn sample_task() -> Task {
     Task {
@@ -250,6 +173,7 @@ pub(crate) fn sample_task() -> Task {
         seed_left: 0.0,
         created: "2026-02-10 10:00".to_string(),
         added_at: 0,
+        bt: None,
     }
 }
 
@@ -281,8 +205,6 @@ mod tests {
         assert!(!TaskState::PostProcessing.is_done());
     }
 
-    /// FR-01-81 修订二：并发线程数（活跃连接数）数据面口径——
-    /// 下载中 = 持有未完成块的连接数（cap>0 且 done<cap）；其余态 = 有效连接数（cap>0）。
     #[test]
     fn thread_counts_active_conns_by_data_plane() {
         let mut t = sample_task();
@@ -293,10 +215,10 @@ mod tests {
             done,
         };
         t.connections = vec![
-            conn(1, 0, 1_000, 400),       // 传输中：计入
-            conn(2, 1_000, 1_000, 0),     // 待命空连接：不计入
-            conn(3, 1_000, 2_000, 1_000), // 已完成当前块：不计入
-            conn(4, 2_000, 3_000, 100),   // 传输中：计入
+            conn(1, 0, 1_000, 400),
+            conn(2, 1_000, 1_000, 0),
+            conn(3, 1_000, 2_000, 1_000),
+            conn(4, 2_000, 3_000, 100),
         ];
         t.state = TaskState::Downloading;
         assert_eq!(t.thread_count(), 2, "下载中 = 持有未完成块的连接数");
@@ -350,7 +272,6 @@ mod tests {
 
     #[test]
     fn fmt_created_known_instant() {
-        // 2026-01-01 00:00:00 UTC = 1767225600；东八区 → 2026-01-01 08:00
         assert_eq!(fmt_created(1_767_225_600), "2026-01-01 08:00");
     }
 

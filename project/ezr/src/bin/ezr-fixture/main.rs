@@ -1,28 +1,6 @@
-//! ezr-fixture — 本地 fixture 服务器（QA 基建 + 交付物，AC-10）
-//!
-//! 能力清单（对应 qa/ 各套件环境前置节）：
-//! - Range 支持/关闭（`?norange=1`）、隐藏 Content-Length（`streamy.bin` chunked）
-//! - 状态码注入（`?status=503`）+ Retry-After（`?retry_after=10`）
-//! - 传输中途断连（`?disconnect=N`：传 N 字节后断）、慢速门控（`?speed=B/s`）
-//! - 重定向链（`?redirect=N`：再跳 N 次）
-//! - 一致性头控制：`?etag=X` 覆盖 / `?noheaders=1` 不返回 ETag/Last-Modified
-//! - Content-Disposition（`?cd=name`）
-//! - 同 URL 换内容（`?swapsize=N`）
-//! - 请求头记录（`--log <jsonl>`：method/path/range/accept-encoding）
-//! - 文件魔法名：`ghost-404.bin` → 404；`streamy.bin` → chunked 无 Content-Length
-//!
-//! 用法：
-//! ```text
-//! ezr-fixture gen --root <dir>            # 生成标准文件集（含 100MB 稀疏）
-//! ezr-fixture serve --root <dir> --port 8765 [--log access.jsonl]
-//! ```
-//!
-//! 文件内容确定性：字节模式 `i % 251`，供校验值预计算。
-//! body 输出为流式（按需 seek + 64 KiB 分块读盘），每请求内存占用恒定；
-//! 仅 `?swapsize=N` 请求例外物化到内存（QA 约定仅小文件使用该注入）。
-#![allow(missing_docs)] // 交互层：demo 定稿基线复用，接口文档见 model/engine 层
-#![allow(clippy::pedantic)] // 交互层字节/速度展示算术与 demo 基线风格豁免
-#![allow(clippy::nursery)] // 同上
+#![allow(missing_docs)]
+#![allow(clippy::pedantic)]
+#![allow(clippy::nursery)]
 #![allow(
     clippy::cognitive_complexity,
     clippy::too_many_lines,
@@ -42,7 +20,6 @@ mod range;
 mod request;
 mod respond;
 
-/// 测试专用临时目录唯一化（挂载产品侧 src/model/testenv.rs，与主 crate 同源）
 #[cfg(test)]
 #[path = "../../model/testenv.rs"]
 mod testenv;
@@ -55,7 +32,6 @@ use crate::files::gen_files;
 use crate::handle::handle;
 use crate::request::AccessLog;
 
-/// CLI 参数（gen/serve 共用；默认 root `.`，port 8765）
 struct FixtureArgs {
     cmd: String,
     root: String,
@@ -63,7 +39,6 @@ struct FixtureArgs {
     log_path: Option<String>,
 }
 
-/// 解析 `gen|serve --root <dir> --port <n> [--log <路径>]`（未知参数忽略）
 fn parse_fixture_args(args: &[String]) -> FixtureArgs {
     let mut out = FixtureArgs {
         cmd: String::new(),
@@ -94,15 +69,12 @@ fn parse_fixture_args(args: &[String]) -> FixtureArgs {
     out
 }
 
-/// accept 循环：逐连接孵化 detach 线程（瞬时 accept 错误记录后继续，
-/// engineering.md 网络 fixture 条款）
 fn serve_loop(listener: TcpListener, root: Arc<PathBuf>, log: Arc<AccessLog>) {
     for conn in listener.incoming() {
         match conn {
             Ok(s) => {
                 let root = Arc::clone(&root);
                 let log = Arc::clone(&log);
-                // fixture 线程：detach（测试进程退出自然回收，engineering.md 纪律）
                 std::thread::spawn(move || handle(s, root, log));
             }
             Err(e) => {
@@ -112,7 +84,6 @@ fn serve_loop(listener: TcpListener, root: Arc<PathBuf>, log: Arc<AccessLog>) {
     }
 }
 
-/// 按子命令执行（gen 生成文件集 / serve 起服务）；返回进程退出码
 fn run_cmd(a: FixtureArgs) -> i32 {
     let root_path: PathBuf = a.root.into();
     match a.cmd.as_str() {
@@ -187,7 +158,6 @@ mod main_tests {
         assert_eq!(a.root, "/tmp/r");
         assert_eq!(a.port, 9001);
         assert_eq!(a.log_path.as_deref(), Some("x.jsonl"));
-        // 非法 port 沿用默认；--root 一律消费下一参数为值（原实现口径）；未知参数忽略
         let a = parse_fixture_args(&args(&[
             "ezr-fixture",
             "serve",
@@ -199,7 +169,6 @@ mod main_tests {
         assert_eq!(a.port, 8765);
         assert_eq!(a.root, "--bogus");
         assert_eq!(a.cmd, "serve");
-        // --root 无后续参数 → 保持默认
         let a = parse_fixture_args(&args(&["ezr-fixture", "serve", "--root"]));
         assert_eq!(a.root, ".");
     }
@@ -229,7 +198,6 @@ mod main_tests {
             dir.join("big-100m.bin").metadata().unwrap().len(),
             100 * 1024 * 1024
         );
-        // 幂等：再次 gen 不重建既有文件（跳过存在项）
         let code = run_cmd(FixtureArgs {
             cmd: "gen".to_string(),
             root: dir.to_string_lossy().into_owned(),

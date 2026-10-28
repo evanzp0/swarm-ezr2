@@ -1,24 +1,15 @@
-//! blocks — 运行时分块状态与租约快照（Blocks 队列、连接分配）
-
 #[cfg(test)]
 use super::lease::{lease_snapshot, spread_bytes};
-/// 总块数 y = ⌈total / piece⌉；空文件或零块大小无分块
 use super::plan::{block_range, chunk_total};
 
-/// 分块运行时状态表：每块 Done（全部完成）或 Partial（块内已写 `done` 字节）。
-/// 下载中断后已写盘字节保持有效（FR-01-13），续传从 `start + done` 继续 Range。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Blocks {
-    /// 文件总大小
     pub total: u64,
-    /// 块大小
     pub piece: u64,
-    /// 各块已写字节（值 == 块长表示完成；0 表示未开始）
     pub written: Vec<u64>,
 }
 
 impl Blocks {
-    /// 构建全空块表
     #[must_use]
     pub fn new(total: u64, piece: u64) -> Self {
         let y = chunk_total(total, piece);
@@ -29,13 +20,11 @@ impl Blocks {
         }
     }
 
-    /// 总块数
     #[must_use]
     pub fn count(&self) -> u32 {
         self.written.len() as u32
     }
 
-    /// 已完成块数 x（written == 块长）
     #[must_use]
     pub fn completed(&self) -> u32 {
         self.written
@@ -47,7 +36,6 @@ impl Blocks {
             .count() as u32
     }
 
-    /// 已下载字节合计（完成块全量 + 部分块块内字节）
     #[must_use]
     pub fn downloaded(&self) -> u64 {
         self.written
@@ -62,8 +50,6 @@ impl Blocks {
             .sum()
     }
 
-    /// 已完成块号集合（升序；Progress 事件携带的逐块真值，乱序完成安全）。
-    /// 单次扫描与 [`Blocks::completed`] 同口径（`written` 达块长）。
     #[must_use]
     pub fn done_indices(&self) -> Vec<u32> {
         self.written
@@ -76,10 +62,6 @@ impl Blocks {
             .collect()
     }
 
-    /// 部分下载块号集合（升序；块内已有字节但未达块长，Progress/PausedDone/
-    /// Failed 事件携带的逐块真值）。单次扫描与 [`Blocks::done_indices`] 同口径
-    /// ——pieces 弹窗 🟨 以集合为准（操作者实证缺陷修复：暂停/失败收尾的
-    /// 投影租约只覆盖尾部 ≤ 并发数个块，前缀外的真部分块无租约错标 ⬜）。
     #[must_use]
     pub fn partial_indices(&self) -> Vec<u32> {
         self.written
@@ -93,7 +75,6 @@ impl Blocks {
             .collect()
     }
 
-    /// 第 `i` 块是否已完成
     #[must_use]
     pub fn is_done_block(&self, i: u32) -> bool {
         match (
@@ -105,7 +86,6 @@ impl Blocks {
         }
     }
 
-    /// 标记第 `i` 块完成
     pub fn mark_done(&mut self, i: u32) {
         if let Some((s, e)) = block_range(self.total, self.piece, i) {
             if let Some(w) = self.written.get_mut(i as usize) {
@@ -114,7 +94,6 @@ impl Blocks {
         }
     }
 
-    /// 标记第 `i` 块块内进度（`done` 字节；越界钳制到块长）
     pub fn mark_progress(&mut self, i: u32, done: u64) {
         if let Some((s, e)) = block_range(self.total, self.piece, i) {
             if let Some(w) = self.written.get_mut(i as usize) {
@@ -124,12 +103,6 @@ impl Blocks {
     }
 }
 
-/// 连接展示快照（demo `make_chunk_conns` 同构语义）：按「已下载 done_bytes 的
-/// 连续前缀」把 min(n, 未完成块数) 个块分配给 n 个连接；`done_bytes >= total`
-/// （校验/完成）时展示最后 min(n, y) 个满块。
-///
-/// 仅用于 UI 快照与恢复基线；下载中的真实连接视图由引擎逐连接上报。
-/// 返回 (连接列表, 已完成块数 x)。
 #[cfg(test)]
 #[cfg(test)]
 mod tests {
@@ -151,7 +124,6 @@ mod tests {
 
     #[test]
     fn chunk_total_saturates_on_huge() {
-        // 块大小极小时块数封顶 u32::MAX，不 panic 不回绕
         assert_eq!(chunk_total(u64::MAX, 1), u32::MAX);
     }
 
@@ -190,31 +162,26 @@ mod tests {
         assert_eq!(b.downloaded(), 1_000_000);
     }
 
-    /// done_indices：升序列出已完成块号，与 completed() 计数同口径；
-    /// 乱序完成（先 2 后 0）不乱序输出；部分块不入选。
     #[test]
     fn done_indices_sorted_matches_completed() {
         let mut b = Blocks::new(5_000_000, 1_000_000);
         assert!(b.done_indices().is_empty(), "全空无完成块");
         b.mark_done(2);
         b.mark_done(0);
-        b.mark_progress(1, 300_000); // 部分块不入选
+        b.mark_progress(1, 300_000);
         let idx = b.done_indices();
         assert_eq!(idx, vec![0, 2], "升序列出已完成块号");
         assert_eq!(idx.len() as u32, b.completed(), "与 completed() 计数一致");
     }
 
-    /// partial_indices：升序列出部分下载块号（0 < written < 块长）；
-    /// 完成块与零字节块不入选，与 done_indices 互斥且并集覆盖全部有字节块。
     #[test]
     fn partial_indices_sorted_excludes_done_and_empty() {
         let mut b = Blocks::new(5_000_000, 1_000_000);
         assert!(b.partial_indices().is_empty(), "全空无部分块");
-        b.mark_done(0); // 完成块不入选
-        b.mark_progress(1, 400_000); // 部分块入选
-        b.mark_progress(2, 1_000_000); // 达块长 = 完成，不入选
-                                       // 块 3 零字节不入选
-        b.mark_progress(4, 1); // 部分块入选
+        b.mark_done(0);
+        b.mark_progress(1, 400_000);
+        b.mark_progress(2, 1_000_000);
+        b.mark_progress(4, 1);
         let idx = b.partial_indices();
         assert_eq!(idx, vec![1, 4], "升序列出部分下载块号");
         let done = b.done_indices();
@@ -229,7 +196,6 @@ mod tests {
         let (conns, x) = lease_snapshot(5 * MB, 0, 4, MB);
         assert_eq!(conns.len(), 4);
         assert_eq!(x, 0);
-        // done=0 时第一连接持有第 0 块、块内进度按权重散布
         assert_eq!(conns[0].start, 0);
         assert_eq!(conns[0].end, MB);
     }
@@ -238,10 +204,7 @@ mod tests {
     fn snapshot_partial_prefix() {
         let (conns, x) = lease_snapshot(5 * MB, 2 * MB + 300_000, 4, MB);
         assert_eq!(x, 2);
-        // 实际并发 = min(4, 剩余未完成块 3) = 3（FR-01-11）
         assert_eq!(conns.len(), 3);
-        // 已完成块（0、1）不占连接；三个连接分别持有块 2/3/4，
-        // 块内进度按权重散布且总和精确等于块内余量 300 KB
         assert_eq!(conns[0].start, 2 * MB);
         assert_eq!(conns[1].start, 3 * MB);
         assert_eq!(conns[2].start, 4 * MB);
@@ -264,7 +227,6 @@ mod tests {
 
     #[test]
     fn snapshot_active_never_exceeds_pending() {
-        // 剩余 1 块时实际并发 1（FR-01-11）
         let (conns, _) = lease_snapshot(5 * MB, 4 * MB, 4, MB);
         assert_eq!(conns.len(), 1);
     }
@@ -276,7 +238,7 @@ mod tests {
         let v = spread_bytes(0, 4, MB);
         assert!(v.iter().all(|&x| x == 0));
         let v = spread_bytes(999, 4, 100);
-        assert_eq!(v.iter().sum::<u64>(), 400); // 钳制到 cap
+        assert_eq!(v.iter().sum::<u64>(), 400);
     }
 
     #[test]

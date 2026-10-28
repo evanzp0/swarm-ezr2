@@ -1,28 +1,6 @@
-//! ezr-proxy — 本地代理 fixture（QA 基建，AC-8 / qa/01-throttle-proxy、qa/02-named-proxy）
-//!
-//! 能力（v140 扩展后）：
-//! - scheme=http（缺省）：http 匿名代理（绝对 URI 转发 + CONNECT 隧道），逐条记录
-//! - scheme=http/https + `--user/--password`：认证强制模式——无/错凭证回 407 质询
-//!   （`Proxy-Authenticate: Basic`），正确凭证放行；日志记认证事件（ok/denied）但
-//!   **不落凭证明文**（NP-04 判据：全日志无 username/password）
-//! - scheme=https：代理自身 TLS 监听（v1.9/FR-01-89 的 https 型 = 代理走 TLS 的
-//!   HTTP 代理）。证书为内嵌自签（SAN：IP 127.0.0.1 / IP ::1 / DNS localhost，
-//!   有效期至 2126）；客户端信任链：reqwest `rustls-tls-native-roots` 经
-//!   rustls-native-certs 0.8（openssl-probe）读取 `SSL_CERT_FILE` 环境变量，
-//!   套件以 `ca.pem` 注入，产品零改动
-//! - scheme=socks5：SOCKS5 + RFC 1929 user/pass 认证（凭证必填，与规格 FR-01-93
-//!   「socks5 不支持匿名」口径一致；错凭证回 0x01 失败并记 denied 事件）
-//! - `--bind`：监听地址（缺省 127.0.0.1；NP-18 用 `::1` IPv6 回环）
-//!
-//! 用法：`ezr-proxy serve --port 8766 --name proxy-a [--log proxy-a.jsonl]
-//!       [--scheme http|https|socks5] [--user U --password W] [--bind ADDR]`
-//!
-//! 日志 JSONL 字段口径不变：`{"ts","proxy","kind","target"}`（套件 NP-13 锁四键）；
-//! kind：http / connect / socks5 / http-auth-ok / http-auth-denied /
-//! socks5-auth-ok / socks5-auth-denied。
-#![allow(missing_docs)] // 交互层：demo 定稿基线复用，接口文档见 model/engine 层
-#![allow(clippy::pedantic)] // 交互层字节/速度展示算术与 demo 基线风格豁免
-#![allow(clippy::nursery)] // 同上
+#![allow(missing_docs)]
+#![allow(clippy::pedantic)]
+#![allow(clippy::nursery)]
 #![allow(
     clippy::cognitive_complexity,
     clippy::too_many_lines,
@@ -41,12 +19,9 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-/// 内嵌自签证书（DER）：SAN = IP 127.0.0.1 / IP ::1 / DNS localhost。
-/// PEM 形态 `ca.pem`（同目录）供套件以 SSL_CERT_FILE 注入产品进程。
 const TLS_CERT_DER: &[u8] = include_bytes!("ezr-proxy-certs/server.der");
 const TLS_KEY_DER: &[u8] = include_bytes!("ezr-proxy-certs/server-key.der");
 
-/// 访问日志（JSONL）；认证事件不含凭证明文
 struct ProxyLog {
     file: Option<std::sync::Mutex<std::fs::File>>,
     name: String,
@@ -84,7 +59,6 @@ impl ProxyLog {
     }
 }
 
-/// host:port 拆分（无端口用默认值；端口解析失败也用默认值）
 fn split_host_port(hostport: &str, default_port: u16) -> (String, u16) {
     match hostport.split_once(':') {
         Some((h, p)) => (h.to_string(), p.parse::<u16>().unwrap_or(default_port)),
@@ -92,12 +66,10 @@ fn split_host_port(hostport: &str, default_port: u16) -> (String, u16) {
     }
 }
 
-/// 由请求行提取目标（第二段）；无第二段 → None
 fn request_target(request_line: &str) -> Option<String> {
     request_line.split_whitespace().nth(1).map(str::to_string)
 }
 
-/// 绝对 URI → (hostport, path)；非 http:// → None（调用方回 400）
 fn split_abs_uri(target: &str) -> Option<(String, String)> {
     let rest = target.strip_prefix("http://")?;
     Some(match rest.split_once('/') {
@@ -106,7 +78,6 @@ fn split_abs_uri(target: &str) -> Option<(String, String)> {
     })
 }
 
-/// 组装转发请求（重写请求行为 `GET {path}` + 透传头（剔除代理专用头）+ Connection: close）
 fn build_forward(path: &str, headers: &[(String, String)]) -> String {
     let mut fwd = format!("GET {path} HTTP/1.1\r\n");
     for (k, v) in headers {
@@ -118,8 +89,6 @@ fn build_forward(path: &str, headers: &[(String, String)]) -> String {
     fwd
 }
 
-/// 极简 base64 编码（标准字母表 + padding；仅用于构造期望的 Basic 头值
-/// 与客户端头做字符串比对，无需解码依赖）
 fn b64(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
@@ -144,17 +113,13 @@ fn b64(data: &[u8]) -> String {
     out
 }
 
-/// 认证要求（`--user/--password` 齐备时启用；http/https 生效）
 type Auth = Option<(String, String)>;
 
-/// 期望的 `Proxy-Authorization` 头值（`Basic b64(user:pass)`）
 fn expected_basic(auth: &Auth) -> Option<String> {
     auth.as_ref()
         .map(|(u, p)| format!("Basic {}", b64(format!("{u}:{p}").as_bytes())))
 }
 
-/// 校验请求头中的代理凭证；`expected` 为 None（匿名模式）恒通过。
-/// 通过 → Ok；失败 → 回 407 + `Proxy-Authenticate`（写失败仅静默，连接即弃）。
 async fn check_http_auth<S: AsyncWrite + Unpin>(
     s: &mut S,
     headers: &[(String, String)],
@@ -182,17 +147,12 @@ async fn check_http_auth<S: AsyncWrite + Unpin>(
     }
 }
 
-/// 监听形态（scheme × 认证）
 enum Mode {
-    /// http 匿名/认证（`--scheme http` 缺省）
     PlainHttp(Auth),
-    /// https：先 TLS 握手再按 http 处理（`--scheme https`）
     TlsHttp(Auth),
-    /// socks5 + RFC 1929 认证（凭证必填，main 已校验）
     Socks5 { user: String, pass: String },
 }
 
-/// TLS acceptor（内嵌证书；进程默认 ring provider 单一存在）
 fn tls_acceptor() -> tokio_rustls::TlsAcceptor {
     let cert = rustls::pki_types::CertificateDer::from(TLS_CERT_DER.to_vec());
     let key = rustls::pki_types::PrivatePkcs8KeyDer::from(TLS_KEY_DER.to_vec());
@@ -203,11 +163,6 @@ fn tls_acceptor() -> tokio_rustls::TlsAcceptor {
     tokio_rustls::TlsAcceptor::from(Arc::new(cfg))
 }
 
-/// 已读头部 → 连接目标 → 原样转发头 → 双向拷贝
-///
-/// `head_bytes` = 分派层已从流中消费的完整请求头（请求行 + 头部 + 空行）；
-/// 分派层需先读首部判定 CONNECT 与否，故头部必须自此传入，严禁再从流上
-/// 重复读取（重复读取将永久阻塞）。
 async fn handle_http<S>(mut client: S, log: Arc<ProxyLog>, head_bytes: Vec<u8>)
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -237,12 +192,9 @@ where
     if upstream.write_all(fwd.as_bytes()).await.is_err() {
         return;
     }
-    // 双向拷贝：客户端头部后余量（GET 无 body）⇄ 上游响应；上游按注入的
-    // Connection: close 关闭 ⇒ 上游向 EOF 收敛，套件生命周期内自然结束
     let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
 }
 
-/// 处理 CONNECT 隧道（HTTPS 目标）：`target` = 请求行第二段（host:port）
 async fn handle_connect<S>(mut client: S, target: String, log: Arc<ProxyLog>)
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -261,8 +213,6 @@ where
     let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
 }
 
-/// 读请求头到空行（\r\n\r\n；上限 64KB）；EOF/超限 → None（头部非空且有内容
-/// 时按已收头部返回，与旧 collect_head 的 EOF 容错口径一致）
 async fn read_head<S: AsyncRead + Unpin>(s: &mut S) -> Option<Vec<u8>> {
     let mut buf = Vec::with_capacity(1024);
     let mut chunk = [0u8; 1024];
@@ -281,10 +231,8 @@ async fn read_head<S: AsyncRead + Unpin>(s: &mut S) -> Option<Vec<u8>> {
     }
 }
 
-/// 已解析头部：（请求行，小写键头部列表）
 type HeadParts = (String, Vec<(String, String)>);
 
-/// 解析已消费的头部文本 →（请求行，小写键头部列表）；空头部 → None
 fn parse_head(head: &str) -> Option<HeadParts> {
     let mut lines = head.lines();
     let request_line = lines
@@ -305,7 +253,6 @@ fn parse_head(head: &str) -> Option<HeadParts> {
     Some((request_line, headers))
 }
 
-/// accept 后逐连接分派：CONNECT 隧道 / 普通 http（TLS 与否由调用方先行处理）
 async fn dispatch_http<S>(mut stream: S, auth: &Auth, log: Arc<ProxyLog>)
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -330,7 +277,6 @@ where
     }
 }
 
-/// CONNECT 分派（认证通过后；独立函数便于日志/复用口径清晰）
 async fn dispatch_connect<S>(stream: S, target: String, log: Arc<ProxyLog>)
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -338,12 +284,10 @@ where
     handle_connect(stream, target, log).await;
 }
 
-/// SOCKS5 服务（RFC 1928 + RFC 1929 user/pass；认证必填）
 async fn handle_socks5<S>(mut s: S, user: &str, pass: &str, log: Arc<ProxyLog>)
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    // 1) 方法协商：仅接受 0x02（user/pass）；探活连接（连后即断）在此自然退出
     let mut hdr = [0u8; 2];
     if s.read_exact(&mut hdr).await.is_err() {
         return;
@@ -363,8 +307,6 @@ where
     if s.write_all(&[5, 0x02]).await.is_err() {
         return;
     }
-    // 2) RFC 1929 user/pass 子协商（ver(1) ulen(1) uname plen(1) passwd）；
-    // 凭证比对失败 → 0x01 + 断开（不落明文）
     let mut ver = [0u8; 1];
     if s.read_exact(&mut ver).await.is_err() || ver[0] != 1 {
         return;
@@ -394,7 +336,6 @@ where
         return;
     }
     log.log("socks5-auth-ok", "authenticated");
-    // 3) 请求：仅 CONNECT（cmd=1）
     let mut pre = [0u8; 3];
     if s.read_exact(&mut pre).await.is_err() {
         return;
@@ -459,12 +400,10 @@ where
         let _ = s.write_all(&[5, 0x05, 0, 1, 0, 0, 0, 0, 0, 0]).await;
         return;
     };
-    // 回复：ver5 rep0 rsv0 atyp1(IPv4) bind=0.0.0.0:0
     let _ = s.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).await;
     let _ = tokio::io::copy_bidirectional(&mut s, &mut upstream).await;
 }
 
-/// accept 循环：逐连接孵化分派任务（accept 错误记录后继续，不失去服务能力）
 async fn serve(listener: TcpListener, mode: Mode, log: Arc<ProxyLog>) {
     loop {
         match listener.accept().await {
@@ -489,15 +428,11 @@ async fn serve(listener: TcpListener, mode: Mode, log: Arc<ProxyLog>) {
     }
 }
 
-/// 单连接分派：按形态接 TLS / 走 http / 走 socks5
-///
-/// TLS 握手失败（探活连接连后即断等）静默丢弃——不属服务错误。
 async fn dispatch_conn(s: TcpStream, mode: Mode, log: Arc<ProxyLog>) {
     match mode {
         Mode::PlainHttp(auth) => dispatch_http(s, &auth, log).await,
         Mode::TlsHttp(auth) => {
             let acceptor = tls_acceptor();
-            // 探活/主动关闭握手失败：静默（套件 start_proxy 以裸 TCP 连接探活）
             if let Ok(tls) = acceptor.accept(s).await {
                 dispatch_http(tls, &auth, log).await;
             }
@@ -506,7 +441,6 @@ async fn dispatch_conn(s: TcpStream, mode: Mode, log: Arc<ProxyLog>) {
     }
 }
 
-/// CLI 参数（默认值：port 8766 / name "proxy" / scheme http / bind 127.0.0.1）
 struct ProxyArgs {
     cmd: String,
     port: u16,
@@ -518,8 +452,6 @@ struct ProxyArgs {
     bind: String,
 }
 
-/// 解析 `serve --port <n> --name <名> [--log <路径>] [--scheme <http|https|socks5>]
-/// [--user <U>] [--password <W>] [--bind <ADDR>]`（未知参数忽略）
 fn parse_proxy_args(args: &[String]) -> ProxyArgs {
     let mut out = ProxyArgs {
         cmd: String::new(),
@@ -570,7 +502,6 @@ fn parse_proxy_args(args: &[String]) -> ProxyArgs {
     out
 }
 
-/// accept 循环入口：按参数装配监听形态（同步函数，供 main 与测试复用）
 async fn run_proxy(a: ProxyArgs) {
     let listener = TcpListener::bind((a.bind.as_str(), a.port))
         .await
@@ -581,20 +512,16 @@ async fn run_proxy(a: ProxyArgs) {
     );
     let log = Arc::new(ProxyLog::open(a.log_path.as_deref(), &a.name));
     let mode = match a.scheme.as_str() {
-        "socks5" => {
-            // socks5 凭证必填（FR-01-93 口径）；main 已校验，此处防御性回退匿名禁用
-            Mode::Socks5 {
-                user: a.user.unwrap_or_default(),
-                pass: a.password.unwrap_or_default(),
-            }
-        }
+        "socks5" => Mode::Socks5 {
+            user: a.user.unwrap_or_default(),
+            pass: a.password.unwrap_or_default(),
+        },
         "https" => Mode::TlsHttp(auth_pair(a.user, a.password)),
         _ => Mode::PlainHttp(auth_pair(a.user, a.password)),
     };
     serve(listener, mode, log).await;
 }
 
-/// 认证对：user/password 齐备才启用（单侧缺失视作配置不全 → 匿名）
 fn auth_pair(user: Option<String>, password: Option<String>) -> Auth {
     match (user, password) {
         (Some(u), Some(p)) => Some((u, p)),
@@ -612,7 +539,6 @@ fn main() {
         );
         std::process::exit(2);
     }
-    // socks5 凭证必填校验（FR-01-93：不支持匿名 socks5；缺任一 → 拒绝启动）
     if a.scheme == "socks5" && (a.user.is_none() || a.password.is_none()) {
         eprintln!("ezr-proxy: socks5 监听需 --user 与 --password（不支持匿名 socks5）");
         std::process::exit(2);
@@ -635,7 +561,6 @@ mod proxy_tests {
     }
 
     fn block_on<F: std::future::Future>(f: F) -> F::Output {
-        // multi_thread：测试客户端侧用阻塞 std I/O，不得饿死分派任务
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -643,13 +568,11 @@ mod proxy_tests {
             .block_on(f)
     }
 
-    /// std 流 → tokio 流（新版 tokio 要求注册前显式转非阻塞）
     fn to_tokio(s: std::net::TcpStream) -> tokio::net::TcpStream {
         s.set_nonblocking(true).unwrap();
         tokio::net::TcpStream::from_std(s).unwrap()
     }
 
-    /// 本地桩上游：accept 一个连接，读一次后回固定响应，返回收到的请求文本
     fn stub_upstream(response: &'static [u8]) -> (u16, std::thread::JoinHandle<String>) {
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -743,7 +666,6 @@ mod proxy_tests {
         assert_eq!(expected_basic(&None), None);
     }
 
-    /// 建立一对已连接的回环 TCP 流（模拟客户端 ↔ 代理入口）
     fn tcp_pair() -> (std::net::TcpStream, std::net::TcpStream) {
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let addr = listener.local_addr().unwrap();
@@ -762,7 +684,6 @@ mod proxy_tests {
             let server = to_tokio(server);
             let no_auth: Auth = None;
             let h = tokio::spawn(async move { dispatch_http(server, &no_auth, log).await });
-            // 关写侧：代理的 client→upstream 拷贝得到 EOF 后才能收尾
             let mut client = client;
             client
                 .set_read_timeout(Some(std::time::Duration::from_secs(5)))
@@ -805,7 +726,6 @@ mod proxy_tests {
             client
                 .write_all(format!("CONNECT 127.0.0.1:{up_port} HTTP/1.1\r\n\r\n").as_bytes())
                 .unwrap();
-            // 读到 Established 头之后，经隧道发一笔数据让桩完成其单次 read
             let mut head = Vec::new();
             let mut byte = [0u8; 1];
             while !head.ends_with(b"\r\n\r\n") {
@@ -820,7 +740,6 @@ mod proxy_tests {
             let _ = client.read_to_end(&mut rest);
             let _ = h.await;
             let req = upstream.join().unwrap();
-            // 桩单次 read 收到的就是隧道首笔数据（原始字节转发）
             assert!(req.starts_with("ping"), "tunnel payload: {req:?}");
             assert_eq!(String::from_utf8_lossy(&rest), "tunnel-ack");
         });
@@ -876,7 +795,6 @@ mod proxy_tests {
             let (up_port, upstream) =
                 stub_upstream(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
             let auth = Some(("bob".to_string(), "pw-secret".to_string()));
-            // ① 无凭证 → 407 + Proxy-Authenticate
             let (c1, s1) = tcp_pair();
             let s1 = to_tokio(s1);
             let log = log_quiet();
@@ -892,7 +810,6 @@ mod proxy_tests {
             let _ = h1.await;
             assert!(resp1.contains("407"), "无凭证应 407: {resp1}");
             assert!(resp1.contains("Proxy-Authenticate: Basic"), "应有质询头");
-            // ② 错凭证 → 407
             let (c2, s2) = tcp_pair();
             let s2 = to_tokio(s2);
             let log = log_quiet();
@@ -911,7 +828,6 @@ mod proxy_tests {
             let _ = c2.read_to_string(&mut resp2);
             let _ = h2.await;
             assert!(resp2.contains("407"), "错凭证应 407: {resp2}");
-            // ③ 正凭证 → 放行（200 经上游回传）
             let (c3, s3) = tcp_pair();
             let s3 = to_tokio(s3);
             let log = log_quiet();
@@ -938,7 +854,6 @@ mod proxy_tests {
         });
     }
 
-    /// SOCKS5 桩客户端：走完整握手，返回 (auth 状态, 隧道后收到的上游数据)
     #[test]
     fn socks5_handshake_auth_and_tunnel() {
         block_on(async {
@@ -951,19 +866,16 @@ mod proxy_tests {
             client
                 .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                 .unwrap();
-            // greeting: 要求 user/pass 方法
             client.write_all(&[5, 1, 0x02]).unwrap();
             let mut m = [0u8; 2];
             client.read_exact(&mut m).unwrap();
             assert_eq!(&m, &[5, 0x02], "应选定 user/pass 方法");
-            // RFC 1929 正确凭证：ver(1) ulen(2) uname("u5") plen(2) passwd("p5")
             client
                 .write_all(&[1, 2, b'u', b'5', 2, b'p', b'5'])
                 .unwrap();
             let mut a = [0u8; 2];
             client.read_exact(&mut a).unwrap();
             assert_eq!(&a, &[1, 0], "认证应成功");
-            // CONNECT 127.0.0.1:up_port
             client.write_all(&[5, 1, 0, 1, 127, 0, 0, 1]).unwrap();
             client.write_all(&up_port.to_be_bytes()).unwrap();
             let mut r = [0u8; 10];
@@ -993,7 +905,6 @@ mod proxy_tests {
             client.write_all(&[5, 1, 0x02]).unwrap();
             let mut m = [0u8; 2];
             client.read_exact(&mut m).unwrap();
-            // 错凭证：uname="ux" passwd="yz"（非 u5/p5）
             client
                 .write_all(&[1, 2, b'u', b'x', 2, b'y', b'z'])
                 .unwrap();
@@ -1065,7 +976,6 @@ mod proxy_tests {
         assert_eq!(a.password.as_deref(), Some("w"));
         assert_eq!(a.bind, "::1");
 
-        // 非法 port 沿用默认；--name 缺值保持原名；未知参数忽略
         let a = parse_proxy_args(&[
             "ezr-proxy".into(),
             "--port".into(),

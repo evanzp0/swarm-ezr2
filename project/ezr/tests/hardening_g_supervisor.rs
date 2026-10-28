@@ -1,10 +1,3 @@
-//! 加固测试（six-pack/hardender 步骤 7 批次 7）：engine/supervisor.rs 部分存活体处置。
-//! 靶点：sidecar_path 167:5（恒串变异 ×2）——暂停落盘必须写到标准
-//! `{save_dir}/{name}.ezr`；stop_workers 255:5（no-op）——暂停后传输必须停止。
-//! 其余 download/block_worker 存活体按会话偏差登记（见 .work/tmp/step7/EQUIVALENCE.md
-//! 与 project/handoff.md 的未处置清单及补测指引）。
-// lint 姿态与产品 bin（src/main.rs crate 级 allow）对齐：#[path] 收编的产品源
-// 在本测试 crate 内沿用产品面的豁免口径（产品面 clippy 0 的同一合同）。
 #![allow(missing_docs)]
 #![allow(clippy::multiple_crate_versions)]
 #![allow(clippy::pedantic)]
@@ -20,12 +13,12 @@
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap
 )]
-// 测试挂载机制固有豁免：产品源经 #[path] 部分收编进独立测试 crate，部分产物项
-// 在本 crate 上下文无消费者或被重复挂载（产品全量编译下均非死代码）。
 #![allow(dead_code)]
 #![allow(clippy::duplicate_mod)]
 #![allow(unused_imports)]
 
+#[path = "../src/bt/mod.rs"]
+mod bt;
 #[path = "../src/engine/mod.rs"]
 mod engine;
 #[path = "../src/model/mod.rs"]
@@ -37,16 +30,15 @@ use model::TaskState;
 
 #[path = "../src/app/mod.rs"]
 mod app;
+#[path = "../src/multiline.rs"]
+mod multiline;
 #[path = "../src/scrollbar.rs"]
-// v1.32/FR-01-109：滚动条引擎（app 状态机依赖的几何/命中类型单源）
 mod scrollbar;
 #[path = "../src/textfield.rs"]
-// 输入框组件（Dialog 文本字段实例化依赖的状态机/取窗/点击映射单源）
 mod textfield;
 
 use app::App;
 
-/// 持续滴流服务器：每 100ms 发 200 字节 × 100 次
 fn stub_trickle() -> std::net::SocketAddr {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let addr = listener.local_addr().unwrap();
@@ -76,7 +68,6 @@ fn stub_trickle() -> std::net::SocketAddr {
     addr
 }
 
-/// 靶 supervisor 167:5 / 255:5：暂停必须停传并把 sidecar 落盘到标准路径
 #[tokio::test]
 async fn pause_stops_transfer_and_writes_sidecar() {
     let addr = stub_trickle();
@@ -103,7 +94,7 @@ async fn pause_stops_transfer_and_writes_sidecar() {
         TaskState::Downloading,
         "滴流下载应进入下载中"
     );
-    a.on_key(KeyCode::Char(' '), KeyModifiers::empty()); // Space → 暂停
+    a.on_key(KeyCode::Char(' '), KeyModifiers::empty());
     let sc = dir.join("f.bin.ezr");
     while std::time::Instant::now() < deadline {
         a.tick().await;
@@ -112,7 +103,7 @@ async fn pause_stops_transfer_and_writes_sidecar() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    assert!(!a.tasks[0].has_slot || true, "占位"); // has_slot 在本地即时置位，不作判据
+    assert!(!a.tasks[0].has_slot || true, "占位");
     assert!(
         sc.exists(),
         "暂停必须把 sidecar 写到标准路径 {}（恒串变异体写去 xyzzy/空路径）",

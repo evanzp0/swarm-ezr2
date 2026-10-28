@@ -1,13 +1,7 @@
-//! dialog_keys — 对话框逐键处理（导航/Enter/退格/字符输入与下拉选择）
-
 use crossterm::event::KeyCode;
 
 mod routing;
 
-// 键路由函数经本模块 re-export（pub(crate) 兼作内部使用的名字绑定，产品构建
-// 由内部消费者消化、无 unused 警告）。可见性链：routing 项 pub（私有模块内
-// 不外泄）→ 本模块 pub(crate) → app 门面 #[cfg(test)] pub(crate)——供 crate 根
-// property_tests 触达（notes/rust.md「门面 re-export」手法，产品 API 面零增量）。
 use routing::kind_add;
 pub(crate) use routing::{
     dropdown_open_key, proxy_dropdown_open_key, push_hex_capped, text_backspace, text_char,
@@ -16,20 +10,11 @@ pub(crate) use routing::{
 
 use super::{Dialog, DialogKind};
 
-/// 对话框文本字段容量上限（URL 与目录共用，逐键输入与 bracketed paste 两
-/// 入口单源，architect v116 防双入口容量漂移）
 pub(super) const CAP_TEXT: usize = 300;
-/// 并发数字段容量上限（位数；并发值域 1–64 恰两位）
 pub(super) const CAP_CONNS_DIGITS: usize = 2;
-/// 校验码字段容量上限（SHA-512 十六进制位数）
 pub(super) const CAP_CK_HEX: usize = 128;
 
 impl super::App {
-    /// URL 变化后同步默认并发（v1.30/FR-01-01 修订：URL 输入自动回填默认并发）。
-    /// 仅当并发字段未被手动改过（conns_edited = false）时回填；协议默认并发：
-    /// HTTP/HTTPS = 配置 `http_concurrency`（默认 4，与提交回退口径同源）、
-    /// BT = 20（phase-02 预留，01 期不触发）。逐键输入 / 退格 / 粘贴三个
-    /// URL 变化入口共用（DRY 单源）。
     pub(super) fn sync_default_conns_after_url_change(&mut self) {
         let Some(d) = self.dialog.as_mut() else {
             return;
@@ -46,7 +31,7 @@ impl super::App {
         d.conns.set(def.to_string());
     }
 
-    pub(super) fn on_dialog_key(&mut self, code: KeyCode) {
+    pub(super) fn on_dialog_key(&mut self, code: KeyCode, mods: crossterm::event::KeyModifiers) {
         let (kind, focus) = match &self.dialog {
             Some(d) => (d.kind, d.focus),
             None => return,
@@ -55,8 +40,9 @@ impl super::App {
             DialogKind::Add => 9,
             DialogKind::Modify => 6,
             DialogKind::Delete => 3,
+            DialogKind::AddBt => 9,
+            DialogKind::ModifyBt => 6,
         };
-        // 校验算法 / 代理下拉框展开时：整块交给下拉键处理（消费所有键）
         if self.dialog.as_ref().is_some_and(|d| d.ck_open) {
             if let Some(d) = self.dialog.as_mut() {
                 dropdown_open_key(d, code);
@@ -72,20 +58,48 @@ impl super::App {
         }
         match code {
             KeyCode::Esc => self.dialog = None,
-            // Tab/BackTab 恒为焦点跳转（v1.34 二批 bug 修订：方向键不再同臂——
-            // 文本字段内方向键 = 输入光标移动，见下）；focus_field 随迁光标
             KeyCode::Tab | KeyCode::BackTab => {
                 if let Some(d) = self.dialog.as_mut() {
                     let step = if code == KeyCode::Tab { 1 } else { nfocus - 1 };
                     d.focus_field((d.focus + step) % nfocus);
                 }
             }
-            // 方向键分流（v1.34 二批 bug 修订）：文本字段内 = 输入光标移动
-            //（Left/Right ±1 字符、Up 行首、Down 行尾——单行字段无纵向行，
-            // 映射 Home/End 语义；只动光标不跳焦点），非文本焦点（下拉行/
-            // 按钮/Delete 对话框）保持原 Tab 语义。光标操作全部走输入框
-            // 组件单源（crate::textfield::TextInput）
             KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => {
+                let bt_special = matches!(kind, DialogKind::AddBt | DialogKind::ModifyBt);
+                if bt_special
+                    && self
+                        .dialog
+                        .as_ref()
+                        .is_some_and(|d| d.focus == Dialog::bt_list_focus(kind))
+                {
+                    if let Some(d) = self.dialog.as_mut() {
+                        match code {
+                            KeyCode::Up => d.bt_list_move(-1),
+                            KeyCode::Down => d.bt_list_move(1),
+                            KeyCode::Left => d.bt_expand_cursor(false),
+                            KeyCode::Right => d.bt_expand_cursor(true),
+                            _ => {}
+                        }
+                    }
+                    return;
+                }
+                if bt_special
+                    && self
+                        .dialog
+                        .as_ref()
+                        .is_some_and(|d| d.trackers_focus() == Some(d.focus))
+                {
+                    if let Some(d) = self.dialog.as_mut() {
+                        match code {
+                            KeyCode::Up => d.trackers.up(),
+                            KeyCode::Down => d.trackers.down(),
+                            KeyCode::Left => d.trackers.left(),
+                            KeyCode::Right => d.trackers.right(),
+                            _ => {}
+                        }
+                    }
+                    return;
+                }
                 let on_text = self
                     .dialog
                     .as_ref()
@@ -110,16 +124,30 @@ impl super::App {
                     }
                 }
             }
+            KeyCode::Enter
+                if mods.contains(crossterm::event::KeyModifiers::ALT)
+                    || mods.contains(crossterm::event::KeyModifiers::SHIFT) =>
+            {
+                if matches!(kind, DialogKind::AddBt | DialogKind::ModifyBt)
+                    && self
+                        .dialog
+                        .as_ref()
+                        .is_some_and(|d| d.trackers_focus() == Some(d.focus))
+                {
+                    self.bt_trackers_newline();
+                }
+            }
             KeyCode::Enter => match kind {
                 DialogKind::Add => self.add_dialog_enter(focus),
                 DialogKind::Modify => self.modify_dialog_enter(focus),
                 DialogKind::Delete => self.dlg_activate_delete(focus),
+                DialogKind::AddBt => self.add_bt_dialog_enter(focus),
+                DialogKind::ModifyBt => self.modify_bt_dialog_enter(focus),
             },
             KeyCode::Backspace => {
                 if let Some(d) = self.dialog.as_mut() {
                     text_backspace(kind, d, focus);
                 }
-                // URL 变化时同步默认并发数（用户未手动修改过时，v1.30/FR-01-01）
                 if kind == DialogKind::Add && focus == 0 {
                     self.sync_default_conns_after_url_change();
                 }
@@ -127,6 +155,8 @@ impl super::App {
             KeyCode::Char(c) => match kind {
                 DialogKind::Add => self.add_dialog_char(focus, c),
                 DialogKind::Modify => self.modify_dialog_char(focus, c),
+                DialogKind::AddBt => self.add_bt_dialog_char(focus, c),
+                DialogKind::ModifyBt => self.modify_bt_dialog_char(focus, c),
                 DialogKind::Delete => match c {
                     '1' => self.dlg_activate_delete(0),
                     '2' => self.dlg_activate_delete(1),
@@ -138,9 +168,6 @@ impl super::App {
         }
     }
 
-    /// Add 对话框 Enter（v1.15/FR-01-103 焦点序 6=立即下载 7=仅添加 8=取消）：
-    /// 算法/代理行展开下拉、立即下载钮与其余焦点走确认、仅添加钮只建不下载、
-    /// 取消按钮关闭
     fn add_dialog_enter(&mut self, focus: usize) {
         if focus == 3 {
             let d = self.dialog.as_mut().unwrap();
@@ -158,8 +185,6 @@ impl super::App {
         }
     }
 
-    /// Modify 对话框 Enter（v1.5/FR-01-87）：0=并发 1=算法 2=校验码 3=代理
-    /// 4=确认 5=取消
     fn modify_dialog_enter(&mut self, focus: usize) {
         if focus == 1 {
             let d = self.dialog.as_mut().unwrap();
@@ -175,8 +200,6 @@ impl super::App {
         }
     }
 
-    /// Add 对话框字符输入：0-2 文本字段、3 空格展开算法下拉、4 校验码、
-    /// 5 空格展开代理下拉、6/7/8 空格激活按钮（立即下载/仅添加/取消）
     fn add_dialog_char(&mut self, focus: usize, c: char) {
         if focus < 3 {
             if !c.is_control() {
@@ -184,7 +207,6 @@ impl super::App {
                     text_char(kind_add(), d, focus, c);
                 }
             }
-            // URL 变化时同步默认并发数（用户未手动修改过时，v1.30/FR-01-01）
             if focus == 0 {
                 self.sync_default_conns_after_url_change();
             }
@@ -195,7 +217,6 @@ impl super::App {
                 d.ck_sel = d.ck_type;
             }
         } else if focus == 4 {
-            // 校验码：仅十六进制，最多 128 位（SHA-512）
             if let Some(d) = self.dialog.as_mut() {
                 push_hex_capped(d, c);
             }
@@ -209,10 +230,6 @@ impl super::App {
         }
     }
 
-    /// Modify 对话框字符输入（v1.5/FR-01-87）：0 并发数字、1 空格展开算法
-    /// 下拉、2 校验码、3 空格展开代理下拉、4/5 空格激活按钮。
-    /// v1.34 二批 bug 修订：并发臂改走 [`text_char`]（光标处插入——原内联
-    /// append 恒加末尾，光标语义与 Add 路径分叉）
     fn modify_dialog_char(&mut self, focus: usize, c: char) {
         if focus == 0 {
             if !c.is_control() {
@@ -244,13 +261,10 @@ impl super::App {
 #[cfg(test)]
 mod dialog_key_tests {
     use super::*;
-    // 测试模块显式导入（拆分后产品路径不再经 mod.rs 转发该常量）
-    use crate::app::CHECKSUM_ALGOS;
-    use crate::app::{Dialog, DialogKind};
+    use crate::app::{Dialog, DialogKind, CHECKSUM_ALGOS};
     use crate::model::checksum::CK_NONE;
     use crate::model::Protocol;
 
-    /// 夹具单源委托（app 树 App 夹具族收口 testutil，architect v153）
     fn make_app(tag: &str) -> crate::app::App {
         crate::app::testutil::make_app_in("ezr-dlgkey", tag)
     }
@@ -272,11 +286,9 @@ mod dialog_key_tests {
         let mut d = add_dlg();
         d.ck_open = true;
         d.ck_sel = 0;
-        // v1.32：下拉 8 项（NONE 首行 + 7 算法）——末尾下标 = CHECKSUM_ALGOS.len()
         dropdown_open_key(&mut d, KeyCode::Up);
         assert_eq!(d.ck_sel, CHECKSUM_ALGOS.len(), "Up 环绕到末尾（8 项）");
         assert_eq!(d.ck_type, d.ck_sel);
-        // Home = NONE：选中即改值 + 校验码实时清空（v1.32）
         d.ck_value.insert("ff", 128);
         dropdown_open_key(&mut d, KeyCode::Home);
         assert_eq!(d.ck_sel, CK_NONE, "Home 回首（NONE）");
@@ -289,7 +301,6 @@ mod dialog_key_tests {
         assert_eq!(d.ck_sel, CK_NONE);
         dropdown_open_key(&mut d, KeyCode::Enter);
         assert!(!d.ck_open);
-        // Tab：关闭下拉并跳到校验码字段
         d.ck_open = true;
         dropdown_open_key(&mut d, KeyCode::Tab);
         assert!(!d.ck_open);
@@ -297,7 +308,6 @@ mod dialog_key_tests {
         d.ck_open = true;
         dropdown_open_key(&mut d, KeyCode::BackTab);
         assert_eq!(d.focus, 2);
-        // 其余键：仅关闭
         d.ck_open = true;
         dropdown_open_key(&mut d, KeyCode::Char('x'));
         assert!(!d.ck_open);
@@ -306,16 +316,13 @@ mod dialog_key_tests {
     #[test]
     fn text_backspace_fields_and_gates() {
         let mut d = add_dlg();
-        // 键入态光标在字段尾：退格删光标前一字符（append/pop 时代的弹末尾）
         d.url.insert("abc", CAP_TEXT);
         assert!(text_backspace(DialogKind::Add, &mut d, 0));
         assert_eq!(d.url.value, "ab");
         assert_eq!(d.url.cursor, 2, "退格后光标随迁");
-        // 中位退格：光标 1 → 删 'a'
         d.url.set_cursor(1);
         assert!(text_backspace(DialogKind::Add, &mut d, 0));
         assert_eq!(d.url.value, "b");
-        // 行首退格（cursor = 0）无操作
         d.url.set_cursor(0);
         assert!(text_backspace(DialogKind::Add, &mut d, 0));
         assert_eq!(d.url.value, "b");
@@ -329,7 +336,6 @@ mod dialog_key_tests {
         d.ck_value.insert("ff", CAP_CK_HEX);
         assert!(text_backspace(DialogKind::Add, &mut d, 4));
         assert_eq!(d.ck_value.value, "f");
-        // 焦点 3（算法下拉）/5/6（按钮）不消费
         assert!(!text_backspace(DialogKind::Add, &mut d, 3));
         assert!(!text_backspace(DialogKind::Add, &mut d, 5));
     }
@@ -341,36 +347,29 @@ mod dialog_key_tests {
             text_char(DialogKind::Add, &mut d, 0, c);
         }
         assert_eq!(d.url.len_chars(), 10);
-        // 300 上限
         for c in ('a'..='z').cycle().take(400) {
             text_char(DialogKind::Add, &mut d, 0, c);
         }
         assert_eq!(d.url.len_chars(), 300);
-        // 并发：仅数字、2 位
         text_char(DialogKind::Add, &mut d, 2, '5');
-        text_char(DialogKind::Add, &mut d, 2, 'x'); // 非数字拒绝
+        text_char(DialogKind::Add, &mut d, 2, 'x');
         text_char(DialogKind::Add, &mut d, 2, '6');
-        text_char(DialogKind::Add, &mut d, 2, '7'); // 第 3 位拒绝
+        text_char(DialogKind::Add, &mut d, 2, '7');
         assert_eq!(d.conns.value, "56");
         assert!(d.conns_edited);
     }
 
-    /// 确认添加主链路（FR-01-01/03/04/05/16）：空 URL/非法协议/校验码位数不符
-    /// 逐一拒绝并保持对话框；合法输入建任务并关闭；重复任务拒绝；取消按钮直接关闭
     #[tokio::test]
     async fn confirm_add_validates_then_creates() {
         let mut app = make_app("confirm");
         app.dialog = Some(add_dlg());
 
-        // 空 URL → 拒绝
         app.dlg_confirm_add();
         assert!(app.dialog.is_some(), "空 URL 拒绝，对话框保持");
-        // 非 http(s) → 拒绝
         app.dialog.as_mut().unwrap().url.set("ftp://x/f.bin");
         app.dlg_confirm_add();
         assert!(app.dialog.is_some(), "非法协议拒绝");
         assert!(app.tasks.is_empty());
-        // 校验码位数不符 → 聚焦回校验码字段（focus 4）
         let d = app.dialog.as_mut().unwrap();
         d.url.set("http://example.com/a.bin");
         d.ck_value.set("abc");
@@ -378,8 +377,6 @@ mod dialog_key_tests {
         assert!(app.dialog.is_some(), "校验码位数不符拒绝");
         assert_eq!(app.dialog.as_ref().unwrap().focus, 4, "聚焦回校验码");
         assert!(app.tasks.is_empty());
-        // 合法完整输入（NONE = 不校验，v1.32；并发显式 9）→ 建任务、关闭
-        // 对话框、页签回下载视图
         let d = app.dialog.as_mut().unwrap();
         d.ck_type = CK_NONE;
         d.ck_sel = CK_NONE;
@@ -390,7 +387,6 @@ mod dialog_key_tests {
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(app.tasks[0].name, "a.bin");
         assert_eq!(app.tasks[0].concurrency, 9);
-        // 重复任务（同 URL 同目录）→ 拒绝并保持对话框
         app.dialog = Some(add_dlg());
         app.dialog
             .as_mut()
@@ -400,14 +396,11 @@ mod dialog_key_tests {
         app.dlg_confirm_add();
         assert!(app.dialog.is_some(), "重复任务拒绝");
         assert_eq!(app.tasks.len(), 1);
-        // 取消按钮（btn 8）→ 直接关闭
         app.dlg_activate_add(8);
         assert!(app.dialog.is_none(), "取消按钮关闭对话框");
         app.shutdown().await;
     }
 
-    /// 断点自动接续（FR-01-26）：保存目录存在同 URL 的 sidecar → 沿用推导原名，
-    /// toast 提示接续（不再追加去重序号）
     #[tokio::test]
     async fn confirm_add_resumes_from_existing_sidecar() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlgkey-resume");
@@ -416,10 +409,8 @@ mod dialog_key_tests {
         let d = app.dialog.as_mut().unwrap();
         d.url.set("http://example.com/r.bin");
         d.dir.set(dir.to_string_lossy().into_owned());
-        // NONE = 不校验创建（v1.32：非 NONE 算法校验码必填，空值路径改由 NONE 承载）
         d.ck_type = CK_NONE;
         d.ck_sel = CK_NONE;
-        // 预置同 URL sidecar（断点视图：模拟既有下载残留）——夹具单源 testutil
         crate::app::testutil::preset_resume_sidecar(&dir);
         app.dlg_confirm_add();
         assert!(app.dialog.is_none(), "确认后关闭");
@@ -429,38 +420,28 @@ mod dialog_key_tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// 对话框键盘导航与 Delete 对话框激活：焦点环绕、Esc 关闭、
-    /// 数字 1/3 触发删除/取消（FR-01-25 删除三选）。v1.34 二批 bug 修订：
-    /// 文本字段内方向键已改光标语义（见 arrow_keys_move_cursor_in_text_fields），
-    /// 焦点导航以 Tab/BackTab 主通道验证；非文本焦点（按钮行）方向键保持
-    /// 原导航语义
     #[tokio::test]
     async fn dialog_key_navigates_and_activates_delete() {
         let mut app = make_app("dnav");
         app.dialog = Some(add_dlg());
 
-        // 焦点前进/后退（Add nfocus=9：v1.15/FR-01-103 增仅添加钮）
-        app.on_dialog_key(KeyCode::Tab); // 1
-        app.on_dialog_key(KeyCode::Tab); // 2
-        app.on_dialog_key(KeyCode::Tab); // 3
-        app.on_dialog_key(KeyCode::BackTab); // 2
-        app.on_dialog_key(KeyCode::BackTab); // 1
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::BackTab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::BackTab, crossterm::event::KeyModifiers::NONE);
         assert_eq!(app.dialog.as_ref().unwrap().focus, 1);
-        // BackTab 从 0 环绕到 8
-        app.on_dialog_key(KeyCode::BackTab); // 0
-        app.on_dialog_key(KeyCode::BackTab); // 环绕到 8
+        app.on_dialog_key(KeyCode::BackTab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::BackTab, crossterm::event::KeyModifiers::NONE);
         assert_eq!(app.dialog.as_ref().unwrap().focus, 8, "BackTab 环绕到末位");
-        // 非文本焦点（取消按钮）方向键保持焦点导航语义
-        app.on_dialog_key(KeyCode::Left); // 8 → 7
+        app.on_dialog_key(KeyCode::Left, crossterm::event::KeyModifiers::NONE);
         assert_eq!(app.dialog.as_ref().unwrap().focus, 7, "按钮行 Left 后退");
-        app.on_dialog_key(KeyCode::Down); // 7 → 8
+        app.on_dialog_key(KeyCode::Down, crossterm::event::KeyModifiers::NONE);
         assert_eq!(app.dialog.as_ref().unwrap().focus, 8, "按钮行 Down 前进");
 
-        // Esc 关闭
-        app.on_dialog_key(KeyCode::Esc);
+        app.on_dialog_key(KeyCode::Esc, crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.is_none(), "Esc 关闭对话框");
 
-        // Delete 对话框：数字 3 = 取消按钮 → 关闭且任务保留
         app.tasks.push(crate::model::Task::new_queued(
             7,
             "del.bin".to_string(),
@@ -475,13 +456,12 @@ mod dialog_key_tests {
             0,
         ));
         app.dialog = Some(del_dlg("del.bin"));
-        app.on_dialog_key(KeyCode::Char('3'));
+        app.on_dialog_key(KeyCode::Char('3'), crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.is_none(), "取消按钮关闭");
         assert_eq!(app.tasks.len(), 1, "取消不删任务");
 
-        // 数字 1 = 仅删除任务：任务移除
         app.dialog = Some(del_dlg("del.bin"));
-        app.on_dialog_key(KeyCode::Char('1'));
+        app.on_dialog_key(KeyCode::Char('1'), crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.is_none(), "删除后关闭");
         assert!(app.tasks.is_empty(), "任务已移除");
         app.shutdown().await;
@@ -491,9 +471,6 @@ mod dialog_key_tests {
         crate::app::testutil::dialog(DialogKind::Modify, 0)
     }
 
-    /// Modify 对话框字符输入路由（v1.5/FR-01-87）：0 并发仅数字 ≤2 位、
-    /// 1 空格展开算法下拉、2 校验码仅十六进制、3 空格展开代理下拉、
-    /// 4/5 空格激活确认/取消按钮
     #[tokio::test]
     async fn modify_dialog_char_routes() {
         let mut app = make_app("mchar");
@@ -511,7 +488,6 @@ mod dialog_key_tests {
             0,
         ));
         app.selected = 0;
-        // 按 m 打开修改对话框（预填并发 2；无校验任务预填 NONE，v1.32/FR-01-87）
         app.on_key(KeyCode::Char('m'), crossterm::event::KeyModifiers::NONE);
         assert_eq!(
             app.dialog.as_ref().unwrap().kind,
@@ -523,75 +499,61 @@ mod dialog_key_tests {
             CK_NONE,
             "无校验任务预填 NONE（v1.32）"
         );
-        // 选 SHA-256（下拉下标 4）后校验码可输入（NONE 禁输入，v1.32）
         app.dialog.as_mut().unwrap().ck_type = 4;
         app.dialog.as_mut().unwrap().ck_sel = 4;
 
-        // focus 0：并发仅数字、≤2 位（预填 "2" → "27"，字母与第 3 位拒绝）
-        app.on_dialog_key(KeyCode::Char('7'));
-        app.on_dialog_key(KeyCode::Char('x'));
-        app.on_dialog_key(KeyCode::Char('8'));
+        app.on_dialog_key(KeyCode::Char('7'), crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Char('x'), crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Char('8'), crossterm::event::KeyModifiers::NONE);
         assert_eq!(app.dialog.as_ref().unwrap().conns.value, "27");
         assert!(app.dialog.as_ref().unwrap().conns_edited, "手动编辑置位");
 
-        // focus 1：空格展开算法下拉
-        app.on_dialog_key(KeyCode::Tab);
-        app.on_dialog_key(KeyCode::Char(' '));
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Char(' '), crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.as_ref().unwrap().ck_open, "空格展开算法下拉");
-        app.on_dialog_key(KeyCode::Esc);
+        app.on_dialog_key(KeyCode::Esc, crossterm::event::KeyModifiers::NONE);
         assert!(!app.dialog.as_ref().unwrap().ck_open, "Esc 收起下拉");
 
-        // focus 2：校验码仅十六进制
-        app.on_dialog_key(KeyCode::Tab);
-        app.on_dialog_key(KeyCode::Char('a'));
-        app.on_dialog_key(KeyCode::Char('z'));
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Char('a'), crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Char('z'), crossterm::event::KeyModifiers::NONE);
         assert_eq!(
             app.dialog.as_ref().unwrap().ck_value.value,
             "a",
             "仅十六进制接收"
         );
 
-        // focus 3：空格展开代理下拉
-        app.on_dialog_key(KeyCode::Tab);
-        app.on_dialog_key(KeyCode::Char(' '));
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Char(' '), crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.as_ref().unwrap().proxy_open, "空格展开代理下拉");
-        app.on_dialog_key(KeyCode::Esc);
+        app.on_dialog_key(KeyCode::Esc, crossterm::event::KeyModifiers::NONE);
         assert!(!app.dialog.as_ref().unwrap().proxy_open);
 
-        // focus 4：空格激活确认；校验码 "a" 非法 → 不生效并聚焦回校验码
-        app.on_dialog_key(KeyCode::Tab);
-        app.on_dialog_key(KeyCode::Char(' '));
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Char(' '), crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.is_some(), "非法校验码不生效");
         assert_eq!(app.dialog.as_ref().unwrap().focus, 2, "聚焦回校验码");
 
-        // 校验选回 NONE（v1.32：清除校验路径）→ Enter 确认：并发 27 生效、
-        // 对话框关闭、任务校验保持为空。注：直接置字段需同步清码——产品路径
-        // 中「选 NONE 即时清码」由下拉选择事件（dropdown_open_key/点击选项）
-        // 承载，见 dropdown_open_key_navigation_and_close 的 NONE 臂断言
         let d = app.dialog.as_mut().unwrap();
         d.ck_type = CK_NONE;
         d.ck_value.clear();
-        app.on_dialog_key(KeyCode::Backspace);
+        app.on_dialog_key(KeyCode::Backspace, crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.as_ref().unwrap().ck_value.is_empty());
-        app.on_dialog_key(KeyCode::Enter);
+        app.on_dialog_key(KeyCode::Enter, crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.is_none(), "确认后关闭");
         assert_eq!(app.tasks[0].concurrency, 27, "并发立即生效");
 
-        // focus 5：空格激活取消按钮 → 直接关闭（文本字段内 Down 不跳焦点，
-        // 焦点导航走 Tab——v1.34 二批 bug 修订）
         app.selected = 0;
         app.on_key(KeyCode::Char('m'), crossterm::event::KeyModifiers::NONE);
         for _ in 0..5 {
-            app.on_dialog_key(KeyCode::Tab); // focus 0 → 5
+            app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
         }
         assert_eq!(app.dialog.as_ref().unwrap().focus, 5);
-        app.on_dialog_key(KeyCode::Char(' '));
+        app.on_dialog_key(KeyCode::Char(' '), crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.is_none(), "取消按钮直接关闭");
         app.shutdown().await;
     }
 
-    /// Modify 对话框 Enter 路由：1/3 展开对应下拉、5 取消关闭、
-    /// 其余焦点走确认（dlg_confirm_modify）
     #[tokio::test]
     async fn modify_dialog_enter_routes() {
         let mut app = make_app("menter");
@@ -611,46 +573,39 @@ mod dialog_key_tests {
         app.selected = 0;
         app.on_key(KeyCode::Char('m'), crossterm::event::KeyModifiers::NONE);
 
-        // focus 1 Enter：展开算法下拉（Tab 前进——文本字段内 Down 不跳焦点）
-        app.on_dialog_key(KeyCode::Tab);
-        app.on_dialog_key(KeyCode::Enter);
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Enter, crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.as_ref().unwrap().ck_open, "Enter 展开算法下拉");
-        app.on_dialog_key(KeyCode::Esc);
+        app.on_dialog_key(KeyCode::Esc, crossterm::event::KeyModifiers::NONE);
 
-        // focus 3 Enter：展开代理下拉
-        app.on_dialog_key(KeyCode::Tab);
-        app.on_dialog_key(KeyCode::Tab);
-        app.on_dialog_key(KeyCode::Enter);
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Enter, crossterm::event::KeyModifiers::NONE);
         assert!(
             app.dialog.as_ref().unwrap().proxy_open,
             "Enter 展开代理下拉"
         );
-        app.on_dialog_key(KeyCode::Esc);
+        app.on_dialog_key(KeyCode::Esc, crossterm::event::KeyModifiers::NONE);
 
-        // focus 0 Enter：确认 → 并发非法值钳制生效路径（空 = 保持当前 4）
-        app.on_dialog_key(KeyCode::BackTab); // 回 focus 2
-        app.on_dialog_key(KeyCode::BackTab); // 回 focus 1
-        app.on_dialog_key(KeyCode::BackTab); // 回 focus 0
-        app.on_dialog_key(KeyCode::Enter);
+        app.on_dialog_key(KeyCode::BackTab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::BackTab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::BackTab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Enter, crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.is_none(), "确认后关闭");
         assert_eq!(app.tasks[0].concurrency, 4, "并发空值保持当前");
 
-        // focus 5 Enter：取消关闭
         app.selected = 0;
         app.on_key(KeyCode::Char('m'), crossterm::event::KeyModifiers::NONE);
         for _ in 0..5 {
-            app.on_dialog_key(KeyCode::Tab);
+            app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
         }
-        app.on_dialog_key(KeyCode::Enter);
+        app.on_dialog_key(KeyCode::Enter, crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.is_none(), "取消焦点 Enter 关闭");
         app.shutdown().await;
     }
 
-    /// 代理下拉展开态逐键路由（v1.5/FR-01-86）：Up/Down 环绕、Home/End 定位、
-    /// Enter/Esc 关闭、Tab/BackTab 关闭并按布局跳焦点、其余键关闭、n=0 守卫
     #[test]
     fn proxy_dropdown_open_key_routes() {
-        // Add 布局：Tab→6、BackTab→4
         let mut d = add_dlg();
         d.proxy_open = true;
         proxy_dropdown_open_key(&mut d, 2, KeyCode::Down);
@@ -677,7 +632,6 @@ mod dialog_key_tests {
         proxy_dropdown_open_key(&mut d, 2, KeyCode::Char('x'));
         assert!(!d.proxy_open, "其余键仅关闭");
 
-        // Modify 布局：Tab→4、BackTab→2
         let mut m = modify_dlg();
         m.proxy_open = true;
         proxy_dropdown_open_key(&mut m, 3, KeyCode::Tab);
@@ -686,7 +640,6 @@ mod dialog_key_tests {
         proxy_dropdown_open_key(&mut m, 3, KeyCode::BackTab);
         assert_eq!(m.focus, 2, "Modify 布局 BackTab 跳校验码");
 
-        // n=0 守卫：按 1 个选项处理（max(1)），End/Down 均落在 0
         let mut z = add_dlg();
         proxy_dropdown_open_key(&mut z, 0, KeyCode::End);
         assert_eq!(z.proxy_sel, 0, "n=0 守卫按 1 处理");
@@ -694,31 +647,26 @@ mod dialog_key_tests {
         assert_eq!(z.proxy_sel, 0);
     }
 
-    /// Add 对话框字符输入路由：文本字段拒控制字符、算法/代理行空格展开下拉、
-    /// 校验码十六进制 ≤128 位、确认/取消按钮空格激活
     #[tokio::test]
     async fn add_dialog_char_routes() {
         let mut app = make_app("achar");
         app.dialog = Some(add_dlg());
 
-        // focus 0：控制字符不进 URL 字段
-        app.on_dialog_key(KeyCode::Char('\u{1}'));
+        app.on_dialog_key(KeyCode::Char('\u{1}'), crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.as_ref().unwrap().url.is_empty(), "控制字符被拒");
-        // focus 3：空格展开算法下拉
-        app.on_dialog_key(KeyCode::Tab);
-        app.on_dialog_key(KeyCode::Tab);
-        app.on_dialog_key(KeyCode::Tab);
-        app.on_dialog_key(KeyCode::Char(' '));
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Char(' '), crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.as_ref().unwrap().ck_open);
-        app.on_dialog_key(KeyCode::Esc);
+        app.on_dialog_key(KeyCode::Esc, crossterm::event::KeyModifiers::NONE);
 
-        // focus 4：校验码仅十六进制，≤128 位
-        app.on_dialog_key(KeyCode::Tab);
-        app.on_dialog_key(KeyCode::Char('f'));
-        app.on_dialog_key(KeyCode::Char('g'));
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Char('f'), crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Char('g'), crossterm::event::KeyModifiers::NONE);
         assert_eq!(app.dialog.as_ref().unwrap().ck_value.value, "f");
         for _ in 0..200 {
-            app.on_dialog_key(KeyCode::Char('a'));
+            app.on_dialog_key(KeyCode::Char('a'), crossterm::event::KeyModifiers::NONE);
         }
         assert_eq!(
             app.dialog.as_ref().unwrap().ck_value.len_chars(),
@@ -727,93 +675,76 @@ mod dialog_key_tests {
         );
         app.dialog.as_mut().unwrap().ck_value.clear();
 
-        // focus 5：空格展开代理下拉
-        app.on_dialog_key(KeyCode::Tab);
-        app.on_dialog_key(KeyCode::Char(' '));
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Char(' '), crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.as_ref().unwrap().proxy_open);
-        app.on_dialog_key(KeyCode::Esc);
+        app.on_dialog_key(KeyCode::Esc, crossterm::event::KeyModifiers::NONE);
 
-        // focus 6：空格激活确认；空 URL → 拒绝保持
-        app.on_dialog_key(KeyCode::Tab);
-        app.on_dialog_key(KeyCode::Char(' '));
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Char(' '), crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.is_some(), "空 URL 确认被拒");
-        // 填入合法 URL + NONE（不校验）后再确认 → 建任务并关闭
         let d = app.dialog.as_mut().unwrap();
         d.url.set("http://example.com/a.bin");
         d.ck_type = CK_NONE;
         d.ck_sel = CK_NONE;
-        app.on_dialog_key(KeyCode::Char(' '));
+        app.on_dialog_key(KeyCode::Char(' '), crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.is_none(), "确认按钮建任务");
         assert_eq!(app.tasks.len(), 1);
 
-        // focus 8：空格激活取消按钮 → 直接关闭（BackTab 从 0 环绕；文本
-        // 字段内 Up 不跳焦点——v1.34 二批 bug 修订）
         app.dialog = Some(add_dlg());
-        app.on_dialog_key(KeyCode::BackTab); // 环绕到 8
-        app.on_dialog_key(KeyCode::Char(' '));
+        app.on_dialog_key(KeyCode::BackTab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Char(' '), crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.is_none(), "取消按钮直接关闭");
         app.shutdown().await;
     }
 
-    /// v1.34 二批 bug 修订专项：文本字段内方向键 = 输入光标移动（不跳焦点）
-    /// ——Left/Right ±1 字符、Up 行首、Down 行尾（单行字段 End 语义）、
-    /// 边界钳制；中位插入与退格随光标生效
     #[tokio::test]
     async fn arrow_keys_move_cursor_in_text_fields() {
         let mut app = make_app("cur");
         app.dialog = Some(add_dlg());
-        // 键入 "abc"：光标随迁至 3（字段尾）
         for c in ['a', 'b', 'c'] {
-            app.on_dialog_key(KeyCode::Char(c));
+            app.on_dialog_key(KeyCode::Char(c), crossterm::event::KeyModifiers::NONE);
         }
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.url.value, "abc");
         assert_eq!(d.url.cursor, 3, "键入后光标在字段尾");
 
-        // Left：3 → 2；再键入 'X' → 中位插入 "abXc"
-        app.on_dialog_key(KeyCode::Left);
-        app.on_dialog_key(KeyCode::Char('X'));
+        app.on_dialog_key(KeyCode::Left, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Char('X'), crossterm::event::KeyModifiers::NONE);
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.url.value, "abXc", "中位插入落在光标列");
         assert_eq!(d.url.cursor, 3);
         assert_eq!(d.focus, 0, "方向键不跳焦点");
 
-        // Right 到尾 + 越界钳制
-        app.on_dialog_key(KeyCode::Right);
-        app.on_dialog_key(KeyCode::Right);
+        app.on_dialog_key(KeyCode::Right, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Right, crossterm::event::KeyModifiers::NONE);
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.url.cursor, 4, "Right 到尾钳制");
-        // Down = 行尾语义（同值，焦点不动）
-        app.on_dialog_key(KeyCode::Down);
+        app.on_dialog_key(KeyCode::Down, crossterm::event::KeyModifiers::NONE);
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.url.cursor, 4, "Down 行尾");
         assert_eq!(d.focus, 0);
-        // Left 到头 + 越界钳制
         for _ in 0..6 {
-            app.on_dialog_key(KeyCode::Left);
+            app.on_dialog_key(KeyCode::Left, crossterm::event::KeyModifiers::NONE);
         }
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.url.cursor, 0, "Left 到头钳制");
-        // Up = 行首语义（同值，焦点不动）
-        app.on_dialog_key(KeyCode::Up);
+        app.on_dialog_key(KeyCode::Up, crossterm::event::KeyModifiers::NONE);
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.url.cursor, 0, "Up 行首");
         assert_eq!(d.focus, 0);
 
-        // 光标 1 处退格：删 'a'
-        app.on_dialog_key(KeyCode::Right);
-        app.on_dialog_key(KeyCode::Backspace);
+        app.on_dialog_key(KeyCode::Right, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Backspace, crossterm::event::KeyModifiers::NONE);
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.url.value, "bXc", "光标 1 处退格删前字符");
         assert_eq!(d.url.cursor, 0);
 
-        // Tab 后光标随迁到新字段（dir 空 = 0）
-        app.on_dialog_key(KeyCode::Tab);
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.focus, 1);
         assert_eq!(d.dir.cursor, 0, "焦点切换单源：光标迁至新字段尾");
 
-        // Modify 并发字段（预填 "2"）：打开后光标在尾，Left+键入中位插入
         app.dialog = None;
         app.tasks.push(crate::model::Task::new_queued(
             1,
@@ -833,8 +764,8 @@ mod dialog_key_tests {
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.conns.value, "2");
         assert_eq!(d.conns.cursor, 1, "预填字段光标在尾（open_modify_dialog）");
-        app.on_dialog_key(KeyCode::Left);
-        app.on_dialog_key(KeyCode::Char('9'));
+        app.on_dialog_key(KeyCode::Left, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Char('9'), crossterm::event::KeyModifiers::NONE);
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.conns.value, "92", "预填字段中位插入");
         assert_eq!(d.focus, 0, "方向键不跳焦点（Modify）");

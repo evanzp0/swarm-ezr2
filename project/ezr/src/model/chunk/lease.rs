@@ -1,10 +1,6 @@
-//! lease — 单帧租约快照（各连接从块队列动态领块，乱序完成；临近结束转待命）
-
 use super::plan::chunk_total;
 use crate::model::Connection;
 
-/// 构建当前帧各连接的领块快照（待命连接 start=end=0）。
-/// 返回 (连接列表, 已完成块数 x)。
 #[must_use]
 pub fn lease_snapshot(total: u64, done_bytes: u64, n: usize, piece: u64) -> (Vec<Connection>, u32) {
     let y = chunk_total(total, piece);
@@ -43,14 +39,10 @@ pub fn lease_snapshot(total: u64, done_bytes: u64, n: usize, piece: u64) -> (Vec
     (conns, x as u32)
 }
 
-/// demo 同构的连接进度散布权重（快照展示用：非均匀进度观感）
 const CONN_WEIGHTS: [f64; 16] = [
     0.95, 0.45, 0.10, 0.00, 0.75, 0.40, 0.85, 0.15, 0.55, 0.20, 0.55, 0.00, 0.70, 0.25, 0.80, 0.35,
 ];
 
-/// 按权重把 `amount` 字节拆成 `n` 份（钳制到 `[0, cap_i]`，差额回补，总和精确）。
-/// `pub` 仅为父模块 re-export（`pub(crate) use`，供 crate 内属性测试守恒验证）；
-/// `lease` 模块私有，不进对外 API。
 #[must_use]
 pub fn spread_bytes(amount: u64, n: usize, cap: u64) -> Vec<u64> {
     let mut v = vec![0u64; n];

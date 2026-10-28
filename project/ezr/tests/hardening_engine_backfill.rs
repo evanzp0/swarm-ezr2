@@ -1,25 +1,3 @@
-//! 加固测试（six-pack/hardender v118-ui-backfill 轮）：引擎账本簇存活体杀灭
-//! （第二目标：需要真实连接级账本的靶点）。
-//!
-//! 布局：#[path] 挂载 app/engine/model 全树（无 ui，缩编译面）。连接级账本
-//! （conn_prev/conn_cum/conn_speed）为 App 私有字段，唯一灌入路径 = 真实引擎
-//! ChunkProgress 事件流：本目标以进程内 mock HTTP 服务器 + `App::tick` 自动
-//! 发车（slots::allocate 空闲分配）驱动真实下载，经 pub(crate) getter
-//! （conn_speed_of/conn_cum_of）与 pub 字段断言。入口：
-//! `cargo test --test hardening_engine_backfill`。
-//!
-//! 靶点对账（v118 补跑轮 missed 清单，本文件负责 11 点；v1.20/FR-01-102 重构
-//! 后 update_conn_stats 的 EMA 直推位点消失，靶点几何由 update_conn_stats_pure_targets
-//! 与 gen-drift 守卫按新数据面口径承接）：
-//! - app/engine/mod.rs update_conn_stats：累计累加 / 窗口推进读数 / 老化清窗 /
-//!   待命不推窗（pure_targets 直测副本；gen-drift 守卫测产品源一致）
-//! - app/mod.rs active_conn_count 6：416:9 / 416:12 / 421:33 ×3 / 421:71
-//!   （cap×speed 2×2 合成矩阵 + 无账本第三连接，real=2 对全部 mutant 唯一）
-//! - app/mod.rs clear_conn_stats 1：429:51（!=→==）清除他者 id 不得误伤在册账本
-//! - app/tasks.rs clear_completed 1：200:33（==→!=）只清已完成任务的账本
-//! - ui/conns.rs 1：101:35（>→<）活跃连接速度列须显数值（并发明细数据行渲染，
-//!   需速度>0 的真实下载帧，本目标独有）
-
 #![allow(missing_docs)]
 #![allow(clippy::multiple_crate_versions)]
 #![allow(clippy::pedantic)]
@@ -39,21 +17,23 @@
 #![allow(clippy::duplicate_mod)]
 #![allow(unused_imports)]
 
-// ui 挂载需要 crate::VERSION（header.rs 版本角标；与 src/main.rs 同宏同值）
 pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "-01");
 
 #[path = "../src/app/mod.rs"]
 mod app;
+#[path = "../src/bt/mod.rs"]
+mod bt;
 #[path = "../src/engine/mod.rs"]
 mod engine;
 #[path = "../src/model/mod.rs"]
 mod model;
+#[path = "../src/multiline.rs"]
+mod multiline;
 #[path = "../src/scrollbar.rs"]
-// v1.32/FR-01-109：滚动条引擎（app 状态机依赖的几何/命中类型单源）
 mod scrollbar;
 #[path = "../src/textfield.rs"]
-// 输入框组件（Dialog 文本字段实例化依赖的状态机/取窗/点击映射单源）
 mod textfield;
+
 #[path = "../src/ui/mod.rs"]
 mod ui;
 
@@ -65,16 +45,12 @@ use app::App;
 use model::config::Config;
 use model::{Connection, Protocol, Task, TaskState};
 
-/// 确定性内容（同 supervisor 测试口径）
 fn fill(buf: &mut [u8], start: u64) {
     for (i, b) in buf.iter_mut().enumerate() {
         *b = ((start as usize + i) % 251) as u8;
     }
 }
 
-/// mock HTTP 服务器（同 supervisor::tests 模式 + 慢速写节流）：支持 Range；
-/// 每连接独立线程（串行 accept 会让第二连接干等整个第一连接的生命周期），
-/// 写盘间歇 sleep 拉长下载窗口（进度事件 200ms 节流 → 需要足够长的下载期）。
 fn mock_server(total: u64, slow: bool) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap().to_string();
@@ -85,7 +61,7 @@ fn mock_server(total: u64, slow: bool) -> String {
                 let mut r = BufReader::new(conn);
                 let mut line = String::new();
                 if r.read_line(&mut line).is_err() || line.is_empty() {
-                    return; // 每连接独立闭包：连接级失败直接结束该连接
+                    return;
                 }
                 let mut range_header = None;
                 loop {
@@ -140,8 +116,6 @@ fn mock_server(total: u64, slow: bool) -> String {
 }
 
 fn queued_task(id: u32, url: &str, dir: &str, conns: usize) -> Task {
-    // 块大小 = 整文件：块完成周期 > 引擎 200ms 发包节流 → 同块连续多帧
-    // （pb == c.block）→ dt > 0 → 速度 EMA 立起（小块会每帧换块，dt 恒 0）
     Task::new_queued(
         id,
         "f.bin".to_string(),
@@ -157,11 +131,8 @@ fn queued_task(id: u32, url: &str, dir: &str, conns: usize) -> Task {
     )
 }
 
-const TOTAL: u64 = 2 * 1024 * 1024; // 2 MB：块 512KB（块周期 320ms > 200ms 节流 → 同块帧 push 速度）
+const TOTAL: u64 = 2 * 1024 * 1024;
 
-/// 引擎账本簇主靶（单一下载会话串起全部 11 点）。
-/// multi_thread 运行时：current_thread 下 tick 的 await 全部同步完成（mpsc 有
-/// 容量 / try_recv 非阻塞）不发生 yield，引擎任务会被饿死（实测死锁 Queued）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn engine_conn_ledger_kills() {
     let url = mock_server(TOTAL, true);
@@ -171,8 +142,6 @@ async fn engine_conn_ledger_kills() {
     a.tasks
         .push(queued_task(1, &url, &dir.to_string_lossy(), 1));
 
-    // ① 等账本灌入（FR-01-102：展示速度 = tick ⑤ 每秒采样窗口速率 → EMA；
-    //    需跨过 1s 采样节拍——窗口速率非零后，首个 speed_due 采样立起展示值）
     let mut guard = 0;
     loop {
         a.tick().await;
@@ -186,30 +155,17 @@ async fn engine_conn_ledger_kills() {
         assert!(guard < 60_000, "下载未在预算内产生连接展示速度");
     }
 
-    // ② 靶 update_conn_stats（FR-01-102 重构后：窗口读数 = 连接级累计）+ tick 采样：
-    //    速度 EMA 已立起（窗口速率 > 0 经采样）。同帧兼靶 ui/conns.rs 101:35（>→<）：
-    //    速度>0 时数据行显数值（mutant 恒 '-'）。
     assert!(
         a.conn_speed_of(1, 1) > 0.0,
         "速度 EMA 已立起（窗口速率经每秒采样）"
     );
     let mid_rows = ui::testfx::row_strings(&ui::testfx::render_full(&mut a, 100, 24));
-    // v1.31/FR-01-107① 页脚双行改版（3 行 → 4 行）后 100×24 主区收缩：
-    // 右列 [Length(12), Min(6)] 在受限空间下 Min 优先——并发面板内框
-    // y=15..18，表头 y=15、数据行 y=16..18（提示行退役，数据行 = 内框高
-    // - 表头 1 行）。数据行区间任一行含速度数值即达标（mutant 恒 '-'
-    // 时区间内零命中）。
     let speed_visible = mid_rows[16..=18].iter().any(|r| r.contains("B/s"));
     assert!(
         speed_visible,
         "下载中并发明细数据行速度列应显数值（mutant 恒 '-'）：{:?}",
         &mid_rows[15..=21]
     );
-    // ③ 靶 active_conn_count 6 点（v1.34 ConnPhase 口径：持块即活跃——
-    //    Connected = 账本 cum>0、Connecting = 持块 cum=0、Closed = cap=0；
-    //    旧「cap×speed 合成矩阵」随 FR-01-96 v1.34 活跃口径改版退役）。
-    //    探针复用真实任务 task_id=1 的账本：(1,1) cum>0（真实单连接在传）、
-    //    (1,2)/(1,3) 无账本条目 cum=0。
     let mut probe = queued_task(1, "probe", "probe", 1);
     probe.state = TaskState::Downloading;
     probe.connections = vec![
@@ -218,27 +174,25 @@ async fn engine_conn_ledger_kills() {
             start: 0,
             end: 100,
             done: 0,
-        }, // cap>0, 账本 cum>0 → Connected → 计
+        },
         Connection {
             id: 3,
             start: 0,
             end: 0,
             done: 0,
-        }, // cap=0 → Closed → 不计
+        },
         Connection {
             id: 2,
             start: 0,
             end: 100,
             done: 0,
-        }, // cap>0, cum=0 → Connecting → 计
+        },
     ];
     assert_eq!(
         a.active_conn_count(&probe),
         2,
         "持块即活跃（Connected+Connecting）+ cap=0 不计（mutant count-all/filter 丢失 → 3/1）"
     );
-    // 探针 B：cap=0 但账本有累计（id=1 → (1,1) cum>0）→ cap 权威优先 →
-    // Closed 不计，杀 conn_phase 丢 cap 判定 / is_active 误纳 Closed 的 mutant
     let mut probe_b = queued_task(1, "probeb", "probeb", 1);
     probe_b.state = TaskState::Downloading;
     probe_b.connections = vec![Connection {
@@ -246,7 +200,7 @@ async fn engine_conn_ledger_kills() {
         start: 0,
         end: 0,
         done: 0,
-    }]; // cap=0（cum>0 不救）→ Closed → 不计（real=0）
+    }];
     assert_eq!(
         a.active_conn_count(&probe_b),
         0,
@@ -260,7 +214,6 @@ async fn engine_conn_ledger_kills() {
         "非明细态恒 0（靶 416:12 delete !）"
     );
 
-    // ④ 靶 clear_conn_stats 429:51（!=→==）：清除无账本 id 不得误伤在册账本
     let cum1_before = a.conn_cum_of(1, 1);
     assert!(cum1_before > 0);
     a.clear_conn_stats(999);
@@ -274,7 +227,6 @@ async fn engine_conn_ledger_kills() {
         "清除他者 id 应保留速度账本（speed-retain mutant 429:51 清空）"
     );
 
-    // ⑤ 靶 clear_completed 200:33（==→!=）：只清已完成任务的账本
     let done = queued_task(2, "done", "done", 2);
     a.tasks.push(done);
     a.tasks[1].state = TaskState::Completed;
@@ -290,13 +242,6 @@ async fn engine_conn_ledger_kills() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-// ------------------------------------------------ gen-drift 守卫 ------------
-
-/// gen-drift 守卫：update_conn_stats 剥头副本必须与产品源码逐字一致。
-/// 副本为函数提取式（独立 type 别名 + use，不能整文件剥头比对）——从两文件
-/// 各自提取 `fn update_conn_stats(` 起至首个顶格 `}` 止的片段逐字比对。
-/// 杀灭链：pure_targets 测副本（不变真品）、本守卫测产品（变异即红 → 场景
-/// 判 caught），二者合力覆盖 73:30/73:40/79:33——缺守卫则产品变异无感知。
 #[test]
 fn gen_ucs_fixture_matches_product_source() {
     let src = std::fs::read_to_string("src/app/engine/mod.rs").expect("read product source");
@@ -327,9 +272,6 @@ fn gen_ucs_fixture_matches_product_source() {
     );
 }
 
-// ------------------------------------------------ update_conn_stats 夹具直测 ---
-
-/// update_conn_stats 剥头副本壳（type 别名 + 纯函数逐字；无 impl 块 → 无碰撞）
 mod ucs_fix {
     use std::collections::HashMap;
     use std::time::Instant;
@@ -338,7 +280,6 @@ mod ucs_fix {
     pub(crate) use crate::model::speed::{SpeedWindow, WINDOW};
     include!("gen/update_conn_stats_stripped.rs");
 
-    /// 私有纯函数的同模块转发
     #[allow(clippy::too_many_arguments)]
     pub fn call(
         prev: &mut HashMap<ConnKey, ConnObs>,
@@ -351,12 +292,6 @@ mod ucs_fix {
     }
 }
 
-/// 靶（v1.20 重构后位点，FR-01-102 数据面）：①累计随增量累加（+= / delta 突变）；
-/// ②在传连接窗口推进且读数 = 连接级累计（push-读数突变 → 窗口速率量级错）；
-/// ③端点老化清窗（守卫删除 → 停传时长摊进速率，rate 残留非 0）；
-/// ④待命连接不推进窗口（展示面零值速断由 tick 采样承担，数据面不产生新样本）。
-/// 旧靶 73:30/73:40/79:33（EMA 直推位点）随 FR-01-102 重构消失；零值速断靶点
-/// 移至 App 展示采样（idle_conn_speed_snaps_to_zero，engine/mod.rs 内联测试）。
 #[test]
 fn update_conn_stats_pure_targets() {
     use std::collections::HashMap;
@@ -370,8 +305,6 @@ fn update_conn_stats_pure_targets() {
         done,
     };
 
-    // ①② 同块两次观测（100ms，rate() 的 dt 下限 0.05s 之上）：cum 累加至 400；
-    //    窗口速率 = 300B/100ms = 3KB/s（mutant push(delta)：样本 (100,300) → 2KB/s）
     let mut prev = HashMap::new();
     let mut cum = HashMap::new();
     let mut windows: HashMap<(u32, usize), SpeedWindow> = HashMap::new();
@@ -385,8 +318,6 @@ fn update_conn_stats_pure_targets() {
         "窗口速率 = Δcum/Δt ≈ 3KB/s（push-读数突变 → 2KB/s）：{r}"
     );
 
-    // ④ 待命连接（done == cap）：窗口不再推进——rate 冻结为末次值
-    //    （mutant 误推：新样本进入窗口 → rate 被稀释偏离 3KB/s）
     std::thread::sleep(Duration::from_millis(30));
     ucs_fix::call(
         &mut prev,
@@ -407,8 +338,6 @@ fn update_conn_stats_pure_targets() {
         "待命连接窗口冻结（误推 → 速率稀释）：{r_idle}"
     );
 
-    // ③ 端点老化清窗：停传 > WINDOW 后再推 → 清窗重开，单样本 rate == 0
-    //    （守卫删除突变：旧端点参与差值 → rate 为停传摊薄的小值 ≠ 0）
     std::thread::sleep(Duration::from_millis(1_100));
     ucs_fix::call(&mut prev, &mut cum, &mut windows, 7, &[view(1, 200)]);
     let r_stale = windows.get_mut(&(7, 1)).unwrap().rate();
@@ -417,10 +346,6 @@ fn update_conn_stats_pure_targets() {
         "老化清窗后单样本速率为 0（守卫删除 → 摊薄残留）: {r_stale}"
     );
 
-    // ⑤ 流式单连接（cap = 0 且 done > 0，FR-01-12 降级路径）：窗口正常推进
-    //    （v1.34 bug 修订靶：原 `cap > 0 && done < cap` 门对降级路径恒 false
-    //    → 面板对在传流式任务无速度样本）；与待命（cap = 0 且 done = 0）
-    //    的判别式 = done
     let mut prev_s = HashMap::new();
     let mut cum_s = HashMap::new();
     let mut win_s: HashMap<(u32, usize), SpeedWindow> = HashMap::new();
@@ -440,7 +365,6 @@ fn update_conn_stats_pure_targets() {
         (2_500.0..3_500.0).contains(&r_stream),
         "流式连接窗口速率 ≈ 3KB/s（原门恒 false → 无样本）: {r_stream}"
     );
-    // 待命对照：cap = 0 且 done = 0 → 不建窗口条目（零值速断）
     ucs_fix::call(
         &mut prev_s,
         &mut cum_s,
@@ -460,12 +384,6 @@ fn update_conn_stats_pure_targets() {
     );
 }
 
-// --------------------------------------- 流式单连接并发明细（bug 修订 e2e）---
-
-/// 无 Content-Length 流式 mock（FR-01-12 降级路径的真实形态）：恒 200、
-/// 不带 Content-Length / Accept-Ranges，Connection: close 以连接关闭定界
-/// 响应体——探测拿不到大小与 Range 支持 → 单流降级，进度视图
-/// ConnView { start: 0, end: 0, done }（cap = 0）。
 fn mock_server_streaming(total: u64, slow: bool) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap().to_string();
@@ -498,20 +416,14 @@ fn mock_server_streaming(total: u64, slow: bool) -> String {
                     }
                     pos += n as u64;
                 }
-                // 连接关闭定界（Connection: close；drop(w) 即 EOF）
             });
         }
     });
     format!("http://{addr}/f.bin")
 }
 
-/// 不支持断点续传的下载中任务 = 一个下载线程（FR-01-12），并发连接面板
-/// 该显示其并发明细（v1.34 bug 修订 e2e）：无 Content-Length 流式下载
-/// （总大小未知，FR-01-116）期间——明细行 1 行（序号 1）、徽标 ` 1/1 项 `、
-/// 头部「并发」活跃计数 1（原 cap=0 一律 Closed → 面板恒空）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn streaming_single_thread_shows_in_conns_panel() {
-    // 4 MB 慢速（5ms/8KB ≈ 2.5s）拉长下载窗口，保证断言落在下载中态
     let url = mock_server_streaming(4 * 1024 * 1024, true);
     let dir = model::testenv::uniq_tmp_dir("ezr-v134-stream");
     let reg = dir.join("registry.json").to_string_lossy().into_owned();
@@ -519,7 +431,6 @@ async fn streaming_single_thread_shows_in_conns_panel() {
     a.tasks
         .push(queued_task(1, &url, &dir.to_string_lossy(), 4));
 
-    // 等首个进度帧（连接账本 cum > 0 = 流式连接视图已被消费）
     let mut guard = 0;
     loop {
         a.tick().await;
@@ -533,13 +444,9 @@ async fn streaming_single_thread_shows_in_conns_panel() {
         assert!(guard < 60_000, "流式下载未在预算内产生连接账本");
     }
 
-    // 活跃口径：流式单连接 Connected（cap=0、done>0）→ 计入活跃并发
     assert_eq!(a.active_conn_count(&a.tasks[0]), 1, "活跃并发 = 1");
     assert_eq!(a.conns_display_total(), 1, "头部并发计数 = 1");
 
-    // 展示面速度（v1.34 二批 bug 修订回归靶）：等 1s 采样节拍后 tick →
-    // 窗口速率经 EMA 立起（原展示采样门 `cap > 0 && done < cap` 漏流式臂 →
-    // 并发面板速度列恒 0；数据面/展示面在传判定已收口单源）
     tokio::time::sleep(Duration::from_millis(1_100)).await;
     a.tick().await;
     assert!(
@@ -548,8 +455,6 @@ async fn streaming_single_thread_shows_in_conns_panel() {
         a.conn_speed_of(1, 1)
     );
 
-    // 面板渲染：徽标 ` 1/1 项 `（x = 活跃明细行数、y = 任务并发设置）+
-    // 数据行序号 1（右对齐 4 列「   1」，表头行为「  序号」不含该形态）
     let rows = ui::testfx::row_strings(&ui::testfx::render_full(&mut a, 100, 24));
     assert!(
         rows.iter().any(|r| r.contains("1/1 项")),

@@ -1,16 +1,5 @@
-//! slots — 下载槽位调度（FR-01-31/32：默认 5 可配置，按列表顺序分配）
-//!
-//! 占用 = 「下载中」∪「校验中」（D12）∪「已失败」且将自动重试（未达上限且
-//! 属可自动重试类别）∪ 已获槽位的等待中任务；
-//! 释放 = 校验成功/完成转「已完成」、手动暂停（含失败挂起，v1.21 合并口径，
-//! v1.23 起数据也与普通暂停一致）、达重试上限或停等失败、删除任务。
-
 use super::{Task, TaskState};
 
-/// 槽位不变式维护：各状态任务的 `has_slot` 修正（每 tick 开头执行）。
-/// - 下载中/校验中恒持有；
-/// - 已失败：将自动重试（`retry_in` 有值）持有，停等释放；
-/// - 其余状态（除持有槽位的等待中）恒不持有。
 pub fn enforce_invariants(tasks: &mut [Task]) {
     for t in tasks.iter_mut() {
         match t.state {
@@ -22,7 +11,6 @@ pub fn enforce_invariants(tasks: &mut [Task]) {
     }
 }
 
-/// 当前占用槽位数（FR-01-31 口径）
 #[must_use]
 pub fn used(tasks: &[Task]) -> usize {
     tasks
@@ -30,15 +18,12 @@ pub fn used(tasks: &[Task]) -> usize {
         .filter(|t| match t.state {
             TaskState::Downloading | TaskState::Verifying => true,
             TaskState::Failed => t.retry_in.is_some(),
-            // 失败挂起（v1.21 合并口径入 Paused，v1.23 起数据同普通暂停）：不占槽（_ 臂）
             TaskState::Queued => t.has_slot,
             _ => false,
         })
         .count()
 }
 
-/// 空闲槽位按列表顺序（从上往下）分配给最靠前的未持有槽位的「等待中」任务
-/// （FR-01-32）。返回本次新获得槽位的任务 ID 列表（按分配顺序）。
 pub fn allocate(tasks: &mut [Task], max_slots: usize) -> Vec<u32> {
     enforce_invariants(tasks);
     let mut free = max_slots.saturating_sub(used(tasks));
@@ -56,7 +41,6 @@ pub fn allocate(tasks: &mut [Task], max_slots: usize) -> Vec<u32> {
     granted
 }
 
-/// 等待任务在队列中的位次（1 基，按列表顺序；已持有槽位者不算位次）
 #[must_use]
 pub fn queue_pos(tasks: &[Task], task_id: u32) -> Option<usize> {
     let mut pos = 0;
@@ -71,10 +55,6 @@ pub fn queue_pos(tasks: &[Task], task_id: u32) -> Option<usize> {
     None
 }
 
-/// 列表视图排队位次（1 基，按给定下标顺序遍历；已获槽位/非等待 = 0）。
-/// 列表渲染的排队编号单一来源（architect v116：原 draw_list 内联重实现）。
-/// 与 [`queue_pos`] 数值等价——Queued 任务恒出现在「正在下载」页签视图内
-/// 且相对顺序一致——按视图序一次线性扫描实现，避免逐任务全表扫描。
 #[must_use]
 pub fn queue_positions(tasks: &[Task], view: &[usize]) -> Vec<usize> {
     let mut waiting = 0usize;
@@ -96,7 +76,6 @@ mod tests {
     use super::*;
     use crate::model::{sample_task, TaskState};
 
-    /// 夹具：共享 sample_task（model 层单一来源），按用例覆盖 id/名称/状态
     fn mk(id: u32, state: TaskState) -> Task {
         let mut t = sample_task();
         t.id = id;
@@ -105,12 +84,10 @@ mod tests {
         t
     }
 
-    /// v1.21/FR-01-92 合并口径：失败挂起不占下载槽位（v1.23 起挂起数据与普通
-    /// 暂停一致，全 Paused 态不占槽的统一不变式）
     #[test]
     fn paused_holds_no_slot() {
         let mut t = mk(1, TaskState::Paused);
-        t.has_slot = true; // 先前置位，验证不变式强制回收
+        t.has_slot = true;
         let mut tasks = vec![t];
         enforce_invariants(&mut tasks);
         assert!(!tasks[0].has_slot, "暂停态（含失败挂起）恒不持有槽位");
@@ -130,7 +107,7 @@ mod tests {
         let mut a = mk(1, TaskState::Failed);
         a.retry_in = Some(8.0);
         let mut b = mk(2, TaskState::Failed);
-        b.retry_in = None; // 停等
+        b.retry_in = None;
         let mut tasks = vec![a, b];
         enforce_invariants(&mut tasks);
         assert!(tasks[0].has_slot);
@@ -155,7 +132,6 @@ mod tests {
     fn queue_position_counts_undecorated_only() {
         let mut tasks = vec![mk(1, TaskState::Queued), mk(2, TaskState::Queued)];
         allocate(&mut tasks, 1);
-        // 任务 1 获槽（无位次），任务 2 排队第 1 位
         assert_eq!(queue_pos(&tasks, 1), None);
         assert_eq!(queue_pos(&tasks, 2), Some(1));
     }
@@ -164,10 +140,9 @@ mod tests {
     fn released_slot_granted_to_front_waiting_task() {
         let mut tasks = vec![mk(1, TaskState::Queued), mk(2, TaskState::Queued)];
         allocate(&mut tasks, 2);
-        tasks[0].state = TaskState::Paused; // 暂停释放
+        tasks[0].state = TaskState::Paused;
         enforce_invariants(&mut tasks);
         assert_eq!(used(&tasks), 1);
-        // 任务 1 重新排队（失败重试路径）：仍在列表最前，按顺序优先获得空闲槽位
         tasks[0].state = TaskState::Queued;
         tasks[0].has_slot = false;
         tasks.push(mk(3, TaskState::Queued));

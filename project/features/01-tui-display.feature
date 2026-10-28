@@ -163,7 +163,7 @@ Feature: 01-tui-display TUI 展示与交互（基线沿用 + 真实数据）
     Then 等价于对应按键操作（确认/取消/选项直选）
 
   Scenario: 01-tui-display-09 toast 反馈自动消失
-    When 触发一个 toast 提示（如保存已暂停任务继续但槽位满）
+    When 触发一个 toast 提示（如重复添加同 URL 任务——「任务已存在」；v1.21 满槽提示已退役）
     Then toast 在页脚 toast 区出现且清晰可读（◆ 前缀黄色，v1.30；toast 独占页脚第 2 行，v1.31/FR-01-107①）
     And 约 3 秒后自动消失且不残留遮挡（v1.30：一般 3 秒）
     And 连续触发两条 toast 时只显示最新一条（新 toast 覆盖旧 toast，v1.30）

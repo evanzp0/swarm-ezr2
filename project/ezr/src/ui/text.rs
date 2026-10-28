@@ -1,17 +1,9 @@
-//! text — 纯文本工具（填充/规格化/进度条，全部可单元测试）。
-//!
-//! 显示宽度 [`w`] 与宽度截断 [`truncate`] 已收口为单行文本输入框组件
-//! crate 单源（`crate::textfield`，输入框取窗/点击映射与全 ui 层共用同一
-//! 宽度口径），此处转发以保持既有 `super::text::{w, truncate}` 引用路径
-//! 不变（DRY：宽度/截断实现唯一）。
-
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 
 use super::EMPTY;
 pub use crate::textfield::{truncate, w};
 
-/// 按终端显示宽度右填充空格（Rust format! 的宽度按字符数计，对 CJK 不准）
 pub fn pad_right(s: &str, width: usize) -> String {
     let cur = w(s);
     if cur >= width {
@@ -21,7 +13,6 @@ pub fn pad_right(s: &str, width: usize) -> String {
     }
 }
 
-/// 按终端显示宽度左填充空格（数值列右对齐用，CJK 宽度感知）
 pub fn pad_left(s: &str, width: usize) -> String {
     let cur = w(s);
     if cur >= width {
@@ -31,24 +22,11 @@ pub fn pad_left(s: &str, width: usize) -> String {
     }
 }
 
-pub fn fmt_size(bytes: u64) -> String {
-    const MB: f64 = 1_000_000.0;
-    const GB: f64 = 1_000_000_000.0;
-    let b = bytes as f64;
-    if b >= GB {
-        format!("{:.2} GB", b / GB)
-    } else if b >= MB {
-        format!("{:.1} MB", b / MB)
-    } else if b >= 1000.0 {
-        format!("{:.0} KB", b / 1000.0)
-    } else {
-        format!("{} B", bytes)
-    }
-}
+pub use crate::model::sizefmt::{fmt_size, fmt_size_pair};
 
 pub fn fmt_speed(bps: f64) -> String {
     const MB: f64 = 1_000_000.0;
-    let bps = if bps == 0.0 { 0.0 } else { bps }; // 归一化负零（-0.0 == 0.0），避免「-0 B/s」显示
+    let bps = if bps == 0.0 { 0.0 } else { bps };
     if bps >= MB {
         format!("{:.1} MB/s", bps / MB)
     } else if bps >= 1000.0 {
@@ -76,36 +54,6 @@ pub fn fmt_dur(s: u64) -> String {
     }
 }
 
-/// 同单位大小对（BT 行更紧凑）：1.72/4.32 GB
-pub fn fmt_size_pair(a: u64, b: u64) -> String {
-    const KB: f64 = 1_000.0;
-    const MB: f64 = 1_000_000.0;
-    const GB: f64 = 1_000_000_000.0;
-    let (x, y) = (a as f64, b as f64);
-    let unit = if y >= GB {
-        ("GB", GB)
-    } else if y >= MB {
-        ("MB", MB)
-    } else if y >= KB {
-        ("KB", KB)
-    } else {
-        ("B", 1.0)
-    };
-    let (u, div) = unit;
-    if u == "GB" {
-        format!("{:.2}/{:.2} {}", x / div, y / div, u)
-    } else if u == "MB" {
-        format!("{:.1}/{:.1} {}", x / div, y / div, u)
-    } else {
-        format!("{:.0}/{:.0} {}", x / div, y / div, u)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 进度条
-// ---------------------------------------------------------------------------
-
-/// 列表整体进度条（不展示分块）
 pub(super) fn plain_bar(width: usize, frac: f64, fill: Color) -> Vec<Span<'static>> {
     let width = width.max(1);
     let filln = ((width as f64) * frac.clamp(0.0, 1.0)).round() as usize;
@@ -122,30 +70,6 @@ pub(super) fn plain_bar(width: usize, frac: f64, fill: Color) -> Vec<Span<'stati
     spans
 }
 
-// ---------------------------------------------------------------------------
-// 断链显示（v1.34/FR-01-113 ④/FR-01-80 ⑤，对齐 ezr-demo 重构版 break_links；
-// v1.34 二批 bug 修订：断链机制升级为逐字符深度断链 [`break_links_deep`]，
-// 原 scheme 锚点版 [`break_links`] 对 www. 形态 URL 识别无能为力、已随
-// 最后一个消费者（详情 URL 行）切换而退役删除）
-// ---------------------------------------------------------------------------
-
-/// 反链接显示变换（深度断链）：在**每个字符之后**注入零宽 VS15
-///（U+FE0E——零宽组合符号 Mn、Default_Ignorable，各主流终端均零宽渲染且
-/// 不产生可见字形）——文本里不再存在任何 ≥2 字符的连续裸串（scheme、域名、
-/// 路径、www 前缀、任意片段均不可整体匹配）：终端自身的 URL 自动识别即便
-/// 把行内孤立组合符号透明化处理（归一化后正则匹配），也无从拼出连续匹配
-/// 串——显示文本因此不再被终端叠加默认链接下划线（根治「详情 URL 值悬停
-/// 出现双下划线（终端识别 + ezr 自身 SGR 下划线叠加）」「字段值弹窗内容带
-/// 终端默认下划线」；ezr 自身的悬停下划线仍由 SGR 控制不受影响）。仅影响
-/// 显示层：复制语义走 App 状态原值（字段名点击 / Y 键），不经注入。VS15 与
-/// 宿主字符构成同一 grapheme 簇（零宽），[`w`]/[`truncate`]/[`wrap_text`]
-/// 及 ratatui 渲染管线均按零宽透传。
-///
-/// 消费者：详情面板 URL 行（v1.34 二批 bug 修订自 scheme 锚点版升级）与
-/// 字段值弹窗内容行。
-///
-/// **注意**：断链文本必须经 [`link_break_spans`] 渲染（而非直接作为单
-/// Span）——原因见该函数文档。
 pub(crate) fn break_links_deep(s: &str) -> String {
     const VS15: &str = "\u{FE0E}";
     let mut out = String::with_capacity(s.len() + s.chars().count() * 3);
@@ -158,8 +82,6 @@ pub(crate) fn break_links_deep(s: &str) -> String {
     out
 }
 
-/// 影子前景色：与原色仅最低位灰度 ±1（肉眼不可见），唯一作用是让
-/// crossterm 在两段文本之间输出样式切换转义序列（见 [`link_break_spans`]）。
 fn fg_shadow(c: Option<Color>) -> Option<Color> {
     match c {
         Some(Color::Rgb(r, g, 0)) => Some(Color::Rgb(r, g.saturating_add(1), 1)),
@@ -168,18 +90,6 @@ fn fg_shadow(c: Option<Color>) -> Option<Color> {
     }
 }
 
-/// 断链文本 span 化（pyte 等简易终端模拟器兼容）：
-///
-/// VS15 是「零宽但组合类为 0」的字符——pyte 的 `Screen::draw` 对这类字符
-/// 直接 `break`，**丢弃同一文本 run 中其后的全部字符**（真终端无此问题，
-/// 会继续渲染）。而 ratatui 同一样式相邻单元格连续输出、中间无转义序列，
-/// VS15 天然落在 run 中间，pyte 解码画面会丢失 URL 尾部。
-///
-/// 处理：以每个 VS15 为界把文本切段，奇数段换用「影子前景色」
-///（[`fg_shadow`]，与原色肉眼不可分）——crossterm 由此在每段之间输出
-/// SGR 切换序列，**每个 VS15 都落在各自文本 run 的末尾**，pyte 在 run 末尾
-/// break 零损失；真终端按单元格渲染，网格文本不变、视觉不变、断链效果
-/// 不变。段样式交替保证相邻段必不相同（连续多个 VS15 也逐段隔断）。
 pub(crate) fn link_break_spans(s: &str, style: Style) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut rest = s;
@@ -215,15 +125,6 @@ pub(crate) fn link_break_spans(s: &str, style: Style) -> Vec<Span<'static>> {
     spans
 }
 
-// ---------------------------------------------------------------------------
-// 字段值弹窗文本工具（v1.34/FR-01-113）
-// ---------------------------------------------------------------------------
-
-/// CJK 感知 wrap text：按显示宽折行（超宽即断行，不做词边界回退——URL/校验码
-/// 等无空格长串与中文文案统一按列宽折行），供字段值弹窗完整展示字段值；
-/// 每行显示宽 ≤ width（width ≤ 1 时按 1 处理，极端窄窗退化为逐字符折行）。
-/// pub(crate)：crate 内可见（property_tests 属性测试经 ui 根 cfg(test) 门面
-/// 消费——architect v151；产品 API 面零增量，crate 外不可见）
 pub(crate) fn wrap_text(s: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let mut out: Vec<String> = Vec::new();
@@ -242,22 +143,12 @@ pub(crate) fn wrap_text(s: &str, width: usize) -> Vec<String> {
     out
 }
 
-// ---------------------------------------------------------------------------
-// 走马灯进度条（v1.34/FR-01-116，对齐 ezr-demo 重构版 marquee_bar）
-// ---------------------------------------------------------------------------
-
-/// 走马灯进度条（总大小未知的下载中任务）：不支持续传的 HTTP(S) 流式下载
-/// 拿不到 Content-Length，百分比/填充进度无从计算——进度条以循环滑动的
-/// 色块（marquee）表达「传输进行中、进度不可知」：滑块自左缘滑入、匀速
-/// 右移、右缘滑出，空一帧后重新滑入循环。anim = App::frame（100ms/tick 的
-/// 10fps 节拍，与 spinner 同源）；每帧 2 列 → 全周期（宽+滑块长）≈ 3s。
 pub(crate) fn marquee_bar(width: usize, anim: u64, fill: Color) -> Vec<Span<'static>> {
     let width = width.max(1);
     let block = (width / 4).clamp(4, 8);
-    let period = width + block; // 滑块完全离场后一个空帧，再从左缘重新滑入
-    let head = ((anim as usize * 2) % period) as isize; // 滑块头部（排他）
-    let tail = head - block as isize; // 滑块尾部（含）
-                                      // 线性裁剪到轨道（不绕环）：滑块 = [tail, head) ∩ [0, width)
+    let period = width + block;
+    let head = ((anim as usize * 2) % period) as isize;
+    let tail = head - block as isize;
     let s = tail.clamp(0, width as isize) as usize;
     let e = head.clamp(0, width as isize) as usize;
     let mut spans = Vec::new();
@@ -295,7 +186,6 @@ mod tests {
         let t = truncate("very-long-name.bin", 8);
         assert_eq!(w(&t), 8);
         assert!(t.ends_with('…'));
-        // CJK 不会被切成半格
         let t = truncate("下载任务名称很长", 6);
         assert!(w(&t) <= 6);
     }
@@ -304,7 +194,7 @@ mod tests {
     fn pad_respects_display_width() {
         assert_eq!(pad_right("ab", 5), "ab   ");
         assert_eq!(pad_right("下载", 5), "下载 ");
-        assert_eq!(pad_right("abc", 2), "abc"); // 超宽不截断
+        assert_eq!(pad_right("abc", 2), "abc");
     }
 
     #[test]
@@ -343,17 +233,11 @@ mod tests {
         let total: usize = spans.iter().map(|s| s.content.chars().count()).sum();
         assert_eq!(total, 10);
         assert_eq!(spans[0].content, "█".repeat(5));
-        // 空进度仍产出整条空槽
         let spans = plain_bar(4, 0.0, GREEN);
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].content, "░".repeat(4));
     }
 
-    // -------------------------------------------------------------------
-    // v1.34/FR-01-113 ④ 断链显示（break_links_deep / link_break_spans）
-    // -------------------------------------------------------------------
-
-    /// 构造含 VS15 的通用样例（link_break_spans 分段测试用；覆盖多字符段）
     fn vs15_sample() -> String {
         "ab\u{FE0E}cd".to_string()
     }
@@ -362,7 +246,6 @@ mod tests {
     fn link_break_spans_segments_at_vs15_boundaries() {
         let s = vs15_sample();
         let spans = link_break_spans(&s, Style::default().fg(FG));
-        // 两段（VS15 前/后，多字符段），相邻段样式必不相同（影子色交替）
         assert_eq!(spans.len(), 2, "按 VS15 切段: {spans:?}");
         assert_ne!(spans[0].style.fg, spans[1].style.fg, "相邻段影子色交替");
         assert_eq!(
@@ -370,25 +253,17 @@ mod tests {
             "VS15 落在段末（pyte 零丢失）"
         );
         assert_eq!(spans[1].content, "cd");
-        // 拼回内容 = 原文（分段零损失）
         let joined: String = spans.iter().map(|x| x.content.as_ref()).collect();
         assert_eq!(joined, s);
-        // 无 VS15 的文本单段原样
         let spans = link_break_spans("plain", Style::default().fg(FG));
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].content, "plain");
     }
 
-    // -------------------------------------------------------------------
-    // v1.34 bug 修订：深度断链（break_links_deep）——详情 URL 行 + 字段值
-    // 弹窗内容共用（www 形态识别归一化后仍命中的终端补强）
-    // -------------------------------------------------------------------
-
     #[test]
     fn break_links_deep_injects_vs15_after_every_char() {
         let raw = "https://www.example.com/f.bin";
         let deep = break_links_deep(raw);
-        // 每个字符后都有 VS15：不存在任何 ≥2 字符的连续裸串
         assert!(!deep.contains("https"), "scheme 断: {deep:?}");
         assert!(!deep.contains("://"), "scheme 分隔断: {deep:?}");
         assert!(
@@ -397,28 +272,20 @@ mod tests {
         );
         assert!(!deep.contains("example"), "域名断: {deep:?}");
         assert!(!deep.contains(".bin"), "路径断: {deep:?}");
-        // 逐字符剥离 VS15 还原原文（显示内容零改变）
         let restored: String = deep.chars().filter(|&c| c != '\u{FE0E}').collect();
         assert_eq!(restored, raw);
-        // 显示宽度不变（VS15 零宽）
         assert_eq!(w(&deep), w(raw), "VS15 零宽：显示宽不变");
-        // wrap 折行结果不受注入影响（零宽透传）
         assert_eq!(wrap_text(&deep, 40), vec![deep.clone()]);
-        // 空串透传
         assert_eq!(break_links_deep(""), "");
-        // CJK 同样逐字断（弹窗可能展示中文错误文案等）
         let zh = break_links_deep("失败原因");
         assert_eq!(w(&zh), 8);
         assert_eq!(zh.chars().filter(|&c| c == '\u{FE0E}').count(), 4);
     }
 
-    /// 深度断链经 link_break_spans 渲染：逐字符分段、相邻段影子色交替、
-    /// 拼回 = 断链原文（pyte 兼容形态：VS15 恒在各段末尾）
     #[test]
     fn deep_break_renders_via_link_break_spans() {
         let deep = break_links_deep("http://a.b");
         let spans = link_break_spans(&deep, Style::default().fg(FG));
-        // 每字符一段（10 段），段内容 = 单字符 + VS15
         assert_eq!(spans.len(), 10, "逐字符分段: {spans:?}");
         for (i, sp) in spans.iter().enumerate() {
             assert!(
@@ -426,7 +293,6 @@ mod tests {
                 "段 {i} = 单字符+VS15: {sp:?}"
             );
         }
-        // 相邻段样式必不相同（影子色交替——crossterm 逐段输出 SGR 切换）
         for w in spans.windows(2) {
             assert_ne!(w[0].style.fg, w[1].style.fg);
         }
@@ -434,32 +300,17 @@ mod tests {
         assert_eq!(joined, deep, "分段零损失");
     }
 
-    // -------------------------------------------------------------------
-    // v1.34/FR-01-113 wrap_text（CJK 感知折行）
-    // -------------------------------------------------------------------
-
     #[test]
     fn wrap_text_folds_by_display_width() {
-        // ASCII 逐列折行
         assert_eq!(wrap_text("abcdef", 4), vec!["abcd", "ef"]);
-        // CJK 宽度感知：宽 5 = 2 汉字 + 1 列（第 3 个汉字放不下换行）
         assert_eq!(wrap_text("中文中文", 4), vec!["中文", "中文"]);
         assert_eq!(wrap_text("中中中", 5), vec!["中中", "中"]);
-        // 窄到 1 退化为逐字符折行（首字符宽超过 width 时先产出一空行——
-        // demo 同形态，仅 VAL_PAD 钳制兜底可达，正常内容区不会出现）
         assert_eq!(wrap_text("中a", 1), vec!["", "中", "a"]);
-        // 空串产出一空行
         assert_eq!(wrap_text("", 4), vec![""]);
     }
 
-    // -------------------------------------------------------------------
-    // v1.34/FR-01-116 走马灯进度条（marquee_bar）
-    // -------------------------------------------------------------------
-
     #[test]
     fn marquee_bar_block_length_clamped() {
-        // 块长 = clamp(宽/4, 4..8)：宽 40 → 8（anim=0 滑块尚未入场 head=0；
-        // anim=4 → head=8，滑块完全入场 = 块长 8）
         let spans = marquee_bar(40, 4, GREEN);
         let filled: usize = spans
             .iter()
@@ -467,7 +318,6 @@ mod tests {
             .map(|s| s.content.chars().count())
             .sum();
         assert_eq!(filled, 8, "块长 = min(宽/4, 8)");
-        // 宽 12 → 4（下限 4；anim=2 → head=4 完全入场）
         let spans = marquee_bar(12, 2, GREEN);
         let filled: usize = spans
             .iter()
@@ -480,7 +330,6 @@ mod tests {
     #[test]
     fn marquee_bar_cycles_and_total_width_constant() {
         let width = 30;
-        // 全周期（宽 + 块长）内任意帧总宽恒定 = width
         for anim in 0..40u64 {
             let spans = marquee_bar(width, anim, GREEN);
             let total: usize = spans
@@ -490,7 +339,6 @@ mod tests {
                 .count();
             assert_eq!(total, width, "anim={anim} 总宽恒定");
         }
-        // 周期性：anim 与 anim+period 帧画面一致（空一帧重新滑入）
         let block = (width / 4).clamp(4, 8);
         let period = (width + block) as u64;
         let a = marquee_bar(width, 3, GREEN);

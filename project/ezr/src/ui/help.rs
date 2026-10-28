@@ -1,16 +1,3 @@
-//! help — 帮助窗口（H 快捷键，v1.30/FR-01-107）渲染层
-//!
-//! 对齐 ezr-demo 重构版 draw_help/help_lines：70×24 模态浮层（小终端钳制）、
-//! 绿色加粗圆角边框、**九组 50 行**分类交互说明（v1.34/FR-01-107 修订：
-//! 新增【字段值弹窗】组、【任务详情】组更新（点击字段名复制四项 + 点击字段值
-//! 打开弹窗）、【弹窗】/【pieces】组新增 [✗] 条目、末行 note 滚动提示删除——
-//! P10 原则定版；内容 44 → 50 行，D43 以源码落账：9 组标题 + 41 条目），
-//! 内容超窗时 ↑↓/PgUp·PgDn/滚轮滚动 + 右缘通用滚动条（ScrollablePanel
-//! Vertical 实例，滑块恒聚焦绿）、鼠标拖拽移动（位置跨次打开记忆）。
-//! padding（v1.34/FR-01-115 S2/S3）：组标题左 2 列（内容区基准）、条目行
-//! 左 4 列（基准 + 2 列层次缩进）；内容渲染区上下各收 1 行（可视行 22→20，
-//! 窗体 70×24 不变）。
-
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -23,18 +10,10 @@ use super::text::pad_right;
 use super::{panel_border_style, panel_title_style, ACCENT, FG, FOCUS_BORDER};
 use crate::app::{App, SbKey};
 
-/// 帮助窗口固定尺寸（宽×高，含边框）
 const HELP_W: u16 = 70;
 const HELP_H: u16 = 24;
 
-/// 分类帮助内容（FR-01-107 ②：九组 50 行分类交互说明，逐字对齐 ezr-demo
-/// 重构版 help_lines——v1.34 修订：新增【字段值弹窗】组、【任务详情】组
-/// 更新、【弹窗】/【pieces】组 [✗] 条目、末行 note 删除；BT 相关条目为
-/// phase-02 预留文案，照录 demo 原文不删改，D26）。每帧重建（行数小、无
-/// 状态）；键名列用 CJK 感知宽度对齐（16 显示宽）。
-/// padding（v1.34/FR-01-115 S2/S3）：组标题左 2 列、条目行左 4 列。
 fn help_lines() -> Vec<Line<'static>> {
-    /// 分组标题（绿色加粗；左 2 列 = 内容区基准，S3）
     fn sec(t: &str) -> Line<'static> {
         Line::from(Span::styled(
             format!("  【{t}】"),
@@ -43,8 +22,6 @@ fn help_lines() -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         ))
     }
-    /// 键位 + 说明（键列 16 显示宽，CJK 感知对齐；键名青色加粗、说明普通前景；
-    /// 左 4 列 = 基准 2 + 层次缩进 2，S3）
     fn kd(k: &str, d: &str) -> Line<'static> {
         Line::from(vec![
             Span::styled("    ", Style::default()),
@@ -73,11 +50,31 @@ fn help_lines() -> Vec<Line<'static>> {
         kd("↑ / ↓", "选择上/下一个任务"),
         kd("PgUp / PgDn", "翻页选择（Home / End 跳首/尾）"),
         kd("鼠标滚轮", "滚动列表（视口自由浏览全表）"),
-        kd("A / M / D", "添加 / 修改 / 删除任务"),
+        kd("A", "打开命令窗口（输入后分流添加）"),
+        kd("M / D", "修改 / 删除任务（BT 任务 M 开修改任务：BT）"),
         kd("Space / R", "暂停·继续 / 重试"),
         kd("U / J", "上移 / 下移任务"),
         kd("C", "清除已完成任务"),
         kd("P", "查看分块状态（仅分块下载任务）"),
+        sec("命令窗口（A）"),
+        kd("输入内容", "http(s) URL / 本地 .torrent 路径"),
+        kd("Enter", "确认分流（= 触发 [确定] 按钮 click；Ctrl+Enter / Ctrl+J 同效）"),
+        kd("Shift+Enter", "文本框内换行（需终端支持 kitty 键盘协议；普通终端用 Alt+Enter）"),
+        kd("Tab", "文本框 ⇄ [确定] 切换焦点（按钮焦点下 Enter = 确认）"),
+        kd("Shift+Tab", "补全光标前的本地路径（readline 式，支持 ~）"),
+        kd("↑↓ / ←→", "上/下可视行（含 wrap 分段行，列保持，短行落行尾）/ 行内移动光标"),
+        kd("鼠标滚轮", "文本区滚动（word wrap 自动换行；滚动条在文本框边框上，可拖拽/点轨道/箭头）"),
+        kd("Esc / [✗]", "关闭命令窗口"),
+        sec("BT 对话框（添加/修改：BT）"),
+        kd("↑↓ / 点击", "文件树移动光标 / 勾选（目录复选框 = 整目录 全选⇄全不选）"),
+        kd("← / →", "收拢 / 展开光标目录（默认收拢；点击目录名同效）"),
+        kd("Space", "勾选 / 取消光标行（文件单选；目录整目录勾选）"),
+        kd("A / N / I", "列表焦点下：全选 / 全不选 / 反选"),
+        kd("[全选] / [全不选]", "文件列表框右上角按钮（悬停高亮，点击作用于全部文件与目录）"),
+        kd("Tab / BackTab", "字段焦点循环（种子·目录·列表·并发·代理·trackers·按钮）"),
+        kd("Enter", "确认（添加 = 立即下载；修改 = 保存文件勾选；trackers 焦点下同效）"),
+        kd("Alt+Enter", "trackers 文本框内换行（kitty 协议终端 Shift+Enter 同效）"),
+        kd("鼠标滚轮", "悬停文件树 / trackers 滚动；滚动条在各自 panel 边框上（与任务列表 ScrollPanel 同构），可拖拽 / 点击轨道 / 箭头"),
         sec("任务详情"),
         kd("鼠标点击字段名", "校验 / URL / 失败 / 路径 复制对应值"),
         kd("鼠标点击字段值", "打开完整值弹窗（悬停显示下划线）"),
@@ -112,13 +109,7 @@ fn help_lines() -> Vec<Line<'static>> {
     ]
 }
 
-/// 帮助窗口（H）：模态浮层——打开时底层面板降级暗框；绿色高亮边框（与
-/// 主面板聚焦色统一）；分类交互说明；内容超窗时 ↑↓/PgUp/PgDn/滚轮滚动 +
-/// 右缘通用滚动条（v1.32/FR-01-109 ScrollablePanel Vertical 实例）；支持
-/// 鼠标拖拽移动（位置跨次记忆）、点击外部 = 无任何操作（模态统一口径）。
 pub(super) fn draw_help(f: &mut Frame, app: &mut App, area: Rect) {
-    // 可拖拽定位：记忆位置优先（钳制在终端内），首帧居中并回填；
-    // 帮助窗口位置跨次打开记忆（关闭不清除，与 pieces 关闭即清不同）
     let rect = match app.help_pos {
         Some((px, py)) => {
             let dw = HELP_W.min(area.width);
@@ -137,26 +128,20 @@ pub(super) fn draw_help(f: &mut Frame, app: &mut App, area: Rect) {
         }
     };
     f.render_widget(Clear, rect);
-    // 浮层边界 CJK 宽字符切割处理（残影根治点，与对话框同口径）
     clip_wide_at_edges(f, rect);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(ratatui::widgets::BorderType::Rounded)
         .border_style(panel_border_style(true))
         .title(Span::styled(" 帮助 ", panel_title_style(true)));
-    // v1.32/FR-01-109：ScrollablePanel 一体化组件（帮助 = Vertical 实例，
-    // 滑块恒聚焦绿）；箭头按压高亮随 App 态
     let mut sb = ScrollablePanel::new(ScrollbarMode::Vertical);
     sb.thumb(FOCUS_BORDER)
         .pressed_v(app.sb_arrow_pressed(SbKey::Help));
     let inner = sb.render_block(f, rect, block);
     app.help_area = Some(rect);
-    // 右上角 [✗]（v1.34/FR-01-114：全部弹窗统一；原地松开 = 关闭帮助窗口）
     app.popup_close_rect = draw_close_btn(f, app, rect, super::text::w(" 帮助 "));
 
     let lines = help_lines();
-    // 内容区 = 内框上下各收 1 行 padding（v1.34/FR-01-115 S2 统一；滚动型窗口：
-    // 窗体尺寸不变，可视行数减 2——70×24 可视 22→20）
     let content = Rect {
         x: inner.x,
         y: inner.y + 1,
@@ -171,13 +156,10 @@ pub(super) fn draw_help(f: &mut Frame, app: &mut App, area: Rect) {
     let shown: Vec<Line> = lines.iter().skip(start).take(view_h).cloned().collect();
     f.render_widget(Paragraph::new(shown), content);
 
-    // 右缘滚动条（v1.32/FR-01-109：ScrollablePanel 组件收口——内容超窗时
-    // 画在窗口右边框列；显示条件由组件内判定；滑块恒聚焦绿）
     sb.vertical(lines.len(), view_h, start);
     app.help_scrollbar = sb.render_bars(f, rect).vertical;
 }
 
-/// 帮助内容总行数（渲染层钳制与测试锚定用；单源 [`help_lines`]）
 #[cfg(test)]
 pub(super) fn help_lines_len() -> usize {
     help_lines().len()
@@ -185,12 +167,6 @@ pub(super) fn help_lines_len() -> usize {
 
 #[cfg(test)]
 mod tests {
-    //! v1.30/FR-01-107 帮助窗口渲染单测：70×24 几何、组标题逐字、
-    //! 滚动钳制、滚动条、位置跨次记忆。v1.34：九组 50 行（新增【字段值弹窗】
-    //! 组、【任务详情】组更新、[✗] 条目、末行 note 删除）+ S2/S3 缩进与
-    //! 内容区上下各收 1 行（可视 22→20）。可视 20 行 < 内容 50 行：三帧取样
-    //! 覆盖九组——首帧 0..19、中间帧 10..29（P 条目 + 任务详情/字段值弹窗组）、
-    //! 末帧钳制 30..49（并发连接/滚动条/弹窗/pieces 四组）。
 
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
@@ -210,15 +186,10 @@ mod tests {
         let mut app = testfx::make_app_in("ezr-help", "geom");
         let term = render_help(&mut app, 120, 40);
         let s = term.backend().to_string();
-        // 70×24 居中：120 宽 → x=25、40 高 → y=8
         assert!(s.contains("帮助"), "标题: {s}");
-        // 首帧可见的前三组标题逐字（FR-01-107 ② v1.34：内容 50 行 > 可视
-        // 20 行（内框 22 − 上下 padding 各 1），首帧显示到【任务列表】组
-        // 「C 清除」条目——P 条目与后六组断言在滚动后帧）
         for sec in ["【全局】", "【页签】", "【任务列表】"] {
             assert!(s.contains(sec), "组标题 {sec}: {s}");
         }
-        // 关键条目锚点（逐字，v1.32 修订）
         assert!(
             s.contains("切换面板（任务列表 → 详情 → 并发连接）"),
             "全局 Tab 条目: {s}"
@@ -231,39 +202,59 @@ mod tests {
             s.contains("右/左切换页签（正在下载 ⇄ 已完成）"),
             "页签条目: {s}"
         );
-        // 滚动到中间帧（help_scroll = 10 → 可视 10..29）：P 条目 + 【任务详情】
-        // 组 + 【字段值弹窗】组逐字——v1.34 内容 50 行后末页视窗（30..49）不再
-        // 覆盖这两组，中段断言拆到中间滚动帧（防两帧取样盲区）
+        assert!(
+            s.contains("打开命令窗口（输入后分流添加）"),
+            "A 条目 phase-02 文案: {s}"
+        );
+        assert!(
+            s.contains("修改 / 删除任务（BT 任务 M 开修改任务：BT）"),
+            "M/D 条目 BT 补注: {s}"
+        );
         app.help_scroll = 10;
         let mut term_mid = Terminal::new(TestBackend::new(120, 40)).unwrap();
         term_mid.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         let sm = term_mid.backend().to_string();
-        for sec in ["【任务详情】", "【字段值弹窗】"] {
-            assert!(sm.contains(sec), "中间帧组标题 {sec}: {sm}");
-        }
         assert!(
             sm.contains("查看分块状态（仅分块下载任务）"),
             "P 条目（中间帧）: {sm}"
         );
         assert!(
-            sm.contains("校验 / URL / 失败 / 路径 复制对应值"),
-            "任务详情组复制四项: {sm}"
+            sm.contains("【命令窗口（A）】"),
+            "phase-02 命令窗口组: {sm}"
         );
         assert!(
-            sm.contains("打开完整值弹窗（悬停显示下划线）"),
-            "字段值点击弹窗条目: {sm}"
+            sm.contains("http(s) URL / 本地 .torrent 路径"),
+            "命令窗口输入内容条目（D59 无磁力链）: {sm}"
         );
         assert!(
-            sm.contains("复制窗口全部内容（完整字段值）"),
-            "字段值弹窗 Y 条目: {sm}"
+            sm.contains("确认分流（= 触发 [确定] 按钮 click"),
+            "命令窗口 Enter 条目: {sm}"
         );
-        // 滚动到末页（End 钳制 → 可视 30..49）：后四组标题 + 并发连接/滚动条/
-        // 弹窗/pieces 组条目逐字（【任务详情】/【字段值弹窗】在中间帧断言）
+        let needles = [
+            "【BT 对话框（添加/修改：BT）】",
+            "全选 / 全不选 / 反选",
+            "校验 / URL / 失败 / 路径 复制对应值",
+            "打开完整值弹窗（悬停显示下划线）",
+            "复制窗口全部内容（完整字段值）",
+        ];
+        for needle in needles {
+            let mut found = false;
+            for scroll in 0..=super::help_lines_len() {
+                app.help_scroll = scroll;
+                let mut t = Terminal::new(TestBackend::new(120, 40)).unwrap();
+                t.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+                if t.backend().to_string().contains(needle) {
+                    found = true;
+                    break;
+                }
+            }
+            assert!(found, "滚动全帧扫描未命中条目：{needle}");
+        }
         app.help_scroll = usize::MAX;
         let mut term2 = Terminal::new(TestBackend::new(120, 40)).unwrap();
         term2.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         let s2 = term2.backend().to_string();
-        assert_eq!(app.help_scroll, 30, "End 钳制 = 50 − 20（末页视窗 30..49）");
+        assert_eq!(app.help_scroll, 50, "End 钳制 = 70 − 20（末页视窗 50..69）");
         for sec in [
             "【并发连接】",
             "【滚动条（通用组件）】",
@@ -292,7 +283,6 @@ mod tests {
             s2.contains("阻塞并移除选中连接（仅 BT 任务）"),
             "B 条目照录（D26 预留）: {s2}"
         );
-        // v1.34/FR-01-107：[✗] 条目 + note 退役（末页可见部分）
         assert!(
             s2.contains("关闭当前弹窗（右上角按钮，悬停高亮）"),
             "弹窗组 [✗] 条目: {s2}"
@@ -305,13 +295,11 @@ mod tests {
             !s2.contains("↑↓/滚轮 滚动本页"),
             "末行 note 滚动提示退役（P10）: {s2}"
         );
-        // 窗口区域回填（拖拽/滚轮/命中测试依据）
         assert_eq!(
             app.help_area,
             Some(ratatui::layout::Rect::new(25, 8, 70, 24)),
             "区域回填"
         );
-        // 位置首帧回填（跨次记忆基础）
         assert_eq!(app.help_pos, Some((25, 8)), "首帧居中并记忆");
         app.shutdown().await;
     }
@@ -321,27 +309,24 @@ mod tests {
         let mut app = testfx::make_app_in("ezr-help", "scroll");
         let total = super::help_lines_len();
         assert_eq!(
-            total, 50,
-            "v1.34 内容 50 行（九组 = 9 组标题 + 41 条目，D43）"
+            total, 70,
+            "phase-02 内容 70 行（十一组 = 11 组标题 + 59 条目；九组 50 行 +1（A/M-D 拆分）+9（命令窗口）+10（BT 对话框））"
         );
-        app.help_scroll = usize::MAX; // 模拟 End
+        app.help_scroll = usize::MAX;
         let term = render_help(&mut app, 120, 40);
-        // 钳制到末页：scroll = total - 20（v1.34 S2：内容区上下各收 1 行）
         assert_eq!(
             app.help_scroll,
             total - 20,
             "End 渲染层钳制到末页（内容 {total} 行 - 可视 20 行）"
         );
-        // 右缘滚动条滑块（↑│║│↓，v1.32：双线滑块恒聚焦绿）
         let buf = term.backend().buffer();
-        let col = 25 + 70 - 1; // 右边框列
+        let col = 25 + 70 - 1;
         let thumb = (9..31).any(|y| {
             buf.cell((col, y))
                 .map(|c| c.symbol() == "║")
                 .unwrap_or(false)
         });
         assert!(thumb, "右缘滚动条滑块出现（内容超窗）");
-        // 命中几何回填（鼠标拖拽/箭头/轨道交互依据）
         assert!(app.help_scrollbar.is_some(), "帮助滚动条几何回填");
         app.shutdown().await;
     }
@@ -349,17 +334,13 @@ mod tests {
     #[tokio::test]
     async fn help_position_memory_across_reopens() {
         let mut app = testfx::make_app_in("ezr-help", "mem");
-        // 首次打开 → 首帧居中回填
         app.help_open = true;
         let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
         term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         let first = app.help_pos;
         assert!(first.is_some(), "首帧回填位置");
-        // 关闭（位置保留）
         app.help_open = false;
-        // 模拟拖拽到新位置
         app.help_pos = Some((3, 5));
-        // 再次打开 → 使用记忆位置（3,5），不重新居中
         app.help_open = true;
         term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         assert_eq!(app.help_pos, Some((3, 5)), "位置跨次记忆（v1.30）");
@@ -370,7 +351,6 @@ mod tests {
         app.shutdown().await;
     }
 
-    /// 小终端钳制：窗口缩小到终端尺寸仍可渲染（内框不足时仅边框不 panic）
     #[tokio::test]
     async fn help_clamps_in_small_terminal() {
         let mut app = testfx::make_app_in("ezr-help", "clamp");

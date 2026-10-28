@@ -197,8 +197,8 @@ class DownloadEngineSuite(Suite):
         """QA-DE-06 2MB（2 块）并发 4：任务级分块行 2/2；无连接级明细（FR-01-81 修订二）。
 
         规程原判据「明细表 2 传输 + 2 待命」随 FR-01-81 修订二「并发分块明细表
-        整体移除」撤销（phase-01 + 实现一致；feature 01-download-engine-06 的
-        THEN 未同步，待操作者裁决，见 handoff 待批）。用例按实现口径改断言。
+        整体移除」撤销（phase-01 操作者指令口径，实现一致；feature
+        01-download-engine-06 THEN 已同步为任务级分块行口径）。用例按实现口径改断言。
         """
         @self.case("QA-DE-06")
         def go(env: Env):

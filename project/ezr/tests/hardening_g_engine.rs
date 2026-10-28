@@ -1,12 +1,3 @@
-//! 加固测试（six-pack/hardender 步骤 7 批次 6）：app/engine.rs 56 存活体处置。
-//! 事件路径经真实引擎 + 本地桩 HTTP 服务器驱动（与产品 tick_tests 同口径），
-//! 纯状态路径直接构造 App 字段（pub）后 tick。
-//! 等价/环境型论证见 .work/tmp/step7/EQUIVALENCE.md：
-//! 188:28（展示面私有态）、205:20（时刻恰等边界）、326:70（暂停竞态权威字节）、
-//! 317:31 `>=`（0 字节 Progress 不可稳定激发）、490:23×3（Progress 镜像使合并守卫不可分）、
-//! 565:33（引擎侧确认事件仅真实会话可观测）、78:18 `<=`（可用空间恰等需注入）。
-// lint 姿态与产品 bin（src/main.rs crate 级 allow）对齐：#[path] 收编的产品源
-// 在本测试 crate 内沿用产品面的豁免口径（产品面 clippy 0 的同一合同）。
 #![allow(missing_docs)]
 #![allow(clippy::multiple_crate_versions)]
 #![allow(clippy::pedantic)]
@@ -22,25 +13,25 @@
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap
 )]
-// 测试挂载机制固有豁免：产品源经 #[path] 部分收编进独立测试 crate，部分产物项
-// 在本 crate 上下文无消费者或被重复挂载（产品全量编译下均非死代码）。
 #![allow(dead_code)]
 #![allow(clippy::duplicate_mod)]
 #![allow(unused_imports)]
 
 #[path = "../src/app/mod.rs"]
 mod app;
+#[path = "../src/bt/mod.rs"]
+mod bt;
 #[path = "../src/engine/mod.rs"]
 mod engine;
 #[path = "common/fixture.rs"]
 mod fixture;
 #[path = "../src/model/mod.rs"]
 mod model;
+#[path = "../src/multiline.rs"]
+mod multiline;
 #[path = "../src/scrollbar.rs"]
-// v1.32/FR-01-109：滚动条引擎（app 状态机依赖的几何/命中类型单源）
 mod scrollbar;
 #[path = "../src/textfield.rs"]
-// 输入框组件（Dialog 文本字段实例化依赖的状态机/取窗/点击映射单源）
 mod textfield;
 
 use app::App;
@@ -81,7 +72,6 @@ async fn pump(app: &mut App, secs: u64, done: impl Fn(&App) -> bool) {
     }
 }
 
-/// 桩 HTTP 服务器（i%251 内容 + 附加头）
 fn stub_with(extra_head: &str, len: u64, trickle: bool) -> std::net::SocketAddr {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let addr = listener.local_addr().unwrap();
@@ -111,7 +101,7 @@ fn stub_with(extra_head: &str, len: u64, trickle: bool) -> std::net::SocketAddr 
                     let _ = c.write_all(&data[..data.len().min(3000)]);
                     let _ = c.flush();
                     std::thread::sleep(std::time::Duration::from_secs(30));
-                    return; // 不发完也不关：悬置连接
+                    return;
                 }
                 let _ = c.write_all(&data);
                 let _ = c.flush();
@@ -121,7 +111,6 @@ fn stub_with(extra_head: &str, len: u64, trickle: bool) -> std::net::SocketAddr 
     addr
 }
 
-/// 持续滴流服务器：每 100ms 发 200 字节×100 次（单流路径 200ms 节流后必然上报 Progress）
 fn stub_trickle() -> std::net::SocketAddr {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let addr = listener.local_addr().unwrap();
@@ -154,9 +143,6 @@ fn data_pattern(len: u64) -> Vec<u8> {
     (0..len as u32).map(|i| (i % 251) as u8).collect()
 }
 
-// ------------------------------------------------- disk_precheck（tick 路径）---
-
-/// 靶 68:9（→true）/70:25（delete !）/78:18（`<`→`==`/`>`）：空间不足必须判失败
 #[tokio::test]
 async fn disk_precheck_fails_when_insufficient() {
     let mut a = mkapp("disk1");
@@ -164,7 +150,7 @@ async fn disk_precheck_fails_when_insufficient() {
     std::fs::create_dir_all(&dir).unwrap();
     let mut t = queued(1, "disk.bin", &dir.to_string_lossy());
     t.probed = true;
-    t.total = u64::MAX / 2; // need 远大于实际可用
+    t.total = u64::MAX / 2;
     a.tasks.push(t);
     a.tick().await;
     assert_eq!(
@@ -180,7 +166,6 @@ async fn disk_precheck_fails_when_insufficient() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 靶 70:22（`||→&&`）：未探测任务跳过预检
 #[tokio::test]
 async fn disk_precheck_skips_unprobed() {
     let mut a = mkapp("disk2");
@@ -197,9 +182,6 @@ async fn disk_precheck_skips_unprobed() {
     a.shutdown().await;
 }
 
-// ----------------------------------------------------- tick 重试与统计路径 ---
-
-/// 靶 142:30（`<=→>`）：退避到点必须转回等待中
 #[tokio::test]
 async fn retry_countdown_expires_to_queued() {
     let mut a = mkapp("countdown");
@@ -218,7 +200,6 @@ async fn retry_countdown_expires_to_queued() {
     a.shutdown().await;
 }
 
-/// 靶 245:62（`==→!=`）：到点重试只清目标任务的进展标记
 #[tokio::test]
 async fn retry_start_clears_only_expired_target() {
     let mut a = mkapp("retry-target");
@@ -243,11 +224,10 @@ async fn retry_start_clears_only_expired_target() {
     a.shutdown().await;
 }
 
-/// 靶 164:46/60/72（`&&→||`）：4b 补发过滤三条件缺一不可
 #[tokio::test]
 async fn retry_filter_requires_all_conditions() {
     let mut a = mkapp("retry-filter");
-    a.max_slots = 0; // 冻结槽位分配，隔离 4b 过滤判定
+    a.max_slots = 0;
     let dir = "/tmp";
     let mut t1 = queued(1, "f1.bin", dir);
     t1.state = TaskState::Paused;
@@ -274,7 +254,6 @@ async fn retry_filter_requires_all_conditions() {
     a.shutdown().await;
 }
 
-/// 靶 177:24（`!=→==`）：非下载态速度立即归零
 #[tokio::test]
 async fn non_downloading_speed_zeroed() {
     let mut a = mkapp("speed-zero");
@@ -290,7 +269,6 @@ async fn non_downloading_speed_zeroed() {
     a.shutdown().await;
 }
 
-/// 靶 184:66（`>=→<`）：1s 节拍必须触发历史采样
 #[tokio::test]
 async fn speed_hist_samples_after_interval() {
     let mut a = mkapp("hist-tick");
@@ -304,7 +282,6 @@ async fn speed_hist_samples_after_interval() {
     a.shutdown().await;
 }
 
-/// 靶 212:47（`>=→<`）：5s 兜底保存不得在新建后立即触发
 #[tokio::test]
 async fn registry_periodic_save_not_immediate() {
     let mut a = mkapp("save-tick");
@@ -321,7 +298,6 @@ async fn registry_periodic_save_not_immediate() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// 靶 198:28（`+=→*=`）：零速不改变累计
 #[tokio::test]
 async fn session_bytes_zero_speed_noop() {
     let mut a = mkapp("sb-zero");
@@ -335,10 +311,6 @@ async fn session_bytes_zero_speed_noop() {
     a.shutdown().await;
 }
 
-/// 累计按真实已下载字节的运行内增量增长（FR-01-81「本次运行累计下载字节」；
-/// QA 会话修订：原「速度×dt 积分」口径为 EMA 展示速度积分，短任务少计约一半，
-/// 与 Gherkin 01-tui-display-12 THEN 冲突，改为 downloaded 增量账本。变异靶
-/// （原 198:28 `+=→-=`、198:42 `*→+`/`*→/`）的行号待下一 hardender 会话重扫刷新。
 #[tokio::test]
 async fn session_bytes_accumulates() {
     let mut a = mkapp("sb-acc");
@@ -353,7 +325,7 @@ async fn session_bytes_accumulates() {
         "首次观察仅建基线，不得计入既有（sidecar 恢复）进度（+=→*= 变异体放大）"
     );
     if let Some(t) = a.tasks.get_mut(0) {
-        t.downloaded = 1500; // 数据面前进 1100 字节
+        t.downloaded = 1500;
     }
     a.tick().await;
     assert_eq!(
@@ -363,7 +335,6 @@ async fn session_bytes_accumulates() {
     a.shutdown().await;
 }
 
-/// 靶 222:30 / 223:38：越界选中钳到末尾
 #[tokio::test]
 async fn tick_clamps_selection() {
     let mut a = mkapp("sel-clamp");
@@ -379,7 +350,6 @@ async fn tick_clamps_selection() {
     a.shutdown().await;
 }
 
-/// 靶 226:28：滚动偏移不得小于选中项
 #[tokio::test]
 async fn tick_clamps_scroll_lower_bound() {
     let mut a = mkapp("scroll-lo");
@@ -397,7 +367,6 @@ async fn tick_clamps_scroll_lower_bound() {
     a.shutdown().await;
 }
 
-/// 靶 230:45/230:49：滚动窗口上界推进
 #[tokio::test]
 async fn tick_clamps_scroll_upper_bound() {
     let mut a = mkapp("scroll-hi");
@@ -415,10 +384,6 @@ async fn tick_clamps_scroll_upper_bound() {
     a.shutdown().await;
 }
 
-// --------------------------------------------------- 事件路径（真实引擎）---
-
-/// 靶 265:63/267:37→false/267:45/267:70→本来/271:72/279:70/289:32：
-/// Probed 基础流 —— CD 改名、probed 置位、Queued→Downloading
 #[tokio::test]
 async fn probed_renames_and_transitions() {
     let addr = stub_with(
@@ -451,7 +416,6 @@ async fn probed_renames_and_transitions() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 靶 267:37→true / 267:53（`&&→||`）：已有下载量不得改名
 #[tokio::test]
 async fn probed_no_rename_when_downloaded() {
     let addr = stub_with(
@@ -479,7 +443,6 @@ async fn probed_no_rename_when_downloaded() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 靶 271:51/271:67/271:86（taken 闭包各比较符）：任务表重名冲突 → 去重改名
 #[tokio::test]
 async fn probed_rename_dedupes_task_conflict() {
     let addr = stub_with(
@@ -497,7 +460,7 @@ async fn probed_rename_dedupes_task_conflict() {
         None,
     );
     let mut t2 = queued(2, "b.bin", &dir.to_string_lossy());
-    t2.state = TaskState::Paused; // 不参与槽位竞争
+    t2.state = TaskState::Paused;
     a.tasks.push(t2);
     pump(&mut a, 20, |x| x.tasks[0].probed).await;
     assert!(
@@ -508,7 +471,6 @@ async fn probed_rename_dedupes_task_conflict() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 靶 272:37（`||→&&`）：盘上重名冲突亦去重
 #[tokio::test]
 async fn probed_rename_dedupes_disk_conflict() {
     let addr = stub_with(
@@ -536,10 +498,9 @@ async fn probed_rename_dedupes_disk_conflict() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 靶 301:67（`==→!=`）/317:31（`>`→`<`/`==`）：Progress 更新字节与进展标记
 #[tokio::test]
 async fn progress_updates_bytes_and_progress_flag() {
-    let addr = stub_trickle(); // 持续喂数据 → 200ms 节流后必然上报 Progress
+    let addr = stub_trickle();
     let mut a = mkapp("progress");
     let dir = std::env::temp_dir().join(format!("ezr-hard-pg-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -565,10 +526,9 @@ async fn progress_updates_bytes_and_progress_flag() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 靶 357:67（`==→!=`）：续传一致性失效必须清零并提示
 #[tokio::test]
 async fn invalidated_resets_and_toasts() {
-    let addr = stub_with("", 2000, false); // sidecar 记录 size=1000 → 大小不一致 → 失效
+    let addr = stub_with("", 2000, false);
     let mut a = mkapp("invalidated");
     let dir = std::env::temp_dir().join(format!("ezr-hard-inv-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -616,7 +576,6 @@ async fn invalidated_resets_and_toasts() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 靶 439:67（`==→!=`）：校验通过必须转完成态
 #[tokio::test]
 async fn verify_done_completes_task() {
     let addr = stub_with("", 128_000, false);
@@ -646,7 +605,6 @@ async fn verify_done_completes_task() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 靶 514:13（delete auto 臂）：瞬时失败必须自动重试（占槽 + 倒计时 + 文案）
 #[tokio::test]
 async fn transient_failure_auto_retries() {
     let mut a = mkapp("auto-retry");
@@ -666,7 +624,6 @@ async fn transient_failure_auto_retries() {
     a.shutdown().await;
 }
 
-/// 靶 548:9（`save_registry→()`）：添加任务必须落盘注册表
 #[tokio::test]
 async fn add_task_persists_registry() {
     let mut a = mkapp("persist");
@@ -686,7 +643,6 @@ async fn add_task_persists_registry() {
     let _ = std::fs::remove_file(&reg);
 }
 
-/// 靶 36:9（resolve_checksum→None）：R 重新校验读伴随文件纠正期望值
 #[tokio::test]
 async fn reverify_reads_companion_checksum() {
     let addr = stub_with("", 128_000, false);
@@ -714,7 +670,6 @@ async fn reverify_reads_companion_checksum() {
         Some(FailKind::Verify),
         "错误期望值必须以校验失败收场"
     );
-    // 伴随文件给出正确校验值 → R 重新校验通过
     std::fs::write(dir.join("f.bin.sha256"), &good).unwrap();
     a.on_key(KeyCode::Char('r'), KeyModifiers::empty());
     pump(&mut a, 30, |x| x.tasks[0].state == TaskState::Completed).await;
@@ -727,11 +682,6 @@ async fn reverify_reads_companion_checksum() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 靶 evt.rs handle_failure 340:13（v137 hardender 轮）：at_limit 决策臂——
-/// 达到重试上限的失败 toast 必须是「已达最大重试次数（n/m），停止自动重试，
-/// 按 R 手动重试」口径。删除该臂后落入 `_` 停等臂：状态效果相同
-/// （retry_in=None / has_slot=false），唯 toast 文案可区分 → 以真实下载
-/// （ezr-fixture 恒 503，Transient 自动重试）走满两次失败后断言。
 #[tokio::test]
 async fn failure_at_limit_toast_reports_exhausted_retries() {
     let root = crate::model::testenv::uniq_tmp_dir("ezr-hard-al-root");
@@ -748,7 +698,7 @@ async fn failure_at_limit_toast_reports_exhausted_retries() {
         save.to_string_lossy().into_owned(),
         1 << 16,
         1,
-        2, // max_retries = 2：首败自动重试，次败达上限
+        2,
         None,
         crate::model::config::ProxyChoice::Direct,
         unix_now(),
@@ -756,8 +706,6 @@ async fn failure_at_limit_toast_reports_exhausted_retries() {
     a.tasks.push(t);
     a.selected = 0;
 
-    // 第一次失败：Transient（5xx）自动重试 → Failed 且持倒计时（toast 有
-    // 存续期，观察窗内先取证）
     let toast1 = std::cell::RefCell::new(String::new());
     pump(&mut a, 10, |x| {
         if x.tasks[0].state == TaskState::Failed && x.tasks[0].retry_in.is_some() {
@@ -778,8 +726,6 @@ async fn failure_at_limit_toast_reports_exhausted_retries() {
         toast1.borrow()
     );
 
-    // 倒计时到点自动重试 → 再次 503 → 达上限（at_limit 臂）：在落败瞬间
-    // 取证 toast（状态效果与停等臂相同，唯文案可区分）
     let toast2 = std::cell::RefCell::new(String::new());
     pump(&mut a, 25, |x| {
         if x.tasks[0].state == TaskState::Failed && x.tasks[0].retry_in.is_none() {
@@ -808,9 +754,6 @@ async fn failure_at_limit_toast_reports_exhausted_retries() {
     let _ = std::fs::remove_dir_all(&save);
 }
 
-/// 靶 supervisor.rs block_worker 1054-1057/1060（v137 hardender 轮 · CRAP
-/// 残余处置）：多块路径整块完成——mark_done 与领块循环推进。既有套件全部
-/// 走单流路径（concurrency=1），block_worker 的块完成臂此前零覆盖。
 #[tokio::test]
 async fn block_worker_completes_multi_block_download() {
     let root = crate::model::testenv::uniq_tmp_dir("ezr-hard-bw-root");
@@ -818,7 +761,6 @@ async fn block_worker_completes_multi_block_download() {
     std::fs::write(root.join("f.bin"), vec![7u8; 3_000_000]).expect("写 fixture 文件");
     let (_fx, port) = fixture::spawn_serve(&root);
     let mut a = mkapp("block-complete");
-    // D31 块大小下限 1MB：1MB × 3 块（total_blocks > 1 才走块路径）
     a.cfg.block_size_http = 1 << 20;
     a.add_cli_task(
         format!("http://127.0.0.1:{port}/f.bin"),
@@ -838,9 +780,6 @@ async fn block_worker_completes_multi_block_download() {
     let _ = std::fs::remove_dir_all(&save);
 }
 
-/// 靶 supervisor.rs block_worker 1005-1007/1038-1039（v137 hardender 轮）：
-/// 在传块中收到停止信号（暂停）——在传块中止、块内已写字节经 mark_progress
-/// 保留（FR-01-13 部分块语义）。
 #[tokio::test]
 async fn block_worker_pause_mid_download_preserves_partial_block() {
     let root = crate::model::testenv::uniq_tmp_dir("ezr-hard-bwp-root");
@@ -848,14 +787,13 @@ async fn block_worker_pause_mid_download_preserves_partial_block() {
     std::fs::write(root.join("slow.bin"), vec![0u8; 3_000_000]).expect("写 fixture 文件");
     let (_fx, port) = fixture::spawn_serve(&root);
     let mut a = mkapp("block-pause-mid");
-    a.cfg.block_size_http = 1 << 20; // D31 下限口径 1MB × 3 块
+    a.cfg.block_size_http = 1 << 20;
     a.add_cli_task(
         format!("http://127.0.0.1:{port}/slow.bin?speed=20000"),
         Some(save.to_string_lossy().into_owned()),
         Some(4),
         None,
     );
-    // 门控：进入块路径下载并已写字节（在传窗口）
     pump(&mut a, 15, |x| {
         x.tasks[0].state == TaskState::Downloading && x.tasks[0].downloaded > 0
     })
@@ -863,7 +801,7 @@ async fn block_worker_pause_mid_download_preserves_partial_block() {
     assert_eq!(a.tasks[0].state, TaskState::Downloading, "慢速门控下在传");
     let before = a.tasks[0].downloaded;
     a.selected = 0;
-    a.toggle_pause(); // Space：暂停 → 引擎停止信号 → 在传块中止
+    a.toggle_pause();
     pump(&mut a, 15, |x| x.tasks[0].state == TaskState::Paused).await;
     assert_eq!(a.tasks[0].state, TaskState::Paused, "暂停收尾");
     assert!(
@@ -875,8 +813,6 @@ async fn block_worker_pause_mid_download_preserves_partial_block() {
     let _ = std::fs::remove_dir_all(&save);
 }
 
-/// 靶 supervisor.rs block_worker 1033 + 中止臂（v137 hardender 轮）：传输
-/// 中途断连（?disconnect=N）→ chunk Err → classify_reqwest → 瞬时失败。
 #[tokio::test]
 async fn block_worker_mid_transfer_disconnect_fails_transient() {
     let root = crate::model::testenv::uniq_tmp_dir("ezr-hard-bwd-root");
@@ -884,7 +820,7 @@ async fn block_worker_mid_transfer_disconnect_fails_transient() {
     std::fs::write(root.join("disc.bin"), vec![0u8; 3_000_000]).expect("写 fixture 文件");
     let (_fx, port) = fixture::spawn_serve(&root);
     let mut a = mkapp("block-disconnect");
-    a.cfg.block_size_http = 1 << 20; // D31 下限口径 1MB × 3 块
+    a.cfg.block_size_http = 1 << 20;
     a.add_cli_task(
         format!("http://127.0.0.1:{port}/disc.bin?disconnect=5000"),
         Some(save.to_string_lossy().into_owned()),

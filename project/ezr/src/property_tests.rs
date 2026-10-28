@@ -1,55 +1,3 @@
-//! property_tests — 属性测试（architect 交付物；与常规单测对账隔离）
-//!
-//! 依据 notes/rust.md「proptest 作为 Rust 属性测试框架」条款：独立模块、
-//! 独立运行命令（`cargo test property_tests::`）、独立报告数量——属性测试
-//! 随机输入驱动的「通过」是概率性的，失败不与单测基线对账（单测基线数量
-//! 口径以 `project/handoff.md` 对账节为准，随批次递进；属性测试独立计数）。
-//!
-//! 覆盖目标（SKILL「属性测试」条款的纯逻辑面选取）：不变量、守恒性、
-//! 幂等性、单调/排序、边界钳制——集中在 model 层纯函数：
-//! - `chunk::plan` 分块数学：块数 = ⌈total/piece⌉、块区间无缝铺满 `[0, total)`、
-//!   末块吸收余数、越界 None；
-//! - `chunk::lease::spread_bytes` 加权散布：总和守恒 `min(amount, n*cap)`、
-//!   逐份钳制 `[0, cap]`；
-//! - `chunk::lease::lease_snapshot` 快照不变量：区间有序不重叠、`done` 不越
-//!   块界、完成块数口径、完成态全块写满；
-//! - `retry` 重试决策：进展重置/无进展累加连续性、at_limit 与上限等价、
-//!   退避序列单调封顶、Retry-After 优先；
-//! - `namegen` 命名：sanitize 幂等且清除路径分隔符、join_path 尾分隔符幂等、
-//!   dedupe 结果不被占用集合命中；
-//! - `speed::SmoothedSpeed` EMA：值域有界（非负采样下 ∈ [0, max]）、恒定输入
-//!   距离单调收敛、zero() 立即归零。
-//!
-//! architect 第二轮（v1.3 后复核批次）追加——覆盖此前未及的纯逻辑面：
-//! - `sidecar` 持久化往返：build → JSON → parse 全字段相等（格式稳定性）、
-//!   stamp() 投影口径；
-//! - `checksum` 校验码解析：validate_value 完全特征化（纯 hex ∧ 位数相等）、
-//!   parse_cli_x 往返 + 大小写归一、algo_index_by_name 规范名查找；
-//! - `config::parse_speed`："/s" 后缀不变性、单位乘数十进制口径、大小写/
-//!   空白归一、garbage → 0；
-//! - `config::from_toml` 输出域不变量：block_size/slots > 0、并发钳制
-//!   [1,64]、重试 ≥ 1；
-//! - `slots` 槽位调度：allocate 幂等（二遍零授予）+ 容量封顶 + 列表序；
-//!   enforce_invariants 幂等（两遍 has_slot 向量一致）+ 状态语义；
-//! - `timefmt`：分钟取整不变性、定宽形状、字典序单调；
-//! - `consistency`：等同 Valid、MissingStamp 判据、URL/大小差异必失效、确定性；
-//! - `registry` 持久化往返：from_tasks → JSON → load 全量保真 + 任务 ID
-//!   随快照保留（v1.20：无 next_id，ID 随机分配随快照持久化）；快照投影
-//!   往返 TaskSnapshot → Task → TaskSnapshot 保真。
-//!
-//! architect v145 追加（v1.28 清理后复核批次，文末独立 proptest! 块）：
-//! - `namegen::derive_name` 三级优先 + 时间戳兜底的契约属性（非空 / 输出
-//!   已卫生化 / 优先级链逐级回退）；
-//! - `idgen::alloc_task_id` 随机分配契约（非 0 / 不与占用集命中 / 连续
-//!   分配互不相同）。
-//!
-//! architect v146 追加（v141 清理后复核批次，文末独立 proptest! 块）：
-//! - `engine::dns::HostsFile` hosts 静态表解析契约（v140 新增模块的属性面
-//!   补齐）：任意文本全函数解析、别名查找大小写无关三态等价、逐别名命中
-//!   列表精确特征化（首见序去重 oracle）、未声明探针 None、行尾注释免疫；
-//! - `engine::dns::merge_answers` 双腿合并契约（D40②）：输出零重复、
-//!   v4 家族先于 v6 家族、全局去重保序独立 oracle 复算相等。
-
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use crossterm::event::KeyCode;
@@ -74,13 +22,7 @@ use crate::model::slots::{queue_pos, queue_positions};
 use crate::model::speed::SmoothedSpeed;
 use crate::model::{is_http_url, protocol_of_url, FailKind, Protocol, Task, TaskState};
 
-// ---------------------------------------------------------------------
-// chunk::plan — 分块数学（不变量 / 铺满 / 末块余数）
-// ---------------------------------------------------------------------
-
 proptest! {
-    /// 块数不变量：chunk_total = ⌈total/piece⌉（u32::MAX 封顶口径；0 值口径：
-    /// total=0 → 0）
     #[test]
     fn prop_chunk_total_is_ceil_div(
         total in 0u64..(1u64 << 48),
@@ -91,9 +33,6 @@ proptest! {
         prop_assert_eq!(chunk_total(0, piece), 0);
     }
 
-    /// 块区间铺满不变量：相邻块首尾相接（end_i == start_{i+1}），非末块长度
-    /// 恒等于 piece，末块 end == total（末块吸收余数）；越界返回 None。
-    /// （assume 排除 u32::MAX 封顶角例：封顶数学上不再保证铺满，属超界域）
     #[test]
     fn prop_block_ranges_tile_total(
         total in 1u64..(1u64 << 48),
@@ -102,11 +41,9 @@ proptest! {
     ) {
         let y = chunk_total(total, piece);
         prop_assume!(y < u32::MAX - 1, "排除块数封顶角例");
-        // 末块与越界
         let last = block_range(total, piece, y - 1);
         prop_assert_eq!(last.map(|(_, end)| end), Some(total), "末块 end = total");
         prop_assert!(block_range(total, piece, y).is_none(), "越界应 None");
-        // 采样相邻对：首尾相接 + 非末块定长 + 区间不越总界
         let i = u64::from(probe) % u64::from(y);
         let (s0, e0) = block_range(total, piece, i as u32).unwrap();
         prop_assert!(s0 < e0 && e0 <= total);
@@ -117,8 +54,6 @@ proptest! {
         }
     }
 
-    /// fmt_block_size 展示稳定性：MB 整倍数固定「N MB」、KB 整倍数「N KB」、
-    /// 其余「N B」（不 panic、非空）
     #[test]
     fn prop_fmt_block_size_stable(bytes in 0u64..(1u64 << 40)) {
         let s = fmt_block_size(bytes);
@@ -135,13 +70,7 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------
-// chunk::lease — 散布守恒与快照不变量（守恒性 / 钳制 / 有序）
-// ---------------------------------------------------------------------
-
 proptest! {
-    /// spread_bytes 守恒：总和精确 = min(amount, n*cap)（容量不足时钳到总容量），
-    /// 逐份 ∈ [0, cap]；amount=0 全零
     #[test]
     fn prop_spread_bytes_conserves(
         amount in 0u64..(1u64 << 32),
@@ -161,15 +90,8 @@ proptest! {
         }
     }
 
-    /// lease_snapshot 快照不变量：区间单调不重叠且不越 [0, total)；每连接
-    /// done ∈ [0, 块长]；完成块数口径（未完成 done/piece 向下、完成态 = 总块数）；
-    /// 完成态每连接写满整块
     #[test]
     fn prop_lease_snapshot_invariants(
-        // 块数口径（chunk_total 返回 u32）：total 上界随 piece 收敛，保证
-        // ceil(total/piece) ≤ u32::MAX——生成域 ⊆ 规格域（notes/rust.md「生成域
-        // 与被测代码的资源分配维度解耦」；piece=1 × total≥2^32 的越域组合曾以
-        // 约 3%/run 的概率随机引爆 y64 - x 减法溢出）
         (piece, total) in (1u64..(1u64 << 20)).prop_flat_map(|piece| {
             (Just(piece), 1u64..((1u64 << 40).min(piece << 32)))
         }),
@@ -179,13 +101,11 @@ proptest! {
         let (conns, x) = lease_snapshot(total, done_raw, n, piece);
         let y = u64::from(chunk_total(total, piece));
         let done = done_raw.min(total);
-        // 完成块数口径
         if done >= total {
             prop_assert_eq!(u64::from(x), y, "完成态：x = 总块数");
         } else {
             prop_assert_eq!(u64::from(x), done / piece, "未完成：x = done/piece 向下");
         }
-        // 区间几何不变量
         let mut prev_end: Option<u64> = None;
         for c in &conns {
             prop_assert!(c.start < c.end && c.end <= total, "区间在 [0, total) 内");
@@ -201,13 +121,7 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------
-// retry — 重试决策（连续性 / 等价性 / 单调封顶 / 优先级）
-// ---------------------------------------------------------------------
-
 proptest! {
-    /// decide 连续性规则与上限等价：有进展 → 计数重置 1；无进展 → +1；
-    /// Transient 下 at_limit ⟺ 新计数 ≥ max_retries；Fatal/Verify 永不自动
     #[test]
     fn prop_retry_decide_rules(
         made_progress in prop::bool::ANY,
@@ -222,7 +136,6 @@ proptest! {
         if kind == FailKind::Transient {
             prop_assert_eq!(d.at_limit, new_retries >= max_retries, "at_limit ⟺ 达上限");
             if d.auto {
-                // 自动重试时延来源：Retry-After 优先，否则退避表
                 prop_assert_eq!(
                     d.delay_secs,
                     retry_after.unwrap_or_else(|| backoff_secs(new_retries))
@@ -234,7 +147,6 @@ proptest! {
         }
     }
 
-    /// 退避序列（计数 ≥ 1）：非降且封顶 60（8 → 16 → 32 → 60 → 60 …）
     #[test]
     fn prop_backoff_monotone_capped(a in 1u32..40, b in 1u32..40) {
         let (fa, fb) = (backoff_secs(a), backoff_secs(b));
@@ -246,13 +158,7 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------
-// namegen — 命名卫生与去重（幂等性 / 唯一性）
-// ---------------------------------------------------------------------
-
 proptest! {
-    /// sanitize_name 幂等：二遍 sanitize == 一遍；且输出不含路径分隔符/冒号/
-    /// NUL/控制字符（越目录写入防御）
     #[test]
     fn prop_sanitize_idempotent(s in prop::collection::vec(any::<char>(), 0..40)) {
         let s = s.into_iter().collect::<String>();
@@ -264,7 +170,6 @@ proptest! {
         prop_assert!(once.chars().all(|c| (c as u32) >= 0x20), "控制字符已替换");
     }
 
-    /// join_path 尾分隔符幂等：任意尾斜杠形态拼接结果一致
     #[test]
     fn prop_join_path_trailing_slash_idempotent(
         dir in "[a-z]{0,8}",
@@ -276,7 +181,6 @@ proptest! {
         prop_assert_eq!(with, without, "尾分隔符不影响拼接");
     }
 
-    /// dedupe 唯一性：返回名不被占用集合命中；base 空闲时原样返回
     #[test]
     fn prop_dedupe_returns_free_name(
         base in "[a-z]{1,6}\\.bin",
@@ -297,12 +201,7 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------
-// speed::SmoothedSpeed — EMA 平滑（有界性 / 收敛 / 归零）
-// ---------------------------------------------------------------------
-
 proptest! {
-    /// EMA 有界性：非负采样下值 ∈ [0, 已见最大采样]（凸组合不变量）
     #[test]
     fn prop_ema_bounded(samples in prop::collection::vec(0.0f64..1e6, 1..40)) {
         let mut s = SmoothedSpeed::default();
@@ -312,12 +211,10 @@ proptest! {
             let v = s.value();
             prop_assert!((0.0..=max_sample).contains(&v), "值域 [0, max]（EMA 凸组合）");
         }
-        // zero() 立即归零（零值速断，无拖尾）
         s.zero();
         prop_assert_eq!(s.value(), 0.0);
     }
 
-    /// EMA 收敛性：恒定输入下与目标的距离单调不增（α=1/5 → 0.8 几何收缩）
     #[test]
     fn prop_ema_converges_constant(target in 0.0f64..1e6, steps in 1usize..40) {
         let mut s = SmoothedSpeed::default();
@@ -331,13 +228,7 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------
-// checksum — 校验码解析（特征化 / 往返 / 归一化）【第二轮追加】
-// ---------------------------------------------------------------------
-
 proptest! {
-    /// validate_value 完全特征化：Ok(小写) ⟺ trim 后纯 hex ∧ 位数 = 算法期望；
-    /// 错误形态二选一（非 hex → NotHex；位数不符 → BadLength）
     #[test]
     fn prop_validate_value_characterization(
         algo_idx in 0usize..7,
@@ -372,8 +263,6 @@ proptest! {
         }
     }
 
-    /// parse_cli_x 往返：`<算法后缀>=<小写hex>` → Ok((原下标, 原值))；
-    /// 大写 hex 归一小写；算法名大小写不敏感；无 `=`/未知算法 → Err
     #[test]
     fn prop_parse_cli_x_round_trip(
         algo_idx in 0usize..7,
@@ -399,8 +288,6 @@ proptest! {
         );
     }
 
-    /// algo_index_by_name 规范查找：显示名任意大小写（保连字符）恒命中原下标；
-    /// 未知名 → None
     #[test]
     fn prop_algo_index_by_name_canonical(algo_idx in 0usize..7, upper in prop::bool::ANY) {
         let (disp, _, _) = crate::model::checksum::CHECKSUM_ALGOS[algo_idx];
@@ -411,14 +298,7 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------
-// config::parse_speed / from_toml — 限速解析与配置钳制（不变量 / 归一化）
-// 【第二轮追加】
-// ---------------------------------------------------------------------
-
 proptest! {
-    /// "/s" 后缀不变性：不含 `/` 的输入 s，parse_speed(s) == parse_speed(s + "/s")；
-    /// 单位乘数十进制口径：n KB = n×1000、n MB = n×1_000_000（f64 精确域内）
     #[test]
     fn prop_parse_speed_suffix_and_units(
         n in 0u64..1_000_000,
@@ -435,9 +315,6 @@ proptest! {
         prop_assert_eq!(crate::model::config::parse_speed(&format!("{n} MB")), n * 1_000_000);
     }
 
-    /// parse_speed 大小写/空白归一 + 非法输入归零 + 单调性（MB > KB > b）
-    /// （garbage 字母表排除 i：避免把可被 f64 解析的 inf 等混入「非法」面——
-    /// parse_speed("inf") 走 f64 饱和转换属既有行为，不入本属性口径）
     #[test]
     fn prop_parse_speed_normalization_and_zero(
         n in 1u64..1_000_000,
@@ -457,12 +334,6 @@ proptest! {
         );
     }
 
-    /// from_toml 输出域不变量：任意（可解析）单键值下，
-    /// block_size_http > 0 ∧ download_slots > 0 ∧ 并发 ∈ [1,64] ∧ max_retries ≥ 1；
-    /// 块大小正值钳下限 1 MB（v1.16/FR-01-104）、0 回退默认；其余正值透传、0 回退；
-    /// 垃圾文本全默认
-    /// （v 上界 2^32：TOML 整数超目标类型宽度时整段解析失败回默认，属
-    /// 「垃圾输入」面，不进逐键透传断言）
     #[test]
     fn prop_config_from_toml_domain_invariants(
         key in prop::sample::select(&["block_size_http", "download_slots", "http_concurrency", "max_retries"]),
@@ -486,7 +357,6 @@ proptest! {
         }
         match key {
             "block_size_http" => {
-                // v1.16/FR-01-104（D31）：正值 < 1 MB 钳到下限，≥ 1 MB 透传；0 回退默认
                 let expect = if v == 0 {
                     Config::default().block_size_http
                 } else {
@@ -510,10 +380,6 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------
-// slots — 槽位调度（幂等性 / 容量封顶 / 状态语义）【第二轮追加】
-// ---------------------------------------------------------------------
-
 fn slot_task(
     id: u32,
     state: crate::model::TaskState,
@@ -528,8 +394,6 @@ fn slot_task(
     t
 }
 
-/// 六态任务状态向量策略（slots/registry 属性共享单源——生成分布不变；
-/// architect v153：策略体同形克隆自配对 tile 单源消解）
 fn arb_task_states(
     n: usize,
 ) -> impl proptest::strategy::Strategy<Value = Vec<crate::model::TaskState>> {
@@ -544,9 +408,6 @@ fn arb_task_states(
     prop::collection::vec(prop::sample::select(STATES), n)
 }
 
-/// slot 属性共享播种：第 i 个任务 = slot_task(i+1, states[i], flags[i],
-/// retry[i])（architect v153：两属性测试体同构脚手架单源消解；向量长度
-/// ≥ n，与原 `0..n` 索引语义一致）
 fn slot_task_vec(
     n: usize,
     states: &[crate::model::TaskState],
@@ -566,8 +427,6 @@ fn slot_task_vec(
 }
 
 proptest! {
-    /// allocate 幂等与封顶（全等待中队列）：一遍授予 = min(空闲, 未持槽数)、
-    /// 授予后 used ≤ max_slots、二遍零授予、授予按列表序
     #[test]
     fn prop_slots_allocate_idempotent_capped(
         n in 0usize..12,
@@ -579,7 +438,7 @@ proptest! {
         let mut tasks: Vec<_> =
             slot_task_vec(n, &[TaskState::Queued; 12], &initial, &[None; 12]);
         let used_before = slots::used(&tasks);
-        let candidates = n - used_before; // 全等待中：未持槽者即可候选
+        let candidates = n - used_before;
         let free_before = max_slots.saturating_sub(used_before);
         let granted = slots::allocate(&mut tasks, max_slots);
         prop_assert_eq!(
@@ -592,19 +451,15 @@ proptest! {
             let t = tasks.iter().find(|t| t.id == *id);
             prop_assert!(t.is_some_and(|t| t.state == TaskState::Queued && t.has_slot), "授予者等待中且持槽");
         }
-        // 列表序：granted 内 id 的列表位置严格递增
         for w in granted.windows(2) {
             let pa = tasks.iter().position(|t| t.id == w[0]);
             let pb = tasks.iter().position(|t| t.id == w[1]);
             prop_assert!(pa.is_some_and(|a| pb.is_some_and(|b| a < b)), "授予按列表序");
         }
-        // 幂等：二遍零授予
         let second = slots::allocate(&mut tasks, max_slots);
         prop_assert!(second.is_empty(), "二遍 allocate 零授予");
     }
 
-    /// enforce_invariants 幂等与状态语义：两遍执行 has_slot 向量一致；
-    /// 下载中/校验中恒持槽；失败 = 将自动重试；其余恒不持（等待中除外，保持原值）
     #[test]
     fn prop_slots_enforce_idempotent_semantics(
         n in 0usize..12,
@@ -617,7 +472,6 @@ proptest! {
         let mut tasks: Vec<_> = slot_task_vec(n, &states, &slots0, &retry_in);
         slots::enforce_invariants(&mut tasks);
         let after_once: Vec<bool> = tasks.iter().map(|t| t.has_slot).collect();
-        // 语义断言
         for t in &tasks {
             match t.state {
                 TaskState::Downloading | TaskState::Verifying => prop_assert!(t.has_slot, "下载/校验恒持槽"),
@@ -632,13 +486,7 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------
-// timefmt — 时间显示（取整不变 / 定宽形状 / 字典序单调）【第二轮追加】
-// ---------------------------------------------------------------------
-
 proptest! {
-    /// fmt_created 分钟取整不变性（CST 偏移为 60 的倍数）+ 定宽形状
-    /// `YYYY-MM-DD HH:MM`（16 字符）+ 字典序单调（t1 ≤ t2 ⇒ 串 ≤）
     #[test]
     fn prop_fmt_created_shape_monotone(t1 in 0u64..4_102_444_800, t2 in 0u64..4_102_444_800) {
         use crate::model::fmt_created;
@@ -657,15 +505,7 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------
-// consistency — 续传一致性（判据 / 确定性）【第二轮追加】
-// ---------------------------------------------------------------------
-
 proptest! {
-    /// check 特征化不变量（v1.28 三要素口径）：等同 → Valid；stored 缺大小 →
-    /// MissingStamp；ETag/大小任一不同 → Invalidated；ETag/Last-Modified 缺失
-    /// 方向不对称按口径（stored 有而 probe 缺 → 失效；stored 无 → 宽容）；
-    /// 确定性（两遍同判）
     #[test]
     fn prop_consistency_decision_rules(
         etag in "[a-z0-9]{1,6}",
@@ -679,25 +519,19 @@ proptest! {
             last_modified: Some("Wed, 01 Jan 2026 00:00:00 GMT".to_string()),
             size: Some(size),
         };
-        // 等同 → Valid（stored 完整时）
         prop_assert_eq!(check(&stored, &stored), Consistency::Valid, "等同快照可续传");
-        // 确定性
         prop_assert_eq!(check(&stored, &stored), check(&stored, &stored));
-        // 大小变化 → 失效
         let probed_size = ServerStamp { size: Some(size.wrapping_add(1)), ..stored.clone() };
         prop_assert_eq!(check(&stored, &probed_size), Consistency::Invalidated);
-        // stored 有 ETag 而 probe 缺失 → 失效；stored 无 ETag → 以大小为准
         let probed_no_etag = ServerStamp { etag: None, ..stored.clone() };
         if stored.etag.is_some() {
             prop_assert_eq!(check(&stored, &probed_no_etag), Consistency::Invalidated, "服务器不再返回 ETag → 失效");
         } else {
             prop_assert_eq!(check(&stored, &probed_no_etag), Consistency::Valid, "stored 未记录 → 宽容");
         }
-        // MissingStamp 判据（v1.28）：仅 stored 缺大小时
         let mut incomplete = stored.clone();
         incomplete.size = None;
         prop_assert_eq!(check(&incomplete, &stored), Consistency::MissingStamp);
-        // ETag 双侧存在但不同 → 失效（构造探针走 etag_probe_missing 面冗余覆盖）
         if !etag_stored_missing && !etag_probe_missing {
             let probed_diff = ServerStamp { etag: Some(format!("{etag}x")), ..stored.clone() };
             prop_assert_eq!(check(&stored, &probed_diff), Consistency::Invalidated);
@@ -705,14 +539,7 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------
-// sidecar / registry — 持久化往返（格式稳定性 / 投影保真）【第二轮追加】
-// ---------------------------------------------------------------------
-
 proptest! {
-    /// Sidecar JSON 往返（v1.28：无 URL 字段）：build → JSON → parse 全字段相等
-    /// （含版本门与 downloaded 钳制口径不漂移）；stamp() 投影与服务端快照一致；
-    /// 序列化文本不含任何 URL 键（FR-01-20 v1.28「不存储任何 URL」）
     #[test]
     fn prop_sidecar_json_round_trip(
         etag in proptest::option::of("[a-z0-9]{1,8}"),
@@ -751,9 +578,6 @@ proptest! {
         prop_assert_eq!(st.size, Some(size), "stamp 投影 size");
     }
 
-    /// Registry 持久化往返 + 快照投影保真：from_tasks → JSON → parse
-    /// 全量保真（JSON 串相等）、任务 ID 随快照保留；快照 → Task → 快照
-    /// 往返不丢字段（崩溃恢复投影的数据面基础）
     #[test]
     fn prop_registry_round_trip_and_projection(
         k in 0usize..6,
@@ -783,7 +607,6 @@ proptest! {
             tasks.push(t);
         }
         let reg = Registry::from_tasks(&tasks);
-        // 任务 ID 随快照保留（随机 u32 分配后持久化/恢复一致）
         for (i, snap) in reg.tasks.iter().enumerate() {
             prop_assert_eq!(snap.id, tasks[i].id, "任务 ID 随快照保留");
         }
@@ -794,7 +617,6 @@ proptest! {
             text,
             "注册表 JSON 往返保真"
         );
-        // 快照投影往返：TaskSnapshot → Task → TaskSnapshot 不丢持久化字段
         for snap in &reg.tasks {
             let back = crate::model::registry::TaskSnapshot::from(&crate::model::Task::from(snap));
             prop_assert_eq!(
@@ -803,7 +625,6 @@ proptest! {
                 "快照投影往返保真"
             );
         }
-        // 校验期望随投影保留（算法显示名可解析时）
         for (i, snap) in reg.tasks.iter().enumerate() {
             if with_checksum[i] {
                 prop_assert!(
@@ -815,7 +636,6 @@ proptest! {
     }
 }
 
-/// 混合 CJK/全角/任意字符的文本策略（覆盖 w() 的宽度表三个分支域）
 fn text_with_wide() -> impl proptest::strategy::Strategy<Value = String> {
     proptest::collection::vec(
         prop_oneof![
@@ -827,10 +647,6 @@ fn text_with_wide() -> impl proptest::strategy::Strategy<Value = String> {
         0..48,
     )
     .prop_map(|chars| chars.into_iter().collect())
-    // 宽度界属性论域 = 「每字符至少 1 列」的分支域：零宽字符（w() 按 0 计——
-    // v1.34 断链 VS15 注入的宽度口径，text.rs zero_width 单源）不属该论域，
-    // 由 prop_text_zero_width_is_free 专门覆盖（否则 any::<char>() 抽到
-    // U+FE0E/U+200B 等时下界 width ≥ n 假失败）
     .prop_filter(
         "排除零宽字符（w() 按 0 计，宽度下界不论及）",
         |s: &String| {
@@ -845,8 +661,6 @@ fn text_with_wide() -> impl proptest::strategy::Strategy<Value = String> {
     )
 }
 
-/// 纯零宽字符策略（w() 零宽分支的属性论域：VS15 族 / 零宽空格连接符族 /
-/// 词连接符 / BOM）
 fn zero_width_text() -> impl proptest::strategy::Strategy<Value = String> {
     proptest::collection::vec(
         prop_oneof![
@@ -861,12 +675,7 @@ fn zero_width_text() -> impl proptest::strategy::Strategy<Value = String> {
 }
 
 proptest! {
-    // ---- ui/text 纯文本工具（architect 第三轮补充）----
-    // 覆盖维度：显示宽度不变量、截断/填充幂等、时长格式化往返、
-    // 大小/速度格式化的单位后缀封闭域与「单位绑定总量」口径。
 
-    /// w() 显示宽度界：n ≤ w(s) ≤ 2n（CJK/全角按 2 计，其余按 1 计；
-    /// 零宽字符不论及——见 text_with_wide 论域注记）
     #[test]
     fn prop_text_width_within_bounds(s in text_with_wide()) {
         let n = s.chars().count();
@@ -875,15 +684,11 @@ proptest! {
         prop_assert!(width <= 2 * n, "宽度上界（每字符至多 2 列）");
     }
 
-    /// 零宽字符域：纯零宽串显示宽恒 0（w() 零宽分支——断链 VS15 注入不
-    /// 改变行宽的宽度不变量，v1.34/FR-01-113）
     #[test]
     fn prop_text_zero_width_is_free(s in zero_width_text()) {
         prop_assert_eq!(crate::ui::w(&s), 0, "纯零宽串显示宽为 0");
     }
 
-    /// truncate 宽度界 + 幂等：w(truncate(s, max)) ≤ max（max ≥ 1；max=0 时
-    /// 单字符省略号超出属既有契约口径，不在本属性域）；二次截断恒等
     #[test]
     fn prop_truncate_bounded_and_idempotent(
         s in text_with_wide(),
@@ -895,7 +700,6 @@ proptest! {
         prop_assert_eq!(&twice, &once, "截断幂等");
     }
 
-    /// pad_right 精确宽度 + 幂等：w(pad(s, width)) == max(w(s), width)；二次填充恒等
     #[test]
     fn prop_pad_right_exact_and_idempotent(
         s in text_with_wide(),
@@ -911,8 +715,6 @@ proptest! {
         prop_assert_eq!(&twice, &once, "填充幂等");
     }
 
-    /// fmt_dur 往返：格式化 → 解析回原秒数（h:mm:ss / mm:ss 两形态全遍历）；
-    /// fmt_eta(Some(s)) 与 fmt_dur(s) 一致（eta 是 dur 的 Option 包装）
     #[test]
     fn prop_fmt_dur_round_trip(secs in 0u64..1_000_000) {
         fn parse_back(text: &str) -> Option<u64> {
@@ -941,8 +743,6 @@ proptest! {
         prop_assert_eq!(crate::ui::fmt_eta(None), "--:--", "eta(None) 恒占位符");
     }
 
-    /// fmt_size / fmt_size_pair 单位后缀封闭域：后缀只取 B/KB/MB/GB；
-    /// fmt_size_pair 的单位只由总量 y 决定（x 同单位展示）且恒含 '/'
     #[test]
     fn prop_fmt_size_suffix_domain(
         bytes in 0u64..u64::MAX,
@@ -967,8 +767,6 @@ proptest! {
         prop_assert!(pair.contains('/'), "配对格式恒含分隔符");
     }
 
-    /// fmt_speed 稳定域：负零归一（-0.0 与 0.0 同输出）；后缀封闭域
-    /// B/s、KB/s、MB/s 且数值前缀可解析
     #[test]
     fn prop_fmt_speed_suffix_domain(bps in 0.0f64..1e15) {
         prop_assert_eq!(
@@ -990,12 +788,6 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------
-// app::dialog_keys/routing — 对话框键路由纯函数（architect 第四轮补充：
-// app 层状态机不变量——字段容量上限、消费矩阵、下拉选择同步与越界钳制）
-// ---------------------------------------------------------------------
-
-/// 键序列策略：下拉导航/确认/关闭键全集 + 退格 + 任意字符键（模拟真实输入流）
 fn dialog_key_seq() -> impl Strategy<Value = Vec<KeyCode>> {
     let nav_keys = prop::sample::select(vec![
         KeyCode::Up,
@@ -1017,9 +809,6 @@ fn dialog_key_seq() -> impl Strategy<Value = Vec<KeyCode>> {
 }
 
 proptest! {
-    /// text_char 消费矩阵与容量上限：仅文本字段消费（true），光标处插入后
-    /// URL/目录 ≤ 300 字符、并发 ≤ 2 位且仅数字；并发非空时 conns_edited
-    /// 必已置位（加数字路径全部置位，无清除路径）；光标恒在字段长内
     #[test]
     fn prop_text_char_caps_and_consumption(
         kind in prop::sample::select(vec![DialogKind::Add, DialogKind::Modify]),
@@ -1044,8 +833,6 @@ proptest! {
             if !d.conns.is_empty() {
                 prop_assert!(d.conns_edited, "并发非空时 edited 必已置位");
             }
-            // 光标不变量（v1.34 二批）：恒在所属字段长度内（光标随输入框
-            // 组件实例，各字段独立）
             let fields = [
                 (crate::app::TextField::Url, d.url.len_chars(), d.url.cursor),
                 (crate::app::TextField::Dir, d.dir.len_chars(), d.dir.cursor),
@@ -1058,11 +845,6 @@ proptest! {
         }
     }
 
-    /// text_backspace 消费矩阵与「至多删除一字符」：退格仅作用于文本字段
-    /// （Add 0/1/2/4，Modify 0/2），命中字段时删除光标前一字符（v1.34 二批
-    /// 光标语义：夹具置光标到靶字段尾 = 弹末尾；长度 -1（空则不变）且返回
-    /// true，其余焦点零变化且返回 false；并发臂无条件置 conns_edited；
-    /// 退格后光标随迁）
     #[test]
     fn prop_text_backspace_pops_at_most_one(
         kind in prop::sample::select(vec![DialogKind::Add, DialogKind::Modify]),
@@ -1075,7 +857,6 @@ proptest! {
         d.dir.set(seed_s.clone());
         d.conns.set("42");
         d.ck_value.set(seed_s.clone());
-        // 夹具置光标到靶字段尾（键入态；set 迁尾口径与旧属性对齐）
         let is_bs_field = matches!(
             (kind, focus),
             (DialogKind::Add, 0)
@@ -1138,8 +919,6 @@ proptest! {
         }
     }
 
-    /// push_hex_capped 容量与字符集：仅十六进制字符追加且总数 ≤ 128
-    /// （SHA-512 上限；任意字符流下均不得越界）
     #[test]
     fn prop_push_hex_capped_cap_and_charset(
         chars in prop::collection::vec(any::<char>(), 0..200),
@@ -1155,9 +934,6 @@ proptest! {
         }
     }
 
-    /// 算法下拉状态机不变量（v1.32：下拉 8 项 = NONE 首行 + 7 算法）：任意
-    /// 键序列下 ck_sel 恒在 8 项界内且 ck_type == ck_sel 同步；选择键
-    ///（Up/Down/Home/End）保持展开；Tab/BackTab 关闭并按 Add 布局跳焦（4/2）
     #[test]
     fn prop_dropdown_open_key_sync_and_bounds(
         sel0 in 0usize..=CHECKSUM_ALGOS.len(),
@@ -1169,7 +945,7 @@ proptest! {
         d.ck_type = sel0;
         for k in &keys {
             if !d.ck_open {
-                break; // 与 on_dialog_key 守卫一致：展开态才路由（消费所有键）
+                break;
             }
             let was_open = d.ck_open;
             let navigated = matches!(k, KeyCode::Up | KeyCode::Down | KeyCode::Home | KeyCode::End);
@@ -1194,8 +970,6 @@ proptest! {
         }
     }
 
-    /// 代理下拉状态机不变量（含 n=0 守卫）：任意键序列下 proxy_sel 恒在
-    /// [0, max(n,1)) 界内；Tab/BackTab 按 kind 跳焦（Add 6/4，Modify 4/2）
     #[test]
     fn prop_proxy_dropdown_open_key_bounds_and_guard(
         n in 0usize..12,
@@ -1205,10 +979,10 @@ proptest! {
     ) {
         let mut d = crate::app::testutil::dialog(kind, 5);
         d.proxy_open = true;
-        d.proxy_sel = sel0 % n.max(1); // 起点合法化
+        d.proxy_sel = sel0 % n.max(1);
         for k in &keys {
             if !d.proxy_open {
-                break; // 与 on_dialog_key 守卫一致：展开态才路由
+                break;
             }
             crate::app::proxy_dropdown_open_key(&mut d, n, *k);
             prop_assert!(d.proxy_sel < n.max(1), "proxy_sel 恒在界内（n=0 守卫后 n'=1）");
@@ -1226,25 +1000,13 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------
-// architect v116 追加批次——覆盖评审认定的属性缺口 + 本轮单源化收口的
-// 回归护甲（新助手/新单源点全部以属性锁定，防止下游漂移）
-// ---------------------------------------------------------------------
-
 proptest! {
-    /// Blocks 状态机不变量（op 序列模型）：任意 mark_done/mark_progress 序列后
-    /// ① downloaded ≤ total；② 逐块 written ≤ 块长；③ mark_done 幂等（全块
-    /// 标完成后 downloaded == total 且 completed == count）。
-    /// 块数有界生成（n_blocks 直接采样、total 由 piece 推导）——不设界时
-    /// Blocks::new 会按块数分配 written 向量（极小 piece × 极大 total =
-    /// 天文块数），属性测试内存不可承受（v116 会话实测挂死教训）
     #[test]
     fn prop_blocks_op_sequence_invariants(
         piece in 1u64..(1u64 << 20),
         n_blocks in 1u64..=4096u64,
         ops in prop::collection::vec((0u8..2, any::<u32>(), any::<u64>()), 0..48),
     ) {
-        // total = (n_blocks-1)*piece + 1：恰 n_blocks 个块（末块 1 字节）
         let total = (n_blocks - 1) * piece + 1;
         let mut b = Blocks::new(total, piece);
         let y = b.count();
@@ -1262,7 +1024,6 @@ proptest! {
                 }
             }
         }
-        // 全块标完成 → 守恒终态
         for i in 0..y {
             b.mark_done(i);
         }
@@ -1270,8 +1031,6 @@ proptest! {
         prop_assert_eq!(b.completed(), b.count(), "全块完成后 x == y");
     }
 
-    /// save_json_atomic 幂等性（fs）：两遍同内容保存字节一致且无 tmp 残留；
-    /// 内容漂移后必须落盘且结果恒可解析
     #[test]
     fn prop_save_json_atomic_idempotent(
         value0 in prop::collection::vec(any::<u64>(), 0..20),
@@ -1295,8 +1054,6 @@ proptest! {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// from_url_path 全函数性（任意输入不 panic——属性框架自身即压力源）+
-    /// 输出形状（非空、非 "."）+ 残缺 %XX 尾保留原文
     #[test]
     fn prop_from_url_path_total_and_shape(
         scheme in "[a-zA-Z]{1,6}",
@@ -1304,25 +1061,19 @@ proptest! {
         seg in "[a-zA-Z0-9_%.~-]{0,24}",
     ) {
         let url = format!("{scheme}://{host}/{seg}");
-        // 全函数性：任意输入不 panic（prop 框架采样含 %XX 残缺形态）
         let _ = from_url_path(&url);
-        // 显式锁残缺尾语义（单元用例的属性化镜像）
         for (suffix, expect_suffix) in [("%", "%"), ("%2", "%2"), ("%.bin", "%.bin")] {
             let u = format!("http://x/p{suffix}");
             if let Some(name) = from_url_path(&u) {
                 prop_assert!(name.ends_with(expect_suffix), "残缺尾 {suffix} 保留原文");
             }
         }
-        // 完整 %25 解码为 '%'（coder 既有语义的属性化镜像）
         if let Some(name) = from_url_path("http://x/50%25.bin") {
             prop_assert_eq!(name, "50%.bin");
         }
-        let _ = seg; // seg 仅参与全函数性采样
+        let _ = seg;
     }
 
-    /// from_content_disposition 输出形状：Some 结果非空且不含路径分隔符/
-    /// 引号（卫生口径）；空名/纯空白名 → None（token 经 trim，空白可修剪字
-    /// 符会被剥除——字母表用非空白可打印字符锁定裸 token 提取面）
     #[test]
     fn prop_from_content_disposition_shape(
         disp in "(attachment|inline)?;? ?",
@@ -1338,8 +1089,6 @@ proptest! {
         }
     }
 
-    /// parse_companion_content 稳定性：Some ⟺ 首 token 为纯小写十六进制且
-    /// 位数与算法表期望一致；首 token 非十六进制或位数不符 → None
     #[test]
     fn prop_parse_companion_content_stability(
         algo_idx in 0usize..CHECKSUM_ALGOS.len(),
@@ -1360,7 +1109,7 @@ proptest! {
         let expect_some = !v.is_empty()
             && v.chars().all(|c| c.is_ascii_hexdigit())
             && v.chars().count() == need
-            && noise.is_none(); // 混入非十六进制噪声 → 首 token 非纯 hex
+            && noise.is_none();
         match parse_companion_content(algo_idx, &content) {
             Some(sc) => {
                 prop_assert!(expect_some, "有效输入才得 Some");
@@ -1371,9 +1120,6 @@ proptest! {
         }
     }
 
-    /// Retry-After 头解析稳定性：非负有限秒数 → Some(原值)；负数/NaN → None；
-    /// 垃圾/None → None；"inf" → Some(inf)（饱和口径登记：engine 侧 retry_in
-    /// 计时对 inf 的行为为既有口径，属性化锚定防漂移）
     #[test]
     fn prop_parse_retry_after_header(
         secs in prop::option::of(any::<f64>().prop_filter("finite", |v| v.is_finite())),
@@ -1388,18 +1134,14 @@ proptest! {
                 prop_assert_eq!(parsed, None, "负数拒绝");
             }
         }
-        // NaN：parse 成功但比较恒 false → None
         prop_assert_eq!(parse_retry_after_header(Some("NaN")), None, "NaN 拒绝");
-        // 垃圾与缺失
         if !junk.parse::<f64>().is_ok() {
             prop_assert_eq!(parse_retry_after_header(Some(&junk)), None, "垃圾拒绝");
         }
         prop_assert_eq!(parse_retry_after_header(None), None, "缺头 None");
-        // 饱和口径锚定（登记项）
         prop_assert_eq!(parse_retry_after_header(Some("inf")), Some(f64::INFINITY));
     }
 
-    /// classify_http_status 完全特征化：408/429/5xx → Transient，其余 → Fatal
     #[test]
     fn prop_classify_http_status_exhaustive(status in any::<u16>()) {
         let transient =
@@ -1411,8 +1153,6 @@ proptest! {
         }
     }
 
-    /// queue_positions 与前缀计数 oracle 一致（任意视图序）：每个位置的位次
-    /// = 视图前缀（含自身）内 Queued 且未获槽位任务的个数（非等待 = 0）
     #[test]
     fn prop_queue_positions_prefix_count_oracle(
         n in 1usize..14,
@@ -1430,7 +1170,6 @@ proptest! {
             t.has_slot = (i * 7 + seed as usize).is_multiple_of(2);
             tasks.push(t);
         }
-        // 种子线性混洗的确定性置换（视图序不影响语义，oracle 按前缀计数）
         let mut view: Vec<usize> = (0..n).collect();
         view.sort_by_key(|&i| {
             (i.wrapping_mul(2654435761).wrapping_add(seed as usize)) % 9973
@@ -1451,7 +1190,6 @@ proptest! {
             };
             prop_assert_eq!(positions[vi], expect, "位次 = 视图前缀等待计数");
         }
-        // 恒等视图（真实「正在下载」页签场景）下单点口径 oracle 一致
         let identity: Vec<usize> = (0..n).collect();
         let positions = queue_positions(&tasks, &identity);
         for (ti, &p) in positions.iter().enumerate() {
@@ -1460,11 +1198,8 @@ proptest! {
         }
     }
 
-    /// algo_index_exact_or_default 特征化：表内规范名 → 自身下标；表外任意
-    /// 变体 → 默认 3（SHA-256）。与宽容匹配的刻意差异以小写 "sha1" 锚定
     #[test]
     fn prop_algo_index_exact_or_default(variant in "[a-zA-Z0-9_ ]{0,12}") {
-        // 全部规范名 → 自身下标
         for (i, (disp, _, _)) in CHECKSUM_ALGOS.iter().enumerate() {
             prop_assert_eq!(
                 algo_index_exact_or_default(disp),
@@ -1473,18 +1208,14 @@ proptest! {
                 disp
             );
         }
-        // 表外变体 → 默认 3
         let expected = CHECKSUM_ALGOS
             .iter()
             .position(|(disp, _, _)| *disp == variant)
             .unwrap_or(3);
         prop_assert_eq!(algo_index_exact_or_default(&variant), expected);
-        // 刻意差异锚点：小写 "sha1" 非规范名 → 默认（宽容匹配会命中 SHA-1）
         prop_assert_eq!(algo_index_exact_or_default("sha1"), 3);
     }
 
-    /// URL scheme 助手特征化（is_http_url / protocol_of_url 与 starts_with
-    /// 语义逐点一致，大小写敏感口径锁定）
     #[test]
     fn prop_url_scheme_helpers(
         scheme in prop::sample::select(vec!["http", "https", "HTTP", "HTTPS", "ftp", "Https", ""]),
@@ -1499,8 +1230,6 @@ proptest! {
         );
     }
 
-    /// 路径约定等价（本轮单源化回归护甲）：Task 方法与 (目录, 文件名) 散点
-    /// 逐字节一致；扩展名常量与字面量一致
     #[test]
     fn prop_path_suffix_conventions(
         dir in "/[a-z]{0,10}(/)?",
@@ -1532,8 +1261,6 @@ proptest! {
         );
     }
 
-    /// 任务展示投影界（progress/eta/chunk_info）：progress ∈ [0,1] 且 total=0 → 0；
-    /// eta 仅下载态且正速有值；x ≤ y
     #[test]
     fn prop_task_projection_bounds(
         total in 0u64..(1u64 << 40),
@@ -1580,19 +1307,9 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------
-// architect v126 补齐批次（四缺口）：checksum 摘要管线 / Task 纯函数 /
-// 代理端点 url 构造 / 速度滑窗不变量
-// ---------------------------------------------------------------------
-
-// ---- checksum 摘要管线：digest_bytes 输出域 + validate_value 闭环 ----
-
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    /// digest_bytes 输出域不变量（7 算法全量）：小写十六进制、位数恰为
-    /// 算法表期望值、且被 validate_value 原样接受（计算→校验闭环——运行时
-    /// 校验路径消费的就是这个输出）
     #[test]
     fn prop_digest_bytes_output_domain(
         data in prop::collection::vec(any::<u8>(), 0..300),
@@ -1612,9 +1329,6 @@ proptest! {
         );
     }
 
-    /// 流式与内存两条计算路径守恒（digest_file == digest_bytes）：运行时校验
-    /// 走流式 digest_file，测试/内存校验走 digest_bytes——两路径对同一内容
-    /// 必须同值，否则「本地算的」与「校验算的」口径分叉
     #[test]
     fn prop_digest_file_matches_bytes(
         data in prop::collection::vec(any::<u8>(), 0..(1 << 20)),
@@ -1630,13 +1344,6 @@ proptest! {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// 代理端点 url 构造（endpoint_url）双属性：① 括号 iff ip 含冒号
-    /// （纯格式契约，任意 ip 字符串成立）；② 合法 IPv6 字面量（全 8 段）
-    /// 必产出可被 url 解析的方括号形态且端口保真（rust.md「IPv6 进 url
-    /// 必须加方括号」契约的属性化）。注意生成域与规格域对齐（rust.md
-    /// 「属性字母表」条）：少于 8 段且无 ：: 压缩的段串不是合法 IPv6，
-    /// url 解析必败属产品正确拒绝生成器以为的合法输入——可解析断言只
-    /// 锁全 8 段合法形态。
     #[test]
     fn prop_endpoint_url_bracket_iff_colon(
         ip in "[0-9a-fA-F:]{2,50}",
@@ -1676,10 +1383,6 @@ proptest! {
         let parsed = url::Url::parse(&url);
         prop_assert!(parsed.is_ok(), "全 8 段方括号形态可被 url 解析: {url}");
         if let Ok(parsed) = parsed {
-            // v133 归因（操作者轮全量回归偶发后固化反例）：url crate 解析时
-            // 归一化掉协议默认端口（http 显式 :80 → port() = None），产品
-            // 无错——端口保真断言用 port_or_known_default()（默认端口归一
-            // 化后仍取回协议默认值），生成域 1..=65535 全域成立
             prop_assert_eq!(parsed.port_or_known_default(), Some(port), "端口保真");
         }
     }
@@ -1703,11 +1406,7 @@ proptest! {
     }
 }
 
-// ---- Task 纯函数：进度界 / ETA 门 / 分块口径 / 路径三件套 ----
-
 proptest! {
-    /// progress() 值域不变量：任意 total/downloaded（含 0 与 downloaded>total）
-    /// 输出 ∈ [0,1]；total=0 恒 0（progress_clamps 单测的属性化全量覆盖）
     #[test]
     fn prop_task_progress_bounded(total in 0u64..(1 << 40), downloaded in 0u64..(1 << 40)) {
         let mut t = crate::model::sample_task();
@@ -1720,8 +1419,6 @@ proptest! {
         }
     }
 
-    /// eta_secs() 门语义：非下载态或速度 ≤ 0 恒 None；仅下载中且速度 > 0
-    /// 才有 Some（剩余 = ⌊(total−downloaded)/speed⌋ 非负）
     #[test]
     fn prop_task_eta_none_gates(
         state in prop::sample::select(&[
@@ -1748,8 +1445,6 @@ proptest! {
         }
     }
 
-    /// chunk_info() 与分块数学一致：y = chunk_total(total, block_size)、
-    /// x ≤ y（完成数不越界钳制）
     #[test]
     fn prop_task_chunk_info_consistent(
         total in 1u64..(1 << 32),
@@ -1766,8 +1461,6 @@ proptest! {
         prop_assert!(u64::from(x) <= y, "完成块数不得越界: x={x} y={y}");
     }
 
-    /// 路径三件套后缀不变量：downloading/sidecar 路径 = 目标路径 + 固定后缀
-    /// （namegen 常量单源；任意目录与文件名形态下成立）
     #[test]
     fn prop_task_paths_suffix_invariants(
         dir in "[a-zA-Z0-9_./-]{0,40}",
@@ -1783,12 +1476,7 @@ proptest! {
     }
 }
 
-// ---- SpeedWindow：滑窗速率非负与上界（含累计回退样本的安全口径）----
-
 proptest! {
-    /// rate() 不变量：任意推进序（含累计值回退/重置形态）下速率恒非负
-    /// （saturating 差值），且上界 = 全程累计极差 / dt 下限 0.05s；
-    /// last_push() 恒为最后推进的时间戳（单调序）
     #[test]
     fn prop_speed_window_rate_bounded(
         n in 1usize..40,
@@ -1815,20 +1503,7 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------
-// engine::throttle — 令牌桶账本数学（architect v134 策略提取后的属性面：
-// 钳制 / 取走特征化 / 预算守恒 / 等待收束）
-// ---------------------------------------------------------------------
-
 proptest! {
-    /// bucket_step 账本不变量（生成域注记：rate > 0——unlimited 由 `acquire`
-    /// 提前短路，`bucket_step` 契约不含 rate=0，生成域 ⊆ 规格域）：
-    /// ① 取走特征化：taken = min(remaining, 可用)，可用 = min(补币后, 突发容量)；
-    /// ② 预算守恒：taken + 桶余 = 可用（补币后余量要么取走要么留存）；
-    /// ③ 钳制：桶余 ∈ [0, 突发容量]（补币上取容量，取走不越可用）；
-    /// ④ 等待收束：wait = 0 ⟺ remaining ≤ 可用（取足）；未取足时 wait =
-    ///    deficit 换算毫秒与 SLEEP_MS 的较大者（浮点运算序与实现一致，
-    ///    IEEE-754 确定性下精确相等）。
     #[test]
     fn prop_throttle_bucket_step_invariants(
         rate in 1.0f64..1e9,
@@ -1856,23 +1531,7 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------
-// model::task — 断点快照投影与并发口径（architect v134 属性面扩展：
-// apply_chunk_snapshot 替换语义投影 / thread_count 数据面泛化）
-// ---------------------------------------------------------------------
-
 proptest! {
-    /// apply_chunk_snapshot 投影口径（v139 两段修订）：connections 与直接调用
-    /// lease_snapshot 同参投影一致（两段不变）；chunk_done 为**替换语义**
-    /// （不与调用前旧值累加），按路径两段合并——多块路径（可续传 ∧ 分块数
-    /// > 1）= 事件逐块真值权威：连续前缀快照在乱序完成 + 部分块零头合计越
-    /// 块界时高估完成数，不得盖过事件（操作者实证「error 显 13、恢复回退
-    /// 12」倒退缺陷的属性面锁定）；单流/单块路径 = max(快照, 事件口径)
-    /// （事件不带逐块记账，字节连续、前缀精确）。写侧不按总块数钳制（存储
-    /// 账本保留事件口径原值；展示侧由 `chunk_info()` 读取时钳制——本属性
-    /// 一并锁定「存储越界、读取受控」两段口径）。生成域解耦（notes/rust.md
-    /// 资源维度条款）：先定块数 n_blocks ≤ 4096，total 由 (n-1)*piece + 余数
-    /// 推导（顺带锁定 ceil 口径），内存有界。
     #[test]
     fn prop_apply_chunk_snapshot_monotone(
         n_blocks in 1usize..=4096,
@@ -1903,9 +1562,6 @@ proptest! {
         prop_assert!(u64::from(x) <= y, "读取侧钳制：展示完成数不越总块数（即便存储越界）");
     }
 
-    /// thread_count 数据面口径（FR-01-81 修订二，泛化既有两状态单测）：
-    /// 下载中 = 持有未完成块的连接数（cap>0 ∧ done<cap）；其余任意态 =
-    /// 有效连接数（cap>0）。连接构造域：done ≤ cap（合法账本状态）。
     #[test]
     fn prop_thread_count_data_plane(
         conns in prop::collection::vec(
@@ -1932,7 +1588,6 @@ proptest! {
                 }
             })
             .collect();
-        // 口径复述（oracle）：cap = end 饱和减 start（不借 cap() 实现判定分支）
         let expected = t
             .connections
             .iter()
@@ -1949,18 +1604,7 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------
-// architect v145 追加——此前未覆盖的纯逻辑面（与常规单测对账隔离）
-// ---------------------------------------------------------------------
-
 proptest! {
-    /// derive_name 三级优先 + 时间戳兜底（FR-01-02/v1.28 述语）的契约属性：
-    /// ①结果恒非空；②输出已卫生化（再 sanitize 幂等——无路径分隔符/控制字符，
-    /// 不越目录写入）；③优先级链逐级回退——CD（trim 后非空）> 跳转落点路径段
-    /// > 原始 URL 路径段 > `download-<ts>` 兜底。生成域：CD 为任意字符串
-    /// （含空白/空——回退分支的合法输入形态）；URL 段为非空文件名字符
-    /// （生成域 ⊆ 规格域：路径段语义由「http://h/<seg>」拼装保证，逐段合法
-    /// 即整体合法，notes/rust.md「复合结构属性生成」）。
     #[test]
     fn prop_derive_name_fallback_chain(
         cd in prop::option::of(prop::collection::vec(any::<char>(), 0..24)),
@@ -1973,12 +1617,9 @@ proptest! {
         let url = format!("http://o.io/{seg_b}");
         let name = derive_name(cd.as_deref(), final_url.as_deref(), &url);
 
-        // ①恒非空（时间戳兜底存在性）
         prop_assert!(!name.is_empty(), "derive_name 恒产出非空名");
-        // ②输出已卫生化（sanitize 幂等点：再处理一次不变）
         prop_assert_eq!(name.clone(), sanitize_name(&name), "输出不含路径分隔符/控制字符");
 
-        // ③优先级链（oracle 按契约逐级复述）
         let cd_pick = cd.as_deref().map(str::trim).filter(|s| !s.is_empty());
         if let Some(n) = cd_pick {
             prop_assert_eq!(name, sanitize_name(n), "CD 非空时最高优先");
@@ -1991,18 +1632,13 @@ proptest! {
         }
     }
 
-    /// 任务 ID 分配（v1.20 u32 随机模型）的契约属性：对任意占用集——
-    /// ①分配结果恒非 0（保留哨兵不得分配）；②不与占用集命中（查重分配）；
-    /// ③连续多次分配互不相同（每次分配即占用，查重面随动增长）。
-    /// 占用集规模 ≤ 4k（4.29e9 取值空间下重试链概率可忽略，测试无挂死面；
-    /// 资源维度直接作为有界采样参数，notes/rust.md「生成域与资源分配解耦」）。
     #[test]
     fn prop_alloc_task_id_fresh_nonzero_unique(
         seed in prop::collection::vec(any::<u32>(), 0..4096),
         rounds in 1usize..8,
     ) {
         let mut used: std::collections::HashSet<u32> = seed.into_iter().collect();
-        used.insert(0); // 显式占用 0：分配必须绕开保留哨兵
+        used.insert(0);
         let mut seen = Vec::new();
         for _ in 0..rounds {
             let id = alloc_task_id(|c| used.contains(&c));
@@ -2015,13 +1651,6 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------
-// engine::dns — hosts 静态表解析与双腿答案合并（v146 架构轮补充：
-// v140 新增模块的属性面补齐；测试可达性经 engine 门面 cfg(test) re-export）
-// ---------------------------------------------------------------------
-
-// v146：IP 生成策略单源（hosts 解析属性与 merge 合并属性共用；proptest 策略
-// 构造脚手架同参数表两处克隆收口 helper——CPD 自配对消解，生成分布不变）。
 fn arb_ipv4() -> impl Strategy<Value = IpAddr> {
     (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>())
         .prop_map(|(a, b, c, d)| IpAddr::V4(Ipv4Addr::new(a, b, c, d)))
@@ -2033,12 +1662,6 @@ fn arb_ipv6_ula() -> impl Strategy<Value = IpAddr> {
 }
 
 proptest! {
-    /// hosts 静态表解析契约（FR-01-112①；v146 属性面补齐）：
-    /// ① 全函数：任意行（合法条目/垃圾行混排）解析不 panic；
-    /// ② 别名查找大小写无关：原/全大写变体等价（lookup 归一化口径）；
-    /// ③ 逐别名命中列表精确特征化 = 首见序去重的声明序列（独立 oracle 复算）；
-    /// ④ 未声明探针（连字符不在别名字母表内）→ None；
-    /// ⑤ 注释免疫：全部行加 `# …` 尾注后整表查找结果与无注释版逐点相等。
     #[test]
     fn prop_hosts_parse_contract(
         lines in prop::collection::vec(
@@ -2051,7 +1674,6 @@ proptest! {
             0..10,
         ),
     ) {
-        // 组装文本：合法条目行（IP + 别名展开）与垃圾行混排；对照文本全部行加尾注。
         let mut text = String::new();
         let mut text_commented = String::new();
         let mut declared: std::collections::BTreeMap<String, Vec<IpAddr>> = Default::default();
@@ -2068,7 +1690,6 @@ proptest! {
             }
             text.push('\n');
             text_commented.push('\n');
-            // 垃圾行（`##` 整行注释形态 + 无法解析为首 token IP 的行）不中止解析
             for g in garbage {
                 let gl = format!("## {g} {g}=");
                 text.push_str(&gl);
@@ -2076,7 +1697,6 @@ proptest! {
                 text_commented.push_str(&gl);
                 text_commented.push('\n');
             }
-            // 首见序去重 oracle（与 from_lines 逐别名口径一致）
             for a in aliases {
                 let key = a.to_ascii_lowercase();
                 let ips = declared.entry(key).or_default();
@@ -2089,12 +1709,10 @@ proptest! {
         let hosts = HostsFile::from_lines(&text);
         let hosts_c = HostsFile::from_lines(&text_commented);
 
-        // ①④ 全函数 + 未声明探针 None
         for s in ["-probe9", "-PROBE9"] {
             prop_assert_eq!(hosts.lookup(s), None, "未声明探针应 None");
         }
 
-        // ②③⑤ 逐别名断言（大小写等价 + 精确特征化 + 注释免疫）
         for (alias, expected) in &declared {
             let got = hosts.lookup(alias);
             let want = Some(expected.clone());
@@ -2108,29 +1726,22 @@ proptest! {
         }
     }
 
-    /// merge_answers 双腿合并契约（D40②；v146 属性面补齐）：
-    /// ① 输出内零重复（集合口径，强于相邻对）；
-    /// ② v4 家族元素全部先于 v6 家族元素（链序口径）；
-    /// ③④ 输出 = 输入并集的全局去重保序（首见序独立 oracle 复算）。
     #[test]
     fn prop_merge_answers_ipv4_first_dedup(
         v4 in prop::collection::vec(arb_ipv4(), 0..12),
         v6 in prop::collection::vec(arb_ipv6_ula(), 0..12),
     ) {
         let merged = merge_answers(v4.clone(), v6.clone());
-        // ① 零重复
         prop_assert_eq!(
             merged.iter().collect::<std::collections::BTreeSet<_>>().len(),
             merged.len(),
             "输出零重复"
         );
-        // ② v4 家族先于 v6 家族
         let last_v4 = merged.iter().rposition(|ip| ip.is_ipv4());
         let first_v6 = merged.iter().position(|ip| ip.is_ipv6());
         if let (Some(l4), Some(f6)) = (last_v4, first_v6) {
             prop_assert!(l4 < f6, "v4 先于 v6（last_v4={l4}, first_v6={f6}）");
         }
-        // ③④ 首见序全局去重 oracle
         let mut oracle: Vec<IpAddr> = Vec::with_capacity(v4.len() + v6.len());
         for ip in v4.iter().chain(v6.iter()) {
             if !oracle.contains(ip) {
@@ -2141,25 +1752,6 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------
-// textfield::TextInput — 取窗几何与点击映射（architect v151 追加：v135
-// 组件化输入框的属性面补齐——取窗/点击是全应用文字定位单源，round trip
-// 与封闭性是 SKILL「解析/格式化稳定性」维度的直接落点）
-//
-// **论域登记（coder v135-fix 轮修复后扩域）**：v151 轮登记的超宽取窗不动点
-// 振荡缺陷（预留量 1↔2 振荡不终止，最小复例宽度序列 (1,2,1) 锚 1 预算 3）
-// 已在本轮修复（原退出条件优先 + 窗口重现 + 不变量守卫双路退出 + 硬上限
-// 兜底，终止性论证见 textfield.rs 实现处注释）；取窗溢出路径论域扩回
-// **全字母表**（ASCII + CJK 宽字符 + VS15 零宽），确定性回归见
-// textfield.rs field_window_oscillation_* 两测（含产品可达复例：URL 字段
-// `a` + 29 宽字符 + `a`、预算 59 = 2×29+1）；预算守恒的「恰满预算」
-// 等式断言保留窄字符域门槛（宽字原子损耗下取等不成立，不等式断言覆盖
-// 全字母表）。
-// ---------------------------------------------------------------------
-
-/// 取窗论域（全字母表）：ASCII 可打印 + CJK 宽字符 + VS15（零宽）——
-/// 不含 `…`（截断指示符，剥指示符断言的字母表卫生——notes/rust.md
-/// 「字母表与修剪口径对齐」）。
 fn field_text_full() -> impl proptest::strategy::Strategy<Value = String> {
     proptest::collection::vec(
         prop_oneof![
@@ -2172,8 +1764,6 @@ fn field_text_full() -> impl proptest::strategy::Strategy<Value = String> {
     .prop_map(|chars| chars.into_iter().collect())
 }
 
-/// field_window 属性共享构造（textfield 属性族：值 + 光标 → 取窗投影；
-/// architect v153：属性体同构脚手架单源消解）
 fn field_window_of(
     s: &str,
     cursor: usize,
@@ -2186,10 +1776,6 @@ fn field_window_of(
 }
 
 proptest! {
-    /// 取窗切片恒等（round trip，全字母表论域——v151-arch 振荡缺陷修复后
-    /// 扩域）：任意（光标, 预算, 聚焦）下，pre 剥头指示符 + post 剥尾指示符 =
-    /// value[win_lo..win_hi]——取窗只裁剪不重排，窗口内容恒为原值连续切片；
-    /// 聚焦锚（光标）恒在窗内。
     #[test]
     fn prop_field_window_slice_identity(
         s in field_text_full(),
@@ -2218,10 +1804,6 @@ proptest! {
         }
     }
 
-    /// 预算守恒（全字母表论域——v151-arch 振荡缺陷修复后扩域）：取窗
-    /// pre+post 显示宽 ≤ 预算（含双缘指示符，全字母表不等式守恒——退出两路
-    /// 均以不变量守卫收口）；纯窄字符超宽域取等——不动点退出条件
-    /// need == reserve ⇒ 内容 = 预算 − 指示符数（无宽字原子损耗时恰满预算）。
     #[test]
     fn prop_field_window_budget_conserved(
         s in field_text_full(),
@@ -2238,10 +1820,6 @@ proptest! {
         }
     }
 
-    /// 整值可见域（预算与值耦合生成，notes/rust.md 长度耦合条款；CJK 全
-    /// 字母表——预算内整值路径不进溢出循环）：w(值) ≤ 预算 → 窗口覆盖全值
-    ///（win_lo=0、win_hi=字符数、cols 长度 = 字符数 + 1、pre+post 拼接 =
-    /// 原值——无指示符）。
     #[test]
     fn prop_field_window_fits_shows_all(
         s in field_text_full(),
@@ -2258,10 +1836,6 @@ proptest! {
         prop_assert_eq!(format!("{}{}", fd.pre, fd.post), s, "pre+post = 原值");
     }
 
-    /// 点击映射封闭性（整值路径论域，budget 与值耦合——不进溢出循环）：
-    /// 任意探针列 click_offset ∈ [win_lo, win_hi]——半开区间定位 + 左右
-    /// 越界钳制保证鼠标点击永不产生窗口外光标（value_x 取非零回填值，
-    /// 覆盖 label 区/右侧 padding 两类越界域）。
     #[test]
     fn prop_click_offset_within_window(
         s in field_text_full(),
@@ -2279,9 +1853,6 @@ proptest! {
         );
     }
 
-    /// 走马灯恒宽 + 周期性（FR-01-116 全域泛化，单测仅锚两宽度样本）：
-    /// 任意（宽, 帧）滑块 + 空槽总格数恒 = width；帧 anim 与 anim+period
-    /// 画面逐字节一致（全周期 = 宽 + 块长）。
     #[test]
     fn prop_marquee_constant_width_and_periodic(width in 1usize..=60, anim in 0u64..600u64) {
         let color = ratatui::style::Color::Green;
@@ -2304,9 +1875,6 @@ proptest! {
         prop_assert_eq!(a, b, "帧画面按周期循环");
     }
 
-    /// wrap 折行损耗与行宽界：折行拼接 = 原文（零字符损耗）；每行显示宽
-    /// ≤ 折行宽（唯一豁免形态 = 单宽字整行——宽 1 窗放不下 2 列宽字，
-    /// demo 同形态）。
     #[test]
     fn prop_wrap_text_lossless_and_bounded(s in field_text_full(), width in 1usize..=40usize) {
         let lines = crate::ui::wrap_text(&s, width);

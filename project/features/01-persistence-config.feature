@@ -14,7 +14,7 @@
 #   01-persistence-config-06 download_slots 可配置生效
 #   01-persistence-config-07 单实例保护
 #   01-persistence-config-08 Q 优雅退出断点保留重启恢复
-#   01-persistence-config-09 Esc 与 Ctrl+C 优雅退出终端无花屏
+#   01-persistence-config-09 Esc 主界面无动作与 Ctrl+C 优雅退出终端无花屏（操作者 20261027 裁决：Esc 不退出，退出仅 Q/Ctrl+C）
 #   01-persistence-config-10 EZR_HOME 环境变量重定位 .ezr 目录（v1.3/D16）
 #   01-persistence-config-11 kill -9 异常终止终端自恢复（v1.3/FR-01-84）
 Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
@@ -106,16 +106,14 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
       | progress |
       | 30%      |
 
-  Scenario: 01-persistence-config-09 Esc 与 Ctrl+C 优雅退出终端无花屏
+  Scenario: 01-persistence-config-09 Esc 主界面无动作与 Ctrl+C 优雅退出终端无花屏
     Given 任务下载中
-    When 以 "<exit_key>" 退出
+    When 在主界面（无浮层打开）按 "Esc"
+    Then 应用无任何动作（不退出、任务继续下载；退出仅 Q/Ctrl+C，01-tui-display-07 口径）
+    And 任务仍在下载（速度与进度继续推进）
+    When 以 "Ctrl+C" 退出
     Then 退出语义与 Q 一致（停止传输、保留断点、保存注册表）
     And 终端无花屏残留（光标与配色恢复正常）
-
-    Examples:
-      | exit_key |
-      | Esc      |
-      | Ctrl+C   |
 
   Scenario: 01-persistence-config-10 EZR_HOME 环境变量重定位 .ezr 目录
     Given 环境变量 EZR_HOME 指向一个空目录

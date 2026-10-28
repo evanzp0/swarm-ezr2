@@ -1,22 +1,9 @@
-//! checksum — 完整性校验（FR-01-50/51/D14/D15）
-//!
-//! 校验算法表沿用 demo `CHECKSUM_ALGOS` 定稿（7 种，期望十六进制位数互不相同）：
-//! Adler-32 = 8、MD5 = 32、SHA-1 = 40、SHA-224 = 56、SHA-256 = 64、SHA-384 = 96、
-//! SHA-512 = 128。
-//!
-//! 校验值来源（D3，优先级从高到低）：① 对话框/CLI `-x <算法>=<校验码>` 显式提供；
-//! ② 保存目录下伴随文件 `<目标文件>.<算法后缀>`（算法由后缀确定，大小写不敏感；
-//! 内容为十六进制摘要或 `hex  文件名` 格式；位数不符视为无效、忽略校验；
-//! 多个并存按算法表声明顺序取最先存在者）。
-
 use std::path::Path;
 
 use md5::Md5;
 use sha1::Sha1;
 use sha2::{Digest, Sha224, Sha256, Sha384, Sha512};
 
-/// 校验算法表（添加对话框下拉顺序即伴随文件择序，D14）：
-/// （显示名，期望十六进制长度，文件后缀）
 pub const CHECKSUM_ALGOS: [(&str, usize, &str); 7] = [
     ("MD5", 32, "md5"),
     ("SHA-1", 40, "sha1"),
@@ -27,15 +14,8 @@ pub const CHECKSUM_ALGOS: [(&str, usize, &str); 7] = [
     ("Adler-32", 8, "adler32"),
 ];
 
-/// 校验算法下拉中「NONE（不校验）」的下标（v1.32/FR-01-01：首行 + 默认选中；
-/// NONE 为下拉选项而非算法——不入 [`CHECKSUM_ALGOS`]、无伴随文件后缀、
-/// CLI `-x` 不接受，FR-01-50 v1.32 注记）
 pub const CK_NONE: usize = 0;
 
-/// 对话框校验算法下拉 8 项（v1.32/FR-01-01 修订，对齐 ezr-demo m3
-/// `CHECKSUM_ALGOS`：首行 NONE（右列 `—` 占位、期望长度 0 仅作占位显示）
-/// 加 [`CHECKSUM_ALGOS`] 7 种；本表由算法表单源派生，防双源漂移）。
-/// 元组为（显示名，期望十六进制长度）。
 #[must_use]
 pub fn checksum_dropdown() -> Vec<(&'static str, usize)> {
     let mut v = Vec::with_capacity(1 + CHECKSUM_ALGOS.len());
@@ -44,12 +24,9 @@ pub fn checksum_dropdown() -> Vec<(&'static str, usize)> {
     v
 }
 
-/// 校验码校验错误
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChecksumError {
-    /// 码值含非十六进制字符
     NotHex,
-    /// 位数与所选算法不符
     BadLength { expected: usize, got: usize },
 }
 
@@ -64,11 +41,6 @@ impl std::fmt::Display for ChecksumError {
     }
 }
 
-/// 按算法表下标校验并规范化校验码（对话框确认/CLI `-x` 用，D15）：
-/// 统一小写、必须纯十六进制、位数与算法一致。
-///
-/// # Errors
-/// 非十六进制或位数不符时返回 [`ChecksumError`]（调用方 toast/报错退出）。
 pub fn validate_value(algo_idx: usize, raw: &str) -> Result<String, ChecksumError> {
     let (algo, need, _) = CHECKSUM_ALGOS[algo_idx.min(CHECKSUM_ALGOS.len() - 1)];
     let v = raw.trim().to_lowercase();
@@ -86,11 +58,6 @@ pub fn validate_value(algo_idx: usize, raw: &str) -> Result<String, ChecksumErro
     Ok(v)
 }
 
-/// CLI `-x <算法>=<校验码>` 解析（D15）：算法名 ∈ 后缀集且大小写不敏感；
-/// 缺少 `=` 前缀、算法无法识别或位数不符 → 启动即报错退出。
-///
-/// # Errors
-/// 三类非法输入分别返回相应消息（字符串含面向用户的中文描述）。
 pub fn parse_cli_x(arg: &str) -> Result<(usize, String), String> {
     let Some((algo_raw, value_raw)) = arg.split_once('=') else {
         return Err(format!(
@@ -111,7 +78,6 @@ pub fn parse_cli_x(arg: &str) -> Result<(usize, String), String> {
         .map_err(|e| format!("-x 参数非法：{e}"))
 }
 
-/// 按显示名找算法下标（大小写不敏感；`Adler-32`/`adler-32` 等均匹配）
 #[must_use]
 pub fn algo_index_by_name(name: &str) -> Option<usize> {
     let n = name.trim().to_lowercase().replace('-', "");
@@ -120,12 +86,6 @@ pub fn algo_index_by_name(name: &str) -> Option<usize> {
         .position(|(disp, _, _)| disp.to_lowercase().replace('-', "") == n)
 }
 
-/// 按显示名精确匹配算法表下标，未收录回退 SHA-256 = 3（规范名回查场景：
-/// 任务 `checksum.algo` / `VerifySpec.algo` 恒为表内规范名——写入点全部取自
-/// `CHECKSUM_ALGOS[i].0`）。与 [`algo_index_by_name`]（宽容匹配，用户输入用）
-/// 语义刻意不同：变体名（如小写 "sha1"）落默认值而非宽容命中，与既有逐点
-/// 行为一致（architect v116 单源收口：supervisor verify 与修改对话框预填
-/// 原各有一份 exact-match + unwrap_or(3) 内联）。
 #[must_use]
 pub fn algo_index_exact_or_default(name: &str) -> usize {
     CHECKSUM_ALGOS
@@ -134,8 +94,6 @@ pub fn algo_index_exact_or_default(name: &str) -> usize {
         .unwrap_or(3)
 }
 
-/// 六种 Digest 算法的流式文件哈希函数表（下标即算法表下标 0..=5）；
-/// 越界下标一律走 Adler-32 流式分支（与既有 `_ =>` 口径一致）
 type FileStreamHash =
     fn(&mut std::io::BufReader<std::fs::File>, &mut [u8]) -> Result<String, String>;
 
@@ -148,7 +106,6 @@ const FILE_STREAM_HASHES: [FileStreamHash; 6] = [
     hash_stream::<Sha512, std::io::BufReader<std::fs::File>>,
 ];
 
-/// Adler-32 流式摘要（与 Digest 分支同口径：256 KiB 缓冲循环读）
 fn adler_stream(
     reader: &mut std::io::BufReader<std::fs::File>,
     buf: &mut [u8],
@@ -165,10 +122,6 @@ fn adler_stream(
     Ok(format!("{:08x}", a.checksum()))
 }
 
-/// 计算文件摘要并输出十六进制小写（流式，不整载内存；校验中/伴随文件预置用）
-///
-/// # Errors
-/// 文件不可读或读取失败时返回错误消息。
 pub fn digest_file(path: &str, algo_idx: usize) -> Result<String, String> {
     let f = std::fs::File::open(path).map_err(|e| format!("无法读取文件（{e}）"))?;
     let mut reader = std::io::BufReader::with_capacity(256 * 1024, f);
@@ -191,8 +144,6 @@ fn hash_stream<D: Digest, R: std::io::Read>(r: &mut R, buf: &mut [u8]) -> Result
     Ok(d.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// 计算字节摘要（十六进制小写；运行时路径走流式 `digest_file`，
-/// 本函数供测试与内存数据校验使用）
 #[must_use]
 #[allow(dead_code)]
 pub fn digest_bytes(data: &[u8], algo_idx: usize) -> String {
@@ -203,7 +154,6 @@ pub fn digest_bytes(data: &[u8], algo_idx: usize) -> String {
         3 => hex(&Sha256::digest(data)),
         4 => hex(&Sha384::digest(data)),
         5 => hex(&Sha512::digest(data)),
-        // Adler-32：按大端 8 位十六进制
         _ => format!("{:08x}", adler32_slice(data)),
     }
 }
@@ -213,23 +163,17 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Adler-32 直接对字节切片计算
 #[allow(dead_code)]
 fn adler32_slice(data: &[u8]) -> u32 {
     adler::adler32_slice(data)
 }
 
-/// 伴随文件解析结果
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SidecarChecksum {
-    /// 算法表下标
     pub algo_idx: usize,
-    /// 十六进制摘要（小写）
     pub value: String,
 }
 
-/// 伴随文件内容行解析（D14）：`hex` 或 `hex  文件名`（GNU 工具风格，分隔为空白）。
-/// 位数与算法不符 → None（视为无效、忽略校验）。
 #[must_use]
 pub fn parse_companion_content(algo_idx: usize, content: &str) -> Option<SidecarChecksum> {
     let (_, need, _) = CHECKSUM_ALGOS[algo_idx];
@@ -242,14 +186,11 @@ pub fn parse_companion_content(algo_idx: usize, content: &str) -> Option<Sidecar
     Some(SidecarChecksum { algo_idx, value: v })
 }
 
-/// 读取并解析单个伴随文件；文件不可读或内容无效 → None（伴随情形，继续其余探测）
 fn probe_companion(idx: usize, path: &Path) -> Option<SidecarChecksum> {
     let content = std::fs::read_to_string(path).ok()?;
     parse_companion_content(idx, &content)
 }
 
-/// 目录扫描：取首个（大小写不敏感）文件名变体即停——
-/// 命中即读取解析，失败也只停在该变体（原 break 语义：不再试后续变体）。
 fn scan_companion_variant(
     idx: usize,
     save_dir: &str,
@@ -267,14 +208,8 @@ fn scan_companion_variant(
     None
 }
 
-/// 在保存目录中查找目标文件的校验伴随文件（D14）：
-/// 按算法表声明顺序取最先存在且内容有效者；文件名后缀大小写不敏感。
-///
-/// # Errors
-/// 目录不可读不视为错误（返回 None 的伴随情形），仅文件存在但读取失败时返回错误。
 pub fn find_companion(save_dir: &str, file_name: &str) -> Option<SidecarChecksum> {
     for (idx, (_, _, suffix)) in CHECKSUM_ALGOS.iter().enumerate() {
-        // 大小写不敏感：先试原名后缀（快路径），再扫描目录匹配大小写变体
         let p = Path::new(save_dir).join(format!("{file_name}.{suffix}"));
         if p.is_file() {
             if let Some(sc) = probe_companion(idx, &p) {
@@ -295,7 +230,6 @@ mod tests {
 
     #[test]
     fn algo_table_lengths_match_d15() {
-        // FR-01-50 算法表：Adler-32=8、MD5=32、SHA-1=40、SHA-224=56、SHA-256=64、SHA-384=96、SHA-512=128
         let expect = [
             ("MD5", 32),
             ("SHA-1", 40),
@@ -331,9 +265,9 @@ mod tests {
 
     #[test]
     fn cli_x_requires_algo_prefix() {
-        assert!(parse_cli_x("deadbeef").is_err()); // 缺 =
-        assert!(parse_cli_x("crc32=deadbeef").is_err()); // 算法无法识别
-        assert!(parse_cli_x("md5=deadbeef").is_err()); // 位数不符
+        assert!(parse_cli_x("deadbeef").is_err());
+        assert!(parse_cli_x("crc32=deadbeef").is_err());
+        assert!(parse_cli_x("md5=deadbeef").is_err());
         let (idx, v) = parse_cli_x(&format!("SHA256={}", "AbCd".repeat(16))).unwrap();
         assert_eq!(idx, 3);
         assert_eq!(v, "abcd".repeat(16));
@@ -352,7 +286,6 @@ mod tests {
 
     #[test]
     fn digest_known_vectors() {
-        // 空串/abc 标准向量
         assert_eq!(digest_bytes(b"", 0), "d41d8cd98f00b204e9800998ecf8427e");
         assert_eq!(digest_bytes(b"abc", 0), "900150983cd24fb0d6963f7d28e17f72");
         assert_eq!(
@@ -375,7 +308,6 @@ mod tests {
             digest_bytes(b"abc", 5),
             "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
         );
-        // Adler-32("abc") = 0x024d0127
         assert_eq!(digest_bytes(b"abc", 6), "024d0127");
     }
 
@@ -386,12 +318,9 @@ mod tests {
         assert_eq!(sc.value, "a".repeat(64));
         let sc = parse_companion_content(6, "024d0127").unwrap();
         assert_eq!(sc.value, "024d0127");
-        // 位数不符 → 无效
         assert!(parse_companion_content(0, "abcd").is_none());
         assert!(parse_companion_content(3, &format!("{}  f\n", "a".repeat(63))).is_none());
-        // 非十六进制 → 无效
         assert!(parse_companion_content(0, "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz").is_none());
-        // 空内容 → 无效
         assert!(parse_companion_content(0, "\n  \n").is_none());
     }
 
@@ -400,12 +329,10 @@ mod tests {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-ck");
         let file = dir.join("f.bin");
         std::fs::write(&file, b"abc").unwrap();
-        // 并存 sha256 与 md5：算法表顺序 MD5 在前 → 取 md5
         std::fs::write(dir.join("f.bin.sha256"), "a".repeat(64)).unwrap();
         std::fs::write(dir.join("f.bin.md5"), "900150983cd24fb0d6963f7d28e17f72").unwrap();
         let sc = find_companion(dir.to_str().unwrap(), "f.bin").unwrap();
         assert_eq!(sc.algo_idx, 0);
-        // 大写后缀文件（SHA1 大写）也要能找到
         std::fs::write(
             dir.join("f.bin.SHA1"),
             "a9993e364706816aba3e25717850c26c9cd0d89d",
@@ -414,7 +341,6 @@ mod tests {
         std::fs::remove_file(dir.join("f.bin.md5")).unwrap();
         let sc = find_companion(dir.to_str().unwrap(), "f.bin").unwrap();
         assert_eq!(sc.algo_idx, 1);
-        // 位数不符的伴随文件 → 忽略校验（删掉其余伴随后无有效者）
         std::fs::write(dir.join("f.bin.sha1"), "short").unwrap();
         std::fs::remove_file(dir.join("f.bin.sha256")).unwrap();
         assert!(find_companion(dir.to_str().unwrap(), "f.bin").is_none());
@@ -440,14 +366,12 @@ mod tests {
     fn digest_file_all_algos_roundtrip_crossing_buffer() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-ck3");
         let p = dir.join("big.bin");
-        // 300_000 字节 > 256 KiB 缓冲：强制多次 read 循环（覆盖函数表全部分支）
         let data: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
         std::fs::write(&p, &data).unwrap();
         for algo in 0..7 {
             let h = digest_file(p.to_str().unwrap(), algo).unwrap();
             assert_eq!(h, digest_bytes(&data, algo), "algo idx {algo}");
         }
-        // 越界下标沿用既有口径：走 Adler-32 分支（等价 idx 6）
         let h = digest_file(p.to_str().unwrap(), 42).unwrap();
         assert_eq!(h, digest_bytes(&data, 6));
         std::fs::remove_dir_all(&dir).unwrap();

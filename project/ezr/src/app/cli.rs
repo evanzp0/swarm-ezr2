@@ -1,16 +1,8 @@
-//! cli — CLI 启动参数添加任务（FR-01-01；入口 shell 与应用层的边界归位）
-//!
-//! `add_cli_task` 原位于 main.rs 的 `impl App` 块；架构评审（cleaner 批次后）依
-//! notes/rust.md「入口（main.rs）不扩展应用主类型的 impl」条款移入应用层——
-//! main.rs 只保留 CLI 解析（parse_cli）与调用，任务创建逻辑与对话框添加流
-//! （dialogs.rs）同层同权。
-
 use super::App;
 use crate::model::namegen::SIDECAR_EXT;
 use crate::model::{protocol_of_url, unix_now, Checksum, Task};
 
 impl App {
-    /// CLI 启动参数直接添加任务（FR-01-01；与对话框共用校验与命名规则）
     pub fn add_cli_task(
         &mut self,
         url: String,
@@ -18,7 +10,6 @@ impl App {
         conns: Option<usize>,
         checksum: Option<Checksum>,
     ) {
-        // URL 校验（FR-01-05，口径单源 model::is_http_url）
         if !crate::model::is_http_url(&url) {
             self.set_toast(format!("⚠ 仅支持 http:// 或 https:// 链接（{url}）"));
             return;
@@ -29,11 +20,6 @@ impl App {
             .trim_end_matches('/')
             .to_string();
         let base_name = crate::model::namegen::derive_name(None, None, &url);
-        // 断点自动接续（FR-01-26 v1.28 路径基）：保存目录存在与推导名同名的
-        // 有效 sidecar 即沿用原名（sidecar 不存储任何 URL，FR-01-20 v1.28——
-        // 不再做同 URL 校验；误接续由 FR-01-22 一致性检查兜底）；否则重名检测
-        // （任务表 + 盘上）自动追加序号（与对话框添加同用 namegen::dedupe，
-        // 口径一致）
         let resumed =
             crate::model::sidecar::Sidecar::load(&format!("{dir}/{base_name}{SIDECAR_EXT}"))
                 .is_some();
@@ -48,7 +34,6 @@ impl App {
         };
         let protocol = protocol_of_url(&url);
         let ts = unix_now();
-        // v1.20：任务 ID = u32 随机数 + 任务全集查重（model::idgen），不再顺序自增
         let id = self.alloc_task_id();
         let mut t = Task::new_queued(
             id,
@@ -63,8 +48,6 @@ impl App {
             crate::model::config::ProxyChoice::Direct,
             ts,
         );
-        // 接续任务名随接续定稿（同 dialogs.rs 添加入口口径：失效重下钉名，
-        // 防残留 .downloading 去重漂移 <name>.1，规格 01-resume-sidecar-14）
         if resumed {
             t.name_locked = true;
         }
@@ -96,9 +79,7 @@ mod cli_add_tests {
         app.add_cli_task(url, Some(save), None, None);
         assert_eq!(app.tasks.len(), 2);
         assert_eq!(app.tasks[0].name, "f.bin");
-        // 同目录同名：第二个任务经 namegen::dedupe（任务表+盘上口径）追加序号
         assert_eq!(app.tasks[1].name, "f.bin.1");
-        // v1.20：随机分配的 ID 互不相同且非零（0 为保留哨兵）
         assert_ne!(app.tasks[0].id, app.tasks[1].id, "随机分配的 ID 互不相同");
         assert_ne!(app.tasks[0].id, 0);
         assert_ne!(app.tasks[1].id, 0);
@@ -108,7 +89,6 @@ mod cli_add_tests {
 
     #[tokio::test]
     async fn cli_add_rejects_non_http_url_with_toast() {
-        // FR-01-05：URL 校验口径单源 model::is_http_url——非法 scheme 不建任务
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-cli-bad-url");
         let reg = dir.join("registry.json").to_string_lossy().to_string();
         let mut app = App::new(Config::default(), reg);
@@ -125,8 +105,6 @@ mod cli_add_tests {
 
     #[tokio::test]
     async fn cli_add_resumes_by_path_sidecar_keeps_name() {
-        // FR-01-26 v1.28 路径基：保存目录存在与推导名同名的有效 sidecar
-        // 即沿用原名自动接续（sidecar 不存储 URL，无同 URL 校验）
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-cli-resume");
         let reg = dir.join("registry.json").to_string_lossy().to_string();
         let save = dir.to_string_lossy().to_string();

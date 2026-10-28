@@ -1,5 +1,3 @@
-//! respond — 响应构造与 body 输出（状态注入/重定向/一致性头/Range/流式 body）
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
@@ -7,7 +5,6 @@ use std::path::Path;
 use crate::query::qget;
 use crate::range::parse_range;
 
-/// 写入响应头
 pub fn write_head(
     w: &mut impl Write,
     status: u16,
@@ -23,7 +20,6 @@ pub fn write_head(
     w.write_all(head.as_bytes())
 }
 
-/// `?status=<code>[&retry_after=<s>]` 注入（探测必失败用例）；命中 → 已响应
 pub fn respond_inject(w: &mut TcpStream, kv: &[(String, String)]) -> bool {
     let Some(status) = qget(kv, "status") else {
         return false;
@@ -39,7 +35,6 @@ pub fn respond_inject(w: &mut TcpStream, kv: &[(String, String)]) -> bool {
     true
 }
 
-/// `?redirect=N`：Location 逐跳递减（N>0 才响应；命中 → 已响应）
 pub fn respond_redirect(w: &mut TcpStream, target: &str, kv: &[(String, String)]) -> bool {
     match qget(kv, "redirect").and_then(|s| s.parse::<u32>().ok()) {
         Some(n) if n > 0 => {
@@ -56,8 +51,6 @@ pub fn respond_redirect(w: &mut TcpStream, target: &str, kv: &[(String, String)]
     }
 }
 
-/// ETag 口径：`?etag=X` 覆盖；否则 `"名字规范化-{total}"`（名字中 /?&= → `_`）；
-/// `?noheaders=1` 时不返回
 fn etag_of(kv: &[(String, String)], file_name: &str, total: u64) -> Option<String> {
     match qget(kv, "etag") {
         Some(e) => Some(e.to_string()),
@@ -69,7 +62,6 @@ fn etag_of(kv: &[(String, String)], file_name: &str, total: u64) -> Option<Strin
     .filter(|_| qget(kv, "noheaders").is_none())
 }
 
-/// 公共一致性头（ETag / Last-Modified / Content-Disposition / Accept-Ranges）
 fn common_headers(kv: &[(String, String)], file_name: &str, total: u64) -> Vec<(String, String)> {
     let mut common: Vec<(String, String)> = Vec::new();
     if let Some(e) = etag_of(kv, file_name, total) {
@@ -93,8 +85,6 @@ fn common_headers(kv: &[(String, String)], file_name: &str, total: u64) -> Vec<(
     common
 }
 
-/// body 数据源：swapsize 物化缓冲优先（从 start 切片），否则按需 seek 文件
-/// （QA 大文件路径不整载内存——每请求内存占用恒定）
 fn body_source<'a>(
     base: &Path,
     materialized: &'a Option<Vec<u8>>,
@@ -112,9 +102,6 @@ fn body_source<'a>(
     Box::new(f)
 }
 
-/// 流式输出 body：从 `src` 读 `remaining` 字节分块写出。
-/// speed=0 → 64 KiB 连发；speed>0 → 100ms 节流分块（沿用既有每请求限速口径）；
-/// disconnect_at=Some(n) → 只发 min(n, remaining) 字节后强制断连
 pub fn emit_stream(
     w: &mut TcpStream,
     src: &mut impl Read,
@@ -129,12 +116,10 @@ pub fn emit_stream(
         emit_throttled(w, src, limit, speed);
     }
     if disconnect_at.is_some() {
-        // 中途断连：直接关闭（不发 FIN 前的剩余数据）
         let _ = w.shutdown(std::net::Shutdown::Both);
     }
 }
 
-/// 不限速拷贝至多 `remaining` 字节（源提前耗尽即止；写失败静默放弃）
 fn copy_n_quiet(w: &mut TcpStream, src: &mut impl Read, mut remaining: u64) {
     let mut buf = vec![0u8; 64 * 1024];
     while remaining > 0 {
@@ -152,7 +137,6 @@ fn copy_n_quiet(w: &mut TcpStream, src: &mut impl Read, mut remaining: u64) {
     let _ = w.flush();
 }
 
-/// 慢速门控输出：每 100ms 发一批（沿用既有 `speed*100/1000` 口径）
 fn emit_throttled(w: &mut TcpStream, src: &mut impl Read, limit: u64, speed: u64) {
     let chunk_ms = 100u64;
     let per_tick = ((speed as u128 * chunk_ms as u128) / 1000).max(1) as usize;
@@ -176,7 +160,6 @@ fn emit_throttled(w: &mut TcpStream, src: &mut impl Read, limit: u64, speed: u64
     }
 }
 
-/// 单个 chunk 帧（长度行 + 数据 + CRLF）
 fn write_chunk(w: &mut TcpStream, chunk: &[u8]) -> std::io::Result<()> {
     writeln!(w, "{:x}\r", chunk.len())?;
     w.write_all(chunk)?;
@@ -184,7 +167,6 @@ fn write_chunk(w: &mut TcpStream, chunk: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
-/// chunked 输出（无 Content-Length；streamy.bin），流式读盘
 pub fn emit_chunked(w: &mut TcpStream, src: &mut impl Read, speed: u64) {
     let per = if speed == 0 {
         64 * 1024
@@ -210,14 +192,7 @@ pub fn emit_chunked(w: &mut TcpStream, src: &mut impl Read, speed: u64) {
     let _ = w.flush();
 }
 
-/// 文件响应：打开 → swapsize 注入 → 一致性头 → Range 判定 → 流式 body。
-/// 返回 `false` = 文件不存在（已回 404）。
-///
-/// Range 口径（FR-01-12，QA-DE-02）：`?norange=1` 忽略 Range 返回 200 全量；
-/// `streamy.bin`（无 Content-Length 形态）对 Range 同样返回 200 全量 chunked——
-/// 隐藏 Content-Length 的服务端不应在 206 中携带 Content-Length/Content-Range，
-/// 否则探测（Range: bytes=0-）会误判为支持续传。
-#[allow(clippy::too_many_lines)] // 分支表即规格（状态注入顺序与 QA 口径一一对应）
+#[allow(clippy::too_many_lines)]
 pub fn serve_file(
     w: &mut TcpStream,
     kv: &[(String, String)],
@@ -239,8 +214,6 @@ pub fn serve_file(
     }
     let file_size = meta.len();
 
-    // 同 URL 换内容（swapsize=N）：物化到内存并 resize（扩容补 0xAB）；
-    // 读取失败与原口径一致 → 404（QA 约定 swapsize 仅用于小文件）
     let swap_n = qget(kv, "swapsize").and_then(|s| s.parse::<u64>().ok());
     let materialized: Option<Vec<u8>> = match swap_n {
         Some(n) => match std::fs::read(base) {
@@ -248,7 +221,6 @@ pub fn serve_file(
                 d.resize(n as usize, 0xAB);
                 Some(d)
             }
-            // 与原口径一致：读取失败 → 404
             Err(_) => {
                 let _ = write_head(w, 404, "Not Found", &[("Content-Length", "0".to_string())]);
                 return false;
@@ -297,7 +269,6 @@ pub fn serve_file(
             }
         }
         Some(_) => {
-            // Range 起点越界：416
             let _ = write_head(
                 w,
                 416,
@@ -306,7 +277,6 @@ pub fn serve_file(
             );
         }
         None => {
-            // 200 全量（含 norange 与无 Range 头）
             let refs: Vec<(&str, String)> = if no_length {
                 common
                     .iter()
@@ -358,7 +328,6 @@ mod tests {
         assert_eq!(etag_of(&over, "f.bin", 100), Some("X1".into()));
         let nh = kv(&[("noheaders", "1")]);
         assert_eq!(etag_of(&nh, "f.bin", 100), None);
-        // 名字规范化：/?&= → _
         let none = kv(&[]);
         assert_eq!(
             etag_of(&none, "a/b?c&d=e", 7),
@@ -391,14 +360,12 @@ mod tests {
 
     #[test]
     fn respond_inject_and_redirect_gate() {
-        // 无 status/redirect → 不响应
         let (c, mut s) = tcp_pair();
         assert!(!respond_inject(&mut s, &kv(&[])));
         drop(s);
         drop(c);
     }
 
-    /// 建立一对已连接的回环 TCP 流
     fn tcp_pair() -> (TcpStream, TcpStream) {
         use std::net::TcpListener;
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -428,7 +395,6 @@ mod tests {
         assert!(resp.starts_with("HTTP/1.1 503 Injected\r\n"));
         assert!(resp.contains("Retry-After: 10"));
         assert!(resp.contains("Content-Length: 0"));
-        // 非法 status → 500；无 retry_after → 无该头
         let (mut c, mut s) = tcp_pair();
         assert!(respond_inject(&mut s, &kv(&[("status", "zzz")])));
         drop(s);
@@ -450,7 +416,6 @@ mod tests {
         assert!(resp.starts_with("HTTP/1.1 302 Found\r\n"));
         assert!(resp.contains("Location: /f.bin?redirect=2&x=1"));
 
-        // redirect=0 → 不响应（落到文件服务）
         let (c, mut s) = tcp_pair();
         assert!(!respond_redirect(
             &mut s,
@@ -459,7 +424,6 @@ mod tests {
         ));
         drop(s);
         drop(c);
-        // 非法 redirect → 不响应
         let (c, mut s) = tcp_pair();
         assert!(!respond_redirect(
             &mut s,

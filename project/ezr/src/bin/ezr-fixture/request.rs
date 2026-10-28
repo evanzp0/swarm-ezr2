@@ -1,8 +1,5 @@
-//! request — fixture 侧 HTTP/1.1 请求解析与访问日志
-
 use std::io::{BufRead, BufReader, Read, Write};
 
-/// 请求行 + 头（手工 HTTP/1.1 解析，httparse）
 pub struct Request {
     pub method: String,
     pub target: String,
@@ -10,7 +7,6 @@ pub struct Request {
     pub accept_encoding: Option<String>,
 }
 
-/// 按头名（大小写不敏感）取第一个头的值
 fn header_find(headers: &[httparse::Header<'_>], name: &str) -> Option<String> {
     headers
         .iter()
@@ -19,7 +15,6 @@ fn header_find(headers: &[httparse::Header<'_>], name: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// 读取请求头块剩余字节（首行已被调用方消费；读到 `\r\n\r\n` 或流结束）
 fn read_head_rest<R: Read>(stream: &mut BufReader<R>) -> std::io::Result<Vec<u8>> {
     let mut rest = Vec::new();
     loop {
@@ -36,7 +31,6 @@ fn read_head_rest<R: Read>(stream: &mut BufReader<R>) -> std::io::Result<Vec<u8>
     Ok(rest)
 }
 
-/// 读取并解析一个请求（对端关闭 → Ok(None)）
 pub fn read_request<R: Read>(stream: &mut BufReader<R>) -> std::io::Result<Option<Request>> {
     let mut line = String::new();
     if stream.read_line(&mut line)? == 0 {
@@ -44,7 +38,6 @@ pub fn read_request<R: Read>(stream: &mut BufReader<R>) -> std::io::Result<Optio
     }
     let mut headers = [httparse::EMPTY_HEADER; 32];
     let mut req = httparse::Request::new(&mut headers);
-    // httparse 需要完整的头块：把首行与其余头一起喂入
     let rest = read_head_rest(stream)?;
     let mut head = line.clone().into_bytes();
     head.extend_from_slice(&rest);
@@ -69,7 +62,6 @@ pub fn read_request<R: Read>(stream: &mut BufReader<R>) -> std::io::Result<Optio
     }))
 }
 
-/// 访问日志（JSONL；字段：ts/method/path/range/accept_encoding）
 pub struct AccessLog {
     pub(crate) file: Option<std::sync::Mutex<std::fs::File>>,
 }
@@ -127,16 +119,13 @@ mod tests {
         assert_eq!(req.target, "/a.bin?x=1");
         assert_eq!(req.range.as_deref(), Some("bytes=5-"));
         assert_eq!(req.accept_encoding.as_deref(), Some("identity"));
-        // 对端关闭（空输入）→ None
         assert!(parse_all(b"").unwrap().is_none());
-        // 无 Range 头 → None
         let req = parse_all(b"GET /a HTTP/1.1\r\n\r\n").unwrap().unwrap();
         assert!(req.range.is_none());
     }
 
     #[test]
     fn read_request_headless_body_is_error() {
-        // 只有半截头块 → partial → InvalidData
         let r = parse_all(b"GET /a HTTP/1.1\r\nRange: bytes=0-");
         assert!(r.is_err());
     }

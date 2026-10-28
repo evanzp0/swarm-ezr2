@@ -1,6 +1,3 @@
-//! range — HTTP Range 头解析（纯函数）
-
-/// `bytes=a-b` / `bytes=a-` 解析（开放末端 → u64::MAX；非法 → None）
 pub fn parse_range(v: &str) -> Option<(u64, u64)> {
     let v = v.strip_prefix("bytes=")?;
     let (a, b) = v.split_once('-')?;

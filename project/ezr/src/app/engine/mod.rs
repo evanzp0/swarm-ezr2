@@ -1,37 +1,19 @@
-//! engine — App 侧引擎适配器（spec 构造 / tick 调度 / 事件消费）
-//!
-//! 自单文件按职责拆分（architect v116：app/engine.rs 118 变异点 > 100 阈值，
-//! 目录化三文件各低于阈值，hardender 可 `--file` 分块跑变异；纯移动零行为
-//! 变化，#[path] 挂载测试 crate 经 app/mod.rs 的 `mod engine;` 解析等价，
-//! 见 notes/rust.md）：
-//! - 本文件（mod.rs）：消费侧适配与 spec 管道（conn_from_view / update_conn_stats /
-//!   make_spec / resolve_endpoint / disk_precheck）+ 收尾（save_registry / shutdown）；
-//! - `tick`：主循环 tick 六段管线与重试补发；
-//! - `evt`：引擎事件处理（状态机权威转换点 on_evt）与失败统一处理。
-
 use std::collections::HashMap;
 use std::time::Instant;
 
 use super::App;
 use crate::engine::Cmd;
-// 测试模块（本文件 cfg(test) mod 经 use super::* 消费）专用导入：产品构建
-// 不产生该路径（Evt 实际消费在 evt.rs、SpeedWindow 在 evt.rs/tick.rs）
 #[cfg(test)]
 use crate::engine::Evt;
 use crate::model::registry::Registry;
 use crate::model::sidecar::Sidecar;
-// SpeedWindow：连接级滑窗（FR-01-102 数据面，与任务级 windows 同构）；
-// WINDOW：窗口端点老化守卫。SmoothedSpeed（展示面 EMA）在 tick.rs。
 use crate::model::speed::{SpeedWindow, WINDOW};
 use crate::model::{checksum, Checksum, FailKind, Task, TaskState};
 
+mod bt;
 mod evt;
 mod tick;
 
-/// ConnView → Connection 消费侧适配（FR-01-81 修订二：进度视图字段直传，
-/// 块号不进 UI 模型）。原为低层 `ConnView::to_connection` 构造方法；架构评审
-/// 依 notes/rust.md「低层不得构造高层展示类型」移到消费侧（低层暴露纯数据，
-/// 高层在消费侧内联构造）。
 fn conn_from_view(c: &crate::engine::ConnView) -> crate::model::Connection {
     crate::model::Connection {
         id: c.id,
@@ -41,18 +23,9 @@ fn conn_from_view(c: &crate::engine::ConnView) -> crate::model::Connection {
     }
 }
 
-/// 连接级账本键（任务 id, 连接 id）与观测对（块号, 块内已写字节）
 type ConnKey = (u32, usize);
 type ConnObs = (u32, u64);
 
-/// 连接级账本推进（FR-01-99 ②累计 + FR-01-102 数据面，App 消费侧计量）：
-/// 按 (任务, 连接) 跟踪 Progress 事件的块内 done 增量——同块 = 差值；
-/// 换块/首次观测 = 新块内已写字节（本轮下载内的落盘量）；累计量随增量累加。
-/// 在传连接（持块未写满，或流式单连接 done > 0）的 1s 滑窗以连接级累计字节读数
-/// 推进（每次事件 push，任务级 SpeedWindow 同构，FR-01-102 ①）；展示面采样
-/// （每秒一次 + EMA）在 tick ⑤。待命/空连接（cap = 0 且 done = 0，或块已完成）
-/// 不推进窗口（展示面零值速断，FR-01-102 ③）；窗口端点老化（停传 > 1s：暂停
-/// 恢复、块间隙）先清窗再推，速率只测最近 1s 增量。
 fn update_conn_stats(
     conn_prev: &mut HashMap<ConnKey, ConnObs>,
     conn_cum: &mut HashMap<ConnKey, u64>,
@@ -65,15 +38,10 @@ fn update_conn_stats(
         let key = (task_id, c.id);
         let delta = match conn_prev.get(&key) {
             Some(&(pb, pd)) if pb == c.block => c.done.saturating_sub(pd),
-            // 换块（领新块）或首次观测：增量 = 新块内已写字节（均为本轮下载内落盘）
             _ => c.done,
         };
         conn_prev.insert(key, (c.block, c.done));
         let cap = c.end.saturating_sub(c.start);
-        // 在传判定（单源 [`crate::model::conn_transferring`]）：持块连接 =
-        // 未写满（done < cap）；流式单连接（FR-01-12 降级路径，无 Content-Length
-        // → cap = 0）= done > 0——速度窗口正常推进，并发面板明细/头部并发随
-        // ConnPhase 活跃口径同步显示。展示面采样（tick ⑤）同门消费
         let active = crate::model::conn_transferring(cap, c.done);
         if delta > 0 {
             *conn_cum.entry(key).or_insert(0) += delta;
@@ -91,8 +59,6 @@ fn update_conn_stats(
 }
 
 impl App {
-    /// 校验期望解析（FR-01-50/D3）：显式提供优先；否则查保存目录伴随文件
-    /// `<目标文件>.<算法后缀>`（算法表顺序取先，位数不符视为无效并提示）。
     pub(super) fn resolve_checksum(
         save_dir: &str,
         name: &str,
@@ -107,9 +73,6 @@ impl App {
         })
     }
 
-    /// 构建任务启动规格（Start 前置：读 sidecar 断点、磁盘预检在获槽时）。
-    /// 任务级代理端点由调用方先经 [`App::resolve_endpoint`] 解析传入
-    /// （v1.5/FR-01-86/D18：三态选择 → 端点；失效引用 → 直连 + toast 一次）
     pub(super) fn make_spec(
         &self,
         t: &Task,
@@ -129,20 +92,12 @@ impl App {
             expected_value: t.checksum.as_ref().map(|c| c.value.clone()),
             sidecar,
             sidecar_path: sc_path,
-            // 任务名已随首次探测定稿（v1.28「首次探测已定名」标记 name_locked，
-            // 原 final_url.is_some() 口径——Probed 置位且不随失效重置）：之后的
-            // 一切重启（失效重下/续传/重试）沿用既有名。失效重启若重新去重，
-            // 会因残留 .downloading 文件漂移新名（m.bin → m.bin.1…），使
-            // sidecar 落盘名与任务名错位、下轮续传一致性检查被跳过（FR-01-22
-            // 违例），故必须钉住。
             keep_name: t.name_locked,
             added_at: t.added_at,
             proxy_endpoint,
         }
     }
 
-    /// 任务级代理选择 → 端点（v1.5/FR-01-86/D18）。命名引用失效 → 直连 +
-    /// toast 一次（Probed 前发出，用户可见；Global 未配置全局 = 直连不提示）
     pub(super) fn resolve_endpoint(
         &mut self,
         choice: &crate::model::ProxyChoice,
@@ -156,12 +111,11 @@ impl App {
         endpoint
     }
 
-    /// 磁盘空间预检（FR-01-44）：可用空间 < 剩余需下载量 → 失败停等
     pub(super) fn disk_precheck(&mut self, idx: usize) -> bool {
         let t = &self.tasks[idx];
         let need = t.total.saturating_sub(t.downloaded);
         if need == 0 || !t.probed {
-            return true; // 未探测（无大小）时跳过预检，大小校验兜底
+            return true;
         }
         let dir = std::path::Path::new(&t.save_dir);
         let avail = std::fs::create_dir_all(dir)
@@ -184,18 +138,15 @@ impl App {
         true
     }
 
-    /// 保存注册表（原子写；状态转换与周期兜底共用）
     pub(crate) fn save_registry(&mut self) {
         self.last_save = Instant::now();
         if let Some(dir) = std::path::Path::new(&self.registry_path).parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        // v1.20：任务 ID 随机分配，注册表不再携带 next_id
         let reg = Registry::from_tasks(&self.tasks);
         let _ = reg.save(&self.registry_path);
     }
 
-    /// 优雅退出收尾：暂停全部传输（引擎落盘 sidecar）→ 保存注册表（FR-01-73）
     pub async fn shutdown(&mut self) {
         let downloading: Vec<u32> = self
             .tasks
@@ -206,9 +157,7 @@ impl App {
         for id in downloading {
             self.engine.send(Cmd::Pause { id }).await;
         }
-        // 给引擎 sidecar 落盘留出窗口（最多 2s 周期 + 暂停即时落盘）
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        // 引擎已全量取消（Shutdown → TaskCmd::Cancel）：补做未确认的延迟文件删除
         for (_, (dir, name)) in self.pending_deletes.drain() {
             Self::delete_task_files(&dir, &name);
         }
@@ -222,15 +171,10 @@ mod tick_tests {
     use super::*;
     use crate::model::config::Config;
 
-    /// 夹具单源委托（app 树 App 夹具族收口 testutil，architect v153；
-    /// 目录进程内唯一化语义由 testenv 单源承载）
     fn make_app(tag: &str) -> App {
         crate::app::testutil::make_app_in("ezr-tick", tag)
     }
 
-    /// 02-named-proxy-05：命名代理引用失效 → 直连 + toast 提醒一次
-    /// （v1.21 统一队列路径：resolve 调用点随启动移至 tick 获槽时，本测试
-    /// 锁定提醒的发射本身；hardening 侧锁定按键时刻不解析、提醒后发覆盖）
     #[tokio::test]
     async fn resolve_endpoint_missing_named_proxy_warns() {
         let mut a = make_app("np-gone");
@@ -246,12 +190,6 @@ mod tick_tests {
         a.shutdown().await;
     }
 
-    /// 测试隔离回归（coder v116）：同 tag 两次 make_app 不得互相恢复。
-    /// 旧方案 `ezr-tick-<tag>-<pid>` 目录测试后不清理，容器内 pid 复用时
-    /// 后到进程的 App::new 经 Self::restore 恢复前到进程残留 registry
-    /// （tasks[0] 为旧 Completed 任务 → pump 秒回假完成 → 产物断言
-    /// NotFound）；修复后目录进程内唯一化（pid+序号+毫秒），同 tag 两次
-    /// 构造必然指向不同 registry 文件。
     #[tokio::test]
     async fn make_app_same_tag_never_restores_previous_registry() {
         let mut a = make_app("iso");
@@ -265,7 +203,7 @@ mod tick_tests {
             .parent()
             .unwrap()
             .to_path_buf();
-        let mut b = make_app("iso"); // 旧方案：pid 复用时此处会恢复 a 的残留
+        let mut b = make_app("iso");
         assert!(
             b.tasks.is_empty(),
             "同 tag 两次构造不得恢复前次 registry（临时目录进程内唯一化）"
@@ -280,7 +218,6 @@ mod tick_tests {
         std::fs::remove_dir_all(&dir_b).ok();
     }
 
-    /// 若干轮 tick：deadline 前反复推进帧；`done` 返回 true 时提前收束
     async fn pump_until(app: &mut App, deadline: std::time::Instant, done: impl Fn(&App) -> bool) {
         while std::time::Instant::now() < deadline {
             app.tick().await;
@@ -308,8 +245,6 @@ mod tick_tests {
         app.shutdown().await;
     }
 
-    /// 桩 HTTP 服务器：固定响应头 + 确定性内容（i%251）；返回监听地址。
-    /// 线程 detach（engineering.md：无退出条件的测试线程一律 detach）。
     fn stub_server(len: u64) -> std::net::SocketAddr {
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let addr = listener.local_addr().unwrap();
@@ -341,7 +276,6 @@ mod tick_tests {
         addr
     }
 
-    /// 泵到完成态并断言（stub 全流程下载类测试共用）
     async fn pump_to_completed(app: &mut App, deadline: std::time::Instant) {
         pump_until(app, deadline, |a| a.tasks[0].state == TaskState::Completed).await;
         assert_eq!(app.tasks[0].state, TaskState::Completed, "stub 下载应完成");
@@ -349,7 +283,6 @@ mod tick_tests {
 
     #[tokio::test]
     async fn tick_completes_download_from_stub_server() {
-        // 桩服务器：固定响应头 + 确定性内容（i%251）
         let addr = stub_server(128_000);
         let mut app = make_app("done");
         let save = crate::model::testenv::uniq_tmp_dir("ezr-tick-save");
@@ -367,8 +300,6 @@ mod tick_tests {
         std::fs::remove_dir_all(&save).ok();
     }
 
-    /// Range 滴流桩（206， honors Range 从请求偏移起持续小步发送）：分块
-    /// 下载中暂停场景专用——传输慢到可稳定在「在飞块带落盘零头」时刻暂停。
     fn stub_206_range_trickle(total: u64) -> std::net::SocketAddr {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -398,7 +329,6 @@ mod tick_tests {
                 );
                 let _ = c.write_all(head.as_bytes());
                 let _ = c.flush();
-                // 滴流：4KB / 5ms ≈ 800KB/s，1MB 块约 1.3s——暂停窗口稳定
                 let mut sent: u64 = 0;
                 while sent < remain {
                     let n = 4096usize.min((remain - sent) as usize);
@@ -415,12 +345,9 @@ mod tick_tests {
         addr
     }
 
-    /// 操作者 v133 实证缺陷回归：下载中（在飞块含部分零头）暂停后按 `P`
-    /// 必须打开分块弹窗（05-ui-pieces-03：暂停后原在传块按落盘零头转 🟨
-    /// 或无零头转 ⬜——门槛三条件 probed/resumable/total 均不受暂停影响）。
     #[tokio::test]
     async fn paused_task_with_partial_blocks_still_opens_pieces() {
-        let addr = stub_206_range_trickle(2_000_000); // 2 块 × 1MB，并发 4
+        let addr = stub_206_range_trickle(2_000_000);
         let mut app = make_app("pause-pieces");
         let save = crate::model::testenv::uniq_tmp_dir("ezr-tick-save-pp");
         app.add_cli_task(
@@ -430,8 +357,6 @@ mod tick_tests {
             None,
         );
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        // 泵到下载中（滴流桩保证此时在飞块带落盘零头；引擎传输中不落
-        // 部分块账——partial_blocks 由暂停收尾 PausedDone 终态快照重铺）
         pump_until(&mut app, deadline, |a| {
             a.tasks[0].state == TaskState::Downloading
         })
@@ -441,7 +366,6 @@ mod tick_tests {
             TaskState::Downloading,
             "滴流桩应处于下载中"
         );
-        // 暂停（UI 即时转已暂停 + 引擎 PausedDone 收尾重铺终态部分块）
         app.toggle_pause();
         pump_until(&mut app, deadline, |a| {
             a.tasks[0].state == TaskState::Paused && !a.tasks[0].partial_blocks.is_empty()
@@ -461,12 +385,9 @@ mod tick_tests {
         std::fs::remove_dir_all(&save).ok();
     }
 
-    /// 操作者 v133 实证缺陷回归：并发下调（4→2）后并发面板不得残留超额
-    /// 槽位的无效连接行——Reconfigure 即时回收（id > q）+ 块边界退出清行，
-    /// 面板只剩存活 worker（id ≤ 2）的条目。
     #[tokio::test]
     async fn reconfigure_shrink_prunes_stale_conn_rows() {
-        let addr = stub_206_range_trickle(6_000_000); // 6 块 × 1MB，并发 4
+        let addr = stub_206_range_trickle(6_000_000);
         let mut app = make_app("shrink-conns");
         let save = crate::model::testenv::uniq_tmp_dir("ezr-tick-save-sc");
         app.add_cli_task(
@@ -481,13 +402,11 @@ mod tick_tests {
         })
         .await;
         assert_eq!(app.tasks[0].state, TaskState::Downloading);
-        // 等到 4 条连接全部在位（4 worker 都领到块）
         pump_until(&mut app, deadline, |a| a.tasks[0].connections.len() >= 4).await;
         assert!(
             app.tasks[0].connections.iter().any(|c| c.id >= 3),
             "缩容前应有槽位 3/4 的连接行"
         );
-        // 修改并发 4→2（走 Modify 确认同款 Reconfigure 命令）
         app.engine
             .send(crate::engine::Cmd::Reconfigure {
                 id: app.tasks[0].id,
@@ -495,7 +414,6 @@ mod tick_tests {
                 endpoint: None,
             })
             .await;
-        // 泵若干进度帧：超额槽位行必须消失且不再出现
         for _ in 0..20 {
             app.tick().await;
             tokio::time::sleep(std::time::Duration::from_millis(60)).await;
@@ -517,8 +435,6 @@ mod tick_tests {
         std::fs::remove_dir_all(&save).ok();
     }
 
-    /// 退避到点自动重试（tick 4a → send_retry_start）：retry_in 到点转等待中、
-    /// 补发 Start 并清进展标记，重试一轮后计数递增（FR-01-41）
     #[tokio::test]
     async fn retry_expiry_resends_start_and_counts_round() {
         let mut app = make_app("retry4a");
@@ -534,7 +450,6 @@ mod tick_tests {
         })
         .await;
         let retries_first = app.tasks[0].retries;
-        // 退避压进观察窗：到点 → Queued → 4a 补发 Start（清进展标记）→ 探测再失败
         app.tasks[0].retry_in = Some(0.05);
         app.tasks[0].made_progress = true;
         pump_until(&mut app, deadline, |a| a.tasks[0].retries > retries_first).await;
@@ -547,8 +462,6 @@ mod tick_tests {
         app.shutdown().await;
     }
 
-    /// 重排后的已获槽+已探测任务重发 Start（tick 4b → send_retry_start）：
-    /// 若 4b 未补发，任务永远停在等待中；补发后走完探测→下载→完成全流程
     #[tokio::test]
     async fn requeued_probed_task_gets_restart_from_slot() {
         let addr = stub_server(64_000);
@@ -560,7 +473,6 @@ mod tick_tests {
             Some(2),
             None,
         );
-        // 置于 4b 过滤态：等待中 + 已获槽 + 已探测（重排后待重发的口径）
         app.tasks[0].state = TaskState::Queued;
         app.tasks[0].has_slot = true;
         app.tasks[0].probed = true;
@@ -570,13 +482,6 @@ mod tick_tests {
         std::fs::remove_dir_all(&save).ok();
     }
 
-    /// v1.25 缺陷回归（操作者实证：重试 10/5 / 进度清零 / 已失败红条增长）：
-    /// 4a/4b 经 send_retry_start 补发 Start 后 probed 必须清 false——残留 true
-    /// 时任务在「探测在途」窗口（慢/超时服务器可达 15s 连接超时）保持
-    /// Queued+has_slot+probed 形态，4b 每 100ms 重发 Start，引擎为同一任务
-    /// 孵化成群幽灵 supervisor（重复 Failed 计数冲破上限、进度回退、已失败
-    /// 态进度条被幽灵 Progress 持续推高）。Probed 事件到达时自然置回 true
-    /// （state 同时转下载中），此处只锁补发时刻的清零与单轮单计数。
     #[tokio::test]
     async fn retry_resend_clears_probed_flag() {
         let mut app = make_app("retry-probed");
@@ -608,11 +513,6 @@ mod tick_tests {
         app.shutdown().await;
     }
 
-    /// v1.25 缺陷回归（操作者实证：已失败任务重试计数 10/5 冲破上限）：
-    /// 任务已处「已失败」态时，迟到/重复的 Failed 事件整体忽略——不重复
-    /// 推进重试计数、不重挂倒计时、不改写已下载字节与断点视图、不覆盖错误
-    /// 信息。新一轮尝试（4a 到点重排/R 手动重试后）的失败发生在
-    /// Queued/Downloading 态，不受此守卫影响（FR-01-41 连续性规则语义不变）。
     #[tokio::test]
     async fn duplicate_failed_event_on_failed_task_is_ignored() {
         let mut app = make_app("dup-failed");
@@ -658,7 +558,6 @@ mod tick_tests {
         app.shutdown().await;
     }
 
-    /// 全局速度历史窗口上限（180 点、KB/s 采样）与 toast 过期清理
     #[tokio::test]
     async fn push_hist_caps_length_and_toast_expires() {
         let mut app = make_app("hist-toast");
@@ -677,8 +576,6 @@ mod tick_tests {
         app.shutdown().await;
     }
 
-    /// ConnView → Connection 消费侧映射锁定（FR-01-81 修订二：进度视图字段
-    /// 直传，块号不进 UI 模型；原锁定测试随适配面自 engine 层同步迁入）
     #[test]
     fn conn_view_maps_progress_fields() {
         let cv = crate::engine::ConnView {
@@ -695,38 +592,29 @@ mod tick_tests {
         assert_eq!(c.done, 400);
     }
 
-    /// make_app 变体：同时返回注册表落盘路径（空闲期零写放大测试用）
     fn make_app_with_reg(tag: &str) -> (App, std::path::PathBuf) {
         let dir = crate::model::testenv::uniq_tmp_dir(&format!("ezr-tick-{tag}"));
         let reg = dir.join("registry.json").to_string_lossy().into_owned();
         (App::new(Config::default(), reg), dir.join("registry.json"))
     }
 
-    /// 空闲期注册表零写放大（tick 第 7 步周期兜底）：全任务终态（无传输、无
-    /// 进度推进）时，越过 5s 窗口的周期保存不得重写内容未变的注册表文件
-    /// （mtime 不变为证）；状态漂移（进度推进）后下一个周期窗口必须落盘。
     #[tokio::test]
     async fn idle_tick_skips_registry_rewrite_until_state_drifts() {
         let (mut app, reg_path) = make_app_with_reg("idlesave");
-        // 种子：终态任务（已完成，无引擎交互 = 空闲形态；避开会被后台自动化
-        // 推进的等待/下载态，engineering.md「种子状态避开后台自动化」）
         let mut t = crate::model::sample_task();
         t.id = 1;
         t.state = TaskState::Completed;
         t.total = 200;
         t.downloaded = 100;
         app.tasks.push(t);
-        // 第一帧：越过 5s 窗口 → 周期保存落盘（基线）
         app.last_save = std::time::Instant::now() - std::time::Duration::from_secs(10);
         app.tick().await;
         let m1 = std::fs::metadata(&reg_path).unwrap().modified().unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        // 第二帧：仍空闲、内容未变 → 越过 5s 窗口但不得重写
         app.last_save = std::time::Instant::now() - std::time::Duration::from_secs(10);
         app.tick().await;
         let m2 = std::fs::metadata(&reg_path).unwrap().modified().unwrap();
         assert_eq!(m1, m2, "空闲期周期保存不得重写内容未变的注册表（零写放大）");
-        // 第三帧：持久化字段漂移（进度推进模拟）→ 下一个周期窗口必须落盘
         app.tasks[0].downloaded = 150;
         app.last_save = std::time::Instant::now() - std::time::Duration::from_secs(10);
         app.tick().await;
@@ -739,19 +627,13 @@ mod tick_tests {
 
 #[cfg(test)]
 mod evt_tests {
-    //! on_evt arm 级单测（QA 轮登记的单测缺口补齐）：不经引擎/网络，直接构造
-    //! `Evt` 驱动状态机权威转换点，锁定每个 arm 与关键内部分支的可观察效果。
-    //! 事件全流程（探测→下载→完成→校验）由 tick_tests 与 PTY e2e 套件覆盖。
 
     use super::*;
     use crate::engine::ConnView;
-    /// 夹具单源委托（app 树 App 夹具族收口 testutil，architect v153）
     fn make_app(tag: &str) -> App {
         crate::app::testutil::make_app_in("ezr-evt", tag)
     }
 
-    /// 种子任务：模型层 sample_task 改 id/名字（终态避免被 tick 自动推进；
-    /// 本模块不经 tick，直接驱动 on_evt，状态播种即为确定起点）
     fn seed_task(id: u32, name: &str) -> Task {
         let mut t = crate::model::sample_task();
         t.id = id;
@@ -768,8 +650,6 @@ mod evt_tests {
             done,
         }
     }
-
-    // ===== Evt::Probed =====
 
     #[tokio::test]
     async fn probed_unknown_id_is_noop() {
@@ -836,7 +716,7 @@ mod evt_tests {
         let mut app = make_app("probe-resumed");
         let mut t1 = seed_task(1, "a.bin");
         t1.save_dir = "/dl".to_string();
-        t1.downloaded = 100; // 断点续传进行中
+        t1.downloaded = 100;
         let mut t2 = seed_task(2, "b.bin");
         t2.save_dir = "/dl".to_string();
         app.tasks.push(t1);
@@ -910,8 +790,6 @@ mod evt_tests {
         app.shutdown().await;
     }
 
-    // ===== Evt::Progress =====
-
     #[tokio::test]
     async fn progress_ghost_cleans_speed_state_without_touching_tasks() {
         let mut app = make_app("progress-ghost");
@@ -981,8 +859,6 @@ mod evt_tests {
         app.shutdown().await;
     }
 
-    /// 逐块完成集合：Progress 全量重铺（乱序完成安全）；失效重下
-    /// （Invalidated）同步清空——断点作废后不得残留旧集合虚标 🟩。
     #[tokio::test]
     async fn progress_updates_done_blocks_and_invalidated_clears() {
         let mut app = make_app("progress-done-blocks");
@@ -1008,9 +884,6 @@ mod evt_tests {
         app.shutdown().await;
     }
 
-    /// 逐块部分集合（v131）：Progress 全量重铺、PausedDone/Failed 终态快照
-    /// 重铺（收尾与最后 tick 间的尾部字节不缺）、失效重下（Invalidated）
-    /// 同步清空——pieces 🟨 数据通道三事件一致性。
     #[tokio::test]
     async fn partial_blocks_relaid_by_progress_paused_done_and_failed() {
         let mut app = make_app("partial-blocks-relay");
@@ -1031,7 +904,6 @@ mod evt_tests {
             vec![1, 3],
             "Progress 携带逐块部分集合"
         );
-        // 暂停收尾：终态快照重铺（stop_workers 后引擎 Blocks 真值）
         app.on_evt(Evt::PausedDone {
             id: 1,
             downloaded: 500,
@@ -1044,7 +916,6 @@ mod evt_tests {
             vec![1, 3, 4],
             "PausedDone 终态快照重铺"
         );
-        // 失败收尾：终态快照重铺（守卫后写入；Failed 前 App 重置为下载中）
         app.tasks[0].state = TaskState::Downloading;
         app.on_evt(Evt::Failed {
             id: 1,
@@ -1062,7 +933,6 @@ mod evt_tests {
             vec![1, 4],
             "Failed 台账终态快照重铺"
         );
-        // 失效重下：同步清空（与 done_blocks 同口径）
         app.on_evt(Evt::Invalidated { id: 1 }).await;
         assert!(
             app.tasks[0].partial_blocks.is_empty(),
@@ -1070,8 +940,6 @@ mod evt_tests {
         );
         app.shutdown().await;
     }
-
-    // ===== Evt::PausedDone =====
 
     #[tokio::test]
     async fn paused_done_snapshots_breakpoint_and_clears_window() {
@@ -1123,8 +991,6 @@ mod evt_tests {
         );
         app.shutdown().await;
     }
-
-    // ===== Evt::Failed =====
 
     #[tokio::test]
     async fn failed_transient_schedules_auto_retry_and_keeps_slot() {
@@ -1212,8 +1078,6 @@ mod evt_tests {
         app.shutdown().await;
     }
 
-    // ===== Evt::Invalidated =====
-
     #[tokio::test]
     async fn invalidated_unknown_id_is_noop() {
         let mut app = make_app("inval-ghost");
@@ -1291,8 +1155,6 @@ mod evt_tests {
         app.shutdown().await;
     }
 
-    // ===== Evt::DownloadDone =====
-
     #[tokio::test]
     async fn download_done_without_checksum_completes_and_clears() {
         let mut app = make_app("done-nocheck");
@@ -1358,10 +1220,6 @@ mod evt_tests {
         app.shutdown().await;
     }
 
-    /// D19「完成校验用最新值」· 清除相位：下载中清空校验码（任务侧
-    /// checksum = None）后完成 —— 不得以过期 spec 的 has_checksum=true
-    /// 触发校验（旧实现以空期望值校验 → 假性「校验失败」）。
-    /// 失败先行（TDD）：QA-MT-05 端到端缺陷指纹。
     #[tokio::test]
     async fn download_done_checksum_cleared_midflight_skips_verify() {
         let mut app = make_app("done-ck-cleared");
@@ -1373,7 +1231,6 @@ mod evt_tests {
             value: "aa".to_string(),
         });
         app.tasks.push(t);
-        // 模拟修改对话框清空校验码（t.checksum = None，spec 标志已过期）
         app.tasks[0].checksum = None;
         app.on_evt(Evt::DownloadDone { id: 1, total: 1000 }).await;
         let t = &app.tasks[0];
@@ -1388,9 +1245,6 @@ mod evt_tests {
         app.shutdown().await;
     }
 
-    /// D19「完成校验用最新值」· 设置相位：下载中设置校验码（任务侧
-    /// checksum = Some）后完成 —— 必须按新值进入校验（旧实现以过期 spec
-    /// 的 has_checksum=false 跳过校验 → 「无校验」完成）。
     #[tokio::test]
     async fn download_done_checksum_set_midflight_verifies() {
         let mut app = make_app("done-ck-set");
@@ -1398,7 +1252,6 @@ mod evt_tests {
         t.state = TaskState::Downloading;
         t.has_slot = true;
         app.tasks.push(t);
-        // 模拟修改对话框设置校验码（t.checksum = Some，spec 标志已过期）
         app.tasks[0].checksum = Some(Checksum {
             algo: "MD5",
             value: "aa".to_string(),
@@ -1412,8 +1265,6 @@ mod evt_tests {
         );
         app.shutdown().await;
     }
-
-    // ===== Evt::VerifyDone =====
 
     #[tokio::test]
     async fn verify_done_ok_completes_and_clears_error() {
@@ -1484,8 +1335,6 @@ mod evt_tests {
         app.shutdown().await;
     }
 
-    // ===== Evt::Cancelled =====
-
     #[tokio::test]
     async fn cancelled_executes_pending_delete_then_unknown_id_ignored() {
         let mut app = make_app("cancelled-del");
@@ -1496,14 +1345,12 @@ mod evt_tests {
         }
         app.pending_deletes
             .insert(5, (base.clone(), "f.bin".to_string()));
-        // 相位一：未知 id → 不触碰延迟删除表（负向探测单发口径）
         app.on_evt(Evt::Cancelled { id: 99 }).await;
         assert!(
             std::path::Path::new(&format!("{base}/f.bin")).exists(),
             "未知 id 的停止确认不触发删除"
         );
         assert!(app.pending_deletes.contains_key(&5));
-        // 相位二：确认 id → 三类本地文件删除、登记清除
         app.on_evt(Evt::Cancelled { id: 5 }).await;
         for f in ["f.bin", "f.bin.downloading", "f.bin.ezr"] {
             assert!(
@@ -1516,8 +1363,6 @@ mod evt_tests {
         app.shutdown().await;
     }
 
-    // ===== Evt::Toast =====
-
     #[tokio::test]
     async fn toast_sets_message_with_fresh_expiry() {
         let mut app = make_app("toast");
@@ -1527,16 +1372,11 @@ mod evt_tests {
         app.shutdown().await;
     }
 
-    // ===== 磁盘预检（disk_precheck）=====
-
-    /// 开始前磁盘预检三分支：未探测/无余量跳过、需求 ≤ 可用空间通过、
-    /// 需求超可用空间转 Fatal 失败并提示（不自动重试）
     #[tokio::test]
     async fn disk_precheck_skips_passes_and_fails_overneed() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-evt-disk");
         let mut app = make_app("disk");
 
-        // 未探测（probed=false）→ 跳过预检返回 true
         let mut t = seed_task(1, "d1.bin");
         t.probed = false;
         t.total = u64::MAX;
@@ -1546,17 +1386,14 @@ mod evt_tests {
         assert!(app.disk_precheck(0), "未探测时跳过预检");
         assert_eq!(app.tasks[0].state, crate::model::TaskState::Queued);
 
-        // 已探测但需求为 0 → 通过
         app.tasks[0].probed = true;
         app.tasks[0].total = 0;
         assert!(app.disk_precheck(0), "无待下载量时通过");
         assert_eq!(app.tasks[0].state, crate::model::TaskState::Queued);
 
-        // 已探测、需求 ≤ 可用空间 → 通过
         app.tasks[0].total = 1024;
         assert!(app.disk_precheck(0), "小需求通过预检");
 
-        // 需求超可用空间（u64::MAX 需求必超）→ Fatal 失败 + 提示
         app.tasks[0].total = u64::MAX;
         assert!(!app.disk_precheck(0), "超量需求预检失败");
         assert_eq!(app.tasks[0].state, crate::model::TaskState::Failed);
@@ -1587,8 +1424,6 @@ mod evt_tests {
 
     #[tokio::test]
     async fn progress_on_non_downloading_task_is_ignored() {
-        // v1.25 幽灵进度防线：非「下载中」任务的 Progress 一律忽略——
-        // 迟到/重复回报不得改写已下载字节、连接视图与断点数
         let mut app = make_app("progress-paused");
         app.tasks.push(seed_task(1, "f.bin"));
         app.tasks[0].state = TaskState::Paused;
@@ -1609,8 +1444,6 @@ mod evt_tests {
 
     #[tokio::test]
     async fn failure_at_retry_limit_stops_auto_retry() {
-        // FR-01-41：无进展重试计数累加至 max_retries → at_limit——停等、
-        // 释放槽位、不挂倒计时，toast 引导按 R 手动重试
         let mut app = make_app("retry-limit");
         app.tasks.push(seed_task(1, "f.bin"));
         app.tasks[0].state = TaskState::Downloading;
@@ -1644,13 +1477,9 @@ mod evt_tests {
 
 #[cfg(test)]
 mod conn_stats_tests {
-    //! FR-01-99 连接级账本单测：增量累计 / 换块增量 / 待命零值速断 /
-    //! 新一次下载清零（Probed 进入下载）/ 续传保留（恢复不清零）。
-    //! 直接驱动 on_evt（不经引擎/网络），账本为确定性纯状态。
 
     use super::*;
     use crate::engine::ConnView;
-    /// 夹具单源委托（app 树 App 夹具族收口 testutil，architect v153）
     fn make_app(tag: &str) -> App {
         crate::app::testutil::make_app_in("ezr-cc", tag)
     }
@@ -1695,7 +1524,6 @@ mod conn_stats_tests {
         std::thread::sleep(std::time::Duration::from_millis(20));
         progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 400)]).await;
         assert_eq!(app.conn_cum_of(1, 1), 400, "同块增量 = done 差值");
-        // FR-01-102：展示速度 = 每秒采样窗口速率 → EMA（单测直驱采样；生产入口 tick ⑤）
         app.sample_conn_speed_display();
         assert!(
             app.conn_speed_of(1, 1) > 0.0,
@@ -1710,7 +1538,6 @@ mod conn_stats_tests {
         app.tasks.push(seed(1, "b.bin", TaskState::Downloading));
         progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 1000)]).await;
         assert_eq!(app.conn_cum_of(1, 1), 1000);
-        // 领新块：done 从新块内偏移重新增长（增量 = 新块内已写字节）
         progress(&mut app, 1, vec![cv(1, 1, 1000, 2000, 200)]).await;
         assert_eq!(app.conn_cum_of(1, 1), 1200, "换块增量 = 新块内已写");
         app.shutdown().await;
@@ -1720,11 +1547,9 @@ mod conn_stats_tests {
     async fn idle_conn_speed_snaps_to_zero() {
         let mut app = make_app("idle");
         app.tasks.push(seed(1, "c.bin", TaskState::Downloading));
-        // 待命空连接（cap = 0）与块满连接（done == cap）速度均为 0（零值速断）
         progress(&mut app, 1, vec![cv(2, 0, 0, 0, 0), cv(3, 0, 0, 500, 500)]).await;
         assert_eq!(app.conn_speed_of(1, 2), 0.0, "空连接待命 → 0");
         assert_eq!(app.conn_speed_of(1, 3), 0.0, "块满待命 → 0");
-        // FR-01-102：在传连接立起速度后转待命（done == cap）→ 采样即精确归零（无拖尾）
         std::thread::sleep(std::time::Duration::from_millis(20));
         progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 100)]).await;
         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -1737,16 +1562,10 @@ mod conn_stats_tests {
         app.shutdown().await;
     }
 
-    /// 流式单连接展示速度立起（v1.34 bug 修订回归靶）：不支持断点续传任务
-    /// 唯一下载线程（FR-01-12 降级，无 Content-Length → 视图 start = end = 0、
-    /// cap = 0，done = 已落盘字节）——原展示采样门 `cap > 0 && done < cap`
-    /// 漏流式臂，并发面板速度恒 0；在传判定与数据面收口单源
-    ///（conn_transferring）后窗口速率正常经 EMA 立起
     #[tokio::test]
     async fn streaming_conn_speed_rises_in_display_sampling() {
         let mut app = make_app("stream");
         app.tasks.push(seed(1, "s.bin", TaskState::Downloading));
-        // 流式连接视图：cap = 0（end − start = 0）、done = 已落盘字节
         progress(&mut app, 1, vec![cv(1, 0, 0, 0, 100)]).await;
         std::thread::sleep(std::time::Duration::from_millis(20));
         progress(&mut app, 1, vec![cv(1, 0, 0, 0, 400)]).await;
@@ -1759,7 +1578,6 @@ mod conn_stats_tests {
         app.shutdown().await;
     }
 
-    /// FR-01-102：任务非下载态 → 采样时其全部连接展示速度归零（零值速断）
     #[tokio::test]
     async fn conn_speed_zeroed_when_task_not_downloading() {
         let mut app = make_app("nondl");
@@ -1779,8 +1597,6 @@ mod conn_stats_tests {
         app.shutdown().await;
     }
 
-    /// FR-01-102：展示采样与任务速度同一每秒节拍——1s 内 tick 不重采样
-    /// （数值每秒最多变化一次；直驱采样建立基线后，节拍内的 tick 不改变展示值）
     #[tokio::test]
     async fn conn_speed_sampling_gated_to_one_second() {
         let mut app = make_app("gate");
@@ -1804,14 +1620,9 @@ mod conn_stats_tests {
     #[tokio::test]
     async fn conn_cum_resets_on_new_download_run() {
         let mut app = make_app("newrun");
-        // v1.25 幽灵进度防线后 Progress 仅在「下载中」被记账（生产流中
-        // supervisor 的 Progress 必然先经 Probed 置下载中）——账本 seeding
-        // 相应在下载中态构建，再翻转等待中以锁定 Probed 清账本语义
         app.tasks.push(seed(1, "n.bin", TaskState::Downloading));
         progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 500)]).await;
         assert_eq!(app.conn_cum_of(1, 1), 500);
-        // 重排回等待（比照 4a/R 重排形态）；Probed 使任务 Queued → Downloading
-        // = 新的一次下载：账本清零
         app.tasks[0].state = TaskState::Queued;
         app.on_evt(Evt::Probed {
             id: 1,
@@ -1833,14 +1644,11 @@ mod conn_stats_tests {
         app.tasks.push(seed(1, "k.bin", TaskState::Downloading));
         progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 500)]).await;
         assert_eq!(app.conn_cum_of(1, 1), 500);
-        // 暂停 → 空格继续 = 重新排队（v1.21/FR-01-33 修订）：不直接开跑
         app.tasks[0].state = TaskState::Paused;
         app.tasks[0].resumable = true;
         app.selected = 0;
         app.toggle_pause();
         assert_eq!(app.tasks[0].state, TaskState::Queued, "恢复 = 重新排队");
-        // 排队获槽启动 → Probed 转下载 = 新的一次下载：连接级累计清零
-        // （FR-01-99 ②，v1.21 统一队列路径后对暂停恢复同样生效）
         app.on_evt(Evt::Probed {
             id: 1,
             name: "k.bin".to_string(),
@@ -1851,7 +1659,6 @@ mod conn_stats_tests {
         })
         .await;
         assert_eq!(app.tasks[0].state, TaskState::Downloading, "Probed 转下载");
-        // 恢复后领新块继续传输：累计量从零重计（若未清零将误延至 750）
         progress(&mut app, 1, vec![cv(1, 1, 1000, 2000, 250)]).await;
         assert_eq!(app.conn_cum_of(1, 1), 250, "新一次下载从零重计");
         app.shutdown().await;

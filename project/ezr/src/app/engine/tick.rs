@@ -1,9 +1,3 @@
-//! engine::tick — 主循环 tick（消费引擎事件 → 槽位调度 → 启动/重试推进 → 统计）
-//!
-//! 自单文件按职责拆出（architect v116，纯移动）。tick 原为 9 步单函数
-//! （CRAP 21），本轮已先做粗粒度保持行为拆分为六段管线（段内局部变量不跨段）；
-//! 更细粒度拆分需参数化跨段局部量，属不安全形态，留 hardender 裁决。
-
 use std::time::{Duration, Instant};
 
 use crate::app::App;
@@ -11,18 +5,9 @@ use crate::engine::Cmd;
 use crate::model::speed::SpeedWindow;
 use crate::model::{slots, TaskState};
 
-/// 展示面采样节拍（FR-01-17 修订：数值每秒最多变化一次）
 const SPEED_TICK: Duration = Duration::from_secs(1);
 
 impl App {
-    // -----------------------------------------------------------------------
-    // 主循环 tick：消费引擎事件 → 槽位调度 → 启动/重试推进 → 统计
-    // -----------------------------------------------------------------------
-
-    /// 推进一帧（每 100ms；消费引擎事件、调度槽位、推进重试倒计时）。
-    /// architect v116 粗粒度保持行为拆分：原 9 步单函数（CRAP 21）按段内
-    /// 局部变量不跨段切成六个私有方法，顺序与原实现完全一致（分发核边界
-    /// 裁决——更细粒度拆分需参数化跨段局部量，属不安全形态，留 hardender）。
     pub async fn tick(&mut self) {
         let now = Instant::now();
         let dt = now
@@ -40,7 +25,6 @@ impl App {
         self.tick_clamp_selection(now);
     }
 
-    /// tick ① 消费引擎事件（本轮全部）
     async fn tick_consume_events(&mut self) {
         loop {
             match self.evt_rx.try_recv() {
@@ -51,8 +35,6 @@ impl App {
         }
     }
 
-    /// tick ②③ 槽位不变式 + 空闲分配（按列表顺序，FR-01-31/32）→ 新获槽位
-    /// 的等待任务启动（磁盘预检 → 发 Start）
     async fn tick_grant_and_start(&mut self) {
         let granted = {
             let tasks = &mut self.tasks;
@@ -73,8 +55,6 @@ impl App {
         }
     }
 
-    /// tick ④ 失败倒计时推进（自动重试：到点 → 等待中重排，槽位保持占用）
-    /// + 4a 到点补发 Start + 4b 已获槽位等待任务重排补发
     async fn tick_retry_countdown(&mut self, dt: f64) {
         let mut expired: Vec<u32> = Vec::new();
         for t in &mut self.tasks {
@@ -90,15 +70,9 @@ impl App {
                 }
             }
         }
-        // 4a) 到点任务补发 Start（FR-01-41 自动重试）：探针失败型任务
-        //     probed=false，下方 4b 的 probed 过滤会永久漏掉它们——故到点
-        //     即发，覆盖全部失败类型
         for id in &expired {
             self.send_retry_start(*id).await;
         }
-        // 4b) 已获槽位的等待任务重排后需要（重新）Start——Failed→Queued 的重试
-        //     由上面 retry_in 到点转 Queued（has_slot 保持）且已由 4a 补发；
-        //     本帧仅补发其他来源的 probed 任务（排除 4a 已发者防双开）。
         let retry_starts: Vec<u32> = self
             .tasks
             .iter()
@@ -112,12 +86,6 @@ impl App {
         }
     }
 
-    /// tick ⑤ 速度展示（FR-01-17 修订）：数据面窗口不变；展示面 1s 节拍采样 +
-    /// EMA 平滑。非下载态每 tick 立即归零（零值速断，无衰减拖尾，全局同步扣除）；
-    /// 下载态每秒采样一次窗口速率推入 EMA，数值每秒最多变化一次。
-    /// （FR-01-81 修订二：连接级展示随明细表移除而撤销，仅任务级三展示面。
-    /// v1.15 起连接级展示面经并发连接面板回归，采样在下方 sample_conn_speed_display。）
-    /// 含会话已下载累计（FR-01-81）与流量图历史采样。
     fn tick_speed_and_session(&mut self, now: Instant) {
         for t in self.tasks.iter_mut() {
             if t.state != TaskState::Downloading {
@@ -139,16 +107,9 @@ impl App {
                 d.push(sample);
                 t.speed = d.value();
             }
-            // 连接级展示采样（FR-01-102）：与任务速度同一节拍、同一 EMA 口径
             self.sample_conn_speed_display();
         }
-        // 全局 ↓（architect v116：口径单源 App::global_dl_speed——与本帧前已将
-        // 非下载态速度归零的合计数值恒等）
         let global_dl = self.global_dl_speed();
-        // 会话已下载（FR-01-81「本次运行累计下载字节」）：按各任务真实已下载
-        // 字节的运行内增量累计（首次观察到任务时以其当前进度为基线，sidecar
-        // 恢复的既有进度不计入）。不积分展示面 EMA 速度——EMA 爬升期的少计
-        // 会随任务结束固化（3 MB 短任务实测少计约一半）。
         let mut gained: u64 = 0;
         for t in self.tasks.iter() {
             match self.session_seen.get(&t.id).copied() {
@@ -168,14 +129,6 @@ impl App {
         }
     }
 
-    /// 连接级速度展示采样（FR-01-102，tick ⑤ 每秒调用；pub(super) 供单测直驱）：
-    /// 与任务速度同构流水线——数据面 1s 滑窗（update_conn_stats 推进）→ 每秒取
-    /// 窗口速率推入 EMA（α=1/5）。在传判定与数据面收口单源
-    ///（[`crate::model::conn_transferring`]）。零值语义：任务非下载态的
-    /// 全部连接、下载中任务的待命/空连接（cap = 0 且 done = 0）与块已完成连接
-    /// → `zero()` 立即归零（无拖尾）；在传连接（持块未写满，或流式单连接
-    /// done > 0——不支持续传任务的唯一下载线程）即使窗口速率为 0 也持续平滑
-    ///（避免 `-` 闪烁，FR-01-99 ①语义保持）。
     pub(super) fn sample_conn_speed_display(&mut self) {
         for t in &self.tasks {
             if t.state != TaskState::Downloading {
@@ -188,10 +141,6 @@ impl App {
             }
             for c in &t.connections {
                 let key = (t.id, c.id);
-                // 在传判定（单源 [`crate::model::conn_transferring`]，与
-                // 数据面 update_conn_stats 同门）：持块未写满，或流式单连接
-                // done > 0——v1.34 bug 修订：原内联门 `cap > 0 && done < cap`
-                // 漏流式臂，不支持断点续传任务速度恒 0
                 let active = crate::model::conn_transferring(c.cap(), c.done);
                 let d = self.conn_speed.entry(key).or_default();
                 if !active {
@@ -208,8 +157,6 @@ impl App {
         }
     }
 
-    /// tick ⑥⑦ toast 过期 + 注册表周期保存（5s 兜底；关键状态转换即时保存；
-    /// 底层原子写对内容未变化的空闲期短路跳过——零写放大）
     fn tick_housekeeping(&mut self, now: Instant) {
         if let Some(u) = self.toast_until {
             if now > u {
@@ -222,11 +169,6 @@ impl App {
         }
     }
 
-    /// tick ⑧⑨ 选中项 / 滚动钳制 + 并发明细选择 / 滚动钳制（FR-01-97：
-    /// 切换选中任务后复位，选中行越界钳制到有效范围；v1.30/FR-01-109 防锁死：
-    /// 仅当选中项真的变化（last_selected ≠ selected）才把视口拉回选中项——
-    /// 滚轮自由滚动不被逐帧归位；末页不空滚钳制仍每帧生效）；v1.32：通用
-    /// 滚动条按住连发由本节驱动（0.4s 起振、0.12s 周期）
     fn tick_clamp_selection(&mut self, now: Instant) {
         let flen = self.filtered().len();
         if flen == 0 {
@@ -236,9 +178,6 @@ impl App {
             if self.selected >= flen {
                 self.selected = flen - 1;
             }
-            // 视口跟随仅在选中项变化时生效（变化检测，v1.30/FR-01-109 ⑤；
-            // 键盘选择路径已在 move_sel/页签切换即时跟随，此处为总数钳制与
-            // 兕底臂）
             let selection_changed = self.last_selected != self.selected;
             let vis = self.visible_rows.max(1);
             if selection_changed {
@@ -257,8 +196,6 @@ impl App {
             self.conns_scroll_for = self.selected;
             self.conns_scroll = 0;
             self.conns_sel = 0;
-            // v1.32/FR-01-96：切换选中任务时横向偏移归零重置（切协议
-            // BT↔HTTP 同理由此覆盖——任务切换是协议切换的载体）
             self.conns_hscroll = 0;
         }
         let clen = self
@@ -270,23 +207,10 @@ impl App {
         }
         let cvis = self.visible_conns_rows.max(1);
         self.conns_scroll = self.conns_scroll.min(clen.saturating_sub(cvis));
-        // v1.32/FR-01-96/109：横向滚动钳制（上限 = 内容宽 − 内框宽，ui 层每帧
-        // 回填；协议切换 BT↔HTTP 时内容宽变化，由本钳制兑底）
         self.conns_hscroll = self.conns_hscroll.min(self.conns_max_hscroll);
-        // 通用滚动条箭头/轨道按住连发（Down 记录、Up 取消、tick 驱动重复：
-        // 起振 0.4s、周期 0.12s，v1.32/FR-01-109 ⑥）
         self.sb_hold_tick(now);
     }
 
-    /// 重试补发 Start 并清进展标记（FR-01-41：新一轮尝试的连续性判定从零起算；
-    /// 4a 到点重试与 4b 重排补发共用，未知 id 静默跳过）。
-    /// v1.25 同帧清 probed（与 tick ② tick_grant_and_start 的获槽口径一致）：
-    /// Start 已发、探测在途，任务处于「Queued+has_slot」等待窗——若 probed
-    /// 残留 true，4b 的过滤形态（Queued ∧ has_slot ∧ probed）每 100ms 命中并
-    /// 重发 Start，引擎为同一任务孵化成群幽灵 supervisor（慢/超时服务器窗口
-    /// 可达 15s）：重复 Failed 计数冲破重试上限（观测 10/5）、幽灵写盘进度
-    /// 回退、已失败态红条被幽灵 Progress 推高。Probed 事件到达时自然置回
-    /// true（state 同时转下载中）。
     async fn send_retry_start(&mut self, id: u32) {
         let Some(idx) = self.tasks.iter().position(|t| t.id == id) else {
             return;

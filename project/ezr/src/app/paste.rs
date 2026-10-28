@@ -1,17 +1,15 @@
-//! paste — bracketed paste 输入路由（FR-01-06；v1.17 修订：Add/Modify 两对话框
-//! 文本字段同权接收；v1.34 二批 bug 修订：光标处插入——与逐键输入同一光标
-//! 语义，粘贴后光标随迁）：纯函数便于单测
-
 use super::dialog_keys::{text_field_at, TextField, CAP_CK_HEX, CAP_CONNS_DIGITS, CAP_TEXT};
 use super::{App, Dialog, DialogKind};
 use crate::model::checksum::CK_NONE;
 
 impl App {
-    /// bracketed paste 事件入口（FR-01-06）：Add/Modify 两对话框的文本字段接收
-    /// 粘贴；算法/代理下拉任一展开、Delete 对话框、无对话框时忽略（避免粘贴
-    /// 触发按钮/导航）。URL 字段粘贴后同步默认并发（v1.30/FR-01-01：未手动
-    /// 改过并发时回填协议默认，与逐键/退格入口同口径）。
     pub fn on_paste(&mut self, text: &str) {
+        if self.cmd_open {
+            if self.cmd_focus == 0 {
+                self.cmd_paste(text);
+            }
+            return;
+        }
         let Some(d) = self.dialog.as_mut() else {
             return;
         };
@@ -27,29 +25,14 @@ impl App {
     }
 }
 
-/// 判定粘贴事件是否可作用于当前对话框状态（FR-01-06）。
-/// v1.17 修订（操作者 20261009 第十四批指令，缺陷改判）：原门条件
-/// `kind == Add` 使 FR-01-87（v1.5）新增的 Modify 对话框完全无法粘贴
-/// （操作者实证：修改对话框校验码字段粘贴无效）——扩为两文本对话框同权。
-/// 代理下拉展开门为 belt-and-braces：展开时焦点本就落在下拉行、字段路由
-/// 天然 no-op，显式化防回归。
 fn paste_accepts(kind: DialogKind, ck_open: bool, proxy_open: bool) -> bool {
     matches!(kind, DialogKind::Add | DialogKind::Modify) && !ck_open && !proxy_open
 }
 
-/// 粘贴文本净化：剔除控制字符（剪贴板可能携带换行/制表等）
 fn paste_sanitize(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
 }
 
-/// 将粘贴文本按当前焦点路由到对话框字段（FR-01-06；v1.34 二批：光标处
-/// 插入）。字段映射单源 [`text_field_at`]（与 routing 编辑函数同源，原
-/// (kind, focus) 矩阵退役）：Add：0=URL 1=目录 2=并发 4=校验码；
-/// Modify：0=并发 2=校验码。过滤规则与逐键输入一致（容量单源 dialog_keys
-/// 常量，architect v116）：URL/目录 ≤ CAP_TEXT 字符；并发仅数字 ≤
-/// CAP_CONNS_DIGITS 位；校验码仅十六进制 ≤ CAP_CK_HEX 位；按钮焦点与
-/// 下拉行不接收。插入后光标随迁（落在插入文本之后）——编辑走输入框
-/// 组件 [`TextInput::insert`] 单源。
 fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, text: &str) -> bool {
     let clean = paste_sanitize(text);
     match text_field_at(kind, focus) {
@@ -62,8 +45,6 @@ fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, text: &str) -
             inserted > 0
         }
         Some(TextField::CkValue) => {
-            // v1.32/FR-01-01：算法选中 NONE 时校验码不可输入（粘贴与逐键
-            // 同拦截——NONE 臂直接吞掉粘贴内容）
             if d.ck_type == CK_NONE {
                 return false;
             }
@@ -86,7 +67,6 @@ mod paste_tests {
         crate::app::testutil::dialog(DialogKind::Modify, focus)
     }
 
-    /// 01-add-task-17：粘贴 200 字符长 URL，字段完整接收
     #[test]
     fn paste_long_url_fully_inserted() {
         let mut d = add_dialog(0);
@@ -96,7 +76,6 @@ mod paste_tests {
         assert_eq!(d.url.value, url);
     }
 
-    /// 粘贴携带换行/制表的剪贴板内容：控制字符被剔除
     #[test]
     fn paste_strips_control_chars() {
         let mut d = add_dialog(0);
@@ -109,7 +88,6 @@ mod paste_tests {
         assert_eq!(d.url.value, "http://example.com/f.bin");
     }
 
-    /// URL 字段 300 字符上限与逐键输入一致
     #[test]
     fn paste_url_caps_at_300() {
         let mut d = add_dialog(0);
@@ -118,7 +96,6 @@ mod paste_tests {
         assert_eq!(d.url.len_chars(), 300);
     }
 
-    /// 校验码字段：仅十六进制被接收，最多 128 位（SHA-512）——Add
     #[test]
     fn paste_checksum_filters_hex_and_caps() {
         let mut d = add_dialog(4);
@@ -134,8 +111,6 @@ mod paste_tests {
         assert_eq!(d.ck_value.len_chars(), 128);
     }
 
-    /// v1.17（FR-01-06 修订，操作者缺陷 A 场景）：修改对话框校验码字段
-    /// 粘贴生效——hex 过滤与 128 位容量与添加对话框同口径
     #[test]
     fn paste_modify_checksum_field_accepts_hex() {
         let mut d = modify_dialog(2);
@@ -149,7 +124,6 @@ mod paste_tests {
         assert_eq!(d.ck_value.len_chars(), 128);
     }
 
-    /// v1.17：修改对话框并发字段粘贴——仅数字 ≤2 位，edited 标记置位
     #[test]
     fn paste_modify_conns_digits_and_cap() {
         let mut d = modify_dialog(0);
@@ -161,8 +135,6 @@ mod paste_tests {
         assert_eq!(d.conns.value, "64");
     }
 
-    /// v1.17：修改对话框下拉行（1=算法 3=代理）与按钮焦点（4=确定 5=取消）
-    /// 不接收粘贴
     #[test]
     fn paste_modify_dropdown_rows_and_buttons_ignore() {
         let mut d = modify_dialog(1);
@@ -173,7 +145,6 @@ mod paste_tests {
         assert!(d.ck_value.is_empty());
     }
 
-    /// 并发数字段：仅数字，最多 2 位；edited 标记置位（Add）
     #[test]
     fn paste_conns_two_digits_only() {
         let mut d = add_dialog(2);
@@ -185,7 +156,6 @@ mod paste_tests {
         assert_eq!(d.conns.value, "94");
     }
 
-    /// 并发字段满 2 位后再粘贴：无变化（Add）
     #[test]
     fn paste_conns_full_rejects() {
         let mut d = add_dialog(2);
@@ -194,7 +164,6 @@ mod paste_tests {
         assert_eq!(d.conns.value, "64");
     }
 
-    /// 纯控制字符粘贴：无效果
     #[test]
     fn paste_all_control_is_noop() {
         let mut d = add_dialog(0);
@@ -202,7 +171,6 @@ mod paste_tests {
         assert!(d.url.is_empty());
     }
 
-    /// 按钮焦点（5=立即下载 6=仅添加 7=取消等）不接收粘贴（Add）
     #[test]
     fn paste_buttons_ignore() {
         let mut d = add_dialog(5);
@@ -215,8 +183,6 @@ mod paste_tests {
         assert!(d.url.is_empty());
     }
 
-    /// 粘贴门条件（FR-01-06 v1.17）：Add/Modify 文本对话框接收；
-    /// 任一下拉展开（算法/代理）忽略；Delete 对话框忽略
     #[test]
     fn paste_accepts_add_modify_text_dialogs() {
         assert!(paste_accepts(DialogKind::Add, false, false));
@@ -228,14 +194,10 @@ mod paste_tests {
         assert!(!paste_accepts(DialogKind::Delete, false, false));
     }
 
-    /// 插入按字符计不切分多字节字符（v1.34 二批：push_capped → 光标语义；
-    /// 组件化后容量截断单测在 textfield 组件内，此处保留字段路径等价守卫：
-    /// hex 字段过滤剔除非十六进制字符 + 光标处插入随迁 + 并发字段数字过滤）
     #[test]
     fn field_insert_respects_char_boundary() {
         let mut d = add_dialog(4);
         d.ck_value.set("下载");
-        // 「器」非十六进制被字段过滤剔除、abc 通过；插入在光标（set 迁尾 = 2）处
         assert!(dlg_apply_paste(DialogKind::Add, &mut d, 4, "器abc"));
         assert_eq!(d.ck_value.value, "下载abc", "hex 过滤剔除非十六进制字符");
         assert_eq!(d.ck_value.cursor, 5, "光标随迁插入文本之后");
@@ -247,36 +209,29 @@ mod paste_tests {
         );
     }
 
-    /// v1.34 二批：粘贴插入在光标处（非恒末尾追加）——URL 字段中位插入
     #[test]
     fn paste_inserts_at_cursor() {
         let mut d = add_dialog(0);
         d.url.set("http://a.bin");
-        d.url.set_cursor(7); // "http://" 之后
+        d.url.set_cursor(7);
         assert!(dlg_apply_paste(DialogKind::Add, &mut d, 0, "X"));
         assert_eq!(d.url.value, "http://Xa.bin", "粘贴落在光标列");
         assert_eq!(d.url.cursor, 8, "光标随迁至插入文本之后");
-        // 光标在 0：插到行首
         d.url.set_cursor(0);
         assert!(dlg_apply_paste(DialogKind::Add, &mut d, 0, "S"));
         assert_eq!(d.url.value, "Shttp://Xa.bin");
     }
 
-    /// 夹具单源委托（app 树 App 夹具族收口 testutil，architect v153）
     fn make_app(tag: &str) -> crate::app::App {
         crate::app::testutil::make_app_in("ezr-paste", tag)
     }
 
-    /// App::on_paste 入口路由（FR-01-06）：Add/Modify 对话框文本字段接收粘贴；
-    /// 无对话框 / 算法下拉展开 / Delete 对话框一律忽略
     #[tokio::test]
     async fn on_paste_routes_by_dialog_state() {
         let mut app = make_app("route");
 
-        // 无对话框 → 忽略（不 panic、无副作用）
         app.on_paste("http://example.com/x.bin");
 
-        // Add 对话框 focus 0 → 粘贴进 URL
         app.dialog = Some(add_dialog(0));
         app.on_paste("http://example.com/p.bin\r\n");
         assert_eq!(
@@ -285,7 +240,6 @@ mod paste_tests {
             "粘贴净化后进入 URL 字段"
         );
 
-        // 算法下拉展开 → 忽略
         app.dialog.as_mut().unwrap().ck_open = true;
         app.on_paste("http://example.com/y.bin");
         assert_eq!(
@@ -294,8 +248,6 @@ mod paste_tests {
             "下拉展开时不接收粘贴"
         );
 
-        // v1.17：Modify 对话框 focus 2（校验码）→ 粘贴进校验码字段
-        //（操作者缺陷 A 场景：修改任务时校验码无法粘贴）
         app.dialog = Some(modify_dialog(2));
         app.on_paste("FF00dead\r\n");
         assert_eq!(
@@ -304,7 +256,6 @@ mod paste_tests {
             "修改对话框校验码字段接收粘贴（v1.17）"
         );
 
-        // Delete 对话框 → 忽略（避免粘贴触发按钮/导航）
         let mut del = add_dialog(0);
         del.kind = DialogKind::Delete;
         app.dialog = Some(del);

@@ -1,6 +1,3 @@
-//! list — 任务列表区渲染（条目三行 + 列表块；v1.30/FR-01-108 聚焦边框 +
-//! v1.32/FR-01-109 通用滚动条组件 ScrollablePanel Vertical 实例）
-
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -22,9 +19,6 @@ pub(super) fn render_task(
     queue_pos: usize,
     anim: u64,
 ) {
-    // v1.34/FR-01-115 S2：任务列表左 2 列由光标槽承担、右 2 列由内容宽收窄
-    //（选中背景仍满行——渲染区域不变，百分比离右边框 2 列）；走马灯帧源
-    // anim（FR-01-116，与 spinner 同 10fps 节拍）
     let text = task_lines(
         t,
         sel,
@@ -41,12 +35,7 @@ pub(super) fn render_task(
     f.render_widget(para, area);
 }
 
-// ---------------------------------------------------------------------------
-// 各区块渲染
-// ---------------------------------------------------------------------------
-
 pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
-    // 聚焦边框（v1.30/FR-01-108）：列表聚焦且无浮层 → 绿色加粗，否则暗色
     let focused = app.focus == Panel::List && !app.overlay_open();
     let block = ratatui::widgets::Block::default()
         .borders(ratatui::widgets::Borders::ALL)
@@ -63,8 +52,6 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             ))
             .alignment(Alignment::Right),
         );
-    // v1.32/FR-01-109：ScrollablePanel 一体化组件（任务列表 = Vertical 实例）。
-    // 滑块颜色 = 面板边框色（聚焦绿加粗/未聚焦暗）；箭头按压高亮随 App 态。
     let mut sb = ScrollablePanel::new(ScrollbarMode::Vertical);
     sb.thumb(if focused { FOCUS_BORDER } else { BORDER })
         .pressed_v(app.sb_arrow_pressed(SbKey::List));
@@ -75,8 +62,7 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
     if rows == 0 || idxs.is_empty() {
         let msg = if idxs.is_empty() {
-            // 空态提示（Gherkin 01-tui-display-13：显示「按 A 添加下载任务」）
-            "（此页签下没有任务，按 A 添加下载任务）"
+            "（此页签下没有任务，按 A 打开命令窗口添加任务）"
         } else {
             "（区域过小）"
         };
@@ -92,8 +78,6 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
     let spinner = app.spinner();
     let max_items = rows.min(idxs.len().saturating_sub(app.scroll));
-    // 排队位次：按列表顺序从上往下，等待槽位的任务依次编号（1 基；已获槽位/非等待 = 0）。
-    // 编号规则单源 model::slots::queue_positions（architect v116：原渲染层内联重实现）
     let qpos = slots::queue_positions(&app.tasks, &idxs);
     for vi in 0..max_items {
         let ti = app.scroll + vi;
@@ -118,8 +102,6 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     app.visible_rows = max_items;
     app.list_area = Some(inner);
 
-    // 右缘滚动条（v1.32/FR-01-109：ScrollablePanel 组件收口——显示条件
-    // （total > rows）由组件内判定；滑块色随面板焦点）
     let total = idxs.len();
     sb.vertical(total, rows, app.scroll);
     app.list_scrollbar = sb.render_bars(f, area).vertical;

@@ -1,12 +1,3 @@
-//! 加固测试（six-pack/hardender 步骤 7 批次 5）：main.rs 进程级靶点。
-//! 靶点：print_help 162:5（no-op）、main 211:5（Ok 恒返）、ezr_main 221:5（Ok 恒返）、
-//! run_tui 299:5（Ok 恒返）。
-//! 机制：进程级观测——`--help` 路径的真实行为是 stdout 帮助文本 + 0 退出；
-//! 无参数路径在本环境（无控制终端）下 enable_raw_mode 失败 → 主进程非零退出
-//! （恒 Ok 变异体退出 0）。终端态类靶点（restore_terminal/setup_panic_hook/run
-//! 事件循环）仅在真实 TTY 可观测 → 环境条件型论证，见 EQUIVALENCE.md。
-// lint 姿态与产品 bin（src/main.rs crate 级 allow）对齐：#[path] 收编的产品源
-// 在本测试 crate 内沿用产品面的豁免口径（产品面 clippy 0 的同一合同）。
 #![allow(missing_docs)]
 #![allow(clippy::multiple_crate_versions)]
 #![allow(clippy::pedantic)]
@@ -22,15 +13,12 @@
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap
 )]
-// 测试挂载机制固有豁免：产品源经 #[path] 部分收编进独立测试 crate，部分产物项
-// 在本 crate 上下文无消费者或被重复挂载（产品全量编译下均非死代码）。
 #![allow(dead_code)]
 #![allow(clippy::duplicate_mod)]
 #![allow(unused_imports)]
 
 use std::process::{Command, Stdio};
 
-/// 独立 EZR_HOME：不读用户配置、锁文件隔离
 fn isolated_home(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("ezr-hard-main-{}-{tag}", std::process::id()));
     let _ = std::fs::create_dir_all(&d);
@@ -46,7 +34,6 @@ fn ezr(tag: &str) -> Command {
     c
 }
 
-/// 靶 print_help 162:5 / main 211:5 / ezr_main 221:5：`--help` 必须打印用法且 0 退出
 #[test]
 fn help_prints_usage_and_exits_zero() {
     let out = ezr("help").arg("--help").output().expect("spawn ezr");
@@ -62,8 +49,6 @@ fn help_prints_usage_and_exits_zero() {
     );
 }
 
-/// 靶 run_tui 299:5：无终端环境启动 TUI 必须失败（非零退出）；
-/// 恒 Ok 变异体会走 shutdown 并 0 退出。加超时兜底防挂死。
 #[test]
 fn tui_without_terminal_fails() {
     let mut child = ezr("tui").spawn().expect("spawn ezr");

@@ -1,5 +1,3 @@
-//! handle — 单请求处理（注入判定 → 魔法名 → 文件服务）
-
 use std::io::BufReader;
 use std::net::TcpStream;
 use std::path::PathBuf;
@@ -9,7 +7,6 @@ use crate::query::parse_query;
 use crate::request::{read_request, AccessLog};
 use crate::respond::{respond_inject, respond_redirect, serve_file, write_head};
 
-/// 单请求处理
 pub fn handle(mut stream: TcpStream, root: Arc<PathBuf>, log: Arc<AccessLog>) {
     let mut reader = BufReader::new(stream.try_clone().expect("clone 失败"));
     let req = read_request(&mut reader).ok().flatten();
@@ -22,12 +19,10 @@ pub fn handle(mut stream: TcpStream, root: Arc<PathBuf>, log: Arc<AccessLog>) {
         req.accept_encoding.as_deref(),
     );
 
-    // 状态码注入（探测必失败用例）
     if respond_inject(&mut stream, &kv) {
         return;
     }
 
-    // 重定向链（FR-01-14：Location 逐跳递减）
     if respond_redirect(&mut stream, &req.target, &kv) {
         return;
     }
@@ -35,7 +30,6 @@ pub fn handle(mut stream: TcpStream, root: Arc<PathBuf>, log: Arc<AccessLog>) {
     let file_name = path_raw.trim_start_matches('/').to_string();
     let base = root.join(&file_name);
 
-    // 魔法名：ghost-404
     if file_name.starts_with("ghost-404") {
         let _ = write_head(
             &mut stream,
@@ -56,14 +50,11 @@ mod handle_tests {
 
     use super::*;
 
-    /// 起一个临时 root 的 fixture，返回 (端口, root 路径)
     fn spawn_fixture() -> (u16, PathBuf) {
         let dir = crate::testenv::uniq_tmp_dir("ezr-fx-h");
-        // 3000 字节 i%251 模式文件
         let data: Vec<u8> = (0..3000u32).map(|i| (i % 251) as u8).collect();
         std::fs::write(dir.join("f.bin"), &data).unwrap();
         std::fs::write(dir.join("streamy.bin"), &data).unwrap();
-        // 100MB 稀疏文件（磁盘开销可忽略，engineering.md 稀疏 fixture 条款）
         let big = std::fs::File::create(dir.join("big-100m.bin")).unwrap();
         big.set_len(100 * 1024 * 1024).unwrap();
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -149,7 +140,6 @@ mod handle_tests {
         assert!(head.contains("Content-Length: 100"));
         let expected: Vec<u8> = (100..200u32).map(|i| (i % 251) as u8).collect();
         assert_eq!(body_of(&resp), expected);
-        // 开放末端：bytes=2990- → 到 2999
         let resp = get(port, "/f.bin", &["Range: bytes=2990-"]);
         assert!(head_of(&resp).contains("Content-Range: bytes 2990-2999/3000"));
         assert_eq!(body_of(&resp).len(), 10);
@@ -196,7 +186,6 @@ mod handle_tests {
         let head = head_of(&resp);
         assert!(head.starts_with("HTTP/1.1 302 Found\r\n"));
         assert!(head.contains("Location: /f.bin?redirect=1"));
-        // redirect=0 → 正常文件响应
         let resp = get(port, "/f.bin?redirect=0", &[]);
         assert!(head_of(&resp).starts_with("HTTP/1.1 200 OK\r\n"));
         drop(dir);
@@ -205,7 +194,6 @@ mod handle_tests {
     #[test]
     fn swapsize_truncates_and_extends() {
         let (port, dir) = spawn_fixture();
-        // 截断到 100 字节
         let resp = get(port, "/f.bin?swapsize=100", &[]);
         let head = head_of(&resp);
         assert!(head.starts_with("HTTP/1.1 200 OK\r\n"));
@@ -213,7 +201,6 @@ mod handle_tests {
         assert!(head.contains("ETag: \"f.bin-100\""));
         let expected: Vec<u8> = (0..100u32).map(|i| (i % 251) as u8).collect();
         assert_eq!(body_of(&resp), expected);
-        // 扩到 3010：尾部补 0xAB
         let resp = get(port, "/f.bin?swapsize=3010", &[]);
         let body = body_of(&resp);
         assert_eq!(body.len(), 3010);
@@ -229,7 +216,6 @@ mod handle_tests {
         assert!(head.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(!head.contains("Content-Length:"));
         assert!(head.contains("Transfer-Encoding: chunked"));
-        // 解 chunked 帧重组，字节与源一致
         let body = body_of(&resp);
         let mut data = Vec::new();
         let mut i = 0;
@@ -250,7 +236,6 @@ mod handle_tests {
         }
         let expected: Vec<u8> = (0..3000u32).map(|i| (i % 251) as u8).collect();
         assert_eq!(data, expected);
-        // streamy 的 Range 请求 → 200 全量 chunked（不带 Content-Range）
         let resp = get(port, "/streamy.bin", &["Range: bytes=0-9"]);
         let head = head_of(&resp);
         assert!(head.starts_with("HTTP/1.1 200 OK\r\n"));
@@ -268,7 +253,6 @@ mod handle_tests {
             .unwrap();
         let mut buf = Vec::new();
         let _ = c.read_to_end(&mut buf);
-        // 动态定位头块边界：断连后 body 只有 100 字节（远小于 Content-Length）
         let (h, b) = buf.split_once_str(b"\r\n\r\n").unwrap();
         assert_eq!(b.len(), 100);
         let head = String::from_utf8_lossy(h).into_owned();
@@ -294,7 +278,6 @@ mod handle_tests {
     #[test]
     fn big_sparse_file_streams_without_materializing() {
         let (port, dir) = spawn_fixture();
-        // 100MB 稀疏文件：只读响应头 + 少量字节即断开（不消费全量）
         let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
         c.set_read_timeout(Some(std::time::Duration::from_secs(5)))
             .unwrap();
