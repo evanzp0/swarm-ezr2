@@ -342,7 +342,7 @@ impl App {
             return;
         }
 
-        let Ok(bytes) = std::fs::read(&source) else {
+        let Ok(bytes) = std::fs::read(crate::model::config::expand_tilde(&source)) else {
             self.set_toast("⚠ 无法读取种子文件");
             return;
         };
@@ -511,7 +511,7 @@ impl App {
 
         let mut rebuilt = true;
         if changed && matches!(state, TaskState::Downloading | TaskState::Seeding) {
-            rebuilt = match std::fs::read(&source)
+            rebuilt = match std::fs::read(crate::model::config::expand_tilde(&source))
                 .map_err(|_| ())
                 .and_then(|b| TorrentMeta::parse(&b).map_err(|_| ()))
             {
@@ -731,6 +731,38 @@ mod tests {
         assert!(app.dialog.is_some(), "解析失败不关窗");
         assert_eq!(app.toast.as_deref(), Some("⚠ 无法读取种子文件"));
         assert!(app.tasks.is_empty());
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn confirm_add_tilde_torrent_path_expands_home() {
+        let Some(home) = crate::model::config::home_dir() else {
+            return;
+        };
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let dir = home.join(format!(".ezr-btdlg-tilde-{}-{ms}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = write_multi_torrent(&dir, "a.torrent");
+        let meta = parse_at(&path);
+        let dirname = dir.file_name().unwrap().to_string_lossy().to_string();
+        let mut app = make_app("tilde");
+        app.open_add_bt_dialog_with(&path, &meta);
+        app.dialog
+            .as_mut()
+            .unwrap()
+            .torrent
+            .set(format!("~/{dirname}/a.torrent").as_str());
+        app.dlg_confirm_add_bt(false);
+        assert_eq!(app.tasks.len(), 1, "~/ 路径展开后确认建任务");
+        assert_eq!(
+            app.tasks[0].url,
+            format!("~/{dirname}/a.torrent"),
+            "任务来源保留输入原文"
+        );
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }

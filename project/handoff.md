@@ -6,6 +6,8 @@
 > BT 下载内核、做种上传与 BT 任务管理。
 > 追加轮（操作者指令）：删除项目源码中的所有注释——`project/ezr` 的 src/ 与 tests/
 > 共 123 个 .rs 已全量无注释（行为零变更，见「注释删除轮」节）。
+> 追加轮（操作者 bug 报告）：命令窗口输入 `~/...` 本地 .torrent 路径报「无法读取种子
+> 文件」——三处种子读取点已接入 tilde 展开（见「tilde 展开修复轮」节）。
 
 ## 一、产物历史完成情况
 
@@ -26,6 +28,7 @@
 | specifier（phase-02） | features/06…09 四份 + qa/06…09 四份 | 全部交付 | 06/07/08 各场景 ↔ qa 逐例对应 |
 | coder（phase-02，本轮） | `project/ezr/` phase-02 全量实现（见下清单） | 已交付 | cargo test 16 套件 5596P/0F（--test-threads=2）；clippy --bins --tests 0 警告；fmt clean |
 | coder（注释删除轮，操作者指令） | src/tests 123 个 .rs 全量剥离注释（54,872 → 46,154 行，−8,718） | 已交付 | 行首注释残留 0；三线复验全绿（同 phase-02 口径，见验证证据） |
+| coder（tilde 修复轮，操作者 bug 报告） | 三处 .torrent 读取点接入 `~/` 展开（config::expand_tilde + 5 测试） | 已交付 | 全量 16 套件 5645P/0F；clippy 0 警告；fmt clean |
 
 ### 遗留受限项（当前有效）
 - **BT 下载限速未接**：BtSpec.max_speed 字段保留、本期引擎未接 throttle（phase-02
@@ -98,12 +101,23 @@
   `#[path]` 收编的挂载套件直接引用产品源，无需额外处理。
 - **行为零变更**：全量测试通过与剥离前逐数一致（5596P/0F）。
 
+### tilde 展开修复轮（操作者 bug 报告）
+- **现象**：命令窗口输入 `~/...` 本地 .torrent 路径，确认后弹错误窗口「无法读取种子文件」。
+- **根因**：Shift+Tab 补全与 `torrent_path_like` 均放行 `~/` 前缀，但确认读取按字面路径
+  `std::fs::read`，`~` 未展开。三处读取点同病：命令窗分流②（app/cmd.rs）、添加 BT
+  确认（app/bt_dialog.rs）、修改 BT 重建（app/bt_dialog.rs）。
+- **修复**：`model/config.rs` 新增 `expand_tilde`/`expand_tilde_with`（HOME/USERPROFILE，
+  `~` 与 `~/前缀` 展开，`~user` 与无主目录回退字面路径），三处读取点统一接入；任务来源
+  与对话框回显保留输入原文（`~/...`），仅读取时展开，持久化后重读同链路成立。
+- **测试**：+5 例（config 纯函数 3、命令窗 `~/` 集成 1、BT 对话框 `~/` 确认 1，夹具写入
+  $HOME 唯一子目录避免环境变量竞争）；挂载套件随 `#[path]` 收编同步增益。
+
 ### 验证证据
 | 验证项 | 结果 | 命令（可复现） |
 |---|---|---|
-| 全量测试（16 套件） | 5596P / 0F | `cargo test -- --test-threads=2`（project/ezr 下；本会话按目标分块复跑） |
-| 其中：bin ezr 单测 | 737P / 0F | `cargo test --bin ezr -- --test-threads=2` |
-| 其中：12 个 hardening 挂载套件 | 4813P / 0F | `cargo test --tests -- --test-threads=2`（hardening 128 + engine_backfill 640 + g_appcore 557 + g_engine 552 + g_main 2 + g_proxy 16 + g_slots 173 + g_supervisor 526 + g_throttle_err 346 + g_v147 540 + ui_backfill 670 + v115 663） |
+| 全量测试（16 套件） | 5645P / 0F | `cargo test -- --test-threads=2`（project/ezr 下；按目标分块复跑） |
+| 其中：bin ezr 单测 | 742P / 0F | `cargo test --bin ezr -- --test-threads=2` |
+| 其中：12 个 hardening 挂载套件 | 4857P / 0F | `cargo test --tests -- --test-threads=2`（hardening 131 + engine_backfill 645 + g_appcore 562 + g_engine 557 + g_main 2 + g_proxy 16 + g_slots 176 + g_supervisor 531 + g_throttle_err 349 + g_v147 545 + ui_backfill 675 + v115 668） |
 | 其中：其余 bin 目标 | 46P / 0F | `cargo test --bin ezr-fixture --bin ezr-mktorrent --bin ezr-proxy`（30+1+15） |
 | clippy | 0 警告 | `cargo clippy --bins --tests` |
 | fmt | clean | `cargo fmt --all --check` |
@@ -111,8 +125,14 @@
 | 做种 e2e | leecher 拉块字节一致 + BEP 9 元数据 SHA-1==infohash + 上传统计真实增长 | `cargo test --bin ezr engine_seeds_to_leecher_with_metadata_exchange` |
 
 ### 对账口径
-- 上一登记 4933P 为 clippy 清理轮之前的中间口径；终态 5596P = bin ezr 737 +
-  hardening 挂载套件 4813 + 其余 bin 目标 46，三项复算自洽（上表分项）。
+- 上一登记 4933P 为 clippy 清理轮之前的中间口径；5596P = bin ezr 737 +
+  hardening 挂载套件 4813 + 其余 bin 目标 46，三项复算自洽。
+- 5596 → 5645（+49）：tilde 修复新增 5 例（config 纯函数 3 + cmd/bt_dialog 集成 2）；
+  挂载套件经 `#[path]` 收编 cfg(test) 用例——仅挂 model/config 的 3 套件各 +3，
+  另 7 套件再挂 app/cmd 与 app/bt_dialog 各 +5，5 + 3×3 + 7×5 = 49 对账自洽。
+- hardening_v147 `sidecar_not_written_within_first_500ms_of_download` 在全量并行复跑时
+  出现 1 次 500ms 窗口时序抖动，单独复跑 545P/0F 通过，与 tilde 改动无代码路径交集
+  （处置纪律见 packs/_common/engineering.md）。
 - hardening_v115 终轮 12 例由"旧 A 键直开添加对话框"改驱动为新命令窗入口，
   用例总数不变（663），属契约跟升而非用例增减。
 

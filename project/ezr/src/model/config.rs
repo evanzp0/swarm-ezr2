@@ -338,6 +338,27 @@ pub fn home_dir() -> Option<PathBuf> {
 }
 
 #[must_use]
+pub fn expand_tilde_with(path: &str, home: Option<&Path>) -> PathBuf {
+    let p = path.trim();
+    if p == "~" {
+        return home
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(p));
+    }
+    if let Some(rest) = p.strip_prefix("~/") {
+        if let Some(h) = home {
+            return h.join(rest);
+        }
+    }
+    PathBuf::from(p)
+}
+
+#[must_use]
+pub fn expand_tilde(path: &str) -> PathBuf {
+    expand_tilde_with(path, home_dir().as_deref())
+}
+
+#[must_use]
 pub fn ezr_dir() -> Option<PathBuf> {
     if let Some(v) = std::env::var_os("EZR_HOME") {
         if !v.is_empty() {
@@ -564,6 +585,52 @@ mod tests {
         assert_eq!(state_dir(), Some(dir.join("state")));
         std::env::remove_var("EZR_HOME");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn expand_tilde_with_maps_home_prefix() {
+        let home = Path::new("/home/u");
+        assert_eq!(expand_tilde_with("~", Some(home)), PathBuf::from("/home/u"));
+        assert_eq!(
+            expand_tilde_with("~/dl/a.torrent", Some(home)),
+            PathBuf::from("/home/u/dl/a.torrent")
+        );
+        assert_eq!(
+            expand_tilde_with("  ~/x.torrent  ", Some(home)),
+            PathBuf::from("/home/u/x.torrent"),
+            "首尾空白先修剪再展开"
+        );
+    }
+
+    #[test]
+    fn expand_tilde_with_falls_back_to_literal() {
+        assert_eq!(
+            expand_tilde_with("~/a.torrent", None),
+            PathBuf::from("~/a.torrent"),
+            "无主目录 → 原样字面路径"
+        );
+        assert_eq!(
+            expand_tilde_with("~x/a", Some(Path::new("/h"))),
+            PathBuf::from("~x/a"),
+            "~user 形式不展开，按字面路径"
+        );
+        assert_eq!(
+            expand_tilde_with("/abs/a.torrent", Some(Path::new("/h"))),
+            PathBuf::from("/abs/a.torrent")
+        );
+        assert_eq!(
+            expand_tilde_with("./rel/a.torrent", Some(Path::new("/h"))),
+            PathBuf::from("./rel/a.torrent")
+        );
+    }
+
+    #[test]
+    fn expand_tilde_passthrough_absolute() {
+        assert_eq!(
+            expand_tilde("/abs/a.torrent"),
+            PathBuf::from("/abs/a.torrent"),
+            "绝对路径不受进程环境影响"
+        );
     }
 
     #[test]

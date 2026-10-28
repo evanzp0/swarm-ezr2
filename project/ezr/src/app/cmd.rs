@@ -116,7 +116,7 @@ impl App {
         if input.starts_with("http://") || input.starts_with("https://") {
             self.open_add_dialog_with(&input);
         } else if torrent_path_like(&input) {
-            match std::fs::read(&input) {
+            match std::fs::read(crate::model::config::expand_tilde(&input)) {
                 Ok(bytes) => match crate::bt::metainfo::TorrentMeta::parse(&bytes) {
                     Ok(meta) => self.open_add_bt_dialog_with(&input, &meta),
                     Err(_) => self.open_error_window("无法读取种子文件"),
@@ -375,6 +375,34 @@ mod cmd_confirm_tests {
             crate::model::config::default_download_dir(),
             "保存到预填配置默认目录（D48，非 demo /srv/downloads）"
         );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn confirm_tilde_torrent_path_expands_home() {
+        let Some(home) = crate::model::config::home_dir() else {
+            return;
+        };
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let dir = home.join(format!(".ezr-tilde-{}-{ms}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = write_mini_torrent(&dir, "ok.torrent");
+        assert!(std::path::Path::new(&path).is_file());
+        let dirname = dir.file_name().unwrap().to_string_lossy().to_string();
+        let input = format!("~/{dirname}/ok.torrent");
+        let mut app = make_app("tilde");
+        app.open_cmd_window();
+        app.cmd.set_text(&input);
+        app.cmd_confirm();
+        assert!(!app.cmd_open && !app.err_open, "~/ 路径展开后可读取并解析");
+        let d = app.dialog.as_ref().expect("~/ 种子路径开 BT 对话框");
+        assert_eq!(d.kind, DialogKind::AddBt);
+        assert_eq!(d.torrent.value, input, "对话框回显输入原文");
+        assert!(!d.bt_tree.is_empty(), "元数据文件树已预填");
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }
