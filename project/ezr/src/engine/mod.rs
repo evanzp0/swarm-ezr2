@@ -380,8 +380,32 @@ fn start_bt_task(
     evt_tx: mpsc::Sender<Evt>,
 ) {
     let (tx, rx) = mpsc::channel::<crate::bt::BtTaskCmd>(8);
-    bt_tasks.insert(spec.id, tx);
-    tokio::spawn(crate::bt::engine::run(spec, shared, rx, evt_tx));
+    let id = spec.id;
+    bt_tasks.insert(id, tx);
+    let fail_tx = evt_tx.clone();
+    tokio::spawn(async move {
+        let task = tokio::spawn(crate::bt::engine::run(spec, shared, rx, evt_tx));
+        if let Err(join_err) = task.await {
+            let reason = if join_err.is_panic() {
+                let payload = join_err.into_panic();
+                let msg = payload
+                    .downcast_ref::<&str>()
+                    .map(|s| (*s).to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "引擎任务 panic".to_string());
+                format!("引擎内部错误：{msg}")
+            } else {
+                "引擎任务中止".to_string()
+            };
+            let _ = fail_tx
+                .send(Evt::BtFailed {
+                    id,
+                    kind: crate::model::FailKind::Fatal,
+                    reason,
+                })
+                .await;
+        }
+    });
 }
 
 fn bt_send(

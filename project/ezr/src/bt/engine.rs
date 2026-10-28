@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -176,6 +176,7 @@ pub(crate) async fn run(
 
     let mut tracker_fail_count = 0usize;
     let mut got_peers = !trackers.is_empty();
+    let mut partial: PartialPieces = HashMap::new();
 
     loop {
         tokio::select! {
@@ -269,8 +270,16 @@ pub(crate) async fn run(
                     }
                     PeerIn::Msg(msg) => {
                         handle_peer_msg(
-                            conn_id, msg, &mut conns, &pmap, &spec, &mut done,
-                            &mut downloaded, &mut files_handles, seeding,
+                            conn_id,
+                            msg,
+                            &mut conns,
+                            &pmap,
+                            &spec,
+                            &mut done,
+                            &mut downloaded,
+                            &mut files_handles,
+                            &mut partial,
+                            seeding,
                         )
                         .await;
                         if downloaded != prev_downloaded {
@@ -322,6 +331,8 @@ pub(crate) async fn run(
     }
     let _ = got_peers;
 }
+
+type PartialPieces = HashMap<u32, BTreeMap<u32, Vec<u8>>>;
 
 struct AnnounceCtx {
     infohash: [u8; 20],
@@ -578,43 +589,66 @@ async fn run_peer_loop(
 
 async fn peer_pump(
     conn_id: usize,
-    mut sock: TcpStream,
+    sock: TcpStream,
     out_rx: &mut mpsc::Receiver<PeerOut>,
     tx: mpsc::Sender<(usize, PeerIn)>,
 ) {
-    loop {
-        tokio::select! {
-            r = peer::read_msg(&mut sock) => {
-                match r {
-                    Ok(m) => {
-                        if tx.send((conn_id, PeerIn::Msg(m))).await.is_err() {
-                            return;
-                        }
-                    }
-                    Err(e) => {
-                        let _ = tx.send((conn_id, PeerIn::Closed { reason: e.to_string() })).await;
+    let (mut rd, mut wr) = sock.into_split();
+    let tx_read = tx.clone();
+    let reader = tokio::spawn(async move {
+        loop {
+            match peer::read_msg(&mut rd).await {
+                Ok(m) => {
+                    if tx_read.send((conn_id, PeerIn::Msg(m))).await.is_err() {
                         return;
                     }
                 }
-            }
-            c = out_rx.recv() => {
-                match c {
-                    Some(PeerOut::Send(m)) => {
-                        let frame = peer::encode_msg(&m);
-                        if sock.write_all(&frame).await.is_err() {
-                            let _ = tx.send((conn_id, PeerIn::Closed { reason: "写入失败".into() })).await;
-                            return;
-                        }
-                        let _ = sock.flush().await;
-                    }
-                    Some(PeerOut::Drop) | None => {
-                        let _ = tx.send((conn_id, PeerIn::Closed { reason: "引擎断开".into() })).await;
-                        return;
-                    }
+                Err(e) => {
+                    let _ = tx_read
+                        .send((
+                            conn_id,
+                            PeerIn::Closed {
+                                reason: e.to_string(),
+                            },
+                        ))
+                        .await;
+                    return;
                 }
             }
         }
+    });
+    loop {
+        match out_rx.recv().await {
+            Some(PeerOut::Send(m)) => {
+                let frame = peer::encode_msg(&m);
+                if wr.write_all(&frame).await.is_err() {
+                    let _ = tx
+                        .send((
+                            conn_id,
+                            PeerIn::Closed {
+                                reason: "写入失败".into(),
+                            },
+                        ))
+                        .await;
+                    break;
+                }
+                let _ = wr.flush().await;
+            }
+            Some(PeerOut::Drop) | None => {
+                let _ = tx
+                    .send((
+                        conn_id,
+                        PeerIn::Closed {
+                            reason: "引擎断开".into(),
+                        },
+                    ))
+                    .await;
+                break;
+            }
+        }
     }
+    drop(wr);
+    let _ = tokio::time::timeout(Duration::from_secs(5), reader).await;
 }
 
 fn new_conn_stat(addr: String) -> ConnStat {
@@ -643,6 +677,7 @@ async fn handle_peer_msg(
     done: &mut HashSet<u32>,
     downloaded: &mut u64,
     files: &mut HashMap<usize, tokio::fs::File>,
+    partial: &mut PartialPieces,
     seeding: bool,
 ) {
     let Some(st) = conns.get_mut(&conn_id) else {
@@ -674,7 +709,7 @@ async fn handle_peer_msg(
         }
         peer::PeerMsg::Unchoke => {
             st.peer_choking = false;
-            issue_requests(conn_id, st, pmap, done).await;
+            issue_requests(conn_id, st, pmap, done, partial).await;
         }
         peer::PeerMsg::Choke => {
             st.peer_choking = true;
@@ -682,7 +717,8 @@ async fn handle_peer_msg(
         }
         peer::PeerMsg::Block { index, begin, data } => {
             on_block(
-                conn_id, index, begin, data, conns, pmap, spec, done, downloaded, files, seeding,
+                conn_id, index, begin, data, conns, pmap, spec, done, downloaded, files, partial,
+                seeding,
             )
             .await;
         }
@@ -769,7 +805,13 @@ async fn send(_conn_id: usize, st: &mut ConnStat, m: peer::PeerMsg) {
     let _ = st.peer_out.send(PeerOut::Send(m)).await;
 }
 
-async fn issue_requests(conn_id: usize, st: &mut ConnStat, pmap: &PieceMap, done: &HashSet<u32>) {
+async fn issue_requests(
+    conn_id: usize,
+    st: &mut ConnStat,
+    pmap: &PieceMap,
+    done: &HashSet<u32>,
+    partial: &PartialPieces,
+) {
     if st.peer_choking || st.inflight.len() >= PEER_PIPELINE {
         return;
     }
@@ -785,8 +827,12 @@ async fn issue_requests(conn_id: usize, st: &mut ConnStat, pmap: &PieceMap, done
             break;
         }
         let plen = pmap.piece_len(piece) as usize;
+        let fetched = partial.get(&piece);
         let mut begin = 0usize;
-        while begin < plen && st.inflight.contains_key(&(piece, begin as u32)) {
+        while begin < plen
+            && (st.inflight.contains_key(&(piece, begin as u32))
+                || fetched.is_some_and(|m| m.contains_key(&(begin as u32))))
+        {
             begin += REQUEST_BLOCK_LEN as usize;
         }
         if begin >= plen {
@@ -819,6 +865,7 @@ async fn on_block(
     done: &mut HashSet<u32>,
     downloaded: &mut u64,
     files: &mut HashMap<usize, tokio::fs::File>,
+    partial: &mut PartialPieces,
     seeding: bool,
 ) {
     let mut st = match conns.remove(&conn_id) {
@@ -828,47 +875,69 @@ async fn on_block(
     st.inflight.remove(&(index, begin));
     st.cum_down += data.len() as u64;
 
-    let plen = pmap.piece_len(index) as usize;
-    let mut buf = match read_piece_from_disk(files, pmap, index).await {
-        Ok(b) => b,
-        Err(_) => vec![0u8; plen],
-    };
-    if buf.len() != plen {
-        buf.resize(plen, 0);
-    }
-    let end = (begin as usize + data.len()).min(plen);
-    if (begin as usize) < plen {
-        buf[begin as usize..end].copy_from_slice(&data[..end - begin as usize]);
+    if done.contains(&index) {
+        conns.insert(conn_id, st);
+        if let Some(st) = conns.get_mut(&conn_id) {
+            issue_requests(conn_id, st, pmap, done, partial).await;
+        }
+        return;
     }
 
-    let piece_complete = st.inflight.keys().all(|(p, _)| *p != index);
-    if piece_complete && verify_piece(&buf, &spec.meta, index) {
-        for (fi, off_in_file, off_in_piece, len) in pmap.write_plan(index) {
-            if let Some(fh) = files.get_mut(&fi) {
-                use tokio::io::{AsyncSeekExt, SeekFrom};
-                if fh.seek(SeekFrom::Start(off_in_file)).await.is_ok()
-                    && fh
-                        .write_all(&buf[off_in_piece as usize..(off_in_piece + len) as usize])
-                        .await
-                        .is_err()
-                {
-                    conns.insert(conn_id, st);
-                    return;
+    let plen = pmap.piece_len(index) as usize;
+    let assembled = {
+        let entry = partial.entry(index).or_default();
+        entry.insert(begin, data);
+        let mut cursor = 0usize;
+        let mut buf: Vec<u8> = Vec::with_capacity(plen);
+        for (off, blk) in entry.iter() {
+            if *off as usize != cursor || cursor + blk.len() > plen {
+                cursor = usize::MAX;
+                break;
+            }
+            buf.extend_from_slice(blk);
+            cursor += blk.len();
+        }
+        if cursor == plen {
+            Some(buf)
+        } else {
+            None
+        }
+    };
+
+    if let Some(buf) = assembled {
+        if verify_piece(&buf, &spec.meta, index) {
+            for (fi, off_in_file, off_in_piece, len) in pmap.write_plan(index) {
+                if let Some(fh) = files.get_mut(&fi) {
+                    use tokio::io::{AsyncSeekExt, SeekFrom};
+                    let seek_ok = fh.seek(SeekFrom::Start(off_in_file)).await.is_ok();
+                    let write_ok = seek_ok
+                        && fh
+                            .write_all(&buf[off_in_piece as usize..(off_in_piece + len) as usize])
+                            .await
+                            .is_ok();
+                    let flush_ok = write_ok && fh.flush().await.is_ok();
+                    if !flush_ok {
+                        conns.insert(conn_id, st);
+                        return;
+                    }
                 }
             }
-        }
-        done.insert(index);
-        *downloaded += selected_bytes_of_piece(pmap, index);
-        for other in conns.values_mut() {
-            let _ = other
-                .peer_out
-                .send(PeerOut::Send(peer::PeerMsg::Have(index)))
-                .await;
+            done.insert(index);
+            *downloaded += selected_bytes_of_piece(pmap, index);
+            partial.remove(&index);
+            for other in conns.values_mut() {
+                let _ = other
+                    .peer_out
+                    .send(PeerOut::Send(peer::PeerMsg::Have(index)))
+                    .await;
+            }
+        } else {
+            partial.remove(&index);
         }
     }
     conns.insert(conn_id, st);
     if let Some(st) = conns.get_mut(&conn_id) {
-        issue_requests(conn_id, st, pmap, done).await;
+        issue_requests(conn_id, st, pmap, done, partial).await;
     }
     let _ = seeding;
 }
@@ -1245,6 +1314,74 @@ mod tests {
         assert!(saw_conns, "连接明细事件在位");
         let out = std::fs::read(format!("{save_dir}/e2e.bin")).unwrap();
         assert_eq!(out, data, "产物与 seeder 数据逐字节一致");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn engine_downloads_multi_block_pieces() {
+        let piece_len = 64 * 1024;
+        let data: Vec<u8> = (0..160_000usize).map(|i| (i % 253) as u8).collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bteng-multipiece");
+        let save_dir = dir.to_string_lossy().into_owned();
+
+        let tmp_meta = make_meta(&data, piece_len, "udp://127.0.0.1:1/announce");
+        let seeder_port = fake_seeder(data.clone(), piece_len, tmp_meta.infohash).await;
+        let tracker_port = fake_udp_tracker(seeder_port).await;
+        let meta = make_meta(
+            &data,
+            piece_len,
+            &format!("udp://127.0.0.1:{tracker_port}/announce"),
+        );
+        assert_eq!(meta.infohash, tmp_meta.infohash, "两次构造 infohash 一致");
+
+        let spec = crate::engine::BtSpec {
+            id: 78,
+            source: "/tmp/e2e-multi.torrent".into(),
+            meta: meta.clone(),
+            save_dir: save_dir.clone(),
+            name: "e2e.bin".into(),
+            files: vec![BtFile {
+                path: "e2e.bin".into(),
+                size: data.len() as u64,
+                selected: true,
+            }],
+            trackers: vec![format!("udp://127.0.0.1:{tracker_port}/announce")],
+            concurrency: 4,
+            proxy_endpoint: None,
+            done_pieces: vec![],
+            seeding: false,
+            max_speed: 0,
+        };
+        let (evt_tx, mut evt_rx) = mpsc::channel(256);
+        let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
+        let shared = crate::engine::shared_for_tests();
+        let engine_handle = tokio::spawn(run(spec, shared, cmd_rx, evt_tx));
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            let remain = deadline.saturating_duration_since(std::time::Instant::now());
+            let Some(evt) = tokio::time::timeout(remain, evt_rx.recv())
+                .await
+                .ok()
+                .flatten()
+            else {
+                if engine_handle.is_finished() {
+                    engine_handle.await.expect("join");
+                }
+                panic!("多块 piece 未在时限内完成下载");
+            };
+            match evt {
+                Evt::BtDone { id, total } => {
+                    assert_eq!(id, 78);
+                    assert_eq!(total, data.len() as u64);
+                    break;
+                }
+                Evt::BtFailed { reason, .. } => panic!("意外失败：{reason}"),
+                _ => {}
+            }
+        }
+        let out = std::fs::read(format!("{save_dir}/e2e.bin")).unwrap();
+        assert_eq!(out, data, "多块 piece 产物与 seeder 数据逐字节一致");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
