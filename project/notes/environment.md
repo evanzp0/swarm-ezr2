@@ -16,6 +16,21 @@
   `target/debug/incremental` 是最大可再生空间（本仓 ~2.5G），删除不影响既有测试二进制
   的指纹有效性；`~/.cargo/registry/src`（解包源 ~344M）可再生可删。项目交接后
   `bin/swarm complete` 会自动清理 target/ 等构建缓存。
+- 第二层空间：跑完全量后 `target/debug/deps` 里的测试可执行文件（无扩展名、单个
+  20M~数百M，全仓 ~3.8G）可安全删除——clippy 只 check 不链接，后续若需重跑测试仅
+  重新链接（秒级）不重编译。全量测试期间设 `CARGO_INCREMENTAL=0` 防增量缓存回填。
+
+## harness 的 tracker/seeder 是会话级临时进程：BT 手测前先起夹具
+- **现象**：操作者报告「BT 连不上 tracker、无 peer」；实测 e2e 三连 PASS、产品无回归。
+- **判定路径**：`ss -tlnp/-ulnp` 查 17901/17902 无监听 + `~/.ezr/state/registry.json`
+  为空 + 用户侧成功时间窗与上一会话 e2e 运行窗重合 → 根因是上一会话起的临时
+  tracker/seeder 进程已死，种子里的 `127.0.0.1:17901/17902` 指向空端口。
+- **用户可见表现**（死 tracker）：任务停在「下载中 0.0%」约 4 分钟后才报「全部
+  tracker 失败」——UDP 首轮 announce 要 15+30+60+120s 重试耗尽，HTTP 秒败但只计
+  1/2 个 tracker，二者都败才报失败（engine.rs 的 tracker_fail_count 判定）。
+- **自愈/自证**：按 `project/harness/README.md` 重起夹具（tracker 17901/17902 +
+  seeder 17903）再跑 ezr；或直接 `python3 swarm_e2e.py --ezr-bin <release/ezr>` 全自动
+  验证。夹具进程不随 complete 存活，每轮手测前需重启。
 
 ## 终端显示伪影：`#[m` 序列会被吞成疑似损坏
 - 本沙箱 Bash 通道回显中 `#[must_use]` 等含 `#[m` 的文本会显示为 `#ust_use]`，极易误判

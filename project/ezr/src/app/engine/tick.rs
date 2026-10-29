@@ -117,7 +117,7 @@ impl App {
         }
     }
 
-    fn tick_speed_and_session(&mut self, now: Instant) {
+    pub(super) fn tick_speed_and_session(&mut self, now: Instant) {
         for t in self.tasks.iter_mut() {
             if t.state != TaskState::Downloading {
                 if let Some(d) = self.speed_display.get_mut(&t.id) {

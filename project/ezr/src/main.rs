@@ -64,35 +64,39 @@ fn enter_tui_sequence<W: std::io::Write>(w: &mut W) -> std::io::Result<()> {
 
 const MOUSE_SETTLE: std::time::Duration = std::time::Duration::from_millis(50);
 
-const MOUSE_SETTLE_RETRY: std::time::Duration = std::time::Duration::from_millis(20);
+const RESIDUAL_MIN_SPAN: std::time::Duration = std::time::Duration::from_millis(80);
+
+const RESIDUAL_QUIET: std::time::Duration = std::time::Duration::from_millis(40);
+
+const RESIDUAL_CAP: std::time::Duration = std::time::Duration::from_millis(250);
 
 fn restore_into<W: std::io::Write>(w: &mut W) -> std::io::Result<()> {
     let mouse_off = execute!(w, DisableMouseCapture);
-    settle_and_drain();
+    std::thread::sleep(MOUSE_SETTLE);
+    drain_input_events();
     let _ = disable_raw_mode();
     let rest = execute!(w, DisableBracketedPaste, LeaveAlternateScreen);
     mouse_off.and(rest)
 }
 
-fn settle_and_drain() {
-    std::thread::sleep(MOUSE_SETTLE);
-    if drain_input_events() {
-        std::thread::sleep(MOUSE_SETTLE_RETRY);
-        drain_input_events();
-    }
-}
-
 fn drain_input_events() -> bool {
+    let start = std::time::Instant::now();
+    let deadline = start + RESIDUAL_CAP;
     let mut consumed = false;
-    for _ in 0..10_000 {
-        match poll(std::time::Duration::from_millis(5)) {
-            Ok(true) => {
-                consumed = true;
-                if read().is_err() {
-                    break;
-                }
+    let mut last_event = start;
+    while std::time::Instant::now() < deadline {
+        let now = std::time::Instant::now();
+        if now.duration_since(start) >= RESIDUAL_MIN_SPAN
+            && now.duration_since(last_event) >= RESIDUAL_QUIET
+        {
+            break;
+        }
+        if let Ok(true) = poll(std::time::Duration::from_millis(5)) {
+            consumed = true;
+            last_event = std::time::Instant::now();
+            if read().is_err() {
+                break;
             }
-            _ => break,
         }
     }
     consumed
@@ -591,15 +595,19 @@ mod cli_parse_tests {
     }
 
     #[test]
-    fn settle_and_drain_spends_primary_window_only_without_events() {
+    fn drain_input_events_keeps_min_span_open_for_inflight_bytes() {
         let start = std::time::Instant::now();
-        settle_and_drain();
+        let consumed = drain_input_events();
         let e = start.elapsed();
-        assert!(e >= MOUSE_SETTLE, "至少等待主 settle 窗口（实际 {e:?}）");
         assert!(
-            e < MOUSE_SETTLE + MOUSE_SETTLE_RETRY + std::time::Duration::from_secs(2),
-            "无事件时不追加二轮窗口（实际 {e:?}）"
+            e >= RESIDUAL_MIN_SPAN,
+            "空队列也必须保持最小排空跨度（在途字节落队窗，实际 {e:?}）"
         );
+        assert!(
+            e < RESIDUAL_CAP + std::time::Duration::from_secs(2),
+            "空队列在静默判定后及时退出（实际 {e:?}）"
+        );
+        assert!(!consumed);
     }
 
     #[test]
