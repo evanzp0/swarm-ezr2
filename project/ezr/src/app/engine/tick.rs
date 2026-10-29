@@ -139,6 +139,7 @@ impl App {
                 t.speed = d.value();
             }
             self.sample_conn_speed_display();
+            self.sample_bt_conn_speed_display();
         }
         let global_dl = self.global_dl_speed();
         let mut gained: u64 = 0;
@@ -184,6 +185,40 @@ impl App {
                     .map(SpeedWindow::rate)
                     .unwrap_or(0.0);
                 d.push(sample);
+            }
+        }
+    }
+
+    pub(super) fn sample_bt_conn_speed_display(&mut self) {
+        let task_ids: Vec<u32> = self.bt_conns.keys().copied().collect();
+        for tid in task_ids {
+            let active = self
+                .tasks
+                .iter()
+                .find(|t| t.id == tid)
+                .is_some_and(|t| t.state.shows_conns());
+            let Some(rows) = self.bt_conns.get(&tid) else {
+                continue;
+            };
+            let conn_ids: Vec<usize> = rows.iter().map(|r| r.id).collect();
+            for cid in conn_ids {
+                let key = (tid, cid);
+                if !active {
+                    if let Some(st) = self.bt_conn_stats.get_mut(&key) {
+                        st.down_ema.zero();
+                        st.up_ema.zero();
+                    }
+                    continue;
+                }
+                let (down, up) = self
+                    .bt_conn_stats
+                    .get_mut(&key)
+                    .map(|st| (st.down_win.rate(), st.up_win.rate()))
+                    .unwrap_or((0.0, 0.0));
+                if let Some(st) = self.bt_conn_stats.get_mut(&key) {
+                    st.down_ema.push(down);
+                    st.up_ema.push(up);
+                }
             }
         }
     }

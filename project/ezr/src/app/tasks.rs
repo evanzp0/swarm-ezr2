@@ -246,6 +246,7 @@ impl App {
         for id in removed {
             self.windows.remove(&id);
             self.clear_conn_stats(id);
+            self.clear_bt_conn_stats(id);
         }
         let n = before - self.tasks.len();
         if n > 0 {

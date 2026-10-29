@@ -82,3 +82,28 @@
   「带宽被重复请求浪费」「坏 peer 卡死调度」「做种侧磁盘放大」；单改任何一处都不够，
   组合后才对齐主流客户端量级。loopback e2e 感知不到 ①③（delayed-ACK 不触发），性能
   类修复要在真实网络（或至少真实 NIC）上复核。
+
+## BT 任务 `.ezr` 控制文件：与 HTTP Sidecar 同构的生命周期与安全垫
+- **动机**：HTTP 任务有 `<file>.ezr` sidecar（块位图/etag/任务信息），BT 任务断点数据
+  只在注册表快照（BtTaskData.done_pieces）里——注册表保存滞后或丢失时 BT 续传无兜底。
+- **口径**：`model/bt.rs::BtSidecar`（version=1 + id/name/save_dir/concurrency +
+  BtTaskData），路径 `save_dir/<task_name>.ezr`（复用 namegen::sidecar_path_of）——
+  与删除任务清理清单 `delete_task_files` 的第三项天然对齐，删除含文件无需改代码。
+- **生命周期**：engine 启动磁盘校验后立即写（0 piece 也写）→ done 增长时 1s tick 落盘
+  （脏判据单一：`done.len() != sidecar_saved_done`，done 只增不减）→ Pause/StopSeed
+  终态落盘 → 全量完成（seeding 转换点）删除 → Cancel 不删（任务可能只是退队保留）。
+- **安全垫**：恢复 = spec.done_pieces ∪ sidecar.done_pieces 后逐 piece SHA-1 磁盘校验，
+  陈旧/外来 sidecar 的错误 piece 索引会被校验自然淘汰——因此 sidecar 不需要 infohash
+  字段，校验本身就是身份验证。
+
+## BT 并发 panel 速度三段管线：与 HTTP 完全同构（消抖动的正解在消费侧）
+- **根因**：引擎 `conn_views` 在每条 peer 消息后都调用并重置窗口——「区间瞬时速率 =
+  本区间字节/区间时长」，块到达呈突发，逐秒跳变且与任务速度（app 侧 1s 滑窗）口径
+  不同，单连接时两处数值明显不匹配。
+- **管线**（与 HTTP conn_windows/conn_speed 同构）：①`Evt::BtConns` 处理器把每连接
+  累计值喂 `BtConnSpeedStat.down_win/up_win`（1s SpeedWindow，陈窗重置，离开连接
+  retain 回收）；②`sample_bt_conn_speed_display` 每 SPEED_TICK 把滑窗 rate 灌入
+  down_ema/up_ema（SmoothedSpeed α=1/5）；③UI 只读 EMA 值（`bt_conn_speeds_of`）。
+  引擎侧 conn_views 的瞬时速率字段保留（tick 汇总上传速度仍消费）但 UI 不再读。
+- **不变式**：喂窗义务在事件路径、采样点只读不喂、清理口径四点对齐
+  （on_bt_done/on_bt_stopped/remove_task/clear_completed 均调 clear_bt_conn_stats）。

@@ -706,6 +706,7 @@ mod bt_key_tests {
             up_speed: 0.0,
             cum_up: 0,
             client: "QB".to_string(),
+            seeder: false,
         }
     }
 

@@ -110,3 +110,11 @@
   issue。调用点（handle_peer_msg 顶部、on_block 尾部、tick 清扫后逐 cid）都遵循
   「先算集、再取连接」；tick 清扫循环内每个 cid 重算一次（前一 conn 的补发会改变
   claimed）。
+
+## 引擎级 sidecar 生命周期测试的确定性写法：预填 sidecar + 立即 Pause
+- 引擎下载速度在 loopback 上不可控（1.5MB 可能亚秒完成），「先等进度再 Pause」会与
+  BtDone 竞态。确定性做法：磁盘预写完整内容 + sidecar 预填一半 piece → 引擎启动时
+  磁盘校验通过半量 → **立即**发 Pause → 断言 BtStopped 后 sidecar.done_pieces 恰为
+  预填量。同型可测「启动即写」（轮询文件存在）与「完成即删」（全量预填秒完成）。
+- 断言 sidecar 内容时逐字段核对（version/id/name/save_dir/concurrency/data.trackers/
+  piece_length/files/source），防止未来结构漂移静默破坏续传。

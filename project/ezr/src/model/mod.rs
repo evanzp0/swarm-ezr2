@@ -109,7 +109,7 @@ pub struct Checksum {
 mod task;
 mod timefmt;
 
-pub use bt::{BtFile, BtTaskData};
+pub use bt::{BtFile, BtSidecar, BtTaskData};
 #[allow(unused_imports)]
 pub use config::{ProxyChoice, ProxyEndpoint};
 #[allow(unused_imports)]

@@ -107,7 +107,16 @@ pub(crate) async fn run(
 
     let mut done: HashSet<u32> = HashSet::new();
     let mut downloaded: u64 = 0;
-    for &p in &spec.done_pieces {
+    let sidecar_path = crate::model::namegen::sidecar_path_of(&spec.save_dir, &spec.name);
+    let mut candidates: Vec<u32> = spec.done_pieces.clone();
+    if let Some(sc) = crate::model::BtSidecar::load(&sidecar_path) {
+        for p in sc.data.done_pieces {
+            if !candidates.contains(&p) {
+                candidates.push(p);
+            }
+        }
+    }
+    for &p in &candidates {
         if !pmap.covered_pieces().contains(&p) {
             continue;
         }
@@ -119,6 +128,8 @@ pub(crate) async fn run(
             _ => {}
         }
     }
+    save_bt_sidecar(&spec, &sidecar_path, &done);
+    let mut sidecar_saved_done: usize = done.len();
 
     let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
         Ok(l) => l,
@@ -185,6 +196,7 @@ pub(crate) async fn run(
             Some(cmd) = cmd_rx.recv() => {
                 match cmd {
                     BtTaskCmd::Pause | BtTaskCmd::StopSeed => {
+                        save_bt_sidecar(&spec, &sidecar_path, &done);
                         spawn_stopped_announce(id, &trackers, &spec, &peer_id, listen_port,
                             &shared, seeding);
                         report_stopped(&evt_tx, id, &pmap, &done, downloaded).await;
@@ -271,7 +283,7 @@ pub(crate) async fn run(
                                     .await;
                             }
                         }
-                        let views = conn_views(&mut conns);
+                        let views = conn_views(&mut conns, pmap.covered_pieces());
                         let _ = evt_tx.send(Evt::BtConns { id, conns: views }).await;
                     }
                     PeerIn::Closed { reason } => {
@@ -298,7 +310,7 @@ pub(crate) async fn run(
                                 st.downloaded = downloaded;
                                 st.left = pmap.selected_total().saturating_sub(downloaded);
                             }
-                            let views = conn_views(&mut conns);
+                            let views = conn_views(&mut conns, pmap.covered_pieces());
                             let _ = evt_tx.send(Evt::BtProgress {
                                 id,
                                 downloaded,
@@ -314,6 +326,7 @@ pub(crate) async fn run(
                             && !pmap.covered_pieces().is_empty() {
                             seeding = true;
                             live.lock().expect("live stats 锁").completed = true;
+                            let _ = crate::model::BtSidecar::remove(&sidecar_path);
                             let _ = evt_tx.send(Evt::BtDone { id, total: pmap.selected_total() }).await;
                         }
                     }
@@ -336,8 +349,12 @@ pub(crate) async fn run(
                         issue_requests(cid, st, &claimed, &pmap, &done).await;
                     }
                 }
-                let views = conn_views(&mut conns);
+                let views = conn_views(&mut conns, pmap.covered_pieces());
                 let sum_up_speed: f64 = views.iter().map(|v| v.up_speed).sum();
+                if done.len() != sidecar_saved_done {
+                    save_bt_sidecar(&spec, &sidecar_path, &done);
+                    sidecar_saved_done = done.len();
+                }
                 let _ = evt_tx.send(Evt::BtProgress {
                     id,
                     downloaded,
@@ -1033,10 +1050,13 @@ async fn read_piece_from_disk(
     }
 }
 
-fn conn_views(conns: &mut HashMap<usize, ConnStat>) -> Vec<BtConnView> {
+fn conn_views(conns: &mut HashMap<usize, ConnStat>, covered: &[u32]) -> Vec<BtConnView> {
     let now = std::time::Instant::now();
     let mut views = Vec::with_capacity(conns.len());
     for (cid, st) in conns.iter_mut() {
+        let seeder = !covered.is_empty()
+            && st.has.len() >= covered.len()
+            && covered.iter().all(|p| st.has.contains(p));
         let down_speed = ConnStat::speed(&st.down_window, st.cum_down);
         let up_speed = ConnStat::speed(&st.up_window, st.cum_up);
         st.down_window = (st.cum_down, now);
@@ -1049,10 +1069,30 @@ fn conn_views(conns: &mut HashMap<usize, ConnStat>) -> Vec<BtConnView> {
             up_speed,
             cum_up: st.cum_up,
             client: st.abbrev.clone(),
+            seeder,
         });
     }
     views.sort_unstable_by_key(|v| v.id);
     views
+}
+
+fn save_bt_sidecar(spec: &crate::engine::BtSpec, path: &str, done: &HashSet<u32>) {
+    let mut pieces: Vec<u32> = done.iter().copied().collect();
+    pieces.sort_unstable();
+    let sc = crate::model::BtSidecar::build(
+        spec.id,
+        &spec.name,
+        &spec.save_dir,
+        spec.concurrency,
+        crate::model::BtTaskData {
+            source: spec.source.clone(),
+            trackers: spec.trackers.clone(),
+            piece_length: spec.meta.piece_length,
+            files: spec.files.clone(),
+            done_pieces: pieces,
+        },
+    );
+    let _ = sc.save(path);
 }
 
 fn bitfield_bytes(done: &HashSet<u32>, num_pieces: u32) -> Vec<u8> {
@@ -1749,6 +1789,338 @@ mod tests {
             read_piece_range(&handles, &pmap, 1, 60, 8).await.is_none(),
             "越界区间拒绝"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bt_sidecar_written_at_start_with_task_shape() {
+        let piece_len = 16 * 1024;
+        let data: Vec<u8> = (0..20_480usize).map(|i| (i % 199) as u8).collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btsc-start");
+        let save_dir = dir.to_string_lossy().into_owned();
+
+        let seeder_port = fake_udp_tracker(1).await;
+        let meta = make_meta(
+            &data,
+            piece_len,
+            &format!("udp://127.0.0.1:{seeder_port}/announce"),
+        );
+        let spec = crate::engine::BtSpec {
+            id: 91,
+            source: "/tmp/sc.torrent".into(),
+            meta: meta.clone(),
+            save_dir: save_dir.clone(),
+            name: "sc.bin".into(),
+            files: vec![BtFile {
+                path: "sc.bin".into(),
+                size: data.len() as u64,
+                selected: true,
+            }],
+            trackers: vec![format!("udp://127.0.0.1:{seeder_port}/announce")],
+            concurrency: 2,
+            proxy_endpoint: None,
+            done_pieces: vec![],
+            seeding: false,
+            max_speed: 0,
+        };
+        let sc_path = crate::model::namegen::sidecar_path_of(&save_dir, "sc.bin");
+        let (evt_tx, _evt_rx) = mpsc::channel(256);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
+        let shared = crate::engine::shared_for_tests();
+        let handle = tokio::spawn(run(spec, shared, cmd_rx, evt_tx));
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if std::path::Path::new(&sc_path).exists() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "任务启动即写 .ezr 控制文件"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let sc = crate::model::BtSidecar::load(&sc_path).expect("sidecar 可解析");
+        assert_eq!(sc.version, crate::model::bt::BT_SIDECAR_VERSION);
+        assert_eq!(sc.id, 91);
+        assert_eq!(sc.name, "sc.bin");
+        assert_eq!(
+            sc.save_dir, save_dir,
+            "sidecar 路径口径 = save_dir/name.ezr"
+        );
+        assert_eq!(sc.concurrency, 2);
+        assert_eq!(
+            sc.data.trackers,
+            vec![format!("udp://127.0.0.1:{seeder_port}/announce")]
+        );
+        assert_eq!(sc.data.piece_length, piece_len as u32);
+        assert_eq!(sc.data.files.len(), 1);
+        assert_eq!(sc.data.source, "/tmp/sc.torrent");
+        assert!(sc.data.done_pieces.is_empty(), "启动时无已完成 piece");
+
+        cmd_tx.send(BtTaskCmd::Cancel).await.unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+        assert!(
+            std::path::Path::new(&sc_path).exists(),
+            "Cancel（任务仍保留）不删 sidecar"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bt_sidecar_prefill_resumes_and_removed_on_completion() {
+        let piece_len = 16 * 1024;
+        let data: Vec<u8> = (0..20_480usize).map(|i| (i % 199) as u8).collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btsc-resume");
+        let save_dir = dir.to_string_lossy().into_owned();
+
+        let tmp_meta = make_meta(&data, piece_len, "udp://127.0.0.1:1/announce");
+        std::fs::write(format!("{save_dir}/sc2.bin"), &data).unwrap();
+        let seeder_port = fake_seeder(data.clone(), piece_len, tmp_meta.infohash).await;
+        let tracker_port = fake_udp_tracker(seeder_port).await;
+        let meta = make_meta(
+            &data,
+            piece_len,
+            &format!("udp://127.0.0.1:{tracker_port}/announce"),
+        );
+        assert_eq!(meta.infohash, tmp_meta.infohash);
+        let num_pieces = data.len().div_ceil(piece_len) as u32;
+
+        let sc_path = crate::model::namegen::sidecar_path_of(&save_dir, "sc2.bin");
+        crate::model::BtSidecar::build(
+            93,
+            "sc2.bin",
+            &save_dir,
+            4,
+            crate::model::BtTaskData {
+                source: "/tmp/sc2.torrent".into(),
+                trackers: vec![format!("udp://127.0.0.1:{tracker_port}/announce")],
+                piece_length: piece_len as u32,
+                files: vec![BtFile {
+                    path: "sc2.bin".into(),
+                    size: data.len() as u64,
+                    selected: true,
+                }],
+                done_pieces: (0..num_pieces).collect(),
+            },
+        )
+        .save(&sc_path)
+        .unwrap();
+
+        let spec = crate::engine::BtSpec {
+            id: 93,
+            source: "/tmp/sc2.torrent".into(),
+            meta: meta.clone(),
+            save_dir: save_dir.clone(),
+            name: "sc2.bin".into(),
+            files: vec![BtFile {
+                path: "sc2.bin".into(),
+                size: data.len() as u64,
+                selected: true,
+            }],
+            trackers: vec![format!("udp://127.0.0.1:{tracker_port}/announce")],
+            concurrency: 4,
+            proxy_endpoint: None,
+            done_pieces: vec![],
+            seeding: false,
+            max_speed: 0,
+        };
+        let (evt_tx, mut evt_rx) = mpsc::channel(256);
+        let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
+        let shared = crate::engine::shared_for_tests();
+        let handle = tokio::spawn(run(spec, shared, cmd_rx, evt_tx));
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            let remain = deadline.saturating_duration_since(std::time::Instant::now());
+            let Some(evt) = tokio::time::timeout(remain, evt_rx.recv())
+                .await
+                .ok()
+                .flatten()
+            else {
+                panic!("sidecar 全量预填应秒完成（磁盘校验通过）");
+            };
+            match evt {
+                Evt::BtDone { id, total } => {
+                    assert_eq!(id, 93);
+                    assert_eq!(total, data.len() as u64);
+                    break;
+                }
+                Evt::BtFailed { reason, .. } => panic!("意外失败：{reason}"),
+                _ => {}
+            }
+        }
+        assert!(
+            !std::path::Path::new(&sc_path).exists(),
+            "完成后 .ezr 控制文件删除"
+        );
+        handle.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bt_sidecar_pause_keeps_resume_state() {
+        let piece_len = 16 * 1024;
+        let data: Vec<u8> = (0..1_572_864usize).map(|i| (i % 199) as u8).collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btsc-pause");
+        let save_dir = dir.to_string_lossy().into_owned();
+
+        let tmp_meta = make_meta(&data, piece_len, "udp://127.0.0.1:1/announce");
+        let seeder_port = fake_seeder(data.clone(), piece_len, tmp_meta.infohash).await;
+        let tracker_port = fake_udp_tracker(seeder_port).await;
+        let meta = make_meta(
+            &data,
+            piece_len,
+            &format!("udp://127.0.0.1:{tracker_port}/announce"),
+        );
+        let num_pieces = data.len().div_ceil(piece_len) as u32;
+        let half = num_pieces / 2;
+
+        let spec = crate::engine::BtSpec {
+            id: 94,
+            source: "/tmp/sc3.torrent".into(),
+            meta: meta.clone(),
+            save_dir: save_dir.clone(),
+            name: "sc3.bin".into(),
+            files: vec![BtFile {
+                path: "sc3.bin".into(),
+                size: data.len() as u64,
+                selected: true,
+            }],
+            trackers: vec![format!("udp://127.0.0.1:{tracker_port}/announce")],
+            concurrency: 4,
+            proxy_endpoint: None,
+            done_pieces: vec![],
+            seeding: false,
+            max_speed: 0,
+        };
+        let sc_path = crate::model::namegen::sidecar_path_of(&save_dir, "sc3.bin");
+        std::fs::write(format!("{save_dir}/sc3.bin"), &data).unwrap();
+        crate::model::BtSidecar::build(
+            94,
+            "sc3.bin",
+            &save_dir,
+            4,
+            crate::model::BtTaskData {
+                source: "/tmp/sc3.torrent".into(),
+                trackers: vec![format!("udp://127.0.0.1:{tracker_port}/announce")],
+                piece_length: piece_len as u32,
+                files: vec![BtFile {
+                    path: "sc3.bin".into(),
+                    size: data.len() as u64,
+                    selected: true,
+                }],
+                done_pieces: (0..half).collect(),
+            },
+        )
+        .save(&sc_path)
+        .unwrap();
+
+        let (evt_tx, mut evt_rx) = mpsc::channel(256);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
+        let shared = crate::engine::shared_for_tests();
+        let handle = tokio::spawn(run(spec, shared, cmd_rx, evt_tx));
+        cmd_tx.send(BtTaskCmd::Pause).await.unwrap();
+
+        let mut stopped = false;
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while std::time::Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(std::time::Instant::now());
+            let Some(evt) = tokio::time::timeout(remain, evt_rx.recv())
+                .await
+                .ok()
+                .flatten()
+            else {
+                break;
+            };
+            if matches!(evt, Evt::BtStopped { .. }) {
+                stopped = true;
+                break;
+            }
+        }
+        assert!(stopped, "暂停后引擎回报 BtStopped");
+        let sc = crate::model::BtSidecar::load(&sc_path).expect("暂停后 sidecar 在盘");
+        assert_eq!(
+            sc.data.done_pieces.len(),
+            half as usize,
+            "Pause 分支保存的 done_pieces = 磁盘校验通过量（sidecar 预填 ∪ 引擎进度）"
+        );
+        let _ = handle.await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bt_conns_mark_full_bitfield_peer_as_seeder() {
+        let piece_len = 16 * 1024;
+        let data: Vec<u8> = (0..20_480usize).map(|i| (i % 199) as u8).collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btsc-seederflag");
+        let save_dir = dir.to_string_lossy().into_owned();
+
+        let tmp_meta = make_meta(&data, piece_len, "udp://127.0.0.1:1/announce");
+        let seeder_port = fake_seeder(data.clone(), piece_len, tmp_meta.infohash).await;
+        let tracker_port = fake_udp_tracker(seeder_port).await;
+        let meta = make_meta(
+            &data,
+            piece_len,
+            &format!("udp://127.0.0.1:{tracker_port}/announce"),
+        );
+
+        let spec = crate::engine::BtSpec {
+            id: 95,
+            source: "/tmp/sc4.torrent".into(),
+            meta: meta.clone(),
+            save_dir: save_dir.clone(),
+            name: "sc4.bin".into(),
+            files: vec![BtFile {
+                path: "sc4.bin".into(),
+                size: data.len() as u64,
+                selected: true,
+            }],
+            trackers: vec![format!("udp://127.0.0.1:{tracker_port}/announce")],
+            concurrency: 4,
+            proxy_endpoint: None,
+            done_pieces: vec![],
+            seeding: false,
+            max_speed: 0,
+        };
+        let (evt_tx, mut evt_rx) = mpsc::channel(256);
+        let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
+        let shared = crate::engine::shared_for_tests();
+        let handle = tokio::spawn(run(spec, shared, cmd_rx, evt_tx));
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        let mut saw_seeder = false;
+        let mut saw_leecher = false;
+        loop {
+            let remain = deadline.saturating_duration_since(std::time::Instant::now());
+            let Some(evt) = tokio::time::timeout(remain, evt_rx.recv())
+                .await
+                .ok()
+                .flatten()
+            else {
+                break;
+            };
+            match evt {
+                Evt::BtConns { conns, .. } if !conns.is_empty() => {
+                    for c in &conns {
+                        if c.seeder {
+                            saw_seeder = true;
+                        } else {
+                            saw_leecher = true;
+                        }
+                    }
+                    if saw_seeder {
+                        break;
+                    }
+                }
+                Evt::BtDone { .. } => break,
+                Evt::BtFailed { reason, .. } => panic!("意外失败：{reason}"),
+                _ => {}
+            }
+        }
+        assert!(saw_seeder, "全量 bitfield peer（fake seeder）标记为 seeder");
+        let _ = saw_leecher;
+        handle.abort();
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

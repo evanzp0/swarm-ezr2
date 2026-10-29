@@ -3,7 +3,7 @@ use std::time::Instant;
 use super::{conn_from_view, update_conn_stats};
 use crate::app::App;
 use crate::engine::{Cmd, Evt};
-use crate::model::speed::SpeedWindow;
+use crate::model::speed::{SpeedWindow, WINDOW};
 use crate::model::{namegen, FailKind, TaskState};
 
 impl App {
@@ -269,6 +269,23 @@ impl App {
                     .iter()
                     .any(|t| t.id == id && t.state.shows_conns());
                 if active {
+                    let ids: std::collections::HashSet<usize> =
+                        conns.iter().map(|c| c.id).collect();
+                    self.bt_conn_stats
+                        .retain(|(tid, cid), _| *tid != id || ids.contains(cid));
+                    let now = Instant::now();
+                    for c in &conns {
+                        let st = self.bt_conn_stats.entry((id, c.id)).or_default();
+                        if st
+                            .down_win
+                            .last_push()
+                            .is_some_and(|t| now.duration_since(t) > WINDOW)
+                        {
+                            *st = crate::app::BtConnSpeedStat::default();
+                        }
+                        st.down_win.push(now, c.cum_down);
+                        st.up_win.push(now, c.cum_up);
+                    }
                     self.bt_conns.insert(
                         id,
                         conns
@@ -281,11 +298,13 @@ impl App {
                                 up_speed: c.up_speed,
                                 cum_up: c.cum_up,
                                 client: c.client,
+                                seeder: c.seeder,
                             })
                             .collect(),
                     );
                 } else {
                     self.bt_conns.remove(&id);
+                    self.clear_bt_conn_stats(id);
                 }
             }
             Evt::BtProgress {

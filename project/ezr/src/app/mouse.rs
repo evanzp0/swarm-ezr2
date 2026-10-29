@@ -1839,6 +1839,7 @@ mod bt_mouse_tests {
                     up_speed: 0.0,
                     cum_up: 0,
                     client: "QB".to_string(),
+                    seeder: false,
                 },
                 BtConnRow {
                     id: 2,
@@ -1848,6 +1849,7 @@ mod bt_mouse_tests {
                     up_speed: 0.0,
                     cum_up: 0,
                     client: "TR".to_string(),
+                    seeder: false,
                 },
             ],
         );

@@ -54,6 +54,7 @@ pub(super) const GREEN: Color = Color::Green;
 pub(super) const YELLOW: Color = Color::Rgb(228, 178, 62);
 pub(super) const RED: Color = Color::Rgb(226, 92, 84);
 pub(super) const MAGENTA: Color = Color::Rgb(214, 112, 214);
+pub(super) const PINK: Color = Color::Rgb(255, 153, 170);
 pub(super) const EMPTY: Color = Color::Rgb(54, 68, 74);
 pub(super) const LIGHT_BLUE: Color = Color::Rgb(122, 185, 242);
 

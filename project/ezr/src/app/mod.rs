@@ -268,6 +268,7 @@ pub struct App {
     pub err_area: Option<Rect>,
     pub err_btn_rect: Option<Rect>,
     pub bt_conns: HashMap<u32, Vec<BtConnRow>>,
+    bt_conn_stats: HashMap<(u32, usize), BtConnSpeedStat>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -279,6 +280,15 @@ pub struct BtConnRow {
     pub up_speed: f64,
     pub cum_up: u64,
     pub client: String,
+    pub seeder: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct BtConnSpeedStat {
+    pub down_win: SpeedWindow,
+    pub up_win: SpeedWindow,
+    pub down_ema: SmoothedSpeed,
+    pub up_ema: SmoothedSpeed,
 }
 
 impl App {
@@ -424,6 +434,7 @@ impl App {
             err_area: None,
             err_btn_rect: None,
             bt_conns: HashMap::new(),
+            bt_conn_stats: HashMap::new(),
         };
         if !app.cfg.warnings.is_empty() {
             let msg = app.cfg.warnings.join("；");
@@ -592,6 +603,12 @@ impl App {
             .map_or(0.0, SmoothedSpeed::value)
     }
 
+    pub(crate) fn bt_conn_speeds_of(&self, task_id: u32, conn_id: usize) -> (f64, f64) {
+        self.bt_conn_stats
+            .get(&(task_id, conn_id))
+            .map_or((0.0, 0.0), |s| (s.down_ema.value(), s.up_ema.value()))
+    }
+
     pub(crate) fn conn_cum_of(&self, task_id: u32, conn_id: usize) -> u64 {
         self.conn_cum.get(&(task_id, conn_id)).copied().unwrap_or(0)
     }
@@ -682,6 +699,10 @@ impl App {
         self.conn_cum.retain(|(tid, _), _| *tid != task_id);
         self.conn_speed.retain(|(tid, _), _| *tid != task_id);
         self.conn_windows.retain(|(tid, _), _| *tid != task_id);
+    }
+
+    pub(super) fn clear_bt_conn_stats(&mut self, task_id: u32) {
+        self.bt_conn_stats.retain(|(tid, _), _| *tid != task_id);
     }
 }
 

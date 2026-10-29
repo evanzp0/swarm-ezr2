@@ -57,6 +57,7 @@ impl App {
                 t.seed_left = SEED_DURATION_SECS;
             }
             self.bt_conns.remove(&id);
+            self.clear_bt_conn_stats(id);
             self.set_toast(format!("✓ 下载完成: {name}"));
             self.save_registry();
         }
@@ -83,10 +84,11 @@ impl App {
         t.speed = 0.0;
         t.upload_speed = 0.0;
         t.has_slot = false;
-        self.bt_conns.remove(&id);
         if matches!(t.state, TaskState::Downloading | TaskState::Seeding) {
             t.state = TaskState::Paused;
         }
+        self.bt_conns.remove(&id);
+        self.clear_bt_conn_stats(id);
         self.windows.remove(&id);
     }
 
@@ -157,6 +159,81 @@ mod bt_progress_speed_tests {
         assert!(
             !app.windows.contains_key(&1),
             "做种态不重建速度滑窗（on_bt_done 已清窗，滑窗生命周期只属下载态）"
+        );
+        app.shutdown().await;
+    }
+
+    fn bt_view(id: usize, cum: u64, seeder: bool) -> crate::engine::BtConnView {
+        crate::engine::BtConnView {
+            id,
+            addr: format!("10.0.0.{id}:6881"),
+            down_speed: 0.0,
+            cum_down: cum,
+            up_speed: 0.0,
+            cum_up: cum / 2,
+            client: "QB".into(),
+            seeder,
+        }
+    }
+
+    #[tokio::test]
+    async fn bt_conns_feed_sliding_windows_and_seeder_flag() {
+        let mut app = make_app("btwin");
+        app.tasks.push(bt_task(1, TaskState::Downloading));
+        app.on_evt(crate::engine::Evt::BtConns {
+            id: 1,
+            conns: vec![bt_view(1, 1000, true), bt_view(2, 0, false)],
+        })
+        .await;
+        app.on_evt(crate::engine::Evt::BtConns {
+            id: 1,
+            conns: vec![bt_view(1, 3000, true), bt_view(2, 0, false)],
+        })
+        .await;
+        assert_eq!(
+            app.bt_conns.get(&1).map(|v| v[0].seeder),
+            Some(true),
+            "seeder 标志贯通到并发行"
+        );
+        app.sample_bt_conn_speed_display();
+        let (down, up) = app.bt_conn_speeds_of(1, 1);
+        assert!(
+            down > 0.0,
+            "每连接下载速度来自 1s 滑窗而非引擎瞬时值: {down}"
+        );
+        assert!(up > 0.0, "每连接上传速度同口径: {up}");
+        let (down2, _) = app.bt_conn_speeds_of(1, 2);
+        assert_eq!(down2, 0.0, "零累计连接速度为 0");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn bt_conn_stats_pruned_when_conn_leaves_and_cleared_on_stop() {
+        let mut app = make_app("btwin-prune");
+        app.tasks.push(bt_task(1, TaskState::Downloading));
+        app.on_evt(crate::engine::Evt::BtConns {
+            id: 1,
+            conns: vec![bt_view(1, 1000, false), bt_view(2, 1000, false)],
+        })
+        .await;
+        app.on_evt(crate::engine::Evt::BtConns {
+            id: 1,
+            conns: vec![bt_view(1, 2000, false)],
+        })
+        .await;
+        assert!(
+            app.bt_conn_speeds_of(1, 2) == (0.0, 0.0),
+            "离开的连接其速度统计被回收"
+        );
+        app.sample_bt_conn_speed_display();
+        let (d1, _) = app.bt_conn_speeds_of(1, 1);
+        assert!(d1 > 0.0, "仍在的连接统计保留: {d1}");
+
+        app.on_bt_stopped(1, 0, vec![], vec![]);
+        assert_eq!(
+            app.bt_conn_speeds_of(1, 1),
+            (0.0, 0.0),
+            "BtStopped 后该任务连接速度统计清零"
         );
         app.shutdown().await;
     }

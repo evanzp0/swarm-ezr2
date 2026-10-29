@@ -8,7 +8,7 @@ use super::scrollable_panel::{ScrollablePanel, ScrollbarMode};
 use super::text::{fmt_size, fmt_speed, pad_left, pad_right, truncate};
 use super::{
     panel_border_style, panel_title_style, BORDER, DIM, DIM2, FG, FOCUS_BORDER, LIGHT_BLUE,
-    MAGENTA, SEL_BG,
+    MAGENTA, PINK, SEL_BG,
 };
 use crate::app::{App, Panel, SbKey};
 
@@ -21,12 +21,37 @@ fn active_title(active: usize, max_conc: usize) -> String {
     format!(" {active}/{max_conc} 项 ")
 }
 
-fn ip_display(addr: &str) -> String {
-    let ip = addr.rsplit_once(':').map_or(addr, |(ip, _)| ip);
-    pad_right(&truncate(ip, BT_COLW[0]), BT_COLW[0])
+fn mask_ip(ip: &str) -> String {
+    let ip = ip.trim_start_matches('[').trim_end_matches(']');
+    if ip.contains(':') {
+        let first = ip.split(':').next().unwrap_or("");
+        let last = ip.rsplit(':').next().unwrap_or("");
+        format!("{first}:*:{last}")
+    } else {
+        let first = ip.split('.').next().unwrap_or("");
+        let last = ip.rsplit('.').next().unwrap_or("");
+        format!("{first}.*.{last}")
+    }
 }
 
-type BtRowCells = (String, f64, u64, f64, u64, String);
+fn ip_display(addr: &str) -> String {
+    let masked = if !addr.contains(':') {
+        return pad_right(&truncate(addr, BT_COLW[0]), BT_COLW[0]);
+    } else if let Some(i) = addr.find('[') {
+        let inner = &addr[i + 1..];
+        let inner = inner.split(']').next().unwrap_or(inner);
+        mask_ip(inner)
+    } else if addr.matches(':').count() == 1 {
+        let (ip, _) = addr.split_once(':').unwrap_or((addr, ""));
+        mask_ip(ip)
+    } else {
+        let (ip, _) = addr.rsplit_once(':').unwrap_or((addr, ""));
+        mask_ip(ip)
+    };
+    pad_right(&truncate(&masked, BT_COLW[0]), BT_COLW[0])
+}
+
+type BtRowCells = (String, f64, u64, f64, u64, String, bool);
 
 enum Rows {
     Bt(Vec<BtRowCells>),
@@ -57,13 +82,15 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                         .map(|cs| {
                             cs.iter()
                                 .map(|c| {
+                                    let (down, up) = app.bt_conn_speeds_of(t.id, c.id);
                                     (
                                         ip_display(&c.addr),
-                                        c.down_speed,
+                                        down,
                                         c.cum_down,
-                                        c.up_speed,
+                                        up,
                                         c.cum_up,
                                         c.client.clone(),
+                                        c.seeder,
                                     )
                                 })
                                 .collect()
@@ -189,14 +216,20 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         let sep = move || sep.clone();
         let spans = match &rows {
             Rows::Bt(v) => {
-                let (ip, down, cum_down, up, cum_up, client) = &v[i];
+                let (ip, down, cum_down, up, cum_up, client, seeder) = &v[i];
                 let dl_on = *down > 0.0;
                 let up_on = *up > 0.0;
                 vec![
                     Span::styled(
                         ip.clone(),
                         Style::default()
-                            .fg(if sel { Color::White } else { FG })
+                            .fg(if sel {
+                                Color::White
+                            } else if *seeder {
+                                PINK
+                            } else {
+                                FG
+                            })
                             .bg(bg),
                     ),
                     sep(),
@@ -439,6 +472,7 @@ mod tests {
                 up_speed: 0.0,
                 cum_up: 0,
                 client: "QB".to_string(),
+                seeder: false,
             }
         }
         let mut app = testfx::make_app_in("ezr-conns", "bt7");
@@ -463,7 +497,9 @@ mod tests {
             text.contains("上传速度") && text.contains("累计上传"),
             "表头列: {text}"
         );
-        assert!(text.contains("1.2.3.4"), "IP 列去 :port: {text}");
+        assert!(text.contains("1.*.4"), "IPv4 遮掩: {text}");
+        assert!(text.contains("5.*.8"), "第二行 IPv4 遮掩: {text}");
+        assert!(!text.contains("1.2.3.4"), "完整 IP 不得出现: {text}");
         assert!(text.contains("2/4 项"), "徽标 x = bt_conns 行数: {text}");
         app.conns_hscroll = app.conns_max_hscroll;
         let text2 = conns_render(&mut app, 60, 14).backend().to_string();
@@ -471,10 +507,56 @@ mod tests {
         assert!(text2.contains("4 KB"), "累计下载: {text2}");
     }
 
+    #[tokio::test]
+    async fn bt_seeder_ip_renders_pink() {
+        fn bt_row(id: usize, addr: &str, seeder: bool) -> BtConnRow {
+            BtConnRow {
+                id,
+                addr: addr.to_string(),
+                down_speed: 0.0,
+                cum_down: 0,
+                up_speed: 0.0,
+                cum_up: 0,
+                client: "QB".to_string(),
+                seeder,
+            }
+        }
+        let mut app = testfx::make_app_in("ezr-conns", "btseed");
+        let mut t = task_with_conns(Protocol::Bt);
+        t.connections.clear();
+        app.tasks.push(t);
+        app.selected = 0;
+        app.bt_conns.insert(
+            1,
+            vec![
+                bt_row(0, "1.2.3.4:51400", true),
+                bt_row(1, "5.6.7.8:51401", false),
+            ],
+        );
+        let term = conns_render(&mut app, 60, 14);
+        let buf = term.backend().buffer();
+        let fg_of = |col: u16, row: u16| buf[(col, row)].fg;
+        assert_eq!(
+            fg_of(3, 2),
+            super::super::PINK,
+            "seeder IP 用粉色（首数据行 y=2, IP 列 x=3）"
+        );
+        assert_eq!(fg_of(3, 3), super::super::FG, "非 seeder IP 保持常规前景色");
+    }
+
     #[test]
-    fn ip_display_strips_port_and_caps_width() {
-        assert_eq!(super::ip_display("1.2.3.4:51400"), "1.2.3.4    ");
-        assert_eq!(super::ip_display("[2001:db8::1]:51400"), "[2001:db8:…");
+    fn mask_ip_demo_rules() {
+        assert_eq!(super::mask_ip("1.2.3.4"), "1.*.4", "IPv4 首尾组");
+        assert_eq!(super::mask_ip("2001:db8::1"), "2001:*:1", "IPv6 首尾组");
+        assert_eq!(super::mask_ip("[2001:db8::1]"), "2001:*:1", "IPv6 括号剥离");
+        assert_eq!(super::mask_ip("9.9.9.9"), "9.*.9", "单字符组不膨胀");
+    }
+
+    #[test]
+    fn ip_display_masks_and_caps_width() {
+        assert_eq!(super::ip_display("1.2.3.4:51400"), "1.*.4      ");
+        assert_eq!(super::ip_display("[2001:db8::1]:51400"), "2001:*:1   ");
+        assert_eq!(super::ip_display("2001:db8::1:51400"), "2001:*:1   ");
         assert_eq!(super::ip_display("noport"), "noport     ");
     }
 }
