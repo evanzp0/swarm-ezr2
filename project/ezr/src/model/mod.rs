@@ -151,6 +151,7 @@ pub(crate) fn sample_task() -> Task {
         chunk_done: 0,
         done_blocks: Vec::new(),
         partial_blocks: Vec::new(),
+        active_blocks: Vec::new(),
         block_size: 1_048_576,
         concurrency: 4,
         proxy: config::ProxyChoice::Direct,

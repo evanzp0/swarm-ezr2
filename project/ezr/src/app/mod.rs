@@ -269,6 +269,11 @@ pub struct App {
     pub err_btn_rect: Option<Rect>,
     pub bt_conns: HashMap<u32, Vec<BtConnRow>>,
     bt_conn_stats: HashMap<(u32, usize), BtConnSpeedStat>,
+    /// BT 引擎「正在停止」登记：暂停是乐观置状态（引擎 select 循环异步消费
+    /// Pause），恢复若早于引擎真正退出会拉起第二个引擎——两个引擎同写文件与
+    /// sidecar，进度互相回退。登记在暂停时写入、BtStopped/BtFailed 时清除；
+    /// 槽位调度见正在停止的任务先不启动（带兜底超时，见 tick_housekeeping）。
+    pub(crate) bt_stopping: HashMap<u32, Instant>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -435,6 +440,7 @@ impl App {
             err_btn_rect: None,
             bt_conns: HashMap::new(),
             bt_conn_stats: HashMap::new(),
+            bt_stopping: HashMap::new(),
         };
         if !app.cfg.warnings.is_empty() {
             let msg = app.cfg.warnings.join("；");
@@ -453,6 +459,42 @@ impl App {
             if let Some(sc) = sc {
                 t.downloaded = t.downloaded.max(sc.downloaded);
                 t.resumable = !sc.non_resumable;
+                // HTTP 分块还原：sidecar.blocks 记录逐块字节进度，
+                // 满块 → 🟩 Done，零头块 → 🟨 Partial（否则重启后全白）。
+                if t.done_blocks.is_empty() && !sc.blocks.is_empty() {
+                    let mut done: Vec<u32> = Vec::new();
+                    let mut part: Vec<u32> = Vec::new();
+                    for (i, &w) in sc.blocks.iter().enumerate() {
+                        let i = i as u32;
+                        let full = crate::model::chunk::block_range(sc.size, sc.block_size, i)
+                            .map_or(0, |(s, e)| e - s);
+                        if full > 0 && w >= full {
+                            done.push(i);
+                        } else if w > 0 {
+                            part.push(i);
+                        }
+                    }
+                    t.chunk_done = t.chunk_done.max(done.len() as u32);
+                    t.done_blocks = done;
+                    t.partial_blocks = part;
+                }
+            }
+            if t.protocol.is_bt() {
+                if let Some(bt) = t.bt.clone() {
+                    let bt_path = crate::model::namegen::sidecar_path_of(&t.save_dir, &t.name);
+                    if let Some(pieces) = crate::model::BtSidecar::load_done(&bt_path) {
+                        let pieces: Vec<u32> = pieces
+                            .into_iter()
+                            .filter(|p| {
+                                u64::from(*p) * u64::from(bt.piece_length.max(1))
+                                    < bt.files.iter().map(|f| f.size).sum::<u64>()
+                            })
+                            .collect();
+                        t.downloaded = t.downloaded.max(bt.selected_bytes_of_pieces(&pieces));
+                        t.chunk_done = pieces.len() as u32;
+                        t.done_blocks = pieces;
+                    }
+                }
             }
         }
         tasks
@@ -636,13 +678,28 @@ impl App {
         self.tasks
             .iter()
             .filter(|t| t.state.shows_conns())
-            .map(|t| {
-                t.connections
-                    .iter()
-                    .filter(|c| self.conn_is_active(t.id, c))
-                    .count()
-            })
+            .map(|t| self.conns_actual_of(t))
             .sum()
+    }
+
+    /// 单任务的「实际并发连接数」（并发面板行数同口径）：
+    /// BT = 引擎回报的已建立 peer 连接（握手完成；connections 恒空），
+    /// HTTP = 当前活跃的分块连接。
+    #[must_use]
+    pub fn conns_actual_of(&self, t: &Task) -> usize {
+        if !t.state.shows_conns() {
+            return 0;
+        }
+        if t.protocol.is_bt() {
+            // BT 的真实并发 = 引擎回报的 peer 连接，
+            // 不用 HTTP lease 快照（BT 任务 connections 恒空）。
+            self.bt_conns.get(&t.id).map_or(0, Vec::len)
+        } else {
+            t.connections
+                .iter()
+                .filter(|c| self.conn_is_active(t.id, c))
+                .count()
+        }
     }
 
     #[allow(dead_code)]
@@ -713,6 +770,150 @@ mod tests {
 
     fn make_app(tag: &str) -> App {
         crate::app::testutil::make_app_in("ezr-app", tag)
+    }
+
+    fn bt_snapshot_task(id: u32, name: &str, save_dir: &str) -> Task {
+        let mut t = crate::model::sample_task();
+        t.id = id;
+        t.protocol = crate::model::Protocol::Bt;
+        t.name = name.to_string();
+        t.url = format!("/tmp/{name}.torrent");
+        t.save_dir = save_dir.to_string();
+        t.state = TaskState::Queued;
+        t.total = 200;
+        t.block_size = 100;
+        t.bt = Some(crate::model::BtTaskData {
+            source: format!("/tmp/{name}.torrent"),
+            trackers: vec!["udp://t/ann".to_string()],
+            piece_length: 100,
+            files: vec![crate::model::BtFile {
+                path: name.to_string(),
+                size: 200,
+                selected: true,
+            }],
+        });
+        t
+    }
+
+    #[test]
+    fn restore_maps_http_sidecar_blocks_to_piece_states() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-restore-http");
+        let sd = dir.to_string_lossy().into_owned();
+        let mut t = crate::model::sample_task();
+        t.id = 11;
+        t.protocol = crate::model::Protocol::Http;
+        t.name = "http.bin".to_string();
+        t.save_dir = sd.clone();
+        t.state = TaskState::Paused;
+        t.total = 10_000;
+        t.block_size = 1_000;
+        t.downloaded = 3_400;
+        let reg = Registry::from_tasks(&[t]);
+        let reg_path = dir.join("registry.json");
+        reg.save(reg_path.to_str().unwrap()).unwrap();
+        let task = crate::model::sidecar::SidecarTask {
+            id: 11,
+            added_at: 0,
+            save_dir: sd.clone(),
+            concurrency: 4,
+            protocol: crate::model::Protocol::Http,
+        };
+        let stamp = crate::model::consistency::ServerStamp::default();
+        let sc = crate::model::sidecar::Sidecar::build(
+            &stamp,
+            10_000,
+            1_000,
+            &[1_000, 1_000, 1_000, 400, 0, 0, 0, 0, 0, 0],
+            false,
+            None,
+            task,
+        );
+        let sidecar_path = {
+            let mut t = crate::model::sample_task();
+            t.id = 11;
+            t.name = "http.bin".to_string();
+            t.save_dir = sd.clone();
+            t.sidecar_path()
+        };
+        sc.save(&sidecar_path).unwrap();
+        let tasks = App::restore(reg_path.to_str().unwrap());
+        assert_eq!(tasks.len(), 1);
+        let t = &tasks[0];
+        assert_eq!(
+            t.done_blocks,
+            vec![0, 1, 2],
+            "满块 → 🟩 Done（重启后 HTTP 分块不再全白）"
+        );
+        assert_eq!(t.partial_blocks, vec![3], "零头块 → 🟨 Partial");
+        assert_eq!(t.chunk_done, 3);
+        assert_eq!(t.downloaded, 3_400);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn restore_populates_bt_piece_state_from_sidecar() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-restore-bt");
+        let sd = dir.to_string_lossy().into_owned();
+        let mut t = bt_snapshot_task(7, "tor.bin", &sd);
+        t.downloaded = 50;
+        let reg = Registry::from_tasks(&[t]);
+        let reg_path = dir.join("registry.json");
+        reg.save(reg_path.to_str().unwrap()).unwrap();
+        crate::model::BtSidecar::build([1, 0])
+            .save(&crate::model::namegen::sidecar_path_of(&sd, "tor.bin"))
+            .unwrap();
+        let tasks = App::restore(reg_path.to_str().unwrap());
+        assert_eq!(tasks.len(), 1);
+        let t = &tasks[0];
+        assert_eq!(
+            t.done_blocks,
+            vec![0, 1],
+            "重启后 pieces 窗口数据直接来自 .ezr 断点（含乱序存储的 piece）"
+        );
+        assert_eq!(t.chunk_done, 2);
+        assert_eq!(
+            t.downloaded, 200,
+            "downloaded = sidecar piece 覆盖的选中字节（2×100），不小于快照值"
+        );
+        assert!(t.done_blocks.iter().all(|&p| p < 2), "无越界 piece 混入");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn restore_bt_without_sidecar_keeps_snapshot_values() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-restore-bt-nosc");
+        let sd = dir.to_string_lossy().into_owned();
+        let mut t = bt_snapshot_task(8, "nsc.bin", &sd);
+        t.downloaded = 40;
+        let reg = Registry::from_tasks(&[t]);
+        let reg_path = dir.join("registry.json");
+        reg.save(reg_path.to_str().unwrap()).unwrap();
+        let tasks = App::restore(reg_path.to_str().unwrap());
+        assert!(tasks[0].done_blocks.is_empty());
+        assert_eq!(tasks[0].chunk_done, 0);
+        assert_eq!(tasks[0].downloaded, 40);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn restore_bt_filters_stale_pieces_beyond_torrent() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-restore-bt-stale");
+        let sd = dir.to_string_lossy().into_owned();
+        let t = bt_snapshot_task(9, "stale.bin", &sd);
+        let reg = Registry::from_tasks(&[t]);
+        let reg_path = dir.join("registry.json");
+        reg.save(reg_path.to_str().unwrap()).unwrap();
+        let _ = crate::model::BtSidecar::build([0, 5, 9])
+            .save(&crate::model::namegen::sidecar_path_of(&sd, "stale.bin"));
+        let tasks = App::restore(reg_path.to_str().unwrap());
+        assert_eq!(
+            tasks[0].done_blocks,
+            vec![0],
+            "piece 5/9 超出 2-piece torrent（200B/100B）被过滤，不计进度"
+        );
+        assert_eq!(tasks[0].chunk_done, 1);
+        assert_eq!(tasks[0].downloaded, 100);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     fn task(id: u32, name: &str, state: TaskState) -> Task {

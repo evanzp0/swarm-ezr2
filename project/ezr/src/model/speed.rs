@@ -16,6 +16,15 @@ impl SpeedWindow {
     }
 
     pub fn push(&mut self, now: Instant, cumulative: u64) {
+        // 上次进样距现已超过窗口：旧样本基线过陈旧，整窗清空重新起算，
+        // 否则 rate 会把停顿期摊进分母低估速度（且与新样本差值跨停顿期失真）。
+        if self
+            .samples
+            .back()
+            .is_some_and(|(t, _)| now.duration_since(*t) > WINDOW)
+        {
+            self.samples.clear();
+        }
         self.total_bytes = self.total_bytes.max(cumulative);
         self.samples.push_back((now, cumulative));
         self.evict(now);
@@ -96,6 +105,23 @@ mod tests {
         w.push(t0 + Duration::from_secs(5), 5000);
         w.push(t0 + Duration::from_secs(5), 5000);
         assert!(w.rate() >= 0.0);
+    }
+
+    #[test]
+    fn push_after_stale_gap_resets_baseline() {
+        let t0 = Instant::now();
+        let mut w = SpeedWindow::new();
+        w.push(t0, 0);
+        w.push(t0 + Duration::from_millis(500), 5_000);
+        // 停顿超过窗口后重新进样：基线清空，rate 不跨停顿期摊分母
+        w.push(t0 + Duration::from_secs(5), 6_000);
+        assert_eq!(w.rate(), 0.0, "新基线单样本 rate=0");
+        w.push(
+            t0 + Duration::from_secs(5) + Duration::from_millis(500),
+            6_500,
+        );
+        let r = w.rate();
+        assert!((r - 1_000.0).abs() < 200.0, "新基线起算 rate={r}");
     }
 
     #[test]

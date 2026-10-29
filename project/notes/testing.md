@@ -118,3 +118,20 @@
   预填量。同型可测「启动即写」（轮询文件存在）与「完成即删」（全量预填秒完成）。
 - 断言 sidecar 内容时逐字段核对（version/id/name/save_dir/concurrency/data.trackers/
   piece_length/files/source），防止未来结构漂移静默破坏续传。
+
+## fake seeder 会话必须容忍本端任意协议消息（`Ok(_) => {}` 而非 `_ => return`）
+- **现象**：`serve_seeder_session` 用 `_ => return` 兜底——本端连接后先发 bitfield，会话
+  立即退出；引擎按候选池退避重连 → 再退出的死循环，e2e 下载测试 30s 超时（旧用例未暴露
+  是因为它们只断言连接数不断言下载完成）。
+- **处置**：fixture 消息循环只对「关心的请求」响应（Request → 回块），其余 `Ok(_) => {}`
+  吞掉，仅 `Err(_) => return`；与 `fake_seeder` 的既有口径一致。
+- **根因**：BT 握手后本端必然发 bitfield（有数据时）——「对端只该收 Request」的假设
+  不成立；fixture 的消息循环必须按协议现实（对端消息集不可枚举）设计兜底分支。
+
+## 引擎 e2e 的 peer 状态断言用轮询计数（AtomicUsize）而非事件推断
+- seeder 连接次数是连接行为的唯一外部可观察量：`counting_seeder`（每 accept 计数 +
+  逐连接 spawn 会话）+ `fetch_add` 返回值区分首个/后续会话（flaky fixture：首个会话
+  直接 drop 模拟掉线）。断言「重连」= 计数恰为 2 + BtDone；断言「多 peer 并发连接」=
+  多 seeder 计数各 ≥1 的轮询等待（deadline 内 sleep 50ms 步进）。
+- 退避时序入账：候选重试冷却 5s×2^fails →「断开后重连」e2e 至少 ~12s（首轮 2s announce
+  + 连接失败 + 10s 冷却），deadline 给 30s；不要用 5s 级 deadline 测带退避的行为。

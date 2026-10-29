@@ -1,14 +1,15 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/coder　会话：ezr-p2-coder-design1（2026-10-29，
-> 「BT .ezr 控制文件 / IP 遮掩+seeder 粉色 / 并发速度平滑」三设计需求实现轮）
-> 上游交接：project/handoff.md（ezr-p2-coder-bug3 前轮交接：trackers 编辑/全局黑名单/
-> 下载速度四 bug 修复轮，5776P/0F）
-> 当轮任务：操作者三项设计指令——①BT 下载任务补齐 `.ezr` 控制文件（对齐 HTTP 任务
-> sidecar 生命周期）；②BT 并发 panel IP 显示照搬 ezr-demo 遮掩规则（IPv4 `首.*.尾` /
-> IPv6 `首:*:尾`），另增规则：peer 是做种 seeder 时其 IP 用粉色显示；③BT 并发 panel
-> 上传/下载速度变动太快、单连接时与任务列表速度不匹配，参照 HTTP 并发 panel 速度
-> 算法（累计值 1s 滑窗 → EMA）修改。
+> 流程：six-pack　当前节点：six-pack/coder　会话：ezr-p2-coder-bug8（2026-10-29，
+> 「BT 下载慢 / 暂停继续进度清零 / 同 IP 两行复发 / 分块窗口并发口径」四 bug 修复轮）
+> 上游交接：project/handoff.md（ezr-p2-coder-bug7 前轮交接：速度 EMA 不重置 / 同 peer_id
+> 双通道去重 / BT 三集合分块显示 / HTTP blocks 还原，796P/0F）
+> 当轮任务：操作者四项指令——①BT 下载速度极慢（同局域网其他客户端 2~3MB/s，ezr 只有
+> 50KB/s）；②bt 任务暂停后继续下载，偶尔进度清零重新开始；③并发 panel 下载一段时间后
+> 同一 peer 的 IP 仍出现两行（bug7 声称已修，复发）；④分块窗口「并发」显示了任务设置的
+> 最高并发数，应显示实际并发连接数（操作者更正版）。
+> 修复后用 project/harness 工具完整测试，bin/swarm complete 打包，产物复制
+> /home/z/my-project/。
 
 ## 一、产物历史完成情况
 
@@ -22,148 +23,129 @@
 | 节点/切片 | 产物 | 完成情况 | 验证状态 |
 |---|---|---|---|
 | specifier（phase-01/02） | features/ 01 十份 + 06…09 四份；qa/ 对应十四份 | 已收官/已交付 | 见前轮登记 |
-| coder（phase-02 及注释删除/tilde/BT 启动收口轮） | `project/ezr/` 全量 | 已交付 | 前轮 5685P/0F；clippy 0 警告 |
-| coder（BT 外部互操作夹具轮） | `project/harness/`；产品修复 ×4；新增回归测试 ×1 | 已交付 | 互操作 e2e 三连 PASS |
-| coder（BT 速度归零 bug 修复轮） | 产品修复 ×1；新增回归测试 ×2 | 已交付 | 全量 5710P/0F |
-| coder（q 退出乱码修复轮） | 产品修复 ×1（restore_into/drain_input_events）；测试删 1 增 1 | 已交付 | 全量 5710P/0F；clippy 0 警告 |
-| coder（ezr-p2-coder-bug3：trackers 编辑/黑名单/速度轮） | 产品修复 ×8（3 文件键路由 + 3 文件 BT 对话框语义 + 引擎黑名单 + 引擎速度五件套）；新增回归测试 ×8 | 已交付 | 全量 5776P/0F；clippy 0 警告；fmt 干净；互操作 e2e PASS ×3 |
-| coder（本轮 ezr-p2-coder-design1：BT sidecar/IP 遮掩/速度平滑轮） | 产品改动 ×9 文件（model/bt.rs BtSidecar + engine/mod.rs·bt/engine.rs sidecar 与 seeder + app 四文件速度平滑 + ui 两文件遮掩粉色）；新增回归测试 ×13 | 已交付 | 全量 5866P/0F（分项见下）；clippy 0 警告；fmt 干净；互操作 e2e 本轮未复跑（磁盘受限，沿袭上轮 PASS） |
+| coder（phase-02 及历次收口轮） | `project/ezr/` 全量 | 已交付 | 前轮 5866P/0F；clippy 0 警告；互操作 e2e 三连 PASS |
+| coder（bug5：去重/还原/peer 策略/策略移植/tracker 轮） | 产品改动 ×9 文件 + 回归测试 ×18 | 已交付 | 6030P/0F；clippy 0 警告；fmt 干净 |
+| coder（bug6：版本回退/total order panic/花屏轮） | 产品改动 ×3 文件（model/bt.rs + bt/engine.rs + main.rs）；测试净 +1 | 已交付 | 788P/0F；clippy 0 警告；fmt 干净 |
+| coder（本轮 bug7：速度闪烁/同 IP 两行/分块还原/连片轮） | 产品改动 ×8 文件（model/speed.rs + model/bt.rs + model/task.rs + model/registry.rs + model/mod.rs + bt/engine.rs + engine/mod.rs + app/{mod.rs, engine/evt.rs, engine/bt.rs}）；新增回归测试 ×8 | 已交付 | 全量 796P/0F；clippy 0 警告；fmt 干净；harness e2e 两连 PASS |
+| coder（本轮 bug8：速度/恢复竞态/同 IP 两行复发/并发口径轮） | 产品改动 ×8 文件（bt/{engine.rs, mod.rs, pieces.rs} + app/{mod.rs, tasks.rs} + app/engine/{tick.rs, bt.rs} + ui/pieces.rs）；新增回归测试 ×8 | 已交付 | 全量 804P/0F；clippy 0 警告；fmt 干净；harness e2e 两连 PASS + 256MB 速度基准 ezr≈libtorrent |
 
 ### 遗留受限项（当前有效）
-- **BT 下载限速未接**（沿袭：BtSpec.max_speed 仅对 HTTP 生效）；最小 choke 状态机
-  （满足 D52）；DHT/BEP 10 完整扩展/uTP 属 phase-03/04。
+- **BT 下载限速未接**（沿袭：BtSpec.max_speed 仅对 HTTP 生效）；DHT/BEP 10 完整扩展/
+  uTP 属 phase-03/04。
 - **cargo-mutants 缺位**（加固轮职责）；demo 回归长脚本沙箱挂起（沿袭）；doc 测试不适用
   （bin-only）。
-- **环境性抖动族**（既有登记项，本轮两处按既有判据处置）：hardening_g_engine 批量连跑
-  FAIL 一次（disconnect_blacklists_peer_and_refuses_after_restart），单跑 ×2 均 6s 绿、
-  复跑整批 582P/0F 绿；hardening_g_v147 本轮 570P/0F 一次通过未复现。处置依据
-  notes/testing.md 双测试二进制并发假 FAIL 判据。
+- **环境性抖动族**（既有登记项）：本轮全量未复现；处置依据 notes/testing.md 双测试二进
+  制并发假 FAIL 判据，继续以「单跑复跑 + 整批复跑」口径处置。
 - **死 tracker 的用户可见延迟**（沿袭待批项）：tracker 不可达时任务停留「下载中 0.0%」
   约 4 分钟才报「全部 tracker 失败」；是否加可视状态由操作者裁定。
-- 源码注释全量删除口径延续；挂载套件剥头副本随产品源同步（对账口径见产物总账）。
-- **上轮规格偏离登记延续**：FR-02-17「单 peer 在飞窗口 5 块」放宽为 `PEER_PIPELINE = 32`；
+- **TUI 恐慌自愈的边界**（bug6 登记）：被捕获恐慌后的重进 TUI 为循环粒度（≤100ms），
+  钩子还原到自愈间一两帧可能瞬时花屏后恢复；零闪烁需恢复感知终端句柄（涉及 TUI 架构，
+  未夹带）。
+- **BT partial 进度不持久化**（本轮登记口径）：引擎 partial（已收块未验完）只存内存，
+  暂停/重启后该部分退回未下载、由引擎磁盘 SHA-1 校验自愈重下——libtorrent 同口径
+  （piece 粒度断点），如需块粒度断点请操作者裁定。
+- 源码注释全量删除口径延续；挂载套件剥头副本随产品源同步（本轮改动文件无剥头对应项）。
+- **规格偏离登记延续**：FR-02-17「单 peer 在飞窗口 5 块」放宽为 `PEER_PIPELINE = 32`；
   FR-02-02「trackers = 空（显示占位提示）」改为预填 config + .torrent trackers。feature
   文件未改（属 specifier 职责），QA 复核时以登记为准。
-- **本轮设计决定登记（操作者指令授权）**：BT sidecar 路径口径 = `save_dir/<task_name>.ezr`
-  （复用 namegen::sidecar_path_of，与删除任务清理清单 `delete_task_files` 第三项
-  `{name}.ezr` 天然对齐）；「删除任务但保留文件」时 sidecar 保留，供重加同种子自动接续
-  （与 HTTP 添加时发现断点的体验对齐）；engine `Cancel` 分支不删 sidecar（任务可能仅
-  退队保留，删除含文件场景由 pending_deletes 清单负责）。
-- **沿袭观察项（本轮未改）**：BT 多文件任务「删除并清理文件」对目录无效
-  （`delete_task_files` 仅 `remove_file`，多文件内容在 `{name}/` 目录下，删除失败静默），
-  属既有局限，如需修复请下一轮明确授权。
+- **设计决定登记（沿袭 + 本轮新增）**：
+  - **registry.json = 任务档案、.ezr = 数据断点**（bug5 定案）；sidecar 版本恒 1、同形
+    v2 遗留文件放行（bug6/本轮定案，旧全量档嵌套形状仍拒绝）。
+  - **BT 分块三集合**（本轮定案）：`done_blocks`（验完）/`partial_blocks`（引擎 partial
+    表，黄）/`active_blocks`（在途请求，蓝，仅下载态）；BT 任务 `connections` 恒空、
+    `pieces()` 走 BT 分支绝不用 HTTP lease；`BtProgress` 携带三集合 + uploaded +
+    upload_speed；`BtStopped` 携带终态 done/partial 集合（暂停即还原，不靠重启回读）。
+  - **单连接-per-peer**（本轮定案，对齐 libtorrent）：`fill_peer_slots` 按 IP 去重；
+    握手 peer_id 去重（后到者 Drop 关闭、候选回退不计失败）；ConnStat 记 peer_id。
+  - **peer 速度显示**（本轮定案）：EMA 不随窗口超时重置；`SpeedWindow::push` 超窗清
+    基线（rate 不跨停顿期摊分母）；'-' 仅表示从未传数据，停止传输平滑衰减至 0 B/s。
 
 ### 实现定义值登记
-- 沿袭 phase-01/02 全部口径（D1–D59）+ 前轮补充（引擎监听 127.0.0.1:0 随机端口、
-  首轮 announce 延迟 2s、piece 落盘三步查错、peer 连接 5s 收割窗、互操作夹具端口、
-  MOUSE_SETTLE 50ms / RESIDUAL_MIN_SPAN 80ms / RESIDUAL_QUIET 40ms / RESIDUAL_CAP
-  250ms、`PEER_PIPELINE` = 32、`REQUEST_TIMEOUT_SECS` = 20、`REQUESTS_PER_PIECE` = 4、
-  黑名单按 IP 记忆挂 EngineShared 内存态）。
-- 本轮新增：`BT_SIDECAR_VERSION` = 1（BtSidecar 结构 version/id/name/save_dir/
-  concurrency/data: BtTaskData，JSON 原子写）；BT sidecar 生命周期＝任务启动即写
-  （磁盘校验后）→ done 增长时 1s tick 落盘 → Pause/StopSeed 终态落盘 → 全量完成即删
-  → Cancel 不动（删除含文件走 pending_deletes 清单）；恢复口径＝
-  spec.done_pieces（注册表）∪ sidecar.done_pieces 后逐 piece SHA-1 磁盘校验，
-  坏 piece 自然淘汰（sidecar 可信度依赖校验，不设 infohash 字段）；seeder 判定＝
-  peer has ⊇ covered_pieces（选集全量，`has.len() >= covered.len()` 预筛）；
-  `PINK` = Rgb(255,153,170)（seeder IP 专用，与 MAGENTA 上传速度色区分）；
-  BT 并发速度＝app 侧 `BtConnSpeedStat`（down/up 双 `SpeedWindow` 1s 滑窗 + 双
-  `SmoothedSpeed` EMA α=1/5，与 HTTP conn_speed/conn_windows 同构），引擎侧
-  conn_views 仍报区间瞬时值但 UI 不再消费（保留字段供 tick 汇总上传速度）。
+- 沿袭 phase-01/02 全部口径（D1–D59）+ bug5/bug6 轮补充（`RECHOKE_INTERVAL_SECS` = 10、
+  `OPTIMISTIC_INTERVAL_SECS` = 30、`UPLOAD_SLOTS` = 4、`PEER_RETRY_BASE_SECS` (5) ×
+  2^fails 封顶 `PEER_RETRY_CAP_SECS` (120)、`PEER_PIPELINE` = 32、`REQUESTS_PER_PIECE`
+  = 4、per-tracker completed Notify 立即发送、BT_SIDECAR_VERSION = 1 等）。
+- 本轮新增：无新常量；行为口径变更见上「本轮定案」。
 
 ## 二、当前产出情况
 
 ### 本会话产物清单
-- **设计①（BT 任务 `.ezr` 控制文件）**：`model/bt.rs` 新增 `BtSidecar`（version=1 /
-  id / name / save_dir / concurrency / data: `BtTaskData`，JSON 原子写，save/load/remove
-  与 HTTP `Sidecar` 同构）；路径口径 `save_dir/<task_name>.ezr`（复用
-  `namegen::sidecar_path_of`）。`bt/engine.rs::run` 生命周期：磁盘校验后启动即写 →
-  done 增长时 1s tick 落盘（`done.len() != sidecar_saved_done` 单一脏判据）→
-  Pause/StopSeed 终态落盘 → 全量完成（seeding 转换点）即删 → Cancel 不动；恢复口径 =
-  `spec.done_pieces`（注册表）∪ sidecar.done_pieces 后逐 piece SHA-1 磁盘校验，坏
-  piece 自然淘汰（不设 infohash 字段，校验即安全垫）。删除任务含文件场景由既有
-  `delete_task_files` 清单第三项 `{name}.ezr` 自动覆盖；「删除任务保留文件」时
-  sidecar 留存，重加同种子自动接续（与 HTTP 添加时「发现有效断点」体验对齐）。
-- **设计②（IP 遮掩 + seeder 粉色）**：`ui/conns.rs` 新增 `mask_ip`（照搬 ezr-demo
-  `app/model.rs` 规则：IPv4 `首.*.尾`、IPv6 `首:*:尾`），`ip_display` 重写为四分支
-  （无 `:` 原样 / 含 `[` 剥括号取 v6 / 恰 1 个 `:` 按 v4:port / 多 `:` 裸 v6+port
-  rsplit 剥 port），并发明细 IP 列不再泄露完整地址；`ConnStat.has` ⊇ covered_pieces
-  （`has.len() >= covered.len()` 预筛）判 seeder，`BtConnView`/`BtConnRow` 各增
-  `seeder: bool` 贯通到行渲染，seeder 行 IP 用新增 `PINK` = Rgb(255,153,170)
-  （`ui/mod.rs`），非 seeder 维持 FG，选中行维持 White 优先。
-- **设计③（BT 并发速度平滑，对齐 HTTP 算法）**：根因＝引擎侧 `conn_views` 每条
-  peer 消息即重置窗口（区间瞬时速率 = 本区间字节 / 区间时长，块到达呈突发 → 抖动
-  剧烈），而任务速度走 app 侧 1s 滑窗 → 单连接时两处数值天然不匹配。修法＝与 HTTP
-  `conn_windows`/`conn_speed` 完全同构：app 新增 `BtConnSpeedStat`（down/up 双
-  `SpeedWindow` + 双 `SmoothedSpeed`），`Evt::BtConns` 处理器喂累计值（陈窗重置 +
-  离开连接 retain 回收），`tick.rs::sample_bt_conn_speed_display` 每 SPEED_TICK 把
-  滑窗 rate 灌入 EMA（α=1/5，镜像 `sample_conn_speed_display`），UI 的 BT 行速度改读
-  `bt_conn_speeds_of`；`on_bt_done`/`on_bt_stopped`/`remove_task`/`clear_completed`
-  四处补 `clear_bt_conn_stats`（镜像 `clear_conn_stats` 口径）。引擎侧
-  `down_speed/up_speed` 字段保留（tick 汇总上传速度仍消费），UI 不再读取。
-- **测试（新增 ×13）**：model 层 ×3（`roundtrip_preserves_everything`、
-  `load_rejects_unknown_version_and_broken_json`、`remove_is_idempotent`）；引擎层 ×4
-  （`bt_sidecar_written_at_start_with_task_shape` 启动即写 + Cancel 不删、
-  `bt_sidecar_prefill_resumes_and_removed_on_completion` 全量预填秒完成 + 完成即删、
-  `bt_sidecar_pause_keeps_resume_state` 预填半量 + Pause 落盘数量断言、
-  `bt_conns_mark_full_bitfield_peer_as_seeder` 全量 bitfield peer 标 seeder）；app 层
-  ×2（`bt_conns_feed_sliding_windows_and_seeder_flag`、
-  `bt_conn_stats_pruned_when_conn_leaves_and_cleared_on_stop`）；ui 层 ×4
-  （`bt_seeder_ip_renders_pink` 缓冲区 fg 断言、`mask_ip_demo_rules`、
-  `ip_display_masks_and_caps_width` 含裸 v6+port 形态、`bt_seven_columns_render_
-  engine_rows` 改写为遮掩断言并新增完整 IP 不得出现反断言）。
-- **`project/notes/`**：architecture.md 增 2 条（BT sidecar 生命周期与路径口径、
-  BT 并发速度三段管线与 HTTP 同构）；testing.md 增 1 条（引擎级 sidecar 测试的
-  确定性写法：预填 sidecar + 立即 Pause 避开下载竞态）；INDEX.md 同步。
+- **Bug①（下载速度极慢）**：分层处置。**主根因与 Bug② 同源**——暂停→继续的双引擎竞态
+  会造成重复下载与反复重校验，平均速度坍塌（见 Bug②）；另两处真实短板一并修复：
+  ①出连 TCP 拨号超时 10s→3s（`CONNECT_TIMEOUT_SECS`）：公网 swarm 死 peer 占比高，
+  10s 级拨号把并发槽位成片占满、拖垮连接建立（libtorrent 连接超时为秒级）；
+  ②引擎每消息 CPU 热点削减：`handle_peer_msg` 原本对**每条**消息（含 KeepAlive/Request/
+  Cancel）都全量重算 claimed+availability（O(conns×pieces)），改按需计算（仅 Have/
+  Unchoke/Block 补请求路径）；Bitfield/Have 的 `covered_pieces().contains` 线性扫描改
+  `PieceMap::covers` 二分（Bitfield 原为 O(pieces²)）。管线机制（pipeline 32×16KiB、
+  nodelay、按 piece 落盘 flush、上传服务、tit-for-tat choker）经比对确认完好。
+- **Bug②（暂停→继续偶尔进度清零）**：根因 = **乐观暂停 + 引擎异步消费 Pause 的竞态**。
+  `toggle_pause` 同步置 Paused、`try_send` 异步发 Pause；旧引擎退出前（大种子启动重校验
+  可达数十秒）用户恢复 → 调度器拉起第二个引擎：双引擎同写文件与 sidecar、进度集合互相
+  覆盖、旧引擎 `BtStopped` 终态回写 `t.downloaded` —— 进度回退/清零重下。修复三件套：
+  ①app 层 `bt_stopping` 登记门闸（HashMap<u32, Instant>）：暂停三分支（Downloading 暂停/
+  Queued-held 退出/Failed 暂停）写入，BtStopped/BtFailed/BtDone 清除；`tick_grant_and_start`
+  见登记在册的 BT 任务先归还槽位不启动；180s 兜底强制放行（防引擎挂死把任务永久卡死）；
+  ②引擎启动重校验循环 `select!` 竞争 cmd：Pause/StopSeed 立即保存退出——**保存集 =
+  已校验 ∪ 未校验预填余量**（只存已校验子集会让 sidecar 回退、余量误判丢失重下；余量
+  下次载入本就重新校验，零进度损失、校验失败者自然排除），Cancel 立即退出不保存
+  （与主循环同语义）；③`on_bt_stopped` 分态处理：Paused=正常暂停流落地终态集合与
+  downloaded；Completed=停止做种流仅清连接/速度显示；Queued/Downloading/Seeding=旧引擎
+  滞后回报整体忽略（状态不得回落 Paused、集合不得覆盖新引擎进度）。
+- **Bug③（同 IP 两行复发）**：根因 = 去重发生在握手完成（Connected），但交叉拨入的入连
+  从 **accept 起**就以同 IP 挂在 conns（peer_id=None），`conn_views` 照渲染——对方每次
+  重拨都出现几秒同 IP 第二行，反复出现即「没修」。修复：`conn_views` 跳过
+  `peer_id.is_none()`，并发 panel 只展示已建立连接；引擎去重语义不变（出连按 IP +
+  握手按 peer_id）。同 IP 不同 peer_id（NAT 后多实例）视为不同 peer 保留两行（合法）。
+- **Bug④（分块窗口「并发」口径）**：`conns_display_total` 抽出单任务版
+  `conns_actual_of`（BT=bt_conns 行数即已建立 peer 数；HTTP=活跃 lease 数；非下载态 0），
+  pieces 弹窗元信息行改用之——与并发面板徽标同口径；任务设置的最高并发只在编辑对话框。
+- **测试（新增 ×8）**：引擎 ×1（conn_views 隐藏握手未完成连接）；app/engine/bt ×4
+  （bt_stopped 竞态不覆盖新引擎进度 / 落终态改 Paused 态 / BtStopped 清登记 /
+  BtFailed 清登记）；app/engine/tick ×2（bt_stopping 在册不启动、清登记后启动 /
+  180s 兜底过期放行）；ui/pieces ×2 内含文案口径更新 ×3 处（HTTP 无连接 0、
+  HTTP 活跃 2 非设置值 4、BT 已建立 2）。
+- **`project/notes/`**：architecture.md 新增四条（同 IP 两行复发根因 / 「并发」口径 /
+  暂停继续竞态与门闸三件套 / 速度短板两处）；INDEX.md 同步。
 
 ### 验证证据
 | 验证项 | 结果 | 命令（可复现，均在 project/ezr 下） |
 |---|---|---|
-| bin ezr | 769P / 0F | `cargo test --bin ezr --quiet` |
-| 12 挂载套件 | 5051P / 0F | hardening 131 + engine_backfill 672 + g_appcore 587 + g_engine 582 + g_main 2 + g_proxy 16 + g_slots 179 + g_supervisor 556 + g_throttle_err 359 + g_v147 570 + ui_backfill 702 + v115 695 |
-| 其余 bin 目标 | 46P / 0F | `cargo test --bin ezr-fixture --bin ezr-mktorrent --bin ezr-proxy --quiet` |
-| 全量合计 | **5866P / 0F** | 上三行求和（769+5051+46） |
-| clippy | 0 警告 | `cargo +nightly clippy --all-targets` |
-| fmt | 干净 | `cargo +nightly fmt --check`（rust-toolchain.toml 钉版） |
-| 互操作 e2e | 本轮未复跑 | 磁盘受限（release 构建需 ~3G，当前余 1.6G）；沿袭上轮 PASS ×3，本轮引擎改动为 additive（sidecar 写盘 + seeder 位计算），debug 引擎级测试 ×4 全绿覆盖同路径 |
-| 设计① 回归 | 绿 | sidecar 三测试：启动即写/全量预填秒完成且完成即删/预填半量 Pause 落盘 |
-| 设计② 回归 | 绿 | `bt_seeder_ip_renders_pink`（TestBackend 缓冲区 fg == PINK/FG 精确断言）+ `mask_ip_demo_rules` + 遮掩渲染反断言 |
-| 设计③ 回归 | 绿 | `bt_conns_feed_sliding_windows_and_seeder_flag`（滑窗+EMA 非零、seeder 贯通）+ 回收/清零测试 |
+| bin ezr | **804P / 0F** | `cargo test --bin ezr --quiet` |
+| 其余 bin 目标 | 15P / 0F | `cargo test --bin ezr-fixture --bin ezr-mktorrent --bin ezr-proxy --quiet` |
+| clippy | 0 警告 | `cargo clippy --bin ezr` |
+| fmt | 干净 | `cargo fmt`（rust-toolchain.toml 钉 nightly） |
+| harness 互操作 e2e | **两连 PASS** | `project/harness`：`python3 swarm_e2e.py --ezr-bin ../ezr/target/release/ezr --payload-mb 4 --timeout 150`——libtorrent seeder+leecher 真实 swarm，HTTP(BEP 3)+UDP(BEP 15) 双 tracker，ezr 2.2s 完成转做种，三方 SHA-256 一致 |
+| harness 速度基准 | **ezr≈libtorrent** | 同上 `--payload-mb 256 --timeout 420`：ezr 126.8s（2.02MB/s）、libtorrent leecher 128s（2.0MB/s）——同 swarm 同 seeder 双 leecher 同时下载，两者持平，管线无短板 |
 
 ### 对账口径
-- 上轮基线 5776（bin ezr 758 + 12 挂载套件 4972 + 其余 bin 46）。本轮 bin ezr
-  758→769（净增 11：model ×3 + 引擎 ×4 + app ×2 + ui ×2 新增，1 个既有测试改写
-  不变计数）；挂载套件 4972→5051（剥头副本自动收编随产品源增长，与本轮改动文件集
-  一致）；其余 bin 46 持平。合计 5866 与分套件实测逐项吻合。
-- hardening_g_engine 首轮批量连跑 FAIL 一次（disconnect_blacklists_…），单跑 ×2 均
-  6s 绿 + 复跑整批 582P/0F 绿，按 notes/testing.md 双测试二进制并发假 FAIL 判据处置，
-  对账以复跑整批结果计。
-- 磁盘事件登记：本轮磁盘 100% 满两次（clippy --all-targets 全套件构建 + 全量测试
-  并发挤压），按 notes/environment.md 处置（`cargo clean` 一次、清 incremental 一次，
-  回收 ~9.6G）；后续全量回归改用 `CARGO_INCREMENTAL=0` 分批跑。不涉及产品代码。
+- 上轮基线 796（bin ezr）+ 15（其余 bin，上轮 46 为全量含挂载套件口径，本轮实测其三
+  bin 目标 15 与上轮该三目标一致）。本轮 bin ezr 796→804（净 +8：新增 ×8，文案口径
+  更新 ×3 断言并入原测试，实测吻合）。
+- release 构建耗时 3m28s；256MB 基准为新增验证项（操作者速度质疑的对照证据）。
 
 ### 待办与待批
-- **待批（设计①侧）**：sidecar 数据面当前只服务「engine 启动合并 + 注册表兜底」；
-  如需「添加对话框打开时发现同种子 .ezr 显示可接续提示」（对齐 HTTP
-  `resumed` toast）请在下一轮明确，本轮未加（不夹带未授权 UI）。
-- **待批（沿袭）**：FR-02-17 在飞窗口 5→32、FR-02-02 trackers 预填规格同步；
-  死 tracker 约 4 分钟静默窗的可视状态；多协议喂窗公共化重构（本轮
-  `sample_bt_conn_speed_display` 与 `sample_conn_speed_display` 已同构，可一并评估）。
-- **遗留观察项**：黑名单仅按 IP、无 UI 展示（沿袭）；BT 多文件「删除并清理文件」
-  对目录无效（沿袭）；IP 遮掩为显示层（引擎事件流、日志仍持原始 addr，删除
-  任务「保留文件」场景重加后续传不受影响）。
+- **待批（沿袭）**：监听端口随机是否需固定范围/config 键；FR-02-17/FR-02-02 规格同步；
+  死 tracker 约 4 分钟静默窗可视状态；做种任务重启不重挂引擎协程（FR-02-22⑥）；多协议
+  喂窗公共化重构；BT partial 不持久化（引擎校验自愈，libtorrent 同口径）。
+- **待批（本轮）**：①同 IP 不同 peer_id（NAT 后多客户端实例）保留两行——严格
+  libtorrent `allow_multiple_connections_per_ip=false` 需按 IP 拒绝第二个已建立连接，
+  但会破坏回环夹具（seeder/leecher 同 127.0.0.1）与 NAT 合法多实例场景，是否收紧由
+  操作者裁定；②bt_stopping 兜底 180s 的取值；③「并发」列现在为实际连接数，设置值
+  不再在 pieces 弹窗展示（如需「实际/设置」双口径请裁定）。
+- 遗留观察项沿袭：黑名单仅按 IP、无 UI 展示；BT 多文件「删除并清理文件」对目录无效；
+  endgame 重复请求无去重上限；choker 速率窗口 10s 判别粒度；availability 仍每事件
+  全量重算（本轮已减频，增量维护可再优化）。
 - 无阻塞。
 
 ### 移交建议
 - 下一步 `bin/swarm begin six-pack/cleaner`：以本文件为上游交接。建议顺序：
-  ① `bt/engine.rs::run` 本轮新增 sidecar 三写点与既五处修改的重复面审查（save_
-  bt_sidecar 单点封装已收敛，确认 tick/Pause/启动三调用点无第四处漏网）；
-  ② `tick.rs` 两个 sample_* 函数同构归并（双协议喂窗公共化）；③ `ui/conns.rs`
-  ip_display 四分支的形态覆盖是否需要收窄为「有 port 必剥」（沿袭裸 v6 形态歧义）。
-- 给操作者的手测口径：①BT 任务启动后，下载目录出现 `<task_name>.ezr`，暂停/继续
-  断点保持，完成后 `.ezr` 自动消失；②并发明细 IP 列显示 `1.*.4` / `2001:*:1` 形态，
-  完整 IP 不再出现；对全量做种的 peer（如 transmission seeder）IP 呈粉色；③并发
-  panel 下载/上传速度不再逐秒跳变，单连接任务的并发速度与任务列表速度量级一致
-  （同为 1s 滑窗 + EMA 口径）。
-- 后续链：cleaner → architect → hardender → QA（宪法第一章：不自动流转，操作者显式
-  续跑）。
+  ① `bt/engine.rs` ~3500 行持续膨胀（本轮 +~120 行），msg 处理/choker/fill_peer_slots/
+  conn 建立路径拆分评估；②`conns_actual_of`/`conns_display_total`/并发面板徽标三处
+  同口径来源可收敛为单一 helper；③`BtProgress` 事件字段增多，可考虑结构体化载荷。
+- 给操作者的手测口径：①BT 下载中打开 pieces 窗口——「并发 N」应等于并发面板行数
+  （实际连接数），暂停后为 0；②BT 下载中按空格暂停 → 立即按空格继续（连续多次）——
+  进度不得清零/回退，pieces 窗口保留绿/黄块，任务短暂排队后恢复下载；③并发 panel
+  下载一段时间观察——同 IP 仅一行（交叉拨入的握手期连接不再显示）；④真实公网 swarm
+  下载速度与 qBittorrent 对照（本轮 loopback 基准 ezr≈libtorrent）。
+- 后续链：cleaner → architect → hardender → QA（宪法第一章：不自动流转，操作者显式续跑）。

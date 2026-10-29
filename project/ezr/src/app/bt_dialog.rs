@@ -129,7 +129,6 @@ impl App {
             trackers: bt.map(|b| b.trackers.clone()).unwrap_or_default(),
             concurrency: t.concurrency,
             proxy_endpoint: self.cfg.resolve_proxy(&t.proxy).0,
-            done_pieces: bt.map(|b| b.done_pieces.clone()).unwrap_or_default(),
             seeding: false,
             max_speed: self.cfg.max_speed,
         }
@@ -421,7 +420,6 @@ impl App {
             trackers,
             piece_length: meta.piece_length,
             files,
-            done_pieces: Vec::new(),
         });
         if paused {
             t.state = TaskState::Paused;
@@ -710,7 +708,6 @@ mod tests {
         assert_eq!(b.source, path);
         assert_eq!(b.files.len(), 2);
         assert!(b.files.iter().all(|f| f.selected));
-        assert!(b.done_pieces.is_empty());
         assert_eq!(
             b.trackers,
             vec!["udp://seed/ann", "udp://manual/ann"],
@@ -992,7 +989,6 @@ mod tests {
         assert_eq!(spec.concurrency, 7);
         assert_eq!(spec.files.len(), 2);
         assert_eq!(spec.trackers.len(), 3, "config 1 + torrent 2（去重后）");
-        assert_eq!(spec.done_pieces, Vec::<u32>::new());
         assert!(!spec.seeding);
         assert_eq!(spec.max_speed, 1024);
         assert!(spec.proxy_endpoint.is_none(), "直连 = None");

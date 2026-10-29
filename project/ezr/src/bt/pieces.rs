@@ -42,6 +42,13 @@ impl PieceMap {
         &self.covered
     }
 
+    /// piece 是否在覆盖集内。covered 升序，二分查找：
+    /// Bitfield/Have 高频路径禁止对 Vec 线性扫描（O(pieces²)）。
+    #[must_use]
+    pub fn covers(&self, piece: u32) -> bool {
+        self.covered.binary_search(&piece).is_ok()
+    }
+
     #[must_use]
     pub fn selected_total(&self) -> u64 {
         self.files

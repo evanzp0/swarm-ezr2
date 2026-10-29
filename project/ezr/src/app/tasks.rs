@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use super::App;
 use crate::engine::Cmd;
 use crate::model::sidecar::Sidecar;
@@ -15,6 +17,11 @@ impl App {
                 self.windows.remove(&self.tasks[idx].id);
                 let id = self.tasks[idx].id;
                 let is_bt = self.tasks[idx].protocol.is_bt();
+                if is_bt {
+                    // 引擎异步消费 Pause；恢复必须等 BtStopped 确认旧引擎退出，
+                    // 否则两个引擎同写文件与 sidecar，进度互相回退。
+                    self.bt_stopping.insert(id, Instant::now());
+                }
                 let engine = self.engine.clone();
                 tokio::spawn(async move {
                     if is_bt {
@@ -40,6 +47,9 @@ impl App {
                 self.tasks[idx].state = TaskState::Paused;
                 self.tasks[idx].has_slot = false;
                 if held {
+                    if is_bt {
+                        self.bt_stopping.insert(id, Instant::now());
+                    }
                     let engine = self.engine.clone();
                     tokio::spawn(async move {
                         if is_bt {
@@ -64,6 +74,9 @@ impl App {
                 self.tasks[idx].retries = 1;
                 self.tasks[idx].retry_in = None;
                 self.tasks[idx].has_slot = false;
+                if is_bt {
+                    self.bt_stopping.insert(id, Instant::now());
+                }
                 let engine = self.engine.clone();
                 tokio::spawn(async move {
                     if is_bt {

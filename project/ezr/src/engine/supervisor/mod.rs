@@ -55,7 +55,6 @@ pub struct BtSpec {
     pub trackers: Vec<String>,
     pub concurrency: usize,
     pub proxy_endpoint: Option<ProxyEndpoint>,
-    pub done_pieces: Vec<u32>,
     pub seeding: bool,
     #[allow(dead_code)]
     pub max_speed: u64,

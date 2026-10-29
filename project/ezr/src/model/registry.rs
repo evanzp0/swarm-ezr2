@@ -131,6 +131,7 @@ impl From<&TaskSnapshot> for Task {
             chunk_done: 0,
             done_blocks: Vec::new(),
             partial_blocks: Vec::new(),
+            active_blocks: Vec::new(),
             block_size: s.block_size,
             concurrency: s.concurrency,
             retries: s.retries,
@@ -324,6 +325,40 @@ mod tests {
             !text.contains("final_url"),
             "新序列化不得含 final_url 键: {text}"
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn legacy_bt_done_pieces_field_is_ignored_and_not_written() {
+        let mut t = sample_task();
+        t.protocol = Protocol::Bt;
+        t.url = "/tmp/tor.torrent".to_string();
+        t.bt = Some(super::super::bt::BtTaskData {
+            source: "/tmp/tor.torrent".to_string(),
+            trackers: vec!["udp://t/ann".to_string()],
+            piece_length: 16_384,
+            files: vec![super::super::bt::BtFile {
+                path: "tor.bin".to_string(),
+                size: 32_768,
+                selected: true,
+            }],
+        });
+        let reg = Registry::from_tasks(&[t]);
+        let raw = serde_json::to_string(&reg).unwrap();
+        assert!(
+            !raw.contains("done_pieces"),
+            "新序列化不得含 done_pieces（进度唯一归属 .ezr）: {raw}"
+        );
+        let legacy = raw.replace("\"files\":[", "\"done_pieces\":[0,1,2],\"files\":[");
+        assert!(legacy.contains("done_pieces"), "旧形态注入应生效");
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg-bt-legacy");
+        let p = dir.join("registry.json");
+        std::fs::write(&p, legacy).unwrap();
+        let loaded =
+            Registry::load(p.to_str().unwrap()).expect("旧注册表（bt.done_pieces）仍可加载");
+        let back = loaded.restore_tasks();
+        let bt = back[0].bt.as_ref().expect("bt 数据保留");
+        assert_eq!(bt.piece_length, 16_384, "任务定义字段随旧档保留");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

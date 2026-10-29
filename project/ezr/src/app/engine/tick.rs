@@ -44,6 +44,12 @@ impl App {
             let Some(idx) = self.tasks.iter().position(|t| t.id == id) else {
                 continue;
             };
+            if self.tasks[idx].protocol == Protocol::Bt && self.bt_stopping.contains_key(&id) {
+                // 旧 BT 引擎尚未确认退出（BtStopped 未到）：先归还槽位，
+                // 等 BtStopped 清除登记后下一轮重新授予并启动。
+                self.tasks[idx].has_slot = false;
+                continue;
+            }
             if !self.disk_precheck(idx) {
                 continue;
             }
@@ -230,6 +236,12 @@ impl App {
                 self.toast_until = None;
             }
         }
+        // bt_stopping 兜底：正常路径 BtStopped/BtFailed 必然清除登记；
+        // 引擎任务若异常挂死（不退也不报），登记滞留会让任务永远无法
+        // 再启动，故超时强制放行（正常停止在秒级完成，180s 极宽裕）。
+        const BT_STOPPING_FAILOPEN_SECS: u64 = 180;
+        self.bt_stopping
+            .retain(|_, at| now.duration_since(*at).as_secs() < BT_STOPPING_FAILOPEN_SECS);
         if self.last_save.elapsed().as_secs() >= 5 {
             self.save_registry();
         }
@@ -352,7 +364,6 @@ mod bt_route_tests {
                 size: 12,
                 selected: true,
             }],
-            done_pieces: Vec::new(),
         });
         t
     }
@@ -395,6 +406,57 @@ mod bt_route_tests {
             "BT 无探测流程：获槽启动即转下载中"
         );
         assert!(app.tasks[0].has_slot);
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn bt_task_in_bt_stopping_waits_for_old_engine_exit() {
+        // 旧引擎尚未确认退出（bt_stopping 在册）时不得拉起新引擎：
+        // 双引擎同写文件与 sidecar 是「暂停→继续进度清零」的根因。
+        let mut app = make_app("gate-bt-stopping");
+        let (spy_tx, mut spy_rx) = mpsc::channel::<Cmd>(8);
+        app.engine = EngineHandle::from_sender(spy_tx);
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btroute-gate");
+        let path = write_torrent(&dir, "a.torrent");
+        app.tasks.push(bt_task(1, &path));
+        app.bt_stopping.insert(1, std::time::Instant::now());
+        app.tick_grant_and_start().await;
+        assert_no_cmd(&mut spy_rx).await;
+        assert_eq!(
+            app.tasks[0].state,
+            TaskState::Queued,
+            "登记未清除前任务保持排队等待"
+        );
+        assert!(
+            !app.tasks[0].has_slot,
+            "跳过启动时归还槽位，登记清除后下一轮重新授予"
+        );
+        // 登记 BtStopped 清除后，下一轮调度正常启动。
+        app.bt_stopping.remove(&1);
+        app.tick_grant_and_start().await;
+        match recv_cmd(&mut spy_rx).await {
+            Cmd::StartBt { spec } => assert_eq!(spec.id, 1),
+            other => panic!("登记清除后应正常启动，实际: {other:?}"),
+        }
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn bt_stopping_failsafe_expires_stale_registration() {
+        // 兜底：登记滞留（引擎挂死既不退也不报）超时后放行，
+        // 任务不能被永久卡死。
+        let mut app = make_app("gate-bt-failsafe");
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btroute-failsafe");
+        app.tasks.push(bt_task(1, "unused.torrent"));
+        let stale = std::time::Instant::now() - std::time::Duration::from_secs(600);
+        app.bt_stopping.insert(1, stale);
+        app.tick_housekeeping(std::time::Instant::now());
+        assert!(
+            !app.bt_stopping.contains_key(&1),
+            "超时兜底必须清除过期登记"
+        );
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }

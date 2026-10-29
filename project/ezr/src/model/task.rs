@@ -82,6 +82,7 @@ pub struct Task {
     pub chunk_done: u32,
     pub done_blocks: Vec<u32>,
     pub partial_blocks: Vec<u32>,
+    pub active_blocks: Vec<u32>,
     pub block_size: u64,
     pub concurrency: usize,
     pub proxy: ProxyChoice,
@@ -145,6 +146,7 @@ impl Task {
             chunk_done: 0,
             done_blocks: Vec::new(),
             partial_blocks: Vec::new(),
+            active_blocks: Vec::new(),
             block_size,
             concurrency,
             proxy,
@@ -269,27 +271,41 @@ impl Task {
         }
         let downloading = self.state == TaskState::Downloading;
         let partial_authoritative = !self.partial_blocks.is_empty();
-        for c in &self.connections {
-            if c.cap() == 0 {
-                continue;
+        if self.bt.is_some() {
+            // BT：在途/部分集合来自引擎真实状态（active_blocks/partial_blocks），
+            // 不用 HTTP 式连续 lease 伪装——否则在途分块被画成从前沿连成一片。
+            if downloading {
+                for &i in &self.active_blocks {
+                    if let Some(idx) = usize::try_from(i).ok().filter(|&idx| idx < y) {
+                        if v[idx] != PieceState::Done {
+                            v[idx] = PieceState::Active;
+                        }
+                    }
+                }
             }
-            let idx = (c.start / self.block_size) as usize;
-            if idx >= y {
-                continue;
-            }
-            let s = if c.done >= c.cap() {
-                PieceState::Done
-            } else if downloading {
-                PieceState::Active
-            } else if partial_authoritative {
-                PieceState::Empty
-            } else if c.done > 0 {
-                PieceState::Partial
-            } else {
-                PieceState::Empty
-            };
-            if v[idx] != PieceState::Done || s == PieceState::Done {
-                v[idx] = s;
+        } else {
+            for c in &self.connections {
+                if c.cap() == 0 {
+                    continue;
+                }
+                let idx = (c.start / self.block_size) as usize;
+                if idx >= y {
+                    continue;
+                }
+                let s = if c.done >= c.cap() {
+                    PieceState::Done
+                } else if downloading {
+                    PieceState::Active
+                } else if partial_authoritative {
+                    PieceState::Empty
+                } else if c.done > 0 {
+                    PieceState::Partial
+                } else {
+                    PieceState::Empty
+                };
+                if v[idx] != PieceState::Done || s == PieceState::Done {
+                    v[idx] = s;
+                }
             }
         }
         if partial_authoritative {
@@ -706,6 +722,88 @@ mod tests {
         assert!(v.iter().all(|s| *s == PieceState::Done));
         t.chunk_done = 99;
         assert_eq!(t.pieces().len(), 3);
+    }
+
+    fn bt_pieces_task(state: TaskState) -> Task {
+        use super::super::bt::{BtFile, BtTaskData};
+        let mut t = crate::model::sample_task();
+        t.protocol = Protocol::Bt;
+        t.state = state;
+        t.probed = true;
+        t.total = 1_000;
+        t.block_size = 100;
+        t.bt = Some(BtTaskData {
+            source: "/tmp/a.torrent".to_string(),
+            trackers: vec![],
+            piece_length: 100,
+            files: vec![BtFile {
+                path: "a.bin".to_string(),
+                size: 1_000,
+                selected: true,
+            }],
+        });
+        t
+    }
+
+    #[test]
+    fn bt_pieces_real_sets_scattered_not_contiguous() {
+        let mut t = bt_pieces_task(TaskState::Downloading);
+        t.done_blocks = vec![0, 5, 9];
+        t.active_blocks = vec![2, 7];
+        t.partial_blocks = vec![4];
+        let v = t.pieces();
+        let expect = [
+            PieceState::Done,
+            PieceState::Empty,
+            PieceState::Active,
+            PieceState::Empty,
+            PieceState::Partial,
+            PieceState::Done,
+            PieceState::Empty,
+            PieceState::Active,
+            PieceState::Empty,
+            PieceState::Done,
+        ];
+        assert_eq!(
+            v, expect,
+            "BT 分块 = 引擎真实 done/active/partial 三集合，离散分布不连片"
+        );
+        t.connections = vec![Connection {
+            id: 1,
+            start: 300,
+            end: 1_000,
+            done: 0,
+        }];
+        assert_eq!(
+            t.pieces(),
+            expect,
+            "HTTP lease 不得参与 BT 上色（在途块不得连成一片）"
+        );
+    }
+
+    #[test]
+    fn bt_pieces_active_only_while_downloading() {
+        let mut t = bt_pieces_task(TaskState::Paused);
+        t.done_blocks = vec![0];
+        t.active_blocks = vec![2];
+        t.partial_blocks = vec![4];
+        let v = t.pieces();
+        assert_eq!(
+            v,
+            vec![
+                PieceState::Done,
+                PieceState::Empty,
+                PieceState::Empty,
+                PieceState::Empty,
+                PieceState::Partial,
+                PieceState::Empty,
+                PieceState::Empty,
+                PieceState::Empty,
+                PieceState::Empty,
+                PieceState::Empty,
+            ],
+            "暂停态不画在途蓝块，部分块保持黄"
+        );
     }
 
     #[test]

@@ -236,3 +236,10 @@ group_imports = "StdExternalCrate"
   `///` 注释行（文档可提及类型名，代码不得构造）。脚本放在 `project/<crate>/scripts/arch_check.sh`，CI 集成为 `&&` 链的一环；
   比起 `cargo-deny`/`cargo-modules` 等重量级工具，grep 脚本零依赖、可读、易维护，
   适合"分层依赖方向"这类规则简单的检查（复杂规则如 trait impl 方向才需重量级工具）。
+
+- **有状态排序键是 total order 反模式**：`sort_by*` 的键/比较器在单次排序内必须恒定；
+  在键闭包里读全局自增计数器/时钟等可变态，新排序实现（1.81+ driftsort/ipnsort）会检测
+  出一致性破坏并 panic「user-provided comparison function does not correctly implement
+  a total order」（小输入可能侥幸不炸，规模相关）。需要随机化时把种子在排序入口取一次
+  再传入纯函数键；浮点排序用 `total_cmp`，不要 `partial_cmp().unwrap_or(Equal)`
+  （NaN 传递性破坏同样不是全序）。

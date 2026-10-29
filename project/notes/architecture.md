@@ -39,6 +39,39 @@
   reader 锁，`crossterm::event::poll(timeout)` 拿不到锁时直接返回 `Ok(false)`
   （假装无事件）——任何依赖 poll 做排空的逻辑都不能把单个 false 当「队列已空」。
 
+## BT peer 池（候选 × 退避重试 × 断开即补位）替代一次性 tried 集合
+- **现象**：tracker 一次返回的 peer 全部进 `tried` 集合且永不清除——连接失败/断开的
+  peer 不再重试，tracker 再返回同批 peer 也无动作；swarm 内其他 peer 上线后 ezr 永远
+  不连它。叠加监听只绑 127.0.0.1，局域网 peer 连不进来，表现为「只连一个可达 peer、
+  断开后不重连、不上传」。
+- **处置**：①监听 `0.0.0.0:0`（announce 端口 = 真实监听端口，LAN 可入连）；②tracker
+  响应只喂**候选池** `HashMap<(ip,port), PeerCandidate{fails,last_try}>`，2s sweep 按
+  「未连过/未拉黑/冷却到期」补满到 concurrency（冷却 = 5s×2^fails 封顶 120s，连接成功
+  清零 fails）；③PeerIn::Closed 立即触发补位扫描（断开即重连，不等 sweep）；④握手响应
+  peer_id 与本机相同 → 判定连到自身，关连接并把该候选移出池。
+- **根因**：「tracker 一次响应 = 一次拨号机会」的模型下，任何瞬时失败都被放大成永久
+  失败；正确模型是候选池常驻、连接机会周期性再生成（libtorrent policy 的 connect
+  candidates 等价物）。
+
+## libtorrent 策略移植三件套：选块 / ENDGAME / 固定槽 choker
+- **选块**（piece_picker）：`order_wanted` = 部分到达的 piece 优先（已到块数降序）→
+  稀有度升序（可用副本数）→ 同稀有度随机抖动（xorshift jitter，per-call 变化）。全局
+  认领集（claimed = 各 conn inflight ∪ partial 已到块）防重复下载。
+- **ENDGAME**：正常轮（跳过被认领块）无块可发且管线未满时进入：允许重复请求他人已认领
+  的块；任一块到达即对其他 conn 的同块在飞请求发 Cancel（`on_block` 入口统一处理，非
+  endgame 时天然无重复、无副作用）。判定 `endgame_active` = 所有未完成 piece 的所有块
+  都被认领。
+- **反吸血 choker**（fixed slots choker）：每 10s（unchoke_interval）重算——仅
+  interested peer 参与，按「对端给我们的下载速率」降序取 4 个固定槽（tit-for-tat），
+  外加 1 个乐观槽每 30s 在剩余池轮转；状态翻转才发 Unchoke/Choke。做种态全量 unchoke
+  （D58 口径不变）。`Request` 服务闸门 = 我方未 choke 它（旧实现误用对端 choke 本端的
+  状态做判据，等于永远不上传）。NotInterested 立即回收槽位。
+- **tracker 交互**：每 tracker 独立 completed_sent 标志（修复共享标志导致多 tracker 只
+  有一个发 completed）；下载完成经 per-tracker `Notify` 立即唤醒 announce 循环发
+  completed（不等 interval）；Pause/StopSeed/Cancel 三终态都发 stopped 且携带真实
+  uploaded/downloaded/left（旧实现 stopped 全 0 且 Cancel 不发）；live.uploaded 每秒
+  tick 回填（uploaded=0 的 announce 属失真上报）。
+
 ## 抄写 ezr-demo 组件时键路由层是交互契约的另一半，必须成对接入
 - **现象**：BT 对话框 trackers 多行面板能输入/换行但 Backspace/Delete 全部失效（不能
   删除字符串）；BT 对话框种子行/并发/保存到退格无效；粘贴进 BT 对话框被整体丢弃。
@@ -83,20 +116,23 @@
   组合后才对齐主流客户端量级。loopback e2e 感知不到 ①③（delayed-ACK 不触发），性能
   类修复要在真实网络（或至少真实 NIC）上复核。
 
-## BT 任务 `.ezr` 控制文件：与 HTTP Sidecar 同构的生命周期与安全垫
-- **动机**：HTTP 任务有 `<file>.ezr` sidecar（块位图/etag/任务信息），BT 任务断点数据
-  只在注册表快照（BtTaskData.done_pieces）里——注册表保存滞后或丢失时 BT 续传无兜底。
-- **口径**：`model/bt.rs::BtSidecar`（version=1 + id/name/save_dir/concurrency +
-  BtTaskData），路径 `save_dir/<task_name>.ezr`（复用 namegen::sidecar_path_of）——
-  与删除任务清理清单 `delete_task_files` 的第三项天然对齐，删除含文件无需改代码。
-- **生命周期**：engine 启动磁盘校验后立即写（0 piece 也写）→ done 增长时 1s tick 落盘
-  （脏判据单一：`done.len() != sidecar_saved_done`，done 只增不减）→ Pause/StopSeed
-  终态落盘 → 全量完成（seeding 转换点）删除 → Cancel 不删（任务可能只是退队保留）。
-- **安全垫**：恢复 = spec.done_pieces ∪ sidecar.done_pieces 后逐 piece SHA-1 磁盘校验，
-  陈旧/外来 sidecar 的错误 piece 索引会被校验自然淘汰——因此 sidecar 不需要 infohash
-  字段，校验本身就是身份验证。
+## 任务档案与断点分离：registry.json 存任务定义，.ezr 只存 piece 进度
+- **动机**：BT 任务注册表快照（BtTaskData）与 .ezr sidecar 双写 source/trackers/piece_
+  length/files/done_pieces 全集——任务定义（不改）与下载进度（秒级增长）耦合存放，.ezr
+  每秒重写全量任务 JSON，重启还原又依赖两处并集。
+- **口径**：**registry.json = 任务档案**（任务是什么、从哪下、怎么下：source/trackers/
+  piece_length/files + UI 态，不含任何进度字段）；**.ezr = 数据断点**（version + done_
+  pieces，进度唯一归属，与数据文件同生命周期：删除含文件即删、保留文件即留、重加同种子
+  自动接续）。恢复 = .ezr 逐 piece SHA-1 磁盘校验（校验即身份验证，无需 infohash 字段）；
+  引擎保存用 `load_done`（bug6 轮定案：内部开发阶段**无兼容性需求**——版本恒为 1，
+  v1 全量档兼容读取代码已删除，`load_done` 只认 `{version:1, done_pieces}` 结构体形态，
+  形状/版本不符一律 None；操作者明示「有 version 1 的代码直接删除，不需要保留」）。
+- **不变式**：任务定义字段进 `BtTaskData` 的前提是「重加同种子重建任务所需」；进度数据
+  进 sidecar 的前提是「仅服务于断点续传」。UI 还原（重启后 pieces 窗口）由 app restore
+  读 .ezr 填 done_blocks/chunk_done/downloaded（`selected_bytes_of_pieces` 与引擎
+  PieceMap.write_plan 同一套覆盖计算），引擎启动校验后以 BtProgress 自愈收敛。
 
-## BT 并发 panel 速度三段管线：与 HTTP 完全同构（消抖动的正解在消费侧）
+## BT 并发 panel 速度三段管线：与 HTTP 完全同构（消抖动的正解在消费侧）## BT 并发 panel 速度三段管线：与 HTTP 完全同构（消抖动的正解在消费侧）
 - **根因**：引擎 `conn_views` 在每条 peer 消息后都调用并重置窗口——「区间瞬时速率 =
   本区间字节/区间时长」，块到达呈突发，逐秒跳变且与任务速度（app 侧 1s 滑窗）口径
   不同，单连接时两处数值明显不匹配。
@@ -107,3 +143,93 @@
   引擎侧 conn_views 的瞬时速率字段保留（tick 汇总上传速度仍消费）但 UI 不再读。
 - **不变式**：喂窗义务在事件路径、采样点只读不喂、清理口径四点对齐
   （on_bt_done/on_bt_stopped/remove_task/clear_completed 均调 clear_bt_conn_stats）。
+
+## 排序键必须轮内恒定：有状态 jitter 触发 sort 的 total order panic（引擎花屏退出根因）
+- **现象**：BT 下载任务启动后片刻报「引擎内部错误: user-provided comparison function does
+  not correctly implement a total order」，随后 TUI 花屏、看似退出。
+- **根因**：`order_wanted` 的 sort_by_key 键里含 `jitter(piece)`，而 jitter 内部用全局
+  自增 AtomicU64 计数器做随机源——**每次取键值都不同**。Rust 新排序实现（driftsort/
+  ipnsort）会在排序过程中多次取键并主动校验比较器一致性，键漂移 → 比较器不满足全序
+  （传递性/一致性被破坏）→ panic。小输入可能侥幸不触发（比较次数少），「停一会」才炸
+  是典型的输入规模相关 panic。
+- **修复口径**：随机化必须**在单次排序内恒定**——种子在 `order_wanted` 入口取一次
+  （AtomicU64 fetch_add，每轮选片一次），`jitter(piece, seed)` 纯函数化（同
+  (piece,seed) 恒定、异种子异值）；轮间换种保留「同优先级 piece 次序多样化」的
+  libtorrent 随机选片意图。同族隐患：浮点排序一律 `f64::total_cmp`（而非
+  `partial_cmp().unwrap_or(Equal)`——NaN 时 Equal 自反性成立但等价不传递，同样不是全序）。
+- **回归测试**：8192 piece 大输入 `order_wanted` 无 panic 且结果为排列（不丢不重）+
+  jitter 同种子恒定断言；验证方法：临时回退旧 jitter 跑回归测试，必须精确复现原 panic
+  消息（smallsort.rs total order panic），证明测试真的罩得住。
+- **花屏放大器（panic 钩子与被捕获恐慌的相互作用）**：`start_bt_task` 包装层把引擎任务
+  panic 捕获转 `Evt::BtFailed(Fatal)`（app 不退出），但 panic 钩子在**恐慌发起时**（还
+  未被捕获前）就执行 `restore_terminal()` 并让默认钩子打印 panic 报文——终端已退出
+  raw/alt screen，而 TUI 循环还在向已还原的终端 draw → 花屏。修复：钩子还原时置
+  `TUI_RESTORED_BY_PANIC` 原子标记；TUI 循环每轮先 swap 检查，命中则重进
+  enable_raw_mode + alt screen 并 `terminal.clear()`（重置 ratatui 双缓冲，下一帧全量
+  重绘），Fatal 原因正常以任务错误行展示。教训：**只要存在「panic 会被捕获并继续运行」
+  的路径，钩子的终端还原就必须配套循环内自愈**，否则钩子反而成为花屏源头。
+
+## pieces 窗口数据流：BT 用引擎真实三集合，HTTP 用 lease；fabricated lease 让在途分块连成一片
+- **现象**：BT 下载中 pieces 窗口「正在下载」分块从前沿连成一片（而非 libtorrent 随机选块
+  的离散分布）；已收块未验完的 piece 与已验完 piece 一度显示成未下载。
+- **根因**：`on_bt_progress` 对 BT 任务也调 `apply_chunk_snapshot`——它按 HTTP 语义用
+  （downloaded, total）算**连续 lease** 塞进 `t.connections`，`pieces()` 再把 lease 覆盖
+  成 Active/Empty → 蓝块必然连片且与引擎真实在途集合无关；引擎侧 `partial_pieces` 只报
+  在途请求的 piece，已收块未验完的 piece（引擎 partial 内存表）从未上报 → 黄色缺失。
+- **口径**：BT 分块三集合全部由引擎上报——`done_blocks`（验完落盘）/ `partial_blocks`
+  （partial 表有块未验完，黄）/ `active_blocks`（有在途请求，蓝，仅下载态上色）；BT 任务
+  `connections` 恒空，`pieces()` 对 `bt.is_some()` 走 active 集合分支、绝不再走 lease 覆盖；
+  HTTP 维持 lease 口径不变。`conns_display_total` 对 BT 数 `bt_conns` 行数（真实 peer 数）。
+- **重启还原**：HTTP sidecar `blocks`（逐块字节进度）映射满块→Done、零头→Partial（旧实现
+  只回读 downloaded，分块全白）；BT sidecar 版本恒 1，但 bug6 前遗留的同形 v2 文件放行
+  （形状相同仅版本号不同），旧全量档嵌套形状仍拒绝。
+
+## 同 peer_id / 同 IP 只连一条：入连+出连双通道是同 IP 两行与速度分裂的根因
+- **根因**：0.0.0.0 监听后，同一 LAN peer 既被我们出连（tracker 给 ip:listen）又会拨入
+  （ip:ephemeral）——入连 addr 端口不同，按 ip:port 去重挡不住；两条连接并存导致并发
+  panel 同 IP 两行、choker/速度统计分裂。
+- **口径**（对齐 libtorrent）：①`fill_peer_slots` 按 **IP** 去重（同 IP 不再拨第二条）；
+  ②握手完成以 **peer_id** 去重（同一客户端实例只留一条，后到者发 Drop 关闭并回退候选，
+  不计失败不惩罚）；连接建立即记 `peer_id` 到 ConnStat。测试用 fake tracker 解析 announce
+  包内 engine 监听端口（BEP 15 第 96..98 字节）让 fake peer 拨入复现双通道。
+
+## BT peer 速度列 '-' 一跳一跳：EMA 被窗口超时整体重置
+- **根因**：BtConns 处理器里「上次进样 >1s 就整体 default() 重置速度统计」——引擎 1s tick
+  与 WINDOW=1s 贴边，事件送达抖动即触发偶发重置 → EMA 清零 → 显示 '-' → 下一事件重建
+  → 反复横跳。
+- **口径**：处理器绝不重置 EMA；`SpeedWindow::push` 在上次进样超窗后仅清滑窗重新起算
+  （rate 不跨停顿期摊分母）。EMA 只随任务失活 zero()，传输停止后平滑衰减到 0 B/s，
+  状态切换单调无闪烁；'-' 语义 = 从未传过数据（EMA 恒 0）。
+
+## 并发 panel 同 IP 两行（复发）：握手未完成的连接也渲染成行
+- **现象**：bug7 修了 peer_id 双通道去重后，用户仍报「下载一段时间后同一 peer IP 两行」。
+- **根因**：去重发生在握手完成（Connected）时，但交叉拨入的入连从 **accept 起**就以
+  同 IP 挂在 conns 表里（peer_id=None），`conn_views` 照渲染——每次对方重拨都出现
+  几秒的同 IP 第二行，反复出现看起来就是没修。
+- **口径**：并发 panel 只展示**已建立**（握手完成、peer_id 已知）的连接；`conn_views`
+  跳过 `peer_id.is_none()`。引擎去重语义不变（IP 出连去重 + peer_id 握手去重）。
+  同 IP 不同 peer_id（NAT 后多实例）视为不同 peer，保留两行是 libtorrent
+  `allow_multiple_connections_per_ip=false` 之外的合法可见情形。
+
+## 分块窗口「并发」语义：显示实际连接数，不是任务设置
+- **口径**：`conns_display_total` 抽出单任务版 `conns_actual_of`（BT=bt_conns 行数即已
+  建立 peer 数、HTTP=活跃 lease 数、非下载态恒 0），pieces 弹窗元信息行与并发面板徽标
+  同口径；任务设置的最高并发只在编辑对话框里体现。
+
+## 暂停→继续进度清零：乐观暂停 + try_send 与旧引擎滞后退出的竞态
+- **现象**：BT 暂停后继续，偶尔进度清零重新下载。
+- **根因**：暂停是乐观置 Paused（引擎 select 循环异步消费 Pause），恢复若早于旧引擎
+  真正退出（重校验大种子可达数十秒），会拉起**第二个引擎**：双引擎同写文件与 sidecar、
+  互相覆盖进度集合、`t.downloaded` 被旧引擎终态回写——表现为进度回退/清零重下。
+- **口径**：①app 层 `bt_stopping` 登记（暂停三分支写入；BtStopped/BtFailed/BtDone 清除；
+  槽位调度见登记在册的 BT 任务先归还槽位不启动；180s 兜底强制放行防引擎挂死卡死任务）；
+  ②引擎重校验循环内 `select!` 竞争 cmd——Pause/StopSeed 立即保存退出，**保存集 =
+  已校验 ∪ 未校验预填余量**（只存已校验子集会让 sidecar 回退、余量被重下；余量下次
+  载入本就重校验，零进度损失），Cancel 立即退出不保存（主循环同语义）；③`on_bt_stopped`
+  分态处理：Paused=正常暂停流落地终态集合；Completed=停止做种流仅清显示；
+  Queued/Downloading/Seeding=旧引擎滞后回报，整体忽略（状态不得回落、集合不得覆盖）。
+- **配套**：出连 TCP 拨号超时 10s→3s（死 peer 不应占槽 10 秒，公网 swarm 死 peer 占比
+  高会成片拖垮连接建立）；`handle_peer_msg` 的 claimed/availability 从「每条消息全量
+  重算」改为按需计算（只有 Have/Unchoke/Block 补请求路径才构建）；Bitfield/Have 的
+  `covered_pieces().contains` 线性扫描改 `PieceMap::covers` 二分（O(pieces²)→O(log n)）。
+  harness 256MB 基准：ezr 2.02MB/s ≈ libtorrent leecher 2.0MB/s（同 swarm 同 seeder）。

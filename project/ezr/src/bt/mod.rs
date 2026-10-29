@@ -53,3 +53,7 @@ pub const PEER_PIPELINE: usize = 32;
 pub const REQUEST_BLOCK_LEN: u32 = 16 * 1024;
 
 pub const HANDSHAKE_TIMEOUT_SECS: u64 = 10;
+
+/// 出连 TCP 拨号超时：公网 swarm 死 peer 占比高，10s 级拨号会把
+/// 并发槽位成片占满、拖垮连接建立速度（libtorrent 连接超时为秒级）。
+pub const CONNECT_TIMEOUT_SECS: u64 = 3;

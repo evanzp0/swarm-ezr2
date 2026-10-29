@@ -36,7 +36,9 @@ pub(super) fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
                 t.name.clone(),
                 t.protocol.label().to_string(),
                 fmt_block_size(plen),
-                t.concurrency,
+                // 「并发」= 实际并发连接数（与并发面板行数同口径），
+                // 非任务设置的最高并发数。
+                app.conns_actual_of(t),
                 x,
                 y,
                 t.pieces(),
@@ -234,8 +236,8 @@ mod tests {
         assert!(rows[26].contains('╰'), "圆角底边框：{}", rows[26]);
         assert!(rows[9].contains("piece-dl8.bin"), "任务名：{}", rows[9]);
         assert!(
-            rows[10].contains("HTTP · 块大小 1 MB · 0/5 块 · 并发 4"),
-            "元信息行：{}",
+            rows[10].contains("HTTP · 块大小 1 MB · 0/5 块 · 并发 0"),
+            "元信息行（「并发」=实际连接数，无连接时为 0）：{}",
             rows[10]
         );
         assert!(rows[12].contains('⬜'), "网格行含未下载块：{}", rows[12]);
@@ -364,8 +366,8 @@ mod tests {
         assert!(rows[0].contains('╭'), "顶边框贴边");
         assert!(rows[0].contains("分块状态"));
         assert!(
-            rows[3].contains("HTTP · 块大小 1 MB · 0/5 块 · 并发 4"),
-            "元信息完整（v1.35 八段：顶 padding + 上呼吸行后网格随内框收缩）"
+            rows[3].contains("HTTP · 块大小 1 MB · 0/5 块 · 并发 0"),
+            "元信息完整（小终端同样用实际连接数口径）"
         );
         assert!(rows[5].contains('⬜'), "网格存在（v1.35 八段：内框收缩后仍 Min 1 行，屏行 5 = 顶 padding+名称+元信息+上呼吸行后）");
         assert!(
@@ -431,15 +433,99 @@ mod tests {
                 size: 3_000_000,
                 selected: true,
             }],
-            done_pieces: vec![],
         });
         app.tasks.push(t);
         app.selected = 0;
         open_popup(&mut app);
         let rows = render_rows(&mut app, 120, 34);
         assert!(
-            rows[10].contains("BT · 块大小 256 KB · 0/12 块 · 并发 4"),
-            "BT 元信息行: {}",
+            rows[10].contains("BT · 块大小 256 KB · 0/12 块 · 并发 0"),
+            "BT 元信息行（无已建立连接时为 0）: {}",
+            rows[10]
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn pieces_meta_concurrency_shows_actual_conns_not_setting() {
+        // 「并发」= 实际并发连接数（与并发面板行数同口径），
+        // 而非任务设置的最高并发数（t.concurrency=4 仅是设置值）。
+        let mut app = make_app("conc-actual");
+        let mut t = dl_task(1, "conc-actual.bin", 5_242_880);
+        t.connections = vec![
+            Connection {
+                id: 1,
+                start: 0,
+                end: 1_048_576,
+                done: 123,
+            },
+            Connection {
+                id: 2,
+                start: 1_048_576,
+                end: 2_097_152,
+                done: 0,
+            },
+        ];
+        app.tasks.push(t);
+        app.selected = 0;
+        open_popup(&mut app);
+        let rows = render_rows(&mut app, 120, 34);
+        assert!(
+            rows[10].contains("并发 2"),
+            "HTTP：两条活跃连接 → 并发 2（非设置值 4）: {}",
+            rows[10]
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn pieces_meta_concurrency_bt_counts_established_peers() {
+        let mut app = make_app("conc-bt");
+        let mut t = dl_task(1, "conc-bt.bin", 3_000_000);
+        t.protocol = crate::model::Protocol::Bt;
+        t.block_size = 1_048_576;
+        t.bt = Some(crate::model::bt::BtTaskData {
+            source: "/tmp/a.torrent".to_string(),
+            trackers: vec![],
+            piece_length: 262_144,
+            files: vec![crate::model::bt::BtFile {
+                path: "a.bin".to_string(),
+                size: 3_000_000,
+                selected: true,
+            }],
+        });
+        app.tasks.push(t);
+        app.bt_conns.insert(
+            1,
+            vec![
+                crate::app::BtConnRow {
+                    id: 1,
+                    addr: "10.0.0.1:51413".into(),
+                    down_speed: 0.0,
+                    cum_down: 0,
+                    up_speed: 0.0,
+                    cum_up: 0,
+                    client: "qB".into(),
+                    seeder: true,
+                },
+                crate::app::BtConnRow {
+                    id: 2,
+                    addr: "10.0.0.2:51413".into(),
+                    down_speed: 0.0,
+                    cum_down: 0,
+                    up_speed: 0.0,
+                    cum_up: 0,
+                    client: "qB".into(),
+                    seeder: false,
+                },
+            ],
+        );
+        app.selected = 0;
+        open_popup(&mut app);
+        let rows = render_rows(&mut app, 120, 34);
+        assert!(
+            rows[10].contains("并发 2"),
+            "BT：已建立 peer 连接数 → 并发 2: {}",
             rows[10]
         );
         app.shutdown().await;

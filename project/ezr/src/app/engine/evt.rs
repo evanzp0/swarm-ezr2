@@ -3,7 +3,7 @@ use std::time::Instant;
 use super::{conn_from_view, update_conn_stats};
 use crate::app::App;
 use crate::engine::{Cmd, Evt};
-use crate::model::speed::{SpeedWindow, WINDOW};
+use crate::model::speed::SpeedWindow;
 use crate::model::{namegen, FailKind, TaskState};
 
 impl App {
@@ -276,13 +276,9 @@ impl App {
                     let now = Instant::now();
                     for c in &conns {
                         let st = self.bt_conn_stats.entry((id, c.id)).or_default();
-                        if st
-                            .down_win
-                            .last_push()
-                            .is_some_and(|t| now.duration_since(t) > WINDOW)
-                        {
-                            *st = crate::app::BtConnSpeedStat::default();
-                        }
+                        // 窗口基线超过 WINDOW 后仅由 SpeedWindow::push 自行重置滑窗，
+                        // 绝不能在这里清零 EMA：引擎 1s tick 与 WINDOW=1s 贴边，
+                        // 偶发超时若清零 EMA 会造成速度列 '-' 一跳一跳。
                         st.down_win.push(now, c.cum_down);
                         st.up_win.push(now, c.cum_up);
                     }
@@ -313,6 +309,7 @@ impl App {
                 chunk_done,
                 done_blocks,
                 partial_blocks,
+                active_blocks,
                 uploaded,
                 upload_speed,
             } => {
@@ -322,6 +319,7 @@ impl App {
                     chunk_done,
                     done_blocks,
                     partial_blocks,
+                    active_blocks,
                     uploaded,
                     upload_speed,
                 );

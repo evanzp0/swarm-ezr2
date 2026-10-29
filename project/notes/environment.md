@@ -62,3 +62,31 @@
   ~6.7G，df 100%→46%）；全量测试全程 `CARGO_INCREMENTAL=0`。多套件顺序连跑时每两个
   套件查一次 df，runtime 期间编译假失败（error 28）按本条处置后单套件重跑即可，不是
   产品回归。
+
+## rustup 安装镜像选型：rsproxy 文件下载最快但 dist 清单缺键，工具链走 TUNA dist server
+- **现象**：空沙箱装 rustup 时，对 rsproxy.cn/tuna/ustc/sjtu/aliyun 测速——rustup-init
+  二进制下载 rsproxy 14.2MB/s（1.5s 拉完 21MB）显著最快、ustc 1.2MB/s、tuna/sjtu/aliyun
+  404 或拒连；但用 rsproxy 作 RUSTUP_DIST_SERVER 装 nightly 报
+  `Malformed manifest date: ""`——`/rustup/dist/channel-rust-nightly.toml` 返回的是
+  HTTP 200 的 OSS NoSuchKey XML 错误页，rustup 当清单解析后 date 字段为空即 panic
+  （ustc 同族同源，同样缺该键）。
+- **处置**：rustup-init 二进制本体取 rsproxy（快），工具链 dist server 换
+  `RUSTUP_DIST_SERVER=https://mirrors.tuna.tsinghua.edu.cn/rustup`（清单 200 正常）→
+  `rustup-init -y --default-toolchain nightly --profile minimal --component rustfmt
+  --component clippy --no-modify-path` 一次装齐；cargo registry 配 rsproxy sparse
+  （~/.cargo/config.toml replace-with）。
+- **根因**：镜像的「文件下载速度」与「dist 清单完备性」是两个独立维度——测速只证明带宽，
+  装工具链前先 curl 一次 `channel-rust-nightly.toml` 验证内容是 TOML 而非错误页。
+
+## bug6 轮环境：USTC 全套镜像选型（rustup dist + cargo sparse index）
+- 本轮沙箱 Rust 工具链再次缺位（会话隔离）。镜像实测：延迟 USTC 0.52s < TUNA 0.71s <
+  rsproxy 1.53s（官方 static.rust-lang.org 8s 超时）；5MB 吞吐 USTC 3MB/s > TUNA 2MB/s。
+- **本轮口径**：rustup 用 `RUSTUP_DIST_SERVER/RUSTUP_UPDATE_ROOT = mirrors.ustc.edu.cn/rust-static`
+  前台安装（操作者要求前台、不走后台）；nightly minimal + rustfmt + clippy 一次装齐。
+  cargo 另配 `~/.cargo/config.toml`：`source.ustc = sparse+https://mirrors.ustc.edu.cn/crates.io-index/`
+  替换 crates-io（上轮 rsproxy 清单缺键问题本轮 USTC 未复现，冷构建 4m01s 全绿）。
+- 工具链钉版走 rust-toolchain.toml（nightly + rustfmt + clippy），cargo 命令自动走
+  nightly，无需手工 `+nightly`。
+- **工具陷阱**：`bin/swarm begin` 的输出被管道截断（如 `| head`）时，脚本会因 SIGPIPE
+  在写 session 状态前中断，`complete` 报「没有进行中的会话」——begin/complete 输出
+  重定向到文件再查看，不要用管道截头。

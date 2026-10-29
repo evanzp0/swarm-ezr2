@@ -130,6 +130,7 @@ pub enum Evt {
         chunk_done: u32,
         done_blocks: Vec<u32>,
         partial_blocks: Vec<u32>,
+        active_blocks: Vec<u32>,
         uploaded: u64,
         upload_speed: f64,
     },

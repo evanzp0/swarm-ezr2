@@ -102,10 +102,16 @@ fn drain_input_events() -> bool {
     consumed
 }
 
+/// 恐慌钩子已还原终端的标记：若恐慌随后被捕获（如引擎任务转 BtFailed），
+/// TUI 循环据此重新进入终端，避免界面花屏。
+static TUI_RESTORED_BY_PANIC: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn setup_panic_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         restore_terminal();
+        TUI_RESTORED_BY_PANIC.store(true, std::sync::atomic::Ordering::Relaxed);
         default_hook(info);
     }));
 }
@@ -344,6 +350,13 @@ async fn run(
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
+        // 恐慌钩子还原过终端但恐慌被捕获（如引擎任务转 BtFailed）时，
+        // 重新进入 TUI 并清屏重绘，避免界面花屏。
+        if TUI_RESTORED_BY_PANIC.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            let _ = enable_raw_mode();
+            let _ = enter_tui_sequence(&mut io::stdout());
+            let _ = terminal.clear();
+        }
         terminal.draw(|f| ui::draw(f, app))?;
 
         tokio::select! {
