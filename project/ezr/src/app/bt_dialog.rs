@@ -16,6 +16,9 @@ impl App {
                 selected: true,
             })
             .collect();
+        let trackers_prefill =
+            Self::merge_trackers(&self.cfg.http_trackers, &self.cfg.udp_trackers, meta, &[])
+                .join("\n");
         self.set_dialog(Dialog {
             kind: DialogKind::AddBt,
             url: TextInput::new(),
@@ -41,7 +44,11 @@ impl App {
             bt_cursor: 0,
             bt_scroll: 0,
             bt_follow: true,
-            trackers: crate::multiline::MultiLineBuf::new(),
+            trackers: {
+                let mut tr = crate::multiline::MultiLineBuf::new();
+                tr.set_text(&trackers_prefill);
+                tr
+            },
         });
     }
 
@@ -298,6 +305,16 @@ impl App {
         out
     }
 
+    fn dedup_keep_order(items: Vec<String>) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for s in items {
+            if !out.contains(&s) {
+                out.push(s);
+            }
+        }
+        out
+    }
+
     pub(crate) fn dlg_confirm_add_bt(&mut self, paused: bool) {
         let Some(d) = self.dialog.as_ref() else {
             return;
@@ -367,13 +384,12 @@ impl App {
             .map(|v| v.clamp(1, 64))
             .unwrap_or(super::cmd::BT_DEFAULT_CONCURRENCY);
 
-        let manual = d.trackers.trim_lines();
-        let trackers = Self::merge_trackers(
-            &self.cfg.http_trackers,
-            &self.cfg.udp_trackers,
-            &meta,
-            &manual,
-        );
+        let edited = Self::dedup_keep_order(d.trackers.trim_lines());
+        let trackers = if edited.is_empty() {
+            Self::merge_trackers(&self.cfg.http_trackers, &self.cfg.udp_trackers, &meta, &[])
+        } else {
+            edited
+        };
 
         let id = self.alloc_task_id();
         let proxy = self.proxy_options[proxy_sel].clone();
@@ -627,7 +643,35 @@ mod tests {
         assert_eq!(d.bt_counts(), (2, 2));
         assert_eq!(d.bt_selected_bytes(), 12);
         assert_eq!(d.bt_row_count(), 1, "根层仅 tor 目录（默认收拢）");
-        assert!(d.trackers.is_buffer_empty(), "trackers 空缓冲");
+        assert_eq!(
+            d.trackers.trim_lines(),
+            vec!["udp://seed/ann", "udp://l1/ann"],
+            "trackers 预填 = .torrent 解析（announce → announce-list，无 config 时）"
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn open_add_bt_prefills_config_and_torrent_trackers() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-prefill");
+        let path = write_multi_torrent(&dir, "a.torrent");
+        let meta = parse_at(&path);
+        let mut app = make_app("prefill");
+        app.cfg.http_trackers = vec!["http://cfg-h/ann".into()];
+        app.cfg.udp_trackers = vec!["udp://cfg1/ann".into()];
+        app.open_add_bt_dialog_with(&path, &meta);
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(
+            d.trackers.trim_lines(),
+            vec![
+                "http://cfg-h/ann",
+                "udp://cfg1/ann",
+                "udp://seed/ann",
+                "udp://l1/ann"
+            ],
+            "trackers 罗列 config + .torrent（config → announce → announce-list 去重保序）"
+        );
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -640,11 +684,19 @@ mod tests {
         let mut app = make_app("add");
         app.cfg.http_trackers = vec!["udp://cfg1/ann".into()];
         app.open_add_bt_dialog_with(&path, &meta);
+        {
+            let d = app.dialog.as_ref().unwrap();
+            assert_eq!(
+                d.trackers.trim_lines(),
+                vec!["udp://cfg1/ann", "udp://seed/ann", "udp://l1/ann"],
+                "打开即罗列 config + torrent trackers"
+            );
+        }
         app.dialog
             .as_mut()
             .unwrap()
             .trackers
-            .set_text("udp://l1/ann\nudp://manual/ann");
+            .set_text("udp://seed/ann\nudp://manual/ann");
         app.dlg_confirm_add_bt(false);
         assert!(app.dialog.is_none(), "确认后关闭");
         assert_eq!(app.tasks.len(), 1);
@@ -661,13 +713,8 @@ mod tests {
         assert!(b.done_pieces.is_empty());
         assert_eq!(
             b.trackers,
-            vec![
-                "udp://cfg1/ann",
-                "udp://seed/ann",
-                "udp://l1/ann",
-                "udp://manual/ann"
-            ],
-            "tracker 池三来源合并去重（FR-02-16）"
+            vec!["udp://seed/ann", "udp://manual/ann"],
+            "编辑后面板内容即任务池：删掉的 config tracker 不回填、手输行纳入"
         );
         assert_eq!(t.state, TaskState::Queued, "非 paused = 等待中");
         app.shutdown().await;
@@ -754,6 +801,26 @@ mod tests {
             app.tasks[0].url,
             format!("~/{dirname}/a.torrent"),
             "任务来源保留输入原文"
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn confirm_add_empty_trackers_falls_back_to_auto_pool() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-fb");
+        let path = write_multi_torrent(&dir, "a.torrent");
+        let meta = parse_at(&path);
+        let mut app = make_app("fallback");
+        app.cfg.udp_trackers = vec!["udp://cfg1/ann".into()];
+        app.open_add_bt_dialog_with(&path, &meta);
+        app.dialog.as_mut().unwrap().trackers.reset();
+        app.dlg_confirm_add_bt(false);
+        assert_eq!(app.tasks.len(), 1);
+        assert_eq!(
+            app.tasks[0].bt.as_ref().unwrap().trackers,
+            vec!["udp://cfg1/ann", "udp://seed/ann", "udp://l1/ann"],
+            "面板清空确认 = 回退 config + torrent 自动池（BT 任务不留空 tracker）"
         );
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();

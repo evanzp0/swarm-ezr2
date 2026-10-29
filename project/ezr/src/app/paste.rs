@@ -18,6 +18,10 @@ impl App {
         }
         let focus = d.focus;
         let kind = d.kind;
+        if d.trackers_focus() == Some(focus) {
+            d.trackers.insert_str(text);
+            return;
+        }
         dlg_apply_paste(kind, d, focus, text);
         if kind == DialogKind::Add && focus == 0 {
             self.sync_default_conns_after_url_change();
@@ -26,7 +30,11 @@ impl App {
 }
 
 fn paste_accepts(kind: DialogKind, ck_open: bool, proxy_open: bool) -> bool {
-    matches!(kind, DialogKind::Add | DialogKind::Modify) && !ck_open && !proxy_open
+    matches!(
+        kind,
+        DialogKind::Add | DialogKind::Modify | DialogKind::AddBt | DialogKind::ModifyBt
+    ) && !ck_open
+        && !proxy_open
 }
 
 fn paste_sanitize(text: &str) -> String {
@@ -51,7 +59,17 @@ fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, text: &str) -
             let hex: String = clean.chars().filter(|c| c.is_ascii_hexdigit()).collect();
             d.ck_value.insert(&hex, CAP_CK_HEX) > 0
         }
-        None => false,
+        None => match (kind, focus) {
+            (DialogKind::AddBt, 0) => d.torrent.insert(&clean, CAP_TEXT) > 0,
+            (DialogKind::AddBt, 1) => d.dir.insert(&clean, CAP_TEXT) > 0,
+            (DialogKind::AddBt, 3) | (DialogKind::ModifyBt, 1) => {
+                let digits: String = clean.chars().filter(|c| c.is_ascii_digit()).collect();
+                let inserted = d.conns.insert(&digits, CAP_CONNS_DIGITS);
+                d.conns_edited |= inserted > 0;
+                inserted > 0
+            }
+            _ => false,
+        },
     }
 }
 
@@ -187,11 +205,56 @@ mod paste_tests {
     fn paste_accepts_add_modify_text_dialogs() {
         assert!(paste_accepts(DialogKind::Add, false, false));
         assert!(paste_accepts(DialogKind::Modify, false, false));
+        assert!(paste_accepts(DialogKind::AddBt, false, false));
+        assert!(paste_accepts(DialogKind::ModifyBt, false, false));
         assert!(!paste_accepts(DialogKind::Add, true, false));
         assert!(!paste_accepts(DialogKind::Add, false, true));
         assert!(!paste_accepts(DialogKind::Modify, true, false));
         assert!(!paste_accepts(DialogKind::Modify, false, true));
         assert!(!paste_accepts(DialogKind::Delete, false, false));
+    }
+
+    #[tokio::test]
+    async fn on_paste_bt_dialog_trackers_multiline_and_fields() {
+        let mut app = make_app("btpaste");
+
+        app.dialog = Some(crate::app::testutil::dialog(DialogKind::AddBt, 5));
+        app.on_paste("udp://a/ann\nudp://b/ann\r\nhttp://c/ann");
+        {
+            let d = app.dialog.as_ref().unwrap();
+            assert_eq!(
+                d.trackers.trim_lines(),
+                vec!["udp://a/ann", "udp://b/ann", "http://c/ann"],
+                "trackers 粘贴保留换行分段（回归）"
+            );
+        }
+
+        app.dialog = Some(crate::app::testutil::dialog(DialogKind::AddBt, 0));
+        app.on_paste("/tmp/x.torrent");
+        {
+            let d = app.dialog.as_ref().unwrap();
+            assert_eq!(d.torrent.value, "/tmp/x.torrent", "种子行粘贴");
+        }
+
+        app.dialog = Some(crate::app::testutil::dialog(DialogKind::AddBt, 3));
+        app.on_paste("2x0");
+        {
+            let d = app.dialog.as_ref().unwrap();
+            assert_eq!(d.conns.value, "20", "BT 并发粘贴仅数字");
+            assert!(d.conns_edited);
+        }
+
+        app.dialog = Some(crate::app::testutil::dialog(DialogKind::ModifyBt, 3));
+        app.on_paste("udp://m/ann");
+        {
+            let d = app.dialog.as_ref().unwrap();
+            assert_eq!(
+                d.trackers.trim_lines(),
+                vec!["udp://m/ann"],
+                "ModifyBt trackers 粘贴"
+            );
+        }
+        app.shutdown().await;
     }
 
     #[test]

@@ -382,6 +382,7 @@ mod tests {
             client: reqwest::Client::builder().no_proxy().build().unwrap(),
             clients: std::sync::Mutex::new(std::collections::HashMap::new()),
             throttle: Arc::new(super::super::throttle::Throttle::new(0)),
+            blacklist: std::sync::Mutex::new(std::collections::HashSet::new()),
         })
     }
 

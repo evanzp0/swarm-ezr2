@@ -112,7 +112,10 @@ pub fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> bool {
             d.dir.backspace();
             true
         }
-        (DialogKind::Add, 2) | (DialogKind::Modify, 0) => {
+        (DialogKind::Add, 2)
+        | (DialogKind::Modify, 0)
+        | (DialogKind::AddBt, 3)
+        | (DialogKind::ModifyBt, 1) => {
             d.conns.backspace();
             d.conns_edited = true;
             true
@@ -122,6 +125,18 @@ pub fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> bool {
                 return true;
             }
             d.ck_value.backspace();
+            true
+        }
+        (DialogKind::AddBt, 0) => {
+            d.torrent.backspace();
+            true
+        }
+        (DialogKind::AddBt, 1) => {
+            d.dir.backspace();
+            true
+        }
+        (DialogKind::AddBt, 5) | (DialogKind::ModifyBt, 3) => {
+            d.trackers.backspace();
             true
         }
         _ => false,

@@ -152,6 +152,27 @@ impl super::App {
                     self.sync_default_conns_after_url_change();
                 }
             }
+            KeyCode::Delete => {
+                if let Some(d) = self.dialog.as_mut() {
+                    if d.trackers_focus() == Some(d.focus) {
+                        d.trackers.delete();
+                    }
+                }
+            }
+            KeyCode::Home => {
+                if let Some(d) = self.dialog.as_mut() {
+                    if d.trackers_focus() == Some(d.focus) {
+                        d.trackers.to_first();
+                    }
+                }
+            }
+            KeyCode::End => {
+                if let Some(d) = self.dialog.as_mut() {
+                    if d.trackers_focus() == Some(d.focus) {
+                        d.trackers.to_last();
+                    }
+                }
+            }
             KeyCode::Char(c) => match kind {
                 DialogKind::Add => self.add_dialog_char(focus, c),
                 DialogKind::Modify => self.modify_dialog_char(focus, c),
@@ -769,6 +790,146 @@ mod dialog_key_tests {
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.conns.value, "92", "预填字段中位插入");
         assert_eq!(d.focus, 0, "方向键不跳焦点（Modify）");
+        app.shutdown().await;
+    }
+
+    fn bt_add_dlg(focus: usize) -> Dialog {
+        crate::app::testutil::dialog(DialogKind::AddBt, focus)
+    }
+
+    #[tokio::test]
+    async fn bt_dialog_trackers_edit_delete_and_navigation() {
+        let mut app = make_app("trkedit");
+        app.dialog = Some(bt_add_dlg(5));
+
+        for c in "udp://a/ann".chars() {
+            app.on_dialog_key(KeyCode::Char(c), crossterm::event::KeyModifiers::NONE);
+        }
+        {
+            let d = app.dialog.as_ref().unwrap();
+            assert_eq!(
+                d.trackers.trim_lines(),
+                vec!["udp://a/ann"],
+                "字符插入 trackers"
+            );
+        }
+
+        app.on_dialog_key(KeyCode::Enter, crossterm::event::KeyModifiers::ALT);
+        for c in "udp://b/ann".chars() {
+            app.on_dialog_key(KeyCode::Char(c), crossterm::event::KeyModifiers::NONE);
+        }
+        {
+            let d = app.dialog.as_ref().unwrap();
+            assert_eq!(
+                d.trackers.trim_lines(),
+                vec!["udp://a/ann", "udp://b/ann"],
+                "Alt+Enter 框内换行"
+            );
+        }
+
+        for _ in 0..4 {
+            app.on_dialog_key(KeyCode::Backspace, crossterm::event::KeyModifiers::NONE);
+        }
+        {
+            let d = app.dialog.as_ref().unwrap();
+            assert_eq!(
+                d.trackers.trim_lines(),
+                vec!["udp://a/ann", "udp://b"],
+                "Backspace 删除字符（回归：不能删除字符串）"
+            );
+        }
+
+        app.on_dialog_key(KeyCode::Home, crossterm::event::KeyModifiers::NONE);
+        {
+            let d = app.dialog.as_ref().unwrap();
+            assert_eq!(d.trackers.row, 0, "Home 跳首行");
+            assert_eq!(d.trackers.line().cursor, 0, "Home 光标行首");
+        }
+        app.on_dialog_key(KeyCode::End, crossterm::event::KeyModifiers::NONE);
+        {
+            let d = app.dialog.as_ref().unwrap();
+            assert_eq!(d.trackers.row, 1, "End 跳末行");
+        }
+
+        app.on_dialog_key(KeyCode::Left, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Delete, crossterm::event::KeyModifiers::NONE);
+        {
+            let d = app.dialog.as_ref().unwrap();
+            assert_eq!(
+                d.trackers.trim_lines(),
+                vec!["udp://a/ann", "udp://"],
+                "Delete 前向删除光标处字符"
+            );
+        }
+
+        let n = app.dialog.as_ref().unwrap().trackers.lines[1].len_chars();
+        for _ in 0..n {
+            app.on_dialog_key(KeyCode::Backspace, crossterm::event::KeyModifiers::NONE);
+        }
+        app.on_dialog_key(KeyCode::Backspace, crossterm::event::KeyModifiers::NONE);
+        {
+            let d = app.dialog.as_ref().unwrap();
+            assert_eq!(
+                d.trackers.trim_lines(),
+                vec!["udp://a/ann"],
+                "行首退格并入上一行"
+            );
+            assert_eq!(d.trackers.lines.len(), 1, "空行不残留");
+        }
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn bt_dialog_backspace_routes_bt_fields() {
+        let mut app = make_app("btbs");
+        app.dialog = Some(bt_add_dlg(0));
+        for c in "/tmp/a.torrent".chars() {
+            app.on_dialog_key(KeyCode::Char(c), crossterm::event::KeyModifiers::NONE);
+        }
+        app.on_dialog_key(KeyCode::Backspace, crossterm::event::KeyModifiers::NONE);
+        {
+            let d = app.dialog.as_ref().unwrap();
+            assert_eq!(d.torrent.value, "/tmp/a.torren", "种子行退格");
+        }
+
+        for _ in 0..2 {
+            app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        }
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        {
+            let d = app.dialog.as_ref().unwrap();
+            assert_eq!(d.focus, 3, "Tab 到并发");
+        }
+        app.on_dialog_key(KeyCode::Char('7'), crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Backspace, crossterm::event::KeyModifiers::NONE);
+        {
+            let d = app.dialog.as_ref().unwrap();
+            assert_eq!(d.conns.value, "", "BT 并发行退格");
+            assert!(d.conns_edited, "退格置编辑位");
+        }
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn modify_bt_dialog_trackers_backspace() {
+        let mut app = make_app("mtrk");
+        app.dialog = Some(crate::app::testutil::dialog(DialogKind::ModifyBt, 3));
+        app.dialog
+            .as_mut()
+            .unwrap()
+            .trackers
+            .set_text("udp://x/ann");
+        for _ in 0..4 {
+            app.on_dialog_key(KeyCode::Backspace, crossterm::event::KeyModifiers::NONE);
+        }
+        {
+            let d = app.dialog.as_ref().unwrap();
+            assert_eq!(
+                d.trackers.trim_lines(),
+                vec!["udp://x"],
+                "ModifyBt trackers 退格（回归）"
+            );
+        }
         app.shutdown().await;
     }
 }

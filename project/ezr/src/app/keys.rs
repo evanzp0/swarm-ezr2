@@ -234,7 +234,7 @@ impl App {
         tokio::spawn(async move {
             engine.send(Cmd::BtDisconnect { id, conn }).await;
         });
-        self.set_toast(format!("✂ 已断开连接 {ip}（剩余 {left} 条）"));
+        self.set_toast(format!("✂ 已断开 {ip} 并加入黑名单（剩余 {left} 条）"));
     }
 
     fn move_sel(&mut self, delta: i32) {
@@ -755,9 +755,9 @@ mod bt_key_tests {
         app.focus = Panel::Conns;
         app.on_key(KeyCode::Char('b'), KeyModifiers::NONE);
         assert!(
-            app.toast
-                .as_deref()
-                .is_some_and(|m| m.contains("✂ 已断开连接 5.6.7.8（剩余 2 条）")),
+            app.toast.as_deref().is_some_and(|m| {
+                m.contains("✂ 已断开 5.6.7.8 并加入黑名单（剩余 2 条）")
+            }),
             "断开 toast = 选中行 IP（去 :port）: {:?}",
             app.toast
         );

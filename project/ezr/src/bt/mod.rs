@@ -48,7 +48,7 @@ pub enum BtTaskCmd {
 
 pub const SEED_DURATION_SECS: f64 = 1800.0;
 
-pub const PEER_PIPELINE: usize = 5;
+pub const PEER_PIPELINE: usize = 32;
 
 pub const REQUEST_BLOCK_LEN: u32 = 16 * 1024;
 

@@ -3,7 +3,8 @@ mod error;
 mod supervisor;
 mod throttle;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -183,9 +184,18 @@ pub(crate) struct EngineShared {
     pub client: reqwest::Client,
     clients: std::sync::Mutex<HashMap<String, reqwest::Client>>,
     throttle: Arc<throttle::Throttle>,
+    blacklist: std::sync::Mutex<HashSet<IpAddr>>,
 }
 
 impl EngineShared {
+    pub(crate) fn blacklist_add(&self, ip: IpAddr) {
+        self.blacklist.lock().expect("BT 黑名单锁").insert(ip);
+    }
+
+    pub(crate) fn is_blacklisted(&self, ip: IpAddr) -> bool {
+        self.blacklist.lock().expect("BT 黑名单锁").contains(&ip)
+    }
+
     pub(crate) fn bt_tracker_client(
         &self,
         ep: Option<&crate::model::ProxyEndpoint>,
@@ -277,6 +287,7 @@ impl EngineHandle {
             client,
             clients: std::sync::Mutex::new(HashMap::new()),
             throttle: Arc::new(throttle::Throttle::new(cfg.max_speed)),
+            blacklist: std::sync::Mutex::new(HashSet::new()),
         });
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>(64);
         tokio::spawn(main_loop(shared, cmd_rx, evt_tx));
@@ -517,6 +528,7 @@ pub(crate) fn shared_for_tests() -> Arc<EngineShared> {
         client,
         clients: std::sync::Mutex::new(HashMap::new()),
         throttle: Arc::new(throttle::Throttle::new(0)),
+        blacklist: std::sync::Mutex::new(HashSet::new()),
     })
 }
 
@@ -529,6 +541,7 @@ mod main_loop_tests {
             client: reqwest::Client::builder().no_proxy().build().unwrap(),
             clients: std::sync::Mutex::new(HashMap::new()),
             throttle: Arc::new(throttle::Throttle::new(0)),
+            blacklist: std::sync::Mutex::new(HashSet::new()),
         }
     }
 

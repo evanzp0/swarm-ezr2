@@ -55,3 +55,10 @@
   结构体字面量换行风格），`cargo fmt` 套用后干净；bin ezr 748P/0F、hardening_g_engine
   563P/0F、hardening_engine_backfill 651P/0F、clippy --bins --tests 0 警告
   （全部在 nightly 工具链下验证）。
+
+## 小盘 100% 满在本轮再次复现（2026-10-28 二次确认）
+- 全量回归中途再次 `os error 28`，同族处置生效：`rm -rf target/debug/incremental` +
+  `find target/debug/deps -maxdepth 1 -type f -executable -size +5M -delete`（一次回收
+  ~6.7G，df 100%→46%）；全量测试全程 `CARGO_INCREMENTAL=0`。多套件顺序连跑时每两个
+  套件查一次 df，runtime 期间编译假失败（error 28）按本条处置后单套件重跑即可，不是
+  产品回归。

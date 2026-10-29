@@ -21,6 +21,8 @@ const TRACKER_BACKOFF_START: u64 = 8;
 const TRACKER_BACKOFF_CAP: u64 = 60;
 const PEER_SWEEP_SECS: u64 = 2;
 const UPLOAD_BLOCK: usize = 16 * 1024;
+const REQUEST_TIMEOUT_SECS: u64 = 20;
+const REQUESTS_PER_PIECE: usize = 4;
 
 enum PeerIn {
     Connected {
@@ -45,7 +47,7 @@ struct ConnStat {
     addr: String,
     abbrev: String,
     has: HashSet<u32>,
-    inflight: HashMap<(u32, u32), u32>,
+    inflight: HashMap<(u32, u32), (u32, std::time::Instant)>,
     peer_choking: bool,
     cum_down: u64,
     cum_up: u64,
@@ -194,6 +196,9 @@ pub(crate) async fn run(
                     }
                     BtTaskCmd::Disconnect(conn_id) => {
                         if let Some(st) = conns.remove(&conn_id) {
+                            if let Some(ip) = addr_ip(&st.addr) {
+                                shared.blacklist_add(ip);
+                            }
                             let _ = st.peer_out.send(PeerOut::Drop).await;
                         }
                     }
@@ -208,6 +213,9 @@ pub(crate) async fn run(
                             .send(Evt::BtPeers { id, complete, incomplete })
                             .await;
                         for p in peers {
+                            if shared.is_blacklisted(p.ip) {
+                                continue;
+                            }
                             if tried.insert((p.ip, p.port)) && conns.len() < spec.concurrency {
                                 spawn_outgoing_peer(next_conn, p, &spec, &peer_id, peer_tx.clone());
                                 conns.insert(next_conn, new_conn_stat(format!("{}:{}", p.ip, p.port)));
@@ -226,10 +234,12 @@ pub(crate) async fn run(
                 }
             }
             Ok((stream, addr)) = listener.accept() => {
-                if conns.len() < spec.concurrency.max(1) + 8 {
+                if !shared.is_blacklisted(addr.ip()) && conns.len() < spec.concurrency.max(1) + 8 {
                     spawn_incoming_peer(next_conn, stream, addr, &spec, &peer_id, peer_tx.clone());
                     conns.insert(next_conn, new_conn_stat(addr.to_string()));
                     next_conn += 1;
+                } else if shared.is_blacklisted(addr.ip()) {
+                    drop(stream);
                 }
             }
             Some((conn_id, ev)) = peer_rx.recv() => {
@@ -310,6 +320,22 @@ pub(crate) async fn run(
                 }
             }
             _ = tick.tick() => {
+                let now = std::time::Instant::now();
+                let mut stale: Vec<usize> = Vec::new();
+                for (cid, st) in conns.iter_mut() {
+                    let before = st.inflight.len();
+                    st.inflight
+                        .retain(|_, (_, at)| now.duration_since(*at).as_secs() < REQUEST_TIMEOUT_SECS);
+                    if st.inflight.len() != before {
+                        stale.push(*cid);
+                    }
+                }
+                for cid in stale {
+                    let claimed = claimed_blocks(&conns, &partial);
+                    if let Some(st) = conns.get_mut(&cid) {
+                        issue_requests(cid, st, &claimed, &pmap, &done).await;
+                    }
+                }
                 let views = conn_views(&mut conns);
                 let sum_up_speed: f64 = views.iter().map(|v| v.up_speed).sum();
                 let _ = evt_tx.send(Evt::BtProgress {
@@ -524,6 +550,7 @@ fn spawn_outgoing_peer(
                 return;
             }
         };
+        let _ = sock.set_nodelay(true);
         run_peer_loop(conn_id, sock, &meta.infohash, &pid, tx).await;
     });
 }
@@ -539,9 +566,16 @@ fn spawn_incoming_peer(
     let meta = spec.meta.clone();
     let pid = *peer_id;
     tokio::spawn(async move {
+        let _ = sock.set_nodelay(true);
         run_peer_loop(conn_id, sock, &meta.infohash, &pid, tx).await;
         let _ = addr;
     });
+}
+
+fn addr_ip(addr: &str) -> Option<IpAddr> {
+    let host = addr.rsplit_once(':').map_or(addr, |(h, _)| h);
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.parse().ok()
 }
 
 async fn run_peer_loop(
@@ -680,6 +714,7 @@ async fn handle_peer_msg(
     partial: &mut PartialPieces,
     seeding: bool,
 ) {
+    let claimed = claimed_blocks(conns, partial);
     let Some(st) = conns.get_mut(&conn_id) else {
         return;
     };
@@ -705,11 +740,14 @@ async fn handle_peer_msg(
             let want = !done.contains(&p) && pmap.covered_pieces().contains(&p);
             if want {
                 send(conn_id, st, peer::PeerMsg::Interested).await;
+                if !st.peer_choking {
+                    issue_requests(conn_id, st, &claimed, pmap, done).await;
+                }
             }
         }
         peer::PeerMsg::Unchoke => {
             st.peer_choking = false;
-            issue_requests(conn_id, st, pmap, done, partial).await;
+            issue_requests(conn_id, st, &claimed, pmap, done).await;
         }
         peer::PeerMsg::Choke => {
             st.peer_choking = true;
@@ -805,51 +843,63 @@ async fn send(_conn_id: usize, st: &mut ConnStat, m: peer::PeerMsg) {
     let _ = st.peer_out.send(PeerOut::Send(m)).await;
 }
 
+fn claimed_blocks(
+    conns: &HashMap<usize, ConnStat>,
+    partial: &PartialPieces,
+) -> HashSet<(u32, u32)> {
+    let mut claimed: HashSet<(u32, u32)> = HashSet::new();
+    for c in conns.values() {
+        claimed.extend(c.inflight.keys().copied());
+    }
+    for (piece, blocks) in partial.iter() {
+        for begin in blocks.keys() {
+            claimed.insert((*piece, *begin));
+        }
+    }
+    claimed
+}
+
 async fn issue_requests(
     conn_id: usize,
     st: &mut ConnStat,
+    claimed: &HashSet<(u32, u32)>,
     pmap: &PieceMap,
     done: &HashSet<u32>,
-    partial: &PartialPieces,
 ) {
     if st.peer_choking || st.inflight.len() >= PEER_PIPELINE {
         return;
     }
-    let mut wanted: Vec<u32> = pmap
-        .covered_pieces()
-        .iter()
-        .copied()
-        .filter(|p| !done.contains(p) && st.has.contains(p))
-        .collect();
-    wanted.sort_unstable();
-    for piece in wanted {
+    for &piece in pmap.covered_pieces() {
         if st.inflight.len() >= PEER_PIPELINE {
-            break;
+            return;
         }
-        let plen = pmap.piece_len(piece) as usize;
-        let fetched = partial.get(&piece);
-        let mut begin = 0usize;
-        while begin < plen
-            && (st.inflight.contains_key(&(piece, begin as u32))
-                || fetched.is_some_and(|m| m.contains_key(&(begin as u32))))
-        {
-            begin += REQUEST_BLOCK_LEN as usize;
-        }
-        if begin >= plen {
+        if done.contains(&piece) || !st.has.contains(&piece) {
             continue;
         }
-        let len = (plen - begin).min(REQUEST_BLOCK_LEN as usize) as u32;
-        st.inflight.insert((piece, begin as u32), len);
-        send(
-            conn_id,
-            st,
-            peer::PeerMsg::Request {
-                index: piece,
-                begin: begin as u32,
-                length: len,
-            },
-        )
-        .await;
+        let plen = pmap.piece_len(piece) as usize;
+        let mut asked = 0usize;
+        let mut begin = 0usize;
+        while begin < plen && asked < REQUESTS_PER_PIECE && st.inflight.len() < PEER_PIPELINE {
+            let key = (piece, begin as u32);
+            if claimed.contains(&key) {
+                begin += REQUEST_BLOCK_LEN as usize;
+                continue;
+            }
+            let len = (plen - begin).min(REQUEST_BLOCK_LEN as usize) as u32;
+            st.inflight.insert(key, (len, std::time::Instant::now()));
+            send(
+                conn_id,
+                st,
+                peer::PeerMsg::Request {
+                    index: piece,
+                    begin: begin as u32,
+                    length: len,
+                },
+            )
+            .await;
+            asked += 1;
+            begin += REQUEST_BLOCK_LEN as usize;
+        }
     }
 }
 
@@ -877,8 +927,9 @@ async fn on_block(
 
     if done.contains(&index) {
         conns.insert(conn_id, st);
+        let claimed = claimed_blocks(conns, partial);
         if let Some(st) = conns.get_mut(&conn_id) {
-            issue_requests(conn_id, st, pmap, done, partial).await;
+            issue_requests(conn_id, st, &claimed, pmap, done).await;
         }
         return;
     }
@@ -936,8 +987,9 @@ async fn on_block(
         }
     }
     conns.insert(conn_id, st);
+    let claimed = claimed_blocks(conns, partial);
     if let Some(st) = conns.get_mut(&conn_id) {
-        issue_requests(conn_id, st, pmap, done, partial).await;
+        issue_requests(conn_id, st, &claimed, pmap, done).await;
     }
     let _ = seeding;
 }
@@ -1026,11 +1078,39 @@ async fn read_piece_range(
     len: usize,
 ) -> Option<Vec<u8>> {
     let plen = pmap.piece_len(piece) as usize;
-    if begin as usize + len > plen {
+    let begin = begin as usize;
+    if begin + len > plen {
         return None;
     }
-    let buf = read_piece_from_disk(files, pmap, piece).await.ok()?;
-    Some(buf[begin as usize..begin as usize + len].to_vec())
+    let p_start = u64::from(piece) * u64::from(pmap.piece_length);
+    let lo = p_start + begin as u64;
+    let hi = lo + len as u64;
+    let mut buf = vec![0u8; len];
+    let mut filled = 0usize;
+    for (fi, off_in_file, off_in_piece, seg_len) in pmap.write_plan(piece) {
+        let seg_lo = p_start + off_in_piece;
+        let seg_hi = seg_lo + seg_len;
+        let o_lo = lo.max(seg_lo);
+        let o_hi = hi.min(seg_hi);
+        if o_lo >= o_hi {
+            continue;
+        }
+        let dst = (o_lo - lo) as usize;
+        let n = (o_hi - o_lo) as usize;
+        let fh = files.get(&fi)?.try_clone().await.ok()?;
+        use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
+        let mut fh = fh;
+        fh.seek(SeekFrom::Start(off_in_file + (o_lo - seg_lo)))
+            .await
+            .ok()?;
+        fh.read_exact(&mut buf[dst..dst + n]).await.ok()?;
+        filled += n;
+    }
+    if filled == len {
+        Some(buf)
+    } else {
+        None
+    }
 }
 
 fn verify_piece(buf: &[u8], meta: &TorrentMeta, piece: u32) -> bool {
@@ -1382,6 +1462,293 @@ mod tests {
         }
         let out = std::fs::read(format!("{save_dir}/e2e.bin")).unwrap();
         assert_eq!(out, data, "多块 piece 产物与 seeder 数据逐字节一致");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    async fn fake_udp_tracker_fast(seeder_port: u16) -> u16 {
+        let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = sock.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let mut buf = [0u8; 512];
+            loop {
+                let (n, from) = match sock.recv_from(&mut buf).await {
+                    Ok(x) => x,
+                    Err(_) => return,
+                };
+                let req = &buf[..n];
+                if req.len() < 16 {
+                    continue;
+                }
+                let action = u32::from_be_bytes(req[8..12].try_into().unwrap());
+                let txid = u32::from_be_bytes(req[12..16].try_into().unwrap());
+                if action == 0 {
+                    if u64::from_be_bytes(req[0..8].try_into().unwrap()) != 0x0417_2710_1980 {
+                        continue;
+                    }
+                    let mut out = Vec::new();
+                    out.extend_from_slice(&0u32.to_be_bytes());
+                    out.extend_from_slice(&txid.to_be_bytes());
+                    out.extend_from_slice(&0x1234_5678_9abc_def0u64.to_be_bytes());
+                    let _ = sock.send_to(&out, from).await;
+                } else if action == 1 {
+                    if u64::from_be_bytes(req[0..8].try_into().unwrap()) != 0x1234_5678_9abc_def0 {
+                        continue;
+                    }
+                    let mut out = Vec::new();
+                    out.extend_from_slice(&1u32.to_be_bytes());
+                    out.extend_from_slice(&txid.to_be_bytes());
+                    out.extend_from_slice(&1u32.to_be_bytes());
+                    out.extend_from_slice(&1u32.to_be_bytes());
+                    out.extend_from_slice(&1u32.to_be_bytes());
+                    out.extend_from_slice(&[127, 0, 0, 1]);
+                    out.extend_from_slice(&seeder_port.to_be_bytes());
+                    let _ = sock.send_to(&out, from).await;
+                }
+            }
+        });
+        port
+    }
+
+    async fn counting_seeder(
+        data: Vec<u8>,
+        piece_len: usize,
+        infohash: [u8; 20],
+        counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let data = std::sync::Arc::new(data);
+        tokio::spawn(async move {
+            loop {
+                let Ok((sock, _)) = listener.accept().await else {
+                    return;
+                };
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let data = data.clone();
+                tokio::spawn(async move {
+                    serve_seeder_session(sock, &data, piece_len, infohash).await;
+                });
+            }
+        });
+        port
+    }
+
+    async fn serve_seeder_session(
+        mut sock: TcpStream,
+        data: &[u8],
+        piece_len: usize,
+        infohash: [u8; 20],
+    ) {
+        let mut hs = [0u8; 68];
+        if sock.read_exact(&mut hs).await.is_err() {
+            return;
+        }
+        let mut resp = Vec::new();
+        resp.push(19);
+        resp.extend_from_slice(b"BitTorrent protocol");
+        resp.extend_from_slice(&[0u8; 8]);
+        resp.extend_from_slice(&infohash);
+        resp.extend_from_slice(b"-QX7777-seederpeer00");
+        if sock.write_all(&resp).await.is_err() {
+            return;
+        }
+        let n = data.len().div_ceil(piece_len);
+        let mut bf = vec![0u8; n.div_ceil(8)];
+        for i in 0..n {
+            bf[i / 8] |= 0x80 >> (i % 8);
+        }
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&((1 + bf.len()) as u32).to_be_bytes());
+        frame.push(5);
+        frame.extend_from_slice(&bf);
+        let _ = sock.write_all(&frame).await;
+        let _ = sock.write_all(&[0, 0, 0, 1, 1]).await;
+        loop {
+            match peer::read_msg(&mut sock).await {
+                Ok(peer::PeerMsg::Request {
+                    index,
+                    begin,
+                    length,
+                }) => {
+                    let off = index as usize * piece_len + begin as usize;
+                    let end = (off + length as usize).min(data.len());
+                    if off >= data.len() {
+                        return;
+                    }
+                    let blk = data[off..end].to_vec();
+                    let mut f = Vec::new();
+                    f.extend_from_slice(&((9 + blk.len()) as u32).to_be_bytes());
+                    f.push(7);
+                    f.extend_from_slice(&index.to_be_bytes());
+                    f.extend_from_slice(&begin.to_be_bytes());
+                    f.extend_from_slice(&blk);
+                    if sock.write_all(&f).await.is_err() {
+                        return;
+                    }
+                }
+                Ok(peer::PeerMsg::Interested) | Ok(peer::PeerMsg::KeepAlive) => {}
+                _ => return,
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn disconnect_blacklists_peer_and_refuses_after_restart() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let piece_len = 16 * 1024;
+        let data: Vec<u8> = (0..40_960usize).map(|i| (i % 241) as u8).collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bteng-blacklist");
+        let save_dir = dir.to_string_lossy().into_owned();
+
+        let counter = std::sync::Arc::new(AtomicUsize::new(0));
+        let meta0 = make_meta(&data, piece_len, "udp://127.0.0.1:1/announce");
+        let seeder_port =
+            counting_seeder(data.clone(), piece_len, meta0.infohash, counter.clone()).await;
+        let tracker_port = fake_udp_tracker_fast(seeder_port).await;
+        let meta = make_meta(
+            &data,
+            piece_len,
+            &format!("udp://127.0.0.1:{tracker_port}/announce"),
+        );
+
+        let shared = crate::engine::shared_for_tests();
+        let make_spec = |id: u32| crate::engine::BtSpec {
+            id,
+            source: "/tmp/e2e-bl.torrent".into(),
+            meta: meta.clone(),
+            save_dir: save_dir.clone(),
+            name: "e2e.bin".into(),
+            files: vec![BtFile {
+                path: "e2e.bin".into(),
+                size: data.len() as u64,
+                selected: true,
+            }],
+            trackers: vec![format!("udp://127.0.0.1:{tracker_port}/announce")],
+            concurrency: 4,
+            proxy_endpoint: None,
+            done_pieces: vec![],
+            seeding: false,
+            max_speed: 0,
+        };
+
+        let (evt_tx1, mut evt_rx1) = mpsc::channel(256);
+        let (cmd_tx1, cmd_rx1) = mpsc::channel::<BtTaskCmd>(8);
+        let run1 = tokio::spawn(run(make_spec(91), shared.clone(), cmd_rx1, evt_tx1));
+
+        let conn_id = {
+            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+            loop {
+                assert!(std::time::Instant::now() < deadline, "首轮未建立连接");
+                let Some(evt) = tokio::time::timeout(Duration::from_millis(500), evt_rx1.recv())
+                    .await
+                    .ok()
+                    .flatten()
+                else {
+                    continue;
+                };
+                if let Evt::BtConns { conns, .. } = evt {
+                    if let Some(v) = conns.first() {
+                        break v.id;
+                    }
+                }
+            }
+        };
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "黑名单生效前 seeder 恰被连一次"
+        );
+
+        cmd_tx1.send(BtTaskCmd::Disconnect(conn_id)).await.unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if shared.is_blacklisted(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Disconnect 应写入全局黑名单"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        cmd_tx1.send(BtTaskCmd::Cancel).await.unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(5), run1).await;
+
+        let (evt_tx2, mut evt_rx2) = mpsc::channel(256);
+        let (_cmd_tx2, cmd_rx2) = mpsc::channel::<BtTaskCmd>(8);
+        let run2 = tokio::spawn(run(make_spec(92), shared.clone(), cmd_rx2, evt_tx2));
+
+        let mut saw_announce = false;
+        let mut saw_conn = false;
+        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        while std::time::Instant::now() < deadline {
+            let Some(evt) = tokio::time::timeout(Duration::from_millis(300), evt_rx2.recv())
+                .await
+                .ok()
+                .flatten()
+            else {
+                continue;
+            };
+            match evt {
+                Evt::BtPeers { .. } => saw_announce = true,
+                Evt::BtConns { conns, .. } if !conns.is_empty() => saw_conn = true,
+                _ => {}
+            }
+        }
+        assert!(saw_announce, "重启轮 tracker 正常返回 peers");
+        assert!(
+            !saw_conn,
+            "黑名单内 peer 重启后仍被拒绝连接（不建立新连接）"
+        );
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "seeder 连接计数保持 1（无重连）"
+        );
+        run2.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn read_piece_range_multi_file_reads_only_requested_slice() {
+        let files = vec![
+            BtFile {
+                path: "a.bin".into(),
+                size: 100,
+                selected: true,
+            },
+            BtFile {
+                path: "b.bin".into(),
+                size: 100,
+                selected: true,
+            },
+        ];
+        let pmap = PieceMap::new(&files, 64);
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bteng-rpr");
+        let a: Vec<u8> = (0..100u32).map(|i| (i % 251) as u8).collect();
+        let b: Vec<u8> = (100..200u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(dir.join("a.bin"), &a).unwrap();
+        std::fs::write(dir.join("b.bin"), &b).unwrap();
+        let mut handles = HashMap::new();
+        for (i, name) in ["a.bin", "b.bin"].into_iter().enumerate() {
+            let fh = tokio::fs::OpenOptions::new()
+                .read(true)
+                .open(dir.join(name))
+                .await
+                .unwrap();
+            handles.insert(i, fh);
+        }
+        let out = read_piece_range(&handles, &pmap, 1, 32, 32)
+            .await
+            .expect("跨文件区间可读");
+        let mut expect = Vec::new();
+        expect.extend_from_slice(&a[96..100]);
+        expect.extend_from_slice(&b[0..28]);
+        assert_eq!(out, expect, "仅读请求区间（piece1 全局 [96..128)）");
+        assert!(
+            read_piece_range(&handles, &pmap, 1, 60, 8).await.is_none(),
+            "越界区间拒绝"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
