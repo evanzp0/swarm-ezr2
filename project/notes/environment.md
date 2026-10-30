@@ -96,3 +96,17 @@
   压测（如 `--payload-mb 256 --piece-kib 16` → 16384 pieces）。引擎逐块成本随
   pieces 数放大，256KiB piece 的千级 pieces 基准全绿不代表真实大种子不塌缩
   （bug9 轮实证：16k pieces 下旧实现慢 25%）。
+
+## rustup 镜像选型本轮实测（2026-10-30，TUNA 整链路最快且可用）
+- 测速口径：rustup-init 二进制 rsproxy 17.4MB/s > TUNA 12.8MB/s（注意 TUNA 的
+  rustup-init 在**双层路径** `/rustup/rustup/dist/<target>/rustup-init`）> USTC
+  8.2MB/s（`/rust-static/rustup/dist/...`）；SJTU/aliyun 404。
+- dist 清单：TUNA（`/rustup/dist/channel-rust-nightly.toml`）与 USTC
+  （`/rust-static/dist/...`）正常；**rsproxy/ustc 的 `/rustup/dist/` 路径仍是
+  NoSuchKey XML 错误页（第三次复现，测速快 ≠ 能装）**。
+- dist 组件吞吐：TUNA **28.7MB/s**（16MB range 探针）。新发现：新版清单里组件 URL
+  是镜像重写后的**绝对 URL**（含日期戳目录 `dist/<date>/…`），rustup 读取清单后
+  自然落在本站，手工探测必须先解析清单拿真实路径，拿旧路径探测会误判 404。
+- 本轮结论：TUNA 单镜像整链路（init + 清单 + 组件）最快且可用，前台一次装齐
+  nightly minimal + rustfmt + clippy（RUSTUP_DIST_SERVER/RUSTUP_UPDATE_ROOT 均指
+  TUNA）。

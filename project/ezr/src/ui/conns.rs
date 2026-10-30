@@ -12,8 +12,8 @@ use super::{
 };
 use crate::app::{App, Panel, SbKey};
 
-const BT_COLW: [usize; 7] = [11, 8, 8, 8, 8, 6, 4];
-const BT_CONTENT_W: usize = 59;
+const BT_COLW: [usize; 7] = [15, 8, 8, 8, 8, 6, 4];
+const BT_CONTENT_W: usize = 63;
 const HTTP_COLW: [usize; 3] = [4, 8, 8];
 const HTTP_CONTENT_W: usize = 22;
 
@@ -35,20 +35,37 @@ fn mask_ip(ip: &str) -> String {
 }
 
 fn ip_display(addr: &str) -> String {
-    let masked = if !addr.contains(':') {
+    let cell = if !addr.contains(':') {
         return pad_right(&truncate(addr, BT_COLW[0]), BT_COLW[0]);
     } else if let Some(i) = addr.find('[') {
         let inner = &addr[i + 1..];
         let inner = inner.split(']').next().unwrap_or(inner);
-        mask_ip(inner)
+        let port = addr
+            .split(']')
+            .nth(1)
+            .and_then(|s| s.strip_prefix(':'))
+            .unwrap_or("");
+        if port.is_empty() {
+            mask_ip(inner)
+        } else {
+            format!("{}:{port}", mask_ip(inner))
+        }
     } else if addr.matches(':').count() == 1 {
-        let (ip, _) = addr.split_once(':').unwrap_or((addr, ""));
-        mask_ip(ip)
+        let (ip, port) = addr.split_once(':').unwrap_or((addr, ""));
+        if port.is_empty() {
+            mask_ip(ip)
+        } else {
+            format!("{}:{port}", mask_ip(ip))
+        }
     } else {
-        let (ip, _) = addr.rsplit_once(':').unwrap_or((addr, ""));
-        mask_ip(ip)
+        let (ip, port) = addr.rsplit_once(':').unwrap_or((addr, ""));
+        if port.is_empty() {
+            mask_ip(ip)
+        } else {
+            format!("{}:{port}", mask_ip(ip))
+        }
     };
-    pad_right(&truncate(&masked, BT_COLW[0]), BT_COLW[0])
+    pad_right(&truncate(&cell, BT_COLW[0]), BT_COLW[0])
 }
 
 type BtRowCells = (String, f64, u64, f64, u64, String, bool);
@@ -167,7 +184,7 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     let dim = |s: String, wd: usize| Span::styled(pad_left(&s, wd), Style::default().fg(DIM));
     let head = if is_bt {
         vec![
-            Span::styled(pad_right("IP", BT_COLW[0]), Style::default().fg(DIM)),
+            Span::styled(pad_right("地址", BT_COLW[0]), Style::default().fg(DIM)),
             Span::raw(" "),
             dim("下载速度".to_string(), BT_COLW[1]),
             Span::raw(" "),
@@ -488,7 +505,7 @@ mod tests {
             ],
         );
         let text = conns_render(&mut app, 60, 14).backend().to_string();
-        assert!(text.contains("IP"), "表头 IP: {text}");
+        assert!(text.contains("地址"), "表头 地址: {text}");
         assert!(
             text.contains("下载速度") && text.contains("累计下载"),
             "表头列: {text}"
@@ -497,8 +514,11 @@ mod tests {
             text.contains("上传速度") && text.contains("累计上传"),
             "表头列: {text}"
         );
-        assert!(text.contains("1.*.4"), "IPv4 遮掩: {text}");
-        assert!(text.contains("5.*.8"), "第二行 IPv4 遮掩: {text}");
+        assert!(text.contains("1.*.4:51400"), "IPv4 遮掩含端口: {text}");
+        assert!(
+            text.contains("5.*.8:51401"),
+            "第二行 IPv4 遮掩含端口: {text}"
+        );
         assert!(!text.contains("1.2.3.4"), "完整 IP 不得出现: {text}");
         assert!(text.contains("2/4 项"), "徽标 x = bt_conns 行数: {text}");
         app.conns_hscroll = app.conns_max_hscroll;
@@ -554,9 +574,13 @@ mod tests {
 
     #[test]
     fn ip_display_masks_and_caps_width() {
-        assert_eq!(super::ip_display("1.2.3.4:51400"), "1.*.4      ");
-        assert_eq!(super::ip_display("[2001:db8::1]:51400"), "2001:*:1   ");
-        assert_eq!(super::ip_display("2001:db8::1:51400"), "2001:*:1   ");
-        assert_eq!(super::ip_display("noport"), "noport     ");
+        assert_eq!(super::ip_display("1.2.3.4:51400"), "1.*.4:51400    ");
+        assert_eq!(super::ip_display("[2001:db8::1]:51400"), "2001:*:1:51400 ");
+        assert_eq!(super::ip_display("2001:db8::1:51400"), "2001:*:1:51400 ");
+        assert_eq!(
+            super::ip_display("255.255.255.255:65535"),
+            "255.*.255:65535"
+        );
+        assert_eq!(super::ip_display("noport"), "noport         ");
     }
 }

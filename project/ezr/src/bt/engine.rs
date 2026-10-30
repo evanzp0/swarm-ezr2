@@ -30,6 +30,11 @@ const PEER_RETRY_BASE_SECS: u64 = 5;
 const PEER_RETRY_CAP_SECS: u64 = 120;
 const PROGRESS_EMIT_MIN_INTERVAL: Duration = Duration::from_millis(250);
 const TRACKER_NUMWANT: u32 = 200;
+const IDLE_EVICTION_SECS: u64 = 60;
+const UPLOAD_READ_CONCURRENCY: usize = 128;
+
+static UPLOAD_READ_PERMITS: std::sync::LazyLock<tokio::sync::Semaphore> =
+    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(UPLOAD_READ_CONCURRENCY));
 
 enum PeerIn {
     Connected {
@@ -65,6 +70,7 @@ struct ConnStat {
     cum_up: u64,
     down_window: (u64, std::time::Instant),
     up_window: (u64, std::time::Instant),
+    idle_check: (u64, std::time::Instant),
 }
 
 impl ConnStat {
@@ -157,6 +163,21 @@ fn refill_visit_order(
 
 fn progress_emit_due(last_emit: std::time::Instant, now: std::time::Instant) -> bool {
     now.duration_since(last_emit) >= PROGRESS_EMIT_MIN_INTERVAL
+}
+
+fn refresh_idle(st: &mut ConnStat, now: std::time::Instant) {
+    if st.cum_down != st.idle_check.0 {
+        st.idle_check = (st.cum_down, now);
+    }
+}
+
+fn idle_evict_due(st: &ConnStat, now: std::time::Instant) -> bool {
+    st.cum_down == st.idle_check.0
+        && now.duration_since(st.idle_check.1).as_secs() >= IDLE_EVICTION_SECS
+}
+
+fn inbound_admitted(conns: &HashMap<usize, ConnStat>, ip: IpAddr, cap: usize) -> bool {
+    conns.len() < cap && !conns.values().any(|st| addr_ip(&st.addr) == Some(ip))
 }
 
 /// piece 的伪随机权重：同一 (piece, seed) 恒定不变。
@@ -401,11 +422,13 @@ pub(crate) async fn run(
                 }
             }
             Ok((stream, addr)) = listener.accept() => {
-                if !shared.is_blacklisted(addr.ip()) && conns.len() < spec.concurrency.max(1) + 8 {
+                if inbound_admitted(&conns, addr.ip(), spec.concurrency.max(1) + 8)
+                    && !shared.is_blacklisted(addr.ip())
+                {
                     spawn_incoming_peer(next_conn, stream, addr, &spec, &peer_id, peer_tx.clone());
                     conns.insert(next_conn, new_conn_stat(addr.to_string()));
                     next_conn += 1;
-                } else if shared.is_blacklisted(addr.ip()) {
+                } else {
                     drop(stream);
                 }
             }
@@ -543,6 +566,26 @@ pub(crate) async fn run(
             }
             _ = tick.tick() => {
                 let now = std::time::Instant::now();
+                if !seeding {
+                    let mut evict: Vec<usize> = Vec::new();
+                    for (cid, st) in conns.iter_mut() {
+                        refresh_idle(st, now);
+                        if idle_evict_due(st, now) {
+                            evict.push(*cid);
+                        }
+                    }
+                    for cid in evict {
+                        if let Some(st) = conns.remove(&cid) {
+                            let _ = st.peer_out.send(PeerOut::Drop).await;
+                        }
+                    }
+                    if conns.len() < spec.concurrency.max(1) {
+                        fill_peer_slots(
+                            &spec, &peer_id, &peer_tx, shared.as_ref(), &mut conns,
+                            &mut candidates, &mut next_conn,
+                        );
+                    }
+                }
                 let mut stale: Vec<usize> = Vec::new();
                 for (cid, st) in conns.iter_mut() {
                     let before = st.inflight.len();
@@ -979,6 +1022,7 @@ fn new_conn_stat(addr: String) -> ConnStat {
         cum_up: 0,
         down_window: (0, std::time::Instant::now()),
         up_window: (0, std::time::Instant::now()),
+        idle_check: (0, std::time::Instant::now()),
     }
 }
 
@@ -1058,20 +1102,27 @@ async fn handle_peer_msg(
             let allowed = !st.am_choking;
             let have = done.contains(&index);
             if allowed && have && length > 0 && length as usize <= UPLOAD_BLOCK * 2 {
-                if let Some(buf) =
-                    read_piece_range(files, pmap, index, begin, length as usize).await
-                {
-                    st.cum_up += buf.len() as u64;
-                    send(
-                        conn_id,
-                        st,
-                        peer::PeerMsg::Block {
-                            index,
-                            begin,
-                            data: buf,
-                        },
-                    )
-                    .await;
+                if let Some(plan) = upload_read_plan(
+                    pmap,
+                    &spec.save_dir,
+                    &spec.name,
+                    index,
+                    begin,
+                    length as usize,
+                ) {
+                    st.cum_up += u64::from(length);
+                    let out = st.peer_out.clone();
+                    tokio::spawn(async move {
+                        let data = {
+                            let _permit = UPLOAD_READ_PERMITS.acquire().await;
+                            read_upload_blocks(plan, length as usize).await
+                        };
+                        if let Some(data) = data {
+                            let _ = out
+                                .send(PeerOut::Send(peer::PeerMsg::Block { index, begin, data }))
+                                .await;
+                        }
+                    });
                 }
             }
         }
@@ -1563,13 +1614,16 @@ fn bitfield_bytes(done: &HashSet<u32>, num_pieces: u32) -> Vec<u8> {
     v
 }
 
-async fn read_piece_range(
-    files: &HashMap<usize, tokio::fs::File>,
+type UploadSeg = (String, u64, usize, usize);
+
+fn upload_read_plan(
     pmap: &PieceMap,
+    save_dir: &str,
+    name: &str,
     piece: u32,
     begin: u32,
     len: usize,
-) -> Option<Vec<u8>> {
+) -> Option<Vec<UploadSeg>> {
     let plen = pmap.piece_len(piece) as usize;
     let begin = begin as usize;
     if begin + len > plen {
@@ -1578,8 +1632,7 @@ async fn read_piece_range(
     let p_start = u64::from(piece) * u64::from(pmap.piece_length);
     let lo = p_start + begin as u64;
     let hi = lo + len as u64;
-    let mut buf = vec![0u8; len];
-    let mut filled = 0usize;
+    let mut plan = Vec::new();
     for (fi, off_in_file, off_in_piece, seg_len) in pmap.write_plan(piece) {
         let seg_lo = p_start + off_in_piece;
         let seg_hi = seg_lo + seg_len;
@@ -1590,12 +1643,24 @@ async fn read_piece_range(
         }
         let dst = (o_lo - lo) as usize;
         let n = (o_hi - o_lo) as usize;
-        let fh = files.get(&fi)?.try_clone().await.ok()?;
+        let rel = &pmap.files.get(fi)?.path;
+        plan.push((
+            file_abs_path(save_dir, name, rel),
+            off_in_file + (o_lo - seg_lo),
+            dst,
+            n,
+        ));
+    }
+    Some(plan)
+}
+
+async fn read_upload_blocks(plan: Vec<UploadSeg>, len: usize) -> Option<Vec<u8>> {
+    let mut buf = vec![0u8; len];
+    let mut filled = 0usize;
+    for (path, off, dst, n) in plan {
+        let mut fh = tokio::fs::File::open(&path).await.ok()?;
         use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
-        let mut fh = fh;
-        fh.seek(SeekFrom::Start(off_in_file + (o_lo - seg_lo)))
-            .await
-            .ok()?;
+        fh.seek(SeekFrom::Start(off)).await.ok()?;
         fh.read_exact(&mut buf[dst..dst + n]).await.ok()?;
         filled += n;
     }
@@ -2449,7 +2514,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_piece_range_multi_file_reads_only_requested_slice() {
+    async fn upload_read_plan_multi_file_reads_only_requested_slice() {
         let files = vec![
             BtFile {
                 path: "a.bin".into(),
@@ -2468,24 +2533,16 @@ mod tests {
         let b: Vec<u8> = (100..200u32).map(|i| (i % 251) as u8).collect();
         std::fs::write(dir.join("a.bin"), &a).unwrap();
         std::fs::write(dir.join("b.bin"), &b).unwrap();
-        let mut handles = HashMap::new();
-        for (i, name) in ["a.bin", "b.bin"].into_iter().enumerate() {
-            let fh = tokio::fs::OpenOptions::new()
-                .read(true)
-                .open(dir.join(name))
-                .await
-                .unwrap();
-            handles.insert(i, fh);
-        }
-        let out = read_piece_range(&handles, &pmap, 1, 32, 32)
-            .await
-            .expect("跨文件区间可读");
+        let save_dir = dir.to_string_lossy().into_owned();
+        let plan =
+            upload_read_plan(&pmap, &save_dir, "", 1, 32, 32).expect("跨文件区间可出读盘计划");
+        let out = read_upload_blocks(plan, 32).await.expect("跨文件区间可读");
         let mut expect = Vec::new();
         expect.extend_from_slice(&a[96..100]);
         expect.extend_from_slice(&b[0..28]);
         assert_eq!(out, expect, "仅读请求区间（piece1 全局 [96..128)）");
         assert!(
-            read_piece_range(&handles, &pmap, 1, 60, 8).await.is_none(),
+            upload_read_plan(&pmap, &save_dir, "", 1, 60, 8).is_none(),
             "越界区间拒绝"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -2793,6 +2850,48 @@ mod tests {
             visit.first(),
             Some(&3),
             "部分到达的 piece 优先（尽管它在缓存序中靠后）"
+        );
+    }
+
+    #[test]
+    fn idle_conn_without_progress_evicted_after_threshold() {
+        let now = std::time::Instant::now();
+        let mut st = new_conn_stat("10.0.0.9:1".into());
+        st.idle_check = (0, now - std::time::Duration::from_secs(61));
+        assert!(
+            idle_evict_due(&st, now),
+            "零进度 60s 的连接到置换点（同 IP 无用 peer 挡住有价值 seeder 的根因）"
+        );
+        st.cum_down = 4096;
+        refresh_idle(&mut st, now);
+        assert!(!idle_evict_due(&st, now), "有字节进账的连接不置换");
+        let stale_cum = st.cum_down;
+        st.idle_check = (stale_cum, now - std::time::Duration::from_secs(61));
+        assert!(
+            idle_evict_due(&st, now),
+            "有历史进账但 60s 无新增的连接到置换点"
+        );
+        let fresh = new_conn_stat("10.0.0.9:2".into());
+        assert!(!idle_evict_due(&fresh, now), "新连接不置换");
+    }
+
+    #[test]
+    fn inbound_admitted_blocks_same_ip_and_cap() {
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        conns.insert(1, new_conn_stat("127.0.0.1:17903".into()));
+        let ip: IpAddr = "127.0.0.1".parse().unwrap();
+        assert!(
+            !inbound_admitted(&conns, ip, 28),
+            "同 IP 已有连接时入连拒绝（入连不得占住同 IP 出连名额）"
+        );
+        let other: IpAddr = "10.0.0.8".parse().unwrap();
+        assert!(inbound_admitted(&conns, other, 28), "不同 IP 入连放行");
+        assert!(!inbound_admitted(&conns, other, 1), "容量满时入连拒绝");
+        let unparseable = new_conn_stat("未知地址".into());
+        conns.insert(2, unparseable);
+        assert!(
+            inbound_admitted(&conns, other, 28),
+            "地址不可解析的既有连接不挡同 IP 判定"
         );
     }
 
@@ -3168,17 +3267,223 @@ mod tests {
             &mut PieceOrderCache::new(),
         )
         .await;
-        match rx_a.try_recv() {
-            Ok(PeerOut::Send(peer::PeerMsg::Block {
+        let served =
+            tokio::time::timeout(std::time::Duration::from_millis(2000), rx_a.recv()).await;
+        match served {
+            Ok(Some(PeerOut::Send(peer::PeerMsg::Block {
                 index,
                 begin,
                 data: blk,
-            })) => {
+            }))) => {
                 assert_eq!((index, begin), (0, 0));
                 assert_eq!(blk, &data[..4096]);
             }
-            other => panic!("unchoke 后 request 应被服务：{other:?}"),
+            other => panic!("unchoke 后 request 应被服务（spawn 任务送出 Block）：{other:?}"),
         }
+        assert_eq!(
+            conns[&1].cum_up, 4096,
+            "serve 决策时计入 cum_up（读盘失败才可能多计）"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn request_serve_does_not_block_engine_loop_when_out_channel_full() {
+        let piece_len = 16 * 1024;
+        let data: Vec<u8> = (0..16_384usize).map(|i| (i % 211) as u8).collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bteng-serve-nonblock");
+        let save_dir = dir.to_string_lossy().into_owned();
+        let files = vec![BtFile {
+            path: "g.bin".into(),
+            size: data.len() as u64,
+            selected: true,
+        }];
+        std::fs::write(format!("{save_dir}/g.bin"), &data).unwrap();
+        let meta = {
+            let mut pieces = Vec::new();
+            let mut h = Sha1::new();
+            h.update(&data);
+            pieces.extend_from_slice(&h.finalize());
+            use crate::bt::bencode::{encode, BValue};
+            let mut info = BTreeMap::new();
+            info.insert(b"length".to_vec(), BValue::Int(data.len() as i64));
+            info.insert(b"name".to_vec(), BValue::Bytes(b"g.bin".to_vec()));
+            info.insert(b"piece length".to_vec(), BValue::Int(piece_len as i64));
+            info.insert(b"pieces".to_vec(), BValue::Bytes(pieces));
+            let mut root = BTreeMap::new();
+            root.insert(
+                b"announce".to_vec(),
+                BValue::Bytes(b"udp://127.0.0.1:1/announce".to_vec()),
+            );
+            root.insert(b"info".to_vec(), BValue::Dict(info));
+            TorrentMeta::parse(&encode(&BValue::Dict(root))).unwrap()
+        };
+        let spec = crate::engine::BtSpec {
+            id: 98,
+            source: "/tmp/g.torrent".into(),
+            meta,
+            save_dir: save_dir.clone(),
+            name: "g.bin".into(),
+            files,
+            trackers: vec![],
+            concurrency: 4,
+            proxy_endpoint: None,
+            seeding: false,
+            max_speed: 0,
+        };
+        let pmap = PieceMap::new(&spec.files, spec.meta.piece_length);
+        let mut done: HashSet<u32> = HashSet::new();
+        done.insert(0);
+        let mut downloaded = data.len() as u64;
+        let mut partial: PartialPieces = HashMap::new();
+
+        let mut st = new_conn_stat("10.0.0.9:999".into());
+        st.am_choking = false;
+        let (tx_a, rx_a) = mpsc::channel(1);
+        tx_a.send(PeerOut::Drop).await.unwrap();
+        st.peer_out = tx_a;
+        let mut conns = HashMap::from([(1usize, st)]);
+        let _keep_rx = rx_a;
+        let mut handles: HashMap<usize, tokio::fs::File> = HashMap::new();
+        let fh = tokio::fs::OpenOptions::new()
+            .read(true)
+            .open(format!("{save_dir}/g.bin"))
+            .await
+            .unwrap();
+        handles.insert(0, fh);
+
+        let serve = tokio::time::timeout(
+            std::time::Duration::from_millis(2000),
+            handle_peer_msg(
+                1,
+                peer::PeerMsg::Request {
+                    index: 0,
+                    begin: 0,
+                    length: 4096,
+                },
+                &mut conns,
+                &pmap,
+                &spec,
+                &mut done,
+                &mut downloaded,
+                &mut handles,
+                &mut partial,
+                &mut PieceOrderCache::new(),
+            ),
+        )
+        .await;
+        assert!(
+            serve.is_ok(),
+            "out 通道满且无人排水时 request 服务不得阻塞引擎循环（上传读盘+发送必须移出引擎任务）"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn request_serve_keeps_engine_handle_cursor_untouched() {
+        let piece_len = 16 * 1024;
+        let data: Vec<u8> = (0..16_384usize).map(|i| (i % 211) as u8).collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bteng-serve-cursor");
+        let save_dir = dir.to_string_lossy().into_owned();
+        let files = vec![BtFile {
+            path: "g.bin".into(),
+            size: data.len() as u64,
+            selected: true,
+        }];
+        std::fs::write(format!("{save_dir}/g.bin"), &data).unwrap();
+        let meta = {
+            let mut pieces = Vec::new();
+            let mut h = Sha1::new();
+            h.update(&data);
+            pieces.extend_from_slice(&h.finalize());
+            use crate::bt::bencode::{encode, BValue};
+            let mut info = BTreeMap::new();
+            info.insert(b"length".to_vec(), BValue::Int(data.len() as i64));
+            info.insert(b"name".to_vec(), BValue::Bytes(b"g.bin".to_vec()));
+            info.insert(b"piece length".to_vec(), BValue::Int(piece_len as i64));
+            info.insert(b"pieces".to_vec(), BValue::Bytes(pieces));
+            let mut root = BTreeMap::new();
+            root.insert(
+                b"announce".to_vec(),
+                BValue::Bytes(b"udp://127.0.0.1:1/announce".to_vec()),
+            );
+            root.insert(b"info".to_vec(), BValue::Dict(info));
+            TorrentMeta::parse(&encode(&BValue::Dict(root))).unwrap()
+        };
+        let spec = crate::engine::BtSpec {
+            id: 99,
+            source: "/tmp/g.torrent".into(),
+            meta,
+            save_dir: save_dir.clone(),
+            name: "g.bin".into(),
+            files,
+            trackers: vec![],
+            concurrency: 4,
+            proxy_endpoint: None,
+            seeding: false,
+            max_speed: 0,
+        };
+        let pmap = PieceMap::new(&spec.files, spec.meta.piece_length);
+        let mut done: HashSet<u32> = HashSet::new();
+        done.insert(0);
+        let mut downloaded = data.len() as u64;
+        let mut partial: PartialPieces = HashMap::new();
+
+        let mut st = new_conn_stat("10.0.0.9:999".into());
+        st.am_choking = false;
+        let (tx_a, mut rx_a) = mpsc::channel(8);
+        st.peer_out = tx_a;
+        let mut conns = HashMap::from([(1usize, st)]);
+        let mut handles: HashMap<usize, tokio::fs::File> = HashMap::new();
+        let fh = tokio::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(format!("{save_dir}/g.bin"))
+            .await
+            .unwrap();
+        handles.insert(0, fh);
+        use tokio::io::AsyncSeekExt;
+        let cursor_before = handles
+            .get_mut(&0)
+            .unwrap()
+            .stream_position()
+            .await
+            .unwrap();
+
+        handle_peer_msg(
+            1,
+            peer::PeerMsg::Request {
+                index: 0,
+                begin: 0,
+                length: 4096,
+            },
+            &mut conns,
+            &pmap,
+            &spec,
+            &mut done,
+            &mut downloaded,
+            &mut handles,
+            &mut partial,
+            &mut PieceOrderCache::new(),
+        )
+        .await;
+        let drained = tokio::time::timeout(std::time::Duration::from_millis(2000), rx_a.recv())
+            .await
+            .expect("上传任务应完成");
+        assert!(matches!(
+            drained,
+            Some(PeerOut::Send(peer::PeerMsg::Block { .. }))
+        ));
+        let cursor_after = handles
+            .get_mut(&0)
+            .unwrap()
+            .stream_position()
+            .await
+            .unwrap();
+        assert_eq!(
+            cursor_before, cursor_after,
+            "上传读盘不得挪动引擎句柄的共享偏移（须独立 open file description）"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

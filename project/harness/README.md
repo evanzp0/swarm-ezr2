@@ -17,6 +17,7 @@ harness/
     pybtracker_server.py   pybtracker 启动包装器（tuple 绑定 + asyncio.run）
     mini_http_tracker.py   自研极简 BEP 3 HTTP tracker（stdlib-only，JSONL announce 日志）
   swarm_e2e.py             主编排：造种 → 双 tracker → seeder → ezr pty 驱动 → leecher 同时下载 → 对账
+  bench_multipeer.py       多 peer 速度基准：N seeder + M 并行 leecher 对照（限速/中途加入/侧车采样速度曲线）
   README.md                本文件
   .ref-py-http-tracker/    不可用候选存档（同 IP 自过滤 + 需预注册 infohash）
   .ref-trondhumbor-tracker/ 不可用候选存档（Flask 1.1.2 死依赖）
@@ -97,6 +98,27 @@ peer_id/event/left/uploaded/downloaded）、`udp_tracker.log`（pybtracker 日�
 
 判据：ezr 到达完成/做种态，且 ezr 产物 SHA-256 == 原始 payload == libtorrent leecher 产物。
 
+## 多 peer 速度基准（bench_multipeer.py）
+
+```sh
+cd project/harness
+python3 bench_multipeer.py --ezr-bin ../ezr/target/release/ezr \
+  --seeders 2 --leechers 0 --payload-mb 128 --seeder-upload-kbps 2560 \
+  --workdir ../../.work/tmp/bench-x
+```
+
+- `--seeders N` 初始 libtorrent seeder 数（各占 17903+i 端口）；`--leechers M` 与 ezr
+  同时下载的对照 leecher 数（17920+i）。
+- `--seeder-upload-kbps` 对每个 seeder 设 libtorrent 上传限速（`torrent_handle.
+  set_upload_limit` + session `upload_rate_limit` 双保险），用于复现「单 seeder
+  2.5MB/s」的真实局域网口径；0 = 不限速（回环页缓存全开 ~50MB/s，测不出多 peer 效应）。
+- `--late-seeders N --late-seeder-delay T`：T 秒后追加 seeder（绑定 127.0.0.2+ 以区分
+  IP；ezr 靠 re-announce ≤30s 内发现）。
+- 进度采样：ezr 的 `.ezr` sidecar（引擎 1s tick 落盘的 done_pieces JSON），完成后
+  sidecar 被删除视为完成。产物：`result.json` + `speed_curve.json`（t/done 采样，
+  其中 `t<0` 的负值行是事件标记：`-100-N` 并发数、`-1-N` late seeder 加入点）。
+- 判据：finished + sha256_match。速度结论看 `avg_speed_Bps` 与曲线拐点。
+
 ## 结果记录
 
 - **2026-10-28 首轮（三连 PASS）**：ezr 2.2s 完成下载并转做种；ezr / libtorrent-leecher /
@@ -108,6 +130,15 @@ peer_id/event/left/uploaded/downloaded）、`udp_tracker.log`（pybtracker 日�
   而指向不存在文件，子进程 127 退出 + tty 回显，外观像“TUI 未就绪”）；② 等 TUI 首屏
   （“命令窗口”提示）与 BT 对话框改用带持续 pump 的 `wait_for`（原为单次 0.6s 定值
   pump，存在启动时序敏感面）。
+- **2026-10-30 bug10 轮（上传离环 + 空闲置换修复后回归）**：4MB PASS；256MB 基准 ezr
+  **64.2s（4.0MB/s）**——上轮 123.8s 的近 2 倍，原因：标准编排本就带并行 leecher，ezr
+  上传路径此前内联在引擎循环，修复后自身下载不再被上传服务拖累；16KiB piece 压测
+  129.8s → **69.6s** 同因。多 peer 基准（`bench_multipeer.py`，seeder 限速 2.5MB/s）：
+  ①1 seeder 2.39MB/s（修复前后持平）；②2 seeder 从头 4.68MB/s（扩速正常）；③late
+  seeder 绑 127.0.0.2 中途加入，re-announce 发现后爬升 4.1–6.3MB/s；④**1 seeder +
+  1 并行 leecher（同 127.0.0.1）为「添加 peer 反而降速」的最小复现**：修复前 ezr
+  175s/0.77MB/s（首连随机落在 leecher，同 IP 去重把 seeder 永久挡住，leecher 下完转
+  做种才恢复），修复后 115.6s/1.16MB/s（60s 空闲置换重拨 seeder 后满速）。
 
 ## 由夹具暴露并已修复的 ezr 缺陷（phase-02）
 

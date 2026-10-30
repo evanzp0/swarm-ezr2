@@ -154,3 +154,22 @@
   （独立 target-dir，不动现行构建缓存）；④跑同一基准；⑤从备份恢复文件重编。
 - 注意：工作树含未提交改动时不要用 `git stash`（会把 harness 等配套改动一起卷走，
   旧二进制跑不了新参数）；只 checkout 明确列出的改动文件。
+
+- libtorrent seeder 限速必须 `handle.set_upload_limit(bytes/s)`：对已建 session
+  `apply_settings({"upload_rate_limit": …})` 实测不生效（场景 A 仍跑满 49MB/s），
+  两个都设才稳。回环不限速时页缓存全开 ~50MB/s，任何「多 peer 速度」结论都必须在
+  seeder 限速口径下取数。
+- 多 peer 对照实验的方法纪律：①同机三方（seeder/leecher/ezr 全 127.0.0.1）会触发
+  客户端同 IP 去重交互，late seeder 必须绑 127.0.0.2+ 区分 IP；②ezr 进度采样用
+  `.ezr` sidecar（引擎 1s tick 落盘的 done_pieces JSON，完成后即删，删除即完成），
+  不能用文件大小（BT 预分配 set_len）；③终帧只有完成后状态，定位引擎级卡点要在
+  下载中途每 5s 落盘屏幕快照（screens.log）对照 leecher 实时状态
+  （handle.status() 的 payload rate）——「0 进度 + 并发 1 指向空 peer」这类结论只能
+  从中途快照得出。
+- 小盘跑 12 个 hardening 套件必爆盘（每测试二进制 ~200MB × 12 ≈ 2.5G）：全量套件
+  编译运行加 `CARGO_PROFILE_TEST_DEBUG=0`（二进制缩到 ~25MB，断言与运行时行为不变，
+  仅丢回溯符号），配合 `CARGO_INCREMENTAL=0`；编译用 `--no-run` 分块（crate 级产物
+  跨块累计），运行按二进制逐个前台跑、只取 `test result` 行。
+- 规格钉定列宽的变更必须同步 feature 文件引用：`04-ui-conns.feature` L128 钉死
+  「IP(11)/…内容宽 59 列」，bug10 按操作者指令改为「地址(15)/内容宽 63」——feature
+  文件属 specifier 职责未改，QA 复核时以 handoff 登记的偏离为准（操作者指令级偏离）。

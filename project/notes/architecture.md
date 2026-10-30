@@ -259,3 +259,33 @@
   重算」改为按需计算（只有 Have/Unchoke/Block 补请求路径才构建）；Bitfield/Have 的
   `covered_pieces().contains` 线性扫描改 `PieceMap::covers` 二分（O(pieces²)→O(log n)）。
   harness 256MB 基准：ezr 2.02MB/s ≈ libtorrent leecher 2.0MB/s（同 swarm 同 seeder）。
+
+## 上传服务必须在引擎循环外：inline 读盘+发送是「加 peer 反而降速」的自饿根因
+- **现象**：1 seeder（限速 2.5MB/s）+ 1 并行 leecher 场景，ezr 下载均速 0.77MB/s
+  （公平份额 1.25MB/s）；leecher 停止索要后立即恢复满速。单 seeder/多 seeder 场景
+  全部正常，故循环内 refill/claimed/热路径均非根因。
+- **根因**：`PeerMsg::Request` 的服务路径（`read_piece_range` 读盘 + `send` 16KiB
+  Block）内联在引擎任务里。libtorrent leecher 管线可达 500 个在飞请求，每个请求的
+  读盘 await 把整个引擎（全部连接的消息处理、refill、tick）串行阻塞，自身下载被
+  Request 洪流饿死。libtorrent/qBittorrent 的对应解法是 aio 线程池。
+- **处置**：Request 分支改为「预计算读盘计划（upload_read_plan）+ tokio::spawn 任务
+  （read_upload_blocks + 发送）」。三个配套纪律：①上传读必须**独立 open**
+  （`tokio::fs::File::open(path)`），`try_clone` 是 dup——共享 open file description
+  （偏移），与引擎写句柄并发 seek 会互踩（回归测试：serve 前后引擎句柄
+  `stream_position` 不得变化）；②进程级 `Semaphore(128)` 限并发读盘防 fd 洪泛；③
+  发送阶段不持读盘资源，慢对端由 out 通道（cap 64）背压天然限流。cum_up 改为
+  serve 决策时计入（读盘失败才可能多计，量级可忽略）。
+
+## 同 IP 候选去重有两个盲区：入连不查同 IP、无用连接永不重估
+- **现象**：三方同机（seeder/leecher/ezr 全在 127.0.0.1）时 ezr 首连随机落在空
+  leecher，`fill_peer_slots` 的同 IP 去重把 seeder 候选**永久**挡住（0 字节永远等
+  不到），直到 leecher 自己从 seeder 下完转做种才解锁。且入连 accept 无同 IP 检查，
+  一条入连就能占住该 IP 的出连名额。
+- **根因**：同 IP 只连一条本身是 libtorrent `allow_multiple_connections_per_ip=false`
+  的正确口径，但 libtorrent 有配套的 peer 置换机制（inactivity_timeout 等），ezr
+  只有去重没有置换——去重从「防重复」变成「一选定终身」。
+- **处置**：①tick 内空闲置换：`!seeding` 且连接 cum_down 60s（`IDLE_EVICTION_SECS`，
+  对齐 libtorrent inactivity_timeout=60）无新增字节 → 断开（conns.remove 先行，
+  Closed 路径即不计 fails、不触发退避）→ fill_peer_slots 重拨同 IP 下一个候选；
+  ②入连 accept 走 `inbound_admitted`（同 IP 已有连接即拒绝 + 容量上限），入连不再
+  能占住同 IP 出连名额。地址不可解析的既有连接不参与同 IP 判定（容忍手测假地址）。
