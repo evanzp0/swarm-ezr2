@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::app::App;
@@ -139,6 +140,11 @@ impl App {
                 if t.state != TaskState::Downloading {
                     continue;
                 }
+                if t.protocol.is_bt() {
+                    // BT 任务速度由 sample_bt_conn_speed_display 从
+                    // per-conn EMA 汇总（与并发 panel 行同源），不走进度窗口。
+                    continue;
+                }
                 let sample = self.windows.get_mut(&t.id).map(|w| w.rate()).unwrap_or(0.0);
                 let d = self.speed_display.entry(t.id).or_default();
                 d.push(sample);
@@ -197,6 +203,7 @@ impl App {
 
     pub(super) fn sample_bt_conn_speed_display(&mut self) {
         let task_ids: Vec<u32> = self.bt_conns.keys().copied().collect();
+        let mut totals: HashMap<u32, (f64, f64)> = HashMap::new();
         for tid in task_ids {
             let active = self
                 .tasks
@@ -207,6 +214,7 @@ impl App {
                 continue;
             };
             let conn_ids: Vec<usize> = rows.iter().map(|r| r.id).collect();
+            let mut sum = (0.0f64, 0.0f64);
             for cid in conn_ids {
                 let key = (tid, cid);
                 if !active {
@@ -216,14 +224,36 @@ impl App {
                     }
                     continue;
                 }
-                let (down, up) = self
-                    .bt_conn_stats
-                    .get_mut(&key)
-                    .map(|st| (st.down_win.rate(), st.up_win.rate()))
-                    .unwrap_or((0.0, 0.0));
                 if let Some(st) = self.bt_conn_stats.get_mut(&key) {
+                    let (down, up) = (st.down_win.rate(), st.up_win.rate());
                     st.down_ema.push(down);
                     st.up_ema.push(up);
+                    sum.0 += st.down_ema.value();
+                    sum.1 += st.up_ema.value();
+                }
+            }
+            if active {
+                totals.insert(tid, sum);
+            }
+        }
+        // 任务速度 = Σ per-conn EMA（与并发 panel 行完全同源）：单连接时
+        // 任务速度 == 该行速度（构造上相等），多连接时等于各行之和。
+        // 引擎逐块碎片窗口和与逐块事件 upload_speed=0 的旧口径已废除。
+        for t in self.tasks.iter_mut() {
+            if t.protocol.is_bt() && t.state.shows_conns() {
+                match totals.get(&t.id) {
+                    Some(&(down, up)) => {
+                        t.upload_speed = up;
+                        if t.state == TaskState::Downloading {
+                            t.speed = down;
+                        }
+                    }
+                    None => {
+                        t.upload_speed = 0.0;
+                        if t.state == TaskState::Downloading {
+                            t.speed = 0.0;
+                        }
+                    }
                 }
             }
         }

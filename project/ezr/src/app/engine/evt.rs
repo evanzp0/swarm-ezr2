@@ -311,7 +311,6 @@ impl App {
                 partial_blocks,
                 active_blocks,
                 uploaded,
-                upload_speed,
             } => {
                 self.on_bt_progress(
                     id,
@@ -321,7 +320,6 @@ impl App {
                     partial_blocks,
                     active_blocks,
                     uploaded,
-                    upload_speed,
                 );
             }
             Evt::BtDone { id, total } => {

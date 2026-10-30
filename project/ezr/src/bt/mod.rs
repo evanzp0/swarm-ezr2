@@ -48,7 +48,11 @@ pub enum BtTaskCmd {
 
 pub const SEED_DURATION_SECS: f64 = 1800.0;
 
-pub const PEER_PIPELINE: usize = 32;
+/// 每 peer 在飞请求块数上限（×16KiB = 1MiB 窗口）。
+/// 对齐 libtorrent request_queue_time=3s 的动态深窗精神（队列 = 3×下载速率，
+/// cap 500）：固定窗需能吸收 piece 校验/落盘造成的引擎 refill 延迟尖峰，
+/// 32 块（512KiB）在真实大种子上不够；64 块留足余量且内存可忽略。
+pub const PEER_PIPELINE: usize = 64;
 
 pub const REQUEST_BLOCK_LEN: u32 = 16 * 1024;
 

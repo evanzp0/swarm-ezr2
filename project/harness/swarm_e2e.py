@@ -50,7 +50,7 @@ def make_payload(path: Path, size_mb: int) -> None:
             remaining -= n
 
 
-def make_torrent(payload: Path, torrent: Path) -> dict:
+def make_torrent(payload: Path, torrent: Path, piece_size: int = 262144) -> dict:
     import torf
 
     t = torf.Torrent(
@@ -59,7 +59,7 @@ def make_torrent(payload: Path, torrent: Path) -> dict:
             f"http://127.0.0.1:{HTTP_PORT}/announce",
             f"udp://127.0.0.1:{UDP_PORT}/announce",
         ],
-        piece_size=262144,
+        piece_size=piece_size,
     )
     t.generate()
     t.write(torrent)
@@ -279,6 +279,7 @@ def main() -> int:
     ap.add_argument("--payload-mb", type=int, default=4)
     ap.add_argument("--timeout", type=float, default=150.0, help="overall download window seconds")
     ap.add_argument("--keep", action="store_true", help="keep workdir for inspection")
+    ap.add_argument("--piece-kib", type=int, default=256, help="torrent piece size KiB")
     args = ap.parse_args()
     args.ezr_bin = str(Path(args.ezr_bin).resolve())
 
@@ -295,7 +296,7 @@ def main() -> int:
     want_hash = sha256_file(payload)
 
     torrent = workdir / "swarm-payload.torrent"
-    meta = make_torrent(payload, torrent)
+    meta = make_torrent(payload, torrent, piece_size=args.piece_kib * 1024)
     log(f"torrent written: infohash={meta['infohash']} piece={meta['piece_size']}B")
 
     procs: list[subprocess.Popen] = []

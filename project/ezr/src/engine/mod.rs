@@ -132,7 +132,6 @@ pub enum Evt {
         partial_blocks: Vec<u32>,
         active_blocks: Vec<u32>,
         uploaded: u64,
-        upload_speed: f64,
     },
     BtDone {
         id: u32,

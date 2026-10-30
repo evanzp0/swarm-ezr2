@@ -90,3 +90,9 @@
 - **工具陷阱**：`bin/swarm begin` 的输出被管道截断（如 `| head`）时，脚本会因 SIGPIPE
   在写 session 状态前中断，`complete` 报「没有进行中的会话」——begin/complete 输出
   重定向到文件再查看，不要用管道截头。
+
+## harness 速度基准的 piece 粒度压测口径（--piece-kib）
+- `swarm_e2e.py` 新增 `--piece-kib`（默认 256 不变）：速度回归必须补一组小 piece
+  压测（如 `--payload-mb 256 --piece-kib 16` → 16384 pieces）。引擎逐块成本随
+  pieces 数放大，256KiB piece 的千级 pieces 基准全绿不代表真实大种子不塌缩
+  （bug9 轮实证：16k pieces 下旧实现慢 25%）。

@@ -132,7 +132,7 @@
   读 .ezr 填 done_blocks/chunk_done/downloaded（`selected_bytes_of_pieces` 与引擎
   PieceMap.write_plan 同一套覆盖计算），引擎启动校验后以 BtProgress 自愈收敛。
 
-## BT 并发 panel 速度三段管线：与 HTTP 完全同构（消抖动的正解在消费侧）## BT 并发 panel 速度三段管线：与 HTTP 完全同构（消抖动的正解在消费侧）
+## BT 并发 panel 速度三段管线：与 HTTP 完全同构（消抖动的正解在消费侧）
 - **根因**：引擎 `conn_views` 在每条 peer 消息后都调用并重置窗口——「区间瞬时速率 =
   本区间字节/区间时长」，块到达呈突发，逐秒跳变且与任务速度（app 侧 1s 滑窗）口径
   不同，单连接时两处数值明显不匹配。
@@ -140,9 +140,35 @@
   累计值喂 `BtConnSpeedStat.down_win/up_win`（1s SpeedWindow，陈窗重置，离开连接
   retain 回收）；②`sample_bt_conn_speed_display` 每 SPEED_TICK 把滑窗 rate 灌入
   down_ema/up_ema（SmoothedSpeed α=1/5）；③UI 只读 EMA 值（`bt_conn_speeds_of`）。
-  引擎侧 conn_views 的瞬时速率字段保留（tick 汇总上传速度仍消费）但 UI 不再读。
+- **任务速度同源化（bug9 定案）**：BT 任务 `t.speed`/`t.upload_speed` = `Σ
+  per-conn EMA`（`sample_bt_conn_speed_display` 采样时顺带汇总写任务字段）——单连接
+  时任务速度与该行速度构造上相等，多连接等于各行之和。引擎侧上传速度三处旧口径
+  全废：逐块 BtProgress 硬编码 upload_speed=0、tick 用 conn_views 碎片窗口求和、
+  任务下载速度走 verified-piece 粒度进度窗（低速时锯齿与行速度对不上）——
+  `Evt::BtProgress` 已删 upload_speed 字段，BT 任务不再喂进度窗（windows 只属 HTTP）。
 - **不变式**：喂窗义务在事件路径、采样点只读不喂、清理口径四点对齐
   （on_bt_done/on_bt_stopped/remove_task/clear_completed 均调 clear_bt_conn_stats）。
+
+## 逐块 O(P) 热路径是大种子速度塌缩的根因：增量 availability + 缓存选片序 + 事件节流三件套
+- **现象**：loopback 基准（256KiB piece、千级 pieces）ezr≈libtorrent，但真实局域网
+  大种子（数万 pieces）速度塌到 100KB/s 以下且多 peer 时更糟；引擎单任务 CPU 被打满。
+- **根因**：引擎对**每条 peer 消息**（尤其每个 Block）做 O(P)~O(P log P) 全量重算——
+  `availability_map` 遍历全部连接的 has 集合重建 O(Σ|has|)、`issue_requests` 重建
+  wanted_all + 全排序 O(P log P)、逐块 `conn_views`（seeder 检查 O(P)/conn）、逐块
+  BtProgress/BtConns 事件携带 done/partial/active 全集克隆 O(P)×3 并由 app 全量替换。
+  成本 = 块率 × P，块率高（16KiB 块）+ P 大（真实种子）时引擎任务饿死 socket 读取，
+  TCP 窗口塌缩 → 速度崩。loopback 基准小 payload（千级 pieces）测不出——**速度回归
+  必须用小 piece 压测**（harness `--piece-kib 16` → 16k pieces）。
+- **处置三件套**：①`PieceOrderCache` 增量维护「多少 peer 报有」（Bitfield/Have
+  peer_gained、Closed/Disconnect peer_lost，只计 covers 的 piece），按（稀有度,
+  jitter-seed-per-rebuild）缓存排序，dirty 失效；②逐块 refill 只走
+  `refill_visit_order`（partial 按已收块数降序前置 + 缓存序，O(已收块数+跳过数)），
+  done/无报有靠 walk 跳过不触发重建；③BtProgress/BtConns 逐块事件 250ms 节流
+  （`PROGRESS_EMIT_MIN_INTERVAL`，tick 1s 强制发），进度/速度显示粒度足够
+  （qBittorrent 同为秒级刷新）。配套 `PEER_PIPELINE` 32→64（对齐 libtorrent
+  request_queue_time=3s 动态深窗精神，吸收校验/落盘的 refill 尖峰）、tracker
+  numwant 50→200（libtorrent num_want 默认）。16k pieces 压测对照：旧 162.3s vs
+  新 129.8s（256MB loopback，新代码贴 seeder 上限）。
 
 ## 排序键必须轮内恒定：有状态 jitter 触发 sort 的 total order panic（引擎花屏退出根因）
 - **现象**：BT 下载任务启动后片刻报「引擎内部错误: user-provided comparison function does

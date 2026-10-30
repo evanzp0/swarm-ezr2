@@ -15,7 +15,6 @@ impl App {
         partial_blocks: Vec<u32>,
         active_blocks: Vec<u32>,
         uploaded: u64,
-        upload_speed: f64,
     ) {
         let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else {
             return;
@@ -25,7 +24,6 @@ impl App {
         }
         t.downloaded = downloaded;
         t.uploaded = uploaded;
-        t.upload_speed = upload_speed;
         t.probed = true;
         if t.protocol.is_bt() {
             // BT：分块状态全部来自引擎真实报告（done/partial/active 三集合），
@@ -39,7 +37,10 @@ impl App {
         t.done_blocks = done_blocks;
         t.partial_blocks = partial_blocks;
         t.active_blocks = active_blocks;
-        if t.state == TaskState::Downloading {
+        if t.state == TaskState::Downloading && !t.protocol.is_bt() {
+            // BT 任务速度不走进度窗口：任务速度与并发 panel 行同源
+            // （Σ per-conn EMA，见 sample_bt_conn_speed_display），
+            // 逐块喂窗只会让 piece 粒度的 downloaded 增量与行速度对不上。
             if let Some(w) = self.windows.get_mut(&id) {
                 w.push(Instant::now(), downloaded);
             } else {
@@ -134,8 +135,6 @@ impl App {
 
 #[cfg(test)]
 mod bt_progress_speed_tests {
-    use std::time::{Duration, Instant};
-
     use super::super::App;
     use crate::model::{
         sample_task, BtFile, BtTaskData, FailKind, PieceState, Protocol, TaskState,
@@ -168,22 +167,106 @@ mod bt_progress_speed_tests {
     }
 
     #[tokio::test]
-    async fn bt_progress_feeds_speed_window_and_task_speed() {
-        let mut app = make_app("window-fed");
+    async fn bt_progress_does_not_feed_speed_window() {
+        let mut app = make_app("bt-no-window");
         app.tasks.push(bt_task(1, TaskState::Downloading));
-        app.on_bt_progress(1, 4096, 1, vec![], vec![], vec![], 0, 0.0);
-        app.on_bt_progress(1, 8192, 2, vec![0], vec![], vec![], 0, 0.0);
+        app.on_bt_progress(1, 4096, 1, vec![], vec![], vec![], 0);
+        app.on_bt_progress(1, 8192, 2, vec![0], vec![], vec![], 0);
         assert!(
-            app.windows.contains_key(&1),
-            "BT 进度必须喂任务速度滑窗（与 HTTP Evt::Progress 同口径）"
+            !app.windows.contains_key(&1),
+            "BT 任务速度不得来自进度窗口（速度与并发行同源：Σ per-conn EMA）"
         );
-        app.last_speed_tick -= Duration::from_secs(2);
-        app.tick_speed_and_session(Instant::now());
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn bt_task_speed_equals_conn_row_single_conn() {
+        let mut app = make_app("bt-speed-single");
+        app.tasks.push(bt_task(1, TaskState::Downloading));
+        app.on_evt(crate::engine::Evt::BtConns {
+            id: 1,
+            conns: vec![bt_view(1, 1000, false)],
+        })
+        .await;
+        app.on_evt(crate::engine::Evt::BtConns {
+            id: 1,
+            conns: vec![bt_view(1, 3000, false)],
+        })
+        .await;
+        app.sample_bt_conn_speed_display();
+        let (row_down, row_up) = app.bt_conn_speeds_of(1, 1);
+        assert!(row_down > 0.0, "行速度来自滑窗: {row_down}");
+        let t = &app.tasks[0];
+        assert_eq!(
+            t.speed, row_down,
+            "单连接任务下载速度必须等于该行速度（同源 Σ）"
+        );
+        assert_eq!(
+            t.upload_speed, row_up,
+            "单连接任务上传速度必须等于该行上传速度（引擎碎片窗口和与逐块清零已废除）"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn bt_task_speed_sums_conn_rows_multi_conn() {
+        let mut app = make_app("bt-speed-multi");
+        app.tasks.push(bt_task(1, TaskState::Downloading));
+        app.on_evt(crate::engine::Evt::BtConns {
+            id: 1,
+            conns: vec![bt_view(1, 1000, false), bt_view(2, 0, false)],
+        })
+        .await;
+        app.on_evt(crate::engine::Evt::BtConns {
+            id: 1,
+            conns: vec![bt_view(1, 5000, false), bt_view(2, 2000, false)],
+        })
+        .await;
+        app.sample_bt_conn_speed_display();
+        let (d1, u1) = app.bt_conn_speeds_of(1, 1);
+        let (d2, u2) = app.bt_conn_speeds_of(1, 2);
+        let t = &app.tasks[0];
         assert!(
-            app.tasks[0].speed > 0.0,
-            "下载中的 BT 任务速度必须非 0，实际={}",
-            app.tasks[0].speed
+            (t.speed - (d1 + d2)).abs() < 1e-6,
+            "任务下载速度 = Σ 行速度: {} vs {}+{}",
+            t.speed,
+            d1,
+            d2
         );
+        assert!(
+            (t.upload_speed - (u1 + u2)).abs() < 1e-6,
+            "任务上传速度 = Σ 行上传速度"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn bt_seeding_upload_speed_from_conn_rows() {
+        let mut app = make_app("bt-seed-speed");
+        app.tasks.push(bt_task(1, TaskState::Seeding));
+        app.on_evt(crate::engine::Evt::BtConns {
+            id: 1,
+            conns: vec![bt_view(1, 0, false)],
+        })
+        .await;
+        app.on_evt(crate::engine::Evt::BtConns {
+            id: 1,
+            conns: vec![bt_view(1, 0, false)],
+        })
+        .await;
+        app.on_evt(crate::engine::Evt::BtConns {
+            id: 1,
+            conns: vec![bt_view(1, 0, true)],
+        })
+        .await;
+        app.sample_bt_conn_speed_display();
+        let (_, row_up) = app.bt_conn_speeds_of(1, 1);
+        let t = &app.tasks[0];
+        assert_eq!(
+            t.upload_speed, row_up,
+            "做种任务上传速度与并发行同源（shows_conns 含 Seeding）"
+        );
+        assert_eq!(t.speed, 0.0, "做种任务无下载速度");
         app.shutdown().await;
     }
 
@@ -191,7 +274,7 @@ mod bt_progress_speed_tests {
     async fn bt_progress_while_seeding_does_not_recreate_speed_window() {
         let mut app = make_app("seed-no-window");
         app.tasks.push(bt_task(1, TaskState::Seeding));
-        app.on_bt_progress(1, 8192, 2, vec![0], vec![], vec![], 0, 0.0);
+        app.on_bt_progress(1, 8192, 2, vec![0], vec![], vec![], 0);
         assert!(
             !app.windows.contains_key(&1),
             "做种态不重建速度滑窗（on_bt_done 已清窗，滑窗生命周期只属下载态）"
@@ -203,7 +286,7 @@ mod bt_progress_speed_tests {
     async fn bt_progress_sets_real_piece_sets_without_lease_fabrication() {
         let mut app = make_app("bt-sets");
         app.tasks.push(bt_task(1, TaskState::Downloading));
-        app.on_bt_progress(1, 8, 2, vec![0, 2], vec![], vec![1], 0, 0.0);
+        app.on_bt_progress(1, 8, 2, vec![0, 2], vec![], vec![1], 0);
         let t = &app.tasks[0];
         assert!(
             t.connections.is_empty(),
@@ -225,7 +308,7 @@ mod bt_progress_speed_tests {
     async fn bt_progress_partial_piece_shows_yellow_not_empty() {
         let mut app = make_app("bt-partial");
         app.tasks.push(bt_task(1, TaskState::Downloading));
-        app.on_bt_progress(1, 4, 1, vec![0], vec![1], vec![], 0, 0.0);
+        app.on_bt_progress(1, 4, 1, vec![0], vec![1], vec![], 0);
         let v = app.tasks[0].pieces();
         assert_eq!(
             v,
@@ -263,7 +346,7 @@ mod bt_progress_speed_tests {
         // Downloading（新引擎在跑），陈旧终态不得覆盖新引擎进度与集合。
         let mut app = make_app("bt-stop-race");
         app.tasks.push(bt_task(1, TaskState::Downloading));
-        app.on_bt_progress(1, 4096, 2, vec![0, 1], vec![], vec![], 0, 0.0);
+        app.on_bt_progress(1, 4096, 2, vec![0, 1], vec![], vec![], 0);
         app.on_bt_stopped(1, 8, vec![0, 1], vec![]);
         let t = &app.tasks[0];
         assert_eq!(

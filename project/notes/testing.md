@@ -135,3 +135,22 @@
   多 seeder 计数各 ≥1 的轮询等待（deadline 内 sleep 50ms 步进）。
 - 退避时序入账：候选重试冷却 5s×2^fails →「断开后重连」e2e 至少 ~12s（首轮 2s announce
   + 连接失败 + 10s 冷却），deadline 给 30s；不要用 5s 级 deadline 测带退避的行为。
+
+## 事件节流后，小负载 e2e 的进度断言必须等到完成后的 tick
+- **现象**：引擎逐块事件加 250ms 节流后，`engine_downloads_via_udp_tracker_and_seeder`
+  偶发 saw_progress=false——首 announce 的 2s 延迟与 1s tick 节拍对齐，tick 刚刷新
+  last_emit，小负载（<250ms 下完）落在节流窗内，BtDone 先于任何 BtProgress 到达；
+  负载放大或加探针后时序漂移又通过——典型竞速 flaky。
+- **处置**：事件循环不在 BtDone 处 break，继续收到「完成后的 1s tick 必发」的
+  BtProgress/BtConns（downloaded=total>0、连接仍在）再退出断言；节流闸门本身用
+  纯函数单测钉住（`progress_emit_due` 249ms 拒 / 250ms 放），e2e 不测节流时序。
+- **根因**：断言依赖「完成前必有中间事件」的隐含时序假设，而该假设被节流设计
+  合法地打破；e2e 断言只锚定设计保证（tick 必发 + 完成事件必达），不锚定实现细节。
+
+## 新旧二进制同工况对照：备份源码 → checkout HEAD → 独立 target-dir 构建 → 恢复
+- 速度优化的证据链要有「同 harness 同参数新旧对照」：①先 `cp` 改动文件到
+  `.work/tmp/new-src/`（分目录防同名覆盖）；②`git checkout HEAD -- <改动文件>`
+  还原旧实现；③`cargo build --release --target-dir .work/tmp/old-target`
+  （独立 target-dir，不动现行构建缓存）；④跑同一基准；⑤从备份恢复文件重编。
+- 注意：工作树含未提交改动时不要用 `git stash`（会把 harness 等配套改动一起卷走，
+  旧二进制跑不了新参数）；只 checkout 明确列出的改动文件。

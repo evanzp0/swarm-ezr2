@@ -28,6 +28,8 @@ const OPTIMISTIC_INTERVAL_SECS: u64 = 30;
 const UPLOAD_SLOTS: usize = 4;
 const PEER_RETRY_BASE_SECS: u64 = 5;
 const PEER_RETRY_CAP_SECS: u64 = 120;
+const PROGRESS_EMIT_MIN_INTERVAL: Duration = Duration::from_millis(250);
+const TRACKER_NUMWANT: u32 = 200;
 
 enum PeerIn {
     Connected {
@@ -78,6 +80,95 @@ impl ConnStat {
 struct PeerCandidate {
     fails: u32,
     last_try: Option<std::time::Instant>,
+}
+
+/// 全引擎共享的选片缓存：增量维护「多少 peer 报有」并按稀有度缓存
+/// 排序结果。逐块 refill 只走缓存 O(小)，不再每块全量重算
+/// availability（O(Σ|has|)）+ 全排序（O(P log P)）——真实大种子
+/// （数万 piece）下曾把引擎任务 CPU 打满，socket 读取被饿死，速度
+/// 塌到 100KB/s 以下（loopback 小 payload 基准测不出）。
+struct PieceOrderCache {
+    avail: HashMap<u32, usize>,
+    order: Vec<u32>,
+    dirty: bool,
+}
+
+impl PieceOrderCache {
+    fn new() -> Self {
+        Self {
+            avail: HashMap::new(),
+            order: Vec::new(),
+            dirty: true,
+        }
+    }
+
+    fn peer_gained(&mut self, p: u32) {
+        *self.avail.entry(p).or_insert(0) += 1;
+        self.dirty = true;
+    }
+
+    fn peer_lost(&mut self, p: u32) {
+        if let Some(c) = self.avail.get_mut(&p) {
+            *c = c.saturating_sub(1);
+            self.dirty = true;
+        }
+    }
+
+    fn rebuild(&mut self, pmap: &PieceMap) {
+        static ROUND: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seed = ROUND.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut v: Vec<u32> = pmap
+            .covered_pieces()
+            .iter()
+            .copied()
+            .filter(|&p| self.avail.get(&p).copied().unwrap_or(0) > 0)
+            .collect();
+        v.sort_by_key(|&p| (self.avail.get(&p).copied().unwrap_or(0), jitter(p, seed)));
+        self.order = v;
+        self.dirty = false;
+    }
+}
+
+/// 逐块 refill 的访问序：partial piece（按已收块数降序）优先，
+/// 之后按缓存 order（稀有度+jitter）；done/无报有/已在 partial 阶段
+/// 覆盖的 piece 跳过。与旧 order_wanted 的 partial-first 项同义。
+fn refill_visit_order(
+    st_has: &HashSet<u32>,
+    done: &HashSet<u32>,
+    partial: &PartialPieces,
+    cache_order: &[u32],
+) -> Vec<u32> {
+    let mut partials: Vec<u32> = partial
+        .keys()
+        .copied()
+        .filter(|p| !done.contains(p) && st_has.contains(p))
+        .collect();
+    partials.sort_by_key(|&p| std::cmp::Reverse(partial.get(&p).map_or(0, |b| b.len())));
+    partials
+        .into_iter()
+        .chain(
+            cache_order
+                .iter()
+                .copied()
+                .filter(|p| !partial.contains_key(p) && !done.contains(p) && st_has.contains(p)),
+        )
+        .collect()
+}
+
+fn progress_emit_due(last_emit: std::time::Instant, now: std::time::Instant) -> bool {
+    now.duration_since(last_emit) >= PROGRESS_EMIT_MIN_INTERVAL
+}
+
+/// piece 的伪随机权重：同一 (piece, seed) 恒定不变。
+/// 排序键在单次排序内必须稳定，否则 sort_by_key 的 total order
+/// 前提被破坏（panic: user-provided comparison function does not
+/// correctly implement a total order）。
+fn jitter(piece: u32, seed: u64) -> u64 {
+    let mut x = u64::from(piece).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed.rotate_left(17);
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+    x ^= x >> 33;
+    x
 }
 
 impl PeerCandidate {
@@ -219,7 +310,7 @@ pub(crate) async fn run(
                 peer_id,
                 port: listen_port,
                 client: shared.bt_tracker_client(spec.proxy_endpoint.as_ref()),
-                numwant: 50,
+                numwant: TRACKER_NUMWANT,
                 live: live.clone(),
                 completed_notify: completed_notifies[ti].clone(),
             },
@@ -245,6 +336,8 @@ pub(crate) async fn run(
     let mut last_optimistic = std::time::Instant::now();
     let mut optimistic_slot: Option<usize> = None;
     let mut optimistic_cursor: usize = 0;
+    let mut order_cache = PieceOrderCache::new();
+    let mut last_emit = std::time::Instant::now();
 
     loop {
         tokio::select! {
@@ -267,6 +360,9 @@ pub(crate) async fn run(
                         if let Some(st) = conns.remove(&conn_id) {
                             if let Some(ip) = addr_ip(&st.addr) {
                                 shared.blacklist_add(ip);
+                            }
+                            for &p in st.has.iter().filter(|&p| pmap.covers(*p)).collect::<Vec<_>>() {
+                                order_cache.peer_lost(p);
                             }
                             let _ = st.peer_out.send(PeerOut::Drop).await;
                         }
@@ -373,6 +469,9 @@ pub(crate) async fn run(
                     }
                     PeerIn::Closed { reason } => {
                         if let Some(st) = conns.remove(&conn_id) {
+                            for &p in st.has.iter().filter(|&p| pmap.covers(*p)).collect::<Vec<_>>() {
+                                order_cache.peer_lost(p);
+                            }
                             if let Some(key) = addr_sock(&st.addr) {
                                 if reason == "self" || reason == "dup" {
                                     candidates.remove(&key);
@@ -397,6 +496,7 @@ pub(crate) async fn run(
                             &mut downloaded,
                             &mut files_handles,
                             &mut partial,
+                            &mut order_cache,
                         )
                         .await;
                         if downloaded != prev_downloaded {
@@ -405,18 +505,24 @@ pub(crate) async fn run(
                                 st.downloaded = downloaded;
                                 st.left = pmap.selected_total().saturating_sub(downloaded);
                             }
-                            let views = conn_views(&mut conns, pmap.covered_pieces());
-                            let _ = evt_tx.send(Evt::BtProgress {
-                                id,
-                                downloaded,
-                                chunk_done: done.len() as u32,
-                                done_blocks: done.iter().copied().collect::<Vec<_>>(),
-                                partial_blocks: partial_piece_list(&partial, &done),
-                                active_blocks: inflight_piece_list(&conns, &done),
-                                uploaded: uploaded_total(&conns),
-                                upload_speed: 0.0,
-                            }).await;
-                            let _ = evt_tx.send(Evt::BtConns { id, conns: views }).await;
+                            // 逐块事件节流：250ms 窗内的块到达不重复发 BtProgress/BtConns。
+                            // 大种子下逐块克隆 done/partial/active 全集（O(P)×3）与逐块
+                            // conn_views 曾随块率线性放大引擎/应用两侧开销；250ms 粒度
+                            // 对进度与速度显示足够（qBittorrent 同为秒级刷新）。
+                            if progress_emit_due(last_emit, std::time::Instant::now()) {
+                                last_emit = std::time::Instant::now();
+                                let views = conn_views(&mut conns, pmap.covered_pieces());
+                                let _ = evt_tx.send(Evt::BtProgress {
+                                    id,
+                                    downloaded,
+                                    chunk_done: done.len() as u32,
+                                    done_blocks: done.iter().copied().collect::<Vec<_>>(),
+                                    partial_blocks: partial_piece_list(&partial, &done),
+                                    active_blocks: inflight_piece_list(&conns, &done),
+                                    uploaded: uploaded_total(&conns),
+                                }).await;
+                                let _ = evt_tx.send(Evt::BtConns { id, conns: views }).await;
+                            }
                         }
                         if !seeding && all_selected_done(&done, &pmap) {
                             seeding = true;
@@ -448,9 +554,9 @@ pub(crate) async fn run(
                 }
                 for cid in stale {
                     let claimed = claimed_blocks(&conns, &partial);
-                    let availability = availability_map(&conns);
                     if let Some(st) = conns.get_mut(&cid) {
-                        issue_requests(cid, st, &claimed, &availability, &pmap, &done, &partial).await;
+                        issue_requests(cid, st, &claimed, &pmap, &done, &partial, &mut order_cache)
+                            .await;
                     }
                 }
                 {
@@ -488,8 +594,8 @@ pub(crate) async fn run(
                     .await;
                     let _ = evt_tx.send(Evt::BtDone { id, total: pmap.selected_total() }).await;
                 }
+                last_emit = now;
                 let views = conn_views(&mut conns, pmap.covered_pieces());
-                let sum_up_speed: f64 = views.iter().map(|v| v.up_speed).sum();
                 let _ = evt_tx.send(Evt::BtProgress {
                     id,
                     downloaded,
@@ -498,7 +604,6 @@ pub(crate) async fn run(
                     partial_blocks: partial_piece_list(&partial, &done),
                     active_blocks: inflight_piece_list(&conns, &done),
                     uploaded: uploaded_total(&conns),
-                    upload_speed: sum_up_speed,
                 }).await;
                 let _ = evt_tx.send(Evt::BtConns { id, conns: views }).await;
             }
@@ -888,6 +993,7 @@ async fn handle_peer_msg(
     downloaded: &mut u64,
     files: &mut HashMap<usize, tokio::fs::File>,
     partial: &mut PartialPieces,
+    order: &mut PieceOrderCache,
 ) {
     let Some(st) = conns.get_mut(&conn_id) else {
         return;
@@ -897,7 +1003,10 @@ async fn handle_peer_msg(
             for (i, b) in bits.iter().enumerate() {
                 for bit in 0..8u32 {
                     if b & (0x80 >> bit) != 0 {
-                        st.has.insert((i as u32) * 8 + bit);
+                        let p = (i as u32) * 8 + bit;
+                        if st.has.insert(p) && pmap.covers(p) {
+                            order.peer_gained(p);
+                        }
                     }
                 }
             }
@@ -907,18 +1016,18 @@ async fn handle_peer_msg(
             }
         }
         peer::PeerMsg::Have(p) => {
-            st.has.insert(p);
+            if st.has.insert(p) && pmap.covers(p) {
+                order.peer_gained(p);
+            }
             let want = !done.contains(&p) && pmap.covers(p);
             if want {
                 send(conn_id, st, peer::PeerMsg::Interested).await;
                 if !st.peer_choking {
-                    // 按需计算：claimed/availability 只在确实要补请求时构建，
+                    // 按需计算：claimed 只在确实要补请求时构建，
                     // 控制消息（KeepAlive/Request/Cancel/…）零开销直达。
                     let claimed = claimed_blocks(conns, partial);
-                    let availability = availability_map(conns);
                     if let Some(st) = conns.get_mut(&conn_id) {
-                        issue_requests(conn_id, st, &claimed, &availability, pmap, done, partial)
-                            .await;
+                        issue_requests(conn_id, st, &claimed, pmap, done, partial, order).await;
                     }
                 }
             }
@@ -926,9 +1035,8 @@ async fn handle_peer_msg(
         peer::PeerMsg::Unchoke => {
             st.peer_choking = false;
             let claimed = claimed_blocks(conns, partial);
-            let availability = availability_map(conns);
             if let Some(st) = conns.get_mut(&conn_id) {
-                issue_requests(conn_id, st, &claimed, &availability, pmap, done, partial).await;
+                issue_requests(conn_id, st, &claimed, pmap, done, partial, order).await;
             }
         }
         peer::PeerMsg::Choke => {
@@ -938,6 +1046,7 @@ async fn handle_peer_msg(
         peer::PeerMsg::Block { index, begin, data } => {
             on_block(
                 conn_id, index, begin, data, conns, pmap, spec, done, downloaded, files, partial,
+                order,
             )
             .await;
         }
@@ -1047,48 +1156,6 @@ fn claimed_blocks(
     claimed
 }
 
-fn availability_map(conns: &HashMap<usize, ConnStat>) -> HashMap<u32, usize> {
-    let mut m: HashMap<u32, usize> = HashMap::new();
-    for st in conns.values() {
-        for &p in &st.has {
-            *m.entry(p).or_insert(0) += 1;
-        }
-    }
-    m
-}
-
-/// piece 的伪随机权重：同一 (piece, seed) 恒定不变。
-/// 排序键在单次排序内必须稳定，否则 sort_by_key 的 total order
-/// 前提被破坏（panic: user-provided comparison function does not
-/// correctly implement a total order）。
-fn jitter(piece: u32, seed: u64) -> u64 {
-    let mut x = u64::from(piece).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed.rotate_left(17);
-    x ^= x >> 33;
-    x = x.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
-    x ^= x >> 33;
-    x
-}
-
-fn order_wanted(
-    wanted: &[u32],
-    partial: &PartialPieces,
-    availability: &HashMap<u32, usize>,
-) -> Vec<u32> {
-    // 每轮选片取一次随机种子：排序键在一轮内恒定（total order 成立），
-    // 轮间换种使同优先级 piece 的次序多样化（libtorrent 随机选片思路）。
-    static ROUND: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let seed = ROUND.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let mut v = wanted.to_vec();
-    v.sort_by_key(|&p| {
-        (
-            std::cmp::Reverse(partial.get(&p).map_or(0, |b| b.len())),
-            availability.get(&p).copied().unwrap_or(0),
-            jitter(p, seed),
-        )
-    });
-    v
-}
-
 fn endgame_active(claimed: &HashSet<(u32, u32)>, pmap: &PieceMap, done: &HashSet<u32>) -> bool {
     if done.len() >= pmap.covered_pieces().len() {
         return false;
@@ -1113,33 +1180,30 @@ async fn issue_requests(
     conn_id: usize,
     st: &mut ConnStat,
     claimed: &HashSet<(u32, u32)>,
-    availability: &HashMap<u32, usize>,
     pmap: &PieceMap,
     done: &HashSet<u32>,
     partial: &PartialPieces,
+    order: &mut PieceOrderCache,
 ) {
     if st.peer_choking || st.inflight.len() >= PEER_PIPELINE {
         return;
     }
-    let wanted_all: Vec<u32> = pmap
-        .covered_pieces()
-        .iter()
-        .copied()
-        .filter(|p| !done.contains(p) && st.has.contains(p))
-        .collect();
-    if wanted_all.is_empty() {
+    if order.dirty {
+        order.rebuild(pmap);
+    }
+    let visit = refill_visit_order(&st.has, done, partial, &order.order);
+    if visit.is_empty() {
         return;
     }
-    let wanted = order_wanted(&wanted_all, partial, availability);
     let mut issued = 0usize;
-    for &piece in &wanted {
+    for &piece in &visit {
         issued += request_blocks_of_piece(conn_id, st, claimed, pmap, piece, false).await;
         if st.inflight.len() >= PEER_PIPELINE {
             return;
         }
     }
     if issued == 0 && endgame_active(claimed, pmap, done) {
-        for &piece in &wanted {
+        for &piece in &visit {
             request_blocks_of_piece(conn_id, st, claimed, pmap, piece, true).await;
             if st.inflight.len() >= PEER_PIPELINE {
                 return;
@@ -1303,6 +1367,7 @@ async fn on_block(
     downloaded: &mut u64,
     files: &mut HashMap<usize, tokio::fs::File>,
     partial: &mut PartialPieces,
+    order: &mut PieceOrderCache,
 ) {
     let mut st = match conns.remove(&conn_id) {
         Some(s) => s,
@@ -1326,9 +1391,8 @@ async fn on_block(
     if done.contains(&index) {
         conns.insert(conn_id, st);
         let claimed = claimed_blocks(conns, partial);
-        let availability = availability_map(conns);
         if let Some(st) = conns.get_mut(&conn_id) {
-            issue_requests(conn_id, st, &claimed, &availability, pmap, done, partial).await;
+            issue_requests(conn_id, st, &claimed, pmap, done, partial, order).await;
         }
         return;
     }
@@ -1387,9 +1451,8 @@ async fn on_block(
     }
     conns.insert(conn_id, st);
     let claimed = claimed_blocks(conns, partial);
-    let availability = availability_map(conns);
     if let Some(st) = conns.get_mut(&conn_id) {
-        issue_requests(conn_id, st, &claimed, &availability, pmap, done, partial).await;
+        issue_requests(conn_id, st, &claimed, pmap, done, partial, order).await;
     }
 }
 
@@ -1985,7 +2048,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn engine_downloads_via_udp_tracker_and_seeder() {
         let piece_len = 16 * 1024;
-        let data: Vec<u8> = (0..40_960usize).map(|i| (i % 251) as u8).collect();
+        let data: Vec<u8> = (0..8 * 1024 * 1024usize).map(|i| (i % 251) as u8).collect();
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-bteng-e2e");
         let save_dir = dir.to_string_lossy().into_owned();
 
@@ -2026,6 +2089,7 @@ mod tests {
 
         let mut saw_progress = false;
         let mut saw_conns = false;
+        let mut done_seen = false;
         let deadline = std::time::Instant::now() + Duration::from_secs(20);
         loop {
             let remain = deadline.saturating_duration_since(std::time::Instant::now());
@@ -2055,13 +2119,19 @@ mod tests {
                 Evt::BtDone { id, total } => {
                     assert_eq!(id, 77);
                     assert_eq!(total, data.len() as u64);
-                    break;
+                    done_seen = true;
                 }
                 Evt::BtFailed { reason, .. } => panic!("意外失败：{reason}"),
                 _ => {}
             }
+            // 逐块事件 250ms 节流后，小负载可能在窗内完成而看不到中间
+            // 进度事件；完成后的 1s tick 必发 BtProgress，等到它再断言。
+            if done_seen && saw_progress && saw_conns {
+                break;
+            }
         }
-        assert!(saw_progress, "进度事件有落盘量");
+        assert!(done_seen, "下载完成事件在位");
+        assert!(saw_progress, "进度事件有落盘量（完成后的 tick 必发）");
         assert!(saw_conns, "连接明细事件在位");
         let out = std::fs::read(format!("{save_dir}/e2e.bin")).unwrap();
         assert_eq!(out, data, "产物与 seeder 数据逐字节一致");
@@ -2638,7 +2708,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn bt_conns_mark_full_bitfield_peer_as_seeder() {
         let piece_len = 16 * 1024;
-        let data: Vec<u8> = (0..20_480usize).map(|i| (i % 199) as u8).collect();
+        let data: Vec<u8> = (0..8 * 1024 * 1024usize).map(|i| (i % 199) as u8).collect();
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-btsc-seederflag");
         let save_dir = dir.to_string_lossy().into_owned();
 
@@ -2698,7 +2768,10 @@ mod tests {
                         break;
                     }
                 }
-                Evt::BtDone { .. } => break,
+                // 逐块事件 250ms 节流后，全量 bitfield 的 seeder 标志
+                // 最早也随第一个节流后的 BtConns 到达；BtDone 不提前退出，
+                // 完成后的 1s tick 必发 BtConns。
+                Evt::BtDone { .. } => {}
                 Evt::BtFailed { reason, .. } => panic!("意外失败：{reason}"),
                 _ => {}
             }
@@ -2713,44 +2786,41 @@ mod tests {
     fn picker_prefers_partial_piece_closest_to_completion() {
         let mut partial: PartialPieces = HashMap::new();
         partial.insert(3, BTreeMap::from([(0u32, vec![0u8; 16])]));
-        let availability = HashMap::from([(1u32, 1usize), (3u32, 5usize)]);
-        let order = order_wanted(&[1, 3], &partial, &availability);
+        let has: HashSet<u32> = HashSet::from([1, 3]);
+        let done: HashSet<u32> = HashSet::new();
+        let visit = refill_visit_order(&has, &done, &partial, &[1, 3]);
         assert_eq!(
-            order.first(),
+            visit.first(),
             Some(&3),
-            "部分到达的 piece 优先（尽管它更常见）"
+            "部分到达的 piece 优先（尽管它在缓存序中靠后）"
         );
     }
 
     #[test]
     fn picker_rarest_first_among_equally_partial() {
-        let partial: PartialPieces = HashMap::new();
-        let availability = HashMap::from([(7u32, 3usize), (9u32, 1usize)]);
-        let order = order_wanted(&[7, 9], &partial, &availability);
-        assert_eq!(order, vec![9, 7], "稀有度低（副本少）的 piece 先选");
+        let files = vec![BtFile {
+            path: "a.bin".into(),
+            size: 320 * 1024,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 32 * 1024);
+        let mut cache = PieceOrderCache::new();
+        cache.peer_gained(7);
+        cache.peer_gained(9);
+        cache.peer_gained(7);
+        cache.peer_gained(7);
+        cache.rebuild(&pmap);
+        let pos = |p: u32| cache.order.iter().position(|&x| x == p).unwrap();
+        assert!(
+            pos(9) < pos(7),
+            "稀有度低（副本少）的 piece 先选：9（1 份）在 7（3 份）前"
+        );
     }
 
     #[test]
     fn jitter_is_deterministic_per_seed() {
         assert_eq!(jitter(7, 42), jitter(7, 42), "同 (piece, seed) 键必须恒定");
         assert_ne!(jitter(7, 1), jitter(7, 2), "不同种子应产生不同键");
-    }
-
-    #[test]
-    fn order_wanted_large_input_total_order() {
-        // 回归：jitter 曾用全局自增计数器作排序键，键在排序过程中漂移，
-        // 触发 sort 的 total order 断言 panic（引擎内部错误→界面花屏）。
-        // 大输入下排序应稳定完成，且结果是 wanted 的一个排列（不丢不重）。
-        let partial: PartialPieces = HashMap::new();
-        let availability: HashMap<u32, usize> = HashMap::new();
-        let wanted: Vec<u32> = (0..8192u32).collect();
-        let order = order_wanted(&wanted, &partial, &availability);
-        let mut as_multiset = order.clone();
-        as_multiset.sort_unstable();
-        assert_eq!(
-            as_multiset, wanted,
-            "排序结果必须是 wanted 的排列（比较器满足 total order）"
-        );
     }
 
     #[test]
@@ -2778,6 +2848,121 @@ mod tests {
         assert!(
             !endgame_active(&full, &pmap, &done_all),
             "全部完成后不进 endgame"
+        );
+    }
+
+    #[test]
+    fn piece_order_cache_dirty_on_gain_and_loss() {
+        let files = vec![BtFile {
+            path: "a.bin".into(),
+            size: 64 * 1024,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 32 * 1024);
+        let mut cache = PieceOrderCache::new();
+        assert!(cache.dirty, "初始即待重建");
+        cache.rebuild(&pmap);
+        assert!(!cache.dirty, "重建后干净");
+        assert!(cache.order.is_empty(), "无人报有的 piece 不进 order");
+        cache.peer_gained(1);
+        assert!(cache.dirty, "Have/Bitfield 报有必须标脏");
+        cache.rebuild(&pmap);
+        assert_eq!(cache.order, vec![1], "重建后纳入新报有 piece");
+        cache.peer_lost(1);
+        assert!(cache.dirty, "连接关闭失去报有必须标脏");
+        cache.rebuild(&pmap);
+        assert!(cache.order.is_empty(), "失去最后报有者后退出 order");
+    }
+
+    #[test]
+    fn piece_order_cache_rebuild_rarest_first() {
+        let files = vec![BtFile {
+            path: "a.bin".into(),
+            size: 96 * 1024,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 32 * 1024);
+        let mut cache = PieceOrderCache::new();
+        for p in [0u32, 1, 2] {
+            cache.peer_gained(p);
+        }
+        cache.peer_gained(1);
+        cache.peer_gained(1);
+        cache.rebuild(&pmap);
+        let pos = |p: u32| cache.order.iter().position(|&x| x == p).unwrap();
+        assert_eq!(cache.order.len(), 3, "全部报有 piece 在 order 中");
+        assert!(
+            pos(0) < pos(1) && pos(2) < pos(1),
+            "副本最少的 piece 先于 3 副本的 piece"
+        );
+    }
+
+    #[test]
+    fn piece_order_cache_rebuild_is_permutation_of_covered() {
+        let files = vec![BtFile {
+            path: "a.bin".into(),
+            size: 256 * 1024,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 32 * 1024);
+        let mut cache = PieceOrderCache::new();
+        for p in pmap.covered_pieces().iter().copied() {
+            cache.peer_gained(p);
+        }
+        cache.rebuild(&pmap);
+        let mut as_multiset = cache.order.clone();
+        as_multiset.sort_unstable();
+        assert_eq!(
+            as_multiset,
+            pmap.covered_pieces().to_vec(),
+            "重建结果是 covered pieces 的排列（比较器 total order，大输入不 panic）"
+        );
+    }
+
+    #[test]
+    fn refill_visit_order_partial_first_then_cache_order() {
+        let partial: PartialPieces = HashMap::from([
+            (
+                3u32,
+                BTreeMap::from([(0u32, vec![0u8; 16]), (16384u32, vec![0u8; 16])]),
+            ),
+            (5u32, BTreeMap::from([(0u32, vec![0u8; 16])])),
+        ]);
+        let done: HashSet<u32> = HashSet::from([9]);
+        let has: HashSet<u32> = HashSet::from([3, 5, 7, 9]);
+        let cache_order = vec![9u32, 7, 5, 3];
+        let visit = refill_visit_order(&has, &done, &partial, &cache_order);
+        assert_eq!(
+            visit,
+            vec![3, 5, 7],
+            "partial 优先（3 已收 2 块 > 5 的 1 块），缓存序跳过 partial/done"
+        );
+    }
+
+    #[test]
+    fn progress_emit_due_throttles_bursts() {
+        let t0 = std::time::Instant::now();
+        assert!(!progress_emit_due(t0, t0), "刚发过不再发");
+        assert!(
+            !progress_emit_due(t0, t0 + Duration::from_millis(249)),
+            "249ms 内节流"
+        );
+        assert!(
+            progress_emit_due(t0, t0 + Duration::from_millis(250)),
+            "250ms 到点放行"
+        );
+    }
+
+    #[test]
+    fn bt_pipeline_and_throttle_constants() {
+        assert_eq!(
+            PEER_PIPELINE, 64,
+            "管线深度 1MiB：对齐 libtorrent request_queue_time 动态深窗精神，吸收引擎校验尖峰"
+        );
+        assert_eq!(
+            PROGRESS_EMIT_MIN_INTERVAL,
+            Duration::from_millis(250),
+            "逐块事件节流 250ms（qBittorrent UI 同为秒级刷新）"
         );
     }
 
@@ -2955,6 +3140,7 @@ mod tests {
             &mut downloaded,
             &mut handles,
             &mut partial,
+            &mut PieceOrderCache::new(),
         )
         .await;
         assert!(
@@ -2979,6 +3165,7 @@ mod tests {
             &mut downloaded,
             &mut handles,
             &mut partial,
+            &mut PieceOrderCache::new(),
         )
         .await;
         match rx_a.try_recv() {
