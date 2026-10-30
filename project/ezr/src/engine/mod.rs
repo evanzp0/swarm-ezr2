@@ -16,7 +16,7 @@ pub use error::classify_reqwest;
 #[cfg(test)]
 #[allow(unused_imports)]
 pub use error::parse_retry_after_header;
-pub use supervisor::{BtSpec, TaskSpec, VerifySpec};
+pub use supervisor::{BtSpec, BtTunables, TaskSpec, VerifySpec};
 #[cfg(test)]
 #[allow(unused_imports)]
 pub use throttle::Throttle;
@@ -47,6 +47,10 @@ pub enum Cmd {
     },
     StartBt {
         spec: Box<supervisor::BtSpec>,
+    },
+    BtUpdateTrackers {
+        id: u32,
+        trackers: Vec<String>,
     },
     PauseBt {
         id: u32,
@@ -186,6 +190,8 @@ pub(crate) struct EngineShared {
     clients: std::sync::Mutex<HashMap<String, reqwest::Client>>,
     throttle: Arc<throttle::Throttle>,
     blacklist: std::sync::Mutex<HashSet<IpAddr>>,
+    grace: std::time::Duration,
+    upload_read_permits: Arc<tokio::sync::Semaphore>,
 }
 
 impl EngineShared {
@@ -204,6 +210,10 @@ impl EngineShared {
         self.client_for(ep)
     }
 
+    pub(crate) fn upload_read_permits(&self) -> Arc<tokio::sync::Semaphore> {
+        self.upload_read_permits.clone()
+    }
+
     pub(crate) fn client_for(&self, ep: Option<&crate::model::ProxyEndpoint>) -> reqwest::Client {
         let Some(ep) = ep else {
             return self.client.clone();
@@ -213,7 +223,7 @@ impl EngineShared {
         if let Some(c) = map.get(&key) {
             return c.clone();
         }
-        let client = build_endpoint_client(ep).unwrap_or_else(|| self.client.clone());
+        let client = build_endpoint_client(ep, self.grace).unwrap_or_else(|| self.client.clone());
         map.insert(key, client.clone());
         client
     }
@@ -242,7 +252,10 @@ fn socks5_auth_url(base: &str, user: &str, pass: &str) -> Option<String> {
     Some(u.to_string())
 }
 
-fn build_endpoint_client(ep: &crate::model::ProxyEndpoint) -> Option<reqwest::Client> {
+fn build_endpoint_client(
+    ep: &crate::model::ProxyEndpoint,
+    grace: std::time::Duration,
+) -> Option<reqwest::Client> {
     let px = match ep.kind {
         crate::model::config::ProxyKind::Socks5 => {
             let target = match (&ep.username, &ep.password) {
@@ -261,16 +274,16 @@ fn build_endpoint_client(ep: &crate::model::ProxyEndpoint) -> Option<reqwest::Cl
             px
         }
     };
-    base_client_builder().proxy(px).build().ok()
+    base_client_builder(grace).proxy(px).build().ok()
 }
 
-fn base_client_builder() -> reqwest::ClientBuilder {
+fn base_client_builder(grace: std::time::Duration) -> reqwest::ClientBuilder {
     let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(10))
         .no_proxy()
         .connect_timeout(std::time::Duration::from_secs(15))
         .read_timeout(std::time::Duration::from_secs(30));
-    if let Ok(resolver) = dns::BuiltinResolver::try_system() {
+    if let Ok(resolver) = dns::BuiltinResolver::try_system_with_grace(grace) {
         builder = builder.dns_resolver(Arc::new(resolver));
     }
     builder
@@ -283,12 +296,21 @@ pub struct EngineHandle {
 
 impl EngineHandle {
     pub fn start(cfg: &crate::model::config::Config, evt_tx: mpsc::Sender<Evt>) -> EngineHandle {
-        let client = base_client_builder().build().expect("HTTP 客户端构建失败");
+        let grace = std::time::Duration::from_millis(cfg.dns_race_grace_ms);
+        let client = base_client_builder(grace).build().expect("HTTP 客户端构建失败");
         let shared = Arc::new(EngineShared {
             client,
             clients: std::sync::Mutex::new(HashMap::new()),
-            throttle: Arc::new(throttle::Throttle::new(cfg.max_speed)),
+            throttle: Arc::new(throttle::Throttle::with_params(
+                cfg.max_speed,
+                cfg.throttle_burst_secs,
+                cfg.throttle_sleep_ms,
+            )),
             blacklist: std::sync::Mutex::new(HashSet::new()),
+            grace,
+            upload_read_permits: Arc::new(tokio::sync::Semaphore::new(
+                cfg.upload_read_concurrency,
+            )),
         });
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>(64);
         tokio::spawn(main_loop(shared, cmd_rx, evt_tx));
@@ -373,6 +395,10 @@ async fn handle_cmd(
         Cmd::PauseBt { id } => bt_send(bt_tasks, id, crate::bt::BtTaskCmd::Pause),
         Cmd::CancelBt { id } => bt_send(bt_tasks, id, crate::bt::BtTaskCmd::Cancel),
         Cmd::StopSeed { id } => bt_send(bt_tasks, id, crate::bt::BtTaskCmd::StopSeed),
+        Cmd::BtUpdateTrackers { id, trackers } => {
+            bt_send(bt_tasks, id, crate::bt::BtTaskCmd::UpdateTrackers(trackers));
+            false
+        }
         Cmd::BtDisconnect { id, conn } => {
             bt_send(bt_tasks, id, crate::bt::BtTaskCmd::Disconnect(conn));
             false
@@ -522,7 +548,7 @@ async fn shutdown_all_bt(bt_tasks: &mut HashMap<u32, mpsc::Sender<crate::bt::BtT
 
 #[cfg(test)]
 pub(crate) fn shared_for_tests() -> Arc<EngineShared> {
-    let client = base_client_builder()
+    let client = base_client_builder(dns::GRACE)
         .build()
         .expect("测试 HTTP 客户端构建失败");
     Arc::new(EngineShared {
@@ -530,6 +556,10 @@ pub(crate) fn shared_for_tests() -> Arc<EngineShared> {
         clients: std::sync::Mutex::new(HashMap::new()),
         throttle: Arc::new(throttle::Throttle::new(0)),
         blacklist: std::sync::Mutex::new(HashSet::new()),
+        grace: dns::GRACE,
+        upload_read_permits: Arc::new(tokio::sync::Semaphore::new(
+            crate::model::config::DEFAULT_UPLOAD_READ_CONCURRENCY,
+        )),
     })
 }
 
@@ -543,6 +573,10 @@ mod main_loop_tests {
             clients: std::sync::Mutex::new(HashMap::new()),
             throttle: Arc::new(throttle::Throttle::new(0)),
             blacklist: std::sync::Mutex::new(HashSet::new()),
+            grace: dns::GRACE,
+            upload_read_permits: Arc::new(tokio::sync::Semaphore::new(
+                crate::model::config::DEFAULT_UPLOAD_READ_CONCURRENCY,
+            )),
         }
     }
 
@@ -564,6 +598,8 @@ mod main_loop_tests {
             keep_name: false,
             added_at: 0,
             proxy_endpoint: None,
+            progress_tick_ms: 100,
+            sidecar_flush_secs: 2,
         }
     }
 
@@ -850,14 +886,14 @@ mod proxy_auth_tests {
             Some("u"),
             Some("p"),
         );
-        assert!(build_endpoint_client(&e).is_some(), "socks5 带凭证 → Some");
+        assert!(build_endpoint_client(&e, dns::GRACE).is_some(), "socks5 带凭证 → Some");
     }
 
     #[test]
     fn build_client_socks5_without_credentials_defensive() {
         let e = ep(ProxyKind::Socks5, "socks5://127.0.0.1:1080", None, None);
         assert!(
-            build_endpoint_client(&e).is_some(),
+            build_endpoint_client(&e, dns::GRACE).is_some(),
             "socks5 无凭证防御 → Some"
         );
     }
@@ -865,7 +901,7 @@ mod proxy_auth_tests {
     #[test]
     fn build_client_http_regression() {
         let anon = ep(ProxyKind::Http, "http://127.0.0.1:8080", None, None);
-        assert!(build_endpoint_client(&anon).is_some(), "http 匿名 → Some");
+        assert!(build_endpoint_client(&anon, dns::GRACE).is_some(), "http 匿名 → Some");
         let auth = ep(
             ProxyKind::Http,
             "http://127.0.0.1:8080",
@@ -873,7 +909,7 @@ mod proxy_auth_tests {
             Some("p"),
         );
         assert!(
-            build_endpoint_client(&auth).is_some(),
+            build_endpoint_client(&auth, dns::GRACE).is_some(),
             "http 成对凭证 → Some"
         );
     }
@@ -887,10 +923,10 @@ mod proxy_auth_tests {
             Some("p"),
         );
         assert!(
-            build_endpoint_client(&auth).is_some(),
+            build_endpoint_client(&auth, dns::GRACE).is_some(),
             "https 成对凭证 → Some"
         );
         let anon = ep(ProxyKind::Https, "https://127.0.0.1:8443", None, None);
-        assert!(build_endpoint_client(&anon).is_some(), "https 匿名 → Some");
+        assert!(build_endpoint_client(&anon, dns::GRACE).is_some(), "https 匿名 → Some");
     }
 }

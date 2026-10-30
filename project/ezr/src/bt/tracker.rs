@@ -259,8 +259,6 @@ const fn be32(b: &[u8]) -> u32 {
 }
 
 const UDP_MAGIC: u64 = 0x417_2710_1980;
-const UDP_BASE_TIMEOUT_SECS: u64 = 15;
-const UDP_RETRIES: u32 = 3;
 const UDP_RECV_BUF: usize = 4096;
 
 pub async fn announce_udp(
@@ -268,14 +266,34 @@ pub async fn announce_udp(
     host: &str,
     port: u16,
     p: &AnnounceParams,
+    base_timeout_secs: u64,
+    retries: u32,
 ) -> Result<TrackerResponse, BtError> {
     let addr = resolve_udp_target(host, port).await?;
     let connect_txid = rand_u32();
     let req = build_connect_request(connect_txid);
-    let conn_id = udp_roundtrip(&sock, addr, &req, connect_txid, parse_connect_response).await?;
+    let conn_id = udp_roundtrip(
+        &sock,
+        addr,
+        &req,
+        connect_txid,
+        parse_connect_response,
+        base_timeout_secs,
+        retries,
+    )
+    .await?;
     let announce_txid = rand_u32();
     let req = build_announce_request(conn_id, announce_txid, p);
-    udp_roundtrip(&sock, addr, &req, announce_txid, parse_announce_response).await
+    udp_roundtrip(
+        &sock,
+        addr,
+        &req,
+        announce_txid,
+        parse_announce_response,
+        base_timeout_secs,
+        retries,
+    )
+    .await
 }
 
 async fn resolve_udp_target(host: &str, port: u16) -> Result<SocketAddr, BtError> {
@@ -378,11 +396,13 @@ async fn udp_roundtrip<T>(
     req: &[u8],
     txid: u32,
     parse: UdpParser<T>,
+    base_timeout_secs: u64,
+    retries: u32,
 ) -> Result<T, BtError> {
-    let mut wait_secs = UDP_BASE_TIMEOUT_SECS;
+    let mut wait_secs = base_timeout_secs;
     let mut buf = vec![0u8; UDP_RECV_BUF];
     let mut last_err: Option<BtError> = None;
-    for attempt in 0..=UDP_RETRIES {
+    for attempt in 0..=retries {
         if attempt > 0 {
             wait_secs = wait_secs.saturating_mul(2);
         }
@@ -750,7 +770,17 @@ mod tests {
             numwant: 50,
         };
         let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let handle = tokio::spawn(async move { announce_udp(sock, "127.0.0.1", tport, &p).await });
+        let handle = tokio::spawn(async move {
+            announce_udp(
+                sock,
+                "127.0.0.1",
+                tport,
+                &p,
+                crate::model::config::DEFAULT_UDP_BASE_TIMEOUT_SECS,
+                crate::model::config::DEFAULT_UDP_RETRIES,
+            )
+            .await
+        });
         let mut buf = [0u8; 512];
         let (n, from) = tracker.recv_from(&mut buf).await.unwrap();
         assert_eq!(n, 16);
@@ -835,7 +865,15 @@ mod tests {
             event: None,
             numwant: 50,
         };
-        let res = announce_udp(sock, "127.0.0.1", port, &p).await;
+        let res = announce_udp(
+        sock,
+        "127.0.0.1",
+        port,
+        &p,
+        crate::model::config::DEFAULT_UDP_BASE_TIMEOUT_SECS,
+        crate::model::config::DEFAULT_UDP_RETRIES,
+    )
+    .await;
         let err = res.expect_err("静默 tracker 应在重试耗尽后判失败");
         assert!(err.to_string().contains("无响应"), "应报无响应：{err}");
     }

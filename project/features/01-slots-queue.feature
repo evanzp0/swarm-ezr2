@@ -17,7 +17,7 @@
 Feature: 01-slots-queue 状态机 · 下载槽位与排队调度
 
   期号 01。依据 project/mission/phase-01.md FR-01-30~34 与 D12 定案（校验中占槽）。
-  槽位默认 5（可配置 download_slots）；占用 = 下载中 ∪ 校验中 ∪ 待自动重试失败 ∪ 已获槽等待。
+  槽位默认 5（可配置 [common] 表 download_slots，v1.17 三大表重构）；占用 = 下载中 ∪ 校验中 ∪ 待自动重试失败 ∪ 已获槽等待。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）

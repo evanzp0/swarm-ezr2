@@ -12,8 +12,8 @@ use super::{
 };
 use crate::app::{App, Panel, SbKey};
 
-const BT_COLW: [usize; 7] = [15, 8, 8, 8, 8, 6, 4];
-const BT_CONTENT_W: usize = 63;
+const BT_COLW: [usize; 7] = [18, 8, 8, 8, 8, 26, 4];
+const BT_CONTENT_W: usize = 86;
 const HTTP_COLW: [usize; 3] = [4, 8, 8];
 const HTTP_CONTENT_W: usize = 22;
 
@@ -48,27 +48,27 @@ fn ip_display(addr: &str) -> String {
         if port.is_empty() {
             mask_ip(inner)
         } else {
-            format!("{}:{port}", mask_ip(inner))
+            format!("{}/{}", mask_ip(inner), port)
         }
     } else if addr.matches(':').count() == 1 {
         let (ip, port) = addr.split_once(':').unwrap_or((addr, ""));
         if port.is_empty() {
             mask_ip(ip)
         } else {
-            format!("{}:{port}", mask_ip(ip))
+            format!("{}/{}", mask_ip(ip), port)
         }
     } else {
         let (ip, port) = addr.rsplit_once(':').unwrap_or((addr, ""));
         if port.is_empty() {
             mask_ip(ip)
         } else {
-            format!("{}:{port}", mask_ip(ip))
+            format!("{}/{}", mask_ip(ip), port)
         }
     };
     pad_right(&truncate(&cell, BT_COLW[0]), BT_COLW[0])
 }
 
-type BtRowCells = (String, f64, u64, f64, u64, String, bool);
+type BtRowCells = (String, f64, f64, u64, u64, String, bool);
 
 enum Rows {
     Bt(Vec<BtRowCells>),
@@ -103,8 +103,8 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                                     (
                                         ip_display(&c.addr),
                                         down,
-                                        c.cum_down,
                                         up,
+                                        c.cum_down,
                                         c.cum_up,
                                         c.client.clone(),
                                         c.seeder,
@@ -181,30 +181,31 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let dim = |s: String, wd: usize| Span::styled(pad_left(&s, wd), Style::default().fg(DIM));
+    let head_cell =
+        |s: &str, wd: usize| Span::styled(pad_right(s, wd), Style::default().fg(DIM));
     let head = if is_bt {
         vec![
-            Span::styled(pad_right("地址", BT_COLW[0]), Style::default().fg(DIM)),
+            head_cell("地址", BT_COLW[0]),
             Span::raw(" "),
-            dim("下载速度".to_string(), BT_COLW[1]),
+            head_cell("下载速度", BT_COLW[1]),
             Span::raw(" "),
-            dim("累计下载".to_string(), BT_COLW[2]),
+            head_cell("上传速度", BT_COLW[2]),
             Span::raw(" "),
-            dim("上传速度".to_string(), BT_COLW[3]),
+            head_cell("累计下载", BT_COLW[3]),
             Span::raw(" "),
-            dim("累计上传".to_string(), BT_COLW[4]),
+            head_cell("累计上传", BT_COLW[4]),
             Span::raw(" "),
-            dim("客户端".to_string(), BT_COLW[5]),
+            head_cell("客户端", BT_COLW[5]),
             Span::raw(" "),
-            dim("协议".to_string(), BT_COLW[6]),
+            head_cell("协议", BT_COLW[6]),
         ]
     } else {
         vec![
-            dim("序号".to_string(), HTTP_COLW[0]),
+            head_cell("序号", HTTP_COLW[0]),
             Span::raw(" "),
-            dim("下载速度".to_string(), HTTP_COLW[1]),
+            head_cell("下载速度", HTTP_COLW[1]),
             Span::raw(" "),
-            dim("累计下载".to_string(), HTTP_COLW[2]),
+            head_cell("累计下载", HTTP_COLW[2]),
         ]
     };
     let mut lines = vec![Line::from(head)];
@@ -233,7 +234,7 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         let sep = move || sep.clone();
         let spans = match &rows {
             Rows::Bt(v) => {
-                let (ip, down, cum_down, up, cum_up, client, seeder) = &v[i];
+                let (ip, down, up, cum_down, cum_up, client, seeder) = &v[i];
                 let dl_on = *down > 0.0;
                 let up_on = *up > 0.0;
                 vec![
@@ -260,17 +261,17 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                         if dl_on { LIGHT_BLUE } else { DIM2 },
                     ),
                     sep(),
-                    cell(fmt_size(*cum_down), BT_COLW[2], FG),
-                    sep(),
                     cell(
                         if up_on {
                             fmt_speed(*up)
                         } else {
                             "-".to_string()
                         },
-                        BT_COLW[3],
+                        BT_COLW[2],
                         if up_on { MAGENTA } else { DIM2 },
                     ),
+                    sep(),
+                    cell(fmt_size(*cum_down), BT_COLW[3], FG),
                     sep(),
                     cell(fmt_size(*cum_up), BT_COLW[4], FG),
                     sep(),
@@ -514,10 +515,14 @@ mod tests {
             text.contains("上传速度") && text.contains("累计上传"),
             "表头列: {text}"
         );
-        assert!(text.contains("1.*.4:51400"), "IPv4 遮掩含端口: {text}");
+        assert!(text.contains("1.*.4/51400"), "IPv4 遮掩/端口（斜杠）: {text}");
         assert!(
-            text.contains("5.*.8:51401"),
-            "第二行 IPv4 遮掩含端口: {text}"
+            text.contains("5.*.8/51401"),
+            "第二行 IPv4 遮掩/端口（斜杠）: {text}"
+        );
+        assert!(
+            !text.contains("1.*.4:51400"),
+            "旧冒号分隔地址形态退役: {text}"
         );
         assert!(!text.contains("1.2.3.4"), "完整 IP 不得出现: {text}");
         assert!(text.contains("2/4 项"), "徽标 x = bt_conns 行数: {text}");
@@ -574,13 +579,108 @@ mod tests {
 
     #[test]
     fn ip_display_masks_and_caps_width() {
-        assert_eq!(super::ip_display("1.2.3.4:51400"), "1.*.4:51400    ");
-        assert_eq!(super::ip_display("[2001:db8::1]:51400"), "2001:*:1:51400 ");
-        assert_eq!(super::ip_display("2001:db8::1:51400"), "2001:*:1:51400 ");
+        assert_eq!(super::ip_display("1.2.3.4:51400"), "1.*.4/51400       ");
+        assert_eq!(super::ip_display("[2001:db8::1]:51400"), "2001:*:1/51400    ");
+        assert_eq!(super::ip_display("2001:db8::1:51400"), "2001:*:1/51400    ");
         assert_eq!(
             super::ip_display("255.255.255.255:65535"),
-            "255.*.255:65535"
+            "255.*.255/65535   ",
+            "IPv4 极值 15 列，右填充至 18"
         );
-        assert_eq!(super::ip_display("noport"), "noport         ");
+        assert_eq!(super::ip_display("noport"), "noport            ");
+        assert_eq!(
+            super::ip_display("ffff::ffff:65535"),
+            "ffff:*:ffff/65535 ",
+            "IPv6 极值 17 列 = 列宽 18 − 1 空白"
+        );
+    }
+
+    #[test]
+    fn bt_column_widths_match_spec() {
+        assert_eq!(BT_COLW[0], 18, "地址列宽 18（ffff:*:ffff/65535 + 1 空白）");
+        assert_eq!(BT_COLW[5], 26, "客户端列宽 26（ArcticTorrent/100.100.100 + 1 空白）");
+        assert_eq!(BT_CONTENT_W, 86, "BT 内容宽 = 七列 + 6 分隔");
+    }
+
+    #[tokio::test]
+    async fn bt_header_left_aligned_and_ordered() {
+        fn bt_row(addr: &str, down: f64, up: f64) -> BtConnRow {
+            BtConnRow {
+                id: 0,
+                addr: addr.to_string(),
+                down_speed: down,
+                cum_down: 0,
+                up_speed: up,
+                cum_up: 0,
+                client: "qBittorrent/2.5.0.0".to_string(),
+                seeder: false,
+            }
+        }
+        let mut app = testfx::make_app_in("ezr-conns", "bthead");
+        let mut t = task_with_conns(Protocol::Bt);
+        t.connections.clear();
+        app.tasks.push(t);
+        app.selected = 0;
+        app.bt_conns.insert(1, vec![bt_row("1.2.3.4:51400", 1024.0, 512.0)]);
+        let text = conns_render(&mut app, 120, 14).backend().to_string();
+        let head_line = text
+            .lines()
+            .find(|l| l.contains("下载速度") && l.contains("客户端"))
+            .unwrap_or_else(|| panic!("BT 表头行缺失: {text}"));
+        let up_pos = head_line.find("上传速度").unwrap();
+        let cum_pos = head_line.find("累计下载").unwrap();
+        let down_pos = head_line.find("下载速度").unwrap();
+        assert!(down_pos < up_pos && up_pos < cum_pos, "列序：累计下载在上传速度后: {head_line}");
+        let addr_pos = head_line.find("地址").unwrap();
+        assert!(
+            head_line[..addr_pos]
+                .chars()
+                .all(|c| c == '"' || c == '│' || c == ' '),
+            "地址表头靠左（边框与 padding 之外无填充空白）: {head_line:?}"
+        );
+        assert!(
+            head_line.contains("地址               下载速度"),
+            "地址列左对齐、右侧空格填充至 18 列（4 列字宽 + 14 填充 + 1 分隔）: {head_line:?}"
+        );
+        assert!(
+            head_line.contains("客户端                     协议"),
+            "客户端列左对齐、右侧空格填充至 26 列（6 列字宽 + 20 填充 + 1 分隔）: {head_line:?}"
+        );
+        let data_line = text
+            .lines()
+            .find(|l| l.contains("1.*.4/51400"))
+            .unwrap_or_else(|| panic!("明细行缺失: {text}"));
+        assert!(
+            data_line.contains("1.*.4/51400               -"),
+            "地址数据左对齐（右填充至 18）+ 速度数据右对齐至 8 列（明细行对齐维持现状）: {data_line:?}"
+        );
+        assert!(
+            data_line.contains("qBittorrent/2.5.0.0  TCP"),
+            "客户端数据右对齐至 26 列、协议列在位: {data_line:?}"
+        );
+    }
+
+
+    #[tokio::test]
+    async fn http_header_left_aligned() {
+        let mut app = testfx::make_app_in("ezr-conns", "httphead");
+        app.tasks.push(task_with_conns(Protocol::Http));
+        app.selected = 0;
+        let text = conns_render(&mut app, 60, 14).backend().to_string();
+        let head_line = text
+            .lines()
+            .find(|l| l.contains("序号") && l.contains("下载速度"))
+            .unwrap_or_else(|| panic!("HTTP 表头行缺失: {text}"));
+        let pos = head_line.find("序号").unwrap();
+        assert!(
+            head_line[..pos]
+                .chars()
+                .all(|c| c == '"' || c == '│' || c == ' '),
+            "序号表头靠左（边框与 padding 之外无填充空白）: {head_line:?}"
+        );
+        assert!(
+            head_line.contains("序号 下载速度"),
+            "表头单元格左对齐（单空格分隔、右侧填充无额外空白可见）: {head_line:?}"
+        );
     }
 }

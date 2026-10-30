@@ -9,8 +9,8 @@ use std::time::Duration;
 use hickory_resolver::TokioAsyncResolver;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
+#[cfg(test)]
 pub(crate) const GRACE: Duration = Duration::from_millis(1000);
-
 pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 type LegResult<T, E> = Option<Result<Vec<T>, E>>;
@@ -144,14 +144,21 @@ pub(crate) struct BuiltinResolver {
     res: TokioAsyncResolver,
     hosts: Arc<HostsFile>,
     fallback: Arc<dyn SystemFallback>,
+    grace: Duration,
 }
 
 impl BuiltinResolver {
+    #[cfg(test)]
     pub(crate) fn try_system() -> Result<Self, BoxError> {
+        Self::try_system_with_grace(GRACE)
+    }
+
+    pub(crate) fn try_system_with_grace(grace: Duration) -> Result<Self, BoxError> {
         Ok(Self {
             res: TokioAsyncResolver::tokio_from_system_conf()?,
             hosts: Arc::new(HostsFile::load()),
             fallback: Arc::new(GaiFallback),
+            grace,
         })
     }
 
@@ -165,6 +172,7 @@ impl BuiltinResolver {
             res,
             hosts,
             fallback,
+            grace: GRACE,
         }
     }
 
@@ -183,7 +191,7 @@ impl BuiltinResolver {
                 .await
                 .map(|l| l.into_iter().map(|a| IpAddr::V6(a.0)).collect::<Vec<_>>())
         };
-        let (r4, r6) = race_with_grace(v4, v6, GRACE).await;
+        let (r4, r6) = race_with_grace(v4, v6, self.grace).await;
         merge_answers(
             r4.and_then(|r| r.ok()).unwrap_or_default(),
             r6.and_then(|r| r.ok()).unwrap_or_default(),
@@ -544,6 +552,6 @@ mod tests {
 
     #[test]
     fn base_client_builder_attaches_builtin_resolver() {
-        let _client = super::super::base_client_builder().build().unwrap();
+        let _client = super::super::base_client_builder(GRACE).build().unwrap();
     }
 }

@@ -110,3 +110,15 @@
 - 本轮结论：TUNA 单镜像整链路（init + 清单 + 组件）最快且可用，前台一次装齐
   nightly minimal + rustfmt + clippy（RUSTUP_DIST_SERVER/RUSTUP_UPDATE_ROOT 均指
   TUNA）。
+
+## rustup 镜像补记（2026-10-30 coder 轮）：单路径探测 TUNA 404 是已知双层路径陷阱，USTC 单路径一站式可用
+
+- 复现：用单路径 `/rustup/dist/<target>/rustup-init` 探测 TUNA/aliyun/nju/huawei 全
+  404（TUNA 实际在双层路径 `/rustup/rustup/dist/...`，见上条）；USTC 单路径
+  `/rust-static/rustup/dist/...` 直接可用。
+- 本轮实测：USTC rustup-init 8.65MB/s（5MB range 探针），前台 `-y --profile minimal`
+  一次装齐 stable + nightly（rust-toolchain.toml 钉 nightly 自动补装），全程无需换源。
+- crates.io 走 USTC sparse 索引（`~/.cargo/config.toml` replace-with ustc）+ 沙箱无
+  外网时依赖拉取全绿；pip 用阿里云镜像装 torf/libtorrent/pyte（harness 依赖）。
+- 磁盘 9.9G 小盘：debug 增量缓存两次撑爆（No space left on device）——测试轮用
+  `CARGO_INCREMENTAL=0`，必要时清 `ezr-demo/target` 与 `target/debug/incremental`。

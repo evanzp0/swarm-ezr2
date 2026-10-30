@@ -14,7 +14,8 @@ import re
 import time
 
 from harness import (
-    Env, EzrApp, Suite, add_task_via_dialog, assert_in, assert_not_in,
+    Env, EzrApp, Suite, DUMMY_URL, add_task_via_dialog, assert_in, assert_not_in,
+    open_add_dialog_via_cmd,
     chart_points, detail_text, expected_content, file_bytes, parse_speed,
     wait_file_size, QA_FILE_SIZES,
 )
@@ -68,7 +69,7 @@ class TuiDisplaySuite(Suite):
                 # v1.31/FR-01-107①：页脚双行 = 常用命令图例 chips + toast 独占行；
                 # 除五枚 chips 外无其他快捷键项（Space 暂停/P 分块/G 面板/鼠标
                 # 等历史项逐字检索为零，交互说明收敛帮助窗口）
-                for chip in ("A 添加", "D 删除", "M 修改", "Q 退出", "H 帮助"):
+                for chip in ("A 命令", "D 删除", "M 修改", "Q 退出", "H 帮助"):
                     assert_in(chip, text, f"页脚 chips 应含「{chip}」（v1.31）")
                 assert_not_in("Space 暂停/继续", text, "页脚历史项已退役（v1.31）")
                 assert_not_in("P 分块", text, "页脚历史项已退役（v1.30 P3）")
@@ -83,7 +84,7 @@ class TuiDisplaySuite(Suite):
             # 块粒度显示口径（速度按块完成跳变，见 TD-15 长注）：默认 1 MB 块
             # 在 100KB/s 门控下首块 ~10s 才完成，非零速度读数窗很紧。配置缩小
             # HTTP 块至 128 KB 使速度行更早非零；行文案模式不受块大小影响。
-            env.write_config("block_size_http = 131072\n")
+            env.write_config("[http]\nblock_size_http = 131072\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(app, env, self._slow(env, "three-m.bin", 1))
@@ -229,8 +230,7 @@ class TuiDisplaySuite(Suite):
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 # A：五字段对话框（74×11 标题 ` 添加任务：HTTP(S) `，v1.32 更名）
-                app.send("A")
-                assert app.wait_for("添加任务：HTTP(S)", 3)
+                open_add_dialog_via_cmd(app, DUMMY_URL)
                 for f in ("URL", "保存到", "并发", "校验", "校验码"):
                     assert_in(f, app.text(), f"对话框字段 {f}")
                 app.send("esc")
@@ -329,9 +329,7 @@ class TuiDisplaySuite(Suite):
                     app, env, env.fixture.url("five-m.bin?speed=500000"))
                 assert app.wait_for("已添加任务", 6)
                 # 重复添加同 URL 同目录 → 「任务已存在」toast
-                app.send("A")
-                assert app.wait_for("添加任务：HTTP(S)", 3)
-                app.type_text(env.fixture.url("five-m.bin?speed=500000"))
+                open_add_dialog_via_cmd(app, env.fixture.url("five-m.bin?speed=500000"))
                 app.send("tab")
                 app.type_text(env.save_dir)
                 app.send("enter")
@@ -418,7 +416,7 @@ class TuiDisplaySuite(Suite):
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 app.pump(1.0)
-                assert_in("按 A 添加下载任务", app.text(), "空态提示")  # noqa: 见 ui.rs 空态提示修复
+                assert_in("按 A 打开命令窗口添加任务", app.text(), "空态提示（06-cmd-window-07）")
                 t0 = app.text()
                 deadline = time.time() + 12  # 60s 规程时长按沙箱预算压缩采样
                 while time.time() < deadline:
@@ -470,7 +468,7 @@ class TuiDisplaySuite(Suite):
             #   ② rate=30000：fixture ?speed 为每请求限速口径（3 连接聚合
             #     ~90KB/s），3MB 需 ~34s——保证采样/暂停/恢复全程任务活跃
             #     （80KB/s 时聚合 ~240KB/s，任务在暂停步前即完成，R 无法测）。
-            env.write_config("block_size_http = 131072\n")
+            env.write_config("[http]\nblock_size_http = 131072\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(
@@ -810,8 +808,7 @@ class TuiDisplaySuite(Suite):
                 app.pump(0.4)
                 assert_in("任务详情", app.text(), "再 G 应恢复右栏")
                 # 浮层打开 → 三面板全部降级暗框（模态）
-                app.send("A")
-                assert app.wait_for("添加任务：HTTP(S)", 3)
+                open_add_dialog_via_cmd(app, DUMMY_URL)
                 ly4, lx4 = border_cells("下载任务")
                 assert app.cell_fg(ly4, lx4) != "green", \
                     "浮层打开时列表应降级暗框（FR-01-108）"
@@ -1137,13 +1134,13 @@ class TuiDisplaySuite(Suite):
                 app.pump(0.5)
                 text = app.text()
                 # chips 逐字（行 1 图例 + 暗灰 · 分隔）
-                assert_in("A 添加 · D 删除 · M 修改 · Q 退出 · H 帮助", text,
+                assert_in("A 命令 · D 删除 · M 修改 · Q 退出 · H 帮助", text,
                           "页脚 chips 逐字图例（v1.31）")
                 # 点击 H chip（原地松开）= 开帮助，与键盘同口径
                 #（chip 列位按 buffer 列空间取——页脚行含 CJK，pyte display
                 # 串索引会左偏，串列作鼠标坐标会脱靶）
                 def chip_pos(needle: str) -> tuple[int, int]:
-                    # 自底向上扫（页脚在屏底；「A 添加」同文见于空态引导文案）
+                    # 自底向上扫（页脚在屏底；「A 命令」同文见于空态引导文案）
                     for i in range(app.screen.lines - 1, -1, -1):
                         x = self._find_col(app, i, needle)
                         if x is not None:
@@ -1164,11 +1161,11 @@ class TuiDisplaySuite(Suite):
                 app.pump(0.4)
                 assert_not_in("修改任务：HTTP(S)", app.text(), "拖出松开应取消")
                 # 点击 A chip 开添加框；模态打开时 chips 不可达（点击 H 无效）
-                ay, ax = chip_pos("A 添加")
+                ay, ax = chip_pos("A 命令")
                 app.send(f"mclick:{ax + 2}:{ay + 1}")
                 app.pump(0.15)
                 app.send(f"mup:{ax + 2}:{ay + 1}")
-                assert app.wait_for("添加任务：HTTP(S)", 3), "点击 A chip 应开框"
+                assert app.wait_for("请输入命令或链接", 3), "点击 A chip 应开命令窗口"
                 app.send(f"mclick:{fx + 2}:{fy + 1}")
                 app.pump(0.15)
                 app.send(f"mup:{fx + 2}:{fy + 1}")
@@ -1207,8 +1204,7 @@ class TuiDisplaySuite(Suite):
             app = EzrApp(env.home, save_dir=env.save_dir)
             self._cur_app = app
             try:
-                app.send("A")
-                assert app.wait_for("添加任务：HTTP(S)", 3)
+                open_add_dialog_via_cmd(app, DUMMY_URL)
                 g = self._panel_span(app, "添加任务：HTTP(S)")
                 assert g is not None, "添加框几何应在位"
                 ty, l, _r = g
@@ -1260,8 +1256,7 @@ class TuiDisplaySuite(Suite):
                 # Esc 关框重开验居中复位
                 app.send("esc")
                 app.pump(0.3)
-                app.send("A")
-                assert app.wait_for("添加任务：HTTP(S)", 3)
+                open_add_dialog_via_cmd(app, DUMMY_URL)
                 ty4, _ = self._panel_title(app, "添加任务：HTTP(S)")
                 assert ty4 == ty, "重开应重新居中（位置不保留）"
                 app.send("esc")
@@ -1272,8 +1267,11 @@ class TuiDisplaySuite(Suite):
             for opener, probe in (("A", "添加任务：HTTP(S)"), ("h", "【全局】")):
                 app = EzrApp(env.home, save_dir=env.save_dir)
                 try:
-                    app.send(opener)
-                    assert app.wait_for(probe, 3)
+                    if opener == "A":
+                        open_add_dialog_via_cmd(app, DUMMY_URL)
+                    else:
+                        app.send(opener)
+                        assert app.wait_for(probe, 3)
                     app.send("ctrl_c")
                     deadline = time.time() + 6
                     while time.time() < deadline and app.exit_code is None:

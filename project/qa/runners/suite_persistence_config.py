@@ -131,7 +131,7 @@ class PersistenceConfigSuite(Suite):
         @self.case("QA-PC-02")
         def go(env: Env):
             # 引擎侧限速拉开下载窗：sidecar 随首块落盘，完成前有稳定观察窗
-            env.write_config('max_speed = "1 MB/s"\n')
+            env.write_config('[common]\nmax_speed = "1 MB/s"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(app, env, env.fixture.url("three-m.bin?speed=700000"))
@@ -187,7 +187,7 @@ class PersistenceConfigSuite(Suite):
         @self.case("QA-PC-04")
         def go(env: Env):
             # ① block_size_http = abc → TOML 解析失败整个文件按默认 → 1MB/块
-            env.write_config('block_size_http = "abc"\n')
+            env.write_config('[http]\nblock_size_http = "abc"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(app, env, env.fixture.url("three-m.bin?speed=900000"))
@@ -199,7 +199,7 @@ class PersistenceConfigSuite(Suite):
                 raise
             # ①' block_size_http = 256KB（v1.16/FR-01-104 钳制行）：生效值下限 1MB，
             #    小于 1MB 一律按 1MB 生效（配置文件是用户可达入口，端到端口径不变）
-            env.write_config("block_size_http = 262144\n")
+            env.write_config("[http]\nblock_size_http = 262144\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(app, env,
@@ -212,7 +212,7 @@ class PersistenceConfigSuite(Suite):
                 app.graceful_quit()
                 raise
             # ② download_slots = 0 → 5
-            env.write_config("download_slots = 0\n")
+            env.write_config("[common]\ndownload_slots = 0\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(app, env, env.fixture.url("small.bin"))
@@ -224,7 +224,7 @@ class PersistenceConfigSuite(Suite):
                 app.graceful_quit()
                 raise
             # ③ max_retries = -1 → TOML 非法 → 全默认（启动不报错，可正常下载）
-            env.write_config("max_retries = -1\n")
+            env.write_config("[http]\nmax_retries = -1\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(app, env, env.fixture.url("small.bin"))
@@ -236,7 +236,7 @@ class PersistenceConfigSuite(Suite):
             # ④ http_concurrency = 99 → 钳制 64（规格已随实现，Gherkin/规程已同步）
             # 口径：详情并发为「活跃连接数」随限速/块完成波动，不等于配置值；
             # 确定性口径 = sidecar 落盘的任务 concurrency（spec 钳制后值）。
-            env.write_config('http_concurrency = 99\nmax_speed = "2 MB/s"\n')
+            env.write_config('[http]\nhttp_concurrency = 99\n\n[common]\nmax_speed = "2 MB/s"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(app, env, env.fixture.url("ten-m.bin"))
@@ -259,7 +259,7 @@ class PersistenceConfigSuite(Suite):
                 app.graceful_quit()
                 raise
             # ⑤ max_speed = xyz → 解析 0 不限速
-            env.write_config('max_speed = "xyz"\n')
+            env.write_config('[common]\nmax_speed = "xyz"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(app, env, env.fixture.url("three-m.bin"))
@@ -282,7 +282,7 @@ class PersistenceConfigSuite(Suite):
             for seq, (bs, expect, disp) in enumerate(
                     ((4_194_304, "2", "4 MB/块"), (2_097_152, "3", "2 MB/块"))):
                 sub = os.path.join(env.save_dir, f"bs{seq}")
-                env.write_config(f"block_size_http = {bs}\n")
+                env.write_config(f"[http]\nblock_size_http = {bs}\n")
                 app = EzrApp(env.home, save_dir=env.save_dir)
                 try:
                     add_task_via_dialog(
@@ -307,7 +307,7 @@ class PersistenceConfigSuite(Suite):
         def go(env: Env):
             # 引擎侧限速：fixture ?speed 为单请求口径，多连接聚合后失效；
             # max_speed 保证任务占用槽位的时间窗（TP-01 权威口径）
-            env.write_config('download_slots = 2\nmax_speed = "1 MB/s"\n')
+            env.write_config('[common]\ndownload_slots = 2\nmax_speed = "1 MB/s"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 for i in range(4):
@@ -353,7 +353,7 @@ class PersistenceConfigSuite(Suite):
         def go(env: Env):
             # 引擎侧限速：续传窗口多秒级，「下载中」徽标可被多帧捕获；
             # 1 MB/s 保证退出时任务仍在途（sidecar 未删除）
-            env.write_config('max_speed = "1 MB/s"\n')
+            env.write_config('[common]\nmax_speed = "1 MB/s"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             add_task_via_dialog(app, env, env.fixture.url("five-m.bin"))
             self._pause_at_progress(app, min_pct=30.0)
@@ -388,7 +388,7 @@ class PersistenceConfigSuite(Suite):
             # 引擎侧限速保证续传窗口（同 PC-08 口径）
             for seq, key in enumerate(("esc", "ctrl_c")):
                 sub = os.path.join(env.save_dir, f"k{seq}")
-                env.write_config('max_speed = "1 MB/s"\n')
+                env.write_config('[common]\nmax_speed = "1 MB/s"\n')
                 app = EzrApp(env.home, save_dir=env.save_dir)
                 add_task_via_dialog(app, env, env.fixture.url("five-m.bin"),
                                     save_dir=sub)

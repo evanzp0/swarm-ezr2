@@ -344,7 +344,11 @@ proptest! {
         let text = if garbage {
             "not [valid toml ===".to_string()
         } else {
-            format!("{key} = {v}")
+            let table = match key {
+                "download_slots" => "common",
+                _ => "http",
+            };
+            format!("[{table}]\n{key} = {v}")
         };
         let c = Config::from_toml(&text);
         prop_assert!(c.block_size_http > 0, "块大小恒正");
@@ -373,8 +377,12 @@ proptest! {
                 prop_assert_eq!(c.max_retries, expect, "正值透传/0 回退");
             }
             _ => {
-                let clamped = (v as usize).clamp(1, 64);
-                prop_assert_eq!(c.http_concurrency, clamped, "并发 clamp 语义");
+                let clamped = if v == 0 {
+                    Config::default().http_concurrency
+                } else {
+                    (v as usize).clamp(1, 64)
+                };
+                prop_assert_eq!(c.http_concurrency, clamped, "并发 0 回退默认/正值 clamp 语义");
             }
         }
     }
@@ -1514,7 +1522,7 @@ proptest! {
         let cap = rate * crate::engine::BURST_SECS;
         let available = (tokens + elapsed * rate).min(cap);
         let (tokens_after, taken, wait) =
-            crate::engine::bucket_step(rate, tokens, elapsed, remaining);
+            crate::engine::bucket_step(rate, tokens, elapsed, remaining, crate::engine::BURST_SECS, crate::engine::SLEEP_MS);
         prop_assert_eq!(taken, remaining.min(available), "取走 = min(remaining, 可用)");
         prop_assert!(
             (taken + tokens_after - available).abs() <= available.abs() * 1e-9,

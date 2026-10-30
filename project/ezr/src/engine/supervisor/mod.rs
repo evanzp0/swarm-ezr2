@@ -41,6 +41,54 @@ pub struct TaskSpec {
     pub keep_name: bool,
     pub added_at: u64,
     pub proxy_endpoint: Option<ProxyEndpoint>,
+    pub progress_tick_ms: u64,
+    pub sidecar_flush_secs: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct BtTunables {
+    pub peer_pipeline: usize,
+    pub upload_slots: usize,
+    pub idle_eviction_secs: u64,
+    pub connect_timeout_secs: u64,
+    pub handshake_timeout_secs: u64,
+    pub request_timeout_secs: u64,
+    pub requests_per_piece: usize,
+    pub rechoke_interval_secs: u64,
+    pub optimistic_interval_secs: u64,
+    pub progress_emit_min_interval_ms: u64,
+    pub tracker_numwant: u32,
+    pub peer_retry_base_secs: u64,
+    pub peer_retry_cap_secs: u64,
+    pub tracker_backoff_start_secs: u64,
+    pub tracker_backoff_cap_secs: u64,
+    pub udp_base_timeout_secs: u64,
+    pub udp_retries: u32,
+}
+
+impl Default for BtTunables {
+    fn default() -> Self {
+        use crate::model::config as c;
+        Self {
+            peer_pipeline: c::DEFAULT_PEER_PIPELINE,
+            upload_slots: c::DEFAULT_UPLOAD_SLOTS,
+            idle_eviction_secs: c::DEFAULT_IDLE_EVICTION_SECS,
+            connect_timeout_secs: c::DEFAULT_CONNECT_TIMEOUT_SECS,
+            handshake_timeout_secs: c::DEFAULT_HANDSHAKE_TIMEOUT_SECS,
+            request_timeout_secs: c::DEFAULT_REQUEST_TIMEOUT_SECS,
+            requests_per_piece: c::DEFAULT_REQUESTS_PER_PIECE,
+            rechoke_interval_secs: c::DEFAULT_RECHOKE_INTERVAL_SECS,
+            optimistic_interval_secs: c::DEFAULT_OPTIMISTIC_INTERVAL_SECS,
+            progress_emit_min_interval_ms: c::DEFAULT_PROGRESS_EMIT_MIN_INTERVAL_MS,
+            tracker_numwant: c::DEFAULT_TRACKER_NUMWANT,
+            peer_retry_base_secs: c::DEFAULT_PEER_RETRY_BASE_SECS,
+            peer_retry_cap_secs: c::DEFAULT_PEER_RETRY_CAP_SECS,
+            tracker_backoff_start_secs: c::DEFAULT_TRACKER_BACKOFF_START_SECS,
+            tracker_backoff_cap_secs: c::DEFAULT_TRACKER_BACKOFF_CAP_SECS,
+            udp_base_timeout_secs: c::DEFAULT_UDP_BASE_TIMEOUT_SECS,
+            udp_retries: c::DEFAULT_UDP_RETRIES,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -58,6 +106,7 @@ pub struct BtSpec {
     pub seeding: bool,
     #[allow(dead_code)]
     pub max_speed: u64,
+    pub tunables: BtTunables,
 }
 
 #[derive(Clone, Debug)]
@@ -373,6 +422,8 @@ mod tests {
             keep_name: false,
             added_at: 0,
             proxy_endpoint: None,
+            progress_tick_ms: 100,
+            sidecar_flush_secs: 2,
         }
     }
 
@@ -380,8 +431,18 @@ mod tests {
         Arc::new(super::super::EngineShared {
             client: reqwest::Client::builder().no_proxy().build().unwrap(),
             clients: std::sync::Mutex::new(std::collections::HashMap::new()),
-            throttle: Arc::new(super::super::throttle::Throttle::new(0)),
+            throttle: Arc::new(super::super::throttle::Throttle::with_params(
+                0,
+                crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
+                crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
+            )),
             blacklist: std::sync::Mutex::new(std::collections::HashSet::new()),
+            grace: std::time::Duration::from_millis(
+                crate::model::config::DEFAULT_DNS_RACE_GRACE_MS,
+            ),
+            upload_read_permits: Arc::new(tokio::sync::Semaphore::new(
+                crate::model::config::DEFAULT_UPLOAD_READ_CONCURRENCY,
+            )),
         })
     }
 

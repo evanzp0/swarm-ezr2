@@ -315,7 +315,7 @@ class IntegrityCheckSuite(Suite):
         """
         @self.case("QA-IC-11")
         def go(env: Env):
-            env.write_config("block_size_http = 4194304\n")
+            env.write_config("[http]\nblock_size_http = 4194304\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(

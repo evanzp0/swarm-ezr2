@@ -275,7 +275,7 @@ class ModifyTaskSuite(Suite):
             px = start_proxy(env, "proxy-a", self._next_port())
             try:
                 env.write_config(
-                    '[[proxies]]\nname = "proxy-a"\ntype = "http"\n'
+                    '[common]\n\n[[common.proxy]]\nname = "proxy-a"\ntype = "http"\n'
                     f'ip = "127.0.0.1"\nport = {px["port"]}\n')
                 app = EzrApp(env.home, save_dir=env.save_dir)
                 self._cur_app = app
@@ -495,7 +495,7 @@ class ModifyTaskSuite(Suite):
             px = start_proxy(env, "proxy-a", self._next_port())
             try:
                 env.write_config(
-                    '[[proxies]]\nname = "proxy-a"\ntype = "http"\n'
+                    '[common]\n\n[[common.proxy]]\nname = "proxy-a"\ntype = "http"\n'
                     f'ip = "127.0.0.1"\nport = {px["port"]}\n')
                 app = EzrApp(env.home, save_dir=env.save_dir)
                 self._cur_app = app

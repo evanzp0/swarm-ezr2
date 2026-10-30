@@ -663,7 +663,7 @@ mod add_dialog_flow_tests {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-pdef");
         let reg = dir.join("registry.json").to_string_lossy().to_string();
         let mut cfg = Config::from_toml(
-            "[[proxies]]\nname = \"a\"\ntype = \"socks5\"\nip = \"a\"\nport = 2\nusername = \"u\"\npassword = \"p\"\n[[proxies]]\nname = \"b\"\ntype = \"http\"\nip = \"b\"\nport = 3\n[[proxies]]\nname = \"c\"\ntype = \"https\"\nip = \"c\"\nport = 4\n",
+            "[[common.proxy]]\nname = \"a\"\ntype = \"socks5\"\nip = \"a\"\nport = 2\nusername = \"u\"\npassword = \"p\"\n[[common.proxy]]\nname = \"b\"\ntype = \"http\"\nip = \"b\"\nport = 3\n[[common.proxy]]\nname = \"c\"\ntype = \"https\"\nip = \"c\"\nport = 4\n",
         );
         cfg.warnings.clear();
         let mut app = App::new(cfg, reg);
@@ -714,7 +714,7 @@ mod add_dialog_flow_tests {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-mod");
         let reg = dir.join("registry.json").to_string_lossy().to_string();
         let mut cfg = Config::from_toml(
-            "[[proxies]]\nname = \"a\"\ntype = \"http\"\nip = \"a\"\nport = 2\n[[proxies]]\nname = \"b\"\ntype = \"http\"\nip = \"b\"\nport = 3\n",
+            "[[common.proxy]]\nname = \"a\"\ntype = \"http\"\nip = \"a\"\nport = 2\n[[common.proxy]]\nname = \"b\"\ntype = \"http\"\nip = \"b\"\nport = 3\n",
         );
         cfg.warnings.clear();
         let mut app = App::new(cfg, reg);

@@ -23,7 +23,8 @@ import re
 import time
 
 from harness import (
-    Env, EzrApp, Suite, add_task_via_dialog, assert_in, assert_not_in,
+    Env, EzrApp, Suite, DUMMY_URL, add_task_via_dialog, assert_in, assert_not_in,
+    open_add_dialog_via_cmd,
     chart_points, conns_badge, detail_text, expected_content, parse_speed,
     task_pct, wait_file_size, QA_FILE_SIZES,
 )
@@ -268,7 +269,7 @@ class UiConnsSuite(Suite):
         """QA-UC-03 页签行并入头部、槽位内联左对齐、满槽黄色加粗、Tab 高亮。"""
         @self.case("QA-UC-03")
         def go(env: Env):
-            env.write_config("download_slots = 2\n")
+            env.write_config("[common]\ndownload_slots = 2\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             self._cur_app = app
             try:
@@ -581,7 +582,7 @@ class UiConnsSuite(Suite):
             # disconnect=2500000：每请求 ~2.5MB 处被切 → 有进展瞬态失败。
             # 块必须大于切点（block_size_http=4MB，IC-11 同口径）——默认 1MB 块
             # 单请求恰一块、1MB < 2.5MB 切点，请求自然结束、disconnect 永不触发。
-            env.write_config("block_size_http = 4194304\n")
+            env.write_config("[http]\nblock_size_http = 4194304\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             self._cur_app = app
             try:
@@ -878,8 +879,7 @@ class UiConnsSuite(Suite):
                 assert app.wait_for("当前状态无可断开的并发连接（仅下载中/做种中）", 5), \
                     "暂停态 B 应给状态门槛 toast（先于协议判断）"
                 # 对话框打开：B 与 ↑↓ 不响应、Ctrl+C 全局直通退出（v1.31/D38）
-                app.send("A")
-                assert app.wait_for("添加任务：HTTP(S)", 3)
+                open_add_dialog_via_cmd(app, DUMMY_URL)
                 app.send("b")
                 app.pump(0.4)
                 assert_in("添加任务：HTTP(S)", app.text(), "对话框内 B 不应生效")
@@ -902,7 +902,7 @@ class UiConnsSuite(Suite):
         """
         @self.case("QA-UC-13")
         def go(env: Env):
-            env.write_config("http_concurrency = 16\ndownload_slots = 1\n")
+            env.write_config("[http]\nhttp_concurrency = 16\n\n[common]\ndownload_slots = 1\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             self._cur_app = app
             try:
@@ -1035,7 +1035,7 @@ class UiConnsSuite(Suite):
                 footer = "".join(rows[-4:])
                 assert not re.search(r"G\s*面板", footer), \
                     f"页脚不应再有 G 提示（v1.30/P3 退役）: {footer!r}"
-                assert "A 添加" in footer and "H 帮助" in footer, \
+                assert "A 命令" in footer and "H 帮助" in footer, \
                     f"页脚应仍为 chips 图例（v1.31）: {footer!r}"
                 # 第二次 G：两面板恢复
                 app.send("g")
@@ -1244,8 +1244,7 @@ class UiConnsSuite(Suite):
                 app.send("g")
                 app.pump(0.5)
                 # ⑤ 对话框内点击「URL」字段名：被对话框分支消费、剪贴板与 toast 不变
-                app.send("A")
-                assert app.wait_for("添加任务：HTTP(S)", 3)
+                open_add_dialog_via_cmd(app, DUMMY_URL)
                 n_before = len(app.osc52_payloads())
                 _click(app, pos_url[0], pos_url[1])
                 app.pump(0.5)

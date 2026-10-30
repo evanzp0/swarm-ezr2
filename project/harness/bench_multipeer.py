@@ -157,7 +157,7 @@ def main() -> int:
         (ezr_home / ".ezr").mkdir(parents=True, exist_ok=True)
         ezr_out.mkdir(parents=True, exist_ok=True)
         (ezr_home / ".ezr" / "config.toml").write_text(
-            f'download_dir = "{ezr_out}"\nauto_retry = false\nmax_retries = 3\n'
+            f'[common]\ndownload_dir = "{ezr_out}"\n\n[http]\nauto_retry = false\nmax_retries = 3\n'
         )
 
         ezr = EzrPty(ezr_home, [args.ezr_bin])

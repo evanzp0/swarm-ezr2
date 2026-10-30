@@ -105,7 +105,18 @@ impl Transport {
     }
 }
 
-const BT_CLIENTS: [&str; 10] = ["QB", "TR", "LT", "UT", "DE", "AR", "RT", "TX", "AZ", "XL"];
+const BT_CLIENTS: [&str; 10] = [
+    "qBittorrent/2.5.0.0",
+    "Transmission/4.0.3.0",
+    "libtorrent/2.0.5.0",
+    "uTorrent/3.6.0.0",
+    "Deluge/2.1.1.0",
+    "ArcticTorrent/1.0.0.1",
+    "Retriever/1.2.0.0",
+    "TuoTu/3.1.0.0",
+    "Azureus/5.7.6.0",
+    "Xunlei/3.3.4.0",
+];
 
 fn pseudo_client(seed: u64, idx: usize) -> &'static str {
     let mix = |mut x: u64| {
@@ -116,6 +127,17 @@ fn pseudo_client(seed: u64, idx: usize) -> &'static str {
     };
     let h = mix(seed ^ mix((idx as u64 + 3).wrapping_mul(0x9E37_79B9_7F4A_7C15)));
     BT_CLIENTS[(h % BT_CLIENTS.len() as u64) as usize]
+}
+
+fn pseudo_port(seed: u64, idx: usize) -> u16 {
+    let mix = |mut x: u64| {
+        x ^= x >> 33;
+        x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        x ^= x >> 33;
+        x
+    };
+    let h = mix(seed ^ mix((idx as u64 + 7).wrapping_mul(0x9E37_79B9_7F4A_7C15)));
+    1024 + (h % (65535 - 1024 + 1)) as u16
 }
 
 fn pseudo_transport(seed: u64, idx: usize) -> Transport {
@@ -145,6 +167,8 @@ pub enum ConnPhase {
 #[derive(Clone)]
 pub struct Connection {
     pub ip: String,
+
+    pub port: u16,
 
     pub client: &'static str,
 
@@ -186,6 +210,10 @@ impl Connection {
 
     pub fn ip_masked(&self) -> String {
         mask_ip(&self.ip)
+    }
+
+    pub fn addr_display(&self) -> String {
+        format!("{}/{}", mask_ip(&self.ip), self.port)
     }
 }
 
@@ -1059,6 +1087,8 @@ pub(super) fn make_chunk_conns_lease(
             };
             Connection {
                 ip: pseudo_ip(seed, i),
+
+                port: pseudo_port(seed, i),
 
                 client: pseudo_client(seed, i),
                 transport: pseudo_transport(seed, i),

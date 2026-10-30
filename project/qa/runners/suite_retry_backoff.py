@@ -72,7 +72,7 @@ class RetryBackoffSuite(Suite):
         @self.case("QA-RB-02")
         def go(env: Env):
             # disconnect=2000000 + 块 4MB：首连各切 2MB（有进展瞬态失败）
-            env.write_config("block_size_http = 4194304\n")
+            env.write_config("[http]\nblock_size_http = 4194304\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(
@@ -215,7 +215,7 @@ class RetryBackoffSuite(Suite):
         """QA-RB-10 auto_retry=false + 网络错误：直接停等不自动重试；R 可重试。"""
         @self.case("QA-RB-10")
         def go(env: Env):
-            env.write_config("auto_retry = false\n")
+            env.write_config("[http]\nauto_retry = false\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 # 断连注入 = 网络类瞬态失败

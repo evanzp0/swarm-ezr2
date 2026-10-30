@@ -7,11 +7,12 @@
 #   09-bt-engine-06 peer 下载与 piece 校验（握手 / 分块请求 / SHA-1 / 多 peer 并发 / 上传统计）
 #   09-bt-engine-07 BEP 9 元数据交换（做种侧响应：ut_metadata request → data/reject）
 #   09-bt-engine-08 按文件下载语义（未选文件不落盘 / 边界 piece / 修改补下）
-#   09-bt-engine-09 config trackers 配置项（http_trackers / udp_trackers / 模板示例 / 任务合并）
+#   09-bt-engine-09 config trackers 配置项（[bt] http_trackers / udp_trackers / 模板示例 / 任务合并）
 #   09-bt-engine-10 下载完成转做种（piece 全校验 → 做种中 / 产物字节一致 / tracker completed 事件）
 #   09-bt-engine-11 B 断开连接（连接移除 / 分块补完 / 下载继续；做种中可用）
 #   09-bt-engine-12 P pieces 弹窗 BT 臂（真实 piece 四态 / 块大小 = piece length）
 #   09-bt-engine-13 做种与上传端到端（做种列表行 / 互惠上传 / 倒计时结束 / 空格停止做种 / 做种中交互）
+#   09-bt-engine-14 [bt] 调优键配置生效与回退（三大表重构：bt_concurrency 预填 / seed_duration_secs / 其余键引擎生效与缺省回退）
 # 期号 02（phase-02）。需求依据 project/mission/phase-02.md FR-02-06…23、D45/D46/D51/D52/D54/D57/D58。
 # 协议基线 = 操作者钦定 BEP 3/15/23/7/12/9/20；tokio 异步（FR-02-10）。
 # BEP 9 做种侧响应（D53/D45——磁力拉取 phase-03）；上传真实统计（D58）；
@@ -75,7 +76,7 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
     Then fixture seeder 侧观察到标准 peer wire 握手（19 + "BitTorrent protocol" + reserved + infohash + peer_id）
     And 本端发送 interested 并按缺口对已选文件覆盖的 piece 发送 request（块长 ≤ 16 KB、单 peer 在飞窗口 5 块）
     And piece 全块落盘后 SHA-1 校验（对 metadata pieces 对应段）、通过后广播 have；校验失败 piece 重下
-    And 并发连接面板明细实时显示各 peer 下载速度/累计下载（口径同 HTTP 列）、上传速度/累计上传 = 真实统计（D45/D58：下载中互惠上传计入，fixture leecher 可从本端拉到已完成 piece 块）、客户端列 = 对端 peer id 前缀两字母缩写（无法识别 = --）、协议列 = TCP（D51）
+    And 并发连接面板明细实时显示各 peer 下载速度/累计下载（口径同 HTTP 列）、上传速度/累计上传 = 真实统计（D45/D58：下载中互惠上传计入，fixture leecher 可从本端拉到已完成 piece 块）、客户端列 = <客户端全名>/<版本号>（v1.35 修订：解析法 = libtorrent identify_client 口径——Azureus 形态两位码全名映射表 + 各客户端专用版本解码规则，如 AR → Arctic Torrent；无法识别显示 Unknown；旧两字母缩写与 -- 形态退役；D51 相应改判）、协议列 = TCP；地址列 = ip缩写/port（v1.35 修订：斜杠分隔，IPv4 首尾组遮掩与 IPv6 首尾组遮掩三形态同口径，如 1.*.4/51400、ffff:*:ffff/65535；旧冒号分隔形态退役，bug10 轮 coder 偏离登记收编清零）
     And 头部全局 ↓/↑ 与峰值 ↓/↑ 计入 BT 任务真实速度（MAGENTA 上传位，header.rs 形态）
 
   Scenario: 09-bt-engine-07 BEP 9 元数据交换（做种侧响应）
@@ -98,10 +99,10 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
       | selected |
       | 3        |
 
-  Scenario: 09-bt-engine-09 config trackers 配置项
-    When 配置文件写入 http_trackers = [<http_url>] 与 udp_trackers = [<udp_url>]
+  Scenario: 09-bt-engine-09 config trackers 配置项（v1.35：迁入 [bt]）
+    When 配置文件写入 [bt] 表 http_trackers = [<http_url>] 与 udp_trackers = [<udp_url>]
     And 配置文件不存在时首次启动生成模板
-    Then 模板包含两段注释示例行（含用途与取值范围说明，FR-01-85 机制）；非法 URL 行启动忽略 + 警告
+    Then 模板包含两段注释示例行（位于 [bt] 表内，含用途与取值范围说明，FR-01-85 机制）；非法 URL 行启动忽略 + 警告
     And 新建 BT 任务（未提供来源 tracker 时）tracker 池 = 两键合并结果；有来源 tracker 时并入池内去重
     And 手输 trackers（添加对话框 trackers 输入框每行一条）同样并入任务持久 tracker 列表
 
@@ -142,3 +143,27 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
     When 做种中按空格提前停止
     Then toast 显示 "⏸ 已停止做种（进入已完成）: <name>" 且任务转「已完成」、tracker 收到 stopped
     And 重启 ezr 后做种中任务恢复继续做种（uploaded 延续、seed_left 续走，FR-02-22）
+
+  Scenario: 09-bt-engine-14 [bt] 调优键配置生效与回退（v1.35，三大表重构）
+    Given 配置文件 [bt] 表设 bt_concurrency = <conns>、seed_duration_secs = <seed_secs>、
+      idle_eviction_secs = <evict>（其余调优键未配置）
+    When 添加 BT 任务（不经修改对话框改并发）并观察至下载完成转做种
+    Then 新任务并发预填/默认 = <conns>（v1.35：BT_DEFAULT_CONCURRENCY 硬编码退役，缺省回退代码常量 20）
+    And 做种列表行「剩余做种」自 <seed_secs> 起倒计时（v1.35：SEED_DURATION_SECS 硬编码退役，缺省回退代码常量 1800）
+    And 空闲连接置换按 <evict> 秒阈值执行（无新增进账超时即断开重拨；缺省回退 60，操作者已批默认值）
+    And 其余 [bt] 调优键（peer_pipeline / upload_slots / upload_read_concurrency /
+      connect_timeout_secs / handshake_timeout_secs / request_timeout_secs /
+      requests_per_piece / rechoke_interval_secs / optimistic_interval_secs /
+      progress_emit_min_interval_ms / tracker_numwant / peer_retry_base_secs /
+      peer_retry_cap_secs / tracker_backoff_start_secs / tracker_backoff_cap_secs /
+      udp_base_timeout_secs / udp_retries）未配置时按代码常量默认值生效、配置合法值时引擎按
+      配置值执行（下载/做种全链路行为不变，仅节律/窗口随配置伸缩）
+    And [http] 调优键同理（progress_tick_ms / sidecar_flush_secs / throttle_burst_secs /
+      throttle_sleep_ms / dns_race_grace_ms；HTTP 任务链路按配置值执行，非法值回退默认——
+      回退样例行见 01-persistence-config-04）
+    When [bt] 表写入 0/负值/非法值后启动
+    Then 对应键回退代码常量默认值且启动不报错（统一回退口径，FR-01-71）
+
+    Examples:
+      | conns | seed_secs | evict |
+      | 8     | 60        | 30    |

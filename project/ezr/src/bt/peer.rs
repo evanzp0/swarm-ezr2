@@ -4,7 +4,9 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::bencode::{self, BValue};
-use super::{BtError, HANDSHAKE_TIMEOUT_SECS, REQUEST_BLOCK_LEN};
+use super::{BtError, REQUEST_BLOCK_LEN};
+#[cfg(test)]
+use crate::model::config::DEFAULT_HANDSHAKE_TIMEOUT_SECS;
 
 pub const MAX_MSG_LEN: u32 = REQUEST_BLOCK_LEN * 4;
 
@@ -30,6 +32,7 @@ pub async fn handshake<S: AsyncRead + AsyncWrite + Unpin>(
     infohash: &[u8; 20],
     peer_id: &[u8; 20],
     ext_metadata: bool,
+    timeout_secs: u64,
 ) -> Result<HandshakeOk, BtError> {
     let mut out = Vec::with_capacity(68);
     out.push(19);
@@ -68,11 +71,9 @@ pub async fn handshake<S: AsyncRead + AsyncWrite + Unpin>(
             peer_id: their_peer_id,
         })
     };
-    match tokio::time::timeout(Duration::from_secs(HANDSHAKE_TIMEOUT_SECS), exchange).await {
+    match tokio::time::timeout(Duration::from_secs(timeout_secs), exchange).await {
         Ok(r) => r,
-        Err(_) => Err(BtError::Peer(format!(
-            "握手超时（{HANDSHAKE_TIMEOUT_SECS}s）"
-        ))),
+        Err(_) => Err(BtError::Peer(format!("握手超时（{timeout_secs}s）"))),
     }
 }
 
@@ -522,7 +523,7 @@ mod tests {
         let (mut a, mut b) = duplex(128);
         let ih = [3u8; 20];
         let server_pid = [9u8; 20];
-        let handle = tokio::spawn(async move { handshake(&mut a, &ih, &[4u8; 20], true).await });
+        let handle = tokio::spawn(async move { handshake(&mut a, &ih, &[4u8; 20], true, DEFAULT_HANDSHAKE_TIMEOUT_SECS).await });
         mock_peer_handshake(&mut b, reserved_bits(true), ih, server_pid)
             .await
             .unwrap();
@@ -539,7 +540,9 @@ mod tests {
     async fn handshake_rejects_infohash_mismatch() {
         let (mut a, mut b) = duplex(128);
         let handle =
-            tokio::spawn(async move { handshake(&mut a, &[5u8; 20], &[6u8; 20], true).await });
+            tokio::spawn(async move {
+            handshake(&mut a, &[5u8; 20], &[6u8; 20], true, DEFAULT_HANDSHAKE_TIMEOUT_SECS).await
+        });
         mock_peer_handshake(&mut b, reserved_bits(true), [7u8; 20], [8u8; 20])
             .await
             .unwrap();
@@ -554,7 +557,7 @@ mod tests {
     #[tokio::test]
     async fn handshake_rejects_bad_protocol_name() {
         let (mut a, mut b) = duplex(128);
-        let t = tokio::spawn(async move { handshake(&mut a, &[1u8; 20], &[2u8; 20], false).await });
+        let t = tokio::spawn(async move { handshake(&mut a, &[1u8; 20], &[2u8; 20], false, DEFAULT_HANDSHAKE_TIMEOUT_SECS).await });
         let mut head = Vec::new();
         head.push(19);
         head.extend_from_slice(b"BitTorrent protoc0l");
@@ -575,7 +578,7 @@ mod tests {
         drop(b);
         let (mut a2, mut b2) = duplex(128);
         let t2 =
-            tokio::spawn(async move { handshake(&mut a2, &[1u8; 20], &[2u8; 20], false).await });
+            tokio::spawn(async move { handshake(&mut a2, &[1u8; 20], &[2u8; 20], false, DEFAULT_HANDSHAKE_TIMEOUT_SECS).await });
         b2.write_all(&[5]).await.unwrap();
         let err2 = tokio::time::timeout(DUR5, t2)
             .await
@@ -592,7 +595,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn handshake_times_out_when_peer_silent() {
         let (mut a, b) = duplex(128);
-        let res = handshake(&mut a, &[1u8; 20], &[2u8; 20], false).await;
+        let res = handshake(&mut a, &[1u8; 20], &[2u8; 20], false, DEFAULT_HANDSHAKE_TIMEOUT_SECS).await;
         let err = res.expect_err("静默对端应握手超时");
         assert!(err.to_string().contains("超时"), "应报握手超时：{err}");
         drop(b);
@@ -602,7 +605,7 @@ mod tests {
     async fn handshake_fails_on_immediate_eof() {
         let (mut a, b) = duplex(128);
         drop(b);
-        assert!(handshake(&mut a, &[1u8; 20], &[2u8; 20], false)
+        assert!(handshake(&mut a, &[1u8; 20], &[2u8; 20], false, DEFAULT_HANDSHAKE_TIMEOUT_SECS)
             .await
             .is_err());
     }

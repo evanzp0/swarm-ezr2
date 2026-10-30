@@ -95,6 +95,8 @@ impl App {
             keep_name: t.name_locked,
             added_at: t.added_at,
             proxy_endpoint,
+            progress_tick_ms: self.cfg.progress_tick_ms,
+            sidecar_flush_secs: self.cfg.sidecar_flush_secs,
         }
     }
 

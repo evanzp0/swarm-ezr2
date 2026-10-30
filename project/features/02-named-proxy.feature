@@ -27,14 +27,19 @@
 #   01–07 编号语义不变，仅条目字段形态由 url 机械改为 ip/port（v1.7 的「type 与 url 前缀矛盾
 #   保留按 url 处理」「type 缺省从 url scheme 推断」「url 为空/url 无 scheme 作废」等 url 相关
 #   场景语义随 url 键退役废止））
+# （v1.10：配置项三大标准表重构——键名 proxies → proxy 改名迁入 [common] 表，即 [[common.proxy]]；
+#   条目字段与校验语义不变，仅配置文件书写位置变更；旧顶层 [[proxies]] 表按未知键静默忽略
+#   （01-persistence-config-12 口径，不兼容旧格式，操作者钦定））
 Feature: 02-named-proxy 命名代理（http/https/socks5）与任务级选择
 
-  期号 01。依据 project/mission/phase-01.md FR-01-86（v1.5；v1.9 字段重构）+ FR-01-89
-  （v1.6 建；v1.7 改判；v1.9 重写）+ FR-01-93（v1.8；v1.9 增补）：配置支持 [[proxies]]
-  命名代理数组，每项字段 = name（非空且唯一）/ type（必填，http / https / socks5 三值）/
+  期号 01。依据 project/mission/phase-01.md FR-01-86（v1.5；v1.9 字段重构；v1.10 键名
+  proxy 迁入 [common]）+ FR-01-89
+  （v1.6 建；v1.7 改判；v1.9 重写）+ FR-01-93（v1.8；v1.9 增补）：配置支持 [[common.proxy]]
+  命名代理数组（v1.10 自顶层 [[proxies]] 改名迁入，字段不变），每项字段 = name（非空且唯一）/ type（必填，http / https / socks5 三值）/
   ip（非空；允许 IP 字面量或主机名）/ port（整数 1..=65535）/ 可选 username/password；
   可配置多个。url 键已退役（v1.9）：配置不再读取，按未知键忽略（FR-01-71 口径，零警告、
-  零迁移）。type 为唯一事实来源：内部代理 url 由 type+ip+port 构造——http →
+  零迁移）。旧顶层 [[proxies]] 表同步退役（v1.10）：按未知键静默忽略（
+  01-persistence-config-12 口径），条目不加载、无警告。type 为唯一事实来源：内部代理 url 由 type+ip+port 构造——http →
   http://{ip}:{port}、https → https://{ip}:{port}（代理自身走 TLS，basic auth 在 TLS 会话内
   生效）、socks5 → socks5://{ip}:{port}；三类型均同时服务 http 与 https 下载目标（http/https
   型经 CONNECT 隧道、socks5 型经 SOCKS 隧道）。type 缺失或取值未知 → 条目作废 + 启动警告
@@ -56,7 +61,7 @@ Feature: 02-named-proxy 命名代理（http/https/socks5）与任务级选择
     And 本地 fixture 代理（可区分记录经手请求，支持 --name 多实例与 http/https/socks5 形态）已启动
 
   Scenario: 02-named-proxy-01 多个命名代理（含认证）在添加对话框可选
-    Given 配置文件含 <count> 个 [[proxies]] 条目（name/type/ip/port 各异，含含 username/password 的条目）
+    Given 配置文件含 <count> 个 [[common.proxy]] 条目（name/type/ip/port 各异，含含 username/password 的条目）
     When 打开添加任务对话框并展开「代理」下拉
     Then 下拉选项 = 「直连」+ <count> 个命名代理（按配置顺序）
     And 每个命名代理按「名（type）」形态显示类型标注（http/https/socks5 三值，FR-01-89）
@@ -78,7 +83,7 @@ Feature: 02-named-proxy 命名代理（http/https/socks5）与任务级选择
       | one-m.bin  | one-m.bin  | one-m.bin  |
 
   Scenario: 02-named-proxy-03 命名条目非法（重名/空名）忽略并 toast
-    Given 配置文件含 [[proxies]] 条目：<bad_entries>（重名/空名）
+    Given 配置文件含 [[common.proxy]] 条目：<bad_entries>（重名/空名）
     And 另含一个合法命名代理 valid
     When 启动 ezr 并打开添加任务对话框展开「代理」下拉
     Then 非法条目不出现于下拉；合法条目 valid 在位

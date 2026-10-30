@@ -1,7 +1,6 @@
 use std::time::Instant;
 
 use super::App;
-use crate::bt::SEED_DURATION_SECS;
 use crate::model::speed::SpeedWindow;
 use crate::model::{FailKind, TaskState};
 
@@ -66,7 +65,7 @@ impl App {
             t.total = if t.total > 0 { t.total } else { total };
             t.speed = 0.0;
             if t.seed_left <= 0.0 {
-                t.seed_left = SEED_DURATION_SECS;
+                t.seed_left = self.cfg.seed_duration_secs;
             }
             self.bt_conns.remove(&id);
             self.clear_bt_conn_stats(id);

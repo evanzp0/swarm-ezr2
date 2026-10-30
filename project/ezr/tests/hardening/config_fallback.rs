@@ -12,7 +12,7 @@ use config::{home_dir, Config};
 #[test]
 fn load_reads_existing_config_file() {
     let path = std::env::temp_dir().join(format!("ezr-hardening-cfg-{}.toml", std::process::id()));
-    std::fs::write(&path, "backoff_initial = 0.75\nbackoff_cap = 30.0\n").expect("write fixture");
+    std::fs::write(&path, "[http]\nbackoff_initial = 0.75\nbackoff_cap = 30.0\n").expect("write fixture");
     let loaded = Config::load(&path);
     let _ = std::fs::remove_file(&path);
     let d = Config::default();
@@ -31,7 +31,7 @@ fn load_reads_existing_config_file() {
 
 #[test]
 fn valid_positive_backoff_values_pass_through() {
-    let c = Config::from_toml("backoff_initial = 0.75\nbackoff_cap = 30.0\n");
+    let c = Config::from_toml("[http]\nbackoff_initial = 0.75\nbackoff_cap = 30.0\n");
     assert!(
         (c.backoff_initial - 0.75).abs() < 1e-9,
         "backoff_initial={}（== 0.0 / < 0.0 变体回退 8.0）",
@@ -46,7 +46,7 @@ fn valid_positive_backoff_values_pass_through() {
 
 #[test]
 fn zero_backoff_falls_back_to_default() {
-    let c = Config::from_toml("backoff_initial = 0.0\nbackoff_cap = 0.0\n");
+    let c = Config::from_toml("[http]\nbackoff_initial = 0.0\nbackoff_cap = 0.0\n");
     let d = Config::default();
     assert!(
         (c.backoff_initial - d.backoff_initial).abs() < 1e-9 && c.backoff_initial > 0.0,

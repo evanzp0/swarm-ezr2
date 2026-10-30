@@ -90,37 +90,38 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let colw: Vec<usize> = if is_bt {
-        vec![11, 8, 8, 8, 8, 6, 4]
+        vec![18, 8, 8, 8, 8, 26, 4]
     } else {
         vec![4, 8, 8]
     };
     let content_w = colw.iter().sum::<usize>() + colw.len().saturating_sub(1);
 
-    let dim = |s: String, wd: usize| Span::styled(pad_left(&s, wd), Style::default().fg(DIM));
+    let head_cell =
+        |s: &str, wd: usize| Span::styled(pad_right(s, wd), Style::default().fg(DIM));
 
     let head = if is_bt {
         vec![
-            Span::styled(pad_right("IP", 11), Style::default().fg(DIM)),
+            head_cell("地址", 18),
             Span::raw(" "),
-            dim("下载速度".to_string(), 8),
+            head_cell("下载速度", 8),
             Span::raw(" "),
-            dim("累计下载".to_string(), 8),
+            head_cell("上传速度", 8),
             Span::raw(" "),
-            dim("上传速度".to_string(), 8),
+            head_cell("累计下载", 8),
             Span::raw(" "),
-            dim("累计上传".to_string(), 8),
+            head_cell("累计上传", 8),
             Span::raw(" "),
-            dim("客户端".to_string(), 6),
+            head_cell("客户端", 26),
             Span::raw(" "),
-            dim("协议".to_string(), 4),
+            head_cell("协议", 4),
         ]
     } else {
         vec![
-            dim("序号".to_string(), 4),
+            head_cell("序号", 4),
             Span::raw(" "),
-            dim("下载速度".to_string(), 8),
+            head_cell("下载速度", 8),
             Span::raw(" "),
-            dim("累计下载".to_string(), 8),
+            head_cell("累计下载", 8),
         ]
     };
     let mut lines = vec![Line::from(head)];
@@ -145,7 +146,7 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         let spans = if is_bt {
             vec![
                 Span::styled(
-                    pad_right(&c.ip_masked(), 11),
+                    pad_right(&c.addr_display(), 18),
                     Style::default()
                         .fg(if sel { Color::White } else { FG })
                         .bg(bg),
@@ -161,8 +162,6 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                     if dl_on { LIGHT_BLUE } else { DIM2 },
                 ),
                 Span::styled(" ", Style::default().bg(bg)),
-                cell(fmt_size(c.cum_down), 8, FG),
-                Span::styled(" ", Style::default().bg(bg)),
                 cell(
                     if up_on {
                         fmt_speed(c.up_speed)
@@ -173,9 +172,11 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                     if up_on { MAGENTA } else { DIM2 },
                 ),
                 Span::styled(" ", Style::default().bg(bg)),
+                cell(fmt_size(c.cum_down), 8, FG),
+                Span::styled(" ", Style::default().bg(bg)),
                 cell(fmt_size(c.cum_up), 8, FG),
                 Span::styled(" ", Style::default().bg(bg)),
-                cell(c.client.to_string(), 6, DIM),
+                cell(c.client.to_string(), 26, DIM),
                 Span::styled(" ", Style::default().bg(bg)),
                 cell(c.transport.label().to_string(), 4, DIM),
             ]

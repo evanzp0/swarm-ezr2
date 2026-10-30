@@ -289,3 +289,64 @@
   Closed 路径即不计 fails、不触发退避）→ fill_peer_slots 重拨同 IP 下一个候选；
   ②入连 accept 走 `inbound_admitted`（同 IP 已有连接即拒绝 + 容量上限），入连不再
   能占住同 IP 出连名额。地址不可解析的既有连接不参与同 IP 判定（容忍手测假地址）。
+
+## config 三大标准表键位总账：[common] 公共 / [http] HTTP 引擎 / [bt] BT 引擎，旧格式不兼容
+- bug11 定案（操作者钦定）：配置键按「<表>.<键名>」归属——`[common]` = download_dir /
+  download_slots / max_speed + `[[common.proxy]]`（proxies 改名迁入，字段不变）；`[http]` =
+  block_size_http / http_concurrency / max_retries / auto_retry / backoff_initial / backoff_cap +
+  调优键 progress_tick_ms(100) / sidecar_flush_secs(2) / throttle_burst_secs(0.5) /
+  throttle_sleep_ms(20) / dns_race_grace_ms(1000)；`[bt]` = http_trackers / udp_trackers +
+  调优键 20 个（bt_concurrency(20) / peer_pipeline(64) / upload_slots(4) /
+  upload_read_concurrency(128) / idle_eviction_secs(60) / connect_timeout_secs(3) /
+  handshake_timeout_secs(10) / request_timeout_secs(20) / requests_per_piece(4) /
+  rechoke_interval_secs(10) / optimistic_interval_secs(30) / progress_emit_min_interval_ms(250) /
+  tracker_numwant(200) / peer_retry_base_secs(5) / peer_retry_cap_secs(120) /
+  tracker_backoff_start_secs(8) / tracker_backoff_cap_secs(60) / udp_base_timeout_secs(15) /
+  udp_retries(3) / seed_duration_secs(1800)），全部平铺表内不设子表。调优键 = 代码常量外置
+  （缺省取常量；常量表见 FR-02-25），统一回退口径 0/负/非法 → 代码常量默认，
+  bt_concurrency/http_concurrency 越界钳制 1–64。**旧顶层平铺键与 [[proxies]] 按未知键静默
+  忽略（零警告零迁移，内部开发无兼容需求——与 sidecar v2 同一口径家族）**；写 QA/测试配置
+  时必须带表头，否则键被忽略、用例假绿或假红。
+
+## 并发 panel 列宽按极值样例 +1：地址 18 = ffff:*:ffff/65535，客户端 26 = ArcticTorrent/100.100.100
+- 列宽演进三笔账：地址 11→15（bug10，`255.*.255:65535` 恰满）→ **18**（bug11，格式改
+  `ip缩写/port` 斜杠分隔，IPv6 极值 `ffff:*:ffff/65535` = 17 列 + 1 空白）；客户端 6→**26**
+  （值改 `<全名>/<版本号>`，极值样例 25 列 + 1 空白）；内容宽 BT_COLW 求和 + 列数 − 1 =
+  86（content_w_matches_colw 断言守护）。对齐口径：**表头（列头）BT/HTTP 全部左对齐**
+  （pad_right），明细行维持现状（数据右对齐、地址列数据左对齐）——表头跟随数据对齐是
+  旧实现的顺手写法，不是规格。客户端全名/版本解析 = libtorrent identify_client 口径
+  （qBittorrent 同源）：两位码全名映射表 + 各客户端专用版本解码，无法识别显示 Unknown。
+
+## tracker 修改不生效的根因：确认路径只改模型，引擎 tracker 池无热更新命令
+- `dlg_confirm_modify_bt` 确认后仅 `Cmd::Reconfigure`（并发/代理）+ 文件/并发变化才
+  CancelBt+StartBt 重挂；只改 trackers 时 `changed == false` → 引擎沿用启动时 spawn 的
+  tracker announce 循环（`spec.trackers` 解析后逐个 spawn_tracker，任务级 Vec 固定），
+  模型里改的 `b.trackers` 引擎永远看不到。修复口径（FR-02-24）：确认后向引擎发 tracker 池
+  热更新命令——新增 tracker 立即 announce、移除的不再轮询、连接/进度不动、下载中与做种中
+  同口径；判断依据是 fixture tracker 日志（announce 到达与停止），不是界面状态。
+
+## 引擎调优常量外置的注入模式：spec 携带 BtTunables / EngineShared 承载进程级量
+
+- 模式：per-task 调优键（BT 17 键）经 `BtTunables`（supervisor::BtTunables，Default =
+  config::DEFAULT_*）随 `BtSpec` 进引擎，引擎内 `let tun = spec.tunables.clone()` 后
+  各 helper 以参数下传（自由函数不读全局常量）；进程级量（DNS grace / 上传读盘信号量 /
+  限速 burst+sleep）挂 `EngineShared`（start(cfg) 时构造）。模块级常量全部退役到
+  `config::DEFAULT_*` 单点，模板示例值与代码默认共用一源。
+- 陷阱：①测试 BtSpec 字面量 29 处需补 `tunables: Default::default()`；②自由函数
+  （cooldown_ok/idle_evict_due/progress_emit_due/apply_choker/udp_roundtrip/handshake）
+  全部要加参数，漏一处即 E0425；③EngineShared 测试构造点（shared_for_tests/supervisor
+  tests）要补 grace + upload_read_permits 两字段。
+
+## tracker 池热更新：AbortHandle 池重建 + tr_tx 保活 + 失败计数重置
+
+- 08-modify-bt-06 口径：M 改 trackers 确认后立即生效、任务不中断。实现 = `BtTaskCmd::
+  UpdateTrackers(Vec<String>)` → 引擎 abort 旧池句柄（spawn_tracker 返回
+  JoinHandle::abort_handle，池句柄随 trackers/completed_notifies 平行维护）→ 重新
+  parse+去重建池（`start_tracker_pool` 统一初建与重建两路）→ tracker_fail_count=0、
+  got_peers 保真。`tr_tx` 初建后**不能 drop**（重建还要用它），stopped announce 用当下
+  池快照，行为自然正确。
+- app 侧接线：`dlg_confirm_modify_bt` 记 old/new trackers，`trackers_changed &&
+  !pool_updated && state∈{Downloading,Seeding}` 才发 Cmd::BtUpdateTrackers（纯 tracker
+  修改不重挂引擎；total/并发变化走既有重建路径，新 spec 自带新池，双发会重复 announce）。
+- spy 测试注意：确认路径先发既有 `Cmd::Reconfigure`（并发/代理热调），断言要跳过它再
+  找 BtUpdateTrackers，且断言无 CancelBt/StartBt（不重挂）。

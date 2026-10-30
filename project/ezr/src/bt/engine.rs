@@ -13,32 +13,16 @@ use super::pieces::PieceMap;
 use super::tracker::{
     announce_http, announce_udp, udp_host_port, AnnounceParams, PeerAddr, TrackerEvent, TrackerUrl,
 };
-use super::{peer, BtError, BtTaskCmd, PEER_PIPELINE, REQUEST_BLOCK_LEN};
-use crate::engine::{BtConnView, EngineShared, Evt};
+use super::{peer, BtError, BtTaskCmd, REQUEST_BLOCK_LEN};
+use crate::engine::{BtConnView, BtTunables, EngineShared, Evt};
 
 const FIRST_ANNOUNCE_DELAY: u64 = 2;
-const TRACKER_BACKOFF_START: u64 = 8;
-const TRACKER_BACKOFF_CAP: u64 = 60;
 const PEER_SWEEP_SECS: u64 = 2;
 const UPLOAD_BLOCK: usize = 16 * 1024;
-const REQUEST_TIMEOUT_SECS: u64 = 20;
-const REQUESTS_PER_PIECE: usize = 4;
-const RECHOKE_INTERVAL_SECS: u64 = 10;
-const OPTIMISTIC_INTERVAL_SECS: u64 = 30;
-const UPLOAD_SLOTS: usize = 4;
-const PEER_RETRY_BASE_SECS: u64 = 5;
-const PEER_RETRY_CAP_SECS: u64 = 120;
-const PROGRESS_EMIT_MIN_INTERVAL: Duration = Duration::from_millis(250);
-const TRACKER_NUMWANT: u32 = 200;
-const IDLE_EVICTION_SECS: u64 = 60;
-const UPLOAD_READ_CONCURRENCY: usize = 128;
-
-static UPLOAD_READ_PERMITS: std::sync::LazyLock<tokio::sync::Semaphore> =
-    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(UPLOAD_READ_CONCURRENCY));
 
 enum PeerIn {
     Connected {
-        abbrev: String,
+        client: String,
         peer_id: [u8; 20],
         out: mpsc::Sender<PeerOut>,
         ext_metadata: bool,
@@ -58,7 +42,7 @@ enum PeerOut {
 struct ConnStat {
     peer_out: mpsc::Sender<PeerOut>,
     addr: String,
-    abbrev: String,
+    client: String,
     peer_id: Option<[u8; 20]>,
     has: HashSet<u32>,
     inflight: HashMap<(u32, u32), (u32, std::time::Instant)>,
@@ -161,8 +145,12 @@ fn refill_visit_order(
         .collect()
 }
 
-fn progress_emit_due(last_emit: std::time::Instant, now: std::time::Instant) -> bool {
-    now.duration_since(last_emit) >= PROGRESS_EMIT_MIN_INTERVAL
+fn progress_emit_due(
+    last_emit: std::time::Instant,
+    now: std::time::Instant,
+    min_interval_ms: u64,
+) -> bool {
+    now.duration_since(last_emit) >= Duration::from_millis(min_interval_ms)
 }
 
 fn refresh_idle(st: &mut ConnStat, now: std::time::Instant) {
@@ -171,9 +159,9 @@ fn refresh_idle(st: &mut ConnStat, now: std::time::Instant) {
     }
 }
 
-fn idle_evict_due(st: &ConnStat, now: std::time::Instant) -> bool {
+fn idle_evict_due(st: &ConnStat, now: std::time::Instant, idle_secs: u64) -> bool {
     st.cum_down == st.idle_check.0
-        && now.duration_since(st.idle_check.1).as_secs() >= IDLE_EVICTION_SECS
+        && now.duration_since(st.idle_check.1).as_secs() >= idle_secs
 }
 
 fn inbound_admitted(conns: &HashMap<usize, ConnStat>, ip: IpAddr, cap: usize) -> bool {
@@ -193,11 +181,11 @@ fn jitter(piece: u32, seed: u64) -> u64 {
 }
 
 impl PeerCandidate {
-    fn cooldown_ok(&self) -> bool {
+    fn cooldown_ok(&self, base_secs: u64, cap_secs: u64) -> bool {
         match self.last_try {
             None => true,
             Some(t) => {
-                let backoff = (PEER_RETRY_BASE_SECS << self.fails.min(5)).min(PEER_RETRY_CAP_SECS);
+                let backoff = (base_secs << self.fails.min(5)).min(cap_secs);
                 std::time::Instant::now().duration_since(t).as_secs() >= backoff
             }
         }
@@ -211,6 +199,7 @@ pub(crate) async fn run(
     evt_tx: mpsc::Sender<Evt>,
 ) {
     let id = spec.id;
+    let tun: BtTunables = spec.tunables.clone();
     let peer_id = super::peer_id::make_peer_id();
     let pmap = Arc::new(PieceMap::new(&spec.files, spec.meta.piece_length));
 
@@ -305,7 +294,7 @@ pub(crate) async fn run(
     };
     let listen_port = listener.local_addr().map(|a| a.port()).unwrap_or(6881);
 
-    let trackers: Vec<TrackerUrl> = {
+    let mut trackers: Vec<TrackerUrl> = {
         let mut seen = HashSet::new();
         spec.trackers
             .iter()
@@ -320,25 +309,16 @@ pub(crate) async fn run(
         completed: false,
     }));
     let (tr_tx, mut tr_rx) = mpsc::channel::<TrackerReport>(32);
-    let completed_notifies: Vec<Arc<tokio::sync::Notify>> = (0..trackers.len())
-        .map(|_| Arc::new(tokio::sync::Notify::new()))
-        .collect();
-    for (ti, url) in trackers.iter().enumerate() {
-        spawn_tracker(
-            url.clone(),
-            AnnounceCtx {
-                infohash: spec.meta.infohash,
-                peer_id,
-                port: listen_port,
-                client: shared.bt_tracker_client(spec.proxy_endpoint.as_ref()),
-                numwant: TRACKER_NUMWANT,
-                live: live.clone(),
-                completed_notify: completed_notifies[ti].clone(),
-            },
-            tr_tx.clone(),
-        );
-    }
-    drop(tr_tx);
+    let (mut completed_notifies, mut tr_handles) = start_tracker_pool(
+        &trackers,
+        spec.meta.infohash,
+        peer_id,
+        listen_port,
+        shared.bt_tracker_client(spec.proxy_endpoint.as_ref()),
+        &tun,
+        &live,
+        &tr_tx,
+    );
 
     let (peer_tx, mut peer_rx) = mpsc::channel::<(usize, PeerIn)>(256);
     let mut next_conn: usize = 1;
@@ -388,6 +368,31 @@ pub(crate) async fn run(
                             let _ = st.peer_out.send(PeerOut::Drop).await;
                         }
                     }
+                    BtTaskCmd::UpdateTrackers(urls) => {
+                        for h in tr_handles.drain(..) {
+                            h.abort();
+                        }
+                        let mut seen = HashSet::new();
+                        trackers = urls
+                            .iter()
+                            .filter_map(|s| TrackerUrl::parse(s))
+                            .filter(|u| seen.insert(u.clone()))
+                            .collect();
+                        tracker_fail_count = 0;
+                        got_peers = got_peers || !trackers.is_empty();
+                        let (notifies, handles) = start_tracker_pool(
+                            &trackers,
+                            spec.meta.infohash,
+                            peer_id,
+                            listen_port,
+                            shared.bt_tracker_client(spec.proxy_endpoint.as_ref()),
+                            &tun,
+                            &live,
+                            &tr_tx,
+                        );
+                        completed_notifies = notifies;
+                        tr_handles = handles;
+                    }
                 }
             }
             Some(rep) = tr_rx.recv() => {
@@ -436,7 +441,7 @@ pub(crate) async fn run(
                 let prev_downloaded = downloaded;
                 match ev {
                     PeerIn::Connected {
-                        abbrev,
+                        client,
                         peer_id,
                         out,
                         ext_metadata,
@@ -457,7 +462,7 @@ pub(crate) async fn run(
                                 candidates.remove(&key);
                             }
                         } else if let Some(st) = conns.get_mut(&conn_id) {
-                            st.abbrev = abbrev;
+                            st.client = client;
                             st.peer_id = Some(peer_id);
                             st.peer_out = out;
                             if let Some(key) = addr_sock(&st.addr) {
@@ -515,6 +520,8 @@ pub(crate) async fn run(
                             &mut conns,
                             &pmap,
                             &spec,
+                            &tun,
+                            shared.upload_read_permits(),
                             &mut done,
                             &mut downloaded,
                             &mut files_handles,
@@ -532,7 +539,7 @@ pub(crate) async fn run(
                             // 大种子下逐块克隆 done/partial/active 全集（O(P)×3）与逐块
                             // conn_views 曾随块率线性放大引擎/应用两侧开销；250ms 粒度
                             // 对进度与速度显示足够（qBittorrent 同为秒级刷新）。
-                            if progress_emit_due(last_emit, std::time::Instant::now()) {
+                            if progress_emit_due(last_emit, std::time::Instant::now(), tun.progress_emit_min_interval_ms) {
                                 last_emit = std::time::Instant::now();
                                 let views = conn_views(&mut conns, pmap.covered_pieces());
                                 let _ = evt_tx.send(Evt::BtProgress {
@@ -556,7 +563,8 @@ pub(crate) async fn run(
                             }
                             let _ = crate::model::BtSidecar::remove(&sidecar_path);
                             optimistic_slot = apply_choker(
-                                &mut conns, true, false, optimistic_slot, &mut optimistic_cursor,
+                                &mut conns, true, false, tun.upload_slots, optimistic_slot,
+                                &mut optimistic_cursor,
                             )
                             .await;
                             let _ = evt_tx.send(Evt::BtDone { id, total: pmap.selected_total() }).await;
@@ -570,7 +578,7 @@ pub(crate) async fn run(
                     let mut evict: Vec<usize> = Vec::new();
                     for (cid, st) in conns.iter_mut() {
                         refresh_idle(st, now);
-                        if idle_evict_due(st, now) {
+                        if idle_evict_due(st, now, tun.idle_eviction_secs) {
                             evict.push(*cid);
                         }
                     }
@@ -590,7 +598,7 @@ pub(crate) async fn run(
                 for (cid, st) in conns.iter_mut() {
                     let before = st.inflight.len();
                     st.inflight
-                        .retain(|_, (_, at)| now.duration_since(*at).as_secs() < REQUEST_TIMEOUT_SECS);
+                        .retain(|_, (_, at)| now.duration_since(*at).as_secs() < tun.request_timeout_secs);
                     if st.inflight.len() != before {
                         stale.push(*cid);
                     }
@@ -598,8 +606,10 @@ pub(crate) async fn run(
                 for cid in stale {
                     let claimed = claimed_blocks(&conns, &partial);
                     if let Some(st) = conns.get_mut(&cid) {
-                        issue_requests(cid, st, &claimed, &pmap, &done, &partial, &mut order_cache)
-                            .await;
+                        issue_requests(
+                            cid, st, &claimed, &pmap, &tun, &done, &partial, &mut order_cache,
+                        )
+                        .await;
                     }
                 }
                 {
@@ -612,13 +622,15 @@ pub(crate) async fn run(
                     save_bt_sidecar(&sidecar_path, &done);
                     sidecar_saved_done = done.len();
                 }
-                if now.duration_since(last_rechoke).as_secs() >= RECHOKE_INTERVAL_SECS {
-                    let rotate = now.duration_since(last_optimistic).as_secs() >= OPTIMISTIC_INTERVAL_SECS;
+                if now.duration_since(last_rechoke).as_secs() >= tun.rechoke_interval_secs {
+                    let rotate =
+                        now.duration_since(last_optimistic).as_secs() >= tun.optimistic_interval_secs;
                     if rotate {
                         last_optimistic = now;
                     }
                     optimistic_slot = apply_choker(
-                        &mut conns, seeding, rotate, optimistic_slot, &mut optimistic_cursor,
+                        &mut conns, seeding, rotate, tun.upload_slots, optimistic_slot,
+                        &mut optimistic_cursor,
                     )
                     .await;
                     last_rechoke = now;
@@ -632,7 +644,8 @@ pub(crate) async fn run(
                     }
                     let _ = crate::model::BtSidecar::remove(&sidecar_path);
                     optimistic_slot = apply_choker(
-                        &mut conns, true, false, optimistic_slot, &mut optimistic_cursor,
+                        &mut conns, true, false, tun.upload_slots, optimistic_slot,
+                        &mut optimistic_cursor,
                     )
                     .await;
                     let _ = evt_tx.send(Evt::BtDone { id, total: pmap.selected_total() }).await;
@@ -671,6 +684,10 @@ struct AnnounceCtx {
     numwant: u32,
     live: Arc<std::sync::Mutex<LiveStats>>,
     completed_notify: Arc<tokio::sync::Notify>,
+    backoff_start_secs: u64,
+    backoff_cap_secs: u64,
+    udp_base_timeout_secs: u64,
+    udp_retries: u32,
 }
 
 #[derive(Default)]
@@ -692,7 +709,11 @@ enum TrackerReport {
     },
 }
 
-fn spawn_tracker(url: TrackerUrl, ctx: AnnounceCtx, tx: mpsc::Sender<TrackerReport>) {
+fn spawn_tracker(
+    url: TrackerUrl,
+    ctx: AnnounceCtx,
+    tx: mpsc::Sender<TrackerReport>,
+) -> tokio::task::AbortHandle {
     tokio::spawn(async move {
         let mut delay = FIRST_ANNOUNCE_DELAY;
         let mut min_interval_secs: u32 = 0;
@@ -744,7 +765,15 @@ fn spawn_tracker(url: TrackerUrl, ctx: AnnounceCtx, tx: mpsc::Sender<TrackerRepo
                         break;
                     };
                     match tokio::net::UdpSocket::bind("0.0.0.0:0").await {
-                        Ok(sock) => announce_udp(sock, &host, port, &params).await,
+                        Ok(sock) => announce_udp(
+                            sock,
+                            &host,
+                            port,
+                            &params,
+                            ctx.udp_base_timeout_secs,
+                            ctx.udp_retries,
+                        )
+                        .await,
                         Err(e) => Err(BtError::Io(e.to_string())),
                     }
                 }
@@ -769,11 +798,45 @@ fn spawn_tracker(url: TrackerUrl, ctx: AnnounceCtx, tx: mpsc::Sender<TrackerRepo
                         .await;
                     delay = delay
                         .saturating_mul(2)
-                        .clamp(TRACKER_BACKOFF_START, TRACKER_BACKOFF_CAP);
+                        .clamp(ctx.backoff_start_secs, ctx.backoff_cap_secs);
                 }
             }
         }
-    });
+    })
+    .abort_handle()
+}
+
+fn start_tracker_pool(
+    trackers: &[TrackerUrl],
+    infohash: [u8; 20],
+    peer_id: [u8; 20],
+    port: u16,
+    client: reqwest::Client,
+    tun: &BtTunables,
+    live: &Arc<std::sync::Mutex<LiveStats>>,
+    tr_tx: &mpsc::Sender<TrackerReport>,
+) -> (Vec<Arc<tokio::sync::Notify>>, Vec<tokio::task::AbortHandle>) {
+    let mut notifies = Vec::with_capacity(trackers.len());
+    let mut handles = Vec::with_capacity(trackers.len());
+    for url in trackers {
+        let completed_notify = Arc::new(tokio::sync::Notify::new());
+        let ctx = AnnounceCtx {
+            infohash,
+            peer_id,
+            port,
+            client: client.clone(),
+            numwant: tun.tracker_numwant,
+            live: live.clone(),
+            completed_notify: completed_notify.clone(),
+            backoff_start_secs: tun.tracker_backoff_start_secs,
+            backoff_cap_secs: tun.tracker_backoff_cap_secs,
+            udp_base_timeout_secs: tun.udp_base_timeout_secs,
+            udp_retries: tun.udp_retries,
+        };
+        handles.push(spawn_tracker(url.clone(), ctx, tr_tx.clone()));
+        notifies.push(completed_notify);
+    }
+    (notifies, handles)
 }
 
 fn spawn_stopped_announce(
@@ -790,6 +853,8 @@ fn spawn_stopped_announce(
     let urls = trackers.to_vec();
     let ih = spec.meta.infohash;
     let pid = *peer_id;
+    let udp_base = spec.tunables.udp_base_timeout_secs;
+    let udp_retries = spec.tunables.udp_retries;
     tokio::spawn(async move {
         for url in urls {
             let params = AnnounceParams {
@@ -809,7 +874,7 @@ fn spawn_stopped_announce(
                 TrackerUrl::Udp(u) => {
                     if let Some((host, p)) = udp_host_port(u) {
                         if let Ok(sock) = tokio::net::UdpSocket::bind("0.0.0.0:0").await {
-                            let _ = announce_udp(sock, &host, p, &params).await;
+                            let _ = announce_udp(sock, &host, p, &params, udp_base, udp_retries).await;
                         }
                     }
                 }
@@ -832,10 +897,12 @@ fn spawn_outgoing_peer(
 ) {
     let meta = spec.meta.clone();
     let pid = *peer_id;
+    let connect_timeout = spec.tunables.connect_timeout_secs;
+    let handshake_timeout = spec.tunables.handshake_timeout_secs;
     tokio::spawn(async move {
         let addr = format!("{}:{}", p.ip, p.port);
         let sock = match tokio::time::timeout(
-            Duration::from_secs(super::CONNECT_TIMEOUT_SECS),
+            Duration::from_secs(connect_timeout),
             TcpStream::connect(&addr),
         )
         .await
@@ -854,7 +921,7 @@ fn spawn_outgoing_peer(
             }
         };
         let _ = sock.set_nodelay(true);
-        run_peer_loop(conn_id, sock, &meta.infohash, &pid, tx).await;
+        run_peer_loop(conn_id, sock, &meta.infohash, &pid, handshake_timeout, tx).await;
     });
 }
 
@@ -868,9 +935,10 @@ fn spawn_incoming_peer(
 ) {
     let meta = spec.meta.clone();
     let pid = *peer_id;
+    let hs_timeout = spec.tunables.handshake_timeout_secs;
     tokio::spawn(async move {
         let _ = sock.set_nodelay(true);
-        run_peer_loop(conn_id, sock, &meta.infohash, &pid, tx).await;
+        run_peer_loop(conn_id, sock, &meta.infohash, &pid, hs_timeout, tx).await;
         let _ = addr;
     });
 }
@@ -890,11 +958,12 @@ async fn run_peer_loop(
     mut sock: TcpStream,
     infohash: &[u8; 20],
     peer_id: &[u8; 20],
+    handshake_timeout_secs: u64,
     tx: mpsc::Sender<(usize, PeerIn)>,
 ) {
     let (out_tx, mut out_rx) = mpsc::channel::<PeerOut>(64);
 
-    let hs = peer::handshake(&mut sock, infohash, peer_id, true).await;
+    let hs = peer::handshake(&mut sock, infohash, peer_id, true, handshake_timeout_secs).await;
     match hs {
         Ok(ok) => {
             if ok.peer_id == *peer_id {
@@ -909,13 +978,13 @@ async fn run_peer_loop(
                     .await;
                 return;
             }
-            let abbrev = super::peer_id::client_abbrev(&ok.peer_id);
+            let client = super::peer_id::client_display(&ok.peer_id);
             let ext_metadata = ok.reserved[5] & 0x10 != 0;
             if tx
                 .send((
                     conn_id,
                     PeerIn::Connected {
-                        abbrev,
+                        client,
                         peer_id: ok.peer_id,
                         out: out_tx.clone(),
                         ext_metadata,
@@ -1010,7 +1079,7 @@ fn new_conn_stat(addr: String) -> ConnStat {
     ConnStat {
         peer_out: dummy_tx,
         addr,
-        abbrev: String::new(),
+        client: String::new(),
         peer_id: None,
         has: HashSet::new(),
         inflight: HashMap::new(),
@@ -1033,6 +1102,8 @@ async fn handle_peer_msg(
     conns: &mut HashMap<usize, ConnStat>,
     pmap: &PieceMap,
     spec: &crate::engine::BtSpec,
+    tun: &BtTunables,
+    permits: Arc<tokio::sync::Semaphore>,
     done: &mut HashSet<u32>,
     downloaded: &mut u64,
     files: &mut HashMap<usize, tokio::fs::File>,
@@ -1071,7 +1142,7 @@ async fn handle_peer_msg(
                     // 控制消息（KeepAlive/Request/Cancel/…）零开销直达。
                     let claimed = claimed_blocks(conns, partial);
                     if let Some(st) = conns.get_mut(&conn_id) {
-                        issue_requests(conn_id, st, &claimed, pmap, done, partial, order).await;
+                        issue_requests(conn_id, st, &claimed, pmap, tun, done, partial, order).await;
                     }
                 }
             }
@@ -1080,7 +1151,7 @@ async fn handle_peer_msg(
             st.peer_choking = false;
             let claimed = claimed_blocks(conns, partial);
             if let Some(st) = conns.get_mut(&conn_id) {
-                issue_requests(conn_id, st, &claimed, pmap, done, partial, order).await;
+                issue_requests(conn_id, st, &claimed, pmap, tun, done, partial, order).await;
             }
         }
         peer::PeerMsg::Choke => {
@@ -1114,7 +1185,7 @@ async fn handle_peer_msg(
                     let out = st.peer_out.clone();
                     tokio::spawn(async move {
                         let data = {
-                            let _permit = UPLOAD_READ_PERMITS.acquire().await;
+                            let _permit = permits.acquire().await;
                             read_upload_blocks(plan, length as usize).await
                         };
                         if let Some(data) = data {
@@ -1232,11 +1303,12 @@ async fn issue_requests(
     st: &mut ConnStat,
     claimed: &HashSet<(u32, u32)>,
     pmap: &PieceMap,
+    tun: &BtTunables,
     done: &HashSet<u32>,
     partial: &PartialPieces,
     order: &mut PieceOrderCache,
 ) {
-    if st.peer_choking || st.inflight.len() >= PEER_PIPELINE {
+    if st.peer_choking || st.inflight.len() >= tun.peer_pipeline {
         return;
     }
     if order.dirty {
@@ -1248,15 +1320,15 @@ async fn issue_requests(
     }
     let mut issued = 0usize;
     for &piece in &visit {
-        issued += request_blocks_of_piece(conn_id, st, claimed, pmap, piece, false).await;
-        if st.inflight.len() >= PEER_PIPELINE {
+        issued += request_blocks_of_piece(conn_id, st, claimed, pmap, tun, piece, false).await;
+        if st.inflight.len() >= tun.peer_pipeline {
             return;
         }
     }
     if issued == 0 && endgame_active(claimed, pmap, done) {
         for &piece in &visit {
-            request_blocks_of_piece(conn_id, st, claimed, pmap, piece, true).await;
-            if st.inflight.len() >= PEER_PIPELINE {
+            request_blocks_of_piece(conn_id, st, claimed, pmap, tun, piece, true).await;
+            if st.inflight.len() >= tun.peer_pipeline {
                 return;
             }
         }
@@ -1268,13 +1340,14 @@ async fn request_blocks_of_piece(
     st: &mut ConnStat,
     claimed: &HashSet<(u32, u32)>,
     pmap: &PieceMap,
+    tun: &BtTunables,
     piece: u32,
     endgame: bool,
 ) -> usize {
     let plen = pmap.piece_len(piece) as usize;
     let mut asked = 0usize;
     let mut begin = 0usize;
-    while begin < plen && asked < REQUESTS_PER_PIECE && st.inflight.len() < PEER_PIPELINE {
+    while begin < plen && asked < tun.requests_per_piece && st.inflight.len() < tun.peer_pipeline {
         let key = (piece, begin as u32);
         if st.inflight.contains_key(&key) || (!endgame && claimed.contains(&key)) {
             begin += REQUEST_BLOCK_LEN as usize;
@@ -1316,7 +1389,9 @@ fn fill_peer_slots(
         let Some(key) = candidates
             .iter()
             .filter(|(k, c)| {
-                !connected_ips.contains(&k.0) && !shared.is_blacklisted(k.0) && c.cooldown_ok()
+                !connected_ips.contains(&k.0)
+                    && !shared.is_blacklisted(k.0)
+                    && c.cooldown_ok(spec.tunables.peer_retry_base_secs, spec.tunables.peer_retry_cap_secs)
             })
             .min_by_key(|(_, c)| (c.last_try, c.fails))
             .map(|(k, _)| *k)
@@ -1343,6 +1418,7 @@ async fn apply_choker(
     conns: &mut HashMap<usize, ConnStat>,
     seeding: bool,
     rotate_optimistic: bool,
+    upload_slots: usize,
     mut optimistic_slot: Option<usize>,
     optimistic_cursor: &mut usize,
 ) -> Option<usize> {
@@ -1375,7 +1451,7 @@ async fn apply_choker(
     rates.sort_by(|a, b| b.1.total_cmp(&a.1));
     let chosen: HashSet<usize> = rates
         .iter()
-        .take(UPLOAD_SLOTS)
+        .take(upload_slots)
         .map(|(cid, _)| *cid)
         .collect();
     let pool: Vec<usize> = rates
@@ -1443,7 +1519,7 @@ async fn on_block(
         conns.insert(conn_id, st);
         let claimed = claimed_blocks(conns, partial);
         if let Some(st) = conns.get_mut(&conn_id) {
-            issue_requests(conn_id, st, &claimed, pmap, done, partial, order).await;
+            issue_requests(conn_id, st, &claimed, pmap, &spec.tunables, done, partial, order).await;
         }
         return;
     }
@@ -1503,7 +1579,7 @@ async fn on_block(
     conns.insert(conn_id, st);
     let claimed = claimed_blocks(conns, partial);
     if let Some(st) = conns.get_mut(&conn_id) {
-        issue_requests(conn_id, st, &claimed, pmap, done, partial, order).await;
+        issue_requests(conn_id, st, &claimed, pmap, &spec.tunables, done, partial, order).await;
     }
 }
 
@@ -1586,7 +1662,7 @@ fn conn_views(conns: &mut HashMap<usize, ConnStat>, covered: &[u32]) -> Vec<BtCo
             cum_down: st.cum_down,
             up_speed,
             cum_up: st.cum_up,
-            client: st.abbrev.clone(),
+            client: st.client.clone(),
             seeder,
         });
     }
@@ -2069,6 +2145,7 @@ mod tests {
             proxy_endpoint: None,
             seeding: false,
             max_speed: 0,
+            tunables: Default::default(),
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -2110,6 +2187,144 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+
+    async fn fake_udp_tracker_logging(
+        seeder_port: u16,
+        announces: Arc<std::sync::Mutex<Vec<[u8; 20]>>>,
+    ) -> u16 {
+        let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = sock.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let mut buf = [0u8; 512];
+            loop {
+                let (n, from) = match sock.recv_from(&mut buf).await {
+                    Ok(x) => x,
+                    Err(_) => return,
+                };
+                let req = &buf[..n];
+                if req.len() < 16 {
+                    continue;
+                }
+                let action = u32::from_be_bytes(req[8..12].try_into().unwrap());
+                let txid = u32::from_be_bytes(req[12..16].try_into().unwrap());
+                if action == 0 {
+                    let magic = u64::from_be_bytes(req[0..8].try_into().unwrap());
+                    if magic != 0x0417_2710_1980 {
+                        continue;
+                    }
+                    let mut out = Vec::new();
+                    out.extend_from_slice(&0u32.to_be_bytes());
+                    out.extend_from_slice(&txid.to_be_bytes());
+                    out.extend_from_slice(&0x1234_5678_9abc_def0u64.to_be_bytes());
+                    let _ = sock.send_to(&out, from).await;
+                } else if action == 1 {
+                    let conn_id = u64::from_be_bytes(req[0..8].try_into().unwrap());
+                    if conn_id != 0x1234_5678_9abc_def0 {
+                        continue;
+                    }
+                    let ih: [u8; 20] = req[16..36].try_into().unwrap();
+                    announces.lock().expect("announce 日志锁").push(ih);
+                    let mut out = Vec::new();
+                    out.extend_from_slice(&1u32.to_be_bytes());
+                    out.extend_from_slice(&txid.to_be_bytes());
+                    out.extend_from_slice(&60u32.to_be_bytes());
+                    out.extend_from_slice(&1u32.to_be_bytes());
+                    out.extend_from_slice(&1u32.to_be_bytes());
+                    out.extend_from_slice(&[127, 0, 0, 1]);
+                    out.extend_from_slice(&seeder_port.to_be_bytes());
+                    let _ = sock.send_to(&out, from).await;
+                }
+            }
+        });
+        port
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn engine_tracker_pool_hot_update() {
+        let piece_len = 16 * 1024;
+        let data: Vec<u8> = (0..64 * 1024usize).map(|i| (i % 251) as u8).collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bteng-hotupd");
+        let save_dir = dir.to_string_lossy().into_owned();
+        let meta = make_meta(&data, piece_len, "udp://127.0.0.1:1/announce");
+        let seeder_port = fake_seeder(data.clone(), piece_len, meta.infohash).await;
+        let log_a: Arc<std::sync::Mutex<Vec<[u8; 20]>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log_b: Arc<std::sync::Mutex<Vec<[u8; 20]>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let port_a = fake_udp_tracker_logging(seeder_port, log_a.clone()).await;
+        let port_b = fake_udp_tracker_logging(seeder_port, log_b.clone()).await;
+
+        let spec = crate::engine::BtSpec {
+            id: 91,
+            source: "/tmp/hotupd.torrent".into(),
+            meta: meta.clone(),
+            save_dir: save_dir.clone(),
+            name: "hotupd.bin".into(),
+            files: vec![BtFile {
+                path: "hotupd.bin".into(),
+                size: data.len() as u64,
+                selected: true,
+            }],
+            trackers: vec![format!("udp://127.0.0.1:{port_a}/announce")],
+            concurrency: 2,
+            proxy_endpoint: None,
+            seeding: false,
+            max_speed: 0,
+            tunables: Default::default(),
+        };
+        let (evt_tx, _evt_rx) = mpsc::channel(256);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
+        let shared = crate::engine::shared_for_tests();
+        let engine_handle = tokio::spawn(run(spec, shared, cmd_rx, evt_tx));
+
+        async fn wait_announces(log: &Arc<std::sync::Mutex<Vec<[u8; 20]>>>, want: usize, secs: u64) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+            while std::time::Instant::now() < deadline {
+                if log.lock().expect("锁").len() >= want {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            panic!("announce 未达 {want} 次");
+        }
+
+        wait_announces(&log_a, 1, 10).await;
+        assert_eq!(
+            log_a.lock().unwrap()[0],
+            meta.infohash,
+            "tracker-A 收到该任务 infohash 的 announce"
+        );
+        assert!(log_b.lock().unwrap().is_empty(), "未更新的 tracker-B 尚无 announce");
+
+        cmd_tx
+            .send(BtTaskCmd::UpdateTrackers(vec![format!(
+                "udp://127.0.0.1:{port_b}/announce"
+            )]))
+            .await
+            .unwrap();
+
+        wait_announces(&log_b, 1, 10).await;
+        assert_eq!(
+            log_b.lock().unwrap()[0],
+            meta.infohash,
+            "热更新后 tracker-B 立即被 announce（同一 infohash，任务不重挂）"
+        );
+        let a_count = log_a.lock().unwrap().len();
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert_eq!(
+            log_a.lock().unwrap().len(),
+            a_count,
+            "被移除的 tracker-A 不再收到后续 announce（旧池已中止）"
+        );
+        let still_alive = cmd_tx
+            .send(BtTaskCmd::UpdateTrackers(vec![format!(
+                "udp://127.0.0.1:{port_b}/announce"
+            )]))
+            .await
+            .is_ok();
+        assert!(still_alive, "热更新后任务保持运行（不重挂引擎）");
+        engine_handle.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn engine_downloads_via_udp_tracker_and_seeder() {
         let piece_len = 16 * 1024;
@@ -2146,6 +2361,7 @@ mod tests {
             proxy_endpoint: None,
             seeding: false,
             max_speed: 0,
+            tunables: Default::default(),
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -2236,6 +2452,7 @@ mod tests {
             proxy_endpoint: None,
             seeding: false,
             max_speed: 0,
+            tunables: Default::default(),
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -2433,6 +2650,7 @@ mod tests {
             proxy_endpoint: None,
             seeding: false,
             max_speed: 0,
+            tunables: Default::default(),
         };
 
         let (evt_tx1, mut evt_rx1) = mpsc::channel(256);
@@ -2577,6 +2795,7 @@ mod tests {
             proxy_endpoint: None,
             seeding: false,
             max_speed: 0,
+            tunables: Default::default(),
         };
         let sc_path = crate::model::namegen::sidecar_path_of(&save_dir, "sc.bin");
         let (evt_tx, _evt_rx) = mpsc::channel(256);
@@ -2653,6 +2872,7 @@ mod tests {
             proxy_endpoint: None,
             seeding: false,
             max_speed: 0,
+            tunables: Default::default(),
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -2721,6 +2941,7 @@ mod tests {
             proxy_endpoint: None,
             seeding: false,
             max_speed: 0,
+            tunables: Default::default(),
         };
         let sc_path = crate::model::namegen::sidecar_path_of(&save_dir, "sc3.bin");
         std::fs::write(format!("{save_dir}/sc3.bin"), &data).unwrap();
@@ -2794,6 +3015,7 @@ mod tests {
             proxy_endpoint: None,
             seeding: false,
             max_speed: 0,
+            tunables: Default::default(),
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -2859,20 +3081,20 @@ mod tests {
         let mut st = new_conn_stat("10.0.0.9:1".into());
         st.idle_check = (0, now - std::time::Duration::from_secs(61));
         assert!(
-            idle_evict_due(&st, now),
+            idle_evict_due(&st, now, 60),
             "零进度 60s 的连接到置换点（同 IP 无用 peer 挡住有价值 seeder 的根因）"
         );
         st.cum_down = 4096;
         refresh_idle(&mut st, now);
-        assert!(!idle_evict_due(&st, now), "有字节进账的连接不置换");
+        assert!(!idle_evict_due(&st, now, 60), "有字节进账的连接不置换");
         let stale_cum = st.cum_down;
         st.idle_check = (stale_cum, now - std::time::Duration::from_secs(61));
         assert!(
-            idle_evict_due(&st, now),
+            idle_evict_due(&st, now, 60),
             "有历史进账但 60s 无新增的连接到置换点"
         );
         let fresh = new_conn_stat("10.0.0.9:2".into());
-        assert!(!idle_evict_due(&fresh, now), "新连接不置换");
+        assert!(!idle_evict_due(&fresh, now, 60), "新连接不置换");
     }
 
     #[test]
@@ -3041,28 +3263,29 @@ mod tests {
     #[test]
     fn progress_emit_due_throttles_bursts() {
         let t0 = std::time::Instant::now();
-        assert!(!progress_emit_due(t0, t0), "刚发过不再发");
+        assert!(!progress_emit_due(t0, t0, 250), "刚发过不再发");
         assert!(
-            !progress_emit_due(t0, t0 + Duration::from_millis(249)),
+            !progress_emit_due(t0, t0 + Duration::from_millis(249), 250),
             "249ms 内节流"
         );
         assert!(
-            progress_emit_due(t0, t0 + Duration::from_millis(250)),
+            progress_emit_due(t0, t0 + Duration::from_millis(250), 250),
             "250ms 到点放行"
         );
     }
 
     #[test]
-    fn bt_pipeline_and_throttle_constants() {
+    fn bt_tunables_default_from_config() {
+        let t = BtTunables::default();
+        let c = crate::model::config::Config::default();
+        assert_eq!(t.peer_pipeline, c.peer_pipeline, "管线深度缺省 = [bt] peer_pipeline 缺省");
         assert_eq!(
-            PEER_PIPELINE, 64,
-            "管线深度 1MiB：对齐 libtorrent request_queue_time 动态深窗精神，吸收引擎校验尖峰"
+            t.progress_emit_min_interval_ms, c.progress_emit_min_interval_ms,
+            "逐块事件节流缺省 250ms（qBittorrent UI 同为秒级刷新）"
         );
-        assert_eq!(
-            PROGRESS_EMIT_MIN_INTERVAL,
-            Duration::from_millis(250),
-            "逐块事件节流 250ms（qBittorrent UI 同为秒级刷新）"
-        );
+        assert_eq!(t.upload_slots, c.upload_slots);
+        assert_eq!(t.idle_eviction_secs, c.idle_eviction_secs);
+        assert_eq!(t.tracker_numwant, c.tracker_numwant);
     }
 
     fn interested_conn(addr: &str, cum_down: u64) -> ConnStat {
@@ -3113,13 +3336,13 @@ mod tests {
             );
         }
         let mut cursor = 0usize;
-        let slot = apply_choker(&mut conns, false, false, None, &mut cursor).await;
+        let slot = apply_choker(&mut conns, false, false, 4, None, &mut cursor).await;
         let unchoked: Vec<usize> = conns
             .iter()
             .filter(|(_, st)| !st.am_choking)
             .map(|(id, _)| *id)
             .collect();
-        assert_eq!(unchoked.len(), UPLOAD_SLOTS + 1, "4 固定槽 + 1 乐观槽");
+        assert_eq!(unchoked.len(), 4 + 1, "4 固定槽 + 1 乐观槽");
         for id in 1..=4usize {
             assert!(
                 !conns[&id].am_choking,
@@ -3138,7 +3361,7 @@ mod tests {
         st.am_choking = false;
         conns.insert(1, st);
         let mut cursor = 0usize;
-        apply_choker(&mut conns, false, false, None, &mut cursor).await;
+        apply_choker(&mut conns, false, false, 4, None, &mut cursor).await;
         assert!(
             conns[&1].am_choking,
             "不 interested 的 peer 被回收上传槽（发 Choke）"
@@ -3154,7 +3377,7 @@ mod tests {
             conns.insert(i, st);
         }
         let mut cursor = 0usize;
-        let slot = apply_choker(&mut conns, true, false, None, &mut cursor).await;
+        let slot = apply_choker(&mut conns, true, false, 4, None, &mut cursor).await;
         assert_eq!(slot, None, "做种态无乐观槽");
         assert!(
             conns.values().all(|st| !st.am_choking),
@@ -3213,6 +3436,7 @@ mod tests {
             proxy_endpoint: None,
             seeding: false,
             max_speed: 0,
+            tunables: Default::default(),
         };
         let pmap = PieceMap::new(&spec.files, spec.meta.piece_length);
         let mut done: HashSet<u32> = HashSet::new();
@@ -3235,6 +3459,8 @@ mod tests {
             &mut conns,
             &pmap,
             &spec,
+            &BtTunables::default(),
+            Arc::new(tokio::sync::Semaphore::new(8)),
             &mut done,
             &mut downloaded,
             &mut handles,
@@ -3260,6 +3486,8 @@ mod tests {
             &mut conns,
             &pmap,
             &spec,
+            &BtTunables::default(),
+            Arc::new(tokio::sync::Semaphore::new(8)),
             &mut done,
             &mut downloaded,
             &mut handles,
@@ -3330,6 +3558,7 @@ mod tests {
             proxy_endpoint: None,
             seeding: false,
             max_speed: 0,
+            tunables: Default::default(),
         };
         let pmap = PieceMap::new(&spec.files, spec.meta.piece_length);
         let mut done: HashSet<u32> = HashSet::new();
@@ -3364,6 +3593,8 @@ mod tests {
                 &mut conns,
                 &pmap,
                 &spec,
+                &BtTunables::default(),
+                Arc::new(tokio::sync::Semaphore::new(8)),
                 &mut done,
                 &mut downloaded,
                 &mut handles,
@@ -3422,6 +3653,7 @@ mod tests {
             proxy_endpoint: None,
             seeding: false,
             max_speed: 0,
+            tunables: Default::default(),
         };
         let pmap = PieceMap::new(&spec.files, spec.meta.piece_length);
         let mut done: HashSet<u32> = HashSet::new();
@@ -3460,6 +3692,8 @@ mod tests {
             &mut conns,
             &pmap,
             &spec,
+            &BtTunables::default(),
+            Arc::new(tokio::sync::Semaphore::new(8)),
             &mut done,
             &mut downloaded,
             &mut handles,
@@ -3549,6 +3783,7 @@ mod tests {
             proxy_endpoint: None,
             seeding: false,
             max_speed: 0,
+            tunables: Default::default(),
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -3661,6 +3896,7 @@ mod tests {
             proxy_endpoint: None,
             seeding: false,
             max_speed: 0,
+            tunables: Default::default(),
         };
         let (evt_tx, _evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -3771,6 +4007,7 @@ mod tests {
             proxy_endpoint: None,
             seeding: false,
             max_speed: 0,
+            tunables: Default::default(),
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -3922,6 +4159,7 @@ mod seeding_tests {
             proxy_endpoint: None,
             seeding: true,
             max_speed: 0,
+            tunables: Default::default(),
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);

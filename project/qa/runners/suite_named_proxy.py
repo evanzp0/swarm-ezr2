@@ -19,7 +19,8 @@ import ssl
 import time
 
 from harness import (
-    Env, EzrApp, PROXY_CA_PEM, SkipCase, Suite, TMP_ROOT, assert_file_content,
+    Env, EzrApp, DUMMY_URL, PROXY_CA_PEM, SkipCase, Suite, TMP_ROOT,
+    assert_file_content, open_add_dialog_via_cmd,
     assert_in, assert_not_in, proxy_reqs, start_proxy, stop_proxy, wait_file_size,
     QA_FILE_SIZES,
 )
@@ -33,10 +34,10 @@ SLOW = "?speed=300000"  # 门控速度（观察窗内 toast 不被完成提示�
 
 
 def proxies_toml(entries: list[dict]) -> str:
-    """[[proxies]] 条目转 TOML（缺键即省略行；port 可为 int 或 str）。"""
-    out = ""
+    """[[common.proxy]] 条目转 TOML（缺键即省略行；port 可为 int 或 str）。"""
+    out = "[common]\n\n"
     for e in entries:
-        out += "[[proxies]]\n"
+        out += "[[common.proxy]]\n"
         for k in ("name", "type", "ip", "port", "username", "password"):
             if k not in e or e[k] is None:
                 continue
@@ -116,8 +117,7 @@ class NamedProxySuite(Suite):
     @staticmethod
     def _dropdown_options(app: EzrApp) -> str:
         """展开添加对话框代理下拉并返回全画面文本（选项行内嵌其中）。"""
-        app.send("A")
-        assert app.wait_for("添加任务：HTTP(S)", 3), "添加对话框未打开"
+        open_add_dialog_via_cmd(app, DUMMY_URL)
         app.send(*(["tab"] * 5))  # URL→目录→并发→校验→校验码→代理
         app.send("enter")         # 展开代理下拉
         assert app.wait_for("选择代理", 3), "代理下拉未展开"
@@ -131,9 +131,7 @@ class NamedProxySuite(Suite):
     def _add_via_proxy(app: EzrApp, env: Env, url: str, option_index: int,
                        save_dir: str | None = None) -> None:
         """添加任务并选中代理下拉第 option_index 项（0 = 直连）。"""
-        app.send("A")
-        assert app.wait_for("添加任务：HTTP(S)", 3), "添加对话框未打开"
-        app.type_text(url)
+        open_add_dialog_via_cmd(app, url)
         app.send("tab")                                  # URL(0)→目录(1)
         app.type_text(env.save_dir if save_dir is None else save_dir)
         app.send(*(["tab"] * 3))                         # 目录→并发→校验→校验码

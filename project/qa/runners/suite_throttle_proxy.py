@@ -129,7 +129,7 @@ class ThrottleProxySuite(Suite):
         """QA-TP-01 配置 max_speed=1 MB/s 单任务：稳定速度 1 MB/s ±10%（AC-7）。"""
         @self.case("QA-TP-01")
         def go(env: Env):
-            env.write_config('max_speed = "1 MB/s"\n')
+            env.write_config('[common]\nmax_speed = "1 MB/s"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 # 100MB：启动瞬态（桶突发+socket 预读）摊薄至 <3%，稳态可测
@@ -147,7 +147,7 @@ class ThrottleProxySuite(Suite):
         """QA-TP-02 同配置 2 任务并发：合计速度 1 MB/s ±10%（v141 实跑）。"""
         @self.case("QA-TP-02")
         def go(env: Env):
-            env.write_config('max_speed = "1 MB/s"\n')
+            env.write_config('[common]\nmax_speed = "1 MB/s"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 # TP-01 同款口径对合计流量：100MB×2 使启动瞬态（桶突发+
@@ -203,7 +203,7 @@ class ThrottleProxySuite(Suite):
         """QA-TP-03 配置 1 MB/s + CLI --max-speed 512 KB/s：参数优先（v141 实跑）。"""
         @self.case("QA-TP-03")
         def go(env: Env):
-            env.write_config('max_speed = "1 MB/s"\n')
+            env.write_config('[common]\nmax_speed = "1 MB/s"\n')
             # CLI 覆盖配置（FR-01-60）。判别力：512K+10% 上界 563K 与
             # 1M−10% 下界 900K 不相交——测得 512K 档即证参数优先。
             app = EzrApp(env.home, args=["--max-speed", "512 KB/s"],
@@ -225,7 +225,7 @@ class ThrottleProxySuite(Suite):
         """QA-TP-04 max_speed=0 / "abc"：分别为不限速 / 回退默认不限速。"""
         @self.case("QA-TP-04")
         def go(env: Env):
-            for seq, body in enumerate(('max_speed = "0"\n', 'max_speed = "abc"\n')):
+            for seq, body in enumerate(('[common]\nmax_speed = "0"\n', '[common]\nmax_speed = "abc"\n')):
                 env.write_config(body)
                 app = EzrApp(env.home, save_dir=env.save_dir)
                 try:
@@ -252,7 +252,7 @@ class ThrottleProxySuite(Suite):
                     (("500KB/s", 500_000), ("2 MB/s", 2_000_000),
                      ("2 mb/s", 2_000_000), ("2000000 B/s", 2_000_000))):
                 sub = os.path.join(env.save_dir, f"r{seq}")
-                env.write_config(f'max_speed = "{spec}"\n')
+                env.write_config(f'[common]\nmax_speed = "{spec}"\n')
                 app = EzrApp(env.home, save_dir=env.save_dir)
                 try:
                     add_task_via_dialog(app, env, env.fixture.url("ten-m.bin"),
@@ -275,7 +275,7 @@ class ThrottleProxySuite(Suite):
                     app.graceful_quit()
                     raise
             # 1GB/s：不限速形态，秒完成（独立子目录同理）
-            env.write_config('max_speed = "1GB/s"\n')
+            env.write_config('[common]\nmax_speed = "1GB/s"\n')
             sub = os.path.join(env.save_dir, "rfree")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
@@ -299,7 +299,7 @@ class ThrottleProxySuite(Suite):
         """QA-TP-06 限速 1 MB/s + 无 Range 文件（单流）：速度同样受限（v141 实跑）。"""
         @self.case("QA-TP-06")
         def go(env: Env):
-            env.write_config('max_speed = "1 MB/s"\n')
+            env.write_config('[common]\nmax_speed = "1 MB/s"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 # ?norange=1：fixture 忽略 Range 回 200 全量（有 Content-Length）
@@ -328,7 +328,7 @@ class ThrottleProxySuite(Suite):
         """QA-TP-07 检查全部界面区块与页脚：无限速控件；布局不变。"""
         @self.case("QA-TP-07")
         def go(env: Env):
-            env.write_config('max_speed = "1 MB/s"\n')
+            env.write_config('[common]\nmax_speed = "1 MB/s"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(app, env, env.fixture.url("three-m.bin"))
@@ -338,7 +338,7 @@ class ThrottleProxySuite(Suite):
                 assert_in("全局", text, "头部")
                 # 页脚（v1.13/FR-01-107 页脚收敛：提示词 chips 化，「暂停」属
                 # footer.rs 退役词表——旧「Space 暂停/继续」断言随版退役）
-                assert_in("A 添加 · D 删除 · M 修改 · Q 退出 · H 帮助", text,
+                assert_in("A 命令 · D 删除 · M 修改 · Q 退出 · H 帮助", text,
                           "页脚命令 chips（v1.13 收敛定版）")
                 assert_not_in("限速", text.replace("max_speed", ""), "无限速控件")
                 assert_in("峰值 ↓", text, "头部流量图区块不变（v1.13 内嵌无标题，峰值图例）")

@@ -4,6 +4,7 @@
 #   08-modify-bt-03 修改文件勾选确认（total 重算 / 已下载钳制 / 立即生效 toast / 续传口径）
 #   08-modify-bt-04 确认校验（0 选中保留 toast）
 #   08-modify-bt-05 并发/代理热调与分块连接重建（保速度续传）
+#   08-modify-bt-06 修改 trackers 确认后立即生效（v1.2：热更新 tracker 池，无需停止再启动）
 # 期号 02（phase-02）。需求依据 project/mission/phase-02.md FR-02-03/04。
 # UI 基线 = ezr-demo phase2 源码（specifier 逐条核证：app/dialogs.rs open_modify_bt_dialog /
 # dlg_confirm_modify_bt、ui/dialogs.rs draw_bt_dialog ModifyBt 臂；焦点表 0–5、
@@ -12,7 +13,9 @@
 Feature: 08-modify-bt 修改任务：BT 对话框
 
   期号 02。M 键对 BT 任务分流进入：任务名静态行 + 文件列表框（预填当前勾选）+ 并发 +
-  代理 + trackers（预填任务 tracker 列表）；确认后文件选择/并发/代理立即生效。
+  代理 + trackers（预填任务 tracker 列表）；确认后文件选择/并发/代理立即生效；trackers
+  修改亦立即生效（v1.2：确认后热更新引擎 tracker 池，无需停止再启动任务——修复前
+  仅改模型、需停止再启动才生效的缺陷，操作者 bug11 轮指令）。
 
   Background:
     Given ezr 以干净环境启动
@@ -73,3 +76,17 @@ Feature: 08-modify-bt 修改任务：BT 对话框
     Examples:
       | conns | proxy |
       | 8     | 直连   |
+
+  Scenario: 08-modify-bt-06 修改 trackers 确认后立即生效（v1.2）
+    Given 任务下载中且任务 tracker 池含 tracker-A（fixture 日志可观察其周期 announce）
+    When 按 M 打开修改对话框，在 trackers 输入框追加一行 tracker-B（另一台 fixture tracker）
+      并删除一行 tracker-C（fixture tracker）后按 Enter 确认
+    Then 对话框关闭且 toast 照旧显示 "✓ BT 任务已更新：<k>/<n> 文件 · 共 <size>（立即生效）"
+    And 任务保持下载中不中断：已建立连接、进度与速度不受影响（不重挂引擎、无重新排队、
+      并发明细不闪断）
+    And tracker-B 立即被 announce（fixture 日志可证：确认后收到该任务 info_hash 的 announce，
+      无需停止再启动）且其返回 peers 纳入候选
+    And tracker-C 不再收到后续 announce（fixture 日志停止增长）
+    And 修改对话框重开时 trackers 预填 = 确认后的新列表（修改结果持久）
+    When 做种中任务同样修改 trackers 确认
+    Then 同口径立即生效（做种 announce 按新列表继续）

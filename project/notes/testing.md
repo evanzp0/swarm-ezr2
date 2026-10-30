@@ -173,3 +173,47 @@
 - 规格钉定列宽的变更必须同步 feature 文件引用：`04-ui-conns.feature` L128 钉死
   「IP(11)/…内容宽 59 列」，bug10 按操作者指令改为「地址(15)/内容宽 63」——feature
   文件属 specifier 职责未改，QA 复核时以 handoff 登记的偏离为准（操作者指令级偏离）。
+
+## 钦定模板文本的 runner 解析锚点：改模板必须同步三处断言
+- `suite_config_template.py` 不内嵌模板——运行时从 `features/01-config-template.feature`
+  注释块解析钦定原文：块起点 = 以「specifier v<N.N>）：」结尾的说明行，块终点 = 独立「）」行，
+  内容行统一剥 2 空格缩进。改模板（v1.10→v1.11 54→168 行）必须同步：①起点锚版本号
+  `specifier v1.10）：` → 新版本；②`len(body)` 断言数字；③键行抽验清单（新增键行加入）。
+  陷阱：示例块行数计入块体（`# [[common.proxy]]` 表头行算 1 行，双示例块各 7 行不是 6），
+  行数手工推算容易少 2。
+
+## QA 套件 write_config 的键路径随三大表重构整体迁移（13 套件 ~57 处）
+- runner 写配置一律顶层平铺（`download_slots = 2`），三大表后这些键全部变成「未知键静默
+  忽略」→ 用例假绿（回退默认恰好等于期望值时）或假红。迁移清单（v1.17 登记）：
+  suite_slots_queue ×9（→[common]）、suite_throttle_proxy ×8（→[common]）、
+  suite_persistence_config ×11、suite_named_proxy ×15（proxies_toml 生成器 [[proxies]] →
+  [[common.proxy]]）、suite_ui_conns ×3、suite_tui_display ×2、suite_retry_backoff ×2、
+  suite_modify_task ×2、suite_config_template ×2、suite_add_task ×1（→[common]）、
+  suite_resume_sidecar ×1、suite_integrity_check ×1、harness.py ×1。机械规则：
+  标量键写入 = 对应表头行 + 键值行（同一 [表] 段内多键合并）。
+
+## phase-02 交互变更必须同步 QA runner 帮助层：添加任务唯一入口已改命令窗口
+
+- 现象：QA 套件全线假红「添加对话框未打开」——`add_task_via_dialog` 仍按 phase-01
+  口径发 A 直接等「添加任务：HTTP(S)」，而 06-cmd-window（phase-02）后 A = 命令窗口
+  （标题「请输入命令或链接」），http URL 经 Enter 分流才开 HTTP 框；页脚 chip 同步改名
+  「A 添加」→「A 命令」，空态引导文案改「按 A 打开命令窗口添加任务」。
+- 处置：harness 新增 `open_add_dialog_via_cmd(app, url)`（A → 命令窗口 → 输 URL →
+  Enter → 等对话框），`add_task_via_dialog` 与 23 处直开点全部改走该 helper（ftp 等
+  对话框级校验用例 = 先 DUMMY_URL 开框再 bs 清空预填注入）；chip/空态文案断言同步。
+- 根因：phase-02 改交互时只改了产品与 feature，runner 帮助层未随动——**交互类需求
+  落地时必须把 QA runner 的入口/文案锚点一并过一遍**，否则全套件假红掩盖真回归。
+- 注意：tui_display 有两处特殊入口（页脚 chip 点击、Ctrl+C 浮层循环）需按命令窗口
+  口径单独改写；`A 添加`→`A 命令` 的全文替换会误伤「按 A 添加下载任务」类空态
+  断言（该文案本身也已改），替换后须逐点核对。
+
+## 状态转场窗口注入按键存在丢键/瞬时窗口：断言要落在稳定可观察物上
+
+- 现象（QA-SQ-13）：`wait_for("已失败")` 后立即 `send("r")`，偶发整套重试流程无响应
+  （无 toast 无重排队）；加 0.5s settle pump 后 toast 稳定出现，但「等待中」行仍可能
+  抓不到——重排队 → 1s tick 授槽 → probe 404 再败，整链 <1.5s，等待中窗口可能短于
+  0.1s 轮询粒度（授槽 tick 对齐时 <100ms）。
+- 处置：转场后先 `pump(0.4~0.5)` 再注入按键；断言优先落在长驻可观察物（toast 约 4s、
+  终态行），瞬时中间态（等待中）断言天然竞态，判读按 testing.md 假 FAIL 口径复跑。
+- 根因：pty 驱动与被测端 1s tick 异步，事件循环在状态切换批次内可能吞掉恰逢其时的
+  键事件；产品侧行为经单测与手工复验均正确（toast + 重排队语义在）。

@@ -27,19 +27,22 @@ FIVE_M = QA_FILE_SIZES["five-m.bin"]
 
 
 def operator_template_text() -> str:
-    """从 feature 场景 01 注释块解析操作者钦定模板原文（54 行，逐字节权威）。
+    """从 feature 场景 01 注释块解析操作者钦定模板原文（168 行，逐字节权威）。
 
-    块起点 = 以「specifier v1.10）：」结尾的说明行；块终点 = 独立全角括号行
+    块起点 = 以「specifier v1.11）：」结尾的说明行；块终点 = 独立全角括号行
     「）」；内容行统一 2 空格缩进（feature 文件风格），空行即真实空行；
     EOF 以一个换行符收尾。
     """
     with open(FEATURE_PATH, encoding="utf-8") as f:
         lines = f.read().split("\n")
     start = next(i for i, l in enumerate(lines)
-                 if l.rstrip().endswith("specifier v1.10）："))
+                 if l.rstrip().endswith("specifier v1.11）："))
     end = next(i for i, l in enumerate(lines) if i > start and l.strip() == "）")
     body = [l[2:] if l.startswith("  ") else l for l in lines[start + 1:end]]
-    assert len(body) == 54, f"钦定原文应为 54 行，解析得 {len(body)}"
+    assert len(body) == 168, f"钦定原文应为 168 行，解析得 {len(body)}"
+    assert any(l.startswith("# ===== [common]") for l in body), "三表分隔头注释：[common]"
+    assert any(l.startswith("# ===== [http]") for l in body), "三表分隔头注释：[http]"
+    assert any(l.startswith("# ===== [bt]") for l in body), "三表分隔头注释：[bt]"
     assert all((not l.strip()) or l.startswith("# ") for l in body), \
         "钦定原文每条非空行应以 # 开头"
     return "\n".join(body) + "\n"
@@ -86,18 +89,47 @@ class ConfigTemplateSuite(Suite):
                 nonblank = [l for l in body if l.strip()]
                 assert nonblank and all(l.startswith("# ") for l in nonblank), \
                     "每条非空行应以 # 开头"
-                # 9 键示例值与默认值口径逐一相符（含在钦定文本内，此处抽核心键）
+                # 36 键示例值与默认值口径逐一相符（v1.11 三表版抽验全集）
                 text = "\n".join(body)
                 for key_line in ("# download_dir = \"\"",
-                                 "# block_size_http = 1048576",
                                  "# download_slots = 5",
                                  "# max_speed = 0",
+                                 "# block_size_http = 1048576",
+                                 "# http_concurrency = 4",
                                  "# max_retries = 5",
                                  "# auto_retry = true",
                                  "# backoff_initial = 8.0",
                                  "# backoff_cap = 60.0",
-                                 "# http_concurrency = 4"):
+                                 "# progress_tick_ms = 100",
+                                 "# sidecar_flush_secs = 2",
+                                 "# throttle_burst_secs = 0.5",
+                                 "# throttle_sleep_ms = 20",
+                                 "# dns_race_grace_ms = 1000",
+                                 "# http_trackers = []",
+                                 "# udp_trackers = []",
+                                 "# bt_concurrency = 20",
+                                 "# peer_pipeline = 64",
+                                 "# upload_slots = 4",
+                                 "# upload_read_concurrency = 128",
+                                 "# idle_eviction_secs = 60",
+                                 "# connect_timeout_secs = 3",
+                                 "# handshake_timeout_secs = 10",
+                                 "# request_timeout_secs = 20",
+                                 "# requests_per_piece = 4",
+                                 "# rechoke_interval_secs = 10",
+                                 "# optimistic_interval_secs = 30",
+                                 "# progress_emit_min_interval_ms = 250",
+                                 "# tracker_numwant = 200",
+                                 "# peer_retry_base_secs = 5",
+                                 "# peer_retry_cap_secs = 120",
+                                 "# tracker_backoff_start_secs = 8",
+                                 "# tracker_backoff_cap_secs = 60",
+                                 "# udp_base_timeout_secs = 15",
+                                 "# udp_retries = 3",
+                                 "# seed_duration_secs = 1800",
+                                 "# [[common.proxy]]"):
                     assert_in(key_line, text, f"键示例行 {key_line}")
+                assert_not_in("# [[proxies]]", text, "旧 [[proxies]] 表头退役")
                 # v1.10 最小注释集：无凭证规则注释行、无解释性语义注释行
                 assert_not_in("必填", text, "无凭证规则注释行（FR-01-93⑤ 废止）")
                 assert_not_in("IPv6", text, "无 IPv6 语义注释行")
@@ -120,7 +152,7 @@ class ConfigTemplateSuite(Suite):
         @self.case("QA-CT-02")
         def go(env: Env):
             write_baseline(env)  # 保持基线落盘口径一致（本用例不比对）
-            env.write_config('download_slots = 2\n')
+            env.write_config('[common]\ndownload_slots = 2\n')
             cfg = env.config_path()
             with open(cfg, "rb") as f:
                 before = f.read()

@@ -3,8 +3,6 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use super::{App, Dialog, DialogKind};
 use crate::textfield::TextInput;
 
-pub(crate) const BT_DEFAULT_CONCURRENCY: usize = 20;
-
 #[must_use]
 pub(crate) fn torrent_path_like(token: &str) -> bool {
     token.ends_with(".torrent")
@@ -63,7 +61,7 @@ impl App {
     pub(crate) fn open_add_dialog_with(&mut self, prefill: &str) {
         let proto = crate::model::protocol_of_url(prefill);
         let def_conns = if proto.is_bt() {
-            BT_DEFAULT_CONCURRENCY
+            self.cfg.bt_concurrency
         } else {
             self.cfg.http_concurrency
         };

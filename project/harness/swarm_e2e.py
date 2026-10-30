@@ -356,7 +356,10 @@ def main() -> int:
         (ezr_home / ".ezr").mkdir(parents=True, exist_ok=True)
         ezr_out.mkdir(parents=True, exist_ok=True)
         (ezr_home / ".ezr" / "config.toml").write_text(
+            f'[common]\n'
             f'download_dir = "{ezr_out}"\n'
+            f'\n'
+            f'[http]\n'
             f'auto_retry = false\n'
             f'max_retries = 3\n'
         )

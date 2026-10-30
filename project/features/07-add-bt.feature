@@ -27,7 +27,7 @@ Feature: 07-add-bt 添加任务：BT 对话框
     When 经命令窗口输入 "<source>" 并确认打开「添加任务：BT」对话框
     Then 出现 78×26 圆角模态浮层居中显示、标题 " 添加任务：BT "、顶边框行右端 [✗]
     And 布局自上而下 = 顶 padding 1 行 / 种子 / 保存到 / 文件列表框（高 9 = 边框 2 + 7 可视行）/ 并发 / 代理 / trackers 输入框（高 7 = 边框 2 + 5 可视行）/ 按钮前空行 / 按钮行 / 底 padding
-    And 种子行预填 "<source>"（可编辑，300 字符上限）、保存到预填默认下载目录、并发预填 "20"、代理预填默认项（D48：配置 download_dir 缺省链，非 demo 的 /srv/downloads）
+    And 种子行预填 "<source>"（可编辑，300 字符上限）、保存到预填默认下载目录、并发预填 = [bt] 表 bt_concurrency 配置值（v1.35 三大表重构：缺省回退代码常量 20；越界钳制 1–64）、代理预填默认项（D48：配置 download_dir 缺省链，非 demo 的 /srv/downloads）
     And 文件列表框标题 " 选择下载文件 "、右上角 "[全选]" "[全不选]" 按钮、右下角统计 "已选 <sel_files> 个文件，共 <sel_size>"
     And 文件树按 "<source>" 元数据生成（目录默认收拢 ▸、默认全选——D49）、复选框列 [x] 绿色
     And trackers 输入框标题 " trackers "、空缓冲占位提示 "可输入多行 traker，使用 ALT+ENTER 换行"（DIM）

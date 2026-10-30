@@ -18,8 +18,6 @@ use crate::model::namegen::DOWNLOADING_EXT;
 use crate::model::sidecar::Sidecar;
 use crate::model::FailKind;
 
-const PROGRESS_TICK: Duration = Duration::from_millis(100);
-const SIDECAR_FLUSH: Duration = Duration::from_secs(2);
 
 pub(super) async fn download(
     spec: &TaskSpec,
@@ -205,7 +203,9 @@ pub(super) async fn download(
         handles.push((wid, deps.spawn(wid, Arc::clone(shared))));
     }
 
-    let mut flush_deadline = tokio::time::Instant::now() + SIDECAR_FLUSH;
+    let progress_tick = Duration::from_millis(spec.progress_tick_ms.max(1));
+    let sidecar_flush = Duration::from_secs(spec.sidecar_flush_secs.max(1));
+    let mut flush_deadline = tokio::time::Instant::now() + sidecar_flush;
     loop {
         tokio::select! {
             cmd = cmd_rx.recv() => match cmd {
@@ -234,7 +234,7 @@ pub(super) async fn download(
                 }
                 _ => return Flow::Cancelled,
             },
-            _ = tokio::time::sleep(PROGRESS_TICK) => {
+            _ = tokio::time::sleep(progress_tick) => {
                 prune_finished(&mut handles);
                 let want = *quota_tx.borrow();
                 if handles.len() < want {
@@ -307,7 +307,7 @@ pub(super) async fn download(
                     return Flow::Completed;
                 }
                 if tokio::time::Instant::now() >= flush_deadline {
-                    flush_deadline = tokio::time::Instant::now() + SIDECAR_FLUSH;
+                    flush_deadline = tokio::time::Instant::now() + sidecar_flush;
                     flush_sidecar(spec, &probed_stamp, &blocks_shared, &sc_path).await;
                 }
             }

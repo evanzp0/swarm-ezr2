@@ -21,7 +21,8 @@ import subprocess
 import time
 
 from harness import (
-    EZR_BIN, Env, EzrApp, Suite, add_task_via_dialog, assert_file_content,
+    DUMMY_URL, EZR_BIN, Env, EzrApp, Suite, add_task_via_dialog,
+    assert_file_content, open_add_dialog_via_cmd,
     assert_in, assert_not_in, detail_text, expected_content, file_bytes,
     wait_file_size, QA_FILE_SIZES,
 )
@@ -98,9 +99,7 @@ class AddTaskSuite(Suite):
         def go(env: Env):
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
-                app.send("A")
-                assert app.wait_for("添加任务：HTTP(S)", 3)
-                app.type_text(env.fixture.url("small.bin"))
+                open_add_dialog_via_cmd(app, env.fixture.url("small.bin"))
                 app.send("tab", "tab", "tab")  # 焦点至校验字段
                 # v1.32：默认 NONE + 占位提示删除（URL/校验码占位、尾注全 removed）
                 assert_in("NONE", app.text(), "默认应选中 NONE（v1.32）")
@@ -140,9 +139,7 @@ class AddTaskSuite(Suite):
         def go(env: Env):
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
-                app.send("A")
-                assert app.wait_for("添加任务：HTTP(S)", 3)
-                app.type_text(env.fixture.url("five-m.bin?speed=400000"))
+                open_add_dialog_via_cmd(app, env.fixture.url("five-m.bin?speed=400000"))
                 app.send("tab")
                 app.type_text(env.save_dir)
                 app.send("tab", "tab")          # 保存到1 → 并发2 → 校验3
@@ -174,9 +171,7 @@ class AddTaskSuite(Suite):
             for downs, want, wrong in ((4, "64", "b" * 32), (1, "32", "c" * 64)):
                 app = EzrApp(env.home, save_dir=env.save_dir)
                 try:
-                    app.send("A")
-                    assert app.wait_for("添加任务：HTTP(S)", 3)
-                    app.type_text(env.fixture.url("small.bin"))
+                    open_add_dialog_via_cmd(app, env.fixture.url("small.bin"))
                     app.send("tab", "tab", "tab")  # 焦点至校验字段
                     app.send("enter")              # 展开下拉
                     app.send("home")               # NONE 基点
@@ -208,9 +203,7 @@ class AddTaskSuite(Suite):
             # ② 选 MD5 留空确认 → 提交被拒 toast（v1.32 必填）
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
-                app.send("A")
-                assert app.wait_for("添加任务：HTTP(S)", 3)
-                app.type_text(env.fixture.url("small.bin"))
+                open_add_dialog_via_cmd(app, env.fixture.url("small.bin"))
                 app.send("tab", "tab", "tab", "enter")  # 展开下拉（焦点 3）
                 app.send("home")                        # NONE 基点
                 app.send("down")                        # MD5
@@ -229,9 +222,7 @@ class AddTaskSuite(Suite):
             # 状态断言与完成竞速（实测偶发 F）；断言须落在稳定下载中段。
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
-                app.send("A")
-                assert app.wait_for("添加任务：HTTP(S)", 3)
-                app.type_text(env.fixture.url("ten-m.bin?speed=400000"))
+                open_add_dialog_via_cmd(app, env.fixture.url("ten-m.bin?speed=400000"))
                 app.send("tab", "tab", "tab", "enter")
                 app.send("home")
                 app.send("down")  # MD5（v1.32 表序）
@@ -394,9 +385,7 @@ class AddTaskSuite(Suite):
             input_dir = os.path.join(env.home, "inputdl")
 
             def manual_add(url: str, dir_text: str) -> None:
-                app.send("A")
-                assert app.wait_for("添加任务：HTTP(S)", 3)
-                app.type_text(url)
+                open_add_dialog_via_cmd(app, url)
                 app.send("tab")
                 if dir_text:
                     app.type_text(dir_text)
@@ -415,7 +404,7 @@ class AddTaskSuite(Suite):
                 app.graceful_quit()
                 raise
             # ② 无输入 + 配置 download_dir → cfg_dir（自动创建）
-            env.write_config(f'download_dir = "{cfg_dir}"\n')
+            env.write_config(f'[common]\ndownload_dir = "{cfg_dir}"\n')
             app = EzrApp(env.home, save_dir=None)
             try:
                 manual_add(env.fixture.url("small.bin"), "")
@@ -513,9 +502,7 @@ class AddTaskSuite(Suite):
                 n1 = self._task_count(app)
                 assert n1 == 1, f"首次添加后任务数 1: {n1}"
                 # 再次添加相同 URL 与目录
-                app.send("A")
-                assert app.wait_for("添加任务：HTTP(S)", 3)
-                app.type_text(env.fixture.url("five-m.bin?speed=500000"))
+                open_add_dialog_via_cmd(app, env.fixture.url("five-m.bin?speed=500000"))
                 app.send("tab")
                 app.type_text(env.save_dir)
                 app.send("enter")
@@ -538,8 +525,7 @@ class AddTaskSuite(Suite):
                 f.write(b"0" * 1024)
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
-                app.send("A")
-                assert app.wait_for("添加任务：HTTP(S)", 3)
+                open_add_dialog_via_cmd(app, DUMMY_URL)
                 os.write(app.fd, b"\x1b[200~" + url.encode() + b"\x1b[201~")
                 app.pump(0.6)
                 assert_in(url[-40:], app.text(), "字段应完整显示粘贴内容（尾部可见）")
@@ -571,8 +557,7 @@ class AddTaskSuite(Suite):
             # ① 按钮行与提示行
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
-                app.send("A")
-                assert app.wait_for("添加任务：HTTP(S)", 3)
+                open_add_dialog_via_cmd(app, DUMMY_URL)
                 text = app.text()
                 for btn in ("[ 立即下载 ]", "[ 仅添加 ]", "[ 取消 ]"):
                     assert_in(btn, text, f"按钮行应含 {btn}（FR-01-103）")
@@ -586,9 +571,7 @@ class AddTaskSuite(Suite):
                 app.pump(0.3)
                 # ② 合法 URL + 仅添加
                 target = os.path.join(env.save_dir, "one-m.bin")
-                app.send("A")
-                assert app.wait_for("添加任务：HTTP(S)", 3)
-                app.type_text(env.fixture.url("one-m.bin?speed=200000"))
+                open_add_dialog_via_cmd(app, env.fixture.url("one-m.bin?speed=200000"))
                 app.send("tab")
                 app.type_text(env.save_dir)
                 app.send(*(["tab"] * 6))  # 焦点 1（保存到）→ 7（仅添加）
@@ -620,8 +603,8 @@ class AddTaskSuite(Suite):
             # ④ 非法 URL + 仅添加：校验链与立即下载一致
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
-                app.send("A")
-                assert app.wait_for("添加任务：HTTP(S)", 3)
+                open_add_dialog_via_cmd(app, DUMMY_URL)
+                app.send(*(["bs"] * len(DUMMY_URL)))  # 清空预填再注入 ftp URL（对话框级校验）
                 app.type_text("ftp://example.invalid/file.bin")
                 app.send(*(["tab"] * 6))
                 app.send("enter")
@@ -646,8 +629,7 @@ class AddTaskSuite(Suite):
             import re
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
-                app.send("A")
-                assert app.wait_for("添加任务：HTTP(S)", 3)
+                open_add_dialog_via_cmd(app, DUMMY_URL)
                 # 逐字输入合法 URL（type_text 即逐字注入）：并发自动回填 4
                 app.type_text(env.fixture.url("small.bin"))
                 app.pump(0.3)

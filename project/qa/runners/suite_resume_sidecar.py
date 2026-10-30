@@ -18,7 +18,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from harness import (
-    Env, EzrApp, Suite, TMP_ROOT, add_task_via_dialog, assert_file_content,
+    Env, EzrApp, Suite, DUMMY_URL, TMP_ROOT, add_task_via_dialog, assert_file_content,
+    open_add_dialog_via_cmd,
     assert_in, assert_not_in, detail_text, expected_content, file_bytes,
     read_file, wait_file_size, task_pct, QA_FILE_SIZES,
 )
@@ -289,7 +290,7 @@ class ResumeSidecarSuite(Suite):
             # 都会在片尾被无害切断；为获得真实中途断连，配置块 4MB（2 块）＋
             # disconnect=2000000：两 worker 首连各传 2MB 被切（有进展瞬态失败），
             # 退避后重试请求片长 ≤2MB 不再被切 → 恰验证「断点续传补齐」
-            env.write_config("block_size_http = 4194304\n")
+            env.write_config("[http]\nblock_size_http = 4194304\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(
@@ -628,9 +629,7 @@ class ResumeSidecarSuite(Suite):
             app.send("enter")  # 仅删除任务
             assert app.wait_for("已删除任务（保留文件）", 6)
             # 重加同 URL 同目录
-            app.send("A")
-            assert app.wait_for("添加任务：HTTP(S)", 3)
-            app.type_text(env.fixture.url(f"{name}?speed=800000"))
+            open_add_dialog_via_cmd(app, env.fixture.url(f"{name}?speed=800000"))
             app.send("tab")
             app.type_text(env.save_dir)
             app.send("enter")
@@ -682,9 +681,7 @@ class ResumeSidecarSuite(Suite):
             assert app.wait_for("已删除任务（保留文件）", 6)
             self._wait_sidecar(env, name, timeout=5)  # 超时即断言失败：sidecar 应保留
             # 重加同推导名异 URL + 相同保存目录
-            app.send("A")
-            assert app.wait_for("添加任务：HTTP(S)", 3)
-            app.type_text(env.fixture.url(f"{new_rel}?speed=800000"))
+            open_add_dialog_via_cmd(app, env.fixture.url(f"{new_rel}?speed=800000"))
             app.send("tab")
             app.type_text(env.save_dir)
             app.send("enter")

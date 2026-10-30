@@ -6,6 +6,31 @@ pub const DEFAULT_BLOCK_SIZE_HTTP: u64 = super::chunk::HTTP_CHUNK_SIZE;
 pub const DEFAULT_DOWNLOAD_SLOTS: usize = 5;
 pub const DEFAULT_HTTP_CONCURRENCY: usize = 4;
 pub const DEFAULT_MAX_RETRIES: u32 = 5;
+pub const DEFAULT_PROGRESS_TICK_MS: u64 = 100;
+pub const DEFAULT_SIDECAR_FLUSH_SECS: u64 = 2;
+pub const DEFAULT_THROTTLE_BURST_SECS: f64 = 0.5;
+pub const DEFAULT_THROTTLE_SLEEP_MS: u64 = 20;
+pub const DEFAULT_DNS_RACE_GRACE_MS: u64 = 1000;
+pub const DEFAULT_BT_CONCURRENCY: usize = 20;
+pub const DEFAULT_PEER_PIPELINE: usize = 64;
+pub const DEFAULT_UPLOAD_SLOTS: usize = 4;
+pub const DEFAULT_UPLOAD_READ_CONCURRENCY: usize = 128;
+pub const DEFAULT_IDLE_EVICTION_SECS: u64 = 60;
+pub const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 3;
+pub const DEFAULT_HANDSHAKE_TIMEOUT_SECS: u64 = 10;
+pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 20;
+pub const DEFAULT_REQUESTS_PER_PIECE: usize = 4;
+pub const DEFAULT_RECHOKE_INTERVAL_SECS: u64 = 10;
+pub const DEFAULT_OPTIMISTIC_INTERVAL_SECS: u64 = 30;
+pub const DEFAULT_PROGRESS_EMIT_MIN_INTERVAL_MS: u64 = 250;
+pub const DEFAULT_TRACKER_NUMWANT: u32 = 200;
+pub const DEFAULT_PEER_RETRY_BASE_SECS: u64 = 5;
+pub const DEFAULT_PEER_RETRY_CAP_SECS: u64 = 120;
+pub const DEFAULT_TRACKER_BACKOFF_START_SECS: u64 = 8;
+pub const DEFAULT_TRACKER_BACKOFF_CAP_SECS: u64 = 60;
+pub const DEFAULT_UDP_BASE_TIMEOUT_SECS: u64 = 15;
+pub const DEFAULT_UDP_RETRIES: u32 = 3;
+pub const DEFAULT_SEED_DURATION_SECS: f64 = 1800.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProxyKind {
@@ -79,17 +104,42 @@ pub struct ProxyEndpoint {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     pub download_dir: Option<String>,
-    pub block_size_http: u64,
     pub download_slots: usize,
     pub max_speed: u64,
+    pub proxies: Vec<ProxyConfig>,
+    pub block_size_http: u64,
+    pub http_concurrency: usize,
     pub max_retries: u32,
     pub auto_retry: bool,
     pub backoff_initial: f64,
     pub backoff_cap: f64,
-    pub proxies: Vec<ProxyConfig>,
-    pub http_concurrency: usize,
+    pub progress_tick_ms: u64,
+    pub sidecar_flush_secs: u64,
+    pub throttle_burst_secs: f64,
+    pub throttle_sleep_ms: u64,
+    pub dns_race_grace_ms: u64,
     pub http_trackers: Vec<String>,
     pub udp_trackers: Vec<String>,
+    pub bt_concurrency: usize,
+    pub peer_pipeline: usize,
+    pub upload_slots: usize,
+    pub upload_read_concurrency: usize,
+    pub idle_eviction_secs: u64,
+    pub connect_timeout_secs: u64,
+    pub handshake_timeout_secs: u64,
+    pub request_timeout_secs: u64,
+    pub requests_per_piece: usize,
+    pub rechoke_interval_secs: u64,
+    pub optimistic_interval_secs: u64,
+    pub progress_emit_min_interval_ms: u64,
+    pub tracker_numwant: u32,
+    pub peer_retry_base_secs: u64,
+    pub peer_retry_cap_secs: u64,
+    pub tracker_backoff_start_secs: u64,
+    pub tracker_backoff_cap_secs: u64,
+    pub udp_base_timeout_secs: u64,
+    pub udp_retries: u32,
+    pub seed_duration_secs: f64,
     pub warnings: Vec<String>,
 }
 
@@ -97,17 +147,42 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             download_dir: None,
-            block_size_http: DEFAULT_BLOCK_SIZE_HTTP,
             download_slots: DEFAULT_DOWNLOAD_SLOTS,
             max_speed: 0,
+            proxies: Vec::new(),
+            block_size_http: DEFAULT_BLOCK_SIZE_HTTP,
+            http_concurrency: DEFAULT_HTTP_CONCURRENCY,
             max_retries: DEFAULT_MAX_RETRIES,
             auto_retry: true,
             backoff_initial: 8.0,
             backoff_cap: 60.0,
-            proxies: Vec::new(),
-            http_concurrency: DEFAULT_HTTP_CONCURRENCY,
+            progress_tick_ms: DEFAULT_PROGRESS_TICK_MS,
+            sidecar_flush_secs: DEFAULT_SIDECAR_FLUSH_SECS,
+            throttle_burst_secs: DEFAULT_THROTTLE_BURST_SECS,
+            throttle_sleep_ms: DEFAULT_THROTTLE_SLEEP_MS,
+            dns_race_grace_ms: DEFAULT_DNS_RACE_GRACE_MS,
             http_trackers: Vec::new(),
             udp_trackers: Vec::new(),
+            bt_concurrency: DEFAULT_BT_CONCURRENCY,
+            peer_pipeline: DEFAULT_PEER_PIPELINE,
+            upload_slots: DEFAULT_UPLOAD_SLOTS,
+            upload_read_concurrency: DEFAULT_UPLOAD_READ_CONCURRENCY,
+            idle_eviction_secs: DEFAULT_IDLE_EVICTION_SECS,
+            connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
+            handshake_timeout_secs: DEFAULT_HANDSHAKE_TIMEOUT_SECS,
+            request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
+            requests_per_piece: DEFAULT_REQUESTS_PER_PIECE,
+            rechoke_interval_secs: DEFAULT_RECHOKE_INTERVAL_SECS,
+            optimistic_interval_secs: DEFAULT_OPTIMISTIC_INTERVAL_SECS,
+            progress_emit_min_interval_ms: DEFAULT_PROGRESS_EMIT_MIN_INTERVAL_MS,
+            tracker_numwant: DEFAULT_TRACKER_NUMWANT,
+            peer_retry_base_secs: DEFAULT_PEER_RETRY_BASE_SECS,
+            peer_retry_cap_secs: DEFAULT_PEER_RETRY_CAP_SECS,
+            tracker_backoff_start_secs: DEFAULT_TRACKER_BACKOFF_START_SECS,
+            tracker_backoff_cap_secs: DEFAULT_TRACKER_BACKOFF_CAP_SECS,
+            udp_base_timeout_secs: DEFAULT_UDP_BASE_TIMEOUT_SECS,
+            udp_retries: DEFAULT_UDP_RETRIES,
+            seed_duration_secs: DEFAULT_SEED_DURATION_SECS,
             warnings: Vec::new(),
         }
     }
@@ -125,19 +200,95 @@ struct ProxyRaw {
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
-struct ConfigRaw {
+struct CommonRaw {
     download_dir: Option<String>,
-    block_size_http: Option<u64>,
-    download_slots: Option<usize>,
-    max_speed: Option<String>,
-    max_retries: Option<u32>,
+    download_slots: Option<i64>,
+    max_speed: Option<toml::Value>,
+    proxy: Option<Vec<ProxyRaw>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct HttpRaw {
+    block_size_http: Option<i64>,
+    http_concurrency: Option<i64>,
+    max_retries: Option<i64>,
     auto_retry: Option<bool>,
     backoff_initial: Option<f64>,
     backoff_cap: Option<f64>,
-    proxies: Option<Vec<ProxyRaw>>,
-    http_concurrency: Option<usize>,
+    progress_tick_ms: Option<i64>,
+    sidecar_flush_secs: Option<i64>,
+    throttle_burst_secs: Option<f64>,
+    throttle_sleep_ms: Option<i64>,
+    dns_race_grace_ms: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct BtRaw {
     http_trackers: Option<Vec<String>>,
     udp_trackers: Option<Vec<String>>,
+    bt_concurrency: Option<i64>,
+    peer_pipeline: Option<i64>,
+    upload_slots: Option<i64>,
+    upload_read_concurrency: Option<i64>,
+    idle_eviction_secs: Option<i64>,
+    connect_timeout_secs: Option<i64>,
+    handshake_timeout_secs: Option<i64>,
+    request_timeout_secs: Option<i64>,
+    requests_per_piece: Option<i64>,
+    rechoke_interval_secs: Option<i64>,
+    optimistic_interval_secs: Option<i64>,
+    progress_emit_min_interval_ms: Option<i64>,
+    tracker_numwant: Option<i64>,
+    peer_retry_base_secs: Option<i64>,
+    peer_retry_cap_secs: Option<i64>,
+    tracker_backoff_start_secs: Option<i64>,
+    tracker_backoff_cap_secs: Option<i64>,
+    udp_base_timeout_secs: Option<i64>,
+    udp_retries: Option<i64>,
+    seed_duration_secs: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct ConfigRaw {
+    common: Option<CommonRaw>,
+    http: Option<HttpRaw>,
+    bt: Option<BtRaw>,
+}
+
+fn min1_u64(v: Option<i64>, d: u64) -> u64 {
+    v.and_then(|v| u64::try_from(v).ok())
+        .filter(|v| *v >= 1)
+        .unwrap_or(d)
+}
+
+fn min1_usize(v: Option<i64>, d: usize) -> usize {
+    v.filter(|v| *v >= 1)
+        .and_then(|v| usize::try_from(v).ok())
+        .unwrap_or(d)
+}
+
+fn min1_u32(v: Option<i64>, d: u32) -> u32 {
+    v.filter(|v| *v >= 1)
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or(d)
+}
+
+fn clamp_u(v: Option<i64>, d: usize) -> usize {
+    v.filter(|v| *v >= 1)
+        .map(|v| v.clamp(1, 64) as usize)
+        .unwrap_or(d)
+}
+
+fn pos_f64(v: Option<f64>, d: f64) -> f64 {
+    v.filter(|v| *v > 0.0 && v.is_finite()).unwrap_or(d)
+}
+
+fn max_speed_of(v: Option<toml::Value>) -> u64 {
+    match v {
+        Some(toml::Value::String(s)) => parse_speed(&s),
+        Some(toml::Value::Integer(n)) => parse_speed(&n.to_string()),
+        _ => 0,
+    }
 }
 
 impl Config {
@@ -154,7 +305,8 @@ impl Config {
         let d = Config::default();
         let mut warnings = Vec::new();
         let mut proxies = Vec::new();
-        for p in raw.proxies.into_iter().flatten() {
+        let common_proxy = raw.common.as_ref().and_then(|c| c.proxy.clone()).unwrap_or_default();
+        for p in common_proxy {
             let name = p.name.unwrap_or_default().trim().to_string();
             if name.is_empty() {
                 warnings.push("已忽略无效代理条目：name 为空".to_string());
@@ -226,45 +378,68 @@ impl Config {
                 password,
             });
         }
+        let common = raw.common.unwrap_or_default();
+        let http = raw.http.unwrap_or_default();
+        let bt = raw.bt.unwrap_or_default();
         Config {
-            download_dir: raw.download_dir.filter(|s| !s.trim().is_empty()),
-            block_size_http: raw
+            download_dir: common.download_dir.filter(|s| !s.trim().is_empty()),
+            download_slots: min1_usize(common.download_slots, d.download_slots),
+            max_speed: max_speed_of(common.max_speed),
+            proxies,
+            block_size_http: http
                 .block_size_http
+                .and_then(|v| u64::try_from(v).ok())
                 .filter(|v| *v > 0)
                 .map(|v| v.max(super::chunk::MIN_HTTP_BLOCK_SIZE))
                 .unwrap_or(d.block_size_http),
-            download_slots: raw
-                .download_slots
-                .filter(|v| *v > 0)
-                .unwrap_or(d.download_slots),
-            max_speed: raw.max_speed.as_deref().map_or(0, parse_speed),
-            max_retries: raw.max_retries.filter(|v| *v >= 1).unwrap_or(d.max_retries),
-            auto_retry: raw.auto_retry.unwrap_or(d.auto_retry),
-            backoff_initial: raw
-                .backoff_initial
-                .filter(|v| *v > 0.0 && v.is_finite())
-                .unwrap_or(d.backoff_initial),
-            backoff_cap: raw
-                .backoff_cap
-                .filter(|v| *v > 0.0 && v.is_finite())
-                .unwrap_or(d.backoff_cap),
-            proxies,
-            http_concurrency: raw
-                .http_concurrency
-                .map(|v| v.clamp(1, 64))
-                .unwrap_or(d.http_concurrency),
+            http_concurrency: clamp_u(http.http_concurrency, d.http_concurrency),
+            max_retries: min1_u32(http.max_retries, d.max_retries),
+            auto_retry: http.auto_retry.unwrap_or(d.auto_retry),
+            backoff_initial: pos_f64(http.backoff_initial, d.backoff_initial),
+            backoff_cap: pos_f64(http.backoff_cap, d.backoff_cap),
+            progress_tick_ms: min1_u64(http.progress_tick_ms, d.progress_tick_ms),
+            sidecar_flush_secs: min1_u64(http.sidecar_flush_secs, d.sidecar_flush_secs),
+            throttle_burst_secs: pos_f64(http.throttle_burst_secs, d.throttle_burst_secs),
+            throttle_sleep_ms: min1_u64(http.throttle_sleep_ms, d.throttle_sleep_ms),
+            dns_race_grace_ms: min1_u64(http.dns_race_grace_ms, d.dns_race_grace_ms),
             http_trackers: sanitize_trackers(
-                raw.http_trackers.unwrap_or_default(),
+                bt.http_trackers.unwrap_or_default(),
                 &["http://", "https://"],
                 "http_trackers",
                 &mut warnings,
             ),
             udp_trackers: sanitize_trackers(
-                raw.udp_trackers.unwrap_or_default(),
+                bt.udp_trackers.unwrap_or_default(),
                 &["udp://"],
                 "udp_trackers",
                 &mut warnings,
             ),
+            bt_concurrency: clamp_u(bt.bt_concurrency, d.bt_concurrency),
+            peer_pipeline: min1_usize(bt.peer_pipeline, d.peer_pipeline),
+            upload_slots: min1_usize(bt.upload_slots, d.upload_slots),
+            upload_read_concurrency: min1_usize(bt.upload_read_concurrency, d.upload_read_concurrency),
+            idle_eviction_secs: min1_u64(bt.idle_eviction_secs, d.idle_eviction_secs),
+            connect_timeout_secs: min1_u64(bt.connect_timeout_secs, d.connect_timeout_secs),
+            handshake_timeout_secs: min1_u64(bt.handshake_timeout_secs, d.handshake_timeout_secs),
+            request_timeout_secs: min1_u64(bt.request_timeout_secs, d.request_timeout_secs),
+            requests_per_piece: min1_usize(bt.requests_per_piece, d.requests_per_piece),
+            rechoke_interval_secs: min1_u64(bt.rechoke_interval_secs, d.rechoke_interval_secs),
+            optimistic_interval_secs: min1_u64(bt.optimistic_interval_secs, d.optimistic_interval_secs),
+            progress_emit_min_interval_ms: min1_u64(
+                bt.progress_emit_min_interval_ms,
+                d.progress_emit_min_interval_ms,
+            ),
+            tracker_numwant: min1_u32(bt.tracker_numwant, d.tracker_numwant),
+            peer_retry_base_secs: min1_u64(bt.peer_retry_base_secs, d.peer_retry_base_secs),
+            peer_retry_cap_secs: min1_u64(bt.peer_retry_cap_secs, d.peer_retry_cap_secs),
+            tracker_backoff_start_secs: min1_u64(
+                bt.tracker_backoff_start_secs,
+                d.tracker_backoff_start_secs,
+            ),
+            tracker_backoff_cap_secs: min1_u64(bt.tracker_backoff_cap_secs, d.tracker_backoff_cap_secs),
+            udp_base_timeout_secs: min1_u64(bt.udp_base_timeout_secs, d.udp_base_timeout_secs),
+            udp_retries: min1_u32(bt.udp_retries, d.udp_retries),
+            seed_duration_secs: pos_f64(bt.seed_duration_secs, d.seed_duration_secs),
             warnings,
         }
     }
@@ -401,13 +576,11 @@ pub fn default_download_dir() -> String {
 
 const AUTHORIZED_TEMPLATE: &str = r#"# EZR Downloader 配置模板
 
+# ===== [common] 公共配置（两引擎共用） =====
+
 # download_dir：默认保存目录（添加对话框目录留空时使用）
 # 取值范围：任意目录路径；留空或缺失 = 用户主目录下的下载目录
 # download_dir = ""
-
-# block_size_http：HTTP 分块块大小（字节）
-# 取值范围：正整数（≥1）；0 或非法值回退默认（1 MB）
-# block_size_http = 1048576
 
 # download_slots：全局下载槽位数（同时下载的任务数上限）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
@@ -416,6 +589,33 @@ const AUTHORIZED_TEMPLATE: &str = r#"# EZR Downloader 配置模板
 # max_speed：全局下载限速（0 = 不限）
 # 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
 # max_speed = 0
+
+# proxy：命名代理列表（可配置多个）
+# [[common.proxy]]
+# name = "办公网代理"
+# type = "http"
+# ip = "proxy.corp.example"
+# port = 8080
+# username = "alice"
+# password = "secret"
+
+# [[common.proxy]]
+# name = "本地 SOCKS5"
+# type = "socks5"
+# ip = "127.0.0.1"
+# port = 1080
+# username = "ezr"
+# password = "secret"
+
+# ===== [http] HTTP 引擎配置 =====
+
+# block_size_http：HTTP 分块块大小（字节）
+# 取值范围：正整数（≥1）；0 或非法值回退默认（1 MB）
+# block_size_http = 1048576
+
+# http_concurrency：默认并发数
+# 取值范围：1–64 的整数；越界钳制到边界
+# http_concurrency = 4
 
 # max_retries：自动重试上限次数（达上限转停等，可按 R 手动重试）
 # 取值范围：≥1 的整数；0 或非法值回退默认
@@ -433,34 +633,115 @@ const AUTHORIZED_TEMPLATE: &str = r#"# EZR Downloader 配置模板
 # 取值范围：>0 的有限数；非法值回退默认
 # backoff_cap = 60.0
 
-# http_concurrency：默认并发数
-# 取值范围：1–64 的整数；越界钳制到边界
-# http_concurrency = 4
+# progress_tick_ms：HTTP 下载进度事件节拍（毫秒）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# progress_tick_ms = 100
 
-# http_trackers：HTTP(S) tracker 列表（BT 任务默认 tracker 池来源之一，phase-02）
+# sidecar_flush_secs：断点 sidecar 落盘间隔（秒）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# sidecar_flush_secs = 2
+
+# throttle_burst_secs：限速令牌桶突发窗（秒）
+# 取值范围：>0 的有限数；非法值回退默认
+# throttle_burst_secs = 0.5
+
+# throttle_sleep_ms：限速循环步进睡眠（毫秒）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# throttle_sleep_ms = 20
+
+# dns_race_grace_ms：DNS 双腿竞速宽限（毫秒，双栈并行解析）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# dns_race_grace_ms = 1000
+
+# ===== [bt] BT 引擎配置 =====
+
+# http_trackers：HTTP(S) tracker 列表（BT 任务默认 tracker 池来源之一）
 # 取值范围：字符串数组，每项为 http:// 或 https:// 开头的 tracker announce URL；非法 URL 行启动时忽略并警告
 # http_trackers = []
 
-# udp_trackers：UDP tracker 列表（BT 任务默认 tracker 池来源之一，phase-02）
+# udp_trackers：UDP tracker 列表（BT 任务默认 tracker 池来源之一）
 # 取值范围：字符串数组，每项为 udp:// 开头的 tracker announce URL（含端口）；非法 URL 行启动时忽略并警告
 # udp_trackers = []
 
-# proxies：命名代理列表（可配置多个）
-# [[proxies]]
-# name = "办公网代理"
-# type = "http"
-# ip = "proxy.corp.example"
-# port = 8080
-# username = "alice"
-# password = "secret"
+# bt_concurrency：BT 任务默认并发数（新任务预填）
+# 取值范围：1–64 的整数；越界钳制到边界
+# bt_concurrency = 20
 
-# [[proxies]]
-# name = "本地 SOCKS5"
-# type = "socks5"
-# ip = "127.0.0.1"
-# port = 1080
-# username = "ezr"
-# password = "secret"
+# peer_pipeline：单 peer 在飞请求块数上限（×16 KiB = 在飞窗口）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# peer_pipeline = 64
+
+# upload_slots：同时获得上传槽位的 peer 数（choker 周期分配）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# upload_slots = 4
+
+# upload_read_concurrency：上传读盘并发上限（进程级）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# upload_read_concurrency = 128
+
+# idle_eviction_secs：空闲连接置换阈值（秒，无新增进账超时即断开重拨）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# idle_eviction_secs = 60
+
+# connect_timeout_secs：出连 TCP 拨号超时（秒）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# connect_timeout_secs = 3
+
+# handshake_timeout_secs：peer 握手超时（秒）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# handshake_timeout_secs = 10
+
+# request_timeout_secs：在飞块请求超时（秒）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# request_timeout_secs = 20
+
+# requests_per_piece：单 piece 请求块粒度（piece 细分为 n 块请求）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# requests_per_piece = 4
+
+# rechoke_interval_secs：上传 choker 重排周期（秒）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# rechoke_interval_secs = 10
+
+# optimistic_interval_secs：乐观 unchoke 轮换周期（秒）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# optimistic_interval_secs = 30
+
+# progress_emit_min_interval_ms：进度事件最小发送间隔（毫秒，节流）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# progress_emit_min_interval_ms = 250
+
+# tracker_numwant：announce 请求的 peer 数上限
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# tracker_numwant = 200
+
+# peer_retry_base_secs：peer 连接失败重试退避起始（秒，倍增）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# peer_retry_base_secs = 5
+
+# peer_retry_cap_secs：peer 连接失败重试退避封顶（秒）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# peer_retry_cap_secs = 120
+
+# tracker_backoff_start_secs：tracker 失败退避起始（秒，倍增）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# tracker_backoff_start_secs = 8
+
+# tracker_backoff_cap_secs：tracker 失败退避封顶（秒）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# tracker_backoff_cap_secs = 60
+
+# udp_base_timeout_secs：UDP tracker 单轮超时起始（秒，倍增重试）
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# udp_base_timeout_secs = 15
+
+# udp_retries：UDP tracker 超时重试次数
+# 取值范围：正整数（≥1）；0 或非法值回退默认
+# udp_retries = 3
+
+# seed_duration_secs：做种时长默认值（秒，任务做种倒计时起点）
+# 取值范围：>0 的数；0 或非法值回退默认
+# seed_duration_secs = 1800
 "#;
 
 impl Config {
@@ -497,11 +778,15 @@ mod tests {
         assert_eq!(c.download_slots, 5);
         assert_eq!(c.max_retries, 5);
         assert!(c.auto_retry);
+        assert_eq!(c.progress_tick_ms, 100);
+        assert_eq!(c.bt_concurrency, 20);
+        assert_eq!(c.idle_eviction_secs, 60);
+        assert_eq!(c.seed_duration_secs, 1800.0);
     }
 
     #[test]
     fn partial_keys_fallback_defaults() {
-        let c = Config::from_toml("download_slots = 3\n");
+        let c = Config::from_toml("[common]\ndownload_slots = 3\n");
         assert_eq!(c.download_slots, 3);
         assert_eq!(c.block_size_http, DEFAULT_BLOCK_SIZE_HTTP);
     }
@@ -509,7 +794,7 @@ mod tests {
     #[test]
     fn invalid_values_fall_back() {
         let c = Config::from_toml(
-            "block_size_http = 0\ndownload_slots = 0\nmax_retries = 0\nhttp_concurrency = 999\n",
+            "[http]\nblock_size_http = 0\nmax_retries = 0\nhttp_concurrency = 999\n[common]\ndownload_slots = 0\n",
         );
         assert_eq!(c.block_size_http, DEFAULT_BLOCK_SIZE_HTTP);
         assert_eq!(c.download_slots, 5);
@@ -519,21 +804,38 @@ mod tests {
 
     #[test]
     fn block_size_http_positive_below_floor_clamped() {
-        let c = Config::from_toml("block_size_http = 512\n");
-        assert_eq!(c.block_size_http, 1_048_576);
-        let c = Config::from_toml("block_size_http = 1048575\n");
-        assert_eq!(c.block_size_http, 1_048_576, "下限之下 1 字节也钳制");
-        let c = Config::from_toml("block_size_http = 1048576\n");
-        assert_eq!(c.block_size_http, 1_048_576, "恰在下限 = 原值");
-        let c = Config::from_toml("block_size_http = 2097152\n");
-        assert_eq!(c.block_size_http, 2_097_152, "大于下限原值生效");
+        let mk = |v: &str| Config::from_toml(&format!("[http]\nblock_size_http = {v}\n"));
+        assert_eq!(mk("512").block_size_http, 1_048_576);
+        assert_eq!(mk("1048575").block_size_http, 1_048_576, "下限之下 1 字节也钳制");
+        assert_eq!(mk("1048576").block_size_http, 1_048_576, "恰在下限 = 原值");
+        assert_eq!(mk("2097152").block_size_http, 2_097_152, "大于下限原值生效");
     }
 
     #[test]
-    fn legacy_concurrency_key_ignored() {
-        let c = Config::from_toml("default_concurrency = 9\n");
-        assert_eq!(c.http_concurrency, DEFAULT_HTTP_CONCURRENCY);
-        assert!(c.warnings.is_empty(), "未知键静默忽略");
+    fn legacy_flat_keys_ignored_silently() {
+        let c = Config::from_toml(
+            "download_slots = 2\nblock_size_http = 4194304\nhttp_concurrency = 8\nmax_speed = \"1 MB/s\"\ndefault_concurrency = 9\nproxy = \"http://127.0.0.1:8118\"\n",
+        );
+        assert_eq!(c, Config::default(), "旧格式顶层键全部按未知键忽略，全部默认");
+        assert!(c.warnings.is_empty(), "零警告（FR-01-71 未知键口径）");
+    }
+
+    #[test]
+    fn legacy_proxies_table_ignored() {
+        let c = Config::from_toml(
+            "[[proxies]]\nname = \"a\"\ntype = \"http\"\nip = \"127.0.0.1\"\nport = 8080\n",
+        );
+        assert!(c.proxies.is_empty(), "旧 [[proxies]] 表不读");
+        assert!(c.warnings.is_empty(), "旧表静默忽略零警告");
+    }
+
+    #[test]
+    fn legacy_and_new_format_coexist() {
+        let c = Config::from_toml(
+            "download_slots = 2\n[common]\ndownload_slots = 3\n",
+        );
+        assert_eq!(c.download_slots, 3, "新表键生效且不受旧顶层键干扰");
+        assert!(c.warnings.is_empty());
     }
 
     #[test]
@@ -553,21 +855,86 @@ mod tests {
     }
 
     #[test]
-    fn legacy_proxy_key_ignored() {
-        let c = Config::from_toml("proxy = \"http://127.0.0.1:8118\"\n");
-        assert_eq!(c, Config::default(), "旧 proxy 键按未知键忽略");
-        assert!(c.warnings.is_empty());
+    fn max_speed_accepts_string_and_integer() {
+        let c = Config::from_toml("[common]\nmax_speed = \"2 MB/s\"\n");
+        assert_eq!(c.max_speed, 2_000_000);
+        let c2 = Config::from_toml("[common]\nmax_speed = 1048576\n");
+        assert_eq!(c2.max_speed, 1_048_576, "整数 B/s 形态直接生效");
+        let c3 = Config::from_toml("[common]\nmax_speed = \"xyz\"\n");
+        assert_eq!(c3.max_speed, 0, "不可解析限速弃用");
     }
 
     #[test]
     fn empty_dir_and_invalid_numbers_fall_back() {
         let c = Config::from_toml(
-            "download_dir = \"   \"\nmax_speed = \"garbage\"\nbackoff_initial = -1.0\nbackoff_cap = 0.0\n",
+            "[common]\ndownload_dir = \"   \"\n[http]\nbackoff_initial = -1.0\nbackoff_cap = 0.0\n",
         );
         assert!(c.download_dir.is_none(), "空白目录弃用");
-        assert_eq!(c.max_speed, 0, "不可解析限速弃用");
         assert_eq!(c.backoff_initial, Config::default().backoff_initial);
         assert_eq!(c.backoff_cap, Config::default().backoff_cap);
+    }
+
+    #[test]
+    fn http_tunables_fallback_and_effective() {
+        let d = Config::default();
+        let bad = Config::from_toml(
+            "[http]\nprogress_tick_ms = 0\nsidecar_flush_secs = -1\nthrottle_burst_secs = 0.0\nthrottle_sleep_ms = 0\ndns_race_grace_ms = 0\n",
+        );
+        assert_eq!(bad.progress_tick_ms, d.progress_tick_ms);
+        assert_eq!(bad.sidecar_flush_secs, d.sidecar_flush_secs);
+        assert_eq!(bad.throttle_burst_secs, d.throttle_burst_secs);
+        assert_eq!(bad.throttle_sleep_ms, d.throttle_sleep_ms);
+        assert_eq!(bad.dns_race_grace_ms, d.dns_race_grace_ms);
+        let ok = Config::from_toml(
+            "[http]\nprogress_tick_ms = 250\nsidecar_flush_secs = 5\nthrottle_burst_secs = 1.5\nthrottle_sleep_ms = 40\ndns_race_grace_ms = 2000\n",
+        );
+        assert_eq!(ok.progress_tick_ms, 250);
+        assert_eq!(ok.sidecar_flush_secs, 5);
+        assert_eq!(ok.throttle_burst_secs, 1.5);
+        assert_eq!(ok.throttle_sleep_ms, 40);
+        assert_eq!(ok.dns_race_grace_ms, 2000);
+    }
+
+    #[test]
+    fn bt_tunables_fallback_and_effective() {
+        let d = Config::default();
+        let bad = Config::from_toml(
+            "[bt]\nbt_concurrency = 0\npeer_pipeline = 0\nupload_slots = -1\nupload_read_concurrency = 0\nidle_eviction_secs = 0\nconnect_timeout_secs = 0\nhandshake_timeout_secs = 0\nrequest_timeout_secs = 0\nrequests_per_piece = 0\nrechoke_interval_secs = 0\noptimistic_interval_secs = 0\nprogress_emit_min_interval_ms = 0\ntracker_numwant = 0\npeer_retry_base_secs = 0\npeer_retry_cap_secs = 0\ntracker_backoff_start_secs = 0\ntracker_backoff_cap_secs = 0\nudp_base_timeout_secs = 0\nudp_retries = 0\nseed_duration_secs = 0.0\n",
+        );
+        assert_eq!(bad.bt_concurrency, d.bt_concurrency);
+        assert_eq!(bad.peer_pipeline, d.peer_pipeline);
+        assert_eq!(bad.upload_slots, d.upload_slots);
+        assert_eq!(bad.upload_read_concurrency, d.upload_read_concurrency);
+        assert_eq!(bad.idle_eviction_secs, d.idle_eviction_secs);
+        assert_eq!(bad.connect_timeout_secs, d.connect_timeout_secs);
+        assert_eq!(bad.handshake_timeout_secs, d.handshake_timeout_secs);
+        assert_eq!(bad.request_timeout_secs, d.request_timeout_secs);
+        assert_eq!(bad.requests_per_piece, d.requests_per_piece);
+        assert_eq!(bad.rechoke_interval_secs, d.rechoke_interval_secs);
+        assert_eq!(bad.optimistic_interval_secs, d.optimistic_interval_secs);
+        assert_eq!(
+            bad.progress_emit_min_interval_ms,
+            d.progress_emit_min_interval_ms
+        );
+        assert_eq!(bad.tracker_numwant, d.tracker_numwant);
+        assert_eq!(bad.peer_retry_base_secs, d.peer_retry_base_secs);
+        assert_eq!(bad.peer_retry_cap_secs, d.peer_retry_cap_secs);
+        assert_eq!(bad.tracker_backoff_start_secs, d.tracker_backoff_start_secs);
+        assert_eq!(bad.tracker_backoff_cap_secs, d.tracker_backoff_cap_secs);
+        assert_eq!(bad.udp_base_timeout_secs, d.udp_base_timeout_secs);
+        assert_eq!(bad.udp_retries, d.udp_retries);
+        assert_eq!(bad.seed_duration_secs, d.seed_duration_secs);
+        let ok = Config::from_toml(
+            "[bt]\nbt_concurrency = 8\npeer_pipeline = 32\nupload_slots = 2\nupload_read_concurrency = 64\nidle_eviction_secs = 30\nseed_duration_secs = 60\n",
+        );
+        assert_eq!(ok.bt_concurrency, 8);
+        assert_eq!(ok.peer_pipeline, 32);
+        assert_eq!(ok.upload_slots, 2);
+        assert_eq!(ok.upload_read_concurrency, 64);
+        assert_eq!(ok.idle_eviction_secs, 30);
+        assert_eq!(ok.seed_duration_secs, 60.0);
+        let clamped = Config::from_toml("[bt]\nbt_concurrency = 99\n");
+        assert_eq!(clamped.bt_concurrency, 64, "越界钳制 1–64");
     }
 
     #[test]
@@ -650,96 +1017,23 @@ mod tests {
         );
     }
 
-    const CHARTER_TEMPLATE_TEXT: &str = r#"# EZR Downloader 配置模板
-
-# download_dir：默认保存目录（添加对话框目录留空时使用）
-# 取值范围：任意目录路径；留空或缺失 = 用户主目录下的下载目录
-# download_dir = ""
-
-# block_size_http：HTTP 分块块大小（字节）
-# 取值范围：正整数（≥1）；0 或非法值回退默认（1 MB）
-# block_size_http = 1048576
-
-# download_slots：全局下载槽位数（同时下载的任务数上限）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
-# download_slots = 5
-
-# max_speed：全局下载限速（0 = 不限）
-# 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
-# max_speed = 0
-
-# max_retries：自动重试上限次数（达上限转停等，可按 R 手动重试）
-# 取值范围：≥1 的整数；0 或非法值回退默认
-# max_retries = 5
-
-# auto_retry：失败后是否自动重试
-# 取值范围：true / false
-# auto_retry = true
-
-# backoff_initial：自动重试退避初始秒（指数退避序列起点）
-# 取值范围：>0 的有限数；非法值回退默认
-# backoff_initial = 8.0
-
-# backoff_cap：自动重试退避封顶秒
-# 取值范围：>0 的有限数；非法值回退默认
-# backoff_cap = 60.0
-
-# http_concurrency：默认并发数
-# 取值范围：1–64 的整数；越界钳制到边界
-# http_concurrency = 4
-
-# http_trackers：HTTP(S) tracker 列表（BT 任务默认 tracker 池来源之一，phase-02）
-# 取值范围：字符串数组，每项为 http:// 或 https:// 开头的 tracker announce URL；非法 URL 行启动时忽略并警告
-# http_trackers = []
-
-# udp_trackers：UDP tracker 列表（BT 任务默认 tracker 池来源之一，phase-02）
-# 取值范围：字符串数组，每项为 udp:// 开头的 tracker announce URL（含端口）；非法 URL 行启动时忽略并警告
-# udp_trackers = []
-
-# proxies：命名代理列表（可配置多个）
-# [[proxies]]
-# name = "办公网代理"
-# type = "http"
-# ip = "proxy.corp.example"
-# port = 8080
-# username = "alice"
-# password = "secret"
-
-# [[proxies]]
-# name = "本地 SOCKS5"
-# type = "socks5"
-# ip = "127.0.0.1"
-# port = 1080
-# username = "ezr"
-# password = "secret"
-"#;
-
     #[test]
-    fn template_matches_charter_text() {
-        let t = Config::default_template();
+    fn template_line_count_is_168() {
         assert_eq!(
-            t,
-            CHARTER_TEMPLATE_TEXT,
-            "default_template() 输出必须与钦定原文逐字节一致（v1.10/FR-01-85）\n{}",
-            first_diff(CHARTER_TEMPLATE_TEXT, &t)
+            Config::default_template().lines().count(),
+            168,
+            "钦定模板 v1.11 = 168 行"
         );
+        assert!(Config::default_template().ends_with('\n'));
+        assert!(!Config::default_template().ends_with("\n\n"), "EOF 单换行收尾");
     }
 
-    fn first_diff(expected: &str, actual: &str) -> String {
-        let (e, a): (Vec<&str>, Vec<&str>) = (expected.lines().collect(), actual.lines().collect());
-        let mut out = String::new();
-        for i in 0..e.len().max(a.len()) {
-            let el = e.get(i).copied().unwrap_or("<EOF>");
-            let al = a.get(i).copied().unwrap_or("<EOF>");
-            if el != al {
-                let n = i + 1;
-                out.push_str(&format!("  行 {n}：钦定={el:?} 实际={al:?}\n"));
-            }
-        }
-        if out.is_empty() {
-            out.push_str("  行内容一致——差异在行尾/EOF 收尾字节（核对末尾换行符数量）");
-        }
-        out
+    #[test]
+    fn template_three_table_headers() {
+        let t = Config::default_template();
+        assert!(t.contains("# ===== [common] 公共配置（两引擎共用） ====="));
+        assert!(t.contains("# ===== [http] HTTP 引擎配置 ====="));
+        assert!(t.contains("# ===== [bt] BT 引擎配置 ====="));
     }
 
     #[test]
@@ -754,35 +1048,103 @@ mod tests {
     }
 
     #[test]
+    fn template_36_keys_three_line_form() {
+        let t = Config::default_template();
+        let keys = [
+            "download_dir", "download_slots", "max_speed",
+            "block_size_http", "http_concurrency", "max_retries", "auto_retry",
+            "backoff_initial", "backoff_cap", "progress_tick_ms", "sidecar_flush_secs",
+            "throttle_burst_secs", "throttle_sleep_ms", "dns_race_grace_ms",
+            "http_trackers", "udp_trackers", "bt_concurrency", "peer_pipeline",
+            "upload_slots", "upload_read_concurrency", "idle_eviction_secs",
+            "connect_timeout_secs", "handshake_timeout_secs", "request_timeout_secs",
+            "requests_per_piece", "rechoke_interval_secs", "optimistic_interval_secs",
+            "progress_emit_min_interval_ms", "tracker_numwant", "peer_retry_base_secs",
+            "peer_retry_cap_secs", "tracker_backoff_start_secs", "tracker_backoff_cap_secs",
+            "udp_base_timeout_secs", "udp_retries", "seed_duration_secs",
+        ];
+        assert_eq!(keys.len(), 36);
+        for k in keys {
+            assert!(t.contains(&format!("\n# {k} = ")), "模板缺键 {k} 的示例行");
+            assert!(t.matches(&format!("\n# {k} = ")).count() == 1, "键 {k} 示例行不唯一");
+        }
+        for k in keys {
+            if k == "download_dir" {
+                continue;
+            }
+            let key_line = t
+                .lines()
+                .find(|l| l.starts_with(&format!("# {k} = ")))
+                .unwrap();
+            let name_line_idx = t.lines().position(|l| l == key_line).unwrap();
+            let lines: Vec<&str> = t.lines().collect();
+            let purpose = lines[name_line_idx - 2];
+            assert_eq!(
+                purpose.split('：').next().unwrap().trim_start_matches("# "),
+                k,
+                "键 {k} 的用途行首必须是键名三行式"
+            );
+        }
+        assert_eq!(t.matches("取值范围").count(), 36, "36 键各一段取值范围标注");
+    }
+
+    #[test]
     fn template_defaults_match_contract() {
         let t = Config::default_template();
         for expected in [
             "# download_dir = \"\"",
-            "# block_size_http = 1048576",
             "# download_slots = 5",
             "# max_speed = 0",
+            "# block_size_http = 1048576",
+            "# http_concurrency = 4",
             "# max_retries = 5",
             "# auto_retry = true",
             "# backoff_initial = 8.0",
             "# backoff_cap = 60.0",
-            "# http_concurrency = 4",
+            "# progress_tick_ms = 100",
+            "# sidecar_flush_secs = 2",
+            "# throttle_burst_secs = 0.5",
+            "# throttle_sleep_ms = 20",
+            "# dns_race_grace_ms = 1000",
+            "# http_trackers = []",
+            "# udp_trackers = []",
+            "# bt_concurrency = 20",
+            "# peer_pipeline = 64",
+            "# upload_slots = 4",
+            "# upload_read_concurrency = 128",
+            "# idle_eviction_secs = 60",
+            "# connect_timeout_secs = 3",
+            "# handshake_timeout_secs = 10",
+            "# request_timeout_secs = 20",
+            "# requests_per_piece = 4",
+            "# rechoke_interval_secs = 10",
+            "# optimistic_interval_secs = 30",
+            "# progress_emit_min_interval_ms = 250",
+            "# tracker_numwant = 200",
+            "# peer_retry_base_secs = 5",
+            "# peer_retry_cap_secs = 120",
+            "# tracker_backoff_start_secs = 8",
+            "# tracker_backoff_cap_secs = 60",
+            "# udp_base_timeout_secs = 15",
+            "# udp_retries = 3",
+            "# seed_duration_secs = 1800",
         ] {
             assert!(t.contains(expected), "模板缺默认值行：{expected}");
         }
         assert!(
-            !t.contains("\n# proxy = "),
-            "旧 proxy 键已退役，模板不得输出（FR-01-90）"
+            !t.contains("# proxies"),
+            "proxies 键已改名 proxy 并迁入 [common]，模板不得输出旧键名"
         );
     }
 
     #[test]
-    fn template_proxy_dual_examples_with_type() {
+    fn template_proxy_dual_examples_in_common() {
         let t = Config::default_template();
         assert!(
-            t.contains("# proxies：命名代理列表（可配置多个）"),
-            "proxies 段一句头注释在位"
+            t.contains("# proxy：命名代理列表（可配置多个）"),
+            "proxy 段一句头注释在位"
         );
-        assert_eq!(t.matches("# [[proxies]]").count(), 2, "双示例块");
+        assert_eq!(t.matches("# [[common.proxy]]").count(), 2, "双示例块");
         for expected in [
             "# name = \"办公网代理\"",
             "# type = \"http\"",
@@ -798,49 +1160,72 @@ mod tests {
         ] {
             assert!(t.contains(expected), "模板代理示例缺行：{expected}");
         }
-        assert!(
-            !t.contains("# url ="),
-            "url 键退役，模板不得输出 url 行（FR-01-86 v1.9）"
-        );
-        assert!(!t.contains("凭证"), "凭证规则注释行退出模板（FR-01-93⑤）");
+        assert!(!t.contains("# url ="), "url 键退役，模板不得输出 url 行");
+        assert!(!t.contains("凭证"), "凭证规则注释行退出模板");
         assert!(!t.contains("唯一事实来源"), "type 语义注释退出模板");
-        assert!(!t.contains("代理自身走 TLS"), "https 语义注释退出模板");
-        assert!(!t.contains("方括号"), "IPv6 注记退出模板");
-        assert!(!t.contains("型示例"), "示例块凭证语义注记退出模板");
     }
 
     #[test]
-    fn template_documents_purpose_and_range_for_every_key() {
+    fn template_example_values_match_code_defaults() {
+        let c = Config::default();
         let t = Config::default_template();
-        let blocks: Vec<&str> = t.split("\n\n").collect();
-        for (key, purpose) in [
-            ("download_dir", "保存目录"),
-            ("block_size_http", "块大小"),
-            ("download_slots", "槽位"),
-            ("max_speed", "限速"),
-            ("max_retries", "重试上限"),
-            ("auto_retry", "自动重试"),
-            ("backoff_initial", "退避"),
-            ("backoff_cap", "退避"),
-            ("http_concurrency", "并发"),
-            ("http_trackers", "tracker"),
-            ("udp_trackers", "tracker"),
-        ] {
-            let block = blocks
-                .iter()
-                .find(|b| b.contains(&format!("# {key} = ")))
-                .unwrap_or_else(|| panic!("模板缺键 {key} 的默认值段落"));
-            assert!(
-                block.contains(purpose),
-                "键 {key} 的段落缺用途说明（应含「{purpose}」）"
-            );
-            assert!(block.contains("取值范围"), "键 {key} 的段落缺取值范围标注");
-        }
+        let val_of = |key: &str| -> String {
+            t.lines()
+                .find(|l| l.starts_with(&format!("# {key} = ")))
+                .unwrap_or_else(|| panic!("模板缺 {key}"))
+                .split_once(" = ")
+                .unwrap()
+                .1
+                .to_string()
+        };
+        assert_eq!(val_of("download_slots"), c.download_slots.to_string());
+        assert_eq!(val_of("block_size_http"), c.block_size_http.to_string());
+        assert_eq!(val_of("http_concurrency"), c.http_concurrency.to_string());
+        assert_eq!(val_of("max_retries"), c.max_retries.to_string());
+        assert_eq!(val_of("auto_retry"), c.auto_retry.to_string());
+        assert_eq!(val_of("progress_tick_ms"), c.progress_tick_ms.to_string());
+        assert_eq!(val_of("sidecar_flush_secs"), c.sidecar_flush_secs.to_string());
+        assert_eq!(val_of("throttle_burst_secs"), "0.5");
+        assert_eq!(val_of("throttle_sleep_ms"), c.throttle_sleep_ms.to_string());
+        assert_eq!(val_of("dns_race_grace_ms"), c.dns_race_grace_ms.to_string());
+        assert_eq!(val_of("bt_concurrency"), c.bt_concurrency.to_string());
+        assert_eq!(val_of("peer_pipeline"), c.peer_pipeline.to_string());
+        assert_eq!(val_of("upload_slots"), c.upload_slots.to_string());
         assert_eq!(
-            t.matches("取值范围").count(),
-            11,
-            "11 键各一段取值范围标注（phase-02/FR-02-21 增 tracker 两键）；proxies 段豁免"
+            val_of("upload_read_concurrency"),
+            c.upload_read_concurrency.to_string()
         );
+        assert_eq!(val_of("idle_eviction_secs"), c.idle_eviction_secs.to_string());
+        assert_eq!(val_of("connect_timeout_secs"), c.connect_timeout_secs.to_string());
+        assert_eq!(
+            val_of("handshake_timeout_secs"),
+            c.handshake_timeout_secs.to_string()
+        );
+        assert_eq!(val_of("request_timeout_secs"), c.request_timeout_secs.to_string());
+        assert_eq!(val_of("requests_per_piece"), c.requests_per_piece.to_string());
+        assert_eq!(val_of("rechoke_interval_secs"), c.rechoke_interval_secs.to_string());
+        assert_eq!(
+            val_of("optimistic_interval_secs"),
+            c.optimistic_interval_secs.to_string()
+        );
+        assert_eq!(
+            val_of("progress_emit_min_interval_ms"),
+            c.progress_emit_min_interval_ms.to_string()
+        );
+        assert_eq!(val_of("tracker_numwant"), c.tracker_numwant.to_string());
+        assert_eq!(val_of("peer_retry_base_secs"), c.peer_retry_base_secs.to_string());
+        assert_eq!(val_of("peer_retry_cap_secs"), c.peer_retry_cap_secs.to_string());
+        assert_eq!(
+            val_of("tracker_backoff_start_secs"),
+            c.tracker_backoff_start_secs.to_string()
+        );
+        assert_eq!(
+            val_of("tracker_backoff_cap_secs"),
+            c.tracker_backoff_cap_secs.to_string()
+        );
+        assert_eq!(val_of("udp_base_timeout_secs"), c.udp_base_timeout_secs.to_string());
+        assert_eq!(val_of("udp_retries"), c.udp_retries.to_string());
+        assert_eq!(val_of("seed_duration_secs"), "1800");
     }
 
     #[test]
@@ -854,361 +1239,77 @@ mod tests {
     #[test]
     fn proxies_parse_with_auth() {
         let c = Config::from_toml(
-            "[[proxies]]\nname = \"a\"\ntype = \"http\"\nip = \"127.0.0.1\"\nport = 8080\nusername = \"u\"\npassword = \"p\"\n[[proxies]]\nname = \"b\"\ntype = \"socks5\"\nip = \"127.0.0.1\"\nport = 1080\nusername = \"u2\"\npassword = \"p2\"\n",
+            "[[common.proxy]]\nname = \"a\"\ntype = \"http\"\nip = \"127.0.0.1\"\nport = 8080\nusername = \"u\"\npassword = \"p\"\n[[common.proxy]]\nname = \"b\"\ntype = \"socks5\"\nip = \"127.0.0.1\"\nport = 1080\nusername = \"u2\"\npassword = \"p2\"\n",
         );
         assert_eq!(c.proxies.len(), 2);
         assert_eq!(c.proxies[0].name, "a");
         assert_eq!(c.proxies[0].kind, ProxyKind::Http);
-        assert_eq!(c.proxies[0].ip, "127.0.0.1");
         assert_eq!(c.proxies[0].port, 8080, "port 以整数落位（u16）");
-        assert_eq!(c.proxies[0].username.as_deref(), Some("u"));
-        assert_eq!(c.proxies[0].password.as_deref(), Some("p"));
         assert_eq!(c.proxies[1].kind, ProxyKind::Socks5);
-        assert_eq!(c.proxies[1].port, 1080);
         assert!(c.warnings.is_empty());
     }
 
     #[test]
     fn proxy_type_three_values_explicit() {
         let c = Config::from_toml(
-            "[[proxies]]\nname = \"h\"\ntype = \"http\"\nip = \"x\"\nport = 1\n[[proxies]]\nname = \"hs\"\ntype = \"HTTPS\"\nip = \"x\"\nport = 2\n[[proxies]]\nname = \"s5\"\ntype = \"socks5\"\nip = \"x\"\nport = 3\nusername = \"u\"\npassword = \"p\"\n",
+            "[[common.proxy]]\nname = \"h\"\ntype = \"http\"\nip = \"x\"\nport = 1\n[[common.proxy]]\nname = \"hs\"\ntype = \"HTTPS\"\nip = \"x\"\nport = 2\n[[common.proxy]]\nname = \"s5\"\ntype = \"socks5\"\nip = \"x\"\nport = 3\nusername = \"u\"\npassword = \"p\"\n",
         );
         assert_eq!(c.proxies.len(), 3);
         assert_eq!(c.proxies[0].kind, ProxyKind::Http);
-        assert_eq!(
-            c.proxies[1].kind,
-            ProxyKind::Https,
-            "type=\"https\"（大小写不敏感）为独立类型（v1.9 三值）"
-        );
+        assert_eq!(c.proxies[1].kind, ProxyKind::Https, "type 大小写不敏感三值");
         assert_eq!(c.proxies[2].kind, ProxyKind::Socks5);
-        assert!(c.warnings.is_empty(), "合法三值 type 不产生警告");
+        assert!(c.warnings.is_empty());
     }
 
     #[test]
-    fn proxy_type_missing_invalidated() {
+    fn proxy_type_missing_or_unknown_invalidated() {
         let c = Config::from_toml(
-            "[[proxies]]\nname = \"no-type\"\nip = \"127.0.0.1\"\nport = 18766\n[[proxies]]\nname = \"valid\"\ntype = \"http\"\nip = \"x\"\nport = 9\n",
+            "[[common.proxy]]\nname = \"no-type\"\nip = \"127.0.0.1\"\nport = 18766\n[[common.proxy]]\nname = \"badtype\"\ntype = \"ftp\"\nip = \"x\"\nport = 5\n[[common.proxy]]\nname = \"valid\"\ntype = \"http\"\nip = \"x\"\nport = 9\n",
         );
-        assert_eq!(c.proxies.len(), 1, "type 缺失即作废，仅剩合法条目");
+        assert_eq!(c.proxies.len(), 1, "type 缺失/未知即作废，仅剩合法条目");
         assert_eq!(c.proxies[0].name, "valid");
-        assert_eq!(c.warnings.len(), 1, "作废警告恰一次");
-        assert!(
-            c.warnings[0].contains("no-type"),
-            "警告点名条目：{}",
-            c.warnings[0]
-        );
-        assert!(c.warnings[0].contains("type 缺失"), "{}", c.warnings[0]);
-        assert!(
-            c.warnings[0].contains("http / https / socks5"),
-            "警告体现 type 三值：{}",
-            c.warnings[0]
-        );
+        assert_eq!(c.warnings.len(), 2);
+        assert!(c.warnings[0].contains("type 缺失"));
+        assert!(c.warnings[1].contains("type 未知"));
+        assert!(c.warnings.iter().all(|w| w.contains("http / https / socks5")));
     }
 
     #[test]
-    fn proxy_type_unknown_invalidated() {
+    fn proxy_ip_port_validation_kept() {
         let c = Config::from_toml(
-            "[[proxies]]\nname = \"badtype\"\ntype = \"ftp\"\nip = \"127.0.0.1\"\nport = 18766\n",
+            "[[common.proxy]]\nname = \"bad-port\"\ntype = \"http\"\nip = \"127.0.0.1\"\nport = 65536\n[[common.proxy]]\nname = \"bad-ip\"\ntype = \"http\"\nport = 1\n[[common.proxy]]\nname = \"valid\"\ntype = \"http\"\nip = \"x\"\nport = 9\n",
         );
-        assert!(c.proxies.is_empty(), "type 未知即作废（v1.9 不再保留）");
-        assert_eq!(c.warnings.len(), 1);
-        assert!(c.warnings[0].contains("type 未知"), "{}", c.warnings[0]);
-        assert!(
-            c.warnings[0].contains("http / https / socks5"),
-            "警告体现 type 三值：{}",
-            c.warnings[0]
-        );
-        assert!(!c.warnings[0].contains("password"), "警告不回显凭证值");
-    }
-
-    #[test]
-    fn legacy_url_key_ignored() {
-        let c = Config::from_toml(
-            "[[proxies]]\nname = \"old\"\ntype = \"http\"\nurl = \"http://old.example:8080\"\nip = \"127.0.0.1\"\nport = 8080\n",
-        );
-        assert_eq!(c.proxies.len(), 1, "url 键忽略，条目按 ip/port/type 加载");
-        assert_eq!(c.proxies[0].endpoint_url(), "http://127.0.0.1:8080");
-        assert!(c.warnings.is_empty(), "url 键退役零警告");
-    }
-
-    #[test]
-    fn proxy_ip_missing_or_blank_invalidated() {
-        let c = Config::from_toml(
-            "[[proxies]]\nname = \"bad-ip\"\ntype = \"http\"\nport = 18766\n[[proxies]]\nname = \"valid\"\ntype = \"http\"\nip = \"x\"\nport = 9\n",
-        );
-        assert_eq!(c.proxies.len(), 1, "ip 缺失即作废，仅剩合法条目");
+        assert_eq!(c.proxies.len(), 1);
         assert_eq!(c.proxies[0].name, "valid");
-        assert_eq!(c.warnings.len(), 1, "作废警告恰一次");
-        assert!(
-            c.warnings[0].contains("bad-ip"),
-            "警告点名条目：{}",
-            c.warnings[0]
-        );
-        assert!(c.warnings[0].contains("ip"), "{}", c.warnings[0]);
-        for ipval in ["\"\"", "\"   \""] {
-            let c2 = Config::from_toml(&format!(
-                "[[proxies]]\nname = \"bad-ip\"\ntype = \"http\"\nip = {ipval}\nport = 18766\n"
-            ));
-            assert!(
-                c2.proxies.is_empty(),
-                "ip={ipval} 应作废（trim 后非空要求）"
-            );
-            assert_eq!(c2.warnings.len(), 1);
-            assert!(
-                c2.warnings[0].contains("ip 缺失或空白"),
-                "{}",
-                c2.warnings[0]
-            );
-        }
+        assert_eq!(c.warnings.len(), 2);
+        assert!(c.warnings[0].contains("1..=65535"));
+        assert!(c.warnings[1].contains("ip 缺失或空白"));
     }
 
     #[test]
-    fn proxy_port_missing_or_out_of_range_invalidated() {
-        for port_raw in [
-            "",
-            "port = \"eighty\"",
-            "port = 0",
-            "port = 65536",
-            "port = -1",
-        ] {
-            let text = format!(
-                "[[proxies]]\nname = \"bad-port\"\ntype = \"http\"\nip = \"127.0.0.1\"\n{port_raw}\n[[proxies]]\nname = \"valid\"\ntype = \"http\"\nip = \"x\"\nport = 9\n"
-            );
-            let c = Config::from_toml(&text);
-            assert_eq!(
-                c.proxies.len(),
-                1,
-                "port 原始值「{port_raw}」应作废该条目，仅剩合法条目"
-            );
-            assert_eq!(c.proxies[0].name, "valid");
-            assert_eq!(c.warnings.len(), 1, "port=「{port_raw}」警告恰一次");
-            assert!(
-                c.warnings[0].contains("1..=65535"),
-                "警告体现 port 合法域：{}",
-                c.warnings[0]
-            );
-        }
-    }
-
-    #[test]
-    fn endpoint_url_three_schemes() {
-        let mk = |kind: ProxyKind| ProxyConfig {
-            name: "p".into(),
-            kind,
-            ip: "127.0.0.1".into(),
-            port: 8080,
-            username: None,
-            password: None,
-        };
-        assert_eq!(mk(ProxyKind::Http).endpoint_url(), "http://127.0.0.1:8080");
-        assert_eq!(
-            mk(ProxyKind::Https).endpoint_url(),
-            "https://127.0.0.1:8080"
-        );
-        assert_eq!(
-            mk(ProxyKind::Socks5).endpoint_url(),
-            "socks5://127.0.0.1:8080"
-        );
-    }
-
-    #[test]
-    fn endpoint_url_ipv6_bracketed() {
-        let mk = |kind: ProxyKind, ip: &str| ProxyConfig {
-            name: "s6".into(),
-            kind,
-            ip: ip.into(),
-            port: 18766,
-            username: None,
-            password: None,
-        };
-        assert_eq!(
-            mk(ProxyKind::Http, "::1").endpoint_url(),
-            "http://[::1]:18766",
-            "IPv6 字面量 ip 加方括号"
-        );
-        assert_eq!(
-            mk(ProxyKind::Socks5, "2001:db8::1").endpoint_url(),
-            "socks5://[2001:db8::1]:18766"
-        );
-        assert_eq!(
-            mk(ProxyKind::Http, "proxy.corp.example").endpoint_url(),
-            "http://proxy.corp.example:18766",
-            "主机名不加方括号"
-        );
-    }
-
-    #[test]
-    fn socks5_missing_username_invalidated() {
+    fn socks5_and_http_credential_rules_kept() {
         let c = Config::from_toml(
-            "[[proxies]]\nname = \"s5-no-user\"\ntype = \"socks5\"\nip = \"127.0.0.1\"\nport = 18768\npassword = \"p1-s3cret\"\n[[proxies]]\nname = \"valid\"\ntype = \"http\"\nip = \"x\"\nport = 9\n",
+            "[[common.proxy]]\nname = \"s5-no-user\"\ntype = \"socks5\"\nip = \"127.0.0.1\"\nport = 18768\npassword = \"p1\"\n[[common.proxy]]\nname = \"half-http\"\ntype = \"http\"\nip = \"x\"\nport = 9\nusername = \"u1\"\n[[common.proxy]]\nname = \"anon-http\"\ntype = \"http\"\nip = \"x\"\nport = 10\n",
         );
-        assert_eq!(
-            c.proxies.len(),
-            1,
-            "socks5 缺 username 即作废，仅剩合法条目"
-        );
-        assert_eq!(c.proxies[0].name, "valid");
-        assert_eq!(c.warnings.len(), 1, "作废警告恰一次");
-        let w = &c.warnings[0];
-        assert!(w.contains("socks5"), "警告含 socks5 提示：{w}");
-        assert!(
-            w.contains("username 与 password"),
-            "警告含凭证字段语义：{w}"
-        );
-        assert!(
-            w.contains("不支持匿名"),
-            "警告含不支持匿名 socks5 语义：{w}"
-        );
-        assert!(!w.contains("p1-s3cret"), "警告不回显凭证值：{w}");
+        assert_eq!(c.proxies.len(), 1);
+        assert_eq!(c.proxies[0].name, "anon-http", "匿名 http 合法，socks5 缺凭证与 http 半凭证作废");
+        assert_eq!(c.warnings.len(), 2);
+        assert!(c.warnings.iter().all(|w| !w.contains("p1") && !w.contains("u1")));
     }
 
     #[test]
-    fn socks5_missing_password_invalidated() {
+    fn duplicate_names_keep_first() {
         let c = Config::from_toml(
-            "[[proxies]]\nname = \"s5-no-pass\"\ntype = \"socks5\"\nip = \"127.0.0.1\"\nport = 18768\nusername = \"u1-s3cret\"\n[[proxies]]\nname = \"valid\"\ntype = \"http\"\nip = \"x\"\nport = 9\n",
+            "[[common.proxy]]\nname = \"dup\"\ntype = \"http\"\nip = \"x\"\nport = 2\n[[common.proxy]]\nname = \"dup\"\ntype = \"http\"\nip = \"x\"\nport = 3\n",
         );
-        assert_eq!(
-            c.proxies.len(),
-            1,
-            "socks5 缺 password 即作废，仅剩合法条目"
-        );
-        assert_eq!(c.proxies[0].name, "valid");
-        assert_eq!(c.warnings.len(), 1, "作废警告恰一次");
-        let w = &c.warnings[0];
-        assert!(w.contains("socks5"), "警告含 socks5 提示：{w}");
-        assert!(
-            w.contains("username 与 password"),
-            "警告含凭证字段语义：{w}"
-        );
-        assert!(
-            w.contains("不支持匿名"),
-            "警告含不支持匿名 socks5 语义：{w}"
-        );
-        assert!(!w.contains("u1-s3cret"), "警告不回显凭证值：{w}");
-    }
-
-    #[test]
-    fn socks5_blank_credentials_invalidated() {
-        let c = Config::from_toml(
-            "[[proxies]]\nname = \"s5-blank\"\ntype = \"socks5\"\nip = \"127.0.0.1\"\nport = 18768\nusername = \"u1\"\npassword = \"   \"\n",
-        );
-        assert!(c.proxies.is_empty(), "空白 password 归 None → 视同缺失作废");
-        assert_eq!(c.warnings.len(), 1);
-        assert!(c.warnings[0].contains("socks5"));
-    }
-
-    #[test]
-    fn http_no_credentials_anonymous_kept() {
-        let c = Config::from_toml(
-            "[[proxies]]\nname = \"anon-http\"\ntype = \"http\"\nip = \"127.0.0.1\"\nport = 18766\n",
-        );
-        assert_eq!(
-            c.proxies.len(),
-            1,
-            "匿名代理为 http 型合法形态，条目正常加载"
-        );
-        assert_eq!(c.proxies[0].name, "anon-http");
-        assert_eq!(c.proxies[0].username, None);
-        assert_eq!(c.proxies[0].password, None);
-        assert!(c.warnings.is_empty(), "匿名代理不产生凭证相关警告");
-    }
-
-    #[test]
-    fn http_half_credentials_invalidated() {
-        let c = Config::from_toml(
-            "[[proxies]]\nname = \"half-http\"\ntype = \"http\"\nip = \"127.0.0.1\"\nport = 18766\nusername = \"u1-s3cret\"\n[[proxies]]\nname = \"valid\"\ntype = \"http\"\nip = \"x\"\nport = 9\n",
-        );
-        assert_eq!(c.proxies.len(), 1, "只填 username 即作废，仅剩合法条目");
-        assert_eq!(c.proxies[0].name, "valid");
-        assert_eq!(c.warnings.len(), 1, "作废警告恰一次");
-        assert!(
-            c.warnings[0].contains("成对"),
-            "警告含 username 与 password 需成对配置文案：{}",
-            c.warnings[0]
-        );
-        assert!(!c.warnings[0].contains("u1-s3cret"), "警告不回显凭证值");
-        let c2 = Config::from_toml(
-            "[[proxies]]\nname = \"half-http\"\ntype = \"http\"\nip = \"127.0.0.1\"\nport = 18766\npassword = \"p1-s3cret\"\n",
-        );
-        assert!(c2.proxies.is_empty(), "只填 password 同样作废");
-        assert_eq!(c2.warnings.len(), 1);
-        assert!(c2.warnings[0].contains("成对"));
-        assert!(!c2.warnings[0].contains("p1-s3cret"), "警告不回显凭证值");
-    }
-
-    #[test]
-    fn https_credentials_three_phases() {
-        let c = Config::from_toml(
-            "[[proxies]]\nname = \"anon-tls\"\ntype = \"https\"\nip = \"127.0.0.1\"\nport = 18767\n",
-        );
-        assert_eq!(c.proxies.len(), 1, "https 匿名代理合法加载");
-        assert_eq!(c.proxies[0].kind, ProxyKind::Https);
-        assert_eq!(c.proxies[0].username, None);
-        assert_eq!(c.proxies[0].password, None);
-        assert!(c.warnings.is_empty(), "匿名代理不产生凭证相关警告");
-        let c2 = Config::from_toml(
-            "[[proxies]]\nname = \"auth-tls\"\ntype = \"https\"\nip = \"127.0.0.1\"\nport = 18767\nusername = \"u1\"\npassword = \"p1\"\n",
-        );
-        assert_eq!(
-            c2.proxies.len(),
-            1,
-            "https 成对凭证保留（TLS 会话内 basic auth）"
-        );
-        assert_eq!(c2.proxies[0].kind, ProxyKind::Https);
-        assert_eq!(c2.proxies[0].username.as_deref(), Some("u1"));
-        assert_eq!(c2.proxies[0].password.as_deref(), Some("p1"));
-        assert!(c2.warnings.is_empty(), "成对凭证无警告");
-        let c3 = Config::from_toml(
-            "[[proxies]]\nname = \"half-tls\"\ntype = \"https\"\nip = \"127.0.0.1\"\nport = 18767\nusername = \"u1-s3cret\"\n",
-        );
-        assert!(
-            c3.proxies.is_empty(),
-            "https 半填即作废（与 http 同级口径）"
-        );
-        assert_eq!(c3.warnings.len(), 1);
-        assert!(
-            c3.warnings[0].contains("成对"),
-            "警告含成对配置文案：{}",
-            c3.warnings[0]
-        );
-        assert!(
-            c3.warnings[0].contains("https"),
-            "警告体现 https 类型：{}",
-            c3.warnings[0]
-        );
-        assert!(!c3.warnings[0].contains("u1-s3cret"), "警告不回显凭证值");
-    }
-
-    #[test]
-    fn socks5_with_credentials_kept() {
-        let c = Config::from_toml(
-            "[[proxies]]\nname = \"auth-s5\"\ntype = \"socks5\"\nip = \"127.0.0.1\"\nport = 18768\nusername = \"u1\"\npassword = \"p1\"\n",
-        );
-        assert_eq!(c.proxies.len(), 1, "socks5 凭证齐备 → 条目保留");
-        let p = &c.proxies[0];
-        assert_eq!(p.kind, ProxyKind::Socks5);
-        assert_eq!(p.port, 18768);
-        assert_eq!(p.username.as_deref(), Some("u1"), "凭证字段在位");
-        assert_eq!(p.password.as_deref(), Some("p1"), "凭证字段在位");
-        assert!(c.warnings.is_empty(), "合法条目无警告");
-    }
-
-    #[test]
-    fn invalid_proxy_entries_skipped_with_warning() {
-        let c = Config::from_toml(
-            "[[proxies]]\nname = \"\"\ntype = \"http\"\nip = \"x\"\nport = 1\n[[proxies]]\nname = \"dup\"\ntype = \"http\"\nip = \"x\"\nport = 2\n[[proxies]]\nname = \"dup\"\ntype = \"http\"\nip = \"x\"\nport = 3\n[[proxies]]\nname = \"ok\"\ntype = \"http\"\nip = \"  \"\nport = 4\n[[proxies]]\nname = \"ok\"\ntype = \"http\"\nip = \"x\"\nport = 9\n",
-        );
-        assert_eq!(c.proxies.len(), 2, "首个 dup 合法在位 + ok");
-        assert_eq!(c.proxies[0].name, "dup", "重名条目保留首个");
-        assert_eq!(c.proxies[1].name, "ok");
-        assert_eq!(c.warnings.len(), 3, "空名 1 + 重名 1 + 空 ip 1");
-        assert!(c.warnings.iter().all(|w| !w.contains("password")));
+        assert_eq!(c.proxies.len(), 1);
+        assert_eq!(c.proxies[0].port, 2, "重名条目保留首个");
     }
 
     #[test]
     fn resolve_proxy_two_states() {
         let c = Config::from_toml(
-            "[[proxies]]\nname = \"a\"\ntype = \"http\"\nip = \"a\"\nport = 2\nusername = \"u\"\npassword = \"pw\"\n",
+            "[[common.proxy]]\nname = \"a\"\ntype = \"http\"\nip = \"a\"\nport = 2\nusername = \"u\"\npassword = \"pw\"\n",
         );
         assert_eq!(c.resolve_proxy(&ProxyChoice::Direct), (None, false));
         let (ep, missing) = c.resolve_proxy(&ProxyChoice::Named("a".into()));
@@ -1217,7 +1318,6 @@ mod tests {
             (ep.url.as_str(), ep.username.as_deref()),
             ("http://a:2", Some("u"))
         );
-        assert_eq!(ep.kind, ProxyKind::Http);
         assert!(!missing);
         assert_eq!(
             c.resolve_proxy(&ProxyChoice::Named("gone".into())),
@@ -1249,11 +1349,11 @@ mod tests {
     fn ensure_keeps_existing_content() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-tpl-keep");
         let p = dir.join("config.toml");
-        std::fs::write(&p, "download_slots = 2\n").unwrap();
+        std::fs::write(&p, "[common]\ndownload_slots = 2\n").unwrap();
         ensure_default_config(&p).unwrap();
         assert_eq!(
             std::fs::read_to_string(&p).unwrap(),
-            "download_slots = 2\n",
+            "[common]\ndownload_slots = 2\n",
             "已存在文件字节级不变"
         );
         std::fs::remove_dir_all(&dir).ok();

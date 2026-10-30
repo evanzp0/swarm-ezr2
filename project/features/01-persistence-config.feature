@@ -17,6 +17,7 @@
 #   01-persistence-config-09 Esc 主界面无动作与 Ctrl+C 优雅退出终端无花屏（操作者 20261027 裁决：Esc 不退出，退出仅 Q/Ctrl+C）
 #   01-persistence-config-10 EZR_HOME 环境变量重定位 .ezr 目录（v1.3/D16）
 #   01-persistence-config-11 kill -9 异常终止终端自恢复（v1.3/FR-01-84）
+#   01-persistence-config-12 旧格式顶层键与旧 [[proxies]] 表按未知键忽略（v1.17：config 三大标准表重构，操作者钦定不兼容旧格式）
 Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
 
   期号 01。依据 project/mission/phase-01.md FR-01-70~73、FR-01-84 与本会话澄清决定
@@ -26,6 +27,14 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
   v1.16 修订（FR-01-104/D31，操作者钦定块大小下限）：`block_size_http` 正值 < 1 MB →
   一律钳制为 1 MB 生效（场景 04 增钳制行；场景 05 原子 1 MB 下界示例行同步替换）；
   0/缺失/非法 → 默认 1 MB 口径不变；续传以 sidecar 块大小为准（一致性优先）。
+  v1.17 修订（操作者 bug11 轮指令，config 三大标准表重构）：配置键迁入 [common]/[http]/[bt]
+  三大标准表（键位分配见 01-config-template v1.11；proxies → [[common.proxy]] 改名迁入
+  [common]）——本文件场景 Given/Examples 中的配置键一律按「<表>.<键名>」点路径书写
+  （QA 会话写入 = 对应表头 + 键值行）；新增调优键（[http] 5 键 + [bt] 20 键，语义与
+  缺省值见模板钦定文本）沿用本场景族的回退/生效口径：非法值回退代码常量默认、合法值
+  生效。**旧格式不兼容（操作者钦定「代码开发中没发布过」）**：顶层平铺旧键与旧
+  [[proxies]] 表按未知键静默忽略（零警告、零迁移，FR-01-71 未知键口径），相关项回退
+  默认值——场景 12。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
@@ -53,22 +62,49 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
       | file       | http_concurrency |
       | five-m.bin | 4                   |
 
-  Scenario: 01-persistence-config-04 配置非法值回退默认或钳制边界
+  Scenario: 01-persistence-config-04 配置非法值回退默认或钳制边界（v1.17：点路径 + 新增调优键行）
     Given 配置文件设 "<key>" = "<value>"（非法）
     When 启动 ezr 并正常使用
     Then 该配置项按回退/钳制值 "<default>" 生效且启动不报错
 
     Examples:
-      | key                  | value | default |
-      | block_size_http      | abc   | 1 MB    |
-      | block_size_http      | 256 KB | 1 MB   |
-      | download_slots       | 0     | 5       |
-      | max_retries          | -1    | 5       |
-      | http_concurrency     | 99    | 64      |
-      | max_speed            | xyz   | 0       |
+      | key                        | value | default |
+      | http.block_size_http       | abc   | 1 MB    |
+      | http.block_size_http       | 256 KB | 1 MB   |
+      | common.download_slots      | 0     | 5       |
+      | http.max_retries           | -1    | 5       |
+      | http.http_concurrency      | 99    | 64      |
+      | common.max_speed           | xyz   | 0       |
+      | http.progress_tick_ms      | 0     | 100     |
+      | http.sidecar_flush_secs    | 0     | 2       |
+      | http.throttle_burst_secs   | 0     | 0.5     |
+      | http.throttle_sleep_ms     | 0     | 20      |
+      | http.dns_race_grace_ms     | 0     | 1000    |
+      | bt.bt_concurrency          | 0     | 20      |
+      | bt.bt_concurrency          | 99    | 64      |
+      | bt.peer_pipeline           | 0     | 64      |
+      | bt.upload_slots            | 0     | 4       |
+      | bt.upload_read_concurrency | 0     | 128     |
+      | bt.idle_eviction_secs      | -1    | 60      |
+      | bt.connect_timeout_secs    | 0     | 3       |
+      | bt.handshake_timeout_secs  | 0     | 10      |
+      | bt.request_timeout_secs    | 0     | 20      |
+      | bt.requests_per_piece      | 0     | 4       |
+      | bt.rechoke_interval_secs   | 0     | 10      |
+      | bt.optimistic_interval_secs | 0    | 30      |
+      | bt.progress_emit_min_interval_ms | 0 | 250   |
+      | bt.tracker_numwant         | 0     | 200     |
+      | bt.peer_retry_base_secs    | 0     | 5       |
+      | bt.peer_retry_cap_secs     | 0     | 120     |
+      | bt.tracker_backoff_start_secs | 0  | 8       |
+      | bt.tracker_backoff_cap_secs | 0    | 60      |
+      | bt.udp_base_timeout_secs   | 0     | 15      |
+      | bt.udp_retries             | 0     | 3       |
+      | bt.seed_duration_secs      | 0     | 1800    |
+      | bt.udp_trackers            | ["ftp://x/ann"] | []（非法 URL 忽略 + 警告） |
 
-  Scenario: 01-persistence-config-05 block_size_http 可配置生效（v1.16：下限 1 MB）
-    Given 配置文件设 block_size_http = "<block_size>"
+  Scenario: 01-persistence-config-05 block_size_http 可配置生效（v1.16：下限 1 MB；v1.17：迁入 [http]）
+    Given 配置文件设 [http] 表 block_size_http = "<block_size>"
     When 下载文件 "<file>"
     Then 详情分块行显示 "x/<chunks> · <display>/块"
 
@@ -77,8 +113,8 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
       | five-m.bin | 4 MB       | 2      | 4 MB     |
       | five-m.bin | 2 MB       | 3      | 2 MB     |
 
-  Scenario: 01-persistence-config-06 download_slots 可配置生效
-    Given 配置文件设 download_slots = <slots>
+  Scenario: 01-persistence-config-06 download_slots 可配置生效（v1.17：迁入 [common]）
+    Given 配置文件设 [common] 表 download_slots = <slots>
     When 依次添加 <slots+2> 个下载任务
     Then 前 <slots> 个任务开始下载且任务队列栏显示「下载槽位 n/<slots>」
     And 其余任务排队等待
@@ -131,3 +167,13 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
     And 终端回到正常（cooked）模式：按键回显生效、CTRL+C 可正常产生 SIGINT 中断
     And 鼠标捕获、bracketed paste 与备用屏幕均已复位，光标与配色正常
     And 哨兵子进程随之退出，不留残留进程
+
+  Scenario: 01-persistence-config-12 旧格式顶层键与旧 [[proxies]] 表按未知键忽略（v1.17）
+    Given 配置文件为旧格式（顶层平铺键 download_slots = 2、block_size_http = 4194304、
+      http_concurrency = 8、max_speed = "1 MB/s"，顶层 [[proxies]] 表含一个合法命名代理条目，
+      无任何新表头）
+    When 启动 ezr 并正常使用（含添加任务与打开添加对话框代理下拉）
+    Then 全部旧键按未知键静默忽略：启动不报错、无任何忽略类 toast/警告（零警告零迁移，FR-01-71 口径）
+    And 相关配置项全部按默认值生效（槽位 5、块大小 1 MB、并发默认 4、max_speed 不限）
+    And 旧 [[proxies]] 条目不出现在代理下拉（proxy 键已改名迁入 [common.proxy]，旧表不读）
+    And 同文件追加新表头（[common] download_slots = 3 等）后新表键正常生效（新格式不受旧键干扰）

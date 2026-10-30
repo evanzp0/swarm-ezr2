@@ -576,7 +576,7 @@ async fn dialog_clamps_out_of_range_ck_type() {
 async fn named_dead_proxy_fails_probe() {
     let (addr, _data) = stub_http(64 * 1024, (0, 0), None, None);
     let cfg = Config::from_toml(
-        "[[proxies]]\nname = \"dead\"\ntype = \"http\"\nip = \"127.0.0.1\"\nport = 9\n",
+        "[[common.proxy]]\nname = \"dead\"\ntype = \"http\"\nip = \"127.0.0.1\"\nport = 9\n",
     );
     let reg = temp_reg();
     let mut a = App::new(cfg, reg.to_string_lossy().into_owned());

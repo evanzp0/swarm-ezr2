@@ -28,7 +28,7 @@ impl App {
                     .clone()
                     .unwrap_or_else(crate::model::config::default_download_dir),
             ),
-            conns: TextInput::with_value(super::cmd::BT_DEFAULT_CONCURRENCY.to_string()),
+            conns: TextInput::with_value(self.cfg.bt_concurrency.to_string()),
             conns_edited: false,
             ck_type: crate::model::checksum::CK_NONE,
             ck_value: TextInput::new(),
@@ -131,6 +131,25 @@ impl App {
             proxy_endpoint: self.cfg.resolve_proxy(&t.proxy).0,
             seeding: false,
             max_speed: self.cfg.max_speed,
+            tunables: crate::engine::BtTunables {
+                peer_pipeline: self.cfg.peer_pipeline,
+                upload_slots: self.cfg.upload_slots,
+                idle_eviction_secs: self.cfg.idle_eviction_secs,
+                connect_timeout_secs: self.cfg.connect_timeout_secs,
+                handshake_timeout_secs: self.cfg.handshake_timeout_secs,
+                request_timeout_secs: self.cfg.request_timeout_secs,
+                requests_per_piece: self.cfg.requests_per_piece,
+                rechoke_interval_secs: self.cfg.rechoke_interval_secs,
+                optimistic_interval_secs: self.cfg.optimistic_interval_secs,
+                progress_emit_min_interval_ms: self.cfg.progress_emit_min_interval_ms,
+                tracker_numwant: self.cfg.tracker_numwant,
+                peer_retry_base_secs: self.cfg.peer_retry_base_secs,
+                peer_retry_cap_secs: self.cfg.peer_retry_cap_secs,
+                tracker_backoff_start_secs: self.cfg.tracker_backoff_start_secs,
+                tracker_backoff_cap_secs: self.cfg.tracker_backoff_cap_secs,
+                udp_base_timeout_secs: self.cfg.udp_base_timeout_secs,
+                udp_retries: self.cfg.udp_retries,
+            },
         }
     }
 }
@@ -381,7 +400,7 @@ impl App {
         let conns = conns_raw
             .parse::<usize>()
             .map(|v| v.clamp(1, 64))
-            .unwrap_or(super::cmd::BT_DEFAULT_CONCURRENCY);
+            .unwrap_or(self.cfg.bt_concurrency);
 
         let edited = Self::dedup_keep_order(d.trackers.trim_lines());
         let trackers = if edited.is_empty() {
@@ -482,6 +501,11 @@ impl App {
         let state = self.tasks[idx].state;
         let source = self.tasks[idx].url.clone();
         let new_total = new_total_of(&files);
+        let old_trackers = self.tasks[idx]
+            .bt
+            .as_ref()
+            .map(|b| b.trackers.clone())
+            .unwrap_or_default();
 
         {
             let t = &mut self.tasks[idx];
@@ -496,6 +520,12 @@ impl App {
             t.total = new_total;
             t.downloaded = t.downloaded.min(new_total);
         }
+        let new_trackers = self.tasks[idx]
+            .bt
+            .as_ref()
+            .map(|b| b.trackers.clone())
+            .unwrap_or_default();
+        let trackers_changed = new_trackers != old_trackers;
         self.dialog = None;
 
         let (endpoint, missing) = self.cfg.resolve_proxy(&self.tasks[idx].proxy);
@@ -516,6 +546,7 @@ impl App {
         });
 
         let mut rebuilt = true;
+        let mut pool_updated = false;
         if changed && matches!(state, TaskState::Downloading | TaskState::Seeding) {
             rebuilt = match std::fs::read(crate::model::config::expand_tilde(&source))
                 .map_err(|_| ())
@@ -528,10 +559,25 @@ impl App {
                         engine.send(Cmd::CancelBt { id }).await;
                         engine.send(Cmd::StartBt { spec }).await;
                     });
+                    pool_updated = true;
                     true
                 }
                 Err(_) => false,
             };
+        }
+        if trackers_changed
+            && !pool_updated
+            && matches!(state, TaskState::Downloading | TaskState::Seeding)
+        {
+            let engine = self.engine.clone();
+            tokio::spawn(async move {
+                engine
+                    .send(Cmd::BtUpdateTrackers {
+                        id,
+                        trackers: new_trackers,
+                    })
+                    .await;
+            });
         }
 
         if rebuilt {
@@ -940,6 +986,72 @@ mod tests {
             "trackers 空输入写回保留原池"
         );
         assert_eq!(app.tasks[0].downloaded, 0, "本例原 downloaded = 0");
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+
+    #[tokio::test]
+    async fn confirm_modify_trackers_only_sends_hot_update_no_rebuild() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-hotupd");
+        let path = write_multi_torrent(&dir, "a.torrent");
+        let meta = parse_at(&path);
+        let mut app = make_app("hotupd");
+        app.open_add_bt_dialog_with(&path, &meta);
+        app.dlg_confirm_add_bt(false);
+        app.selected = 0;
+        app.tasks[0].state = TaskState::Downloading;
+
+        let (spy_tx, mut spy_rx) = tokio::sync::mpsc::channel::<crate::engine::Cmd>(16);
+        app.engine = crate::engine::EngineHandle::from_sender(spy_tx);
+
+        app.modify_dialog_entry();
+        {
+            let d = app.dialog.as_mut().unwrap();
+            let mut tr = d.trackers.trim_lines().join("\n");
+            tr.push_str("\nudp://added/ann");
+            d.trackers.set_text(&tr);
+        }
+        app.dlg_confirm_modify_bt();
+        assert!(app.dialog.is_none(), "确认后关闭");
+        assert_eq!(
+            app.tasks[0].bt.as_ref().unwrap().trackers.last(),
+            Some(&"udp://added/ann".to_string()),
+            "新 tracker 已写入任务池（重开预填 = 新列表）"
+        );
+
+        let mut got = None;
+        for _ in 0..4 {
+            let c = tokio::time::timeout(std::time::Duration::from_millis(500), spy_rx.recv())
+                .await
+                .expect("应发出引擎命令")
+                .expect("发送端存活");
+            match c {
+                crate::engine::Cmd::Reconfigure { .. } => continue,
+                other => {
+                    got = Some(other);
+                    break;
+                }
+            }
+        }
+        match got.expect("应发出 BtUpdateTrackers") {
+            crate::engine::Cmd::BtUpdateTrackers { id, trackers } => {
+                assert_eq!(id, app.tasks[0].id);
+                assert_eq!(
+                    trackers.last(),
+                    Some(&"udp://added/ann".to_string()),
+                    "热更新携带确认后的新列表"
+                );
+                assert!(trackers.contains(&"udp://seed/ann".to_string()));
+            }
+            other => panic!("纯 tracker 修改应发 BtUpdateTrackers，实际: {other:?}"),
+        }
+        let more = tokio::time::timeout(std::time::Duration::from_millis(150), spy_rx.recv()).await;
+        assert!(
+            more.is_err(),
+            "不得重挂引擎（无 CancelBt/StartBt），实际: {:?}",
+            more.ok().flatten()
+        );
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }

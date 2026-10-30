@@ -18,6 +18,9 @@
 >  （RFC 1929 强制认证）/ 认证强制 http（407 质询）与 --bind IPv6 监听；NP-04/08/13/15/18
 >  下载相位 S→实跑（NP-04 增 407 质询负例、NP-15 增错凭证负例；https 相位证书信任经
 >  SSL_CERT_FILE 注入，产品零改动）；环境前置与判据同步改写，无常设 S。）
+>  v1.10（config 三大标准表重构）：键名 proxies → proxy 迁入 [common] 表，即 [[common.proxy]]——
+>  全部用例的配置写入位置机械同步（[[proxies]] → [[common.proxy]]，条目字段/校验语义不变）；
+>  旧 [[proxies]] 表静默忽略的判据由 `qa/01-persistence-config-qa.md` QA-PC-12 承载。
 
 ## 环境前置
 
@@ -41,7 +44,7 @@
 
 | 用例 | 场景 | 操作 | 通过判据 |
 |---|---|---|---|
-| QA-NP-01 | 02-named-proxy-01 | 配置 3 个命名代理（name/type/ip/port 各异，其一含认证）打开添加对话框展开代理下拉 | 选项 = 直连 + 3 命名项（按配置顺序）；每项按「名（type）」显示类型标注（三值形态）；选项文案不含账号密码 |
+| QA-NP-01 | 02-named-proxy-01 | 配置 3 个命名代理（`[[common.proxy]]`，name/type/ip/port 各异，其一含认证）打开添加对话框展开代理下拉 | 选项 = 直连 + 3 命名项（按配置顺序）；每项按「名（type）」显示类型标注（三值形态）；选项文案不含账号密码 |
 | QA-NP-02 | 02-named-proxy-02 | 任务 A→proxy-a、B→proxy-b、C→直连并行下载 | proxy-a/b 日志各记录对应任务请求、互不串线、均无 C；三任务完成且文件正确 |
 | QA-NP-03 | 02-named-proxy-03 | 配置重名/空名条目 + 一个合法条目 | 非法条目不在下拉；合法在位；启动 toast 一次；启动与下载不受阻 |
 | QA-NP-04 | 02-named-proxy-04 | http 型认证代理（ip/port + 成对凭证，v140 桩为强制认证形态）下载；桩级探针负例 + 全界面/日志全文检索 | 桩侧：无凭证/错凭证 → 407 + `Proxy-Authenticate: Basic` 质询、正凭证放行；产品：认证通过下载成功；界面与日志均无 username/password 明文（含 407/放行事件记录） |

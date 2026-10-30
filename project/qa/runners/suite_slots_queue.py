@@ -97,7 +97,7 @@ class SlotsQueueSuite(Suite):
         """
         @self.case("QA-SQ-02")
         def go(env: Env):
-            env.write_config("download_slots = 3\n")
+            env.write_config("[common]\ndownload_slots = 3\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 # 失败进倒计时（占槽）
@@ -119,7 +119,7 @@ class SlotsQueueSuite(Suite):
         @self.case("QA-SQ-03")
         def go(env: Env):
             import hashlib
-            env.write_config("download_slots = 3\n")
+            env.write_config("[common]\ndownload_slots = 3\n")
             data = expected_content(1_000_000)
             with open(os.path.join(env.fixture_root, "sq3.bin"), "wb") as f:
                 f.write(data)
@@ -145,7 +145,7 @@ class SlotsQueueSuite(Suite):
         """QA-SQ-04 槽满+等待队列；1 任务达上限停等：槽位释放且队首递补。"""
         @self.case("QA-SQ-04")
         def go(env: Env):
-            env.write_config("download_slots = 2\n")
+            env.write_config("[common]\ndownload_slots = 2\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 # 1 个停等任务（探测必败 fatal）占 0 槽 —— 用「已达上限」
@@ -198,7 +198,7 @@ class SlotsQueueSuite(Suite):
         """QA-SQ-06 队列 T1/T2：选中 T1 按 J（下移）→ T2 变队首先获槽。"""
         @self.case("QA-SQ-06")
         def go(env: Env):
-            env.write_config("download_slots = 1\n")
+            env.write_config("[common]\ndownload_slots = 1\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(app, env, self._slow_url(env, "three-m.bin", 1))
@@ -258,7 +258,7 @@ class SlotsQueueSuite(Suite):
         """QA-SQ-08 下载至 20% Space：转已暂停；sidecar 存在；槽位释放递补。"""
         @self.case("QA-SQ-08")
         def go(env: Env):
-            env.write_config("download_slots = 1\n")
+            env.write_config("[common]\ndownload_slots = 1\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(app, env, self._slow_url(env, "three-m.bin", 1))
@@ -318,7 +318,7 @@ class SlotsQueueSuite(Suite):
         """QA-SQ-10 已暂停任务 Space（满槽）：转等待中显示位次；满槽 toast 已退役（v1.21）。"""
         @self.case("QA-SQ-10")
         def go(env: Env):
-            env.write_config("download_slots = 1\n")
+            env.write_config("[common]\ndownload_slots = 1\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(app, env, self._slow_url(env, "three-m.bin", 1))
@@ -342,7 +342,7 @@ class SlotsQueueSuite(Suite):
         """QA-SQ-11 等待中任务 Space：转已暂停；排队行消失；已获槽释放递补。"""
         @self.case("QA-SQ-11")
         def go(env: Env):
-            env.write_config("download_slots = 1\n")
+            env.write_config("[common]\ndownload_slots = 1\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(app, env, self._slow_url(env, "three-m.bin", 1))
@@ -399,7 +399,7 @@ class SlotsQueueSuite(Suite):
         @self.case("QA-SQ-14")
         def go(env: Env):
             import json as _json
-            env.write_config("download_slots = 1\n")
+            env.write_config("[common]\ndownload_slots = 1\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(
@@ -469,7 +469,7 @@ class SlotsQueueSuite(Suite):
         """QA-SQ-15 已暂停失败任务再按空格：重新排队续传；R 仅兜底提示（v1.19 收窄）。"""
         @self.case("QA-SQ-15")
         def go(env: Env):
-            env.write_config("download_slots = 1\n")
+            env.write_config("[common]\ndownload_slots = 1\n")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(
@@ -511,6 +511,7 @@ class SlotsQueueSuite(Suite):
                 add_task_via_dialog(app, env, env.fixture.url("ghost-404.bin"))
                 assert app.wait_for("已失败", 10)
                 assert_in("不自动重试", app.text(), "404 应不自动重试")
+                app.pump(0.5)  # 失败切换窗 settle：转场瞬间注入按键会被事件循环吞键
                 app.send("r")
                 assert app.wait_for("等待中", 8) or app.wait_for("下载中", 10), \
                     "不自动重试任务 R 后应重新排队"

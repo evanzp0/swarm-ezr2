@@ -117,7 +117,7 @@ Feature: 01-retry-backoff 失败分类 · 重试计数与退避
       | big-100m.bin  |
 
   Scenario: 01-retry-backoff-10 auto_retry=false 时失败一律停等
-    Given 配置文件设 auto_retry = false
+    Given 配置文件设 [http] 表 auto_retry = false
     When 任务以网络错误（或 408/429/5xx）失败
     Then 任务转「已失败」且列表行显示「不自动重试」、无倒计时
     And 按 R 可手动重试（重试后再次失败仍停等）

@@ -696,6 +696,23 @@ class Suite:
 # ---------------------------------------------------------------------------
 
 
+DUMMY_URL = "http://qa.local/probe.bin"
+
+
+def open_add_dialog_via_cmd(app: "EzrApp", url: str) -> None:
+    """A → 命令窗口输入 URL → Enter 分流打开「添加任务：HTTP(S)」。
+
+    06-cmd-window-02 口径（phase-02 起添加任务唯一入口）：http(s) URL →
+    HTTP 对话框且 URL 字段预填、并发自动回填 4；torrent 路径 → BT 对话框；
+    其余输入 → 错误窗口。命令窗口打开锚 = 标题「请输入命令或链接」。
+    """
+    app.send("A")
+    assert app.wait_for("请输入命令或链接", 3), "命令窗口未打开"
+    app.type_text(url)
+    app.send("enter")
+    assert app.wait_for("添加任务：HTTP(S)", 3), "添加对话框未打开"
+
+
 def add_task_via_dialog(app: "EzrApp", env: "Env", url: str, conns: str = "",
                         ck_value: str = "", save_dir: str | None = None) -> None:
     """A 对话框添加任务：URL + 保存目录 +（可选并发/校验码）→ Enter 确认。
@@ -703,11 +720,7 @@ def add_task_via_dialog(app: "EzrApp", env: "Env", url: str, conns: str = "",
     save_dir 缺省打 env.save_dir；需要目录隔离的用例（同 case 多轮下载、
     避免落盘脏测与重复守卫）显式传独立子目录。
     """
-    app.send("A")
-    # v1.32 标题更名：锚定对话框标题（勿锚「添加下载任务」——空态引导文案
-    # 「按 A 添加下载任务」含同文，空列表时会把未打开误判为已打开）
-    assert app.wait_for("添加任务：HTTP(S)", 3), "添加对话框未打开"
-    app.type_text(url)
+    open_add_dialog_via_cmd(app, url)
     app.send("tab")
     # 哨兵语义：None=env.save_dir；""=字段留空（走默认 download_dir）；
     # "路径"=显式目录。不可用 or（空串会被吞掉）。

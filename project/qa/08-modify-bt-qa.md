@@ -1,6 +1,6 @@
 # QA 套件 · 08-modify-bt 修改任务：BT 对话框（期号 02）
 
-> 对应规格：`project/features/08-modify-bt.feature`（5 场景）。
+> 对应规格：`project/features/08-modify-bt.feature`（6 场景）。
 > 需求依据：`project/mission/phase-02.md` FR-02-03/04。
 > UI 基线：ezr-demo phase2 源码（78×24 / 焦点表 0–5 / 预填与确认口径 / toast 文案照录源码，
 > specifier 逐条核证）。
@@ -24,6 +24,7 @@
 | QA-MB-03 | 08-modify-bt-03 | 取消 1 个未完成文件勾选 → 确定；重开勾回 → 确定 | toast 逐字 `✓ BT 任务已更新：<k>/<n> 文件 · 共 <size>（立即生效）`；total 重算、已下载钳制 ≤ 新 total、列表进度即时更新；被取消文件停止推进；勾回后补下且已落盘 piece 不重下（fixture 侧断点可观察） |
 | QA-MB-04 | 08-modify-bt-04 | 全不选 → 确定；Esc / [✗] / [ 取消 ] 关闭 | toast `⚠ 请至少保留一个要下载的文件（空格勾选）`、焦点回列表不关窗；三种关闭通道均无修改生效 |
 | QA-MB-05 | 08-modify-bt-05 | 并发改 8、代理切「直连」→ 确定 | 并发/代理热调立即生效（同 FR-01-87 口径）；total 或并发变化时分块连接重建且连接速度保留（保速度续传，无重新排队）；头部「并发」与面板徽标 ` x/8 项 ` 刷新 |
+| QA-MB-06 | 08-modify-bt-06 | 下载中任务按 M，trackers 追加一行 tracker-B（另一台 fixture tracker）并删除一行 tracker-C → 确定；重开修改框观察预填；做种中任务同口径修改 | toast 照旧 `✓ BT 任务已更新：<k>/<n> 文件 · 共 <size>（立即生效）`；任务保持下载中不中断（连接/进度/速度不受影响、并发明细不闪断、无重新排队）；tracker-B 立即被 announce（fixture 日志确认后收到该任务 info_hash，无需停止再启动）且返回 peers 纳入候选；tracker-C 不再收到后续 announce（日志停止增长）；重开修改框 trackers 预填 = 确认后新列表（持久）；做种中同口径生效（v1.2：修复前仅改模型、需停止再启动才生效的缺陷） |
 
 ## 通过准则
 
