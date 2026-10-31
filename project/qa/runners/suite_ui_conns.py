@@ -14,6 +14,9 @@ FR-01-100…102（v1.14/v1.15 详情类型行、链接样式复制、速度同�
 配色断言无视 NO_COLOR（产品强制彩色）；布局锚点动态定位（标题行/分隔符列），
 不硬编码列位（engineering.md 区域锚定与面板箱体截取纪律）。
 
+v1.38 同步注（bug14 轮，D63③）：QA-UC-09 新增 ①b 任务速度=Σ并发行同帧断言（HTTP 驱动）；
+BT 臂同口径由单测锁（http_task_speed_equals_sum_of_conn_rows 等）+ QA 会话覆盖，runner 维持 HTTP 驱动。
+D63④（客户端列自适应收缩 + 末列完整可见吸附）BT 面板判据由单测锁（bt_protocol_header_complete_at_viewport_92 等）+ QA 会话覆盖。
 v1.37 同步注（bug13 轮，D62④）：QA-UC-11 新增 BT 同口径判据——多 peer 明细中
 ↓/↑/鼠标可选中任意 peer 行、选择不随 tick 复位、B 断开作用于选中行。BT peer 明细
 需真实 swarm（harness territory），本 runner 维持 HTTP 明细驱动；BT 判据由
@@ -146,6 +149,14 @@ def _conns_data_rows(app: EzrApp) -> list[tuple[int, str | None, str | None]]:
         if m:
             out.append((int(m.group(1)), m.group(2), m.group(3)))
     return out
+
+
+def _speed_to_bs(text: str) -> float:
+    """把 fmt_speed 形态（如 '196.9 KB/s'）解析为 B/s（十进制口径）。"""
+    m = re.match(r"([\d.]+) ([KMG]?)B/s", text.strip())
+    assert m, f"速度形态不符: {text!r}"
+    mult = {"": 1.0, "K": 1e3, "M": 1e6, "G": 1e9}[m.group(2)]
+    return float(m.group(1)) * mult
 
 
 def _click(app: EzrApp, row: int, col: int) -> None:
@@ -624,6 +635,17 @@ class UiConnsSuite(Suite):
                     changes = sum(1 for a, b in zip(vals, vals[1:]) if a != b)
                     assert changes <= 6.5, \
                         f"连接{cid}速度 5s 内变化 {changes} 次超 1s 节拍口径"
+                # ①b v1.38/D63③：任务行速度 = Σ 并发行速度（同一帧采样；
+                # 单任务语境下头部「全局 ↓」= 该任务展示速度，作任务行等价观测点）
+                rows_sum = _conns_data_rows(app)
+                speeds = [_speed_to_bs(v) for _, v, _ in rows_sum if v and v != "-"]
+                glob = _header_field(app, "全局 ↓")
+                assert glob, f"头部应有全局 ↓ 字段: {app.screen.display[1]!r}"
+                g = _speed_to_bs(glob)
+                tol = 60.0 * max(len(speeds), 1) + max(0.02 * g, 1.0)
+                assert abs(sum(speeds) - g) <= tol, \
+                    f"Σ并发行 {sum(speeds):.0f} B/s 应≈任务速度（全局↓）{g:.0f} B/s " \
+                    f"（行值舍入容差 {tol:.0f}；D63③）"
                 # ② 累计下载单调递增（自本次开始下载起算）
                 prev: dict[int, float] = {}
                 deadline = time.time() + 30.0

@@ -390,9 +390,6 @@ impl App {
                         continue;
                     }
 
-                    let win: u64 = t.connections.iter().map(|c| c.win).sum();
-                    let sample = win as f64 / SPEED_TICK.as_secs_f64();
-                    t.speed += (sample - t.speed) * SPEED_EMA_ALPHA;
                     for c in t.connections.iter_mut() {
                         if c.cap() == 0 || c.done >= c.cap() {
                             c.speed = 0.0;
@@ -401,11 +398,9 @@ impl App {
                             c.speed += (s - c.speed) * SPEED_EMA_ALPHA;
                         }
                     }
+                    t.speed = t.connections.iter().map(|c| c.speed).sum();
 
                     if t.protocol.is_bt() {
-                        let win_up: u64 = t.connections.iter().map(|c| c.win_up).sum();
-                        let up = win_up as f64 / SPEED_TICK.as_secs_f64();
-                        t.upload_speed += (up - t.upload_speed) * SPEED_EMA_ALPHA;
                         for c in t.connections.iter_mut() {
                             if c.cap() == 0 || c.done >= c.cap() {
                                 c.up_speed = 0.0;
@@ -414,6 +409,7 @@ impl App {
                                 c.up_speed += (s - c.up_speed) * SPEED_EMA_ALPHA;
                             }
                         }
+                        t.upload_speed = t.connections.iter().map(|c| c.up_speed).sum();
                     }
 
                     for c in t.connections.iter_mut() {

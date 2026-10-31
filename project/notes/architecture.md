@@ -391,3 +391,16 @@
   任务 Fatal。QA-PC-06 全量套件语境下低频复现（隔离 11 连跑零复现；慢速逐键清场把任务添加
   窗口拉长 ~0.5s 后暴露率上升，清场提速后 3 连跑稳定）。本轮未改引擎，登记为 QA/引擎轮
   观察项：worker 打开失败可考虑有界重试窗（文件由 supervisor 先 touch 再派 worker 即根治）。
+## bug14 轮（specifier）
+- 「协议」表头只显示「协」的根因：视口右缘恰好落在末列宽字（议）的中缝，ratatui 渲染层对跨界宽字整字丢弃（不渲染半个字），视觉上=表头被截断；v1.34 的「+1 放宽」只保证滚到最右完整，不保证默认视图/中间偏移。探针实证矩阵（TestBackend buffer 直读）：面板宽 98（视口 92）默认视图、面板宽 50 + hscroll 48/49 均复现「协」；hscroll≥50 或视口≥94 完整。修法=客户端列自适应收缩（内容>视口时客户端 34→max(12, 视口宽−60)，整表无滚动可见）+ 末列完整可见吸附（右缘 ∈ (内容宽−4, 内容宽) 时偏移吸附到最大）。ezr-demo 同构同现（同列宽同 head_cell），属设计基线级现象非 ezr 实现独有。
+- 并发速度合计不一致的协议差异：BT 任务速度=Σ per-conn EMA（bug12 已同源）；HTTP 任务速度走独立任务级窗口 EMA 链（tick_speed_and_session 的 speed_display），与并发行 SmoothedSpeed 结构性不同源。v1.39 统一为两协议 Σ per-conn EMA；源不变式严格成立、显示层各自 fmt 的亚 0.1 KB/s 舍入差登记为实现定义值。
+- config 解析失败静默回退是「改配置不生效」的根因载体：from_toml 用 toml::from_str(text).unwrap_or_default()，非法 TOML → 空 ConfigRaw → 全默认 + 零警告，用户无任何感知。v1.39 翻转为启动即报错非零退出（仅「解析失败」层致命；逐键非法值回退与未知键静默忽略口径不变——三层语义要分清）。
+- 模板「示例行活跃」改版（v1.13）的连带语义：首启 config.toml 直接可改值（消除「只改键值不动 # 表头导致键落根表被未知键忽略」的坑）；proxy 双示例块必须保持注释（激活=注入两个占位死代理），36 键白名单取消注释要精确到键名（proxy 块的 name=/type= 行同形态但不得动）。
+
+## bug14 轮（coder 实现）
+- 解析失败分层的最终口径（D63① 落地版）：toml 反序列化层错误（语法错 + 键类型不匹配）= try_from_toml Err = 启动致命；反序列化成功后的语义非法值（0/负/越界/非法字符串值）= 逐键回退默认。规格 v1.39 措辞已同步此分层（原「类型错逐键回退」表述与 serde 类型化结构体不可实现，正确口径 = 结构层致命、语义层回退）。
+- 浮点键整数写法容忍（num_f64）：backoff_initial/backoff_cap/throttle_burst_secs/seed_duration_secs 的 ConfigRaw 字段改 Option<toml::Value>，Integer/Float 通吃、其余回退——否则用户写 `throttle_burst_secs = 1`（整数）会整体解析失败误伤致命；模板 v1.13 的 seed_duration_secs = 1800（整数）也依赖它。
+- HTTP 任务速度 Σ 接线：sample_conn_speed_display 聚合 per-conn EMA 值写 t.speed（totals map 两段式避开借用）；speed_display EMA 链整链退役（字段/zero/entry/evt 清理）；任务级 windows 滑窗保留（evt/bt 仍喂、生命周期测试锁定——仅失去 rate() 读者，cleaner 轮可退役登记）。
+- conns 自适应收缩/吸附实现：client_w = 视口<94 时 max(12, vw−60)（BT_CLIENT_SHRINK_BASE=60 = 除客户端外六列宽+分隔）；内容宽动态 = 94−34+client_w；吸附条件 edge+4>content_w && edge<content_w（edge=hs+vw，落入 (c−4,c) 即吸到 max），渲染与滚动条位置同用吸附后偏移。
+- BT 种子路径归一接线点 = dlg_confirm_add_bt 确认链（normalize_save_dir 复用，~ 展开+相对转 cwd 绝对），fs::read 直读归一后路径（expand_tilde 冗余化），判重与 Task.url 同用归一值；预填层不改写。
+

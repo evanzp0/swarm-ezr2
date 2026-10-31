@@ -213,11 +213,11 @@ struct HttpRaw {
     http_concurrency: Option<i64>,
     max_retries: Option<i64>,
     auto_retry: Option<bool>,
-    backoff_initial: Option<f64>,
-    backoff_cap: Option<f64>,
+    backoff_initial: Option<toml::Value>,
+    backoff_cap: Option<toml::Value>,
     progress_tick_ms: Option<i64>,
     sidecar_flush_secs: Option<i64>,
-    throttle_burst_secs: Option<f64>,
+    throttle_burst_secs: Option<toml::Value>,
     throttle_sleep_ms: Option<i64>,
     dns_race_grace_ms: Option<i64>,
 }
@@ -245,7 +245,7 @@ struct BtRaw {
     tracker_backoff_cap_secs: Option<i64>,
     udp_base_timeout_secs: Option<i64>,
     udp_retries: Option<i64>,
-    seed_duration_secs: Option<f64>,
+    seed_duration_secs: Option<toml::Value>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -279,6 +279,15 @@ fn clamp_u(v: Option<i64>, d: usize) -> usize {
         .unwrap_or(d)
 }
 
+fn num_f64(v: Option<toml::Value>, d: f64) -> f64 {
+    let x = match v {
+        Some(toml::Value::Float(f)) => f,
+        Some(toml::Value::Integer(i)) => i as f64,
+        _ => return d,
+    };
+    pos_f64(Some(x), d)
+}
+
 fn pos_f64(v: Option<f64>, d: f64) -> f64 {
     v.filter(|v| *v > 0.0 && v.is_finite()).unwrap_or(d)
 }
@@ -292,16 +301,21 @@ fn max_speed_of(v: Option<toml::Value>) -> u64 {
 }
 
 impl Config {
-    pub fn load(path: &Path) -> Self {
-        match std::fs::read_to_string(path) {
-            Ok(text) => Config::from_toml(&text),
-            Err(_) => Config::default(),
-        }
+    pub fn try_load(path: &Path) -> Result<Self, String> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(_) => return Ok(Config::default()),
+        };
+        Self::try_from_toml(&text).map_err(|e| format!("配置文件解析失败：{}\n{e}", path.display()))
     }
 
-    #[must_use]
+    #[cfg(test)]
     pub fn from_toml(text: &str) -> Self {
-        let raw: ConfigRaw = toml::from_str(text).unwrap_or_default();
+        Self::try_from_toml(text).unwrap_or_default()
+    }
+
+    pub fn try_from_toml(text: &str) -> Result<Self, String> {
+        let raw: ConfigRaw = toml::from_str(text).map_err(|e| e.to_string())?;
         let d = Config::default();
         let mut warnings = Vec::new();
         let mut proxies = Vec::new();
@@ -385,7 +399,7 @@ impl Config {
         let common = raw.common.unwrap_or_default();
         let http = raw.http.unwrap_or_default();
         let bt = raw.bt.unwrap_or_default();
-        Config {
+        Ok(Config {
             download_dir: common.download_dir.filter(|s| !s.trim().is_empty()),
             download_slots: min1_usize(common.download_slots, d.download_slots),
             max_speed: max_speed_of(common.max_speed),
@@ -399,11 +413,11 @@ impl Config {
             http_concurrency: clamp_u(http.http_concurrency, d.http_concurrency),
             max_retries: min1_u32(http.max_retries, d.max_retries),
             auto_retry: http.auto_retry.unwrap_or(d.auto_retry),
-            backoff_initial: pos_f64(http.backoff_initial, d.backoff_initial),
-            backoff_cap: pos_f64(http.backoff_cap, d.backoff_cap),
+            backoff_initial: num_f64(http.backoff_initial, d.backoff_initial),
+            backoff_cap: num_f64(http.backoff_cap, d.backoff_cap),
             progress_tick_ms: min1_u64(http.progress_tick_ms, d.progress_tick_ms),
             sidecar_flush_secs: min1_u64(http.sidecar_flush_secs, d.sidecar_flush_secs),
-            throttle_burst_secs: pos_f64(http.throttle_burst_secs, d.throttle_burst_secs),
+            throttle_burst_secs: num_f64(http.throttle_burst_secs, d.throttle_burst_secs),
             throttle_sleep_ms: min1_u64(http.throttle_sleep_ms, d.throttle_sleep_ms),
             dns_race_grace_ms: min1_u64(http.dns_race_grace_ms, d.dns_race_grace_ms),
             http_trackers: sanitize_trackers(
@@ -452,9 +466,9 @@ impl Config {
             ),
             udp_base_timeout_secs: min1_u64(bt.udp_base_timeout_secs, d.udp_base_timeout_secs),
             udp_retries: min1_u32(bt.udp_retries, d.udp_retries),
-            seed_duration_secs: pos_f64(bt.seed_duration_secs, d.seed_duration_secs),
+            seed_duration_secs: num_f64(bt.seed_duration_secs, d.seed_duration_secs),
             warnings,
-        }
+        })
     }
 
     #[must_use]
@@ -629,19 +643,19 @@ const AUTHORIZED_TEMPLATE: &str = r#"# EZR Downloader 配置模板
 
 # ===== 公共配置 =====
 
-# [common]
+[common]
 
 # 默认保存目录（添加对话框目录留空时使用）
 # 取值范围：任意目录路径；留空或缺失 = 用户主目录下的下载目录
-# download_dir = ""
+download_dir = ""
 
 # 全局下载槽位数（同时下载的任务数上限）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# download_slots = 5
+download_slots = 5
 
 # 全局下载限速（0 = 不限）
 # 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
-# max_speed = 0
+max_speed = 0
 
 # 命名代理列表（可配置多个）
 # [[common.proxy]]
@@ -662,143 +676,143 @@ const AUTHORIZED_TEMPLATE: &str = r#"# EZR Downloader 配置模板
 
 # ===== HTTP 引擎配置 =====
 
-# [http]
+[http]
 
 # HTTP 分块块大小（字节）
 # 取值范围：正整数（≥1）；0 或非法值回退默认（1 MB）
-# block_size_http = 1048576
+block_size_http = 1048576
 
 # 默认并发数
 # 取值范围：1–64 的整数；越界钳制到边界
-# http_concurrency = 4
+http_concurrency = 4
 
 # 自动重试上限次数（达上限转停等，可按 R 手动重试）
 # 取值范围：≥1 的整数；0 或非法值回退默认
-# max_retries = 5
+max_retries = 5
 
 # 失败后是否自动重试
 # 取值范围：true / false
-# auto_retry = true
+auto_retry = true
 
 # 自动重试退避初始秒（指数退避序列起点）
 # 取值范围：>0 的有限数；非法值回退默认
-# backoff_initial = 8.0
+backoff_initial = 8.0
 
 # 自动重试退避封顶秒
 # 取值范围：>0 的有限数；非法值回退默认
-# backoff_cap = 60.0
+backoff_cap = 60.0
 
 # HTTP 下载进度事件节拍（毫秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# progress_tick_ms = 100
+progress_tick_ms = 100
 
 # 断点 sidecar 落盘间隔（秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# sidecar_flush_secs = 2
+sidecar_flush_secs = 2
 
 # 限速令牌桶突发窗（秒）
 # 取值范围：>0 的有限数；非法值回退默认
-# throttle_burst_secs = 0.5
+throttle_burst_secs = 0.5
 
 # 限速循环步进睡眠（毫秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# throttle_sleep_ms = 20
+throttle_sleep_ms = 20
 
 # DNS 双腿竞速宽限（毫秒，双栈并行解析）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# dns_race_grace_ms = 1000
+dns_race_grace_ms = 1000
 
 # ===== BT 引擎配置 =====
 
-# [bt]
+[bt]
 
 # HTTP(S) tracker 列表（BT 任务默认 tracker 池来源之一）
 # 取值范围：字符串数组，每项为 http:// 或 https:// 开头的 tracker announce URL；非法 URL 行启动时忽略并警告
-# http_trackers = []
+http_trackers = []
 
 # UDP tracker 列表（BT 任务默认 tracker 池来源之一）
 # 取值范围：字符串数组，每项为 udp:// 开头的 tracker announce URL（含端口）；非法 URL 行启动时忽略并警告
-# udp_trackers = []
+udp_trackers = []
 
 # BT 任务默认并发数（新任务预填）
 # 取值范围：1–64 的整数；越界钳制到边界
-# bt_concurrency = 20
+bt_concurrency = 20
 
 # 单 peer 在飞请求块数上限（×16 KiB = 在飞窗口）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# peer_pipeline = 64
+peer_pipeline = 64
 
 # 同时获得上传槽位的 peer 数（choker 周期分配）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# upload_slots = 4
+upload_slots = 4
 
 # 上传读盘并发上限（进程级）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# upload_read_concurrency = 128
+upload_read_concurrency = 128
 
 # 空闲连接置换阈值（秒，无新增进账超时即断开重拨）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# idle_eviction_secs = 60
+idle_eviction_secs = 60
 
 # 出连 TCP 拨号超时（秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# connect_timeout_secs = 3
+connect_timeout_secs = 3
 
 # peer 握手超时（秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# handshake_timeout_secs = 10
+handshake_timeout_secs = 10
 
 # 在飞块请求超时（秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# request_timeout_secs = 20
+request_timeout_secs = 20
 
 # 单 piece 请求块粒度（piece 细分为 n 块请求）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# requests_per_piece = 4
+requests_per_piece = 4
 
 # 上传 choker 重排周期（秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# rechoke_interval_secs = 10
+rechoke_interval_secs = 10
 
 # 乐观 unchoke 轮换周期（秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# optimistic_interval_secs = 30
+optimistic_interval_secs = 30
 
 # 进度事件最小发送间隔（毫秒，节流）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# progress_emit_min_interval_ms = 250
+progress_emit_min_interval_ms = 250
 
 # announce 请求的 peer 数上限
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# tracker_numwant = 200
+tracker_numwant = 200
 
 # peer 连接失败重试退避起始（秒，倍增）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# peer_retry_base_secs = 5
+peer_retry_base_secs = 5
 
 # peer 连接失败重试退避封顶（秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# peer_retry_cap_secs = 120
+peer_retry_cap_secs = 120
 
 # tracker 失败退避起始（秒，倍增）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# tracker_backoff_start_secs = 8
+tracker_backoff_start_secs = 8
 
 # tracker 失败退避封顶（秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# tracker_backoff_cap_secs = 60
+tracker_backoff_cap_secs = 60
 
 # UDP tracker 单轮超时起始（秒，倍增重试）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# udp_base_timeout_secs = 15
+udp_base_timeout_secs = 15
 
 # UDP tracker 超时重试次数
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-# udp_retries = 3
+udp_retries = 3
 
 # 做种时长默认值（秒，任务做种倒计时起点）
 # 取值范围：>0 的数；0 或非法值回退默认
-# seed_duration_secs = 1800
+seed_duration_secs = 1800
 "#;
 
 impl Config {
@@ -829,7 +843,7 @@ mod tests {
 
     #[test]
     fn missing_file_yields_defaults() {
-        let c = Config::load(Path::new("/nonexistent/ezr/config.toml"));
+        let c = Config::try_load(Path::new("/nonexistent/ezr/config.toml")).unwrap();
         assert_eq!(c, Config::default());
         assert_eq!(c.block_size_http, 1_048_576);
         assert_eq!(c.download_slots, 5);
@@ -905,6 +919,56 @@ mod tests {
     fn garbage_file_falls_back_all() {
         let c = Config::from_toml("not [valid toml ===");
         assert_eq!(c, Config::default());
+    }
+
+    #[test]
+    fn garbage_parse_is_err_in_strict_path() {
+        let err = Config::try_from_toml("not [valid toml ===")
+            .expect_err("v1.13/D63①：非法 TOML 必须报错（解析失败致命）");
+        assert!(!err.is_empty(), "错误信息含解析原因: {err}");
+    }
+
+    #[test]
+    fn try_load_reports_path_and_reason() {
+        let dir = std::env::temp_dir().join(format!("ezr-cfg-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("config.toml");
+        std::fs::write(&p, "not [valid toml ===").unwrap();
+        let err = Config::try_load(&p).expect_err("损坏配置必须报错");
+        assert!(
+            err.contains("配置文件解析失败"),
+            "报错含解析失败语义: {err}"
+        );
+        assert!(
+            err.contains(p.to_string_lossy().as_ref()),
+            "报错含配置文件路径: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn template_v13_parses_to_defaults() {
+        let c = Config::try_from_toml(&Config::default_template())
+            .expect("v1.13 活跃模板必须可解析（整数/浮点键均合法）");
+        assert_eq!(
+            c,
+            Config::default(),
+            "示例值 = 代码默认 ⇒ 解析结果与文件缺失一致"
+        );
+        assert!(c.warnings.is_empty(), "活跃模板零警告");
+        assert!(c.proxies.is_empty(), "proxy 示例块保持注释，未激活");
+    }
+
+    #[test]
+    fn float_keys_accept_integer_form_per_key() {
+        let c = Config::from_toml(
+            "[http]\nthrottle_burst_secs = 1\nbackoff_initial = 2\n[bt]\nseed_duration_secs = 1800\n",
+        );
+        assert_eq!(c.throttle_burst_secs, 1.0, "整数写法逐键生效（不致命）");
+        assert_eq!(c.seed_duration_secs, 1800.0);
+        assert_eq!(c.backoff_initial, 2.0);
+        let c2 = Config::from_toml("[http]\nthrottle_burst_secs = 0\n");
+        assert_eq!(c2.throttle_burst_secs, 0.5, "0 仍回退默认（逐键口径）");
     }
 
     #[test]
@@ -1192,9 +1256,9 @@ mod tests {
     fn template_three_table_headers_two_line_form() {
         let t = Config::default_template();
         for (sep, decl) in [
-            ("# ===== 公共配置 =====", "# [common]"),
-            ("# ===== HTTP 引擎配置 =====", "# [http]"),
-            ("# ===== BT 引擎配置 =====", "# [bt]"),
+            ("# ===== 公共配置 =====", "[common]"),
+            ("# ===== HTTP 引擎配置 =====", "[http]"),
+            ("# ===== BT 引擎配置 =====", "[bt]"),
         ] {
             let pos = t.find(sep).unwrap_or_else(|| panic!("缺分隔头 {sep}"));
             assert!(!t.contains("# ===== ["), "旧形态分隔头（含表名）已退役");
@@ -1206,14 +1270,28 @@ mod tests {
     }
 
     #[test]
-    fn template_lines_all_commented() {
-        for line in Config::default_template().lines() {
-            let t = line.trim_start();
-            assert!(
-                t.is_empty() || t.starts_with('#'),
-                "模板出现非注释行：{line}"
-            );
-        }
+    fn template_v13_active_structure() {
+        let t = Config::default_template();
+        assert!(t.contains("\n[common]\n"), "v1.13 表声明行活跃");
+        assert!(t.contains("\n[http]\n"));
+        assert!(t.contains("\n[bt]\n"));
+        assert!(t.contains("\ndownload_slots = 5\n"), "键值行活跃");
+        assert!(t.contains("\nbt_concurrency = 20\n"));
+        assert!(
+            !t.contains("\n[[common.proxy]]\n"),
+            "proxy 双示例块保持注释（D63②：占位主机/凭证不激活）"
+        );
+        assert!(t.contains("# 取值范围"), "用途/取值范围注释保持");
+        assert_eq!(t.matches("取值范围").count(), 36, "36 键各一段取值范围标注");
+        let active: Vec<&str> = t
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+            .collect();
+        assert_eq!(
+            active.len(),
+            39,
+            "活跃行 = 36 键值行 + 3 表声明行，实际 {active:?}"
+        );
     }
 
     #[test]
@@ -1259,9 +1337,12 @@ mod tests {
         ];
         assert_eq!(keys.len(), 36);
         for k in keys {
-            assert!(t.contains(&format!("\n# {k} = ")), "模板缺键 {k} 的示例行");
             assert!(
-                t.matches(&format!("\n# {k} = ")).count() == 1,
+                t.contains(&format!("\n{k} = ")),
+                "模板缺键 {k} 的活跃键值行"
+            );
+            assert!(
+                t.matches(&format!("\n{k} = ")).count() == 1,
                 "键 {k} 示例行不唯一"
             );
         }
@@ -1271,7 +1352,7 @@ mod tests {
             }
             let key_line = t
                 .lines()
-                .find(|l| l.starts_with(&format!("# {k} = ")))
+                .find(|l| l.starts_with(&format!("{k} = ")))
                 .unwrap();
             let name_line_idx = t.lines().position(|l| l == key_line).unwrap();
             let lines: Vec<&str> = t.lines().collect();
@@ -1291,47 +1372,47 @@ mod tests {
     fn template_defaults_match_contract() {
         let t = Config::default_template();
         for expected in [
-            "# download_dir = \"\"",
-            "# download_slots = 5",
-            "# max_speed = 0",
-            "# block_size_http = 1048576",
-            "# http_concurrency = 4",
-            "# max_retries = 5",
-            "# auto_retry = true",
-            "# backoff_initial = 8.0",
-            "# backoff_cap = 60.0",
-            "# progress_tick_ms = 100",
-            "# sidecar_flush_secs = 2",
-            "# throttle_burst_secs = 0.5",
-            "# throttle_sleep_ms = 20",
-            "# dns_race_grace_ms = 1000",
-            "# http_trackers = []",
-            "# udp_trackers = []",
-            "# bt_concurrency = 20",
-            "# peer_pipeline = 64",
-            "# upload_slots = 4",
-            "# upload_read_concurrency = 128",
-            "# idle_eviction_secs = 60",
-            "# connect_timeout_secs = 3",
-            "# handshake_timeout_secs = 10",
-            "# request_timeout_secs = 20",
-            "# requests_per_piece = 4",
-            "# rechoke_interval_secs = 10",
-            "# optimistic_interval_secs = 30",
-            "# progress_emit_min_interval_ms = 250",
-            "# tracker_numwant = 200",
-            "# peer_retry_base_secs = 5",
-            "# peer_retry_cap_secs = 120",
-            "# tracker_backoff_start_secs = 8",
-            "# tracker_backoff_cap_secs = 60",
-            "# udp_base_timeout_secs = 15",
-            "# udp_retries = 3",
-            "# seed_duration_secs = 1800",
+            "download_dir = \"\"",
+            "download_slots = 5",
+            "max_speed = 0",
+            "block_size_http = 1048576",
+            "http_concurrency = 4",
+            "max_retries = 5",
+            "auto_retry = true",
+            "backoff_initial = 8.0",
+            "backoff_cap = 60.0",
+            "progress_tick_ms = 100",
+            "sidecar_flush_secs = 2",
+            "throttle_burst_secs = 0.5",
+            "throttle_sleep_ms = 20",
+            "dns_race_grace_ms = 1000",
+            "http_trackers = []",
+            "udp_trackers = []",
+            "bt_concurrency = 20",
+            "peer_pipeline = 64",
+            "upload_slots = 4",
+            "upload_read_concurrency = 128",
+            "idle_eviction_secs = 60",
+            "connect_timeout_secs = 3",
+            "handshake_timeout_secs = 10",
+            "request_timeout_secs = 20",
+            "requests_per_piece = 4",
+            "rechoke_interval_secs = 10",
+            "optimistic_interval_secs = 30",
+            "progress_emit_min_interval_ms = 250",
+            "tracker_numwant = 200",
+            "peer_retry_base_secs = 5",
+            "peer_retry_cap_secs = 120",
+            "tracker_backoff_start_secs = 8",
+            "tracker_backoff_cap_secs = 60",
+            "udp_base_timeout_secs = 15",
+            "udp_retries = 3",
+            "seed_duration_secs = 1800",
         ] {
             assert!(t.contains(expected), "模板缺默认值行：{expected}");
         }
         assert!(
-            !t.contains("# proxies"),
+            !t.contains("proxies"),
             "proxies 键已改名 proxy 并迁入 [common]，模板不得输出旧键名"
         );
     }
@@ -1370,7 +1451,7 @@ mod tests {
         let t = Config::default_template();
         let val_of = |key: &str| -> String {
             t.lines()
-                .find(|l| l.starts_with(&format!("# {key} = ")))
+                .find(|l| l.starts_with(&format!("{key} = ")))
                 .unwrap_or_else(|| panic!("模板缺 {key}"))
                 .split_once(" = ")
                 .unwrap()

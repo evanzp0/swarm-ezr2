@@ -127,29 +127,14 @@ impl App {
     pub(super) fn tick_speed_and_session(&mut self, now: Instant) {
         for t in self.tasks.iter_mut() {
             if t.state != TaskState::Downloading {
-                if let Some(d) = self.speed_display.get_mut(&t.id) {
-                    d.zero();
-                }
                 t.speed = 0.0;
             }
         }
         let speed_due = now.duration_since(self.last_speed_tick) >= SPEED_TICK;
         if speed_due {
             self.last_speed_tick = now;
-            for t in self.tasks.iter_mut() {
-                if t.state != TaskState::Downloading {
-                    continue;
-                }
-                if t.protocol.is_bt() {
-                    // BT 任务速度由 sample_bt_conn_speed_display 从
-                    // per-conn EMA 汇总（与并发 panel 行同源），不走进度窗口。
-                    continue;
-                }
-                let sample = self.windows.get_mut(&t.id).map(|w| w.rate()).unwrap_or(0.0);
-                let d = self.speed_display.entry(t.id).or_default();
-                d.push(sample);
-                t.speed = d.value();
-            }
+            // HTTP 与 BT 同口径（FR-01-102 v1.39/D63③）：任务速度一律由
+            // per-conn EMA 汇总（Σ 与并发 panel 行同源），独立任务级 EMA 链废除。
             self.sample_conn_speed_display();
             self.sample_bt_conn_speed_display();
         }
@@ -174,6 +159,7 @@ impl App {
     }
 
     pub(super) fn sample_conn_speed_display(&mut self) {
+        let mut totals: HashMap<u32, f64> = HashMap::new();
         for t in &self.tasks {
             if t.state != TaskState::Downloading {
                 for ((tid, _), d) in self.conn_speed.iter_mut() {
@@ -183,6 +169,7 @@ impl App {
                 }
                 continue;
             }
+            let mut sum = 0.0f64;
             for c in &t.connections {
                 let key = (t.id, c.id);
                 let active = crate::model::conn_transferring(c.cap(), c.done);
@@ -197,6 +184,13 @@ impl App {
                     .map(SpeedWindow::rate)
                     .unwrap_or(0.0);
                 d.push(sample);
+                sum += d.value();
+            }
+            totals.insert(t.id, sum);
+        }
+        for t in self.tasks.iter_mut() {
+            if t.state == TaskState::Downloading {
+                t.speed = totals.get(&t.id).copied().unwrap_or(0.0);
             }
         }
     }

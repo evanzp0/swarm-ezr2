@@ -89,7 +89,7 @@ class PersistenceConfigSuite(Suite):
     # -- 用例 -----------------------------------------------------------------
 
     def run(self) -> list[CaseResult]:
-        for i in list(range(1, 10)) + [13]:
+        for i in list(range(1, 10)) + [13, 14]:
             getattr(self, f"_case_{i:02d}")()
         return self.results
 
@@ -198,17 +198,16 @@ class PersistenceConfigSuite(Suite):
         """QA-PC-04 非法配置回退/钳制：块 1MB/槽 5/重试 5/并发钳 64/不限速（规格已随实现）。"""
         @self.case("QA-PC-04")
         def go(env: Env):
-            # ① block_size_http = abc → TOML 解析失败整个文件按默认 → 1MB/块
-            env.write_config('[http]\nblock_size_http = "abc"\n')
+            # ① v1.19/D63① 分层：block_size_http = "abc"（字符串进数字键）= TOML
+            #    反序列化错误 = 解析失败 → 拒绝启动直接报错（01-config-template-03 口径）
+            env.write_config('ttp]\nblock_size_http = "abc"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
-            try:
-                add_task_via_dialog(app, env, env.fixture.url("three-m.bin?speed=900000"))
-                assert app.wait_for("下载中", 8)
-                assert_in("1 MB/块", detail_text(app), "非法块大小回退 1MB")
-                app.graceful_quit()
-            except Exception:
-                app.graceful_quit()
-                raise
+            deadline = time.time() + 8
+            while app.exit_code is None and time.time() < deadline:
+                app.pump(0.2)
+            assert app.exit_code is not None, "类型不匹配应拒绝启动（D63①）"
+            assert app.exit_code != 0, f"退出码应非零，实得 {app.exit_code}"
+            assert_in("配置文件解析失败", app.text()[-2000:], "报错含解析失败语义")
             # ①' block_size_http = 256KB（v1.16/FR-01-104 钳制行）：生效值下限 1MB，
             #    小于 1MB 一律按 1MB 生效（配置文件是用户可达入口，端到端口径不变）
             env.write_config("[http]\nblock_size_http = 262144\n")
@@ -547,6 +546,74 @@ class PersistenceConfigSuite(Suite):
             except Exception:
                 app.graceful_quit()
                 raise
+
+    def _case_14(self):
+        """QA-PC-14（v1.19 新增，D63②）活跃模板起步改值生效链。
+
+        首启生成 v1.13 活跃模板 → 直接改 bt_concurrency=10 / http_concurrency=3 /
+        download_slots=2 / download_dir → 重启 → 槽位 2 生效 + BT 对话框并发预填 10
+        （修 bug：改值后仍显示默认 20）+ HTTP 对话框并发 3 与目录预填。
+        """
+        @self.case("QA-PC-14")
+        def go(env: Env):
+            dl_dir = os.path.join(env.home, "qa14-dl")
+            app = EzrApp(env.home, save_dir=None)
+            try:
+                assert app.wait_for("EZR Downloader", 10), "首启应生成模板"
+                cfgp = env.config_path()
+                assert os.path.exists(cfgp), "v1.13 活跃模板应已生成"
+                with open(cfgp, encoding="utf-8") as f:
+                    body = f.read()
+                assert_in("bt_concurrency = 20", body, "活跃键值行应在位")
+                app.graceful_quit()
+            except Exception:
+                app.graceful_quit()
+                raise
+            edited = (
+                body.replace("bt_concurrency = 20", "bt_concurrency = 10")
+                .replace("http_concurrency = 4", "http_concurrency = 3")
+                .replace("download_slots = 5", "download_slots = 2")
+                .replace('download_dir = ""', f'download_dir = "{dl_dir}"')
+            )
+            assert edited != body, "活跃模板应含全部待改键"
+            with open(cfgp, "w", encoding="utf-8") as f:
+                f.write(edited)
+            app = EzrApp(env.home, save_dir=None)
+            try:
+                assert app.wait_for("EZR Downloader", 10), "重启应正常启动"
+                assert_not_in("已忽略", app.text(), "合法改值零警告")
+                assert_in("0/2", app.text(),
+                          "下载槽位应显示 0/2（download_slots=2 生效）")
+                open_add_dialog_via_cmd(app, env.fixture.url("small.bin"))
+                app.send("tab")
+                assert_in(dl_dir[-16:], app.text(),
+                          "保存目录应预填改值 download_dir（字段超宽按尾部断言）")
+                assert_in("3", app.text(), "并发应回填 http_concurrency=3")
+                app.send("esc")
+                app.pump(0.3)
+            except Exception:
+                app.graceful_quit()
+                raise
+            # BT 对话框并发预填 = 10（操作者 bug14 复现路径的证据环）
+            app.send("a")
+            assert app.wait_for("请输入命令或链接", 5), "命令窗口应打开"
+            tdir = os.path.join(env.home, "qa14-torrents")
+            os.makedirs(tdir, exist_ok=True)
+            tpath = os.path.join(tdir, "qa14.torrent")
+            with open(tpath, "wb") as f:
+                f.write(_mini_torrent("qa14"))
+            app.type_text(tpath)
+            app.send("enter")
+            assert app.wait_for("添加任务：BT", 5), "应分流打开 BT 对话框"
+            screen = app.text()
+            assert_in("10", screen, "BT 并发应预填改值 bt_concurrency=10（D63②）")
+            row = next((l for l in screen.split("\n") if "并发" in l and "10" in l), "")
+            assert row, "并发字段行应含预填值 10: " + repr(
+                [l for l in screen.split("\n") if "并发" in l])
+            app.send("esc")
+            app.pump(0.3)
+            app.graceful_quit()
+
 
 
 if __name__ == "__main__":

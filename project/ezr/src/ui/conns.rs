@@ -13,6 +13,9 @@ use super::{
 use crate::app::{App, Panel, SbKey};
 
 const BT_COLW: [usize; 7] = [18, 8, 8, 8, 8, 34, 4];
+const BT_CLIENT_SHRINK_BASE: usize = 60;
+const BT_CLIENT_MIN: usize = 12;
+const BT_PROTO_TEXT_W: usize = 4;
 const BT_CONTENT_W: usize = 94;
 const HTTP_COLW: [usize; 3] = [4, 8, 8];
 const HTTP_CONTENT_W: usize = 22;
@@ -181,6 +184,14 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
+    let vw_pre = inner.width.saturating_sub(4) as usize;
+    let client_w = if is_bt && BT_CONTENT_W > vw_pre {
+        vw_pre
+            .saturating_sub(BT_CLIENT_SHRINK_BASE)
+            .max(BT_CLIENT_MIN)
+    } else {
+        BT_COLW[5]
+    };
     let head_cell = |s: &str, wd: usize| Span::styled(pad_right(s, wd), Style::default().fg(DIM));
     let head = if is_bt {
         vec![
@@ -194,7 +205,7 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
             Span::raw(" "),
             head_cell("累计上传", BT_COLW[4]),
             Span::raw(" "),
-            head_cell("客户端", BT_COLW[5]),
+            head_cell("客户端", client_w),
             Span::raw(" "),
             head_cell("协议", BT_COLW[6]),
         ]
@@ -280,7 +291,7 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                     sep(),
                     cell(fmt_size(*cum_up), BT_COLW[4], FG),
                     sep(),
-                    cell_left(client.clone(), BT_COLW[5], DIM),
+                    cell_left(client.clone(), client_w, DIM),
                     sep(),
                     cell("TCP".to_string(), BT_COLW[6], DIM),
                 ]
@@ -308,15 +319,25 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     app.visible_conns_rows = data_rows;
-    let content_w = if is_bt { BT_CONTENT_W } else { HTTP_CONTENT_W };
-    app.conns_max_hscroll = content_w
-        .saturating_sub(view.width as usize)
-        .saturating_add(1);
-    let hscroll = app.conns_hscroll.min(app.conns_max_hscroll) as u16;
+    let vw = view.width as usize;
+    let content_w = if is_bt {
+        BT_CONTENT_W - BT_COLW[5] + client_w
+    } else {
+        HTTP_CONTENT_W
+    };
+    app.conns_max_hscroll = content_w.saturating_sub(vw).saturating_add(1);
+    let mut hscroll = app.conns_hscroll.min(app.conns_max_hscroll);
+    if is_bt {
+        let edge = hscroll + vw;
+        if edge + BT_PROTO_TEXT_W > content_w && edge < content_w {
+            hscroll = app.conns_max_hscroll;
+        }
+    }
+    let hscroll = hscroll as u16;
     f.render_widget(Paragraph::new(lines).scroll((0, hscroll)), view);
 
     sb.vertical(n_conns, data_rows, app.conns_scroll)
-        .horizontal(content_w, view.width as usize, app.conns_hscroll);
+        .horizontal(content_w, vw, hscroll as usize);
     let bars = sb.render_bars(f, area);
     app.conns_v_scrollbar = bars.vertical;
     app.conns_h_scrollbar = bars.horizontal;
@@ -614,6 +635,83 @@ mod tests {
             "客户端列宽 34（Propagate Data Client/35.35.35.35 = 33 + 1 空白，v1.36）"
         );
         assert_eq!(BT_CONTENT_W, 94, "BT 内容宽 = 七列 + 6 分隔（v1.36）");
+    }
+
+    fn bt_row_proto(client: &str) -> BtConnRow {
+        BtConnRow {
+            id: 0,
+            addr: "1.2.3.4:51400".to_string(),
+            down_speed: 1024.0,
+            cum_down: 0,
+            up_speed: 0.0,
+            cum_up: 0,
+            client: client.to_string(),
+            seeder: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn bt_protocol_header_complete_at_viewport_92() {
+        let mut app = testfx::make_app_in("ezr-conns", "proto92");
+        let mut t = task_with_conns(Protocol::Bt);
+        t.connections.clear();
+        app.tasks.push(t);
+        app.selected = 0;
+        app.bt_conns
+            .insert(1, vec![bt_row_proto("qBittorrent/2.5.0.0")]);
+        let text = conns_render(&mut app, 98, 10).backend().to_string();
+        let head = text
+            .lines()
+            .find(|l| l.contains("客户端"))
+            .unwrap_or_else(|| panic!("BT 表头行缺失: {text}"));
+        assert!(
+            head.contains("协议"),
+            "视口 92 默认视图：客户端收缩后整表可见，协议表头完整（D63④）: {head:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bt_protocol_header_snaps_to_complete_at_right_end() {
+        for hs in [48usize, 49, 50, 51] {
+            let mut app = testfx::make_app_in("ezr-conns", "snap");
+            let mut t = task_with_conns(Protocol::Bt);
+            t.connections.clear();
+            app.tasks.push(t);
+            app.selected = 0;
+            app.bt_conns
+                .insert(1, vec![bt_row_proto("qBittorrent/2.5.0.0")]);
+            app.conns_hscroll = hs;
+            let text = conns_render(&mut app, 50, 10).backend().to_string();
+            let head = text
+                .lines()
+                .find(|l| l.contains("客户端"))
+                .unwrap_or_else(|| panic!("hs={hs} BT 表头行缺失: {text}"));
+            assert!(
+                head.contains("协议"),
+                "hscroll={hs} 吸附后协议表头完整（D63④右端吸附）: {head:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn bt_client_column_fixed_34_when_viewport_fits() {
+        let mut app = testfx::make_app_in("ezr-conns", "fit94");
+        let mut t = task_with_conns(Protocol::Bt);
+        t.connections.clear();
+        app.tasks.push(t);
+        app.selected = 0;
+        app.bt_conns
+            .insert(1, vec![bt_row_proto("qBittorrent/2.5.0.0")]);
+        let text = conns_render(&mut app, 100, 10).backend().to_string();
+        let data = text
+            .lines()
+            .find(|l| l.contains("qBittorrent"))
+            .unwrap_or_else(|| panic!("明细行缺失: {text}"));
+        let expect = format!("qBittorrent/2.5.0.0{}TCP", " ".repeat(34 - 19 + 1 + 1));
+        assert!(
+            data.contains(&expect),
+            "视口 ≥ 94 维持 34 列钦定形态: {data:?}"
+        );
     }
 
     #[tokio::test]

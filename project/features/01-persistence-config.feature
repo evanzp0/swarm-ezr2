@@ -63,14 +63,18 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
       | file       | http_concurrency |
       | five-m.bin | 4                   |
 
-  Scenario: 01-persistence-config-04 配置非法值回退默认或钳制边界（v1.17：点路径 + 新增调优键行）
+  Scenario: 01-persistence-config-04 配置非法值回退默认或钳制边界（v1.17：点路径 + 新增调优键行；v1.19 注记：语义非法值口径）
+    # v1.19 修订（D63① 分层澄清）：本场景只收「语义非法值」（TOML 反序列化成功后的
+    # 0/负/越界/非法字符串值 → 逐键回退默认）；TOML 反序列化层错误（语法错、键类型
+    # 不匹配——如把字符串写进数字键）属「解析失败」→ 拒绝启动直接报错
+    #（01-config-template-03 v1.13 口径）。原 Examples 首行
+    # 「http.block_size_http = abc → 1 MB」随此退役（场景序号留痕不重排）。
     Given 配置文件设 "<key>" = "<value>"（非法）
     When 启动 ezr 并正常使用
     Then 该配置项按回退/钳制值 "<default>" 生效且启动不报错
 
     Examples:
       | key                        | value | default |
-      | http.block_size_http       | abc   | 1 MB    |
       | http.block_size_http       | 256 KB | 1 MB   |
       | common.download_slots      | 0     | 5       |
       | http.max_retries           | -1    | 5       |
@@ -186,3 +190,13 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
     And 可观察键逐项生效：download_dir = 添加对话框保存目录字段预填值；download_slots = 任务队列栏「n/<slots>」；max_speed = 限速生效（速度曲线封顶）；命名代理 = 代理下拉按配置顺序出现且可选；block_size_http = 详情分块行显示自定义块大小；http_concurrency = HTTP 对话框并发自动回填值；auto_retry/max_retries/backoff_initial/backoff_cap = 失败重试行为按配置推进（序列与上限一致）；progress_tick_ms/sidecar_flush_secs/throttle_burst_secs/throttle_sleep_ms/dns_race_grace_ms = 运行期无异常（行为不劣化，无错误 toast）
     And BT 键逐项生效：http_trackers/udp_trackers = BT 对话框 trackers 预填合并来源；bt_concurrency = BT 对话框并发预填值；peer_pipeline/upload_slots/upload_read_concurrency/idle_eviction_secs/connect_timeout_secs/handshake_timeout_secs/request_timeout_secs/requests_per_piece/rechoke_interval_secs/optimistic_interval_secs/progress_emit_min_interval_ms/tracker_numwant/peer_retry_base_secs/peer_retry_cap_secs/tracker_backoff_start_secs/tracker_backoff_cap_secs/udp_base_timeout_secs/udp_retries/seed_duration_secs = BT 下载与做种全程无错误（引擎行为正常、无致命 toast）
     And 下载正常完成且产物完整（全量配置下核心链路不致病）
+
+  Scenario: 01-persistence-config-14 活跃模板起步改值生效链（v1.19 新增，D63②：操作者 bug14 复现路径回归）
+    Given 干净 HOME 首启 ezr 生成 v1.13 活跃配置模板（36 键值行为活跃 TOML）后退出
+    And 在生成的 config.toml 中直接改值：[bt] bt_concurrency = 10、[http] http_concurrency = 3、[common] download_slots = 2、[common] download_dir = "<tmp_dl>"
+    When 再次启动 ezr 并正常使用
+    Then 启动不报错且无任何警告 toast（活跃模板 + 手改值合法解析）
+    And 下载槽位 = 2 生效（任务队列栏「n/2」，第 3 个任务排队）
+    And 打开「添加任务：BT」对话框：并发字段预填 = 10（bt_concurrency 生效，修 bug：改值后仍显示默认 20）
+    And 打开「添加任务：HTTP(S)」对话框：并发字段 = 3（http_concurrency 生效）、保存目录预填 = <tmp_dl>（download_dir 生效）
+    And 操作者复现口径（v1.13 模板 + bt_concurrency = 10）全链路有证据：模板字节级 → 改值落盘 → 重启解析 → 对话框预填逐环可验

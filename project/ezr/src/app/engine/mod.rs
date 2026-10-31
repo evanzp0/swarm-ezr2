@@ -796,7 +796,6 @@ mod evt_tests {
     async fn progress_ghost_cleans_speed_state_without_touching_tasks() {
         let mut app = make_app("progress-ghost");
         app.windows.insert(9, SpeedWindow::new());
-        app.speed_display.entry(9).or_default();
         app.on_evt(Evt::Progress {
             id: 9,
             downloaded: 100,
@@ -807,8 +806,8 @@ mod evt_tests {
         })
         .await;
         assert!(
-            !app.windows.contains_key(&9) && !app.speed_display.contains_key(&9),
-            "已删除/未知任务的幽灵进度：速度状态一并清除"
+            !app.windows.contains_key(&9),
+            "已删除/未知任务的幽灵进度：速度滑窗一并清除"
         );
         assert!(app.tasks.is_empty());
         app.shutdown().await;
@@ -1615,6 +1614,65 @@ mod conn_stats_tests {
             app.conn_speed_of(1, 1),
             base,
             "1s 节拍内 tick 不重采样（每秒最多变化一次）"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn http_task_speed_equals_sum_of_conn_rows() {
+        let mut app = make_app("sum");
+        app.tasks.push(seed(1, "sum.bin", TaskState::Downloading));
+        progress(
+            &mut app,
+            1,
+            vec![cv(1, 0, 0, 1000, 100), cv(2, 0, 0, 1000, 300)],
+        )
+        .await;
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        progress(
+            &mut app,
+            1,
+            vec![cv(1, 0, 0, 1000, 400), cv(2, 0, 0, 1000, 900)],
+        )
+        .await;
+        app.sample_conn_speed_display();
+        let r1 = app.conn_speed_of(1, 1);
+        let r2 = app.conn_speed_of(1, 2);
+        assert!(r1 > 0.0 && r2 > 0.0, "前置：两行速度立起");
+        let t = app.tasks.iter().find(|t| t.id == 1).unwrap();
+        assert_eq!(
+            t.speed,
+            r1 + r2,
+            "任务行速度 = Σ 并发行速度（FR-01-102 v1.39/D63③，同一采样源）"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn http_single_conn_task_speed_equals_row() {
+        let mut app = make_app("single");
+        app.tasks.push(seed(1, "one.bin", TaskState::Downloading));
+        progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 100)]).await;
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 500)]).await;
+        app.sample_conn_speed_display();
+        let r1 = app.conn_speed_of(1, 1);
+        assert!(r1 > 0.0);
+        let t = app.tasks.iter().find(|t| t.id == 1).unwrap();
+        assert_eq!(t.speed, r1, "单连接任务速度 == 该行速度（构造上相等）");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn http_task_speed_zero_when_no_active_rows() {
+        let mut app = make_app("norate");
+        app.tasks.push(seed(1, "zero.bin", TaskState::Downloading));
+        progress(&mut app, 1, vec![cv(2, 0, 0, 0, 0)]).await;
+        app.sample_conn_speed_display();
+        let t = app.tasks.iter().find(|t| t.id == 1).unwrap();
+        assert_eq!(
+            t.speed, 0.0,
+            "无活跃并发行 → 任务速度 0（与行合计一致，不再来自任务级窗口）"
         );
         app.shutdown().await;
     }

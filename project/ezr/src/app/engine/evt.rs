@@ -58,7 +58,6 @@ impl App {
             } => {
                 let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else {
                     self.windows.remove(&id);
-                    self.speed_display.remove(&id);
                     return;
                 };
                 if t.state != TaskState::Downloading {

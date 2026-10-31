@@ -1,152 +1,145 @@
 # 交接（handoff）
 
 > 流程：six-pack　当前节点：six-pack/coder（本轮已完成）→ 建议下一节点 six-pack/cleaner
-> 会话：ezr-coder-bug13（2026-10-31，「D62 四项落地 + QA runner 同步 + ezr-demo 对比 +
+> 会话：ezr-coder-bug14（2026-10-31，「D63 五项落地 + QA runner 同步 + ezr-demo 同步 +
 > 全量验证 + harness 测试」实现轮）
-> 上游交接：project/handoff.md（bug13 specifier 轮交接：规格 v1.38/v1.4 + feature ×4 +
-> qa ×4 + D62，任务依据＝已批规格 + 操作者 bug13 指令，含 ezr-demo 同步与 harness 完整
-> 测试授权）。
+> 上游交接：project/handoff.md（bug14 specifier 轮交接：规格 v1.39/v1.5/v1.37/v1.13/v1.19 +
+> feature ×4 + qa ×4 + D63，任务依据＝已批规格 + 操作者 bug14 指令，含 ezr-demo 同步与
+> harness 完整测试授权）。
 
 ## 一、产物历史完成情况
 
 ### 项目与需求
 - **EZR Downloader**：Rust + tokio + ratatui 终端下载器（单二进制、跨平台）。需求权威
   `project/mission.md`（分期模式）+ `project/mission/phase-01…04.md`。
-- **phase-01（HTTP/HTTPS 内核与 TUI）已收官**；**phase-02（BT 内核/做种/管理）已实现**
-  并经互操作夹具多轮收口。bug13 轮为操作者指令级需求修订落地轮（D62 全项），本轮
-  coder 全量交付（实现 + 测试 + runner + harness）。
+- phase-01（HTTP/HTTPS 内核与 TUI）已收官；phase-02（BT 内核/做种/管理）已实现并经
+  互操作夹具多轮收口。bug14 轮为操作者指令级需求修订落地轮（D63 全项），本轮 coder
+  全量交付（实现 + 测试 + runner + harness）。
 
 ### 产物总账
 | 节点/切片 | 产物 | 完成情况 | 验证状态 |
 |---|---|---|---|
 | specifier（phase-01/02 及历轮） | features/ 18 份 + qa/ 对应套件 | 已收官/已交付 | 见前轮登记 |
-| coder（phase-02 及历次收口轮） | `project/ezr/` 全量 | 已交付 | bug12 轮登记沿袭 |
-| **specifier（bug13 规格轮）** | mission ×2 + feature ×4 + qa ×4 | 已交付 | APS dry-check 4/4（specifier 轮登记） |
-| **coder（本轮 bug13 落地）** | 产品 ×6 文件 + 单测 ×14 + runner ×6 文件 + ezr-demo 核证 | **已交付** | **cargo test bin 837P/0F + 集成 12 目标分块 5400P/0F + clippy --all-targets 零警告 + fmt 干净；QA runners 15 套件冒烟（12 全绿 + 3 例预先存在 flake 见下）；harness swarm_e2e PASS + bench_multipeer PASS；ezr-demo cargo test 30P/0F** |
+| coder（phase-02 及历次收口轮） | `project/ezr/` 全量 | 已交付 | bug13 轮登记沿袭 |
+| specifier（bug14 规格轮） | mission ×2 + feature ×4 + qa ×4 | 已交付 | APS dry-check 4/4（specifier 轮登记） |
+| **coder（本轮 bug14 落地）** | 产品 ×6 文件 + 单测 ×11 + runner ×3 文件 + ezr-demo 同步 ×3 文件 | **已交付** | **cargo test bin 844P/0F + 集成 12 目标 5642P/0F + clippy --all-targets 零警告 + fmt 干净；QA runners 14 套件冒烟（13 全绿 + MT-03 沿袭基线同败见下）；harness swarm_e2e PASS + bench_multipeer PASS；ezr-demo cargo test 30P/0F** |
 
 ### 遗留受限项（当前有效，沿袭 + 本轮更新）
 - 沿袭：BT 下载限速未接；DHT/BEP 10 完整扩展/uTP 属 phase-03/04；cargo-mutants 缺位；
-  死 tracker 约 4 分钟静默窗；TUI 恐慌自愈边界（bug6）；BT partial 进度不持久化。
-- **QA-SQ-13 判据固有竞态**（沿袭）：不自动重试任务 R 后重排队列的判据竞态，QA 轮
-  refinement 待办；本轮冒烟复现 1 次。
-- **QA-RS-06 / QA-MT-03 预先存在 flake（本轮新登记，非本轮回归）**：两例在本轮二进制与
-  bug12 基线二进制上均可复现（A/B 对照，基线构建自 HEAD 原样源码）——RS-06「重启后排队
-  位次」间歇（同轮既可 P 也可 F）、MT-03「重启应续传」稳定 F（基线同败）。两套件自
-  D44 命令窗口迁移后未全量冒烟，期望口径与现行实现存在漂移嫌疑，**QA 轮 refinement 待办**
-  （修复归属 QA 轮，本轮不越权）。
-- **supervisor block_worker 写入 fatal 竞态（观察项，本轮登记）**：QA-PC-06 全量套件语境
-  曾低频复现「无法写入目标文件」Fatal（worker `OpenOptions::write(true).open` 失败）；
-  隔离 11 连跑零复现，runner 清场提速后 3 连跑稳定。疑与 resume 作废重建目标文件和
-  worker（重）开文件的时序交错相关（ENOENT → Fatal）。本轮未改引擎；根治方向 =
-  supervisor 先 touch 目标文件再派 worker，或 worker 打开失败加有界重试窗。归 QA/引擎轮。
-- **APS dry-checker 已补装**（.tools/Acceptance-Pipeline-Specification + .tools/bb
-  v1.12.209，符号链接桥接 .tools/bin/bb）；runner 内嵌 dry-check 步骤是否接入由 QA 轮定夺。
-- **Inversion 访谈受限项（specifier 轮沿袭）**：chat 选择题面板不可用，操作者 bug13 指令
-  文本即阶段 1 答案（D62 登记）；如对 D62 任一裁决有异议可回退，改动均为注记/单点接线。
+  死 tracker 约 4 分钟静默窗；TUI 恐慌自愈边界（bug6）；BT partial 进度不持久化；
+  QA-SQ-13 竞态（本轮冒烟未复现，沿袭待办）；QA-RS-06（本轮 14/14 全绿未复现）；
+  supervisor block_worker 写入 fatal 竞态观察项；APS dry-checker 已装（.tools/，gh-proxy 镜像）。
+- **QA-MT-03（沿袭，本轮 2 连败与登记一致）**：「重启应续传」稳定 F——bug13 轮 A/B 对照
+  已证基线同败（与二进制无关），本轮续传路径零改动；QA 轮 refinement 待办不变。
+- **任务级速度滑窗 `windows` 失去读者（本轮登记，cleaner 候选）**：D63③ 废除任务级 EMA
+  链后 `App.windows` 仅剩喂入与生命周期测试（evt/bt 进度路径），rate() 无读者；
+  退役属 cleaner 轮裁决（涉及 evt.rs/bt.rs/mod.rs 三处生命周期测试语义）。
+- **Inversion 访谈受限项（specifier 轮沿袭）**：chat 选择题面板不可用，操作者 bug14 指令
+  文本即阶段 1 答案（D63⑥ 登记）；D63②（proxy 示例块保持注释）与 D63③（显示层舍入差
+  实现定义值）可回退，改动均为注记/单点接线级。
 
 ### 设计决定登记（沿袭 + 本轮实现口径）
-- 沿袭 D1–D62 全部裁决（D62 = bug13 轮已批项，见 mission/phase-02.md）。
+- 沿袭 D1–D63 全部裁决（D63 = bug14 轮已批项，见 mission/phase-02.md）。
 - **本轮实现定义值（coder 细化，规格框架内）**：
-  - `normalize_save_dir_with(path, home, cwd)`：trim → 末尾 `/` 去除（长度 >1 才去，根
-    `/` 保持）→ `~`/`~/` 经既有 `expand_tilde_with` 展开（主目录不可得保持字面）→ 非
-    绝对路径 join cwd（cwd 不可得保持原样）→ `to_string_lossy`。单入口
-    `normalize_save_dir(path)` 取真实 HOME/cwd。配置解析层不归一（D62①）。
-  - `default_save_dir_prefill(cfg)`：`cfg.download_dir` → trim 后非空即用 → 否则
-    `default_download_dir()`（from_toml 已过滤空白，此处双保险；D62② 预填链）。
-  - 归一接线点 ×4：`dlg_finish_add`（HTTP 对话框，含命令窗口 URL 分流路径）、
-    `dlg_confirm_add_bt`（BT 对话框）、`add_cli_task`（CLI `-d`/配置链）——均确认时归一，
-    判重（同 URL/来源 + 同保存目录）与 namegen/sidecar 路径均用归一后路径。
-  - 预填接线点 ×2：`open_add_dialog` / `open_add_dialog_with` 的 `dir` 字段 =
-    `default_save_dir_prefill(&self.cfg)`（BT 对话框既有 D48 预填不动，预填层不改写）。
-  - tick 钳制同源：`tick_clamp_selection` 的 clen = BT 任务取 `bt_conns.get(id).len()`、
-    HTTP 任务维持 `t.connections.len()`（渲染行集同源；D62④）。
+  - **解析失败分层最终口径**：toml 反序列化层错误（语法错 + 键类型不匹配）= try_from_toml
+    Err = 启动致命（exit 1，stderr `ezr: 配置文件解析失败：<path>\n<toml 错误>`）；语义非法
+    （0/负/越界/非法字符串值）= 逐键回退默认不变。规格措辞已随此分层澄清（specifier 产物
+    v1.39/D63① 同步修订——类型不匹配从「逐键回退」表述中移出，01-persistence-config-04
+    的 `abc` 行退役、01-config-template-03 承接该类）。
+  - **浮点键整数容忍（num_f64）**：backoff_initial/backoff_cap/throttle_burst_secs/
+    seed_duration_secs 四键 ConfigRaw 字段改 Option<toml::Value>，Integer/Float 通吃、
+    其余类型回退默认——模板 v1.13 的 `seed_duration_secs = 1800`（整数）与用户整数写法
+    （`throttle_burst_secs = 1`）由此不致命。
+  - **HTTP 任务速度 Σ 接线**：`sample_conn_speed_display` 聚合 per-conn EMA 写 t.speed
+    （Downloading 态；无活跃行 = 0）；`speed_display` EMA 链整链退役（字段/初始化/evt
+    清理/tick entry 全删）；`windows` 保留（见遗留受限项）。
+  - **conns 列修复参数**：client_w = (vw < 94) ? max(12, vw − 60) : 34；内容宽 = 94 − 34 +
+    client_w；吸附条件 `edge + 4 > content_w && edge < content_w`（edge = hscroll + 视口宽）；
+    渲染 Paragraph.scroll 与水平滚动条位置同用吸附后偏移；HTTP 三列不参与。
+  - **种子路径归一接线点**：`dlg_confirm_add_bt` 确认链（normalize_save_dir 复用：~ 展开 +
+    相对转 cwd 绝对）；fs::read 直读归一后路径；判重（同来源 + 同保存目录）与 Task.url
+    同用归一值；预填层不改写（所见即所输）。
 
 ### 实现定义值登记（累计，覆盖为最新全量）
-- 沿袭 phase-01/02 全部口径（D1–D62）+ bug11 轮键位缺省表 + bug12 轮客户端列样例集。
-- 客户端列显示样例集（测试已锁，沿袭不变）：qB2500→`qBittorrent/2.5.0`、TR4030→
-  `Transmission/4.0.3`、LT2110→`libtorrent/2.1.1`、v="BitComet 1.64"→`BitComet 1.64`、
-  全零→`Unknown`（全表见 bug12 轮登记）。
-- 本轮新增：保存目录归一口径五组验收例已锁单测——`~/Documents`+home→`<home>/Documents`、
-  `qadl-rel/sub`+cwd→`<cwd>/qadl-rel/sub`、`/tmp/qadl/`→`/tmp/qadl`、`~/`→`<home>`、
-  `~`（裸）→`<home>`；主目录缺失时 `~/x` 保持字面再按 cwd 转绝对；cwd 不可得时相对保持。
+- 沿袭 phase-01/02 全部口径（D1–D63）+ bug11 键位缺省表 + bug12 客户端列样例集 + bug13
+  保存目录归一五组验收例 + 本轮：速度显示舍入容差（Σ fmt ≤ 0.1 KB/s×行数亚视觉差）；
+  conns 收缩下限 12 / 基数 60 / 吸附窗口 (c−4, c)；BT 下载速度展示链单位换算 KB/s 头部
+  历史口径不变。
 
 ## 二、当前产出情况
 
 ### 本会话产物清单
 - **产品（project/ezr/src/）×6**：
-  - `model/config.rs`：新增 `normalize_save_dir_with`/`normalize_save_dir`/
-    `default_save_dir_prefill`；单测 ×5（~ 展开/末尾斜杠与空白/主目录缺失/cwd 缺失/
-    预填链三态）。
-  - `app/dialogs.rs`：`dlg_finish_add` 归一接线；`open_add_dialog` dir 预填；单测 ×3
-    （预填链/`~` 展开落盘/相对→cwd 绝对落盘）；既有 normalized_dir 测试适配预填（清空
-    预填后再输入）。
-  - `app/cmd.rs`：`open_add_dialog_with` dir 预填（命令窗口 URL 分流路径同口径）。
-  - `app/bt_dialog.rs`：`dlg_confirm_add_bt` 归一接线；单测 ×1（BT `~` 展开 + 相对转绝对）。
-  - `app/cli.rs`：`add_cli_task` 归一接线；单测 ×1（相对配置 download_dir → cwd 绝对）。
-  - `app/engine/tick.rs`：`tick_clamp_selection` clen 同源化（BT=bt_conns 行数）。
-- **单测（keys.rs）×2**：BT 多 peer 选择 tick 不复位 / 行数收缩越界钳制保持。
-- **QA runner ×6 文件**：
-  - `harness.py`：新增 `clear_dir_prefill`/`clear_url_prefill`（一次写 64 bs + 单 pump）；
-    `add_task_via_dialog` 显式目录前清空预填（留空=走预填语义保持）。
-  - `suite_add_task.py`：QA-01-11 重写为五行组合（预填断言 + `~` 展开 + 相对转绝对 +
-    字面 `~` 目录负对照）；QA-01-07/17 按 D44 迁移修复（对话框内改写 URL 可达路径 /
-    粘贴前清 URL 预填）。
-  - `suite_persistence_config.py`：新增 QA-PC-13（全量 36 键合法非默认值生效冒烟：零
-    警告 + download_dir 预填落盘 + http_concurrency 回填 + BT 对话框 bt_concurrency=61/
-    trackers 预填合并；mini torrent 生成器内嵌）；run 循环注册 case 13。
-  - `suite_named_proxy.py`/`suite_tui_display.py`/`suite_resume_sidecar.py`：dir 输入点
-    接入 clear_dir_prefill（×8 处）。
-  - `suite_ui_conns.py`：v1.37 同步注（BT 判据由单测 + QA 会话覆盖，runner 维持 HTTP 驱动）。
-- **ezr-demo 核证（无需同步）**：并发 panel 选择计数 = `active_conn_map().len()` 单源
-  （sim.rs 无复位缺陷）；对话框保存到预填 = 钦定演示值 `/srv/downloads`（D48 明示不采用
-  为产品口径，demo 无 config.toml）；demo 无真实文件系统（归一无适用面）。demo cargo
-  test 30P/0F + fmt 干净——本轮 ezr 侧修改无 demo 侧对应物，零同步改动。
-- **notes**：testing.md ×2（预填清场辅助与节奏纪律 + A/B 归因组合矩阵）；architecture.md
-  ×1（block_worker 写入 fatal 竞态观察项）；INDEX 同步。
+  - `model/config.rs`：try_from_toml/try_load 严格解析 + from_toml 收为 #[cfg(test)] 助手 +
+    num_f64 四浮点键容忍 + AUTHORIZED_TEMPLATE 整体替换 v1.13（174 行活跃键值）；
+    单测 ×4 新增（strict err / try_load 路径与原因 / 模板解析=默认等价 / 整数浮点通吃）
+    + 模板测试组适配（v1.13 活跃结构/36 键活跃行/三表活跃声明）。
+  - `main.rs`：启动臂 Config::try_load → Err 时 eprintln + exit(1)（损坏配置拒绝启动）。
+  - `app/engine/tick.rs`：sample_conn_speed_display 聚合 Σ → t.speed；任务级 EMA 链退役。
+  - `app/mod.rs` + `app/engine/evt.rs` + `app/engine/mod.rs`：speed_display 字段链删除 +
+    ghost 清理测试适配；单测 ×3 新增（Σ 多连接/单连接同值/无活跃行归零）。
+  - `ui/conns.rs`：客户端列自适应收缩 + 末列完整可见吸附 + BT_CLIENT_* 常量；
+    单测 ×3 新增（视口 92 默认视图表头完整/hs 48–51 吸附后完整/视口≥94 维持 34 列）。
+  - `app/bt_dialog.rs`：dlg_confirm_add_bt 种子来源归一接线；单测 ×3 新增（相对→cwd 绝对/
+    ~→主目录绝对/判重归一命中）+ 既有 url 原文断言翻转（D63⑤）。
+- **QA runner ×3 文件**：`suite_config_template.py`（v1.13 锚点：起点锚/活跃表声明/36 活跃
+  键行 + 活跃 39 行断言 + CT-01 判据改版 + **CT-03 翻转**：exit_code 轮询 + 非零退出 +
+  报错语义 + 文件不变 + 修复恢复）；`suite_persistence_config.py`（**PC-14 新增**：模板
+  起步改值生效链 bt_concurrency=10 → BT 对话框预填 10 + PC-04① 类型不匹配翻转断言）；
+  `suite_ui_conns.py`（UC-09 增 ①b 同帧 Σ 断言 + _speed_to_bs 助手 + v1.38 同步注）。
+- **ezr-demo 同步 ×3 文件 + README**：`ui/conns.rs`（自适应收缩 + 右端吸附，colw 动态化）；
+  `app/sim.rs`（t.speed/t.upload_speed = Σ per-conn EMA 同源，废除任务级窗口 EMA）；
+  `README.md` 变更记录 22/23 条。
+- **notes**：architecture.md ×5（解析分层最终口径/num_f64/Σ 接线/收缩吸附参数/归一接线点）；
+  testing.md ×4（to_string vs 裸 buffer 两形态/PC-04① 翻转法/throttle 外部驱动补跑/MT-03
+  归类）；environment.md ×1（heredoc 写盘不持久化三连对策）；INDEX 同步。
 
 ### 验证证据
 | 验证项 | 结果 | 说明 |
 |---|---|---|
-| cargo test --bin ezr | 837P/0F | 含本轮新增单测 ×14（config ×5、dialogs ×3+适配、bt_dialog ×1、cli ×1、keys ×2、prefill ×2） |
-| cargo test（集成 12 目标分块） | 5400P/0F | chunk1 763 / chunk2 740+644 / chunk3 649+186+618 / chunk4 398+632+770 |
-| cargo clippy --all-targets | 零警告 | field_reassign_with_default 已修（cli 测试改结构体初始化） |
+| cargo test --bin ezr | 844P/0F | 含本轮新增单测 ×11（config ×4、engine Σ ×3、conns ×3、bt_dialog ×3 − 1 翻转） |
+| cargo test（集成 12 目标） | 5642P/0F | hardening 137 / g_engine 654 / g_proxy 16 / g_supervisor 628 / g_main 2 / g_slots 190 / g_v147 642 / g_appcore 659 / g_throttle_err 402 / v115 776 / engine_backfill 753 / ui_backfill 783 |
+| cargo clippy --all-targets | 零警告 | nightly 1.101.0-nightly（rsproxy 装机） |
 | cargo fmt --check | 干净 | ezr + ezr-demo |
-| QA runners | 12/15 全绿 | config-template 5/5、persistence-config **10/10 ×3 连跑（含新 QA-PC-13）**、add-task 19/19（含重写 QA-01-11 与 D44 迁移修复 07/17）、ui-conns 18/18、tui-display 21/21、download-engine 16/16、integrity-check 12/12、named-proxy 18/18、ui-pieces 7/7、retry-backoff 9/9、throttle-proxy 7/7（5+2 分块）；slots-queue 14/15（SQ-13 沿袭竞态）、resume-sidecar 13/14（RS-06 间歇，双二进制同现）、modify-task 8/9（MT-03，基线同败） |
+| QA runners | 13/14 全绿 | config-template **5/5（CT-03 翻转实测）**、persistence-config **11/11（含 PC-14 证据链 + PC-04① 翻转）**、ui-conns **18/18（Σ 同帧断言）**、add-task 19/19、tui-display 21/21、download-engine 16/16、integrity-check 12/12、named-proxy 18/18、ui-pieces 7/7、retry-backoff 9/9、throttle-proxy 7/7（TP-01..04 整跑 + 05..07 外部驱动补跑）、slots-queue **15/15（SQ-13 本轮未复现）**、resume-sidecar **14/14（RS-06 本轮未复现）**；modify-task 8/9（MT-03 沿袭基线同败） |
 | harness swarm_e2e | PASS | 4MB：ezr 与 libtorrent leecher 双向做种、sha256 逐字节一致、HTTP announce 7 行可观察 |
-| harness bench_multipeer | PASS | 8MB 单 seeder：32/32 块、sha256_match true |
-| ezr-demo cargo test | 30P/0F | 零同步改动核证后回归 |
+| harness bench_multipeer | PASS | 512/512 块、sha256_match true、4.5s |
+| ezr-demo | 30P/0F + fmt 干净 | 同步后回归；触面（sim.rs/ui/conns.rs）clippy 零命中（其余 11 条为未触碰文件 nightly 漂移，预存） |
 
 ### 对账口径
-- 产品净改动 ×6 文件 + 单测净增 14；测试计数 bin 825→837。
-- runner 净改动 ×6 文件：harness helper ×2 新增 + add_task_via_dialog 一处接线；add-task
-  用例 07/11/17 重写；persistence 新增 QA-PC-13（用例数 9→10）；named-proxy/tui-display/
-  resume-sidecar 共 8 处 clear 接线。
-- QA-PC-06 曾随慢速清场（64×0.008s pump ≈ 0.5s/次）暴露 block_worker 打开竞态（见遗留
-  受限项）；清场提速后 3 连跑稳定——非本轮产品回归（该路径本轮零改动）。
-- 磁盘纪律：本轮 QA 全量跑前 target/ 增量与基线对照 target 已按 notes/environment.md
-  口径清理（沙箱 9.9G 盘，qa-run 临时区在 .work/tmp/ 随 complete 清理）。
+- 产品净改动 ×6 文件 + 单测净增 11；测试计数 bin 837→844（+4 新增 − 1 收编 from_toml
+  助手化改造不变计数 + Σ/conns/bt_dialog 新增）。
+- runner 净改动 ×3 文件：config_template（锚点 ×3 + CT-01 判据 + CT-03 重写）、persistence
+  （PC-14 新增用例数 10→11 + PC-04① 腿重写）、ui_conns（UC-09 ①b + 助手）。
+- feature 侧对账：01-persistence-config-04 Examples 减 1 行（`abc` 行退役 → CT-03 口径
+  承接）；07-add-bt 场景 8→9；persistence 场景 13→14；模板文本 v1.12→v1.13（174 行不变）。
+- 规格措辞澄清 ×2（本轮实现期发现，specifier 产物同步修订）：D63① 解析失败分层
+  （反序列化错=致命 / 语义非法=逐键）；FR-02-01 v1.5 预填原文措辞与场景 09 对齐。
+  **待操作者知悉（可回退）**。
 
 ### 待办与待批
-- **待办（QA 轮）**：①RS-06/MT-03 期望口径 refinement（D44 迁移漂移嫌疑）；②SQ-13 竞态
-  refinement（沿袭）；③supervisor block_worker 打开竞态观察项转引擎轮裁决（touch 先行
-  或 worker 重试窗）；④QA-UC-11 BT peer 选择段的 QA 会话脚本化（本轮由单测
-  tick_keeps_bt_peer_selection_* 承接）；⑤runner 内嵌 APS dry-check 步骤接入定夺。
-- **待批（沿袭）**：监听端口随机范围/死 tracker 静默窗可视状态/做种任务重启不重挂/
-  多协议喂窗公共化/BT partial 不持久化/`EZ` 码映射表外加项。
+- **待办（cleaner 轮）**：①`App.windows` 失去读者后的退役裁决（涉及 evt/bt/mod 三处
+  生命周期测试）；②`Config::load` 已删、from_toml 已收 #[cfg(test)]——归一助手
+  normalize_save_dir 与 num_f64 的参数链是否收拢结构体；③demo 未触面文件的 11 条
+  nightly 漂移 lint（预存，未越权修）。
+- **待办（QA 轮）**：QA-MT-03 refinement（沿袭）；QA-AB-09 的 QA 会话脚本化（本轮由
+  单测 confirm_bt_* ×3 承接，runner 无 add-bt 套件沿既有分工）。
+- **待批（沿袭）**：D63②③④ 实现定义值（见 specifier 轮登记）；监听端口随机范围/死
+  tracker 静默窗可视状态/做种任务重启不重挂/BT partial 不持久化。
 - 无阻塞。
 
 ### 移交建议
 - 下一步 `bin/swarm begin six-pack/cleaner`：以本文件为上游交接。重点核对：
-  ①`normalize_save_dir_with` 与 `expand_tilde_with` 的参数链（home/cwd 显式注入便于
-  测试，可考虑收拢为结构体参数）；②`dlg_finish_add`/`dlg_confirm_add_bt`/
-  `add_cli_task` 三处「缺省链 + 归一」两步式的重复形态（可提公共 helper）；③
-  `default_save_dir_prefill` 的 trim 过滤与 from_toml 过滤的双保险是否保留。
-- 给操作者的手测口径：①`~/.ezr/config.toml` 设 `download_dir = "~/Documents"` → 启动
-  ezr 按 `A`（或命令窗口输入 URL）→ 对话框保存目录字段显示展开后的绝对路径
-  `<主目录>/Documents` → 确认后任务详情「路径」为绝对路径、文件落在主目录 Documents
-  （不再出现字面 `~` 目录）；②config 未设 download_dir → 对话框预填 `<主目录>/Downloads`；
-  ③对话框保存目录手输相对路径（如 `dl/sub`）→ 任务创建后详情「路径」= `<启动目录>/dl/sub`；
-  ④BT 下载中并发面板（多 peer）：↓/↑ 与鼠标可选中任意 peer 行、选择不被刷新复位、
-  `B` 断开选中行；⑤config.toml 全量键写入合法非默认值 → 启动零警告、各键生效
-  （QA-PC-13 口径，runner 可复跑）。
+  ①`windows` 退役裁决（遗留受限项）；②num_f64/pos_f64 双助手是否合并；
+  ③conns.rs client_w 与 BT_COLW[5] 的双源（const 34 与动态值并存）可收敛；
+  ④suite_config_template 的 operator_template_text 解析逻辑与 feature 内嵌文本的耦合
+  锚点（起点行尾串）。
+- 给操作者的手测口径：①首启 ezr 生成 v1.13 活跃模板 → 直接改 `bt_concurrency = 10` →
+  重启 → `A` → 命令窗口输入 .torrent 路径 → BT 对话框并发预填 = 10（QA-PC-14 实测）；
+  ②把 config.toml 改坏（如删掉表头留下键、或把字符串写进数字键）→ 启动直接报错退出
+  （含路径与 TOML 错误位置，QA-CT-03 实测）；③改 `bt_concurrency = 10` 后 BT 对话框
+  显示 10、改 `http_concurrency = 3` 后 HTTP 对话框显示 3（D63② 证据）；④HTTP 下载
+  多连接 → 并发面板各行速度合计 = 任务列表速度（BT 同口径，QA-UC-09 ①b 实测）；
+  ⑤宽终端默认视图「协议」表头完整、120 列终端滚到最右「协议」完整（单测探针矩阵锁定）；
+  ⑥命令窗口输入 `~/x.torrent` 或相对路径 → 任务详情「URL」为绝对路径。
 - 后续链：coder → cleaner → architect → hardender → QA（宪法第一章：不自动流转）。

@@ -345,6 +345,7 @@ impl App {
             }
             return;
         }
+        let source = crate::model::config::normalize_save_dir(&source);
         let (sel_cnt, total_files) = d.bt_counts();
         if sel_cnt == 0 {
             self.set_toast("⚠ 请至少选择一个要下载的文件（空格勾选）");
@@ -377,7 +378,7 @@ impl App {
             return;
         }
 
-        let Ok(bytes) = std::fs::read(crate::model::config::expand_tilde(&source)) else {
+        let Ok(bytes) = std::fs::read(&source) else {
             self.set_toast("⚠ 无法读取种子文件");
             return;
         };
@@ -668,6 +669,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn confirm_bt_stores_absolute_url_for_relative_source() {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let tag = format!("rel-{}-{ms}", std::process::id());
+        let dir = std::env::current_dir().unwrap().join(&tag);
+        std::fs::create_dir_all(&dir).unwrap();
+        let rel = format!("{tag}/ok.torrent");
+        write_multi_torrent(&dir, "ok.torrent");
+        let meta = parse_at(&dir.join("ok.torrent").to_string_lossy());
+        let mut app = make_app("relurl");
+        app.open_add_bt_dialog_with(&rel, &meta);
+        app.dlg_confirm_add_bt(false);
+        let t = app.tasks.iter().find(|t| t.protocol.is_bt()).unwrap();
+        let expect = std::env::current_dir()
+            .unwrap()
+            .join(&tag)
+            .join("ok.torrent");
+        assert_eq!(
+            t.url,
+            expect.to_string_lossy(),
+            "相对路径确认后 url = cwd 绝对路径（D63⑤）"
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn confirm_bt_stores_absolute_url_for_tilde_source() {
+        let Some(home) = crate::model::config::home_dir() else {
+            return;
+        };
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let dir = home.join(format!(".ezr-tilde-url-{}-{ms}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = write_multi_torrent(&dir, "ok.torrent");
+        let dirname = dir.file_name().unwrap().to_string_lossy().to_string();
+        let input = format!("~/{dirname}/ok.torrent");
+        let meta = parse_at(&path);
+        let mut app = make_app("tildeurl");
+        app.open_add_bt_dialog_with(&input, &meta);
+        assert_eq!(
+            app.dialog.as_ref().unwrap().torrent.value,
+            input,
+            "预填层不改写（所见即所输）"
+        );
+        app.dlg_confirm_add_bt(false);
+        let t = app.tasks.iter().find(|t| t.protocol.is_bt()).unwrap();
+        assert_eq!(t.url, path, "~ 路径确认后 url = 主目录展开绝对路径（D63⑤）");
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn confirm_bt_dedup_uses_normalized_source() {
+        let Some(home) = crate::model::config::home_dir() else {
+            return;
+        };
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let dir = home.join(format!(".ezr-dedup-{}-{ms}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = write_multi_torrent(&dir, "ok.torrent");
+        let meta = parse_at(&path);
+        let mut app = make_app("dedup");
+        app.open_add_bt_dialog_with(&path, &meta);
+        app.dlg_confirm_add_bt(false);
+        assert!(app.dialog.is_none(), "第一次确认成功");
+        let tilde = format!("~/{}", dir.file_name().unwrap().to_string_lossy());
+        let tilde = format!("{tilde}/ok.torrent");
+        app.open_add_bt_dialog_with(&tilde, &meta);
+        app.dlg_confirm_add_bt(false);
+        assert!(
+            app.toast.as_deref() == Some("⚠ 任务已存在"),
+            "同来源不同写法（绝对 vs ~/）判重命中（归一后比对）: {:?}",
+            app.toast
+        );
+        assert_eq!(app.tasks.len(), 1, "未重复建任务");
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
     async fn open_add_bt_prefills_real_metadata() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-open");
         let path = write_multi_torrent(&dir, "a.torrent");
@@ -841,9 +931,8 @@ mod tests {
         app.dlg_confirm_add_bt(false);
         assert_eq!(app.tasks.len(), 1, "~/ 路径展开后确认建任务");
         assert_eq!(
-            app.tasks[0].url,
-            format!("~/{dirname}/a.torrent"),
-            "任务来源保留输入原文"
+            app.tasks[0].url, path,
+            "任务 url = 归一后绝对路径（v1.37/D63⑤：~ 展开主目录）"
         );
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();

@@ -17,7 +17,7 @@ fn load_reads_existing_config_file() {
         "[http]\nbackoff_initial = 0.75\nbackoff_cap = 30.0\n",
     )
     .expect("write fixture");
-    let loaded = Config::load(&path);
+    let loaded = Config::try_load(&path).unwrap();
     let _ = std::fs::remove_file(&path);
     let d = Config::default();
     assert!(

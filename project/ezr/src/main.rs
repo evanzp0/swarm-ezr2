@@ -285,7 +285,16 @@ async fn ezr_main() -> std::io::Result<()> {
         let _ = ensure_default_config(&p);
     }
 
-    let mut cfg = config_path().map(|p| Config::load(&p)).unwrap_or_default();
+    let mut cfg = match config_path() {
+        Some(p) => match Config::try_load(&p) {
+            Ok(c) => c,
+            Err(msg) => {
+                eprintln!("ezr: {msg}");
+                std::process::exit(1);
+            }
+        },
+        None => Config::default(),
+    };
     if let Some(ms) = cli.max_speed {
         cfg.max_speed = ms;
     }

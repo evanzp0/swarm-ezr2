@@ -11,6 +11,8 @@ features/01-config-template.feature 场景 01 注释块）——本套件运行�
 
 from __future__ import annotations
 
+import time
+
 import os
 import stat
 
@@ -36,13 +38,13 @@ def operator_template_text() -> str:
     with open(FEATURE_PATH, encoding="utf-8") as f:
         lines = f.read().split("\n")
     start = next(i for i, l in enumerate(lines)
-                 if l.rstrip().endswith("specifier v1.12）："))
+                 if l.rstrip().endswith("specifier v1.13）："))
     end = next(i for i, l in enumerate(lines) if i > start and l.strip() == "）")
     body = [l[2:] if l.startswith("  ") else l for l in lines[start + 1:end]]
     assert len(body) == 174, f"钦定原文应为 174 行，解析得 {len(body)}"
-    for sep, decl in (("# ===== 公共配置 =====", "# [common]"),
-                      ("# ===== HTTP 引擎配置 =====", "# [http]"),
-                      ("# ===== BT 引擎配置 =====", "# [bt]")):
+    for sep, decl in (("# ===== 公共配置 =====", "[common]"),
+                      ("# ===== HTTP 引擎配置 =====", "[http]"),
+                      ("# ===== BT 引擎配置 =====", "[bt]")):
         si = body.index(sep)
         assert body[si + 1] == "", f"{sep} 后应空行"
         assert body[si + 2] == decl, f"{sep} 后第二行应为表声明行 {decl}"
@@ -51,8 +53,13 @@ def operator_template_text() -> str:
     import re as _re
     assert not any(_re.match(r"^# [a-z_][a-z_0-9]*：", l) for l in body), \
         "v1.12：键注释首行不得再带键名前缀"
-    assert all((not l.strip()) or l.startswith("# ") for l in body), \
-        "钦定原文每条非空行应以 # 开头"
+    active = [l for l in body if l.strip() and not l.startswith("#")]
+    assert len(active) == 39, \
+        f"v1.13 活跃行 = 36 键值 + 3 表声明，解析得 {len(active)}"
+    assert sum(1 for l in body if l.startswith("# 取值范围")) == 36, \
+        "v1.13：36 键取值范围注释保持"
+    assert sum(1 for l in body if l.startswith("# [[common.proxy]]")) == 2, \
+        "v1.13：proxy 双示例块保持注释（D63②）"
     return "\n".join(body) + "\n"
 
 
@@ -81,7 +88,7 @@ class ConfigTemplateSuite(Suite):
         return self.results
 
     def _case_01(self):
-        """QA-CT-01 干净 HOME 启动：生成全注释模板，逐字节一致 + 行为全默认。"""
+        """QA-CT-01 干净 HOME 启动：生成 v1.13 活跃模板，逐字节一致 + 解析等价默认。"""
         @self.case("QA-CT-01")
         def go(env: Env):
             baseline = write_baseline(env)
@@ -95,46 +102,47 @@ class ConfigTemplateSuite(Suite):
                 with open(cfg, encoding="utf-8") as f:
                     body = f.read().split("\n")
                 nonblank = [l for l in body if l.strip()]
-                assert nonblank and all(l.startswith("# ") for l in nonblank), \
-                    "每条非空行应以 # 开头"
+                active = [l for l in nonblank if not l.startswith("#")]
+                assert len(active) == 39, \
+                    f"v1.13 活跃行 = 36 键值 + 3 表声明，实得 {len(active)}"
                 # 36 键示例值与默认值口径逐一相符（v1.11 三表版抽验全集）
                 text = "\n".join(body)
-                for key_line in ("# download_dir = \"\"",
-                                 "# download_slots = 5",
-                                 "# max_speed = 0",
-                                 "# block_size_http = 1048576",
-                                 "# http_concurrency = 4",
-                                 "# max_retries = 5",
-                                 "# auto_retry = true",
-                                 "# backoff_initial = 8.0",
-                                 "# backoff_cap = 60.0",
-                                 "# progress_tick_ms = 100",
-                                 "# sidecar_flush_secs = 2",
-                                 "# throttle_burst_secs = 0.5",
-                                 "# throttle_sleep_ms = 20",
-                                 "# dns_race_grace_ms = 1000",
-                                 "# http_trackers = []",
-                                 "# udp_trackers = []",
-                                 "# bt_concurrency = 20",
-                                 "# peer_pipeline = 64",
-                                 "# upload_slots = 4",
-                                 "# upload_read_concurrency = 128",
-                                 "# idle_eviction_secs = 60",
-                                 "# connect_timeout_secs = 3",
-                                 "# handshake_timeout_secs = 10",
-                                 "# request_timeout_secs = 20",
-                                 "# requests_per_piece = 4",
-                                 "# rechoke_interval_secs = 10",
-                                 "# optimistic_interval_secs = 30",
-                                 "# progress_emit_min_interval_ms = 250",
-                                 "# tracker_numwant = 200",
-                                 "# peer_retry_base_secs = 5",
-                                 "# peer_retry_cap_secs = 120",
-                                 "# tracker_backoff_start_secs = 8",
-                                 "# tracker_backoff_cap_secs = 60",
-                                 "# udp_base_timeout_secs = 15",
-                                 "# udp_retries = 3",
-                                 "# seed_duration_secs = 1800",
+                for key_line in ("download_dir = \"\"",
+                                 "download_slots = 5",
+                                 "max_speed = 0",
+                                 "block_size_http = 1048576",
+                                 "http_concurrency = 4",
+                                 "max_retries = 5",
+                                 "auto_retry = true",
+                                 "backoff_initial = 8.0",
+                                 "backoff_cap = 60.0",
+                                 "progress_tick_ms = 100",
+                                 "sidecar_flush_secs = 2",
+                                 "throttle_burst_secs = 0.5",
+                                 "throttle_sleep_ms = 20",
+                                 "dns_race_grace_ms = 1000",
+                                 "http_trackers = []",
+                                 "udp_trackers = []",
+                                 "bt_concurrency = 20",
+                                 "peer_pipeline = 64",
+                                 "upload_slots = 4",
+                                 "upload_read_concurrency = 128",
+                                 "idle_eviction_secs = 60",
+                                 "connect_timeout_secs = 3",
+                                 "handshake_timeout_secs = 10",
+                                 "request_timeout_secs = 20",
+                                 "requests_per_piece = 4",
+                                 "rechoke_interval_secs = 10",
+                                 "optimistic_interval_secs = 30",
+                                 "progress_emit_min_interval_ms = 250",
+                                 "tracker_numwant = 200",
+                                 "peer_retry_base_secs = 5",
+                                 "peer_retry_cap_secs = 120",
+                                 "tracker_backoff_start_secs = 8",
+                                 "tracker_backoff_cap_secs = 60",
+                                 "udp_base_timeout_secs = 15",
+                                 "udp_retries = 3",
+                                 "seed_duration_secs = 1800",
                                  "# [[common.proxy]]"):
                     assert_in(key_line, text, f"键示例行 {key_line}")
                 assert_not_in("# [[proxies]]", text, "旧 [[proxies]] 表头退役")
@@ -188,7 +196,7 @@ class ConfigTemplateSuite(Suite):
                 app.graceful_quit()
 
     def _case_03(self):
-        """QA-CT-03 损坏配置不重写不阻塞：字节不变 + 全默认行为。"""
+        """QA-CT-03（v1.13 翻转）损坏配置拒绝启动：非零退出 + 报错含路径与原因 + 文件不变 + 修复恢复。"""
         @self.case("QA-CT-03")
         def go(env: Env):
             write_baseline(env)
@@ -198,19 +206,27 @@ class ConfigTemplateSuite(Suite):
                 before = f.read()
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
-                assert app.wait_for("EZR Downloader", 6), "启动不报错"
-                assert_in("下载槽位 0/5", app.text(), "默认槽位 5")
-                add_task_via_dialog(
-                    app, env, env.fixture.url("five-m.bin?speed=900000"))
-                assert app.wait_for("下载中", 8), "正常下载"
-                d = detail_text(app)
-                assert_in("1 MB/块", d, "默认块 1 MB")
-                assert app.wait_for("并发 4", 15), "默认并发 4（头部数据面）"
-                with open(cfg, "rb") as f:
-                    after = f.read()
-                assert after == before, "损坏文件不被模板覆盖"
+                deadline = time.time() + 8
+                while app.exit_code is None and time.time() < deadline:
+                    app.pump(0.2)
+                assert app.exit_code is not None, \
+                    "损坏配置应拒绝启动（进程应退出，D63①）"
+                assert app.exit_code != 0, f"退出码应非零，实得 {app.exit_code}"
+                tail = app.text()[-2000:]
+                assert_in("配置文件解析失败", tail, "报错含解析失败语义")
+                assert_in("config.toml", tail, "报错含配置文件路径")
             finally:
-                app.graceful_quit()
+                app.pump(0.2)
+            with open(cfg, "rb") as f:
+                after = f.read()
+            assert after == before, "损坏文件不被重写、不被模板覆盖"
+            env.write_config('[common]\ndownload_slots = 3\n')
+            app2 = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                assert app2.wait_for("EZR Downloader", 6), "修复为合法 TOML 后应正常启动"
+                assert_in("下载槽位 0/3", app2.text(), "修复文件生效（槽位 3）")
+            finally:
+                app2.graceful_quit()
 
     def _case_04(self):
         """QA-CT-04 配置目录只读：启动正常、无 config.toml 生成、全默认。"""

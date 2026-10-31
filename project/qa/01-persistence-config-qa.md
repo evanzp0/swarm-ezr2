@@ -2,6 +2,10 @@
 
 > 对应规格：`project/features/01-persistence-config.feature`（13 场景）。
 > 端到端 UI 层验证：CLI 启动/退出操作 + `~/.ezr` 磁盘产物观察 + TUI 状态断言 + 双实例进程操作。
+> **v1.19 同步（操作者 bug14 轮指令，D63②；FR-01-85 v1.13）**：新增 QA-PC-14（活跃模板
+> 起步改值生效链——首启 v1.13 活跃模板直接改 bt_concurrency=10/http_concurrency=3/
+> download_slots=2/download_dir → 重启逐项生效；复刻操作者「改了 bt_concurrency 添加任务
+> 窗口仍是 20」的复现路径作为回归证据）。
 > **v1.18 同步（操作者 bug13 轮指令，D62③）**：新增 QA-PC-13（全量配置键合法值生效冒烟：
 > 36 键全量写入合法非默认值 → 启动零警告 + 可观察键逐项生效 + 引擎内部键不致病，回应
 > 「所有 config.toml 中的配置项的都要测试验证是否可用」）。
@@ -31,6 +35,7 @@
 | QA-PC-09 | 01-persistence-config-09 | 下载中在主界面按 Esc；再以 Ctrl+C 退出 | Esc 主界面无任何动作（应用不退出、任务继续下载——退出仅 Q/Ctrl+C，01-tui-display-07 口径，操作者 20261027 裁决定稿）；Ctrl+C 优雅退出（语义同 Q：停传、保断点、存注册表；收尾亦可以 Q 优雅退出复验同口径）；终端无花屏（AC-9）。场景 09 文本已按裁决同步修订 |
 | QA-PC-12 | 01-persistence-config-12 | 预置旧格式 config.toml（顶层平铺 `download_slots=2`、`block_size_http=4194304`、`http_concurrency=8`、`max_speed="1 MB/s"` + 顶层 `[[proxies]]` 合法条目，无任何新表头）→ 启动、添加任务、打开添加对话框代理下拉；随后同文件追加 `[common]` 表头与 `download_slots = 3` 再启动 | 启动不报错、无忽略类 toast/警告（零警告零迁移）；全部旧键忽略、行为全默认（槽位 5/块 1 MB/并发默认 4/不限速）；旧 [[proxies]] 条目不出现在代理下拉；追加新表头后 `[common] download_slots=3` 正常生效（新格式不受旧键干扰）（v1.17，操作者钦定不兼容旧格式） |
 | QA-PC-13 | 01-persistence-config-13 | 一次性写入全部 36 键合法非默认值（[common] 3 键 + [[common.proxy]] 双条目 + ttp] 11 键 + [bt] 20 键）→ 启动 → 添加 HTTP 下载（观察预填/队列栏/分块行/限速）→ 打开添加对话框代理下拉 → 经命令窗口打开 BT 对话框（观察 trackers 预填/并发预填）→ 完成一次 BT 下载 | 启动零警告 toast；download_dir = 添加对话框预填值；download_slots = 队列栏「n/<slots>」；max_speed = 速度封顶；命名代理 = 下拉按序出现可选；block_size_http = 分块行自定义值；http_concurrency = 并发回填值；auto_retry/max_retries/backoff_* = 重试序列与上限一致；ttp] 5 调优键 = 运行期无异常；http_trackers/udp_trackers = BT trackers 预填含之；bt_concurrency = BT 并发预填值；[bt] 其余 19 键 = 下载做种全程无错误；下载完成产物完整（v1.18 新增，D62③） |
+| QA-PC-14 | 01-persistence-config-14 | 干净 HOME 首启 ezr 生成 v1.13 活跃模板后退出 → 在生成的 config.toml 直接改值（[bt] bt_concurrency = 10、[http] http_concurrency = 3、[common] download_slots = 2、[common] download_dir = <tmp_dl>）→ 再次启动并使用（v1.19 新增，D63②） | 启动不报错零警告；下载槽位 = 2（队列栏「n/2」，第 3 个任务排队）；BT 对话框并发预填 = **10**（修 bug：改值后仍显示默认 20）；HTTP 对话框并发 = 3、保存目录预填 = <tmp_dl>；证据链逐环可验（模板字节级 → 改值落盘 → 重启解析 → 对话框预填） |
 
 ## 通过准则
 

@@ -146,3 +146,6 @@
   fetch 元数据很小，跨版本比对源码成本可控（本轮 qBt/lt 四分支比对即此法）。
 - `git ls-remote --tags` 一次性拿全标签列表再挑版本，比盲猜 tag 名可靠（qBt 用
   release-X.Y.Z 命名，不是 vX.Y.Z）。
+## bug14 轮（specifier）
+- GitHub 直连间歇不可用（git clone 与 release 下载同时超时；本会话开头 clone swarm-ezr2 成功过，同会话后段 443 连不通）：gh-proxy.com 前缀镜像可用且快（bb v1.12.209 静态包 + APS 仓库 clone 均经 `https://gh-proxy.com/https://github.com/...` 成功）；ghfast.top/kkgithub 探测不通。rustup/cargo 仍走 rsproxy 不受影响。
+- **heredoc python 写文件偶发不持久化**（本轮两次复现：re.sub 36 单元格与 PC-04 改写——脚本打印成功、紧随的读回是旧内容；间隔一次调用后有时又变新内容）：写关键文件一律「写后 fsync + 本进程读回布尔探针 + 外部 rg 复核」三连；仍不符时用行索引重写并再验。

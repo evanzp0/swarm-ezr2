@@ -229,3 +229,13 @@
   from_toml 裸键形态（顶层键断言 = 旧格式残留）。
 - **runner 对话框预填的清场辅助（v1.38/D62 起）**：HTTP 添加对话框保存目录/URL 字段打开即预填配置链值——runner 一律经 `clear_dir_prefill`/`clear_url_prefill`（harness.py，一次写 64 个 `\x7f` + 单次 0.06s pump，空字段上 bs 为无害 no-op）清空后再输入显式值；留空确认 = 走预填（恰为原「留空走默认」语义）。**清场节奏是时序敏感面**：逐键 0.008s pump 的 64 连发会把对话框停留时间拉长 ~0.5s，曾放大 QA-PC-06 的「worker 重开文件失败」竞态窗口（详见 architecture 同日条目）；一次写整段 + 单 pump 后 3 连跑稳定。**预填字段断言按尾部可见段**：字段超宽左截断显示（`…`+尾部），`assert_in(完整路径)` 必假红——用 `cfg_dir[-16:]` 这类尾部锚。**D44 迁移残留修复**：QA-01-07（坏 URL 现被命令窗口预过滤，对话框级校验可达路径 = 对话框内改写 URL 字段）与 QA-01-17（粘贴前先清 URL 预填，防 300 上限截断拼接）——凡「直开对话框」时代的用例迁移到命令窗口分流后，都要重推一遍「字段预填 + 光标在尾」前提。
 - **A/B 归因先核对 runner 与二进制的组合矩阵**：本轮曾把「旧 runner + 新二进制」的失败（预填拼接 → 下载落错目录 → sidecar 找不到）误读为产品回归——stash/pop 序列中 runner 与 binary 的版本组合极易错位；归因前先确认（binary mtime vs 源码 stash 状态、runner 是否含本轮 helper）。对照法同 testing.md 既有「新旧二进制同工况对照」，但必须连同 runner 一起锁版本。
+## bug14 轮（specifier）
+- 模板改版（v1.13 活跃键值行）的 runner 锚点三处同步：块起点锚 `specifier v1.12）：` → v1.13（len(body)==174 不变）；表声明行断言 `# [common]` → `[common]`；键行抽验 `# <key> = <值>` → `<key> = <值>`；「每条非空行以 # 开头」全注释断言退役，新增 tomllib 解析等价断言（解析值=代码默认逐键）。
+- QA-CT-03 行为翻转的 runner 驱动方式变化：从「启动并 pump 画面」改为「启动收退出码 + stderr 后收尸」（损坏配置现期望非零退出）；负向探测单发，不重试。
+- TestBackend 探针直读 buffer 比字符串比对可靠：terminal.backend().buffer() 按 (x,y) 取 symbol，可精确定位宽字边界处的渲染结果；别依赖 to_string() 的行形态（含坐标注记，断言锚易错）。
+
+## bug14 轮（coder 实现）
+- TestBackend 断言两形态差异：backend().to_string() 会压缩宽字符跳格（「协议」可直接 contains），裸 buffer 遍历（cell by cell push symbol）则宽字后带跳格单元（「协 议」空格形态）——断言宽字完整性用 to_string() 行匹配（套件既有模式），别混用两种形态的期望串。
+- QA-PC-04① 语义翻转的 runner 改法：类型不匹配（字符串进数字键）改断言「进程退出 + exit_code!=0 + 报错含『配置文件解析失败』」，用 app.exit_code 轮询（EZR 致命臂在 TUI 之前退出，stderr 直写 PTY 可断言）；语义非法值腿（0/256KB/-1）维持启动+逐键回退断言。
+- throttle 套件单调用装不下（TP-02/03 各 ~210s）：`python3 -c` 外部驱动 import 套件类、只调 `_case_05..07` 补跑尾部（原文件零改动），与整跑日志拼对账。
+- MT-03（重启应续传）本轮 2 连败与 bug13 登记一致（基线同败、A/B 已证与二进制无关、本轮续传路径零改动）——沿袭已知项，QA 轮 refinement 归属不变。

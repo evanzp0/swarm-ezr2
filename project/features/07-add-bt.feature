@@ -18,6 +18,11 @@
 # 展开用户主目录、相对路径（非 / 开头且非 ~ 前缀）按创建时进程工作目录转绝对路径、末尾 /
 # 去除；任务落注册表与详情「路径」均为归一后绝对路径；预填层不改写（所见即所输）；重复任务
 # 判重（同来源 + 同保存目录）用归一后路径比对。
+# v1.37 修订注（操作者 bug14 轮指令，D63；FR-02-02 v1.5/FR-02-09③ 同步）：新增场景 09「种子
+# 来源路径归一」——种子行取值（预填或手输）在确认时归一为绝对路径存入任务 url（~ 与 ~/ 展开
+# 主目录、相对路径按创建时进程工作目录转绝对；与保存到归一 D62① 同族，复用同一 expand_tilde
+# 口径）；判重（同来源）用归一后路径比对；预填层不改写（所见即所输）；命令窗口分流臂②解析前
+# 同口径归一（FR-02-01 v1.5）。修 bug：相对路径/`~` 形式的 .torrent 路径此前字面存入 url。
 Feature: 07-add-bt 添加任务：BT 对话框
 
   期号 02。命令窗口分流打开（仅 .torrent 路径，D53）：种子来源 + 保存到 + 文件树勾选
@@ -93,6 +98,7 @@ Feature: 07-add-bt 添加任务：BT 对话框
     And toast 逐字显示 "✓ 已添加任务 #<id>: <name>（BT，已选 <selected>/<total> 文件）"
     And 任务 total = 选中文件大小合计、协议徽标 "[BT]"（黄色）、详情类型行 = "BT · 支持断点续传"、详情无校验字段
     And 保存到按归一口径落盘为绝对路径（v1.36/D62：~ 展开用户主目录、相对路径按创建时工作目录转绝对、末尾 / 去除；预填层不改写）
+    And 任务 url = 种子来源归一后绝对路径（v1.37/D63：详情「URL」字段与注册表来源为绝对路径，~ 展开与相对转绝对同保存到口径）
     And 保存目录下按元数据路径结构重建目录结构（多文件）；磁盘随下载推进只落盘选中文件（FR-02-19）
 
     Examples:
@@ -121,3 +127,17 @@ Feature: 07-add-bt 添加任务：BT 对话框
     When 终端高度不足时打开「添加任务：BT」对话框
     Then 对话框钳制到终端尺寸、文件列表框按剩余高度收缩且不低于 1 可视行（trackers/字段行保留）
     And 内框宽 < 30 或高度低于最低需求时仅渲染边框与标题、不留残影
+
+  Scenario: 07-add-bt-09 种子来源路径归一（v1.37 新增，D63）
+    Given 预置种子文件 <torrent_name> 位于 <base_dir>
+    When 经命令窗口输入 "<input>" 打开「添加任务：BT」对话框并确认创建
+    Then 任务创建成功且任务 url = "<expected_url>"（详情「URL」字段与注册表来源一致）
+    And 对话框种子行预填保持原样输入（预填层不改写，所见即所输）
+    And 以同来源再次创建同一任务时判重命中（toast 「⚠ 任务已存在」——判重用归一后路径比对）
+
+    Examples:
+      | torrent_name      | base_dir           | input                                   | expected_url                            |
+      | multi-file.torrent | /tmp/qatorrents    | /tmp/qatorrents/multi-file.torrent      | /tmp/qatorrents/multi-file.torrent      |
+      | multi-file.torrent | /tmp/qatorrents    | ~/qatorrents/multi-file.torrent         | <home>/qatorrents/multi-file.torrent    |
+      | multi-file.torrent | /tmp/qatorrents    | qatorrents/multi-file.torrent           | <cwd>/qatorrents/multi-file.torrent     |
+      | multi-file.torrent | /tmp/qatorrents    | ./qatorrents/multi-file.torrent         | <cwd>/qatorrents/multi-file.torrent     |

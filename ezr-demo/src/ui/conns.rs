@@ -89,11 +89,18 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let colw: Vec<usize> = if is_bt {
+    let mut colw: Vec<usize> = if is_bt {
         vec![18, 8, 8, 8, 8, 34, 4]
     } else {
         vec![4, 8, 8]
     };
+    if is_bt {
+        let vw = view.width as usize;
+        let base = colw.iter().sum::<usize>() + colw.len().saturating_sub(1);
+        if base > vw {
+            colw[5] = vw.saturating_sub(60).max(12);
+        }
+    }
     let content_w = colw.iter().sum::<usize>() + colw.len().saturating_sub(1);
 
     let head_cell = |s: &str, wd: usize| Span::styled(pad_right(s, wd), Style::default().fg(DIM));
@@ -110,7 +117,7 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
             Span::raw(" "),
             head_cell("累计上传", 8),
             Span::raw(" "),
-            head_cell("客户端", 34),
+            head_cell("客户端", colw[5]),
             Span::raw(" "),
             head_cell("协议", 4),
         ]
@@ -176,7 +183,7 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                 cell(fmt_size(c.cum_up), 8, FG),
                 Span::styled(" ", Style::default().bg(bg)),
                 Span::styled(
-                    pad_right(&truncate(&c.client.to_string(), 34), 34),
+                    pad_right(&truncate(c.client, colw[5]), colw[5]),
                     Style::default().fg(DIM).bg(bg),
                 ),
                 Span::styled(" ", Style::default().bg(bg)),
@@ -207,13 +214,20 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let hmax = content_w.saturating_sub(view.width as usize) + 1;
-    let hscroll = app.conns_hscroll.min(hmax) as u16;
+    let mut hscroll = app.conns_hscroll.min(hmax);
+    if is_bt {
+        let edge = hscroll + view.width as usize;
+        if edge + 4 > content_w && edge < content_w {
+            hscroll = hmax;
+        }
+    }
+    let hscroll = hscroll as u16;
     app.conns_max_hscroll = hmax;
     app.visible_conns_rows = data_rows;
     f.render_widget(Paragraph::new(lines).scroll((0, hscroll)), view);
 
     sb.vertical(total_rows, data_rows, app.conns_scroll)
-        .horizontal(content_w, view.width as usize, app.conns_hscroll);
+        .horizontal(content_w, view.width as usize, hscroll as usize);
     let bars = sb.render_bars(f, area);
     app.conns_v_sb = bars.vertical;
     app.conns_h_sb = bars.horizontal;
