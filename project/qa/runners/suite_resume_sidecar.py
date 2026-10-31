@@ -18,6 +18,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from harness import (
+    clear_dir_prefill,
     Env, EzrApp, Suite, DUMMY_URL, TMP_ROOT, add_task_via_dialog, assert_file_content,
     open_add_dialog_via_cmd,
     assert_in, assert_not_in, detail_text, expected_content, file_bytes,
@@ -631,6 +632,7 @@ class ResumeSidecarSuite(Suite):
             # 重加同 URL 同目录
             open_add_dialog_via_cmd(app, env.fixture.url(f"{name}?speed=800000"))
             app.send("tab")
+            clear_dir_prefill(app)
             app.type_text(env.save_dir)
             app.send("enter")
             app.pump(0.5)
@@ -683,6 +685,7 @@ class ResumeSidecarSuite(Suite):
             # 重加同推导名异 URL + 相同保存目录
             open_add_dialog_via_cmd(app, env.fixture.url(f"{new_rel}?speed=800000"))
             app.send("tab")
+            clear_dir_prefill(app)
             app.type_text(env.save_dir)
             app.send("enter")
             app.pump(0.5)

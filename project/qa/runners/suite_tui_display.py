@@ -14,6 +14,7 @@ import re
 import time
 
 from harness import (
+    clear_dir_prefill,
     Env, EzrApp, Suite, DUMMY_URL, add_task_via_dialog, assert_in, assert_not_in,
     open_add_dialog_via_cmd,
     chart_points, detail_text, expected_content, file_bytes, parse_speed,
@@ -331,6 +332,7 @@ class TuiDisplaySuite(Suite):
                 # 重复添加同 URL 同目录 → 「任务已存在」toast
                 open_add_dialog_via_cmd(app, env.fixture.url("five-m.bin?speed=500000"))
                 app.send("tab")
+                clear_dir_prefill(app)
                 app.type_text(env.save_dir)
                 app.send("enter")
                 assert app.wait_for("任务已存在", 5), "toast 应出现且清晰可读"

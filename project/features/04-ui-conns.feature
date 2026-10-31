@@ -52,6 +52,10 @@
 # （09-bt-engine-06 v1.36）后映射表极值重推：全名最长 Propagate Data Client（21 列）+
 # 版本极值 35.35.35.35（11 列）= 33 列 + 1 空白（旧极值样例 ArcticTorrent/100.100.100 基于
 # 62 项旧表已退役）；内容宽 86→94（数据语义见 09-bt-engine-06 v1.36）。
+# v1.37 修订注（操作者 bug13 轮指令，D62④；FR-01-97 既有口径澄清）：场景 11 明细选择补注——
+# BT 任务 peer 明细行与 HTTP 连接行同一选择语义（↑↓/鼠标/B 断开同口径），选择索引与并发面板
+# 明细行数同源钳制（BT = bt_conns 行数、HTTP = 活跃连接行数）；修 bug：BT 任务此前每次 tick
+# 选择被复位到首行 peer（实现未达本场景既有规格，规格语义不变）。
 Feature: 04-ui-conns UI 对齐 ezr-demo 定稿（头部仪表带 + 单色面积流量图 + 并发连接面板）
 
   期号 01。依据 project/mission/phase-01.md v1.15（FR-01-94…103、D26…D29，操作者第十/十一/十二批指令）。
@@ -180,7 +184,7 @@ Feature: 04-ui-conns UI 对齐 ezr-demo 定稿（头部仪表带 + 单色面积�
       | 已失败  | gate-f.bin  |
       | 已完成  | gate-c.bin  |
 
-  Scenario: 04-ui-conns-11 ↑↓ 明细选择（并发面板聚焦，v1.30 修订）
+  Scenario: 04-ui-conns-11 ↑↓ 明细选择（并发面板聚焦，v1.30 修订；v1.37 注：BT peer 行同口径可选，D62）
     Given 下载中的任务 "<file>"（并发 <conns>）且处于 "<state>" 状态的另一任务 "<ofile>" 也被观察
     When 按 Tab 将焦点切到并发连接面板后按 ↓ ×3 再按 ↑
     Then 选中行下移 3 格后上移 1 格且选中行以深青背景 + 首列白字高亮（仅本面板聚焦时显示；焦点移开后面板不显示内部选中态，v1.30/FR-01-108）
@@ -191,6 +195,7 @@ Feature: 04-ui-conns UI 对齐 ezr-demo 定稿（头部仪表带 + 单色面积�
     Then 明细选择已自动复位到首行（滚动与选中归零重置）
     When 在 "<state>" 状态任务上（并发面板聚焦）按 ↓
     Then toast 显示 "当前状态无并发明细（仅下载中/做种中可选）"
+    And BT 任务同口径（v1.37/D62）：多 peer 明细中按 ↓/↑ 或鼠标点击可选中任意 peer 行（非仅首行），选择不随后续 tick 复位；B 断开作用于选中 peer 行
 
     Examples:
       | file        | conns | state  | ofile       |

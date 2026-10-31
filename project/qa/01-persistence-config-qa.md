@@ -1,7 +1,10 @@
 # QA 套件 · 01-persistence-config 持久化配置与生命周期（期号 01）
 
-> 对应规格：`project/features/01-persistence-config.feature`（12 场景）。
+> 对应规格：`project/features/01-persistence-config.feature`（13 场景）。
 > 端到端 UI 层验证：CLI 启动/退出操作 + `~/.ezr` 磁盘产物观察 + TUI 状态断言 + 双实例进程操作。
+> **v1.18 同步（操作者 bug13 轮指令，D62③）**：新增 QA-PC-13（全量配置键合法值生效冒烟：
+> 36 键全量写入合法非默认值 → 启动零警告 + 可观察键逐项生效 + 引擎内部键不致病，回应
+> 「所有 config.toml 中的配置项的都要测试验证是否可用」）。
 > v1.17（操作者 bug11 轮指令，config 三大标准表重构）：配置键按「<表>.<键名>」点路径书写——
 > QA 写入 = 对应表头（`[common]` / `[http]` / `[bt]`）+ 键值行；QA-PC-04 扩充新增调优键
 > 非法值回退行（[http] 5 键 + [bt] 20 键代表性样例，统一回退口径 = 回退代码常量默认）；
@@ -27,6 +30,7 @@
 | QA-PC-08 | 01-persistence-config-08 | 下载至 30% 按 Q→重启 | 断点保留（sidecar 完整）；终端恢复；重启续传完成（AC-9） |
 | QA-PC-09 | 01-persistence-config-09 | 下载中在主界面按 Esc；再以 Ctrl+C 退出 | Esc 主界面无任何动作（应用不退出、任务继续下载——退出仅 Q/Ctrl+C，01-tui-display-07 口径，操作者 20261027 裁决定稿）；Ctrl+C 优雅退出（语义同 Q：停传、保断点、存注册表；收尾亦可以 Q 优雅退出复验同口径）；终端无花屏（AC-9）。场景 09 文本已按裁决同步修订 |
 | QA-PC-12 | 01-persistence-config-12 | 预置旧格式 config.toml（顶层平铺 `download_slots=2`、`block_size_http=4194304`、`http_concurrency=8`、`max_speed="1 MB/s"` + 顶层 `[[proxies]]` 合法条目，无任何新表头）→ 启动、添加任务、打开添加对话框代理下拉；随后同文件追加 `[common]` 表头与 `download_slots = 3` 再启动 | 启动不报错、无忽略类 toast/警告（零警告零迁移）；全部旧键忽略、行为全默认（槽位 5/块 1 MB/并发默认 4/不限速）；旧 [[proxies]] 条目不出现在代理下拉；追加新表头后 `[common] download_slots=3` 正常生效（新格式不受旧键干扰）（v1.17，操作者钦定不兼容旧格式） |
+| QA-PC-13 | 01-persistence-config-13 | 一次性写入全部 36 键合法非默认值（[common] 3 键 + [[common.proxy]] 双条目 + ttp] 11 键 + [bt] 20 键）→ 启动 → 添加 HTTP 下载（观察预填/队列栏/分块行/限速）→ 打开添加对话框代理下拉 → 经命令窗口打开 BT 对话框（观察 trackers 预填/并发预填）→ 完成一次 BT 下载 | 启动零警告 toast；download_dir = 添加对话框预填值；download_slots = 队列栏「n/<slots>」；max_speed = 速度封顶；命名代理 = 下拉按序出现可选；block_size_http = 分块行自定义值；http_concurrency = 并发回填值；auto_retry/max_retries/backoff_* = 重试序列与上限一致；ttp] 5 调优键 = 运行期无异常；http_trackers/udp_trackers = BT trackers 预填含之；bt_concurrency = BT 并发预填值；[bt] 其余 19 键 = 下载做种全程无错误；下载完成产物完整（v1.18 新增，D62③） |
 
 ## 通过准则
 

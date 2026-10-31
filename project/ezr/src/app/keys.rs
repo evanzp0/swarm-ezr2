@@ -782,4 +782,45 @@ mod bt_key_tests {
         );
         app.shutdown().await;
     }
+
+    #[tokio::test]
+    async fn tick_keeps_bt_peer_selection_not_reset_to_first_row() {
+        let mut app = make_app("tickbt");
+        app.tasks.push(bt_task(1, "bt.bin", TaskState::Downloading));
+        app.selected = 0;
+        app.bt_conns.insert(
+            1,
+            vec![
+                row(1, "1.2.3.4:51400"),
+                row(2, "5.6.7.8:51401"),
+                row(3, "9.9.9.9:51402"),
+            ],
+        );
+        app.conns_sel = 2;
+        app.tick().await;
+        assert_eq!(
+            app.conns_sel, 2,
+            "BT 多 peer 明细：tick 钳制与 bt_conns 行数同源，选择不被复位到首行（D62④）"
+        );
+        app.conns_sel = 1;
+        app.tick().await;
+        assert_eq!(app.conns_sel, 1, "再次 tick 仍保持");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn tick_still_clamps_bt_selection_when_rows_shrink() {
+        let mut app = make_app("tickbt2");
+        app.tasks.push(bt_task(1, "bt.bin", TaskState::Downloading));
+        app.selected = 0;
+        app.bt_conns
+            .insert(1, vec![row(1, "1.2.3.4:51400"), row(2, "5.6.7.8:51401")]);
+        app.conns_sel = 5;
+        app.tick().await;
+        assert_eq!(
+            app.conns_sel, 1,
+            "越界选择仍钳制到末行（行数同源口径的守卫臂保持）"
+        );
+        app.shutdown().await;
+    }
 }

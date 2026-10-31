@@ -81,6 +81,16 @@
 - **根因**：镜像的「文件下载速度」与「dist 清单完备性」是两个独立维度——测速只证明带宽，
   装工具链前先 curl 一次 `channel-rust-nightly.toml` 验证内容是 TOML 而非错误页。
 
+## rustup 镜像 2026-10-31（bug13 轮）复测：rsproxy 官方双变量整链路可用且最快
+- **现象**：同机新沙箱复测，rsproxy 官方双变量（`RUSTUP_DIST_SERVER=https://rsproxy.cn` +
+  `RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup`）下 rustup-init.sh 前台一次装齐 nightly
+  minimal + rustfmt + clippy；init 二进制 ~16MB/s，channel-rust-nightly.toml 返回正常 TOML
+  （旧「dist 清单缺键/Malformed manifest」本轮未复现——另注意安装脚本 rustup-init 的
+  rustup-init 二进制取自 **UPDATE_ROOT**/dist/…，UPDATE_ROOT 误写成 …/rustup/rustup 双层
+  路径必 404，报错文案是「installer not found」，别据此改判清单缺键）。
+- **口径更新**：空沙箱首选 rsproxy 官方双变量一条命令装齐；crates.io 仍配 rsproxy sparse。
+  TUNA/USTC 作为后备（各轮可达性与清单完备性会漂移，装前先 curl 清单验证）。
+
 ## bug6 轮环境：USTC 全套镜像选型（rustup dist + cargo sparse index）
 - 本轮沙箱 Rust 工具链再次缺位（会话隔离）。镜像实测：延迟 USTC 0.52s < TUNA 0.71s <
   rsproxy 1.53s（官方 static.rust-lang.org 8s 超时）；5MB 吞吐 USTC 3MB/s > TUNA 2MB/s。

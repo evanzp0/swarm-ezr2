@@ -309,7 +309,13 @@ impl App {
         let clen = self
             .sel_task()
             .filter(|t| t.state.shows_conns())
-            .map_or(0, |t| t.connections.len());
+            .map_or(0, |t| {
+                if t.protocol.is_bt() {
+                    self.bt_conns.get(&t.id).map_or(0, Vec::len)
+                } else {
+                    t.connections.len()
+                }
+            });
         if self.conns_sel >= clen.max(1) {
             self.conns_sel = clen.saturating_sub(1);
         }

@@ -21,11 +21,23 @@ import time
 from harness import (
     EZR_BIN, Env, EzrApp, Suite, add_task_via_dialog, assert_file_content,
     assert_in, assert_not_in, detail_text, file_bytes, read_file,
-    wait_file_size, task_pct, QA_FILE_SIZES,
+    open_add_dialog_via_cmd, wait_file_size, task_pct, QA_FILE_SIZES,
 )
 
 FIVE_M = QA_FILE_SIZES["five-m.bin"]
 THREE_M = QA_FILE_SIZES["three-m.bin"]
+
+
+def _mini_torrent(name: str) -> bytes:
+    """最小合法单文件 .torrent（5 字节 payload，20 字节伪 pieces）。"""
+    buf = bytearray()
+    buf += b"d8:announce14:udp://seed/ann"
+    buf += b"4:infod6:lengthi5e4:name%d:" % len(name)
+    buf += name.encode()
+    buf += b"12:piece lengthi16384e6:pieces20:"
+    buf += bytes(20)
+    buf += b"ee"
+    return bytes(buf)
 
 
 class PersistenceConfigSuite(Suite):
@@ -77,7 +89,7 @@ class PersistenceConfigSuite(Suite):
     # -- 用例 -----------------------------------------------------------------
 
     def run(self) -> list[CaseResult]:
-        for i in range(1, 10):
+        for i in list(range(1, 10)) + [13]:
             getattr(self, f"_case_{i:02d}")()
         return self.results
 
@@ -420,6 +432,121 @@ class PersistenceConfigSuite(Suite):
                     assert_file_content(os.path.join(sub, "five-m.bin"), FIVE_M)
                 finally:
                     app2.graceful_quit()
+
+
+    def _case_13(self):
+        """QA-PC-13（v1.18 新增）全量 36 键合法非默认值生效冒烟（D62③）。
+
+        零警告 + 可观察键逐项生效（download_dir 预填/落盘、download_slots、
+        block_size_http、http_concurrency 回填、max_speed）+ BT 键预填生效
+        （bt_concurrency、http/udp trackers）+ 下载完成产物完整。
+        """
+        @self.case("QA-PC-13")
+        def go(env: Env):
+            cfg_dir = os.path.join(env.home, "qa13-dl")
+            cfg = (
+                "[common]\n"
+                f'download_dir = "{cfg_dir}"\n'
+                "download_slots = 3\n"
+                'max_speed = "2 MB/s"\n'
+                "\n"
+                '[[common.proxy]]\n'
+                'name = "QA13-HTTP"\n'
+                'type = "http"\n'
+                'ip = "127.0.0.1"\n'
+                "port = 18801\n"
+                "\n"
+                '[[common.proxy]]\n'
+                'name = "QA13-SOCKS5"\n'
+                'type = "socks5"\n'
+                'ip = "127.0.0.2"\n'
+                "port = 11802\n"
+                'username = "qa13"\n'
+                'password = "secret"\n'
+                "\n"
+                "[http]\n"
+                "block_size_http = 2097152\n"
+                "http_concurrency = 6\n"
+                "max_retries = 7\n"
+                "auto_retry = false\n"
+                "backoff_initial = 4.5\n"
+                "backoff_cap = 40.0\n"
+                "progress_tick_ms = 120\n"
+                "sidecar_flush_secs = 3\n"
+                "throttle_burst_secs = 0.6\n"
+                "throttle_sleep_ms = 25\n"
+                "dns_race_grace_ms = 900\n"
+                "\n"
+                "[bt]\n"
+                'http_trackers = ["http://cfg13a/ann", "http://cfg13b/ann"]\n'
+                'udp_trackers = ["udp://cfg13u/ann"]\n'
+                "bt_concurrency = 61\n"
+                "peer_pipeline = 32\n"
+                "upload_slots = 5\n"
+                "upload_read_concurrency = 96\n"
+                "idle_eviction_secs = 45\n"
+                "connect_timeout_secs = 4\n"
+                "handshake_timeout_secs = 11\n"
+                "request_timeout_secs = 18\n"
+                "requests_per_piece = 5\n"
+                "rechoke_interval_secs = 9\n"
+                "optimistic_interval_secs = 25\n"
+                "progress_emit_min_interval_ms = 240\n"
+                "tracker_numwant = 150\n"
+                "peer_retry_base_secs = 6\n"
+                "peer_retry_cap_secs = 100\n"
+                "tracker_backoff_start_secs = 7\n"
+                "tracker_backoff_cap_secs = 50\n"
+                "udp_base_timeout_secs = 12\n"
+                "udp_retries = 2\n"
+                "seed_duration_secs = 1500.0\n"
+            )
+            env.write_config(cfg)
+            app = EzrApp(env.home, save_dir=None)
+            try:
+                # 全量合法值 → 零警告（toast 3s 窗内断言）
+                assert app.wait_for("EZR Downloader", 10), "应正常启动"
+                assert_not_in("已忽略", app.text(),
+                              "全量合法配置不得出现任何忽略类警告")
+                # download_dir 预填 + http_concurrency 回填 + 下载落盘
+                open_add_dialog_via_cmd(app, env.fixture.url("small.bin"))
+                app.send("tab")
+                # 字段超宽左截断显示（…+尾部）：按尾部可见段断言
+                assert_in(cfg_dir[-16:], app.text(),
+                          "保存目录字段应预填配置 download_dir（D62②，字段超宽左截断按尾部断言）")
+                assert_in("6", app.text(), "并发应自动回填 http_concurrency=6")
+                app.send("enter")
+                assert app.wait_for("（无校验）", 60), "small.bin 应下载完成"
+                assert file_bytes(os.path.join(cfg_dir, "small.bin")) is not None, \
+                    "下载应落配置 download_dir（预填链生效）"
+                app.graceful_quit()
+            except Exception:
+                app.graceful_quit()
+                raise
+            # BT 键生效：BT 对话框预填（bt_concurrency=61 + trackers 合并 + 目录预填）
+            app = EzrApp(env.home, save_dir=None)
+            try:
+                tdir = os.path.join(env.home, "qa13-torrents")
+                os.makedirs(tdir, exist_ok=True)
+                tpath = os.path.join(tdir, "qa13.torrent")
+                with open(tpath, "wb") as f:
+                    f.write(_mini_torrent("qa13"))
+                app.send("a")
+                assert app.wait_for("请输入命令或链接", 5), "命令窗口应打开"
+                app.type_text(tpath)
+                app.send("enter")
+                assert app.wait_for("添加任务：BT", 5), "应分流打开 BT 对话框"
+                assert_in("61", app.text(), "并发应预填 [bt] bt_concurrency=61")
+                assert_in("udp://cfg13u/ann", app.text(),
+                          "trackers 应预填合并 [bt] udp_trackers")
+                assert_in(cfg_dir[-16:], app.text(),
+                          "保存到应预填配置 download_dir（D48，字段超宽左截断按尾部断言）")
+                app.send("esc")
+                app.pump(0.3)
+                app.graceful_quit()
+            except Exception:
+                app.graceful_quit()
+                raise
 
 
 if __name__ == "__main__":

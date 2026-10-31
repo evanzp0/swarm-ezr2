@@ -21,6 +21,7 @@ import subprocess
 import time
 
 from harness import (
+    clear_dir_prefill, clear_url_prefill,
     DUMMY_URL, EZR_BIN, Env, EzrApp, Suite, add_task_via_dialog,
     assert_file_content, open_add_dialog_via_cmd,
     assert_in, assert_not_in, detail_text, expected_content, file_bytes,
@@ -141,6 +142,7 @@ class AddTaskSuite(Suite):
             try:
                 open_add_dialog_via_cmd(app, env.fixture.url("five-m.bin?speed=400000"))
                 app.send("tab")
+                clear_dir_prefill(app)
                 app.type_text(env.save_dir)
                 app.send("tab", "tab")          # 保存到1 → 并发2 → 校验3
                 app.send("enter")               # 展开下拉
@@ -263,14 +265,21 @@ class AddTaskSuite(Suite):
                     raise
 
     def _case_07(self):
-        """QA-01-07 URL 无协议/ftp:///本地路径：toast 报错且列表不新增。"""
+        """QA-01-07 URL 无协议/ftp:///本地路径：toast 报错且列表不新增。
+
+        D44 迁移同步：命令窗口对非 http(s)/非 .torrent 输入直接开错误窗口，
+        对话框级 URL 校验的可达路径 = 对话框内改写 URL 字段后确认。
+        """
         @self.case("QA-01-07")
         def go(env: Env):
             for bad in ("www.fixture.local/file.bin", "ftp://fixture.local/file",
                         "/etc/hosts"):
                 app = EzrApp(env.home, save_dir=env.save_dir)
                 try:
-                    add_task_via_dialog(app, env, bad)
+                    open_add_dialog_via_cmd(app, DUMMY_URL)
+                    clear_url_prefill(app)
+                    app.type_text(bad)
+                    app.send("enter")
                     assert app.wait_for("仅支持 http", 5), \
                         f"{bad!r} 应报仅支持 http/https"
                     assert_not_in("已添加任务", app.text())
@@ -378,21 +387,25 @@ class AddTaskSuite(Suite):
                 app.graceful_quit()
 
     def _case_11(self):
-        """QA-01-11 目录解析顺序：输入 > 配置 download_dir > ~/Downloads；自动创建。"""
+        """QA-01-11（v1.35 重写）打开预填 + 解析顺序 + 归一：~ 展开 / 相对→绝对。"""
         @self.case("QA-01-11")
         def go(env: Env):
             cfg_dir = os.path.join(env.home, "cfgdl")
             input_dir = os.path.join(env.home, "inputdl")
+            tilde_dir = os.path.join(env.home, "qadl-docs")
+            rel_dir = os.path.join(env.home, "qadl-rel", "sub")
 
             def manual_add(url: str, dir_text: str) -> None:
                 open_add_dialog_via_cmd(app, url)
                 app.send("tab")
                 if dir_text:
+                    # v1.38/D62：字段打开即预填配置链值——显式输入前先清空
+                    clear_dir_prefill(app)
                     app.type_text(dir_text)
                 app.send("enter")
                 app.pump(0.5)
 
-            # ③ 无输入无配置 → ~/Downloads（目录留空确认）
+            # ③ 无输入无配置 → 预填 ~/Downloads，留空确认落同（目录留空语义）
             app = EzrApp(env.home, save_dir=None)
             try:
                 manual_add(env.fixture.url("small.bin"), "")
@@ -403,11 +416,15 @@ class AddTaskSuite(Suite):
             except Exception:
                 app.graceful_quit()
                 raise
-            # ② 无输入 + 配置 download_dir → cfg_dir（自动创建）
+            # ② 无输入 + 配置 download_dir → 对话框预填 cfg_dir，留空确认落同
             env.write_config(f'[common]\ndownload_dir = "{cfg_dir}"\n')
             app = EzrApp(env.home, save_dir=None)
             try:
-                manual_add(env.fixture.url("small.bin"), "")
+                open_add_dialog_via_cmd(app, env.fixture.url("small.bin"))
+                app.send("tab")
+                assert_in(cfg_dir, app.text(),
+                          "保存目录字段应预填配置 download_dir（v1.38/D62②）")
+                app.send("enter")
                 assert app.wait_for("（无校验）", 30)
                 assert file_bytes(os.path.join(cfg_dir, "small.bin")) is not None, \
                     "配置 download_dir 应生效（自动创建）"
@@ -424,8 +441,35 @@ class AddTaskSuite(Suite):
                 assert file_bytes(
                     os.path.join(input_dir, "sub", "created", "small.bin")) \
                     is not None, "输入目录应优先且自动创建"
-            finally:
                 app.graceful_quit()
+            except Exception:
+                app.graceful_quit()
+                raise
+            # ④ ~ 前缀展开主目录（D62 归一；pty 子进程 HOME=env.home）
+            app = EzrApp(env.home, save_dir=None)
+            try:
+                manual_add(env.fixture.url("small.bin"), "~/qadl-docs")
+                assert app.wait_for("（无校验）", 30)
+                assert file_bytes(os.path.join(tilde_dir, "small.bin")) is not None, \
+                    "~/ 输入应展开为 <主目录>/qadl-docs（字面 ~ 目录不得出现）"
+                assert file_bytes(os.path.join(env.home, "~", "qadl-docs",
+                                               "small.bin")) is None, \
+                    "不得在主目录下生成字面 ~/qadl-docs 目录"
+                app.graceful_quit()
+            except Exception:
+                app.graceful_quit()
+                raise
+            # ⑤ 相对路径按创建时工作目录转绝对（pty 子进程 cwd = 隔离 HOME）
+            app = EzrApp(env.home, save_dir=None)
+            try:
+                manual_add(env.fixture.url("small.bin"), "qadl-rel/sub")
+                assert app.wait_for("（无校验）", 30)
+                assert file_bytes(os.path.join(rel_dir, "small.bin")) is not None, \
+                    "相对输入应按启动 cwd（隔离 HOME）转绝对落盘"
+                app.graceful_quit()
+            except Exception:
+                app.graceful_quit()
+                raise
 
     def _case_12(self):
         """QA-01-12 CLI 创建任务：-x 算法=码 依次 SHA-256/MD5/Adler-32（大小写不敏感）。"""
@@ -504,6 +548,7 @@ class AddTaskSuite(Suite):
                 # 再次添加相同 URL 与目录
                 open_add_dialog_via_cmd(app, env.fixture.url("five-m.bin?speed=500000"))
                 app.send("tab")
+                clear_dir_prefill(app)
                 app.type_text(env.save_dir)
                 app.send("enter")
                 app.pump(0.5)
@@ -526,10 +571,12 @@ class AddTaskSuite(Suite):
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 open_add_dialog_via_cmd(app, DUMMY_URL)
+                clear_url_prefill(app)
                 os.write(app.fd, b"\x1b[200~" + url.encode() + b"\x1b[201~")
                 app.pump(0.6)
                 assert_in(url[-40:], app.text(), "字段应完整显示粘贴内容（尾部可见）")
                 app.send("tab")
+                clear_dir_prefill(app)
                 app.type_text(env.save_dir)
                 app.send("enter")
                 # 小文件瞬时完成：「已添加」toast 会被完成 toast 覆盖，
@@ -573,6 +620,7 @@ class AddTaskSuite(Suite):
                 target = os.path.join(env.save_dir, "one-m.bin")
                 open_add_dialog_via_cmd(app, env.fixture.url("one-m.bin?speed=200000"))
                 app.send("tab")
+                clear_dir_prefill(app)
                 app.type_text(env.save_dir)
                 app.send(*(["tab"] * 6))  # 焦点 1（保存到）→ 7（仅添加）
                 app.send("enter")

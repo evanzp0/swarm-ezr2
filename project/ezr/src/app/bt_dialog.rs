@@ -366,7 +366,7 @@ impl App {
         } else {
             dir_raw
         };
-        let dir = dir.trim_end_matches('/').to_string();
+        let dir = crate::model::config::normalize_save_dir(&dir);
 
         if self
             .tasks
@@ -1105,6 +1105,48 @@ mod tests {
         assert!(spec.proxy_endpoint.is_none(), "直连 = None");
         assert_eq!(spec.meta.infohash, meta.infohash);
         app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn bt_confirm_normalizes_tilde_and_relative_dir() {
+        let Some(home) = crate::model::config::home_dir() else {
+            return;
+        };
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-norm");
+        let path = write_multi_torrent(&dir, "n.torrent");
+        let meta = parse_at(&path);
+        let mut app = make_app("norm");
+        app.open_add_bt_dialog_with(&path, &meta);
+        if let Some(d) = app.dialog.as_mut() {
+            d.dir.value = format!("~/ezr-bt-tilde-{}", std::process::id());
+        }
+        app.dlg_confirm_add_bt(false);
+        assert_eq!(app.tasks.len(), 1, "任务创建");
+        let expect = home
+            .join(format!("ezr-bt-tilde-{}", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(
+            app.tasks[0].save_dir, expect,
+            "BT 保存到 ~ 展开为主目录绝对路径（FR-02-02 v1.4/D62）"
+        );
+        app.shutdown().await;
+
+        let mut app2 = make_app("norm-rel");
+        let cwd = std::env::current_dir().unwrap();
+        app2.open_add_bt_dialog_with(&path, &meta);
+        if let Some(d) = app2.dialog.as_mut() {
+            d.dir.value = "ezr-bt-rel-test".to_string();
+        }
+        app2.dlg_confirm_add_bt(false);
+        assert_eq!(app2.tasks.len(), 1, "任务创建");
+        assert_eq!(
+            app2.tasks[0].save_dir,
+            cwd.join("ezr-bt-rel-test").to_string_lossy().to_string(),
+            "BT 保存到相对路径按创建时 cwd 转绝对（D62）"
+        );
+        app2.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }
 }

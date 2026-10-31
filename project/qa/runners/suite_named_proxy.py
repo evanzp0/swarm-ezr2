@@ -19,6 +19,7 @@ import ssl
 import time
 
 from harness import (
+    clear_dir_prefill,
     Env, EzrApp, DUMMY_URL, PROXY_CA_PEM, SkipCase, Suite, TMP_ROOT,
     assert_file_content, open_add_dialog_via_cmd,
     assert_in, assert_not_in, proxy_reqs, start_proxy, stop_proxy, wait_file_size,
@@ -133,6 +134,8 @@ class NamedProxySuite(Suite):
         """添加任务并选中代理下拉第 option_index 项（0 = 直连）。"""
         open_add_dialog_via_cmd(app, url)
         app.send("tab")                                  # URL(0)→目录(1)
+        if save_dir is None or save_dir:
+            clear_dir_prefill(app)
         app.type_text(env.save_dir if save_dir is None else save_dir)
         app.send(*(["tab"] * 3))                         # 目录→并发→校验→校验码
         app.send("tab")                                  # 校验码(4)→代理(5)

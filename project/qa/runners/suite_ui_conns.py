@@ -13,6 +13,12 @@ FR-01-100…102（v1.14/v1.15 详情类型行、链接样式复制、速度同�
 时序纪律：门控 Given（?speed= 慢速维持观察窗）；正探有界 wait_for、负探单发；
 配色断言无视 NO_COLOR（产品强制彩色）；布局锚点动态定位（标题行/分隔符列），
 不硬编码列位（engineering.md 区域锚定与面板箱体截取纪律）。
+
+v1.37 同步注（bug13 轮，D62④）：QA-UC-11 新增 BT 同口径判据——多 peer 明细中
+↓/↑/鼠标可选中任意 peer 行、选择不随 tick 复位、B 断开作用于选中行。BT peer 明细
+需真实 swarm（harness territory），本 runner 维持 HTTP 明细驱动；BT 判据由
+config.rs/tick.rs 单测（tick_keeps_bt_peer_selection_*）与 QA 会话（QA-UC-11 v1.37
+操作列 BT 段）覆盖。
 """
 
 from __future__ import annotations

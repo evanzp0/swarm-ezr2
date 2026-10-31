@@ -547,6 +547,44 @@ pub fn expand_tilde(path: &str) -> PathBuf {
 }
 
 #[must_use]
+pub fn normalize_save_dir_with(path: &str, home: Option<&Path>, cwd: Option<&Path>) -> String {
+    let p = path.trim();
+    let p = if p.len() > 1 {
+        p.trim_end_matches('/')
+    } else {
+        p
+    };
+    let expanded = expand_tilde_with(p, home);
+    let expanded = if expanded.is_absolute() {
+        expanded
+    } else {
+        match cwd {
+            Some(c) => c.join(&expanded),
+            None => expanded,
+        }
+    };
+    expanded.to_string_lossy().to_string()
+}
+
+#[must_use]
+pub fn normalize_save_dir(path: &str) -> String {
+    normalize_save_dir_with(
+        path,
+        home_dir().as_deref(),
+        std::env::current_dir().ok().as_deref(),
+    )
+}
+
+#[must_use]
+pub fn default_save_dir_prefill(cfg: &Config) -> String {
+    cfg.download_dir
+        .clone()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(default_download_dir)
+}
+
+#[must_use]
 pub fn ezr_dir() -> Option<PathBuf> {
     if let Some(v) = std::env::var_os("EZR_HOME") {
         if !v.is_empty() {
@@ -1022,6 +1060,100 @@ mod tests {
             expand_tilde("/abs/a.torrent"),
             PathBuf::from("/abs/a.torrent"),
             "绝对路径不受进程环境影响"
+        );
+    }
+
+    #[test]
+    fn normalize_save_dir_expands_tilde_and_relative() {
+        let home = Path::new("/home/u");
+        let cwd = Path::new("/work/dir");
+        assert_eq!(
+            normalize_save_dir_with("~/Documents", Some(home), Some(cwd)),
+            "/home/u/Documents",
+            "~ 前缀展开为主目录"
+        );
+        assert_eq!(
+            normalize_save_dir_with("~", Some(home), Some(cwd)),
+            "/home/u",
+            "裸 ~ 展开为主目录"
+        );
+        assert_eq!(
+            normalize_save_dir_with("qadl-rel/sub", Some(home), Some(cwd)),
+            "/work/dir/qadl-rel/sub",
+            "相对路径按 cwd 转绝对"
+        );
+        assert_eq!(
+            normalize_save_dir_with("/tmp/qadl-new", Some(home), Some(cwd)),
+            "/tmp/qadl-new",
+            "绝对路径原样保留"
+        );
+    }
+
+    #[test]
+    fn normalize_save_dir_trims_trailing_slash_and_space() {
+        let home = Path::new("/home/u");
+        let cwd = Path::new("/work");
+        assert_eq!(
+            normalize_save_dir_with("/tmp/qadl/", Some(home), Some(cwd)),
+            "/tmp/qadl",
+            "末尾 / 归一去除"
+        );
+        assert_eq!(
+            normalize_save_dir_with("  /tmp/qadl  ", Some(home), Some(cwd)),
+            "/tmp/qadl",
+            "首尾空白修剪"
+        );
+        assert_eq!(
+            normalize_save_dir_with("/", Some(home), Some(cwd)),
+            "/",
+            "根目录保持 / 不清空"
+        );
+        assert_eq!(
+            normalize_save_dir_with("~/", Some(home), Some(cwd)),
+            "/home/u",
+            "~/ 尾斜杠展开主目录"
+        );
+    }
+
+    #[test]
+    fn normalize_save_dir_without_home_keeps_literal_tilde() {
+        let cwd = Path::new("/work");
+        assert_eq!(
+            normalize_save_dir_with("~/Documents", None, Some(cwd)),
+            "/work/~/Documents",
+            "无主目录时 ~/x 保持字面（相对形态）再按 cwd 转绝对"
+        );
+    }
+
+    #[test]
+    fn normalize_save_dir_without_cwd_keeps_relative() {
+        let home = Path::new("/home/u");
+        assert_eq!(
+            normalize_save_dir_with("rel/sub", Some(home), None),
+            "rel/sub",
+            "cwd 不可得时相对路径保持原样"
+        );
+    }
+
+    #[test]
+    fn default_save_dir_prefill_follows_config_chain() {
+        let mut cfg = Config::default();
+        assert_eq!(
+            default_save_dir_prefill(&cfg),
+            default_download_dir(),
+            "未配置 → 代码默认下载目录"
+        );
+        cfg.download_dir = Some("/tmp/qadl-home".to_string());
+        assert_eq!(
+            default_save_dir_prefill(&cfg),
+            "/tmp/qadl-home",
+            "配置 download_dir → 预填配置值"
+        );
+        cfg.download_dir = Some("   ".to_string());
+        assert_eq!(
+            default_save_dir_prefill(&cfg),
+            default_download_dir(),
+            "空白配置视同未设（from_toml 已过滤，双保险）"
         );
     }
 

@@ -374,3 +374,20 @@
   修改不重挂引擎；total/并发变化走既有重建路径，新 spec 自带新池，双发会重复 announce）。
 - spy 测试注意：确认路径先发既有 `Cmd::Reconfigure`（并发/代理热调），断言要跳过它再
   找 BtUpdateTrackers，且断言无 CancelBt/StartBt（不重挂）。
+- 并发 panel 选择钳制必须与明细行数同源：`tick_clamp_selection` 的 `conns_sel` 钳制此前误用
+  HTTP 连接快照长度（`t.connections.len()`），而 BT 任务 connections 恒空（peer 行在
+  `bt_conns` map）——每次 tick（约 100ms）把 `conns_sel >= 1` 强制复位为 0，表象即「BT 明细
+  永远只能选中第一个 peer，↑↓ 与鼠标看似无效」。根因模式：同一索引被两处数据源引用（渲染
+  行集 vs 钳制基线）时，钳制基线必须与渲染行集同一来源（BT = bt_conns.len、HTTP = 活跃连接
+  行数），与 `conn_count()`/`conns_actual_of` 同源；修复落在 tick 钳制一处，渲染/键位/鼠标
+  均不动。同类隐患：任何「选择索引 + 周期钳制」结构都要求钳制计数与面板实际行数同源。
+- 保存目录归一层位 = 任务创建确认时，不在配置解析层：`download_dir`（config）与对话框/CLI
+  输入统一在任务创建确认时做 `~` 展开 + 相对→绝对（按创建时进程 cwd）+ 末尾 `/` 去除；配置
+  解析层保留原文（同一 config 在不同 cwd 启动语义一致，归一后果随创建时上下文）。既有
+  `expand_tilde`（种子路径/cmd 窗口已在用）直接复用，缺的只是四条创建路径各自调用——修此类
+  bug 先找「既有的归一函数 + 未接线的路径」，不要新造归一实现。
+- supervisor block_worker 的「无法写入目标文件」fatal（`OpenOptions::write(true).open` 失败）
+  与重试路径存在理论竞态：resume 作废重建目标文件与 worker（重）开文件交错时 ENOENT →
+  任务 Fatal。QA-PC-06 全量套件语境下低频复现（隔离 11 连跑零复现；慢速逐键清场把任务添加
+  窗口拉长 ~0.5s 后暴露率上升，清场提速后 3 连跑稳定）。本轮未改引擎，登记为 QA/引擎轮
+  观察项：worker 打开失败可考虑有界重试窗（文件由 supervisor 先 touch 再派 worker 即根治）。

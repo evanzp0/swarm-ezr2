@@ -16,9 +16,8 @@ impl App {
         }
         let dir = dir
             .or_else(|| self.cfg.download_dir.clone())
-            .unwrap_or_else(crate::model::config::default_download_dir)
-            .trim_end_matches('/')
-            .to_string();
+            .unwrap_or_else(crate::model::config::default_download_dir);
+        let dir = crate::model::config::normalize_save_dir(&dir);
         let base_name = crate::model::namegen::derive_name(None, None, &url);
         let resumed =
             crate::model::sidecar::Sidecar::load(&format!("{dir}/{base_name}{SIDECAR_EXT}"))
@@ -124,6 +123,29 @@ mod cli_add_tests {
         );
         let toast = app.toast.as_deref().unwrap_or_default();
         assert!(toast.contains("自动接续"), "接续 toast: {toast}");
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn cli_add_normalizes_relative_config_download_dir() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-cli-norm");
+        let cfg = Config {
+            download_dir: Some("ezr-cli-rel-dl".to_string()),
+            ..Config::default()
+        };
+        let cwd = std::env::current_dir().unwrap();
+        let mut app = App::new(
+            cfg,
+            dir.join("registry.json").to_string_lossy().into_owned(),
+        );
+        app.add_cli_task("http://example.com/n.bin".to_string(), None, None, None);
+        assert_eq!(app.tasks.len(), 1, "任务创建");
+        assert_eq!(
+            app.tasks[0].save_dir,
+            cwd.join("ezr-cli-rel-dl").to_string_lossy().to_string(),
+            "配置 download_dir 相对路径按创建时 cwd 转绝对（D62）"
+        );
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -161,7 +161,7 @@ impl App {
         } else {
             dir_raw
         };
-        let dir = dir.trim_end_matches('/').to_string();
+        let dir = crate::model::config::normalize_save_dir(&dir);
 
         let protocol = protocol_of_url(&url);
         if self.tasks.iter().any(|t| t.url == url && t.save_dir == dir) {
@@ -304,7 +304,7 @@ impl App {
         self.set_dialog(Dialog {
             kind: DialogKind::Add,
             url: TextInput::new(),
-            dir: TextInput::new(),
+            dir: TextInput::with_value(crate::model::config::default_save_dir_prefill(&self.cfg)),
             conns: TextInput::new(),
             conns_edited: false,
             ck_type: CK_NONE,
@@ -429,6 +429,7 @@ mod add_dialog_flow_tests {
             app.on_key(KeyCode::Char(c), KeyModifiers::NONE);
         }
         app.on_key(KeyCode::Tab, KeyModifiers::NONE);
+        app.dialog.as_mut().unwrap().dir.set("");
         for c in format!("{}/", dir.to_string_lossy()).chars() {
             app.on_key(KeyCode::Char(c), KeyModifiers::NONE);
         }
@@ -786,6 +787,122 @@ mod add_dialog_flow_tests {
             .as_deref()
             .is_some_and(|m| m.contains("不可修改")));
         app2.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn add_dialog_prefills_dir_from_config_chain() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-prefill");
+        let reg = dir.join("registry.json").to_string_lossy().to_string();
+        let mut app = App::new(Config::default(), reg);
+        app.open_add_dialog();
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(
+            d.dir.value,
+            crate::model::config::default_download_dir(),
+            "未配置 → 预填代码默认下载目录（FR-01-01 v1.38/D62）"
+        );
+        app.shutdown().await;
+
+        let mut app2 = App::new(
+            Config::default(),
+            dir.join("r2.json").to_string_lossy().into_owned(),
+        );
+        app2.cfg.download_dir = Some("/tmp/qadl-home".to_string());
+        app2.open_add_dialog();
+        let d2 = app2.dialog.as_ref().unwrap();
+        assert_eq!(
+            d2.dir.value, "/tmp/qadl-home",
+            "配置 download_dir → 预填配置值"
+        );
+        app2.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn add_dialog_confirm_normalizes_tilde_dir() {
+        let Some(home) = crate::model::config::home_dir() else {
+            return;
+        };
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-tilde");
+        let mut app = App::new(
+            Config::default(),
+            dir.join("registry.json").to_string_lossy().into_owned(),
+        );
+        let target = format!("{}-{}", "ezr-tilde-docs", std::process::id());
+        app.dialog = Some(Dialog {
+            kind: DialogKind::Add,
+            url: TextInput::with_value("http://example.com/t.bin"),
+            dir: TextInput::with_value(format!("~/{target}")),
+            conns: TextInput::new(),
+            conns_edited: false,
+            ck_type: CK_NONE,
+            ck_value: TextInput::new(),
+            ck_open: false,
+            ck_sel: CK_NONE,
+            proxy_sel: 0,
+            proxy_open: false,
+            focus: 7,
+            task_name: String::new(),
+            task_id: None,
+            torrent: TextInput::new(),
+            bt_tree: Vec::new(),
+            bt_cursor: 0,
+            bt_scroll: 0,
+            bt_follow: true,
+            trackers: crate::multiline::MultiLineBuf::new(),
+        });
+        app.dlg_confirm_add();
+        assert_eq!(app.tasks.len(), 1, "任务创建");
+        assert_eq!(
+            app.tasks[0].save_dir,
+            home.join(&target).to_string_lossy().to_string(),
+            "保存目录 ~ 展开为主目录绝对路径（D62，不再字面落盘 ~ 目录）"
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn add_dialog_confirm_normalizes_relative_dir_to_cwd() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-rel");
+        let cwd = std::env::current_dir().unwrap();
+        let mut app = App::new(
+            Config::default(),
+            dir.join("registry.json").to_string_lossy().into_owned(),
+        );
+        app.dialog = Some(Dialog {
+            kind: DialogKind::Add,
+            url: TextInput::with_value("http://example.com/r.bin"),
+            dir: TextInput::with_value("ezr-relsub-test/sub"),
+            conns: TextInput::new(),
+            conns_edited: false,
+            ck_type: CK_NONE,
+            ck_value: TextInput::new(),
+            ck_open: false,
+            ck_sel: CK_NONE,
+            proxy_sel: 0,
+            proxy_open: false,
+            focus: 7,
+            task_name: String::new(),
+            task_id: None,
+            torrent: TextInput::new(),
+            bt_tree: Vec::new(),
+            bt_cursor: 0,
+            bt_scroll: 0,
+            bt_follow: true,
+            trackers: crate::multiline::MultiLineBuf::new(),
+        });
+        app.dlg_confirm_add();
+        assert_eq!(app.tasks.len(), 1, "任务创建");
+        assert_eq!(
+            app.tasks[0].save_dir,
+            cwd.join("ezr-relsub-test/sub")
+                .to_string_lossy()
+                .to_string(),
+            "相对路径按创建时进程工作目录转绝对（D62）"
+        );
+        app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }
 }

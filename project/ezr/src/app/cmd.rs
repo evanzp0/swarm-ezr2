@@ -68,7 +68,7 @@ impl App {
         self.set_dialog(Dialog {
             kind: DialogKind::Add,
             url: TextInput::with_value(prefill),
-            dir: TextInput::new(),
+            dir: TextInput::with_value(crate::model::config::default_save_dir_prefill(&self.cfg)),
             conns: TextInput::with_value(def_conns.to_string()),
             conns_edited: false,
             ck_type: crate::model::checksum::CK_NONE,

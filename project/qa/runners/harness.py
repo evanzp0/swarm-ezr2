@@ -713,6 +713,23 @@ def open_add_dialog_via_cmd(app: "EzrApp", url: str) -> None:
     assert app.wait_for("添加任务：HTTP(S)", 3), "添加对话框未打开"
 
 
+def clear_dir_prefill(app: "EzrApp") -> None:
+    """清空保存目录字段预填（v1.38/D62：对话框打开即预填配置链值）。
+
+    64 次 bs 覆盖一切现实预填长度（字段上限 300；空字段/光标起点处的 bs
+    为无害 no-op）；清空后输入 = 显式目录，不清 = 留空确认走预填（恰为
+    原「留空走默认 download_dir」语义）。
+    """
+    os.write(app.fd, key_bytes("bs") * 64)
+    app._pump(0.06)
+
+
+def clear_url_prefill(app: "EzrApp") -> None:
+    """清空 URL 字段预填（同 clear_dir_prefill 口径；对话框 URL 字段打开即预填）。"""
+    os.write(app.fd, key_bytes("bs") * 64)
+    app._pump(0.06)
+
+
 def add_task_via_dialog(app: "EzrApp", env: "Env", url: str, conns: str = "",
                         ck_value: str = "", save_dir: str | None = None) -> None:
     """A 对话框添加任务：URL + 保存目录 +（可选并发/校验码）→ Enter 确认。
@@ -722,8 +739,11 @@ def add_task_via_dialog(app: "EzrApp", env: "Env", url: str, conns: str = "",
     """
     open_add_dialog_via_cmd(app, url)
     app.send("tab")
-    # 哨兵语义：None=env.save_dir；""=字段留空（走默认 download_dir）；
+    # 哨兵语义：None=env.save_dir；""=字段留空（走预填=配置链默认，v1.38/D62）；
     # "路径"=显式目录。不可用 or（空串会被吞掉）。
+    # v1.38/D62：字段打开即预填配置链值——显式目录前先清空预填防拼接
+    if save_dir is None or save_dir:
+        clear_dir_prefill(app)
     app.type_text(env.save_dir if save_dir is None else save_dir)
     # 字段序：URL → 保存到 → 并发 → 校验（下拉）→ 校验码
     if conns:

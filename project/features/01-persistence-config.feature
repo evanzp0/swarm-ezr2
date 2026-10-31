@@ -18,6 +18,7 @@
 #   01-persistence-config-10 EZR_HOME 环境变量重定位 .ezr 目录（v1.3/D16）
 #   01-persistence-config-11 kill -9 异常终止终端自恢复（v1.3/FR-01-84）
 #   01-persistence-config-12 旧格式顶层键与旧 [[proxies]] 表按未知键忽略（v1.17：config 三大标准表重构，操作者钦定不兼容旧格式）
+#   01-persistence-config-13 全量配置键合法值生效冒烟（v1.18：bug13 轮操作者指令「所有 config.toml 中的配置项的都要测试验证是否可用」）
 Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
 
   期号 01。依据 project/mission/phase-01.md FR-01-70~73、FR-01-84 与本会话澄清决定
@@ -177,3 +178,11 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
     And 相关配置项全部按默认值生效（槽位 5、块大小 1 MB、并发默认 4、max_speed 不限）
     And 旧 [[proxies]] 条目不出现在代理下拉（proxy 键已改名迁入 [common.proxy]，旧表不读）
     And 同文件追加新表头（[common] download_slots = 3 等）后新表键正常生效（新格式不受旧键干扰）
+
+  Scenario: 01-persistence-config-13 全量配置键合法值生效冒烟（v1.18 新增，D62③）
+    Given 配置文件一次性写入全部 36 键的合法非默认值（[common] 3 键 + [[common.proxy]] 双条目 + ttp] 11 键 + [bt] 20 键，取值均在模板注明取值范围内且非代码默认）
+    When 启动 ezr 并正常使用（添加 HTTP 下载、打开添加对话框与代理下拉、打开 BT 对话框）
+    Then 启动不报错且无任何警告 toast（全量合法值零警告）
+    And 可观察键逐项生效：download_dir = 添加对话框保存目录字段预填值；download_slots = 任务队列栏「n/<slots>」；max_speed = 限速生效（速度曲线封顶）；命名代理 = 代理下拉按配置顺序出现且可选；block_size_http = 详情分块行显示自定义块大小；http_concurrency = HTTP 对话框并发自动回填值；auto_retry/max_retries/backoff_initial/backoff_cap = 失败重试行为按配置推进（序列与上限一致）；progress_tick_ms/sidecar_flush_secs/throttle_burst_secs/throttle_sleep_ms/dns_race_grace_ms = 运行期无异常（行为不劣化，无错误 toast）
+    And BT 键逐项生效：http_trackers/udp_trackers = BT 对话框 trackers 预填合并来源；bt_concurrency = BT 对话框并发预填值；peer_pipeline/upload_slots/upload_read_concurrency/idle_eviction_secs/connect_timeout_secs/handshake_timeout_secs/request_timeout_secs/requests_per_piece/rechoke_interval_secs/optimistic_interval_secs/progress_emit_min_interval_ms/tracker_numwant/peer_retry_base_secs/peer_retry_cap_secs/tracker_backoff_start_secs/tracker_backoff_cap_secs/udp_base_timeout_secs/udp_retries/seed_duration_secs = BT 下载与做种全程无错误（引擎行为正常、无致命 toast）
+    And 下载正常完成且产物完整（全量配置下核心链路不致病）

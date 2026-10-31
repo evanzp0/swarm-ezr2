@@ -9,7 +9,7 @@
 #   01-add-task-08 文件名推导优先级
 #   01-add-task-09 文件名无法推导回退 download-<时间戳>
 #   01-add-task-10 目标文件已存在自动追加序号
-#   01-add-task-11 保存目录缺省链与自动创建
+#   01-add-task-11 保存目录缺省链、打开预填与归一（v1.35 重写：~ 展开 + 相对→绝对）
 #   01-add-task-12 CLI 参数创建任务且 -x <算法>=<校验码> 显式指定算法
 #   01-add-task-13 CLI -x 非法（缺前缀/算法无法识别/位数不符）启动报错退出
 #   01-add-task-14 CLI -c 非法值启动报错退出
@@ -29,6 +29,11 @@
 # 字段行 x = 内框 + 2、行宽 = 内框 − 4、热区同步）；②下拉选项行左 2 列前缀缩进（前缀 2 空格，
 # 高度「项数 + 2」紧凑特例不变，FR-01-115）；③顶边框行右端 [✗] 关闭按钮（FR-01-114：原地松开 =
 # 取消，几何/配色细则见 01-tui-display-27）。
+# v1.35 修订注（操作者 bug13 轮指令，D62；FR-01-03 v1.38）：①场景 11 重写——保存目录字段打开时
+# 预填 = 配置 download_dir（未设/空白 → 代码默认 ~/Downloads 口径，与 BT 对话框 D48 同口径），
+# 确认时按归一口径处理：~ 与 ~/ 前缀展开为用户主目录（主目录不可得时保持原样）、相对路径
+# （非 / 开头且非 ~ 前缀）按创建时进程工作目录转绝对路径、末尾 / 去除；任务落注册表与详情
+# 「路径」显示均为归一后绝对路径；②目录不存在时自动创建口径不变。
 Feature: 01-add-task 任务添加（对话框与 CLI）
 
   期号 01。依据 project/mission/phase-01.md FR-01-01~06 与本会话澄清决定（重复任务拒绝、
@@ -169,17 +174,22 @@ Feature: 01-add-task 任务添加（对话框与 CLI）
       | dir       | filename   |
       | /tmp/qadl | report.pdf |
 
-  Scenario: 01-add-task-11 保存目录缺省链与自动创建
+  Scenario: 01-add-task-11 保存目录缺省链、打开预填与归一（v1.35 重写：~ 展开 + 相对→绝对，FR-01-03 v1.38/D62）
     Given 配置文件 download_dir 为 "<config_dir>"
+    When 按 A 打开「添加任务：HTTP(S)」对话框且未触碰保存目录字段
+    Then 保存目录字段预填 "<prefilled>"（配置未设/空白 → 代码默认；FR-01-01 v1.38/D48 同口径）
     When 按对话框添加下载项且保存目录字段输入 "<input_dir>"
     And 按 Enter 确认
     Then 目标文件落在 "<resolved_dir>" 下（目录不存在时已自动创建）
+    And 详情「路径」与注册表保存目录均为归一后绝对路径 "<resolved_dir>"（~ 展开用户主目录、相对路径按创建时工作目录转绝对、末尾 / 去除）
 
     Examples:
-      | config_dir      | input_dir   | resolved_dir    |
-      | /tmp/qadl-home  | （留空）    | /tmp/qadl-home  |
-      | （配置缺失）    | （留空）    | （用户主目录下载目录）|
-      | /tmp/qadl-home  | /tmp/qadl-new | /tmp/qadl-new |
+      | config_dir      | input_dir      | prefilled       | resolved_dir             |
+      | /tmp/qadl-home  | （留空）       | /tmp/qadl-home  | /tmp/qadl-home           |
+      | （配置缺失）    | （留空）       | （用户主目录下载目录）| （用户主目录下载目录） |
+      | /tmp/qadl-home  | /tmp/qadl-new  | /tmp/qadl-home  | /tmp/qadl-new            |
+      | （配置缺失）    | ~/qadl-docs    | （用户主目录下载目录）| （用户主目录）/qadl-docs |
+      | （配置缺失）    | qadl-rel/sub   | （用户主目录下载目录）| （启动时工作目录）/qadl-rel/sub |
 
   Scenario: 01-add-task-12 CLI 参数创建任务且 -x <算法>=<校验码> 显式指定算法
     When 以命令行启动 "ezr <url> -d <dir> -c <concurrency> -x <x_arg>"
