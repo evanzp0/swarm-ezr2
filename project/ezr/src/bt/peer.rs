@@ -349,13 +349,29 @@ pub fn ext_handshake_payload(ut_metadata_id: u8, metadata_size: u32) -> Vec<u8> 
     bencode::encode(&BValue::Dict(outer))
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExtHandshake {
+    pub ut_metadata: Option<u8>,
+    pub metadata_size: Option<u32>,
+    pub v: Option<String>,
+}
+
 #[must_use]
-#[allow(dead_code)]
-pub fn parse_ext_handshake(payload: &[u8]) -> Option<(u8, u32)> {
+pub fn parse_ext_handshake(payload: &[u8]) -> Option<ExtHandshake> {
     let v = bencode::decode_all(payload).ok()?;
-    let ut = u8::try_from(v.get("m")?.get_int("ut_metadata")?).ok()?;
-    let size = u32::try_from(v.get_int("metadata_size")?).ok()?;
-    Some((ut, size))
+    let ut = v
+        .get("m")
+        .and_then(|m| m.get_int("ut_metadata"))
+        .and_then(|i| u8::try_from(i).ok());
+    let size = v
+        .get_int("metadata_size")
+        .and_then(|i| u32::try_from(i).ok());
+    let client = v.get_str("v").map(str::to_string);
+    Some(ExtHandshake {
+        ut_metadata: ut,
+        metadata_size: size,
+        v: client,
+    })
 }
 
 #[cfg(test)]
@@ -523,7 +539,16 @@ mod tests {
         let (mut a, mut b) = duplex(128);
         let ih = [3u8; 20];
         let server_pid = [9u8; 20];
-        let handle = tokio::spawn(async move { handshake(&mut a, &ih, &[4u8; 20], true, DEFAULT_HANDSHAKE_TIMEOUT_SECS).await });
+        let handle = tokio::spawn(async move {
+            handshake(
+                &mut a,
+                &ih,
+                &[4u8; 20],
+                true,
+                DEFAULT_HANDSHAKE_TIMEOUT_SECS,
+            )
+            .await
+        });
         mock_peer_handshake(&mut b, reserved_bits(true), ih, server_pid)
             .await
             .unwrap();
@@ -539,9 +564,15 @@ mod tests {
     #[tokio::test]
     async fn handshake_rejects_infohash_mismatch() {
         let (mut a, mut b) = duplex(128);
-        let handle =
-            tokio::spawn(async move {
-            handshake(&mut a, &[5u8; 20], &[6u8; 20], true, DEFAULT_HANDSHAKE_TIMEOUT_SECS).await
+        let handle = tokio::spawn(async move {
+            handshake(
+                &mut a,
+                &[5u8; 20],
+                &[6u8; 20],
+                true,
+                DEFAULT_HANDSHAKE_TIMEOUT_SECS,
+            )
+            .await
         });
         mock_peer_handshake(&mut b, reserved_bits(true), [7u8; 20], [8u8; 20])
             .await
@@ -557,7 +588,16 @@ mod tests {
     #[tokio::test]
     async fn handshake_rejects_bad_protocol_name() {
         let (mut a, mut b) = duplex(128);
-        let t = tokio::spawn(async move { handshake(&mut a, &[1u8; 20], &[2u8; 20], false, DEFAULT_HANDSHAKE_TIMEOUT_SECS).await });
+        let t = tokio::spawn(async move {
+            handshake(
+                &mut a,
+                &[1u8; 20],
+                &[2u8; 20],
+                false,
+                DEFAULT_HANDSHAKE_TIMEOUT_SECS,
+            )
+            .await
+        });
         let mut head = Vec::new();
         head.push(19);
         head.extend_from_slice(b"BitTorrent protoc0l");
@@ -577,8 +617,16 @@ mod tests {
         );
         drop(b);
         let (mut a2, mut b2) = duplex(128);
-        let t2 =
-            tokio::spawn(async move { handshake(&mut a2, &[1u8; 20], &[2u8; 20], false, DEFAULT_HANDSHAKE_TIMEOUT_SECS).await });
+        let t2 = tokio::spawn(async move {
+            handshake(
+                &mut a2,
+                &[1u8; 20],
+                &[2u8; 20],
+                false,
+                DEFAULT_HANDSHAKE_TIMEOUT_SECS,
+            )
+            .await
+        });
         b2.write_all(&[5]).await.unwrap();
         let err2 = tokio::time::timeout(DUR5, t2)
             .await
@@ -595,7 +643,14 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn handshake_times_out_when_peer_silent() {
         let (mut a, b) = duplex(128);
-        let res = handshake(&mut a, &[1u8; 20], &[2u8; 20], false, DEFAULT_HANDSHAKE_TIMEOUT_SECS).await;
+        let res = handshake(
+            &mut a,
+            &[1u8; 20],
+            &[2u8; 20],
+            false,
+            DEFAULT_HANDSHAKE_TIMEOUT_SECS,
+        )
+        .await;
         let err = res.expect_err("静默对端应握手超时");
         assert!(err.to_string().contains("超时"), "应报握手超时：{err}");
         drop(b);
@@ -605,9 +660,15 @@ mod tests {
     async fn handshake_fails_on_immediate_eof() {
         let (mut a, b) = duplex(128);
         drop(b);
-        assert!(handshake(&mut a, &[1u8; 20], &[2u8; 20], false, DEFAULT_HANDSHAKE_TIMEOUT_SECS)
-            .await
-            .is_err());
+        assert!(handshake(
+            &mut a,
+            &[1u8; 20],
+            &[2u8; 20],
+            false,
+            DEFAULT_HANDSHAKE_TIMEOUT_SECS
+        )
+        .await
+        .is_err());
     }
 
     #[test]
@@ -684,11 +745,33 @@ mod tests {
             b"d1:md11:ut_metadatai2ee13:metadata_sizei54321ee".as_slice(),
             "BEP 10 最小子集线格式金样"
         );
-        assert_eq!(parse_ext_handshake(&payload), Some((2, 54321)));
+        assert_eq!(
+            parse_ext_handshake(&payload),
+            Some(ExtHandshake {
+                ut_metadata: Some(2),
+                metadata_size: Some(54321),
+                v: None,
+            })
+        );
         assert_eq!(
             parse_ext_handshake(&ext_handshake_payload(1, 484)),
-            Some((1, 484))
+            Some(ExtHandshake {
+                ut_metadata: Some(1),
+                metadata_size: Some(484),
+                v: None,
+            })
         );
+    }
+
+    #[test]
+    fn ext_handshake_v_capture() {
+        let mut m = BTreeMap::new();
+        m.insert(b"v".to_vec(), BValue::Bytes(b"BitComet 1.64".to_vec()));
+        let payload = bencode::encode(&BValue::Dict(m));
+        let eh = parse_ext_handshake(&payload).expect("仅 v 的扩展握手可解析");
+        assert_eq!(eh.v.as_deref(), Some("BitComet 1.64"));
+        assert_eq!(eh.ut_metadata, None);
+        assert_eq!(eh.metadata_size, None);
     }
 
     #[test]
@@ -701,17 +784,22 @@ mod tests {
         m.insert(b"metadata_size".to_vec(), BValue::Int(484));
         m.insert(b"p".to_vec(), BValue::Int(6881));
         let payload = bencode::encode(&BValue::Dict(m));
-        assert_eq!(parse_ext_handshake(&payload), Some((3, 484)));
+        let eh = parse_ext_handshake(&payload).expect("额外键容忍");
+        assert_eq!(eh.ut_metadata, Some(3));
+        assert_eq!(eh.metadata_size, Some(484));
         let mut m2 = BTreeMap::new();
         m2.insert(b"metadata_size".to_vec(), BValue::Int(484));
         let p2 = bencode::encode(&BValue::Dict(m2));
-        assert_eq!(parse_ext_handshake(&p2), None);
+        let eh2 = parse_ext_handshake(&p2).expect("缺 m 容忍（v 优先口径）");
+        assert_eq!(eh2.ut_metadata, None);
+        assert_eq!(eh2.metadata_size, Some(484));
         let mut m3 = BTreeMap::new();
         let mut md3 = BTreeMap::new();
         md3.insert(b"ut_metadata".to_vec(), BValue::Int(1));
         m3.insert(b"m".to_vec(), BValue::Dict(md3));
         let p3 = bencode::encode(&BValue::Dict(m3));
-        assert_eq!(parse_ext_handshake(&p3), None);
+        let eh3 = parse_ext_handshake(&p3).expect("缺 metadata_size 容忍");
+        assert_eq!(eh3.ut_metadata, Some(1));
         assert_eq!(parse_ext_handshake(b"junk"), None);
     }
 }

@@ -18,7 +18,6 @@ use crate::model::namegen::DOWNLOADING_EXT;
 use crate::model::sidecar::Sidecar;
 use crate::model::FailKind;
 
-
 pub(super) async fn download(
     spec: &TaskSpec,
     shared: &Arc<super::super::EngineShared>,

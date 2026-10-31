@@ -94,10 +94,7 @@ pub fn draw_tree_panel(
             height: 1,
         };
         f.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                cap_text,
-                Style::default().fg(DIM),
-            ))),
+            Paragraph::new(Line::from(Span::styled(cap_text, Style::default().fg(DIM)))),
             cap_rect,
         );
     }
@@ -140,7 +137,9 @@ pub fn draw_tree_panel(
         } else {
             snap.name.clone()
         };
-        let name_budget = content_w.saturating_sub(head_w + crate::ui::w(&size_str)).max(4);
+        let name_budget = content_w
+            .saturating_sub(head_w + crate::ui::w(&size_str))
+            .max(4);
         let name = crate::ui::truncate(&name_disp, name_budget);
         let pad = content_w.saturating_sub(head_w + crate::ui::w(&name) + crate::ui::w(&size_str));
         let mut spans = Vec::new();
@@ -148,13 +147,11 @@ pub fn draw_tree_panel(
         spans.push(Span::styled(indent.clone(), Style::default().fg(DIM2)));
         spans.push(Span::styled(
             mark.to_string(),
-            Style::default()
-                .fg(mark_color)
-                .add_modifier(if is_cursor {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
+            Style::default().fg(mark_color).add_modifier(if is_cursor {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            }),
         ));
         spans.push(Span::styled(" ", Style::default()));
         if snap.is_dir {

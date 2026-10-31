@@ -33,9 +33,12 @@
   验证。夹具进程不随 complete 存活，每轮手测前需重启。
 
 ## 终端显示伪影：`#[m` 序列会被吞成疑似损坏
-- 本沙箱 Bash 通道回显中 `#[must_use]` 等含 `#[m` 的文本会显示为 `#ust_use]`，极易误判
-  为文件损坏。处置：用 `od -c`、`md5sum` 或文件读取工具核实原始字节再下结论，不要凭
-  终端回显改文件。
+- 本沙箱 Bash 通道回显中 `#[must_use]`、`[http]` 等含 `#[`/`[h`/`[m` 的文本会显示为
+  `#ust_use]`、`ttp]` 等残缺形态，极易误判为文件损坏（`cat`/`git show`/python repr 的
+  回显同样被吞）。处置：不要凭终端回显改文件；核实用**布尔判定探针**——
+  `python3 -c "print('[http]' in open(f).read())"` 输出 True/False，不回显可疑序列本身，
+  不受伪影影响（bug12 轮实证：config_fallback.rs 的 `[http]` 三次被误读为 `ttp]`，
+  布尔探针证实文件完好）。
 
 ## pip 直连 PyPI/清华镜像均不可用：走阿里云镜像
 - `pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/`；清华镜像
@@ -122,3 +125,14 @@
   外网时依赖拉取全绿；pip 用阿里云镜像装 torf/libtorrent/pyte（harness 依赖）。
 - 磁盘 9.9G 小盘：debug 增量缓存两次撑爆（No space left on device）——测试轮用
   `CARGO_INCREMENTAL=0`，必要时清 `ezr-demo/target` 与 `target/debug/incremental`。
+
+
+## GitHub 访问：raw.githubusercontent 重置不可用，git clone 偶发断连靠重试，历史版本文件用 blob:none+sparse
+- raw.githubusercontent.com 直连被重置（Connection reset）；github.com 的 git 操作可用但
+  偶发 TLS 断连/超时（约 1/3 概率），失败重试 2–4 次即可成功。
+- 取大仓库单文件/历史版本：`git clone --depth 1 --filter=blob:none --sparse` 后
+  `git sparse-checkout set <目录>`（按需懒取 blob）；再要历史版本时
+  `git fetch --depth 1 origin tag <tag>` + `git show <tag>:<path>`——blob:none 滤镜下
+  fetch 元数据很小，跨版本比对源码成本可控（本轮 qBt/lt 四分支比对即此法）。
+- `git ls-remote --tags` 一次性拿全标签列表再挑版本，比盲猜 tag 名可靠（qBt 用
+  release-X.Y.Z 命名，不是 vX.Y.Z）。

@@ -305,7 +305,11 @@ impl Config {
         let d = Config::default();
         let mut warnings = Vec::new();
         let mut proxies = Vec::new();
-        let common_proxy = raw.common.as_ref().and_then(|c| c.proxy.clone()).unwrap_or_default();
+        let common_proxy = raw
+            .common
+            .as_ref()
+            .and_then(|c| c.proxy.clone())
+            .unwrap_or_default();
         for p in common_proxy {
             let name = p.name.unwrap_or_default().trim().to_string();
             if name.is_empty() {
@@ -417,14 +421,20 @@ impl Config {
             bt_concurrency: clamp_u(bt.bt_concurrency, d.bt_concurrency),
             peer_pipeline: min1_usize(bt.peer_pipeline, d.peer_pipeline),
             upload_slots: min1_usize(bt.upload_slots, d.upload_slots),
-            upload_read_concurrency: min1_usize(bt.upload_read_concurrency, d.upload_read_concurrency),
+            upload_read_concurrency: min1_usize(
+                bt.upload_read_concurrency,
+                d.upload_read_concurrency,
+            ),
             idle_eviction_secs: min1_u64(bt.idle_eviction_secs, d.idle_eviction_secs),
             connect_timeout_secs: min1_u64(bt.connect_timeout_secs, d.connect_timeout_secs),
             handshake_timeout_secs: min1_u64(bt.handshake_timeout_secs, d.handshake_timeout_secs),
             request_timeout_secs: min1_u64(bt.request_timeout_secs, d.request_timeout_secs),
             requests_per_piece: min1_usize(bt.requests_per_piece, d.requests_per_piece),
             rechoke_interval_secs: min1_u64(bt.rechoke_interval_secs, d.rechoke_interval_secs),
-            optimistic_interval_secs: min1_u64(bt.optimistic_interval_secs, d.optimistic_interval_secs),
+            optimistic_interval_secs: min1_u64(
+                bt.optimistic_interval_secs,
+                d.optimistic_interval_secs,
+            ),
             progress_emit_min_interval_ms: min1_u64(
                 bt.progress_emit_min_interval_ms,
                 d.progress_emit_min_interval_ms,
@@ -436,7 +446,10 @@ impl Config {
                 bt.tracker_backoff_start_secs,
                 d.tracker_backoff_start_secs,
             ),
-            tracker_backoff_cap_secs: min1_u64(bt.tracker_backoff_cap_secs, d.tracker_backoff_cap_secs),
+            tracker_backoff_cap_secs: min1_u64(
+                bt.tracker_backoff_cap_secs,
+                d.tracker_backoff_cap_secs,
+            ),
             udp_base_timeout_secs: min1_u64(bt.udp_base_timeout_secs, d.udp_base_timeout_secs),
             udp_retries: min1_u32(bt.udp_retries, d.udp_retries),
             seed_duration_secs: pos_f64(bt.seed_duration_secs, d.seed_duration_secs),
@@ -576,21 +589,23 @@ pub fn default_download_dir() -> String {
 
 const AUTHORIZED_TEMPLATE: &str = r#"# EZR Downloader 配置模板
 
-# ===== [common] 公共配置（两引擎共用） =====
+# ===== 公共配置 =====
 
-# download_dir：默认保存目录（添加对话框目录留空时使用）
+# [common]
+
+# 默认保存目录（添加对话框目录留空时使用）
 # 取值范围：任意目录路径；留空或缺失 = 用户主目录下的下载目录
 # download_dir = ""
 
-# download_slots：全局下载槽位数（同时下载的任务数上限）
+# 全局下载槽位数（同时下载的任务数上限）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # download_slots = 5
 
-# max_speed：全局下载限速（0 = 不限）
+# 全局下载限速（0 = 不限）
 # 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
 # max_speed = 0
 
-# proxy：命名代理列表（可配置多个）
+# 命名代理列表（可配置多个）
 # [[common.proxy]]
 # name = "办公网代理"
 # type = "http"
@@ -607,139 +622,143 @@ const AUTHORIZED_TEMPLATE: &str = r#"# EZR Downloader 配置模板
 # username = "ezr"
 # password = "secret"
 
-# ===== [http] HTTP 引擎配置 =====
+# ===== HTTP 引擎配置 =====
 
-# block_size_http：HTTP 分块块大小（字节）
+# [http]
+
+# HTTP 分块块大小（字节）
 # 取值范围：正整数（≥1）；0 或非法值回退默认（1 MB）
 # block_size_http = 1048576
 
-# http_concurrency：默认并发数
+# 默认并发数
 # 取值范围：1–64 的整数；越界钳制到边界
 # http_concurrency = 4
 
-# max_retries：自动重试上限次数（达上限转停等，可按 R 手动重试）
+# 自动重试上限次数（达上限转停等，可按 R 手动重试）
 # 取值范围：≥1 的整数；0 或非法值回退默认
 # max_retries = 5
 
-# auto_retry：失败后是否自动重试
+# 失败后是否自动重试
 # 取值范围：true / false
 # auto_retry = true
 
-# backoff_initial：自动重试退避初始秒（指数退避序列起点）
+# 自动重试退避初始秒（指数退避序列起点）
 # 取值范围：>0 的有限数；非法值回退默认
 # backoff_initial = 8.0
 
-# backoff_cap：自动重试退避封顶秒
+# 自动重试退避封顶秒
 # 取值范围：>0 的有限数；非法值回退默认
 # backoff_cap = 60.0
 
-# progress_tick_ms：HTTP 下载进度事件节拍（毫秒）
+# HTTP 下载进度事件节拍（毫秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # progress_tick_ms = 100
 
-# sidecar_flush_secs：断点 sidecar 落盘间隔（秒）
+# 断点 sidecar 落盘间隔（秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # sidecar_flush_secs = 2
 
-# throttle_burst_secs：限速令牌桶突发窗（秒）
+# 限速令牌桶突发窗（秒）
 # 取值范围：>0 的有限数；非法值回退默认
 # throttle_burst_secs = 0.5
 
-# throttle_sleep_ms：限速循环步进睡眠（毫秒）
+# 限速循环步进睡眠（毫秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # throttle_sleep_ms = 20
 
-# dns_race_grace_ms：DNS 双腿竞速宽限（毫秒，双栈并行解析）
+# DNS 双腿竞速宽限（毫秒，双栈并行解析）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # dns_race_grace_ms = 1000
 
-# ===== [bt] BT 引擎配置 =====
+# ===== BT 引擎配置 =====
 
-# http_trackers：HTTP(S) tracker 列表（BT 任务默认 tracker 池来源之一）
+# [bt]
+
+# HTTP(S) tracker 列表（BT 任务默认 tracker 池来源之一）
 # 取值范围：字符串数组，每项为 http:// 或 https:// 开头的 tracker announce URL；非法 URL 行启动时忽略并警告
 # http_trackers = []
 
-# udp_trackers：UDP tracker 列表（BT 任务默认 tracker 池来源之一）
+# UDP tracker 列表（BT 任务默认 tracker 池来源之一）
 # 取值范围：字符串数组，每项为 udp:// 开头的 tracker announce URL（含端口）；非法 URL 行启动时忽略并警告
 # udp_trackers = []
 
-# bt_concurrency：BT 任务默认并发数（新任务预填）
+# BT 任务默认并发数（新任务预填）
 # 取值范围：1–64 的整数；越界钳制到边界
 # bt_concurrency = 20
 
-# peer_pipeline：单 peer 在飞请求块数上限（×16 KiB = 在飞窗口）
+# 单 peer 在飞请求块数上限（×16 KiB = 在飞窗口）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # peer_pipeline = 64
 
-# upload_slots：同时获得上传槽位的 peer 数（choker 周期分配）
+# 同时获得上传槽位的 peer 数（choker 周期分配）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # upload_slots = 4
 
-# upload_read_concurrency：上传读盘并发上限（进程级）
+# 上传读盘并发上限（进程级）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # upload_read_concurrency = 128
 
-# idle_eviction_secs：空闲连接置换阈值（秒，无新增进账超时即断开重拨）
+# 空闲连接置换阈值（秒，无新增进账超时即断开重拨）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # idle_eviction_secs = 60
 
-# connect_timeout_secs：出连 TCP 拨号超时（秒）
+# 出连 TCP 拨号超时（秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # connect_timeout_secs = 3
 
-# handshake_timeout_secs：peer 握手超时（秒）
+# peer 握手超时（秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # handshake_timeout_secs = 10
 
-# request_timeout_secs：在飞块请求超时（秒）
+# 在飞块请求超时（秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # request_timeout_secs = 20
 
-# requests_per_piece：单 piece 请求块粒度（piece 细分为 n 块请求）
+# 单 piece 请求块粒度（piece 细分为 n 块请求）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # requests_per_piece = 4
 
-# rechoke_interval_secs：上传 choker 重排周期（秒）
+# 上传 choker 重排周期（秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # rechoke_interval_secs = 10
 
-# optimistic_interval_secs：乐观 unchoke 轮换周期（秒）
+# 乐观 unchoke 轮换周期（秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # optimistic_interval_secs = 30
 
-# progress_emit_min_interval_ms：进度事件最小发送间隔（毫秒，节流）
+# 进度事件最小发送间隔（毫秒，节流）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # progress_emit_min_interval_ms = 250
 
-# tracker_numwant：announce 请求的 peer 数上限
+# announce 请求的 peer 数上限
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # tracker_numwant = 200
 
-# peer_retry_base_secs：peer 连接失败重试退避起始（秒，倍增）
+# peer 连接失败重试退避起始（秒，倍增）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # peer_retry_base_secs = 5
 
-# peer_retry_cap_secs：peer 连接失败重试退避封顶（秒）
+# peer 连接失败重试退避封顶（秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # peer_retry_cap_secs = 120
 
-# tracker_backoff_start_secs：tracker 失败退避起始（秒，倍增）
+# tracker 失败退避起始（秒，倍增）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # tracker_backoff_start_secs = 8
 
-# tracker_backoff_cap_secs：tracker 失败退避封顶（秒）
+# tracker 失败退避封顶（秒）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # tracker_backoff_cap_secs = 60
 
-# udp_base_timeout_secs：UDP tracker 单轮超时起始（秒，倍增重试）
+# UDP tracker 单轮超时起始（秒，倍增重试）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # udp_base_timeout_secs = 15
 
-# udp_retries：UDP tracker 超时重试次数
+# UDP tracker 超时重试次数
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 # udp_retries = 3
 
-# seed_duration_secs：做种时长默认值（秒，任务做种倒计时起点）
+# 做种时长默认值（秒，任务做种倒计时起点）
 # 取值范围：>0 的数；0 或非法值回退默认
 # seed_duration_secs = 1800
 "#;
@@ -806,7 +825,11 @@ mod tests {
     fn block_size_http_positive_below_floor_clamped() {
         let mk = |v: &str| Config::from_toml(&format!("[http]\nblock_size_http = {v}\n"));
         assert_eq!(mk("512").block_size_http, 1_048_576);
-        assert_eq!(mk("1048575").block_size_http, 1_048_576, "下限之下 1 字节也钳制");
+        assert_eq!(
+            mk("1048575").block_size_http,
+            1_048_576,
+            "下限之下 1 字节也钳制"
+        );
         assert_eq!(mk("1048576").block_size_http, 1_048_576, "恰在下限 = 原值");
         assert_eq!(mk("2097152").block_size_http, 2_097_152, "大于下限原值生效");
     }
@@ -816,7 +839,11 @@ mod tests {
         let c = Config::from_toml(
             "download_slots = 2\nblock_size_http = 4194304\nhttp_concurrency = 8\nmax_speed = \"1 MB/s\"\ndefault_concurrency = 9\nproxy = \"http://127.0.0.1:8118\"\n",
         );
-        assert_eq!(c, Config::default(), "旧格式顶层键全部按未知键忽略，全部默认");
+        assert_eq!(
+            c,
+            Config::default(),
+            "旧格式顶层键全部按未知键忽略，全部默认"
+        );
         assert!(c.warnings.is_empty(), "零警告（FR-01-71 未知键口径）");
     }
 
@@ -831,9 +858,7 @@ mod tests {
 
     #[test]
     fn legacy_and_new_format_coexist() {
-        let c = Config::from_toml(
-            "download_slots = 2\n[common]\ndownload_slots = 3\n",
-        );
+        let c = Config::from_toml("download_slots = 2\n[common]\ndownload_slots = 3\n");
         assert_eq!(c.download_slots, 3, "新表键生效且不受旧顶层键干扰");
         assert!(c.warnings.is_empty());
     }
@@ -1018,22 +1043,34 @@ mod tests {
     }
 
     #[test]
-    fn template_line_count_is_168() {
+    fn template_line_count_is_174() {
         assert_eq!(
             Config::default_template().lines().count(),
-            168,
-            "钦定模板 v1.11 = 168 行"
+            174,
+            "钦定模板 v1.12 = 174 行"
         );
         assert!(Config::default_template().ends_with('\n'));
-        assert!(!Config::default_template().ends_with("\n\n"), "EOF 单换行收尾");
+        assert!(
+            !Config::default_template().ends_with("\n\n"),
+            "EOF 单换行收尾"
+        );
     }
 
     #[test]
-    fn template_three_table_headers() {
+    fn template_three_table_headers_two_line_form() {
         let t = Config::default_template();
-        assert!(t.contains("# ===== [common] 公共配置（两引擎共用） ====="));
-        assert!(t.contains("# ===== [http] HTTP 引擎配置 ====="));
-        assert!(t.contains("# ===== [bt] BT 引擎配置 ====="));
+        for (sep, decl) in [
+            ("# ===== 公共配置 =====", "# [common]"),
+            ("# ===== HTTP 引擎配置 =====", "# [http]"),
+            ("# ===== BT 引擎配置 =====", "# [bt]"),
+        ] {
+            let pos = t.find(sep).unwrap_or_else(|| panic!("缺分隔头 {sep}"));
+            assert!(!t.contains("# ===== ["), "旧形态分隔头（含表名）已退役");
+            let after: Vec<&str> = t[pos..].lines().collect();
+            assert_eq!(after[1], "", "分隔头后应空行");
+            assert_eq!(after[2], decl, "表声明行应紧随空行");
+            assert_eq!(after[3], "", "表声明行后应空行");
+        }
     }
 
     #[test]
@@ -1051,22 +1088,50 @@ mod tests {
     fn template_36_keys_three_line_form() {
         let t = Config::default_template();
         let keys = [
-            "download_dir", "download_slots", "max_speed",
-            "block_size_http", "http_concurrency", "max_retries", "auto_retry",
-            "backoff_initial", "backoff_cap", "progress_tick_ms", "sidecar_flush_secs",
-            "throttle_burst_secs", "throttle_sleep_ms", "dns_race_grace_ms",
-            "http_trackers", "udp_trackers", "bt_concurrency", "peer_pipeline",
-            "upload_slots", "upload_read_concurrency", "idle_eviction_secs",
-            "connect_timeout_secs", "handshake_timeout_secs", "request_timeout_secs",
-            "requests_per_piece", "rechoke_interval_secs", "optimistic_interval_secs",
-            "progress_emit_min_interval_ms", "tracker_numwant", "peer_retry_base_secs",
-            "peer_retry_cap_secs", "tracker_backoff_start_secs", "tracker_backoff_cap_secs",
-            "udp_base_timeout_secs", "udp_retries", "seed_duration_secs",
+            "download_dir",
+            "download_slots",
+            "max_speed",
+            "block_size_http",
+            "http_concurrency",
+            "max_retries",
+            "auto_retry",
+            "backoff_initial",
+            "backoff_cap",
+            "progress_tick_ms",
+            "sidecar_flush_secs",
+            "throttle_burst_secs",
+            "throttle_sleep_ms",
+            "dns_race_grace_ms",
+            "http_trackers",
+            "udp_trackers",
+            "bt_concurrency",
+            "peer_pipeline",
+            "upload_slots",
+            "upload_read_concurrency",
+            "idle_eviction_secs",
+            "connect_timeout_secs",
+            "handshake_timeout_secs",
+            "request_timeout_secs",
+            "requests_per_piece",
+            "rechoke_interval_secs",
+            "optimistic_interval_secs",
+            "progress_emit_min_interval_ms",
+            "tracker_numwant",
+            "peer_retry_base_secs",
+            "peer_retry_cap_secs",
+            "tracker_backoff_start_secs",
+            "tracker_backoff_cap_secs",
+            "udp_base_timeout_secs",
+            "udp_retries",
+            "seed_duration_secs",
         ];
         assert_eq!(keys.len(), 36);
         for k in keys {
             assert!(t.contains(&format!("\n# {k} = ")), "模板缺键 {k} 的示例行");
-            assert!(t.matches(&format!("\n# {k} = ")).count() == 1, "键 {k} 示例行不唯一");
+            assert!(
+                t.matches(&format!("\n# {k} = ")).count() == 1,
+                "键 {k} 示例行不唯一"
+            );
         }
         for k in keys {
             if k == "download_dir" {
@@ -1079,11 +1144,13 @@ mod tests {
             let name_line_idx = t.lines().position(|l| l == key_line).unwrap();
             let lines: Vec<&str> = t.lines().collect();
             let purpose = lines[name_line_idx - 2];
-            assert_eq!(
-                purpose.split('：').next().unwrap().trim_start_matches("# "),
-                k,
-                "键 {k} 的用途行首必须是键名三行式"
+            assert!(
+                !purpose.starts_with(&format!("# {k}：")) && !purpose.contains("："),
+                "键 {k} 的用途行不得再带键名前缀（v1.12）"
             );
+            assert!(!purpose.starts_with("# 取值范围"), "键 {k} 用途行占位");
+            let range = lines[name_line_idx - 1];
+            assert!(range.starts_with("# 取值范围"), "键 {k} 取值范围行占位");
         }
         assert_eq!(t.matches("取值范围").count(), 36, "36 键各一段取值范围标注");
     }
@@ -1141,7 +1208,7 @@ mod tests {
     fn template_proxy_dual_examples_in_common() {
         let t = Config::default_template();
         assert!(
-            t.contains("# proxy：命名代理列表（可配置多个）"),
+            t.contains("# 命名代理列表（可配置多个）"),
             "proxy 段一句头注释在位"
         );
         assert_eq!(t.matches("# [[common.proxy]]").count(), 2, "双示例块");
@@ -1184,7 +1251,10 @@ mod tests {
         assert_eq!(val_of("max_retries"), c.max_retries.to_string());
         assert_eq!(val_of("auto_retry"), c.auto_retry.to_string());
         assert_eq!(val_of("progress_tick_ms"), c.progress_tick_ms.to_string());
-        assert_eq!(val_of("sidecar_flush_secs"), c.sidecar_flush_secs.to_string());
+        assert_eq!(
+            val_of("sidecar_flush_secs"),
+            c.sidecar_flush_secs.to_string()
+        );
         assert_eq!(val_of("throttle_burst_secs"), "0.5");
         assert_eq!(val_of("throttle_sleep_ms"), c.throttle_sleep_ms.to_string());
         assert_eq!(val_of("dns_race_grace_ms"), c.dns_race_grace_ms.to_string());
@@ -1195,15 +1265,30 @@ mod tests {
             val_of("upload_read_concurrency"),
             c.upload_read_concurrency.to_string()
         );
-        assert_eq!(val_of("idle_eviction_secs"), c.idle_eviction_secs.to_string());
-        assert_eq!(val_of("connect_timeout_secs"), c.connect_timeout_secs.to_string());
+        assert_eq!(
+            val_of("idle_eviction_secs"),
+            c.idle_eviction_secs.to_string()
+        );
+        assert_eq!(
+            val_of("connect_timeout_secs"),
+            c.connect_timeout_secs.to_string()
+        );
         assert_eq!(
             val_of("handshake_timeout_secs"),
             c.handshake_timeout_secs.to_string()
         );
-        assert_eq!(val_of("request_timeout_secs"), c.request_timeout_secs.to_string());
-        assert_eq!(val_of("requests_per_piece"), c.requests_per_piece.to_string());
-        assert_eq!(val_of("rechoke_interval_secs"), c.rechoke_interval_secs.to_string());
+        assert_eq!(
+            val_of("request_timeout_secs"),
+            c.request_timeout_secs.to_string()
+        );
+        assert_eq!(
+            val_of("requests_per_piece"),
+            c.requests_per_piece.to_string()
+        );
+        assert_eq!(
+            val_of("rechoke_interval_secs"),
+            c.rechoke_interval_secs.to_string()
+        );
         assert_eq!(
             val_of("optimistic_interval_secs"),
             c.optimistic_interval_secs.to_string()
@@ -1213,8 +1298,14 @@ mod tests {
             c.progress_emit_min_interval_ms.to_string()
         );
         assert_eq!(val_of("tracker_numwant"), c.tracker_numwant.to_string());
-        assert_eq!(val_of("peer_retry_base_secs"), c.peer_retry_base_secs.to_string());
-        assert_eq!(val_of("peer_retry_cap_secs"), c.peer_retry_cap_secs.to_string());
+        assert_eq!(
+            val_of("peer_retry_base_secs"),
+            c.peer_retry_base_secs.to_string()
+        );
+        assert_eq!(
+            val_of("peer_retry_cap_secs"),
+            c.peer_retry_cap_secs.to_string()
+        );
         assert_eq!(
             val_of("tracker_backoff_start_secs"),
             c.tracker_backoff_start_secs.to_string()
@@ -1223,7 +1314,10 @@ mod tests {
             val_of("tracker_backoff_cap_secs"),
             c.tracker_backoff_cap_secs.to_string()
         );
-        assert_eq!(val_of("udp_base_timeout_secs"), c.udp_base_timeout_secs.to_string());
+        assert_eq!(
+            val_of("udp_base_timeout_secs"),
+            c.udp_base_timeout_secs.to_string()
+        );
         assert_eq!(val_of("udp_retries"), c.udp_retries.to_string());
         assert_eq!(val_of("seed_duration_secs"), "1800");
     }
@@ -1271,7 +1365,10 @@ mod tests {
         assert_eq!(c.warnings.len(), 2);
         assert!(c.warnings[0].contains("type 缺失"));
         assert!(c.warnings[1].contains("type 未知"));
-        assert!(c.warnings.iter().all(|w| w.contains("http / https / socks5")));
+        assert!(c
+            .warnings
+            .iter()
+            .all(|w| w.contains("http / https / socks5")));
     }
 
     #[test]
@@ -1292,9 +1389,15 @@ mod tests {
             "[[common.proxy]]\nname = \"s5-no-user\"\ntype = \"socks5\"\nip = \"127.0.0.1\"\nport = 18768\npassword = \"p1\"\n[[common.proxy]]\nname = \"half-http\"\ntype = \"http\"\nip = \"x\"\nport = 9\nusername = \"u1\"\n[[common.proxy]]\nname = \"anon-http\"\ntype = \"http\"\nip = \"x\"\nport = 10\n",
         );
         assert_eq!(c.proxies.len(), 1);
-        assert_eq!(c.proxies[0].name, "anon-http", "匿名 http 合法，socks5 缺凭证与 http 半凭证作废");
+        assert_eq!(
+            c.proxies[0].name, "anon-http",
+            "匿名 http 合法，socks5 缺凭证与 http 半凭证作废"
+        );
         assert_eq!(c.warnings.len(), 2);
-        assert!(c.warnings.iter().all(|w| !w.contains("p1") && !w.contains("u1")));
+        assert!(c
+            .warnings
+            .iter()
+            .all(|w| !w.contains("p1") && !w.contains("u1")));
     }
 
     #[test]

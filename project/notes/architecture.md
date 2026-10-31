@@ -308,14 +308,38 @@
   忽略（零警告零迁移，内部开发无兼容需求——与 sidecar v2 同一口径家族）**；写 QA/测试配置
   时必须带表头，否则键被忽略、用例假绿或假红。
 
-## 并发 panel 列宽按极值样例 +1：地址 18 = ffff:*:ffff/65535，客户端 26 = ArcticTorrent/100.100.100
+## 并发 panel 列宽按极值样例 +1：地址 18 = ffff:*:ffff/65535，客户端 34 = Propagate Data Client/35.35.35.35
 - 列宽演进三笔账：地址 11→15（bug10，`255.*.255:65535` 恰满）→ **18**（bug11，格式改
-  `ip缩写/port` 斜杠分隔，IPv6 极值 `ffff:*:ffff/65535` = 17 列 + 1 空白）；客户端 6→**26**
-  （值改 `<全名>/<版本号>`，极值样例 25 列 + 1 空白）；内容宽 BT_COLW 求和 + 列数 − 1 =
-  86（content_w_matches_colw 断言守护）。对齐口径：**表头（列头）BT/HTTP 全部左对齐**
-  （pad_right），明细行维持现状（数据右对齐、地址列数据左对齐）——表头跟随数据对齐是
-  旧实现的顺手写法，不是规格。客户端全名/版本解析 = libtorrent identify_client 口径
-  （qBittorrent 同源）：两位码全名映射表 + 各客户端专用版本解码，无法识别显示 Unknown。
+  `ip缩写/port` 斜杠分隔，IPv6 极值 `ffff:*:ffff/65535` = 17 列 + 1 空白）；客户端 6→26
+  （bug11，值改 `<全名>/<版本号>`，旧 62 项表极值 25 列 + 1 空白）→ **34**（bug12，
+  映射表换 102 项全量后极值重推：全名最长 Propagate Data Client 21 列 + 版本极值
+  35.35.35.35 11 列 = 33 列 + 1 空白；旧极值样例 ArcticTorrent/100.100.100 基于 62 项旧表，
+  换表必须重推极值——漏推即极值溢出列宽破坏对齐）；内容宽 BT_COLW 求和 + 列数 − 1 =
+  94（content_w_matches_colw 断言守护）。对齐口径：**表头（列头）BT/HTTP 全部左对齐**
+  （pad_right），明细行**数据右对齐、地址列与客户端列数据左对齐**（bug12：客户端值视作
+  字符串）——表头跟随数据对齐是旧实现的顺手写法，不是规格。客户端全名/版本解析 =
+  qBittorrent 源码口径两级（见下条）。
+
+## 客户端识别 qBittorrent 口径的两级源码链：扩展握手 v 优先，peer id 解码 = lt identify_client 全量移植
+- **源码链核证**（qBt f6cf56c + lt 1.1/1.2/2.0/master 四分支比对）：qBittorrent 的
+  `PeerInfo::client()` 直接返回 `lt::peer_info::client`，而 lt 侧 `m_client_version` 有两条
+  写入路径——①peer 发 BEP 10 扩展握手时 `v` 字符串**覆盖** identify_client 结果
+  （bt_peer_connection.cpp）；②无 `v` 时握手后 `identify_client(pid)` 解码。**没有任何
+  libtorrent 分支对 BitComet 做版本特判**——qBt 显示 BitComet 1.64 全靠 BitComet 自报
+  `v`="BitComet 1.64"；只抄 peer id 解码路径必然复现 0.1.6.4（旧 62 项子集表的缺陷）。
+- **移植要点**：identify_client 匹配序 = generic_mappings 37 项（offset+前缀子串、仅名无
+  版本，先于一切 style）→ -BOW/eXeem/Experimental 特判 → Transmission legacy（-TRxYYR-，
+  YY=两位 minor 合一数字）→ Azureus（首 -、码后首字符可打印、第 3–7 字符 ≥'0'、尾 -；
+  版本逐位 decode_digit = 数字原值/大写字母→10–35，**不看小写字母**——小写经 c-'A'+10
+  得 ≥42 的大数是 lt 原语义，照抄）→ Shadow（`--` 结尾臂逐位 decode / 否则原始字节臂且
+  第 9 字节须 0）→ Mainline（sscanf %1c%3d-%3d-%3d--）；lookup = name_map 102 项按码
+  字典序查找、未命中用码本体为名、版本 `M.m.r`（tag=0 省略第 4 段——qB2500 → 2.5.0 不是
+  2.5.0.0）；全零 → Unknown；全不匹配 → Unknown（ezr 不采用 lt 的 `Unknown [原始串]`
+  展示形态——列宽约束，v1.35 既有口径）。**别再把「映射表外码」判 Unknown**——lt 显示
+  码本体 + 版本。
+- 判定「qBt 到底怎么显示」要看 lt 的 `m_client_version` 全部写入路径，不能只看
+  identify_client.cpp；扩展握手解析在本项目属 BEP 9 框架既有路径（parse_ext_handshake
+  同一 dict），读 `v` 字段不越 phase-03「完整 BEP 10」边界。
 
 ## tracker 修改不生效的根因：确认路径只改模型，引擎 tracker 池无热更新命令
 - `dlg_confirm_modify_bt` 确认后仅 `Cmd::Reconfigure`（并发/代理）+ 文件/并发变化才

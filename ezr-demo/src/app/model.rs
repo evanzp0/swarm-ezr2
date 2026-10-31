@@ -106,16 +106,16 @@ impl Transport {
 }
 
 const BT_CLIENTS: [&str; 10] = [
-    "qBittorrent/2.5.0.0",
-    "Transmission/4.0.3.0",
-    "libtorrent/2.0.5.0",
-    "uTorrent/3.6.0.0",
-    "Deluge/2.1.1.0",
-    "ArcticTorrent/1.0.0.1",
-    "Retriever/1.2.0.0",
-    "TuoTu/3.1.0.0",
-    "Azureus/5.7.6.0",
-    "Xunlei/3.3.4.0",
+    "BitComet 1.64",
+    "qBittorrent/5.1.2",
+    "libtorrent/2.1.1",
+    "uTorrent/3.6.0",
+    "Deluge/2.1.1",
+    "Arctic Torrent/1.0.0.1",
+    "Transmission/4.0.6",
+    "TuoTu/3.1.0",
+    "BiglyBT/3.6.0.0",
+    "Xunlei/3.3.4",
 ];
 
 fn pseudo_client(seed: u64, idx: usize) -> &'static str {
@@ -634,7 +634,14 @@ fn bt_tree_insert(
         return;
     }
     if let Some(dir) = nodes.iter_mut().find(|n| n.is_dir && n.name == *name) {
-        bt_tree_insert(&mut dir.children, &segs[1..], depth + 1, &path, size, selected);
+        bt_tree_insert(
+            &mut dir.children,
+            &segs[1..],
+            depth + 1,
+            &path,
+            size,
+            selected,
+        );
     } else {
         let mut dir = BtNode {
             name: (*name).to_string(),
@@ -647,7 +654,14 @@ fn bt_tree_insert(
             partial: false,
             children: Vec::new(),
         };
-        bt_tree_insert(&mut dir.children, &segs[1..], depth + 1, &path, size, selected);
+        bt_tree_insert(
+            &mut dir.children,
+            &segs[1..],
+            depth + 1,
+            &path,
+            size,
+            selected,
+        );
         nodes.push(dir);
     }
 }
@@ -805,8 +819,16 @@ pub(super) fn bt_tree_files(nodes: &[BtNode], out: &mut Vec<BtFile>) {
 }
 
 const BT_DIRS: [&str; 10] = [
-    "", "", "", "docs/", "sample/", "subs/", "video/season-01/", "video/season-02/",
-    "docs/notes/", "artwork/",
+    "",
+    "",
+    "",
+    "docs/",
+    "sample/",
+    "subs/",
+    "video/season-01/",
+    "video/season-02/",
+    "docs/notes/",
+    "artwork/",
 ];
 
 const BT_NAMES: [&str; 18] = [

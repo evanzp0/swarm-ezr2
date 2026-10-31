@@ -990,7 +990,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-
     #[tokio::test]
     async fn confirm_modify_trackers_only_sends_hot_update_no_rebuild() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-hotupd");

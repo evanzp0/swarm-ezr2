@@ -12,8 +12,8 @@ use super::{
 };
 use crate::app::{App, Panel, SbKey};
 
-const BT_COLW: [usize; 7] = [18, 8, 8, 8, 8, 26, 4];
-const BT_CONTENT_W: usize = 86;
+const BT_COLW: [usize; 7] = [18, 8, 8, 8, 8, 34, 4];
+const BT_CONTENT_W: usize = 94;
 const HTTP_COLW: [usize; 3] = [4, 8, 8];
 const HTTP_CONTENT_W: usize = 22;
 
@@ -181,8 +181,7 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let head_cell =
-        |s: &str, wd: usize| Span::styled(pad_right(s, wd), Style::default().fg(DIM));
+    let head_cell = |s: &str, wd: usize| Span::styled(pad_right(s, wd), Style::default().fg(DIM));
     let head = if is_bt {
         vec![
             head_cell("地址", BT_COLW[0]),
@@ -230,6 +229,12 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         let cell = |s: String, wd: usize, col: Color| {
             Span::styled(pad_left(&s, wd), Style::default().fg(col).bg(bg))
         };
+        let cell_left = |s: String, wd: usize, col: Color| {
+            Span::styled(
+                pad_right(&truncate(&s, wd), wd),
+                Style::default().fg(col).bg(bg),
+            )
+        };
         let sep = Span::styled(" ", Style::default().bg(bg));
         let sep = move || sep.clone();
         let spans = match &rows {
@@ -275,7 +280,7 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                     sep(),
                     cell(fmt_size(*cum_up), BT_COLW[4], FG),
                     sep(),
-                    cell(client.clone(), BT_COLW[5], DIM),
+                    cell_left(client.clone(), BT_COLW[5], DIM),
                     sep(),
                     cell("TCP".to_string(), BT_COLW[6], DIM),
                 ]
@@ -515,7 +520,10 @@ mod tests {
             text.contains("上传速度") && text.contains("累计上传"),
             "表头列: {text}"
         );
-        assert!(text.contains("1.*.4/51400"), "IPv4 遮掩/端口（斜杠）: {text}");
+        assert!(
+            text.contains("1.*.4/51400"),
+            "IPv4 遮掩/端口（斜杠）: {text}"
+        );
         assert!(
             text.contains("5.*.8/51401"),
             "第二行 IPv4 遮掩/端口（斜杠）: {text}"
@@ -580,7 +588,10 @@ mod tests {
     #[test]
     fn ip_display_masks_and_caps_width() {
         assert_eq!(super::ip_display("1.2.3.4:51400"), "1.*.4/51400       ");
-        assert_eq!(super::ip_display("[2001:db8::1]:51400"), "2001:*:1/51400    ");
+        assert_eq!(
+            super::ip_display("[2001:db8::1]:51400"),
+            "2001:*:1/51400    "
+        );
         assert_eq!(super::ip_display("2001:db8::1:51400"), "2001:*:1/51400    ");
         assert_eq!(
             super::ip_display("255.255.255.255:65535"),
@@ -598,8 +609,11 @@ mod tests {
     #[test]
     fn bt_column_widths_match_spec() {
         assert_eq!(BT_COLW[0], 18, "地址列宽 18（ffff:*:ffff/65535 + 1 空白）");
-        assert_eq!(BT_COLW[5], 26, "客户端列宽 26（ArcticTorrent/100.100.100 + 1 空白）");
-        assert_eq!(BT_CONTENT_W, 86, "BT 内容宽 = 七列 + 6 分隔");
+        assert_eq!(
+            BT_COLW[5], 34,
+            "客户端列宽 34（Propagate Data Client/35.35.35.35 = 33 + 1 空白，v1.36）"
+        );
+        assert_eq!(BT_CONTENT_W, 94, "BT 内容宽 = 七列 + 6 分隔（v1.36）");
     }
 
     #[tokio::test]
@@ -621,7 +635,8 @@ mod tests {
         t.connections.clear();
         app.tasks.push(t);
         app.selected = 0;
-        app.bt_conns.insert(1, vec![bt_row("1.2.3.4:51400", 1024.0, 512.0)]);
+        app.bt_conns
+            .insert(1, vec![bt_row("1.2.3.4:51400", 1024.0, 512.0)]);
         let text = conns_render(&mut app, 120, 14).backend().to_string();
         let head_line = text
             .lines()
@@ -630,7 +645,10 @@ mod tests {
         let up_pos = head_line.find("上传速度").unwrap();
         let cum_pos = head_line.find("累计下载").unwrap();
         let down_pos = head_line.find("下载速度").unwrap();
-        assert!(down_pos < up_pos && up_pos < cum_pos, "列序：累计下载在上传速度后: {head_line}");
+        assert!(
+            down_pos < up_pos && up_pos < cum_pos,
+            "列序：累计下载在上传速度后: {head_line}"
+        );
         let addr_pos = head_line.find("地址").unwrap();
         assert!(
             head_line[..addr_pos]
@@ -643,8 +661,8 @@ mod tests {
             "地址列左对齐、右侧空格填充至 18 列（4 列字宽 + 14 填充 + 1 分隔）: {head_line:?}"
         );
         assert!(
-            head_line.contains("客户端                     协议"),
-            "客户端列左对齐、右侧空格填充至 26 列（6 列字宽 + 20 填充 + 1 分隔）: {head_line:?}"
+            head_line.contains("客户端                             协议"),
+            "客户端列左对齐、右侧空格填充至 34 列（6 列字宽 + 28 填充 + 1 分隔，v1.36）: {head_line:?}"
         );
         let data_line = text
             .lines()
@@ -652,14 +670,58 @@ mod tests {
             .unwrap_or_else(|| panic!("明细行缺失: {text}"));
         assert!(
             data_line.contains("1.*.4/51400               -"),
-            "地址数据左对齐（右填充至 18）+ 速度数据右对齐至 8 列（明细行对齐维持现状）: {data_line:?}"
+            "地址数据左对齐（右填充至 18）+ 速度数据右对齐至 8 列: {data_line:?}"
         );
         assert!(
-            data_line.contains("qBittorrent/2.5.0.0  TCP"),
-            "客户端数据右对齐至 26 列、协议列在位: {data_line:?}"
+            data_line.contains("qBittorrent/2.5.0.0                 TCP"),
+            "客户端数据左对齐至 34 列（右填充 15 + 分隔 1 + 协议 pad_left 1，v1.36）: {data_line:?}"
         );
     }
 
+    #[tokio::test]
+    async fn bt_client_cell_left_aligned_and_truncated() {
+        fn bt_row(addr: &str, client: &str) -> BtConnRow {
+            BtConnRow {
+                id: 0,
+                addr: addr.to_string(),
+                down_speed: 0.0,
+                cum_down: 0,
+                up_speed: 0.0,
+                cum_up: 0,
+                client: client.to_string(),
+                seeder: false,
+            }
+        }
+        let mut app = testfx::make_app_in("ezr-conns", "btclient");
+        let mut t = task_with_conns(Protocol::Bt);
+        t.connections.clear();
+        app.tasks.push(t);
+        app.selected = 0;
+        app.bt_conns.insert(
+            1,
+            vec![
+                bt_row("1.2.3.4:51400", "BitComet 1.64"),
+                bt_row(
+                    "5.6.7.8:51401",
+                    "Propagate Data Client/35.35.35.359999999999999",
+                ),
+            ],
+        );
+        let term = conns_render(&mut app, 120, 14);
+        let text = term.backend().to_string();
+        let line = text
+            .lines()
+            .find(|l| l.contains("BitComet 1.64"))
+            .unwrap_or_else(|| panic!("v 自报名明细行缺失: {text}"));
+        assert!(
+            line.contains("0 B BitComet 1.64"),
+            "客户端数据左对齐（紧跟前列单元格，无右对齐填充空白）: {line:?}"
+        );
+        assert!(
+            text.contains("Propagate Data Client/35.35.35.35…"),
+            "超宽客户端截断（省略号收尾，v 自报名可超极值）: {text}"
+        );
+    }
 
     #[tokio::test]
     async fn http_header_left_aligned() {

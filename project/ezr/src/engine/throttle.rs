@@ -69,8 +69,14 @@ impl Throttle {
                 let now = Instant::now();
                 let elapsed = now.duration_since(*last).as_secs_f64();
                 *last = now;
-                let (tokens_after, taken, wait) =
-                    bucket_step(rate, *tokens, elapsed, remaining, self.burst_secs, self.sleep_ms);
+                let (tokens_after, taken, wait) = bucket_step(
+                    rate,
+                    *tokens,
+                    elapsed,
+                    remaining,
+                    self.burst_secs,
+                    self.sleep_ms,
+                );
                 *tokens = tokens_after;
                 remaining -= taken;
                 wait
@@ -141,8 +147,7 @@ mod tests {
         let t = Throttle::with_params(1_000_000, 2.0, 5);
         assert_eq!(t.burst_secs, 2.0, "burst 参数落位");
         assert_eq!(t.sleep_ms, 5, "sleep 参数落位");
-        let (tokens, taken, wait) =
-            bucket_step(1_000.0, 0.0, 0.0, 1.0, 2.0, 5);
+        let (tokens, taken, wait) = bucket_step(1_000.0, 0.0, 0.0, 1.0, 2.0, 5);
         assert_eq!(tokens, 0.0);
         assert_eq!(taken, 0.0);
         assert_eq!(wait, 5, "自定义 sleep 下限生效");

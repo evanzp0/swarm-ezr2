@@ -714,9 +714,10 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: Dia
         let right = box_rect.x + box_rect.width.saturating_sub(1); // 右角列（┐）
         let none_x = right.saturating_sub(8);
         let all_x = none_x.saturating_sub(1 + 6);
-        for (txt, bx, bw, idx) in
-            [("全选", all_x, 6u16, 0usize), ("全不选", none_x, 8u16, 1usize)]
-        {
+        for (txt, bx, bw, idx) in [
+            ("全选", all_x, 6u16, 0usize),
+            ("全不选", none_x, 8u16, 1usize),
+        ] {
             if bx <= box_rect.x + 1 {
                 continue;
             }

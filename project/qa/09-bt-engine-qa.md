@@ -1,12 +1,16 @@
 # QA 套件 · 09-bt-engine BT 下载与做种引擎（期号 02）
 
 > 对应规格：`project/features/09-bt-engine.feature`（14 场景）。
-> 需求依据：`project/mission/phase-02.md` FR-02-06…25、D45/D46/D51/D52/D54/D57/D58/D60。
+> 需求依据：`project/mission/phase-02.md` FR-02-06…25、D45/D46/D51/D52/D54/D57/D58/D60/D61。
 > 协议基线：操作者钦定 BEP 3/15/23/7/12/9/20；tokio 异步（FR-02-10）。
 > 上传真实统计（互惠/做种，D45/D58）、BEP 9 做种侧响应（D53）、下载完成转做种（D57）；
-> tracker 池三来源（去磁力 tr=，D53）；v1.35（操作者 bug11 轮）：客户端列 全名/版本号
-> （libtorrent identify_client 口径）、地址列 ip缩写/port、[bt]/[http] 调优键入配置
-> （FR-02-25，QA-BE-14 新增），D51 两字母缩写口径随之改判。
+> tracker 池三来源（去磁力 tr=，D53）；v1.35（操作者 bug11 轮）：客户端列 全名/版本号、
+> 地址列 ip缩写/port、[bt]/[http] 调优键入配置（FR-02-25，QA-BE-14 新增），D51 两字母缩写
+> 口径随之改判。
+> v1.36（操作者 bug12 轮指令，客户端列识别修正）：QA-BE-06 客户端列改 qBittorrent 源码口径
+> 两级识别（FR-02-08 v1.3——扩展握手 `v` 自报名优先 + peer id 解码 = libtorrent identify_client
+> 算法与映射表全量移植；BitComet 验收例 1.64；明细客户端列左对齐、列宽 34，见 04-ui-conns
+> v1.36），旧 62 项子集表与逐位四段解码退役。
 > 端到端 UI 层验证：以用户可达入口（TUI 按键/命令窗口、磁盘产物、并发面板/pieces/详情观察）
 > 为主；本地 fixture（tracker/seeder/leecher）与其控制脚本属于暴露给 QA 智能体的用户界面入口
 > （SKILL 允许口径），用于驱动「正常/失败/冗余」场景并做字节级对账。
@@ -34,7 +38,7 @@
 | QA-BE-03 | 09-bt-engine-03 | 添加含 UDP tracker 任务下载；随后停服 UDP tracker | fixture 收到 connect（magic 0x41727101980/action=0）与 announce（action=1）；peers 建连下载推进；停服后该 tracker 协议重试（倍增）判失败、任务经其他 tracker 继续下载 |
 | QA-BE-04 | 09-bt-engine-04 | fixture HTTP tracker 返回 peers6（IPv6 紧凑） | IPv6 peer 建连（面板 IP 列 IPv6 地址）、经 IPv6 peer 下载推进（字节落盘对账） |
 | QA-BE-05 | 09-bt-engine-05 | 三来源合并任务（config + torrent + 手输）；停服主 tracker；全部停服 | 池去重（同 URL 单条）、http/udp 分型；主 tracker 失败其余接续（下载不中断）；全部失败 → 失败臂退避重试；tracker 列表持久化且修改对话框预填 |
-| QA-BE-06 | 09-bt-engine-06 | 下载中观察 fixture 与并发面板；leecher 向本端请求数据 | seeder 观察标准握手（68 字节/protocol string/infohash/peer_id）；interested + request（≤16 KB 块、在飞 5 块）；piece SHA-1 校验、通过广播 have、失败重下；面板各 peer 速度/累计实时、上传两列 = 真实统计（D45/D58：leecher 从本端拉到已完成 piece 块、fixture 侧字节对账）、**客户端 = <全名>/<版本号>（v1.35：libtorrent identify_client 口径——libtorrent 对照客户端显示 libtorrent/版本号，fixture 可观察 peer_id 前缀 ↔ 名称/版本映射；无法识别显示 Unknown；旧两位缩写与 -- 退役）**、协议 = TCP；**地址 = ip缩写/port（v1.35：斜杠分隔，如 1.*.4/51400，IPv6 ffff:*:ffff/65535 形态；旧冒号分隔退役）**；头部 ↓/↑ 与峰值真实计入 BT |
+| QA-BE-06 | 09-bt-engine-06 | 下载中观察 fixture 与并发面板；leecher 向本端请求数据 | seeder 观察标准握手（68 字节/protocol string/infohash/peer_id）；interested + request（≤16 KB 块、在飞 5 块）；piece SHA-1 校验、通过广播 have、失败重下；面板各 peer 速度/累计实时、上传两列 = 真实统计（D45/D58：leecher 从本端拉到已完成 piece 块、fixture 侧字节对账）、**客户端 = qBittorrent 源码口径两级识别（v1.36/FR-02-08 v1.3：①对端扩展握手携带 `v` 时显示其原样（如 libtorrent fixture 自报 `libtorrent/<版本号>`、BitComet 自报 `BitComet 1.64`——验收例：qBt 解析 1.64、旧 ezr 0.1.6.4，v1.36 起同源同值，fixture 侧对 v 串可观察对账）；②无 `v` 时 peer id 解码 = libtorrent identify_client 算法与映射表全量移植：fixture 可构造 -AR1001- → Arctic Torrent/1.0.0.1、-BC0164- → BitComet/0.1.6.4（peer id 路径）；映射表未命中 → 码本体；全零/全不匹配 → Unknown；旧 62 项子集表与逐位四段解码退役）**、明细客户端列左对齐（列宽 34）；协议 = TCP；**地址 = ip缩写/port（v1.35：斜杠分隔，如 1.*.4/51400，IPv6 ffff:*:ffff/65535 形态；旧冒号分隔退役）**；头部 ↓/↑ 与峰值真实计入 BT |
 | QA-BE-07 | 09-bt-engine-07 | 做种中任务：leecher peer 发扩展握手 + ut_metadata request（合法分片 / 越界分片） | 本端回 extended handshake（m.ut_metadata id + metadata_size）；合法分片回 data（首片带 total_size）；越界分片回 reject；leecher 拼接 SHA-1 = infohash（fixture 侧观察）；完整 BEP 10 与拉取侧属 phase-03 |
 | QA-BE-08 | 09-bt-engine-08 | 多文件任务只勾 3 文件下载；完成后补选文件 | 只落盘选中文件（未选路径不存在）；边界 piece 整 piece 下载、未选字节不写入；完成态选中文件字节 = seeder 原始字节；补选后缺口补下、已落盘 piece 不重下 |
 | QA-BE-09 | 09-bt-engine-09 | 写入 `[bt]` 表 http_trackers/udp_trackers 配置（v1.17 三大表）；删配置重启动生成模板；配置非法 URL 行；无来源 tracker 任务 + 手输 trackers | 模板含两键注释示例（位于 [bt] 表内，FR-01-85 机制）；非法行忽略 + 警告；任务 tracker 池 = config 合并（去重分型）；手输每行一条并入持久 tracker 列表 |

@@ -297,7 +297,9 @@ pub struct EngineHandle {
 impl EngineHandle {
     pub fn start(cfg: &crate::model::config::Config, evt_tx: mpsc::Sender<Evt>) -> EngineHandle {
         let grace = std::time::Duration::from_millis(cfg.dns_race_grace_ms);
-        let client = base_client_builder(grace).build().expect("HTTP 客户端构建失败");
+        let client = base_client_builder(grace)
+            .build()
+            .expect("HTTP 客户端构建失败");
         let shared = Arc::new(EngineShared {
             client,
             clients: std::sync::Mutex::new(HashMap::new()),
@@ -308,9 +310,7 @@ impl EngineHandle {
             )),
             blacklist: std::sync::Mutex::new(HashSet::new()),
             grace,
-            upload_read_permits: Arc::new(tokio::sync::Semaphore::new(
-                cfg.upload_read_concurrency,
-            )),
+            upload_read_permits: Arc::new(tokio::sync::Semaphore::new(cfg.upload_read_concurrency)),
         });
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>(64);
         tokio::spawn(main_loop(shared, cmd_rx, evt_tx));
@@ -886,7 +886,10 @@ mod proxy_auth_tests {
             Some("u"),
             Some("p"),
         );
-        assert!(build_endpoint_client(&e, dns::GRACE).is_some(), "socks5 带凭证 → Some");
+        assert!(
+            build_endpoint_client(&e, dns::GRACE).is_some(),
+            "socks5 带凭证 → Some"
+        );
     }
 
     #[test]
@@ -901,7 +904,10 @@ mod proxy_auth_tests {
     #[test]
     fn build_client_http_regression() {
         let anon = ep(ProxyKind::Http, "http://127.0.0.1:8080", None, None);
-        assert!(build_endpoint_client(&anon, dns::GRACE).is_some(), "http 匿名 → Some");
+        assert!(
+            build_endpoint_client(&anon, dns::GRACE).is_some(),
+            "http 匿名 → Some"
+        );
         let auth = ep(
             ProxyKind::Http,
             "http://127.0.0.1:8080",
@@ -927,6 +933,9 @@ mod proxy_auth_tests {
             "https 成对凭证 → Some"
         );
         let anon = ep(ProxyKind::Https, "https://127.0.0.1:8443", None, None);
-        assert!(build_endpoint_client(&anon, dns::GRACE).is_some(), "https 匿名 → Some");
+        assert!(
+            build_endpoint_client(&anon, dns::GRACE).is_some(),
+            "https 匿名 → Some"
+        );
     }
 }

@@ -223,15 +223,20 @@ async fn proxy_dropdown_single_item_exact_geometry() {
 
 #[test]
 fn config_keeps_positive_block_size_http() {
-    let cfg = Config::from_toml("block_size_http = 2097152\n");
+    let cfg = Config::from_toml("[http]\nblock_size_http = 2097152\n");
     assert_eq!(
         cfg.block_size_http, 2_097_152,
-        "显式正值 block_size_http 必须保留"
+        "显式正值 block_size_http 必须保留（v1.17 三大表：[http] 表内）"
     );
-    let cfg0 = Config::from_toml("block_size_http = 0\n");
+    let cfg0 = Config::from_toml("[http]\nblock_size_http = 0\n");
     assert_eq!(
         cfg0.block_size_http, DEFAULT_BLOCK_SIZE_HTTP,
         "0 值回退默认（负对照：过滤参数确在生效）"
+    );
+    let cfg_old = Config::from_toml("block_size_http = 2097152\n");
+    assert_eq!(
+        cfg_old.block_size_http, DEFAULT_BLOCK_SIZE_HTTP,
+        "旧顶层平铺键按未知键静默忽略回退默认（FR-01-71/01-persistence-config-12）"
     );
 }
 

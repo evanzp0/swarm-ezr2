@@ -333,9 +333,7 @@ impl App {
                     if Self::pointer_in(&self.dlg_bt_area, m.column, m.row) {
                         if let Some(d) = self.dialog.as_mut() {
                             d.bt_follow = false;
-                            let max = d
-                                .bt_row_count()
-                                .saturating_sub(self.dlg_bt_visible.max(1));
+                            let max = d.bt_row_count().saturating_sub(self.dlg_bt_visible.max(1));
                             d.bt_scroll = (d.bt_scroll + 1).min(max);
                         }
                         return;
@@ -757,11 +755,10 @@ impl App {
                 Some(DialogKind::ModifyBt) => 0,
                 _ => 0,
             };
-            let meta = self.dialog.as_ref().and_then(|d| {
-                d.bt_rows()
-                    .get(i)
-                    .map(|(_, n)| (n.is_dir, n.depth))
-            });
+            let meta = self
+                .dialog
+                .as_ref()
+                .and_then(|d| d.bt_rows().get(i).map(|(_, n)| (n.is_dir, n.depth)));
             if let Some(d) = self.dialog.as_mut() {
                 d.focus = list_focus;
                 d.bt_cursor = i;
@@ -781,8 +778,10 @@ impl App {
             return;
         }
         if let Some(i) = hit(&field_rects) {
-            let is_trackers =
-                self.dialog.as_ref().is_some_and(|d| d.trackers_focus() == Some(i));
+            let is_trackers = self
+                .dialog
+                .as_ref()
+                .is_some_and(|d| d.trackers_focus() == Some(i));
             let trackers_area = self.dlg_trackers_area;
             {
                 let d = self.dialog.as_mut().unwrap();

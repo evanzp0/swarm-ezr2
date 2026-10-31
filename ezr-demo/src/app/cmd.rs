@@ -34,7 +34,10 @@ impl App {
     /// Shift+Enter / Alt+Enter：在当前光标处换行（光标后内容移到新行）
     fn cmd_newline(&mut self) {
         if !self.cmd.newline() {
-            self.set_toast(format!("⚠ 命令窗口最多 {} 行", crate::multiline::MULTI_MAX_LINES));
+            self.set_toast(format!(
+                "⚠ 命令窗口最多 {} 行",
+                crate::multiline::MULTI_MAX_LINES
+            ));
         }
     }
 
@@ -152,7 +155,10 @@ impl App {
             file_part.push('/');
         }
 
-        let new_before = format!("{before_left}{tok_dir}{file_part}", before_left = &before[..start]);
+        let new_before = format!(
+            "{before_left}{tok_dir}{file_part}",
+            before_left = &before[..start]
+        );
         let new_line = format!("{new_before}{after}");
 
         let cur = self.cmd.row;

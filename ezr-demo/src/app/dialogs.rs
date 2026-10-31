@@ -571,12 +571,7 @@ impl App {
             self.set_toast("⚠ 已完成任务不可修改");
             return;
         }
-        let (id, name, concurrency, proxy) = (
-            t.id,
-            t.name.clone(),
-            t.concurrency,
-            t.proxy.clone(),
-        );
+        let (id, name, concurrency, proxy) = (t.id, t.name.clone(), t.concurrency, t.proxy.clone());
         let files = if t.bt_files.is_empty() {
             pseudo_bt_files(&name, t.total)
         } else {
@@ -841,7 +836,9 @@ impl App {
     }
 
     fn bt_list_char(&mut self, c: char) {
-        let Some(d) = self.dialog.as_mut() else { return };
+        let Some(d) = self.dialog.as_mut() else {
+            return;
+        };
         match c {
             ' ' => d.bt_toggle_cursor(),
             'a' | 'A' => d.bt_select_all(true),
@@ -912,9 +909,7 @@ impl App {
         }
         self.sync_sim_sidecars();
 
-        let resumed = self
-            .sim_sidecars
-            .contains(&(dir.clone(), name0.clone()))
+        let resumed = self.sim_sidecars.contains(&(dir.clone(), name0.clone()))
             || self.tasks.iter().any(|t| {
                 t.url == url
                     && save_dir_of(&t.save_path) == dir

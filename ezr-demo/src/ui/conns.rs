@@ -90,14 +90,13 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let colw: Vec<usize> = if is_bt {
-        vec![18, 8, 8, 8, 8, 26, 4]
+        vec![18, 8, 8, 8, 8, 34, 4]
     } else {
         vec![4, 8, 8]
     };
     let content_w = colw.iter().sum::<usize>() + colw.len().saturating_sub(1);
 
-    let head_cell =
-        |s: &str, wd: usize| Span::styled(pad_right(s, wd), Style::default().fg(DIM));
+    let head_cell = |s: &str, wd: usize| Span::styled(pad_right(s, wd), Style::default().fg(DIM));
 
     let head = if is_bt {
         vec![
@@ -111,7 +110,7 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
             Span::raw(" "),
             head_cell("累计上传", 8),
             Span::raw(" "),
-            head_cell("客户端", 26),
+            head_cell("客户端", 34),
             Span::raw(" "),
             head_cell("协议", 4),
         ]
@@ -176,7 +175,10 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled(" ", Style::default().bg(bg)),
                 cell(fmt_size(c.cum_up), 8, FG),
                 Span::styled(" ", Style::default().bg(bg)),
-                cell(c.client.to_string(), 26, DIM),
+                Span::styled(
+                    pad_right(&truncate(&c.client.to_string(), 34), 34),
+                    Style::default().fg(DIM).bg(bg),
+                ),
                 Span::styled(" ", Style::default().bg(bg)),
                 cell(c.transport.label().to_string(), 4, DIM),
             ]

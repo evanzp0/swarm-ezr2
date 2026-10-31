@@ -4,7 +4,7 @@
 #   09-bt-engine-03 BEP 15 UDP tracker（connect / announce / 紧凑 peers / 超时重试）
 #   09-bt-engine-04 BEP 7 IPv6 peers（peers6 紧凑列表 / IPv6 连接）
 #   09-bt-engine-05 BEP 12 多 tracker 冗余与 tracker 池三来源合并去重
-#   09-bt-engine-06 peer 下载与 piece 校验（握手 / 分块请求 / SHA-1 / 多 peer 并发 / 上传统计）
+#   09-bt-engine-06 peer 下载与 piece 校验（握手 / 分块请求 / SHA-1 / 多 peer 并发 / 上传统计；v1.36 修订：客户端列识别改 qBittorrent 源码口径，FR-02-08 v1.3）
 #   09-bt-engine-07 BEP 9 元数据交换（做种侧响应：ut_metadata request → data/reject）
 #   09-bt-engine-08 按文件下载语义（未选文件不落盘 / 边界 piece / 修改补下）
 #   09-bt-engine-09 config trackers 配置项（[bt] http_trackers / udp_trackers / 模板示例 / 任务合并）
@@ -17,6 +17,10 @@
 # 协议基线 = 操作者钦定 BEP 3/15/23/7/12/9/20；tokio 异步（FR-02-10）。
 # BEP 9 做种侧响应（D53/D45——磁力拉取 phase-03）；上传真实统计（D58）；
 # 下载完成自动转做种（D57）；tracker 池三来源（去磁力 tr=，D53）。
+# v1.36 修订（操作者 bug12 轮指令，客户端列识别修正）：客户端列解析法改 qBittorrent 源码口径
+# （FR-02-08 v1.3：扩展握手 v 自报名优先 + peer id 解码 = libtorrent identify_client 算法与
+# 映射表全量移植；验收例：BitComet 1.64 对端显示 BitComet 1.64——旧 62 项子集表与逐位四段
+# 解码（0.1.6.4 形态）退役）。
 # QA 经 UI 层观察 + fixture 侧可观察日志（本地 fixture 属暴露给 QA 的用户界面入口）。
 Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文件选择）
 
@@ -76,7 +80,7 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
     Then fixture seeder 侧观察到标准 peer wire 握手（19 + "BitTorrent protocol" + reserved + infohash + peer_id）
     And 本端发送 interested 并按缺口对已选文件覆盖的 piece 发送 request（块长 ≤ 16 KB、单 peer 在飞窗口 5 块）
     And piece 全块落盘后 SHA-1 校验（对 metadata pieces 对应段）、通过后广播 have；校验失败 piece 重下
-    And 并发连接面板明细实时显示各 peer 下载速度/累计下载（口径同 HTTP 列）、上传速度/累计上传 = 真实统计（D45/D58：下载中互惠上传计入，fixture leecher 可从本端拉到已完成 piece 块）、客户端列 = <客户端全名>/<版本号>（v1.35 修订：解析法 = libtorrent identify_client 口径——Azureus 形态两位码全名映射表 + 各客户端专用版本解码规则，如 AR → Arctic Torrent；无法识别显示 Unknown；旧两字母缩写与 -- 形态退役；D51 相应改判）、协议列 = TCP；地址列 = ip缩写/port（v1.35 修订：斜杠分隔，IPv4 首尾组遮掩与 IPv6 首尾组遮掩三形态同口径，如 1.*.4/51400、ffff:*:ffff/65535；旧冒号分隔形态退役，bug10 轮 coder 偏离登记收编清零）
+    And 并发连接面板明细实时显示各 peer 下载速度/累计下载（口径同 HTTP 列）、上传速度/累计上传 = 真实统计（D45/D58：下载中互惠上传计入，fixture leecher 可从本端拉到已完成 piece 块）、客户端列 = 客户端识别显示（v1.36 修订：解析法 = qBittorrent 源码口径两级——①**扩展握手 `v` 自报名优先**：对端扩展握手携带 `v` 字符串时显示其原样（空白归并 + 不可打印字符剔除后；qBittorrent 同源行为——libtorrent bt_peer_connection.cpp 扩展握手 `v` 覆盖 peer id 解码结果，如 BitComet 自报 `BitComet 1.64`、libtorrent 自报 `libtorrent/<版本号>`）；②**无 `v` 时按 peer id 解码 = libtorrent identify_client 算法与映射表全量移植**（qBittorrent 捆绑同源）：非标准形态优先（generic_mappings 37 项按 offset+前缀子串匹配、仅名无版本，如 exbc→BitComet；`-BOW`+尾`-`→`Bits on Wheels <3 字符>`；`eX` 前缀→`eXeem ('<12 字符>')`；前 12 字节全零+第 13 字节 \x97/\0 → Experimental 两态）→ Transmission legacy（`-TRxYYR-`，x∈0–3、YY 两位 minor、R 为数字或 A–Z 字母 tag）→ Azureus 形态（`-XX????-`：首 `−`、码后首字符可打印、第 3–7 字符均 ≥'0'、尾 `−`；4 位版本逐位 decode_digit = 数字原值/大写字母→10–35）→ Shadow 形态（首字符字母或数字；`--` 结尾臂 = 后 3 字符逐位 decode，否则 = 后 3 字节原值且第 9 字节为 0）→ Mainline 形态（`<字符><1-3 位数>-<1-3 位数>-<1-3 位数>--`）；版本格式 = `M.m.r`（tag≠0 时追加 `.tag`）；全名映射表 = name_map 102 项全量按码排序查找（如 AR→Arctic Torrent、BC→BitComet、qB→qBittorrent、QD→QQDownload、SD/XL→Xunlei、DP→Propagate Data Client），未命中 → 以 1–2 字符码本体为名；全零 peer id 与全部形态均不匹配 → Unknown（不采用 lt 的 `Unknown [原始串]` 形态，v1.35 口径维持）。**验收例（操作者钦定）：同一 BitComet 1.64 对端，qBittorrent 解析版本号 = 1.64、ezr v1.35 旧实现 = 0.1.6.4——v1.36 起与 qBittorrent 同源同值**；旧 62 项子集表与逐位四段点分解码退役；D51 相应改判）、协议列 = TCP；地址列 = ip缩写/port（v1.35 修订：斜杠分隔，IPv4 首尾组遮掩与 IPv6 首尾组遮掩三形态同口径，如 1.*.4/51400、ffff:*:ffff/65535；旧冒号分隔形态退役，bug10 轮 coder 偏离登记收编清零）
     And 头部全局 ↓/↑ 与峰值 ↓/↑ 计入 BT 任务真实速度（MAGENTA 上传位，header.rs 形态）
 
   Scenario: 09-bt-engine-07 BEP 9 元数据交换（做种侧响应）

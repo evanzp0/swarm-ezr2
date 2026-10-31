@@ -217,3 +217,13 @@
   终态行），瞬时中间态（等待中）断言天然竞态，判读按 testing.md 假 FAIL 口径复跑。
 - 根因：pty 驱动与被测端 1s tick 异步，事件循环在状态切换批次内可能吞掉恰逢其时的
   键事件；产品侧行为经单测与手工复验均正确（toast + 重排队语义在）。
+
+## 配置解析语义变更时，单元测试与 runner 同在键路径迁移清单内
+- **现象**：bug11 三大表重构后，`tests/hardening_v115.rs` 的 `config_keeps_positive_block_size_http`
+  仍断言顶层平铺键 `block_size_http = 2097152` 被保留——旧格式按未知键静默忽略后该键回退
+  默认，断言失败（750P/1F）。
+- **处置**：改 `[http]` 表形态断言 + 补旧格式回退负对照（顶层键 → DEFAULT，与
+  01-persistence-config-12 口径对齐）。
+- **根因**：迁移清单只覆盖了 QA runner 的 write_config（~57 处），单元测试里硬编码的
+  `Config::from_toml("裸键 = 值")` 形态漏排。改配置解析语义时必须 grep 全部 `tests/` 的
+  from_toml 裸键形态（顶层键断言 = 旧格式残留）。

@@ -11,7 +11,7 @@ use std::io;
 use crossterm::{
     event::{
         poll, read, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
-        EnableMouseCapture, Event, EventStream, KeyboardEnhancementFlags, KeyEventKind,
+        EnableMouseCapture, Event, EventStream, KeyEventKind, KeyboardEnhancementFlags,
         PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
@@ -89,9 +89,7 @@ async fn main() -> std::io::Result<()> {
         crossterm::cursor::EnableBlinking,
         // disambiguate escape codes：支持 kitty 键盘协议的终端上 Shift+Enter
         // 可区分上报（命令窗口换行）；不支持的终端降级为 Ctrl+J 换行
-        PushKeyboardEnhancementFlags(
-            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-        )
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
     )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;

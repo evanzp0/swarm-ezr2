@@ -27,22 +27,30 @@ FIVE_M = QA_FILE_SIZES["five-m.bin"]
 
 
 def operator_template_text() -> str:
-    """从 feature 场景 01 注释块解析操作者钦定模板原文（168 行，逐字节权威）。
+    """从 feature 场景 01 注释块解析操作者钦定模板原文（174 行，逐字节权威）。
 
-    块起点 = 以「specifier v1.11）：」结尾的说明行；块终点 = 独立全角括号行
+    块起点 = 以「specifier v1.12）：」结尾的说明行；块终点 = 独立全角括号行
     「）」；内容行统一 2 空格缩进（feature 文件风格），空行即真实空行；
     EOF 以一个换行符收尾。
     """
     with open(FEATURE_PATH, encoding="utf-8") as f:
         lines = f.read().split("\n")
     start = next(i for i, l in enumerate(lines)
-                 if l.rstrip().endswith("specifier v1.11）："))
+                 if l.rstrip().endswith("specifier v1.12）："))
     end = next(i for i, l in enumerate(lines) if i > start and l.strip() == "）")
     body = [l[2:] if l.startswith("  ") else l for l in lines[start + 1:end]]
-    assert len(body) == 168, f"钦定原文应为 168 行，解析得 {len(body)}"
-    assert any(l.startswith("# ===== [common]") for l in body), "三表分隔头注释：[common]"
-    assert any(l.startswith("# ===== [http]") for l in body), "三表分隔头注释：[http]"
-    assert any(l.startswith("# ===== [bt]") for l in body), "三表分隔头注释：[bt]"
+    assert len(body) == 174, f"钦定原文应为 174 行，解析得 {len(body)}"
+    for sep, decl in (("# ===== 公共配置 =====", "# [common]"),
+                      ("# ===== HTTP 引擎配置 =====", "# [http]"),
+                      ("# ===== BT 引擎配置 =====", "# [bt]")):
+        si = body.index(sep)
+        assert body[si + 1] == "", f"{sep} 后应空行"
+        assert body[si + 2] == decl, f"{sep} 后第二行应为表声明行 {decl}"
+        assert body[si + 3] == "", "表声明行后应空行"
+    assert not any(l.startswith("# ===== [") for l in body), "旧形态分隔头（含表名）退役"
+    import re as _re
+    assert not any(_re.match(r"^# [a-z_][a-z_0-9]*：", l) for l in body), \
+        "v1.12：键注释首行不得再带键名前缀"
     assert all((not l.strip()) or l.startswith("# ") for l in body), \
         "钦定原文每条非空行应以 # 开头"
     return "\n".join(body) + "\n"

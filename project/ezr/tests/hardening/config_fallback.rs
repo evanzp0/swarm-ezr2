@@ -12,7 +12,11 @@ use config::{home_dir, Config};
 #[test]
 fn load_reads_existing_config_file() {
     let path = std::env::temp_dir().join(format!("ezr-hardening-cfg-{}.toml", std::process::id()));
-    std::fs::write(&path, "[http]\nbackoff_initial = 0.75\nbackoff_cap = 30.0\n").expect("write fixture");
+    std::fs::write(
+        &path,
+        "[http]\nbackoff_initial = 0.75\nbackoff_cap = 30.0\n",
+    )
+    .expect("write fixture");
     let loaded = Config::load(&path);
     let _ = std::fs::remove_file(&path);
     let d = Config::default();

@@ -152,10 +152,7 @@ pub fn draw_multi_line_input(
         && cursor_vcol <= buf.view_x + text_w.max(1)
     {
         let disp_col = (cursor_vcol - buf.view_x).min(text_w.saturating_sub(1)) as u16;
-        Some((
-            inner.x + disp_col,
-            inner.y + (cursor_vrow - start) as u16,
-        ))
+        Some((inner.x + disp_col, inner.y + (cursor_vrow - start) as u16))
     } else {
         None
     };

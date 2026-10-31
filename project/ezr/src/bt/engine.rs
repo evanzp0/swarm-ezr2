@@ -160,8 +160,7 @@ fn refresh_idle(st: &mut ConnStat, now: std::time::Instant) {
 }
 
 fn idle_evict_due(st: &ConnStat, now: std::time::Instant, idle_secs: u64) -> bool {
-    st.cum_down == st.idle_check.0
-        && now.duration_since(st.idle_check.1).as_secs() >= idle_secs
+    st.cum_down == st.idle_check.0 && now.duration_since(st.idle_check.1).as_secs() >= idle_secs
 }
 
 fn inbound_admitted(conns: &HashMap<usize, ConnStat>, ip: IpAddr, cap: usize) -> bool {
@@ -765,15 +764,17 @@ fn spawn_tracker(
                         break;
                     };
                     match tokio::net::UdpSocket::bind("0.0.0.0:0").await {
-                        Ok(sock) => announce_udp(
-                            sock,
-                            &host,
-                            port,
-                            &params,
-                            ctx.udp_base_timeout_secs,
-                            ctx.udp_retries,
-                        )
-                        .await,
+                        Ok(sock) => {
+                            announce_udp(
+                                sock,
+                                &host,
+                                port,
+                                &params,
+                                ctx.udp_base_timeout_secs,
+                                ctx.udp_retries,
+                            )
+                            .await
+                        }
                         Err(e) => Err(BtError::Io(e.to_string())),
                     }
                 }
@@ -874,7 +875,8 @@ fn spawn_stopped_announce(
                 TrackerUrl::Udp(u) => {
                     if let Some((host, p)) = udp_host_port(u) {
                         if let Ok(sock) = tokio::net::UdpSocket::bind("0.0.0.0:0").await {
-                            let _ = announce_udp(sock, &host, p, &params, udp_base, udp_retries).await;
+                            let _ =
+                                announce_udp(sock, &host, p, &params, udp_base, udp_retries).await;
                         }
                     }
                 }
@@ -978,7 +980,7 @@ async fn run_peer_loop(
                     .await;
                 return;
             }
-            let client = super::peer_id::client_display(&ok.peer_id);
+            let client = super::peer_id::client_display(None, &ok.peer_id);
             let ext_metadata = ok.reserved[5] & 0x10 != 0;
             if tx
                 .send((
@@ -1142,7 +1144,8 @@ async fn handle_peer_msg(
                     // 控制消息（KeepAlive/Request/Cancel/…）零开销直达。
                     let claimed = claimed_blocks(conns, partial);
                     if let Some(st) = conns.get_mut(&conn_id) {
-                        issue_requests(conn_id, st, &claimed, pmap, tun, done, partial, order).await;
+                        issue_requests(conn_id, st, &claimed, pmap, tun, done, partial, order)
+                            .await;
                     }
                 }
             }
@@ -1210,7 +1213,19 @@ async fn handle_peer_msg(
         }
         peer::PeerMsg::KeepAlive | peer::PeerMsg::Port(_) => {}
         peer::PeerMsg::Extended { ext_id, payload } => {
-            if ext_id == 1 {
+            if ext_id == 0 {
+                if let Some(eh) = peer::parse_ext_handshake(&payload) {
+                    if let Some(v) = eh.v {
+                        let disp = super::peer_id::client_display(
+                            Some(&v),
+                            &st.peer_id.unwrap_or([0u8; 20]),
+                        );
+                        if st.client != disp {
+                            st.client = disp;
+                        }
+                    }
+                }
+            } else if ext_id == 1 {
                 if let Some(um) = peer::parse_ut_metadata(&payload) {
                     match um {
                         peer::UtMetadata::Request(piece) => {
@@ -1391,7 +1406,10 @@ fn fill_peer_slots(
             .filter(|(k, c)| {
                 !connected_ips.contains(&k.0)
                     && !shared.is_blacklisted(k.0)
-                    && c.cooldown_ok(spec.tunables.peer_retry_base_secs, spec.tunables.peer_retry_cap_secs)
+                    && c.cooldown_ok(
+                        spec.tunables.peer_retry_base_secs,
+                        spec.tunables.peer_retry_cap_secs,
+                    )
             })
             .min_by_key(|(_, c)| (c.last_try, c.fails))
             .map(|(k, _)| *k)
@@ -1519,7 +1537,17 @@ async fn on_block(
         conns.insert(conn_id, st);
         let claimed = claimed_blocks(conns, partial);
         if let Some(st) = conns.get_mut(&conn_id) {
-            issue_requests(conn_id, st, &claimed, pmap, &spec.tunables, done, partial, order).await;
+            issue_requests(
+                conn_id,
+                st,
+                &claimed,
+                pmap,
+                &spec.tunables,
+                done,
+                partial,
+                order,
+            )
+            .await;
         }
         return;
     }
@@ -1579,7 +1607,17 @@ async fn on_block(
     conns.insert(conn_id, st);
     let claimed = claimed_blocks(conns, partial);
     if let Some(st) = conns.get_mut(&conn_id) {
-        issue_requests(conn_id, st, &claimed, pmap, &spec.tunables, done, partial, order).await;
+        issue_requests(
+            conn_id,
+            st,
+            &claimed,
+            pmap,
+            &spec.tunables,
+            done,
+            partial,
+            order,
+        )
+        .await;
     }
 }
 
@@ -2187,7 +2225,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-
     async fn fake_udp_tracker_logging(
         seeder_port: u16,
         announces: Arc<std::sync::Mutex<Vec<[u8; 20]>>>,
@@ -2247,8 +2284,10 @@ mod tests {
         let save_dir = dir.to_string_lossy().into_owned();
         let meta = make_meta(&data, piece_len, "udp://127.0.0.1:1/announce");
         let seeder_port = fake_seeder(data.clone(), piece_len, meta.infohash).await;
-        let log_a: Arc<std::sync::Mutex<Vec<[u8; 20]>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let log_b: Arc<std::sync::Mutex<Vec<[u8; 20]>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log_a: Arc<std::sync::Mutex<Vec<[u8; 20]>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log_b: Arc<std::sync::Mutex<Vec<[u8; 20]>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
         let port_a = fake_udp_tracker_logging(seeder_port, log_a.clone()).await;
         let port_b = fake_udp_tracker_logging(seeder_port, log_b.clone()).await;
 
@@ -2275,7 +2314,11 @@ mod tests {
         let shared = crate::engine::shared_for_tests();
         let engine_handle = tokio::spawn(run(spec, shared, cmd_rx, evt_tx));
 
-        async fn wait_announces(log: &Arc<std::sync::Mutex<Vec<[u8; 20]>>>, want: usize, secs: u64) {
+        async fn wait_announces(
+            log: &Arc<std::sync::Mutex<Vec<[u8; 20]>>>,
+            want: usize,
+            secs: u64,
+        ) {
             let deadline = std::time::Instant::now() + Duration::from_secs(secs);
             while std::time::Instant::now() < deadline {
                 if log.lock().expect("锁").len() >= want {
@@ -2292,7 +2335,10 @@ mod tests {
             meta.infohash,
             "tracker-A 收到该任务 infohash 的 announce"
         );
-        assert!(log_b.lock().unwrap().is_empty(), "未更新的 tracker-B 尚无 announce");
+        assert!(
+            log_b.lock().unwrap().is_empty(),
+            "未更新的 tracker-B 尚无 announce"
+        );
 
         cmd_tx
             .send(BtTaskCmd::UpdateTrackers(vec![format!(
@@ -3278,7 +3324,10 @@ mod tests {
     fn bt_tunables_default_from_config() {
         let t = BtTunables::default();
         let c = crate::model::config::Config::default();
-        assert_eq!(t.peer_pipeline, c.peer_pipeline, "管线深度缺省 = [bt] peer_pipeline 缺省");
+        assert_eq!(
+            t.peer_pipeline, c.peer_pipeline,
+            "管线深度缺省 = [bt] peer_pipeline 缺省"
+        );
         assert_eq!(
             t.progress_emit_min_interval_ms, c.progress_emit_min_interval_ms,
             "逐块事件节流缺省 250ms（qBittorrent UI 同为秒级刷新）"
@@ -4214,9 +4263,13 @@ mod seeding_tests {
         sock.read_exact(&mut eh).await.unwrap();
         assert_eq!(eh[0], 20, "extended 帧");
         assert_eq!(eh[1], 0, "ext handshake id");
-        let (peer_ut_id, metadata_size) =
-            peer::parse_ext_handshake(&eh[2..]).expect("ext handshake 可解析");
-        assert_eq!(metadata_size as usize, meta.info_bytes.len());
+        let eh = peer::parse_ext_handshake(&eh[2..]).expect("ext handshake 可解析");
+        assert_eq!(
+            eh.metadata_size.map(|s| s as usize),
+            Some(meta.info_bytes.len())
+        );
+        assert_eq!(eh.ut_metadata, Some(1));
+        let peer_ut_id = eh.ut_metadata.expect("ut_metadata id 在位");
 
         let req = peer::encode_msg(&peer::PeerMsg::Request {
             index: 0,

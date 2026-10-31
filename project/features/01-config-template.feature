@@ -34,9 +34,18 @@ Feature: 01-config-template 配置模板自动生成
   回退代码常量默认（与既有「0 或非法值回退默认」口径一致）；bt_concurrency 越界钳制 1–64
   （同 http_concurrency）。旧格式（顶层平铺键、[[proxies]] 表）不兼容：按未知键静默忽略、
   相关项回退默认值（操作者钦定「代码开发中没发布过，不需要兼容旧格式」，FR-01-71 未知键
-  口径，零警告零迁移；场景见 01-persistence-config-12）。模板钦定文本整体替换为 v1.11
-  三表版（36 键三行式 + [[common.proxy]] 双示例块 + 三表分隔头注释，权威机制沿 v1.10：
-  default_template() 输出与钦定原文逐字节一致，EOF 单换行收尾）。
+  口径，零警告零迁移；场景见 01-persistence-config-12）。
+  v1.12 修订（操作者 bug12 轮指令，模板注释格式修正）：①三表声明改两行式——每表改为
+  `# ===== 公共配置 =====`（分隔头注释不含表名）+ 空行 + `# [common]`（表声明行），
+  [http]/[bt] 同构（`# ===== HTTP 引擎配置 =====` + 空行 + `# [http]`、
+  `# ===== BT 引擎配置 =====` + 空行 + `# [bt]`）；②全部 36 键三行式的首行注释
+  去「键名：」前缀（如 `# rechoke_interval_secs：上传 choker 重排周期（秒）` →
+  `# 上传 choker 重排周期（秒）`），「用途要点 + 取值范围要点」契约不变（键名由示例行
+  本身承载，注释不重复键名）；proxy 一句头注释同步去前缀（`# proxy：命名代理列表
+  （可配置多个）` → `# 命名代理列表（可配置多个）`）。模板钦定文本整体替换为 v1.12 版
+  （174 行 = 标题行 + 3 组「分隔头注释 + 空行 + 表声明行」+ 36 键三行式 +
+  [[common.proxy]] 一句头注释 + 双示例块 + 空行分隔，权威机制沿 v1.10：default_template()
+  输出与钦定原文逐字节一致，EOF 单换行收尾）。
 
   Background:
     Given ezr 以独立 HOME 的干净环境启动
@@ -46,7 +55,7 @@ Feature: 01-config-template 配置模板自动生成
     When 启动 ezr 并正常使用
     Then 配置文件 <config_path> 已生成
     And 文件内每条非空行均以 # 开头（全注释 ⇒ 解析结果与文件缺失一致，全部默认值生效）
-    And 模板内容与操作者钦定文本逐字节一致（钦定原文行集内嵌于本场景下方注释块：标题行、三表分隔头注释、36 键三行式、[[common.proxy]] 一句头注释 + 双示例块、空行位置与行序、EOF 单换行收尾全部一致，v1.11）
+    And 模板内容与操作者钦定文本逐字节一致（钦定原文行集内嵌于本场景下方注释块：标题行、3 组「分隔头注释 + 空行 + 表声明行」、36 键三行式（首行注释无键名前缀）、[[common.proxy]] 一句头注释 + 双示例块、空行位置与行序、EOF 单换行收尾全部一致，v1.12）
     And 键 "<key>" 以注释形式给出默认值 "<default_line>"
     And 键 "<key>" 的注释说明含用途要点 "<purpose>" 与取值范围要点 "<range>"
 
@@ -89,28 +98,31 @@ Feature: 01-config-template 配置模板自动生成
       | udp_retries                  | # udp_retries = 3                         | UDP tracker 超时重试次数                         | 正整数（≥1）；0 或非法值回退默认            |
       | seed_duration_secs           | # seed_duration_secs = 1800               | 做种时长默认值（秒）                             | >0 的数；0 或非法值回退默认                 |
 
-  （v1.11 操作者钦定模板原文——default_template() 输出与其逐字节一致，coder 不得增删改
-  任何字符/空行；钦定原文共 168 行 = 标题行 + 3 表分隔头注释 + 36 键×3 行三行式 +
-  [[common.proxy]] 一句头注释 + 双示例块（各 7 行 = 1 表头行 + 6 字段行）+ 41 个空行分隔，EOF 以一个换行符收尾。
+  （v1.12 操作者钦定模板原文——default_template() 输出与其逐字节一致，coder 不得增删改
+  任何字符/空行；钦定原文共 174 行 = 标题行 + 3 组「分隔头注释 + 空行 + 表声明行」+
+  36 键×3 行三行式（首行注释无键名前缀）+ [[common.proxy]] 一句头注释 + 双示例块
+  （各 7 行 = 1 表头行 + 6 字段行）+ 44 个空行分隔，EOF 以一个换行符收尾。
   下为权威原文逐字节内嵌（空行即真实空行；示例值与代码常量默认逐键比对 36/36 一致，
-  specifier v1.11）：
+  specifier v1.12）：
   # EZR Downloader 配置模板
 
-  # ===== [common] 公共配置（两引擎共用） =====
+  # ===== 公共配置 =====
 
-  # download_dir：默认保存目录（添加对话框目录留空时使用）
+  # [common]
+
+  # 默认保存目录（添加对话框目录留空时使用）
   # 取值范围：任意目录路径；留空或缺失 = 用户主目录下的下载目录
   # download_dir = ""
 
-  # download_slots：全局下载槽位数（同时下载的任务数上限）
+  # 全局下载槽位数（同时下载的任务数上限）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # download_slots = 5
 
-  # max_speed：全局下载限速（0 = 不限）
+  # 全局下载限速（0 = 不限）
   # 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
   # max_speed = 0
 
-  # proxy：命名代理列表（可配置多个）
+  # 命名代理列表（可配置多个）
   # [[common.proxy]]
   # name = "办公网代理"
   # type = "http"
@@ -127,139 +139,143 @@ Feature: 01-config-template 配置模板自动生成
   # username = "ezr"
   # password = "secret"
 
-  # ===== [http] HTTP 引擎配置 =====
+  # ===== HTTP 引擎配置 =====
 
-  # block_size_http：HTTP 分块块大小（字节）
+  # [http]
+
+  # HTTP 分块块大小（字节）
   # 取值范围：正整数（≥1）；0 或非法值回退默认（1 MB）
   # block_size_http = 1048576
 
-  # http_concurrency：默认并发数
+  # 默认并发数
   # 取值范围：1–64 的整数；越界钳制到边界
   # http_concurrency = 4
 
-  # max_retries：自动重试上限次数（达上限转停等，可按 R 手动重试）
+  # 自动重试上限次数（达上限转停等，可按 R 手动重试）
   # 取值范围：≥1 的整数；0 或非法值回退默认
   # max_retries = 5
 
-  # auto_retry：失败后是否自动重试
+  # 失败后是否自动重试
   # 取值范围：true / false
   # auto_retry = true
 
-  # backoff_initial：自动重试退避初始秒（指数退避序列起点）
+  # 自动重试退避初始秒（指数退避序列起点）
   # 取值范围：>0 的有限数；非法值回退默认
   # backoff_initial = 8.0
 
-  # backoff_cap：自动重试退避封顶秒
+  # 自动重试退避封顶秒
   # 取值范围：>0 的有限数；非法值回退默认
   # backoff_cap = 60.0
 
-  # progress_tick_ms：HTTP 下载进度事件节拍（毫秒）
+  # HTTP 下载进度事件节拍（毫秒）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # progress_tick_ms = 100
 
-  # sidecar_flush_secs：断点 sidecar 落盘间隔（秒）
+  # 断点 sidecar 落盘间隔（秒）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # sidecar_flush_secs = 2
 
-  # throttle_burst_secs：限速令牌桶突发窗（秒）
+  # 限速令牌桶突发窗（秒）
   # 取值范围：>0 的有限数；非法值回退默认
   # throttle_burst_secs = 0.5
 
-  # throttle_sleep_ms：限速循环步进睡眠（毫秒）
+  # 限速循环步进睡眠（毫秒）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # throttle_sleep_ms = 20
 
-  # dns_race_grace_ms：DNS 双腿竞速宽限（毫秒，双栈并行解析）
+  # DNS 双腿竞速宽限（毫秒，双栈并行解析）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # dns_race_grace_ms = 1000
 
-  # ===== [bt] BT 引擎配置 =====
+  # ===== BT 引擎配置 =====
 
-  # http_trackers：HTTP(S) tracker 列表（BT 任务默认 tracker 池来源之一）
+  # [bt]
+
+  # HTTP(S) tracker 列表（BT 任务默认 tracker 池来源之一）
   # 取值范围：字符串数组，每项为 http:// 或 https:// 开头的 tracker announce URL；非法 URL 行启动时忽略并警告
   # http_trackers = []
 
-  # udp_trackers：UDP tracker 列表（BT 任务默认 tracker 池来源之一）
+  # UDP tracker 列表（BT 任务默认 tracker 池来源之一）
   # 取值范围：字符串数组，每项为 udp:// 开头的 tracker announce URL（含端口）；非法 URL 行启动时忽略并警告
   # udp_trackers = []
 
-  # bt_concurrency：BT 任务默认并发数（新任务预填）
+  # BT 任务默认并发数（新任务预填）
   # 取值范围：1–64 的整数；越界钳制到边界
   # bt_concurrency = 20
 
-  # peer_pipeline：单 peer 在飞请求块数上限（×16 KiB = 在飞窗口）
+  # 单 peer 在飞请求块数上限（×16 KiB = 在飞窗口）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # peer_pipeline = 64
 
-  # upload_slots：同时获得上传槽位的 peer 数（choker 周期分配）
+  # 同时获得上传槽位的 peer 数（choker 周期分配）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # upload_slots = 4
 
-  # upload_read_concurrency：上传读盘并发上限（进程级）
+  # 上传读盘并发上限（进程级）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # upload_read_concurrency = 128
 
-  # idle_eviction_secs：空闲连接置换阈值（秒，无新增进账超时即断开重拨）
+  # 空闲连接置换阈值（秒，无新增进账超时即断开重拨）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # idle_eviction_secs = 60
 
-  # connect_timeout_secs：出连 TCP 拨号超时（秒）
+  # 出连 TCP 拨号超时（秒）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # connect_timeout_secs = 3
 
-  # handshake_timeout_secs：peer 握手超时（秒）
+  # peer 握手超时（秒）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # handshake_timeout_secs = 10
 
-  # request_timeout_secs：在飞块请求超时（秒）
+  # 在飞块请求超时（秒）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # request_timeout_secs = 20
 
-  # requests_per_piece：单 piece 请求块粒度（piece 细分为 n 块请求）
+  # 单 piece 请求块粒度（piece 细分为 n 块请求）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # requests_per_piece = 4
 
-  # rechoke_interval_secs：上传 choker 重排周期（秒）
+  # 上传 choker 重排周期（秒）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # rechoke_interval_secs = 10
 
-  # optimistic_interval_secs：乐观 unchoke 轮换周期（秒）
+  # 乐观 unchoke 轮换周期（秒）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # optimistic_interval_secs = 30
 
-  # progress_emit_min_interval_ms：进度事件最小发送间隔（毫秒，节流）
+  # 进度事件最小发送间隔（毫秒，节流）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # progress_emit_min_interval_ms = 250
 
-  # tracker_numwant：announce 请求的 peer 数上限
+  # announce 请求的 peer 数上限
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # tracker_numwant = 200
 
-  # peer_retry_base_secs：peer 连接失败重试退避起始（秒，倍增）
+  # peer 连接失败重试退避起始（秒，倍增）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # peer_retry_base_secs = 5
 
-  # peer_retry_cap_secs：peer 连接失败重试退避封顶（秒）
+  # peer 连接失败重试退避封顶（秒）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # peer_retry_cap_secs = 120
 
-  # tracker_backoff_start_secs：tracker 失败退避起始（秒，倍增）
+  # tracker 失败退避起始（秒，倍增）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # tracker_backoff_start_secs = 8
 
-  # tracker_backoff_cap_secs：tracker 失败退避封顶（秒）
+  # tracker 失败退避封顶（秒）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # tracker_backoff_cap_secs = 60
 
-  # udp_base_timeout_secs：UDP tracker 单轮超时起始（秒，倍增重试）
+  # UDP tracker 单轮超时起始（秒，倍增重试）
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # udp_base_timeout_secs = 15
 
-  # udp_retries：UDP tracker 超时重试次数
+  # UDP tracker 超时重试次数
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   # udp_retries = 3
 
-  # seed_duration_secs：做种时长默认值（秒，任务做种倒计时起点）
+  # 做种时长默认值（秒，任务做种倒计时起点）
   # 取值范围：>0 的数；0 或非法值回退默认
   # seed_duration_secs = 1800
   ）

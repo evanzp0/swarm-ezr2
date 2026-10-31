@@ -155,9 +155,7 @@ impl Dialog {
     }
 
     fn bt_path_at_cursor(&self) -> Option<Vec<usize>> {
-        self.bt_rows()
-            .get(self.bt_cursor)
-            .map(|(p, _)| p.clone())
+        self.bt_rows().get(self.bt_cursor).map(|(p, _)| p.clone())
     }
 
     /// 空格/点击复选框：切换光标行勾选（文件翻转；目录 全选⇄全不选，部分 → 全选）
@@ -312,7 +310,9 @@ pub(super) fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> 
             d.dir.backspace();
             true
         }
-        (DialogKind::Add, 2) | (DialogKind::Modify, 0) | (DialogKind::AddBt, 3)
+        (DialogKind::Add, 2)
+        | (DialogKind::Modify, 0)
+        | (DialogKind::AddBt, 3)
         | (DialogKind::ModifyBt, 1) => {
             d.conns.backspace();
             d.conns_edited = true;
@@ -348,7 +348,9 @@ pub(super) fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, te
     match (kind, focus) {
         (DialogKind::Add, 0) => d.url.insert(&clean, 300) > 0,
         (DialogKind::Add, 1) => d.dir.insert(&clean, 300) > 0,
-        (DialogKind::Add, 2) | (DialogKind::Modify, 0) | (DialogKind::AddBt, 3)
+        (DialogKind::Add, 2)
+        | (DialogKind::Modify, 0)
+        | (DialogKind::AddBt, 3)
         | (DialogKind::ModifyBt, 1) => {
             let digits: String = clean.chars().filter(|c| c.is_ascii_digit()).collect();
             let inserted = d.conns.insert(&digits, 2) > 0;

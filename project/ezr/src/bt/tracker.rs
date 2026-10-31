@@ -866,14 +866,14 @@ mod tests {
             numwant: 50,
         };
         let res = announce_udp(
-        sock,
-        "127.0.0.1",
-        port,
-        &p,
-        crate::model::config::DEFAULT_UDP_BASE_TIMEOUT_SECS,
-        crate::model::config::DEFAULT_UDP_RETRIES,
-    )
-    .await;
+            sock,
+            "127.0.0.1",
+            port,
+            &p,
+            crate::model::config::DEFAULT_UDP_BASE_TIMEOUT_SECS,
+            crate::model::config::DEFAULT_UDP_RETRIES,
+        )
+        .await;
         let err = res.expect_err("静默 tracker 应在重试耗尽后判失败");
         assert!(err.to_string().contains("无响应"), "应报无响应：{err}");
     }

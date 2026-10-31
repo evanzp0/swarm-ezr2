@@ -386,7 +386,11 @@ impl MultiLineBuf {
     /// view_x 判定可见性并换算屏幕位）
     pub fn cursor_visual_nowrap(&self) -> (usize, usize) {
         let cur = self.row.min(self.lines.len() - 1);
-        let pre: String = self.lines[cur].value.chars().take(self.lines[cur].cursor).collect();
+        let pre: String = self.lines[cur]
+            .value
+            .chars()
+            .take(self.lines[cur].cursor)
+            .collect();
         (cur, w(&pre))
     }
 
