@@ -406,3 +406,23 @@
 
 - D64 收缩下限：client_w 下限 12→26 = 极值样例 ArcticTorrent/100.100.100（25 列+1 空白）所需列宽，BT_CLIENT_MIN 单常量点（ui/conns.rs）；视口 <86 后内容宽 86 > 视口走既有水平滚动条（吸附臂 edge+4>c && edge<c 不变、hmax=内容宽−视口+1 不变），≥94 维持 34 列钦定形态；列位置在客户端列之前者不随 client_w 移动（窄视口 N5 类断言的可见性只取决于列起点不取决于 client_w）。
 - ezr-demo 同构同步点 = ui/conns.rs 收缩式 max(12→26)（demo 无 BT_CLIENT_MIN 常量，colw[5] 内联）+ README 变更记录 + 设计规范「本轮需求修订」块；demo 无引擎故 ezr 独有文案（黑名单 toast/校验 computed=expected/重试计数）不属同步面；chips `A 命令` 两端实现一致（规格/QA 文档写 `A 添加` 为 phase-02 命令窗口改版时的文档滞后，非两端漂移）。
+
+## bug16 轮（specifier）：BT 引擎无并发热调命令——改并发的现行实现是全量重启（bug16 根因事实）
+- `BtTaskCmd` 全集 = Pause/StopSeed/Cancel/Disconnect/UpdateTrackers，**无并发/Reconfigure
+  命令**；`Cmd::Reconfigure` 只查 HTTP 任务表（`reconfigure_task(tasks, …)`），对 BT 任务是
+  no-op（BT 引擎句柄在独立的 bt_tasks 表）。
+- 修改任务：BT 确认链（`app/bt_dialog.rs::dlg_confirm_modify_bt`）：模型更新 + 发
+  Reconfigure（BT 侧无效）+ 若 total/并发变化且状态 ∈ {Downloading, Seeding} → **CancelBt +
+  StartBt 全量重启**（新 spec 带新并发）。探针实证（spy 引擎命令序列）：只改并发 →
+  Reconfigure + CancelBt + StartBt 三连。
+- 全量重启的可感知代价 = 连接整体拆除 + 启动重校验（bt/engine.rs 启动注释：大种子逐块
+  SHA-1 可达数十秒）→ 用户感知「改并发未生效、需暂停重启才生效」。app 侧旧引擎滞后退出
+  的 BtStopped 回报在 Downloading/Seeding 态被忽略（on_bt_stopped `_` 臂），状态机无回落。
+- FR-02-24 的 tracker 池热更新先例 = 引擎内 AbortHandle 池重建 + 不重挂引擎；并发热调
+  同理应在 BtTaskCmd 新增命令 + 引擎内重排连接（上调补建、下调即时收缩），杜绝 CancelBt+StartBt。
+
+## bug16 轮（coder）：BT 并发热调落地版实现图谱（D65① 落地）
+- 命令面：`BtTaskCmd::Reconfigure { concurrency, files, proxy_endpoint }`（bt/mod.rs，BtFile 需 use crate::model）+ `Cmd::ReconfigureBt` 转发（engine/mod.rs bt_send）；app 确认链（dlg_confirm_modify_bt）running 态（Downloading|Seeding）发 ReconfigureBt，trackers_changed 另发 BtUpdateTrackers，**CancelBt+StartBt 路径整体退役**（torrent 重读/重解析不再需要，toast 恒成功）。
+- 引擎 cmd 臂顺序：目标并发 clamp(1,64) → files_changed 则重建 pmap+order_cache、补开新选文件句柄（open_selected_file_handle 复用启动路径，Result 化）、逐连接 cancel_inflight_not_covered（try_send Cancel，非覆盖 piece 块退还缺口池、partial 内存保留）、recompute_downloaded（= Σ done × selected_bytes，消除 downloaded 超越新 total 的漂移）、seeding 反转臂（改选使 all_selected_done 不成立时回 downloading）→ shed_excess_conns（先无在飞后最少累计，Drop）→ 补建 fill_peer_slots（上调立即，非 seeding 才拨）→ proxy_changed 重建 tracker 池（同 UpdateTrackers 路径）→ BtConns 立即刷新（连接行一帧内消失）。
+- on_block 新守卫：非覆盖 piece 数据早退（不写盘不计字节不发 Have，退 conn 并续 issue_requests）——撤销在飞后对端仍会发数据的兜底；run() 的 spec/pmap 改 mut（spec.files/concurrency/proxy_endpoint 热可变）。
+- 下调保字节语义 = D30 同构：超额连接的在飞请求随连接拆除立即中断，`partial` 按 piece 键存储不受连接拆除影响，块内已写字节保留、claimed_blocks 自动回归缺口池。

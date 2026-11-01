@@ -192,7 +192,7 @@ impl PeerCandidate {
 }
 
 pub(crate) async fn run(
-    spec: crate::engine::BtSpec,
+    mut spec: crate::engine::BtSpec,
     shared: Arc<EngineShared>,
     mut cmd_rx: mpsc::Receiver<BtTaskCmd>,
     evt_tx: mpsc::Sender<Evt>,
@@ -200,33 +200,19 @@ pub(crate) async fn run(
     let id = spec.id;
     let tun: BtTunables = spec.tunables.clone();
     let peer_id = super::peer_id::make_peer_id();
-    let pmap = Arc::new(PieceMap::new(&spec.files, spec.meta.piece_length));
+    let mut pmap = Arc::new(PieceMap::new(&spec.files, spec.meta.piece_length));
 
     let mut files_handles: HashMap<usize, tokio::fs::File> = HashMap::new();
     for (i, f) in pmap.files.iter().enumerate() {
         if !f.selected {
             continue;
         }
-        let abs = file_abs_path(&spec.save_dir, &spec.name, &f.path);
-        if let Some(parent) = std::path::Path::new(&abs).parent() {
-            let _ = tokio::fs::create_dir_all(parent).await;
-        }
-        match tokio::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .read(true)
-            .open(&abs)
-            .await
-        {
+        match open_selected_file_handle(&spec.save_dir, &spec.name, f).await {
             Ok(fh) => {
-                if f.size > 0 {
-                    let _ = fh.set_len(f.size).await;
-                }
                 files_handles.insert(i, fh);
             }
             Err(e) => {
-                report_fail(&evt_tx, id, BtError::Io(e.to_string())).await;
+                report_fail(&evt_tx, id, BtError::Io(e)).await;
                 return;
             }
         }
@@ -391,6 +377,77 @@ pub(crate) async fn run(
                         );
                         completed_notifies = notifies;
                         tr_handles = handles;
+                    }
+                    BtTaskCmd::Reconfigure {
+                        concurrency,
+                        files,
+                        proxy_endpoint,
+                    } => {
+                        let target = concurrency.clamp(1, 64);
+                        let files_changed = spec.files != files;
+                        let proxy_changed = spec.proxy_endpoint != proxy_endpoint;
+                        spec.concurrency = target;
+                        spec.proxy_endpoint = proxy_endpoint;
+                        if files_changed {
+                            spec.files = files;
+                            pmap = Arc::new(PieceMap::new(&spec.files, spec.meta.piece_length));
+                            order_cache = PieceOrderCache::new();
+                            for (i, f) in pmap.files.iter().enumerate() {
+                                if !f.selected || files_handles.contains_key(&i) {
+                                    continue;
+                                }
+                                if let Ok(fh) =
+                                    open_selected_file_handle(&spec.save_dir, &spec.name, f).await
+                                {
+                                    files_handles.insert(i, fh);
+                                }
+                            }
+                            for st in conns.values_mut() {
+                                let mut dropped = Vec::new();
+                                cancel_inflight_not_covered(st, &pmap, &mut dropped);
+                            }
+                            downloaded = recompute_downloaded(&done, &pmap);
+                            {
+                                let mut st = live.lock().expect("live stats 锁");
+                                st.downloaded = downloaded;
+                                st.left = pmap.selected_total().saturating_sub(downloaded);
+                            }
+                            if seeding && !all_selected_done(&done, &pmap) {
+                                seeding = false;
+                                live.lock().expect("live stats 锁").completed = false;
+                            }
+                        }
+                        for cid in shed_excess_conns(&conns, target) {
+                            if let Some(st) = conns.remove(&cid) {
+                                let _ = st.peer_out.send(PeerOut::Drop).await;
+                            }
+                        }
+                        if !seeding && conns.len() < spec.concurrency.max(1) {
+                            fill_peer_slots(
+                                &spec, &peer_id, &peer_tx, shared.as_ref(), &mut conns,
+                                &mut candidates, &mut next_conn,
+                            );
+                        }
+                        if proxy_changed {
+                            for h in tr_handles.drain(..) {
+                                h.abort();
+                            }
+                            tracker_fail_count = 0;
+                            let (notifies, handles) = start_tracker_pool(
+                                &trackers,
+                                spec.meta.infohash,
+                                peer_id,
+                                listen_port,
+                                shared.bt_tracker_client(spec.proxy_endpoint.as_ref()),
+                                &tun,
+                                &live,
+                                &tr_tx,
+                            );
+                            completed_notifies = notifies;
+                            tr_handles = handles;
+                        }
+                        let views = conn_views(&mut conns, pmap.covered_pieces());
+                        let _ = evt_tx.send(Evt::BtConns { id, conns: views }).await;
                     }
                 }
             }
@@ -1386,6 +1443,73 @@ async fn request_blocks_of_piece(
     asked
 }
 
+fn shed_excess_conns(conns: &HashMap<usize, ConnStat>, target: usize) -> Vec<usize> {
+    let excess = conns.len().saturating_sub(target.max(1));
+    if excess == 0 {
+        return Vec::new();
+    }
+    let mut order: Vec<(usize, usize, u64)> = conns
+        .iter()
+        .map(|(cid, st)| (*cid, st.inflight.len(), st.cum_down))
+        .collect();
+    order.sort_by_key(|&(_, inflight_n, cum)| (inflight_n, cum));
+    order
+        .into_iter()
+        .take(excess)
+        .map(|(cid, _, _)| cid)
+        .collect()
+}
+
+fn cancel_inflight_not_covered(
+    st: &mut ConnStat,
+    pmap: &PieceMap,
+    cancelled: &mut Vec<(u32, u32)>,
+) {
+    let drop_keys: Vec<(u32, u32)> = st
+        .inflight
+        .keys()
+        .copied()
+        .filter(|(p, _)| !pmap.covers(*p))
+        .collect();
+    for key in drop_keys {
+        if let Some((len, _)) = st.inflight.remove(&key) {
+            cancelled.push(key);
+            let _ = st.peer_out.try_send(PeerOut::Send(peer::PeerMsg::Cancel {
+                index: key.0,
+                begin: key.1,
+                length: len,
+            }));
+        }
+    }
+}
+
+fn recompute_downloaded(done: &HashSet<u32>, pmap: &PieceMap) -> u64 {
+    done.iter().map(|&p| selected_bytes_of_piece(pmap, p)).sum()
+}
+
+async fn open_selected_file_handle(
+    save_dir: &str,
+    name: &str,
+    f: &crate::model::BtFile,
+) -> Result<tokio::fs::File, String> {
+    let abs = file_abs_path(save_dir, name, &f.path);
+    if let Some(parent) = std::path::Path::new(&abs).parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    let fh = tokio::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .read(true)
+        .open(&abs)
+        .await
+        .map_err(|e| e.to_string())?;
+    if f.size > 0 {
+        let _ = fh.set_len(f.size).await;
+    }
+    Ok(fh)
+}
+
 fn fill_peer_slots(
     spec: &crate::engine::BtSpec,
     peer_id: &[u8; 20],
@@ -1519,6 +1643,24 @@ async fn on_block(
         None => return,
     };
     st.inflight.remove(&(index, begin));
+    if !pmap.covers(index) {
+        conns.insert(conn_id, st);
+        let claimed = claimed_blocks(conns, partial);
+        if let Some(st) = conns.get_mut(&conn_id) {
+            issue_requests(
+                conn_id,
+                st,
+                &claimed,
+                pmap,
+                &spec.tunables,
+                done,
+                partial,
+                order,
+            )
+            .await;
+        }
+        return;
+    }
     st.cum_down += data.len() as u64;
     for other in conns.values_mut() {
         if let Some((len, _)) = other.inflight.remove(&(index, begin)) {
@@ -2601,11 +2743,47 @@ mod tests {
         port
     }
 
+    async fn counting_seeder_any(
+        data: Vec<u8>,
+        piece_len: usize,
+        infohash: [u8; 20],
+        counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        peer_id: &[u8; 20],
+    ) -> u16 {
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let data = std::sync::Arc::new(data);
+        let peer_id = *peer_id;
+        tokio::spawn(async move {
+            loop {
+                let Ok((sock, _)) = listener.accept().await else {
+                    return;
+                };
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let data = data.clone();
+                tokio::spawn(async move {
+                    serve_seeder_session_as(sock, &data, piece_len, infohash, &peer_id).await;
+                });
+            }
+        });
+        port
+    }
+
     async fn serve_seeder_session(
+        sock: TcpStream,
+        data: &[u8],
+        piece_len: usize,
+        infohash: [u8; 20],
+    ) {
+        serve_seeder_session_as(sock, data, piece_len, infohash, b"-QX7777-seederpeer00").await;
+    }
+
+    async fn serve_seeder_session_as(
         mut sock: TcpStream,
         data: &[u8],
         piece_len: usize,
         infohash: [u8; 20],
+        peer_id: &[u8; 20],
     ) {
         let mut hs = [0u8; 68];
         if sock.read_exact(&mut hs).await.is_err() {
@@ -2616,7 +2794,7 @@ mod tests {
         resp.extend_from_slice(b"BitTorrent protocol");
         resp.extend_from_slice(&[0u8; 8]);
         resp.extend_from_slice(&infohash);
-        resp.extend_from_slice(b"-QX7777-seederpeer00");
+        resp.extend_from_slice(peer_id);
         if sock.write_all(&resp).await.is_err() {
             return;
         }
@@ -4103,6 +4281,401 @@ mod tests {
         }
         assert!(saw_stopped, "取消（删除任务）也发送 stopped");
         let _ = handle.await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    async fn wait_bt_conns_established(evt_rx: &mut mpsc::Receiver<Evt>, n: usize) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "等待 {n} 条已握手连接超时"
+            );
+            let Some(evt) = tokio::time::timeout(Duration::from_millis(500), evt_rx.recv())
+                .await
+                .ok()
+                .flatten()
+            else {
+                continue;
+            };
+            if let Evt::BtConns { conns, .. } = evt {
+                if conns.len() >= n {
+                    break;
+                }
+            }
+        }
+    }
+
+    fn reconf_spec_conns(inflight: &[(u32, u32)], cum_down: u64) -> ConnStat {
+        let (tx, _rx) = mpsc::channel::<PeerOut>(8);
+        let mut st = new_conn_stat("127.0.0.9:1000".into());
+        st.peer_out = tx;
+        st.cum_down = cum_down;
+        for (p, b) in inflight {
+            st.inflight
+                .insert((*p, *b), (16 * 1024, std::time::Instant::now()));
+        }
+        st
+    }
+
+    #[test]
+    fn shed_excess_conns_prefers_uninflight_then_least_downloaded() {
+        let mut conns = HashMap::new();
+        conns.insert(1usize, reconf_spec_conns(&[(0, 0), (0, 16384)], 1000));
+        conns.insert(2usize, reconf_spec_conns(&[], 5));
+        conns.insert(3usize, reconf_spec_conns(&[(1, 0)], 50));
+        let shed = shed_excess_conns(&conns, 1);
+        assert_eq!(shed, vec![2usize, 3usize], "先收无在飞、再收累计下载最少");
+        let shed = shed_excess_conns(&conns, 2);
+        assert_eq!(shed, vec![2usize], "目标 2 只收一条");
+        let shed = shed_excess_conns(&conns, 3);
+        assert!(shed.is_empty(), "未超额不收");
+    }
+
+    #[test]
+    fn cancel_inflight_not_covered_keeps_wanted_requests() {
+        let files = vec![
+            BtFile {
+                path: "a.bin".into(),
+                size: 200 * 1024,
+                selected: true,
+            },
+            BtFile {
+                path: "b.bin".into(),
+                size: 200 * 1024,
+                selected: false,
+            },
+        ];
+        let pmap = PieceMap::new(&files, 128 * 1024);
+        assert!(pmap.covers(0) && pmap.covers(1) && !pmap.covers(2) && !pmap.covers(3));
+        let (tx, _rx) = mpsc::channel::<PeerOut>(8);
+        let mut st = new_conn_stat("127.0.0.9:1000".into());
+        st.peer_out = tx;
+        for (p, b) in [(0u32, 0u32), (2u32, 0u32), (3u32, 16384u32)] {
+            st.inflight
+                .insert((p, b), (16 * 1024, std::time::Instant::now()));
+        }
+        let mut cancelled = Vec::new();
+        cancel_inflight_not_covered(&mut st, &pmap, &mut cancelled);
+        cancelled.sort_unstable();
+        assert_eq!(
+            cancelled,
+            vec![(2u32, 0u32), (3u32, 16384u32)],
+            "撤销集合 = 非覆盖 piece 的在飞请求（顺序不敏感）"
+        );
+        assert!(st.inflight.contains_key(&(0, 0)), "覆盖内请求保留");
+    }
+
+    #[test]
+    fn recompute_downloaded_follows_new_selection() {
+        let all = vec![
+            BtFile {
+                path: "a.bin".into(),
+                size: 100,
+                selected: true,
+            },
+            BtFile {
+                path: "b.bin".into(),
+                size: 100,
+                selected: true,
+            },
+        ];
+        let full = PieceMap::new(&all, 64);
+        let done: HashSet<u32> = [0u32, 1, 2, 3].into();
+        assert_eq!(
+            recompute_downloaded(&done, &full),
+            200,
+            "全选：四块全完成 = 200"
+        );
+        let shrunk_files = vec![
+            BtFile {
+                path: "a.bin".into(),
+                size: 100,
+                selected: true,
+            },
+            BtFile {
+                path: "b.bin".into(),
+                size: 100,
+                selected: false,
+            },
+        ];
+        let shrunk = PieceMap::new(&shrunk_files, 64);
+        assert_eq!(
+            recompute_downloaded(&done, &shrunk),
+            100,
+            "取消勾选 b.bin：仅计入 a.bin 覆盖的字节（64+36，重算口径与完成计数同源）"
+        );
+    }
+
+    async fn fake_udp_tracker_multi(peers: Vec<(std::net::IpAddr, u16)>) -> u16 {
+        let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = sock.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let mut buf = [0u8; 512];
+            loop {
+                let (n, from) = match sock.recv_from(&mut buf).await {
+                    Ok(x) => x,
+                    Err(_) => return,
+                };
+                let req = &buf[..n];
+                if req.len() < 16 {
+                    continue;
+                }
+                let action = u32::from_be_bytes(req[8..12].try_into().unwrap());
+                let txid = u32::from_be_bytes(req[12..16].try_into().unwrap());
+                if action == 0 {
+                    let mut out = Vec::new();
+                    out.extend_from_slice(&0u32.to_be_bytes());
+                    out.extend_from_slice(&txid.to_be_bytes());
+                    out.extend_from_slice(&0x1234_5678_9abc_def0u64.to_be_bytes());
+                    let _ = sock.send_to(&out, from).await;
+                } else if action == 1 {
+                    let mut out = Vec::new();
+                    out.extend_from_slice(&1u32.to_be_bytes());
+                    out.extend_from_slice(&txid.to_be_bytes());
+                    out.extend_from_slice(&(peers.len() as u32).to_be_bytes());
+                    out.extend_from_slice(&1u32.to_be_bytes());
+                    out.extend_from_slice(&(peers.len() as u32).to_be_bytes());
+                    for (ip, port) in &peers {
+                        match ip {
+                            std::net::IpAddr::V4(v4) => out.extend_from_slice(&v4.octets()),
+                            std::net::IpAddr::V6(v6) => out.extend_from_slice(&v6.octets()),
+                        }
+                        out.extend_from_slice(&port.to_be_bytes());
+                    }
+                    let _ = sock.send_to(&out, from).await;
+                }
+            }
+        });
+        port
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reconfigure_grows_connection_count_without_restart() {
+        let piece_len = 16 * 1024;
+        let data: Vec<u8> = (0..80_000usize).map(|i| (i % 251) as u8).collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bteng-reconf-grow");
+        let save_dir = dir.to_string_lossy().into_owned();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let seeders = [
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 2)),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 3)),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 4)),
+        ];
+        let meta0 = make_meta(&data, piece_len, "udp://127.0.0.1:1/announce");
+        let mut peer_list = Vec::new();
+        for (i, ip) in seeders.iter().enumerate() {
+            let mut pid = *b"-QX7777-seederpeer00";
+            pid[19] = b'0' + i as u8;
+            let port = counting_seeder_any(
+                data.clone(),
+                piece_len,
+                meta0.infohash,
+                counter.clone(),
+                &pid,
+            )
+            .await;
+            peer_list.push((*ip, port));
+        }
+        let tracker_port = fake_udp_tracker_multi(peer_list).await;
+        let meta = make_meta(
+            &data,
+            piece_len,
+            &format!("udp://127.0.0.1:{tracker_port}/announce"),
+        );
+
+        let shared = crate::engine::shared_for_tests();
+        let spec = crate::engine::BtSpec {
+            id: 61,
+            source: "/tmp/e2e-reconf.torrent".into(),
+            meta: meta.clone(),
+            save_dir,
+            name: "e2e-reconf.bin".into(),
+            files: vec![BtFile {
+                path: "e2e-reconf.bin".into(),
+                size: data.len() as u64,
+                selected: true,
+            }],
+            trackers: vec![format!("udp://127.0.0.1:{tracker_port}/announce")],
+            concurrency: 1,
+            proxy_endpoint: None,
+            seeding: false,
+            max_speed: 0,
+            tunables: Default::default(),
+        };
+
+        let (evt_tx, mut evt_rx) = mpsc::channel(256);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
+        let handle = tokio::spawn(run(spec.clone(), shared.clone(), cmd_rx, evt_tx));
+
+        wait_bt_conns_established(&mut evt_rx, 1).await;
+
+        cmd_tx
+            .send(BtTaskCmd::Reconfigure {
+                concurrency: 3,
+                files: spec.files.clone(),
+                proxy_endpoint: None,
+            })
+            .await
+            .unwrap();
+        wait_bt_conns_established(&mut evt_rx, 3).await;
+        assert!(
+            !handle.is_finished(),
+            "热调不得重启引擎（引擎任务必须存活）"
+        );
+
+        cmd_tx.send(BtTaskCmd::Cancel).await.unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reconfigure_shrinks_connections_and_keeps_downloading() {
+        let piece_len = 16 * 1024;
+        let data: Vec<u8> = (0..400_000usize).map(|i| (i % 241) as u8).collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bteng-reconf-shrink");
+        let save_dir = dir.to_string_lossy().into_owned();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let ips = [
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 5)),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 6)),
+        ];
+        let meta0 = make_meta(&data, piece_len, "udp://127.0.0.1:1/announce");
+        let mut peer_list = Vec::new();
+        for (i, ip) in ips.iter().enumerate() {
+            let mut pid = *b"-QX7777-seederpeer00";
+            pid[19] = b'0' + i as u8;
+            let port = counting_seeder_any(
+                data.clone(),
+                piece_len,
+                meta0.infohash,
+                counter.clone(),
+                &pid,
+            )
+            .await;
+            peer_list.push((*ip, port));
+        }
+        let tracker_port = fake_udp_tracker_multi(peer_list).await;
+        let meta = make_meta(
+            &data,
+            piece_len,
+            &format!("udp://127.0.0.1:{tracker_port}/announce"),
+        );
+
+        let shared = crate::engine::shared_for_tests();
+        let spec = crate::engine::BtSpec {
+            id: 62,
+            source: "/tmp/e2e-shrink.torrent".into(),
+            meta: meta.clone(),
+            save_dir,
+            name: "e2e-shrink.bin".into(),
+            files: vec![BtFile {
+                path: "e2e-shrink.bin".into(),
+                size: data.len() as u64,
+                selected: true,
+            }],
+            trackers: vec![format!("udp://127.0.0.1:{tracker_port}/announce")],
+            concurrency: 2,
+            proxy_endpoint: None,
+            seeding: false,
+            max_speed: 0,
+            tunables: Default::default(),
+        };
+
+        let (evt_tx, mut evt_rx) = mpsc::channel(256);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
+        let handle = tokio::spawn(run(spec.clone(), shared.clone(), cmd_rx, evt_tx));
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        let mut established_seen = 0usize;
+        let mut last_downloaded = 0u64;
+        while established_seen < 2 {
+            assert!(std::time::Instant::now() < deadline, "双连接未建立");
+            let Some(evt) = tokio::time::timeout(Duration::from_millis(500), evt_rx.recv())
+                .await
+                .ok()
+                .flatten()
+            else {
+                continue;
+            };
+            match evt {
+                Evt::BtConns { conns, .. } => {
+                    established_seen = conns.len().max(established_seen);
+                }
+                Evt::BtProgress { downloaded, .. } => {
+                    assert!(
+                        downloaded >= last_downloaded,
+                        "已下载字节单调不减：{last_downloaded} → {downloaded}"
+                    );
+                    last_downloaded = downloaded;
+                }
+                _ => {}
+            }
+        }
+
+        cmd_tx
+            .send(BtTaskCmd::Reconfigure {
+                concurrency: 1,
+                files: spec.files.clone(),
+                proxy_endpoint: None,
+            })
+            .await
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut shrunk = false;
+        let mut progress_after = 0usize;
+        while std::time::Instant::now() < deadline {
+            let Some(evt) = tokio::time::timeout(Duration::from_millis(300), evt_rx.recv())
+                .await
+                .ok()
+                .flatten()
+            else {
+                continue;
+            };
+            match evt {
+                Evt::BtConns { conns, .. } => {
+                    if !shrunk {
+                        assert!(
+                            conns.len() <= 2,
+                            "热调前快照不得超过原并发，实际 {}",
+                            conns.len()
+                        );
+                        if conns.len() <= 1 {
+                            shrunk = true;
+                        }
+                    } else {
+                        assert!(
+                            conns.len() <= 1,
+                            "收缩后连接数 ≤ 目标并发，实际 {}",
+                            conns.len()
+                        );
+                    }
+                }
+                Evt::BtProgress { downloaded, .. } => {
+                    assert!(
+                        downloaded >= last_downloaded,
+                        "收缩后字节单调不减：{last_downloaded} → {downloaded}"
+                    );
+                    last_downloaded = downloaded;
+                    if shrunk {
+                        progress_after += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(shrunk, "收缩后应观察到 ≤1 条连接的 BtConns 快照");
+        assert!(progress_after > 0, "收缩后任务保持下载（进度事件继续）");
+        assert!(
+            !handle.is_finished(),
+            "热调不得重启引擎（引擎任务必须存活）"
+        );
+
+        cmd_tx.send(BtTaskCmd::Cancel).await.unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

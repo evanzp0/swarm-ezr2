@@ -496,11 +496,7 @@ impl App {
             conns_raw.parse::<usize>().unwrap_or(0).clamp(1, 64)
         };
 
-        let old_total = self.tasks[idx].total;
-        let changed =
-            new_total_of(&files) != old_total || concurrency != self.tasks[idx].concurrency;
         let state = self.tasks[idx].state;
-        let source = self.tasks[idx].url.clone();
         let new_total = new_total_of(&files);
         let old_trackers = self.tasks[idx]
             .bt
@@ -535,41 +531,26 @@ impl App {
                 self.set_toast(format!("⚠ 引用的代理「{nm}」不存在，已按直连"));
             }
         }
-        let engine = self.engine.clone();
-        tokio::spawn(async move {
-            engine
-                .send(Cmd::Reconfigure {
-                    id,
-                    concurrency,
-                    endpoint,
-                })
-                .await;
-        });
-
-        let mut rebuilt = true;
-        let mut pool_updated = false;
-        if changed && matches!(state, TaskState::Downloading | TaskState::Seeding) {
-            rebuilt = match std::fs::read(crate::model::config::expand_tilde(&source))
-                .map_err(|_| ())
-                .and_then(|b| TorrentMeta::parse(&b).map_err(|_| ()))
-            {
-                Ok(meta) => {
-                    let spec = Box::new(self.make_bt_spec(&self.tasks[idx], &meta));
-                    let engine = self.engine.clone();
-                    tokio::spawn(async move {
-                        engine.send(Cmd::CancelBt { id }).await;
-                        engine.send(Cmd::StartBt { spec }).await;
-                    });
-                    pool_updated = true;
-                    true
-                }
-                Err(_) => false,
-            };
+        let running = matches!(state, TaskState::Downloading | TaskState::Seeding);
+        if running {
+            let files = self.tasks[idx]
+                .bt
+                .as_ref()
+                .map(|b| b.files.clone())
+                .unwrap_or_default();
+            let engine = self.engine.clone();
+            tokio::spawn(async move {
+                engine
+                    .send(Cmd::ReconfigureBt {
+                        id,
+                        concurrency,
+                        files,
+                        proxy_endpoint: endpoint,
+                    })
+                    .await;
+            });
         }
-        if trackers_changed
-            && !pool_updated
-            && matches!(state, TaskState::Downloading | TaskState::Seeding)
-        {
+        if trackers_changed && running {
             let engine = self.engine.clone();
             tokio::spawn(async move {
                 engine
@@ -581,20 +562,16 @@ impl App {
             });
         }
 
-        if rebuilt {
-            self.set_toast(format!(
-                "✓ BT 任务已更新：{}/{} 文件 · 共 {}（立即生效）",
-                sel_cnt,
-                self.tasks[idx]
-                    .bt
-                    .as_ref()
-                    .map(|b| b.files.len())
-                    .unwrap_or(0),
-                crate::model::sizefmt::fmt_size(self.tasks[idx].total)
-            ));
-        } else {
-            self.set_toast("⚠ 无法读取种子文件");
-        }
+        self.set_toast(format!(
+            "✓ BT 任务已更新：{}/{} 文件 · 共 {}（立即生效）",
+            sel_cnt,
+            self.tasks[idx]
+                .bt
+                .as_ref()
+                .map(|b| b.files.len())
+                .unwrap_or(0),
+            crate::model::sizefmt::fmt_size(self.tasks[idx].total)
+        ));
         self.save_registry();
     }
 }
@@ -1116,6 +1093,7 @@ mod tests {
                 .expect("发送端存活");
             match c {
                 crate::engine::Cmd::Reconfigure { .. } => continue,
+                crate::engine::Cmd::ReconfigureBt { .. } => continue,
                 other => {
                     got = Some(other);
                     break;
@@ -1140,6 +1118,123 @@ mod tests {
             "不得重挂引擎（无 CancelBt/StartBt），实际: {:?}",
             more.ok().flatten()
         );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn confirm_modify_concurrency_only_sends_hot_reconfigure_no_restart() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-hotconns");
+        let path = write_multi_torrent(&dir, "a.torrent");
+        let meta = parse_at(&path);
+        let mut app = make_app("hotconns");
+        app.open_add_bt_dialog_with(&path, &meta);
+        app.dlg_confirm_add_bt(false);
+        app.selected = 0;
+        app.tasks[0].state = TaskState::Downloading;
+
+        let (spy_tx, mut spy_rx) = tokio::sync::mpsc::channel::<crate::engine::Cmd>(16);
+        app.engine = crate::engine::EngineHandle::from_sender(spy_tx);
+
+        app.modify_dialog_entry();
+        {
+            let d = app.dialog.as_mut().unwrap();
+            d.conns.set("8");
+            d.conns.cursor_end();
+        }
+        app.dlg_confirm_modify_bt();
+        assert!(app.dialog.is_none(), "确认后关闭");
+        assert_eq!(app.tasks[0].concurrency, 8);
+
+        let got = tokio::time::timeout(std::time::Duration::from_millis(500), spy_rx.recv())
+            .await
+            .expect("应发出引擎命令")
+            .expect("发送端存活");
+        match got {
+            crate::engine::Cmd::ReconfigureBt {
+                id,
+                concurrency,
+                files,
+                proxy_endpoint,
+            } => {
+                assert_eq!(id, app.tasks[0].id);
+                assert_eq!(concurrency, 8, "携带确认后的新并发");
+                assert_eq!(
+                    files.len(),
+                    app.tasks[0].bt.as_ref().unwrap().files.len(),
+                    "携带确认后的文件勾选全集"
+                );
+                assert!(proxy_endpoint.is_none(), "直连无端点");
+            }
+            other => panic!("只改并发应发 ReconfigureBt，实际: {other:?}"),
+        }
+        let more = tokio::time::timeout(std::time::Duration::from_millis(150), spy_rx.recv()).await;
+        assert!(
+            more.is_err(),
+            "不得出现引擎重启（无 CancelBt/StartBt），实际: {:?}",
+            more.ok().flatten()
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn confirm_modify_combined_sends_reconfigure_bt_plus_tracker_hot_update() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-hotcombo");
+        let path = write_multi_torrent(&dir, "a.torrent");
+        let meta = parse_at(&path);
+        let mut app = make_app("hotcombo");
+        app.open_add_bt_dialog_with(&path, &meta);
+        app.dlg_confirm_add_bt(false);
+        app.selected = 0;
+        app.tasks[0].state = TaskState::Downloading;
+        let files_before = app.tasks[0].bt.as_ref().unwrap().files.len();
+
+        let (spy_tx, mut spy_rx) = tokio::sync::mpsc::channel::<crate::engine::Cmd>(16);
+        app.engine = crate::engine::EngineHandle::from_sender(spy_tx);
+
+        app.modify_dialog_entry();
+        {
+            let d = app.dialog.as_mut().unwrap();
+            d.conns.set("24");
+            d.conns.cursor_end();
+            d.proxy_sel = (d.proxy_sel + 1) % app.proxy_options.len();
+            let mut tr = d.trackers.trim_lines().join("\n");
+            tr.push_str("\nudp://combo/ann");
+            d.trackers.set_text(&tr);
+        }
+        app.dlg_confirm_modify_bt();
+        assert!(app.dialog.is_none(), "确认后关闭");
+        assert_eq!(app.tasks[0].concurrency, 24);
+
+        let mut got_reconf = None;
+        let mut got_trackers = None;
+        for _ in 0..6 {
+            let c = tokio::time::timeout(std::time::Duration::from_millis(500), spy_rx.recv())
+                .await
+                .expect("应发出引擎命令")
+                .expect("发送端存活");
+            match c {
+                crate::engine::Cmd::ReconfigureBt {
+                    concurrency, files, ..
+                } => got_reconf = Some((concurrency, files)),
+                crate::engine::Cmd::BtUpdateTrackers { trackers, .. } => {
+                    got_trackers = Some(trackers)
+                }
+                crate::engine::Cmd::CancelBt { .. } | crate::engine::Cmd::StartBt { .. } => {
+                    panic!("组合修改不得触发引擎重启: {c:?}")
+                }
+                _ => {}
+            }
+            if got_reconf.is_some() && got_trackers.is_some() {
+                break;
+            }
+        }
+        let (concurrency, files) = got_reconf.expect("组合修改应发 ReconfigureBt");
+        assert_eq!(concurrency, 24);
+        assert_eq!(files.len(), files_before, "文件勾选未变时全集原样携带");
+        let trackers = got_trackers.expect("trackers 变更应发 BtUpdateTrackers");
+        assert_eq!(trackers.last(), Some(&"udp://combo/ann".to_string()));
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }

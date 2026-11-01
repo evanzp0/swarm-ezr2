@@ -154,3 +154,13 @@
 ## bug14 轮（specifier）
 - GitHub 直连间歇不可用（git clone 与 release 下载同时超时；本会话开头 clone swarm-ezr2 成功过，同会话后段 443 连不通）：gh-proxy.com 前缀镜像可用且快（bb v1.12.209 静态包 + APS 仓库 clone 均经 `https://gh-proxy.com/https://github.com/...` 成功）；ghfast.top/kkgithub 探测不通。rustup/cargo 仍走 rsproxy 不受影响。
 - **heredoc python 写文件偶发不持久化**（本轮两次复现：re.sub 36 单元格与 PC-04 改写——脚本打印成功、紧随的读回是旧内容；间隔一次调用后有时又变新内容）：写关键文件一律「写后 fsync + 本进程读回布尔探针 + 外部 rg 复核」三连；仍不符时用行索引重写并再验。
+
+## bug16 轮（specifier）：工具调用输入/输出存在双向文本改写，含方括号序列的锚点匹配必须运行时拼接 + 字节级验证
+- 现象：经 chat 工具通道编辑 mission/phase-02.md 时，输入内容中的 `[bt]/[http]` 被改写为
+  `[bt]/ttp]`（反向亦有），Edit 工具 old_str 永远匹配不上；工具输出显示的文件内容同样被
+  反向改写，肉眼比对「看起来一致」但 `s.count(anchor)==0`。
+- 处置：锚点字符串一律运行时拼接构造（如 `'[' + 'http' + ']'`），绕开输入改写；匹配失败时
+  用 `unicode_escape` + `bytes.hex()` 对文件段与锚点做字节级比对裁决，不信任何一侧的显示
+  文本（含 repr/unicode_escape 输出——输出同样可能被改写，bytes hex 才是终审）。
+- 根因：chat 管道存在一层自动「纠错」改写，触发面包含方括号缩写序列；常规 ASCII 锚点
+  （`| D64 |`、`Feature:` 行）不受影响，含 `[/]` 形态序列的才中招。

@@ -6,6 +6,8 @@ pub mod peer_id;
 pub mod pieces;
 pub mod tracker;
 
+use crate::model::BtFile;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BtError {
     Bencode(String),
@@ -42,6 +44,11 @@ pub enum BtTaskCmd {
     StopSeed,
     Disconnect(usize),
     UpdateTrackers(Vec<String>),
+    Reconfigure {
+        concurrency: usize,
+        files: Vec<BtFile>,
+        proxy_endpoint: Option<crate::model::ProxyEndpoint>,
+    },
 }
 
 pub const REQUEST_BLOCK_LEN: u32 = 16 * 1024;

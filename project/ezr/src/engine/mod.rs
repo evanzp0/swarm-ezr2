@@ -48,6 +48,12 @@ pub enum Cmd {
     StartBt {
         spec: Box<supervisor::BtSpec>,
     },
+    ReconfigureBt {
+        id: u32,
+        concurrency: usize,
+        files: Vec<crate::model::BtFile>,
+        proxy_endpoint: Option<crate::model::ProxyEndpoint>,
+    },
     BtUpdateTrackers {
         id: u32,
         trackers: Vec<String>,
@@ -392,6 +398,20 @@ async fn handle_cmd(
             start_bt_task(bt_tasks, *spec, shared.clone(), evt_tx.clone());
             false
         }
+        Cmd::ReconfigureBt {
+            id,
+            concurrency,
+            files,
+            proxy_endpoint,
+        } => bt_send(
+            bt_tasks,
+            id,
+            crate::bt::BtTaskCmd::Reconfigure {
+                concurrency,
+                files,
+                proxy_endpoint,
+            },
+        ),
         Cmd::PauseBt { id } => bt_send(bt_tasks, id, crate::bt::BtTaskCmd::Pause),
         Cmd::CancelBt { id } => bt_send(bt_tasks, id, crate::bt::BtTaskCmd::Cancel),
         Cmd::StopSeed { id } => bt_send(bt_tasks, id, crate::bt::BtTaskCmd::StopSeed),

@@ -241,3 +241,20 @@
 - MT-03（重启应续传）本轮 2 连败与 bug13 登记一致（基线同败、A/B 已证与二进制无关、本轮续传路径零改动）——沿袭已知项，QA 轮 refinement 归属不变。
 - demo pty 验证脚本（verify_ezr.py）的表头查找断言隐含列宽假设：N5 查找「下载速度+累计下载」同行在 44 列视口下依赖累计下载单元格（37..45 列）完整可见——bug11 列宽改版（内容 59→86/94）后该单元格被视口右缘裁成「累计下」，查找 not found 连锁 N5b/N10/N11 四项假 FAIL（A/B 对照 max(12)/max(26) 同败已证与 D64 无关）；列宽改版轮必须同步核对 demo 脚本的视口可见性断言（查找锚应选列起点不受 client_w 影响的列，如「地址/下载速度/上传速度」，或放宽滚动次数到 hmax）。
 - pyte 是 demo pty 脚本依赖（本沙箱 pip 阿里云镜像装 0.8.2 即可）；跑单场景 `python3 scripts/verify_ezr.py n`（参数=场景字母过滤器），release 二进制先 cargo build --release（增量 18s）。
+
+## bug16 轮（specifier）：binary-only crate 的 spy 探针法与临时测试插桩还原纪律
+- 本仓无 lib.rs（binary-only），tests/ 集成测试访问不了内部——行为探针只能做 crate 内
+  测试模块（cfg(test)）。
+- 探针插桩纪律：改前 `cp` 备份原文件到 `.work/tmp/`；探针测试以 `panic!` 携带诊断载荷
+  （命令序列 fmt 列表）主动失败输出证据；跑完 `cp` 还原并 `git diff` 复核零残留。
+- spy 引擎命令序列断言模式：`EngineHandle::from_sender(spy_tx)` 替换 app.engine，逐条
+  `timeout(recv)` 收集 `Cmd` 的 Debug 串——比逐命令断言更适合「发生了什么」类归因。
+- APS dry-check 增量口径：改 feature 前先对 `git show HEAD:` 版本跑 parser+dry-checker
+  存基线，改后 diff findings（同类配对增减），套件级增减才是本轮净效应（本轮 08：
+  29→28，03：8→8）。
+
+## bug16 轮（coder）：BT 引擎多 seeder 夹具三纪律 + 磁盘满复现
+- **互异 peer_id**：多 seeder 夹具每个实例必须用不同 peer_id（serve_seeder_session_as 支持传入）——同 peer_id 会被引擎「单 peer 单连接」去重臂正确断开，tracker 周期 announce 又把候选加回，形成「拨号→dup 断开→重拨」死循环（探针 Closed reason=引擎断开 连锁复现）。
+- **0.0.0.0 绑定**：多回环地址（127.0.0.2–4）拨号测多连接时，seeder 必须 bind 0.0.0.0:0（counting_seeder_any）——绑 127.0.0.1 的 listener 不接受 127.0.0.2 目的连接（连接拒绝假象）；沙箱 127/8 全段可连（python 探针实测）。
+- **piece 数学**：done 集 × selected_bytes_of_piece 的重算断言要按 piece_length 跨文件边界推演（a=100+b=100、块 64：done{0..3} 全选=200、b 取消后=100=64+36）——别想当然按文件大小直加。
+- 磁盘 100% 二次复现（集成目标链接期 Bus error + No space left）：清 target/debug/incremental（3.2G）+ 全程 CARGO_INCREMENTAL=0 再跑 13 目标（累计 ~10 分钟逐目标前台跑，禁 --tests 一把梭）。
