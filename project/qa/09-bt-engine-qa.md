@@ -1,6 +1,6 @@
 # QA 套件 · 09-bt-engine BT 下载与做种引擎（期号 02）
 
-> 对应规格：`project/features/09-bt-engine.feature`（14 场景）。
+> 对应规格：`project/features/09-bt-engine.feature`（15 场景）。
 > 需求依据：`project/mission/phase-02.md` FR-02-06…25、D45/D46/D51/D52/D54/D57/D58/D60/D61。
 > 协议基线：操作者钦定 BEP 3/15/23/7/12/9/20；tokio 异步（FR-02-10）。
 > 上传真实统计（互惠/做种，D45/D58）、BEP 9 做种侧响应（D53）、下载完成转做种（D57）；
@@ -47,6 +47,7 @@
 | QA-BE-12 | 09-bt-engine-12 | 下载中 BT 任务按 P | 弹窗元信息行 `BT · 块大小 256 KB · x/y 块 · 并发 N`（真实 piece 进度）；四态色块真实渲染（🟦 优先于 🟨）；下载前沿定位；滚动/关闭/鼠标同 FR-01-106 口径 |
 | QA-BE-13 | 09-bt-engine-13 | 做种端到端：leecher 连接做种中任务拉数据 → 观察上传统计 → 倒计时归零；再跑一轮空格提前停止；重启恢复 | leecher 从本端拉到字节（fixture 对账）、上传统计真实增长（列表已上传/头部 ↑ 与峰值/面板上传两列/announce uploaded）；倒计时归零 → toast `✓ 做种结束: <name>`、转「已完成」、上传连接清空、tracker 收 stopped；空格 → toast `⏸ 已停止做种（进入已完成）: <name>`、转「已完成」、tracker 收 stopped；重启后做种恢复（uploaded 延续、seed_left 续走，FR-02-22） |
 | QA-BE-14 | 09-bt-engine-14 | 配置 `[bt]` 表 bt_concurrency=8、seed_duration_secs=60、idle_eviction_secs=30 后添加 BT 任务观察至做种；另轮写非法值（0/负/非整数）观察回退；[http] 调优键同理抽验（throttle_burst_secs=0 回退 0.5） | 新 BT 任务并发预填/默认 = 8（v1.35：硬编码 20 退役，缺省回退代码常量）；做种列表行「剩余做种」自 60s 起倒计时；空闲置换按 30s 阈值执行（同 IP 重拨可观察）；其余 [bt] 调优键未配置时按代码常量默认生效、合法配置值引擎按值执行（下载/做种全链路行为不变）；非法值回退默认且启动不报错（统一口径 FR-01-71，与 QA-PC-04 回退行对账） |
+| QA-BE-15 | 09-bt-engine-15 | 下载中任务空格暂停 → 空格开始重复 3 轮（fixture seeder/tracker 全程留档）；另轮修改并发下调收缩一条连接后随即改回 | **生命周期礼仪严格检查（v1.37/FR-02-27）**：每轮新握手 peer_id = 首轮（会话级稳定：进程内全部 BT 任务共用、跨暂停/重启/热调不变，`-EZ2000-` 形态）；每轮暂停 seeder 侧读到 EOF（本端先关写）且全程无 ConnectionReset（优雅关闭非 RST 强拆）；tracker 事件序列 = started → stopped → started 且全程同 peer_id（无「换 ID 重启」形态）；重启后无同 peer 双连（peer_id 去重既有口径）；下调收缩连接 seeder 侧读到 EOF 无 ConnectionReset；被收缩候选不计失败退避（fails 不被污染）且自关冷却内不向该候选重拨（同候选两次入连间隔 ≥ 冷却下限，fixture 观察入连时间戳）；任务全程下载中、进度单调不减 |
 
 ## 通过准则
 

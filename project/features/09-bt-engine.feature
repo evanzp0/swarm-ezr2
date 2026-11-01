@@ -13,6 +13,7 @@
 #   09-bt-engine-12 P pieces 弹窗 BT 臂（真实 piece 四态 / 块大小 = piece length）
 #   09-bt-engine-13 做种与上传端到端（做种列表行 / 互惠上传 / 倒计时结束 / 空格停止做种 / 做种中交互）
 #   09-bt-engine-14 [bt] 调优键配置生效与回退（三大表重构：bt_concurrency 预填 / seed_duration_secs / 其余键引擎生效与缺省回退）
+#   09-bt-engine-15 peer 连接生命周期礼仪（v1.37，FR-02-27：会话级 peer_id 稳定 / 优雅关闭 / 自关不计失败+冷却）
 # 期号 02（phase-02）。需求依据 project/mission/phase-02.md FR-02-06…23、D45/D46/D51/D52/D54/D57/D58。
 # 协议基线 = 操作者钦定 BEP 3/15/23/7/12/9/20；tokio 异步（FR-02-10）。
 # BEP 9 做种侧响应（D53/D45——磁力拉取 phase-03）；上传真实统计（D58）；
@@ -22,6 +23,12 @@
 # 映射表全量移植；验收例：BitComet 1.64 对端显示 BitComet 1.64——旧 62 项子集表与逐位四段
 # 解码（0.1.6.4 形态）退役）。
 # QA 经 UI 层观察 + fixture 侧可观察日志（本地 fixture 属暴露给 QA 的用户界面入口）。
+# v1.37 修订（操作者 bug17 轮指令，FR-02-27 连接生命周期礼仪 + D66）：修复前缺陷 = peer_id 每
+# 引擎启动随机生成（暂停/重启后同 IP 换 peer_id 立即重连，触发 BitComet 等反吸血屏蔽，qBittorrent
+# 因会话级 peer_id + 优雅关闭而不触发）+ 自关路径引擎返回即整体丢弃连接（读半部滞留/RST 面）+
+# 「引擎断开」关闭误记对端失败；修订后 = 会话级 peer_id 稳定（进程内全部 BT 任务共用，跨暂停/
+# 重启/重试/热调不变，仅进程重启更换）+ 全部自发起关闭路径优雅关闭（先关写 FIN、排水窗口、
+# 无 RST）+ 自关后候选进重拨冷却（不递增失败、不立即重拨；真实失败退避不变）。QA 严格检查 = QA-BE-15。
 Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文件选择）
 
   期号 02。真实 BT 链路：.torrent 解析 → tracker announce（HTTP/UDP、紧凑 peer、
@@ -171,3 +178,23 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
     Examples:
       | conns | seed_secs | evict |
       | 8     | 60        | 30    |
+
+
+  # v1.37 新增（操作者 bug17 轮指令，FR-02-27 连接生命周期礼仪 + D66）：修改并发与暂停/启用
+  # 任务按 qBittorrent 规则优化、不触发对端反吸血——四判据全部 fixture 侧可观察（peer_id 全等、
+  # EOF 非 RST、自关冷却、事件序列一致），QA 套件按本场景严格检查（QA-BE-15）。
+  Scenario: 09-bt-engine-15 peer 连接生命周期礼仪（v1.37，FR-02-27）
+    Given 任务下载中且与 fixture seeder 保持连接（fixture 可观察握手与 socket 关闭）
+    When 对该任务按空格暂停、再次按空格开始（重复 3 轮）
+    Then 每轮开始后 fixture seeder 收到的新握手 peer_id 与首轮完全一致（会话级稳定：
+      进程内全部 BT 任务共用、跨暂停/重启/热调不变，-EZ2000- 形态维持）
+    And 每轮暂停时 fixture seeder 侧观察到有序关闭：本端先关写、seeder 读到 EOF，
+      全程无 ConnectionReset（优雅关闭而非 RST 强拆）
+    And fixture tracker 每轮收到的事件序列 = started（首轮）→ stopped（每轮暂停）→
+      started（重启）且全程同 peer_id（对端视角为一致客户端生命周期，无「换 ID 重启」形态）
+    And 重启后对同 peer 无并行双连（同 peer_id 单连接既有口径不变）
+    When 下载中任务修改并发下调收缩一条连接、随即改回原并发
+    Then 被收缩连接以同口径优雅关闭（seeder 侧读到 EOF，无 ConnectionReset）
+    And 被收缩候选不因自关计入失败退避（fails 不被污染），且自关冷却内不向该候选重拨
+      （fixture seeder 观察同候选两次入连间隔 ≥ 冷却下限）
+    And 任务全程保持下载中、进度单调不减（收缩/回补判据同 08-modify-bt-05）

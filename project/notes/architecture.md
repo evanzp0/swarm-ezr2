@@ -426,3 +426,15 @@
 - 引擎 cmd 臂顺序：目标并发 clamp(1,64) → files_changed 则重建 pmap+order_cache、补开新选文件句柄（open_selected_file_handle 复用启动路径，Result 化）、逐连接 cancel_inflight_not_covered（try_send Cancel，非覆盖 piece 块退还缺口池、partial 内存保留）、recompute_downloaded（= Σ done × selected_bytes，消除 downloaded 超越新 total 的漂移）、seeding 反转臂（改选使 all_selected_done 不成立时回 downloading）→ shed_excess_conns（先无在飞后最少累计，Drop）→ 补建 fill_peer_slots（上调立即，非 seeding 才拨）→ proxy_changed 重建 tracker 池（同 UpdateTrackers 路径）→ BtConns 立即刷新（连接行一帧内消失）。
 - on_block 新守卫：非覆盖 piece 数据早退（不写盘不计字节不发 Have，退 conn 并续 issue_requests）——撤销在飞后对端仍会发数据的兜底；run() 的 spec/pmap 改 mut（spec.files/concurrency/proxy_endpoint 热可变）。
 - 下调保字节语义 = D30 同构：超额连接的在飞请求随连接拆除立即中断，`partial` 按 piece 键存储不受连接拆除影响，块内已写字节保留、claimed_blocks 自动回归缺口池。
+
+## bug17 轮（specifier）：BT 连接生命周期反吸血触发面与 qBt 对等口径
+- 反吸血触发面三处（代码实证）：①peer_id 每引擎随机（bt/engine.rs run() 调 peer_id.rs make_peer_id）——暂停/重启后同 IP 换 peer_id 立即重连，正对 BitComet「换 ID 重置统计」吸血特征，qBt/libtorrent 每 session 一枚全 torrent 共用故不触发；②引擎 Pause/StopSeed/Cancel 臂直接 return，连接随 HashMap 丢弃（读半部滞留 + 强制收口存在 RST 面），qBt 为有序 FIN 关闭；③自关后候选 last_try 不刷新（shed/evict 臂先 conns.remove 再发 Drop，候选保留旧 last_try）——回补调度对刚关候选零冷却，「断开即刻重拨」。
+- 修法口径（FR-02-27/D66）：peer_id 会话化（引擎侧 OnceLock，进程内全任务共用、跨重启不变——对 21 处测试 spec 构造点零扰动，夹具固定 -QX 前缀与自连守卫互不干扰）；自关一律「先关写 FIN → 排水窗口 → 超时强收」；自关刷新候选 last_try（复用既有 cooldown_ok，fails 不动）；失败退避与同 peer/同 IP 单连接、tracker started/stopped/completed 事件不变。
+- 判据全部 fixture 侧可观察：握手 peer_id 全等、seeder 读到 EOF 非 ConnectionReset、同候选两次入连间隔 ≥ 冷却、tracker 事件序列一致。
+
+## bug17 轮（coder）：引擎退出连接滞留根因（out_tx 残留）与生命周期落地版图谱
+- **引擎退出连接滞留根因（本 round 最重要发现）**：run_peer_loop 把 `out: out_tx.clone()` 交给引擎、**原件留驻自己栈帧**直到函数返回——而 peer_pump 正是该函数的 await 体，永不返回。引擎 run() 返回丢弃 conns 后，写循环 `recv()` 永不 None（sender 计数仍 ≥1）→ **暂停后连接整体滞留（fd+task 永久泄漏、FIN 永不发出）**；对端视角 = 旧连接挂着 + 同 IP 新连接（换 peer_id）并行 = 反吸血双杀。修法 = Connected 消息改为 **move out_tx**（引擎侧 ConnStat.peer_out 成为唯一 sender），引擎退出即触发写循环 None→收口，一处改动根治全部返回路径。
+- graceful_close 原语（peer_pump 收尾统一）：`wr.shutdown()`（显式 FIN）→ 排水窗口（GRACE_CLOSE_SECS=5，timeout 等 reader 自然退出：有消息即转发失败自灭，静默则等超时）→ `reader.abort()` 强收读半部。替代旧「drop(wr) + 5s detach」——旧路径 reader 永久 detach 持 fd。
+- 自关冷却落地：shed/evict 臂在 conns.remove 后**刷新候选 last_try**（回补/置换调度复用既有 cooldown_ok，fails 不动）——原缺陷 = 自关不刷新 last_try，回补调度对刚关候选零冷却（TDD 红证：回补仅 528µs）。首轮规格「Closed 处理器误记 fails += 1」经实证更正：各自关臂先 remove 再发 Drop，处理器 `conns.remove` 返回 None 整段跳过，fails 从未被污染——**缺陷在调度侧不在记账侧**。
+- TDD 夹具增补：probing_seeder（记录对端握手 peer_ids + 终态读错误串，serve_seeder_stream 抽取复用并 Result 化）——peer_id 会话稳定性（两轮 run 全等）、暂停收口 EOF 判据、自关冷却三测试共用。
+- 陷阱登记：tokio read_exact EOF 文案是 **"early eof"**（非 std 的 "failed to fill whole buffer"）；OwnedWriteHalf 无 Clone（两阶段写测试用 oneshot 门闸单任务内完成）；TCP 半关闭后对端**第一次**写仍成功（RST 由第二次写触发）——强制收口断言必须写两次。

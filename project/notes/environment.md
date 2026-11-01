@@ -164,3 +164,14 @@
   文本（含 repr/unicode_escape 输出——输出同样可能被改写，bytes hex 才是终审）。
 - 根因：chat 管道存在一层自动「纠错」改写，触发面包含方括号缩写序列；常规 ASCII 锚点
   （`| D64 |`、`Feature:` 行）不受影响，含 `[/]` 形态序列的才中招。
+
+## bug17 轮：沙箱中途重置吞掉整个工作区——归档必须即时落盘
+- 现象：bug17 轮 specifier 完成（归档已生成于主目录）+ coder 轮实现过半（bin 864P/0F）
+  之际，沙箱文件系统整体重置：/home/z/work（工作区+target）、~/.cargo、主目录归档全部
+  丢失，仅 /home/z/my-project 幸存。
+- 处置：从 my-project 存活的上轮归档重建工作区；rustup/cargo/bb/APS 按既有口径前台重装
+  （TUNA 30MB/s 最快）；规格补丁与代码补丁按上下文中的原始 patch 脚本精确重放；重放后
+  全量验证重跑。
+- 纪律：**每轮 `bin/swarm complete` 后立即把归档 tar.gz 复制进 /home/z/my-project/**，
+  不等多轮攒批；长跑中途的关键产物（如已通过的测试基线记录）随 handoff/notes 落盘，
+  不依赖工作区存续。

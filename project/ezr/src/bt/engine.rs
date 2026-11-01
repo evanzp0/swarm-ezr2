@@ -199,7 +199,7 @@ pub(crate) async fn run(
 ) {
     let id = spec.id;
     let tun: BtTunables = spec.tunables.clone();
-    let peer_id = super::peer_id::make_peer_id();
+    let peer_id = super::peer_id::session_peer_id();
     let mut pmap = Arc::new(PieceMap::new(&spec.files, spec.meta.piece_length));
 
     let mut files_handles: HashMap<usize, tokio::fs::File> = HashMap::new();
@@ -419,6 +419,11 @@ pub(crate) async fn run(
                         }
                         for cid in shed_excess_conns(&conns, target) {
                             if let Some(st) = conns.remove(&cid) {
+                                if let Some(key) = addr_sock(&st.addr) {
+                                    if let Some(c) = candidates.get_mut(&key) {
+                                        c.last_try = Some(std::time::Instant::now());
+                                    }
+                                }
                                 let _ = st.peer_out.send(PeerOut::Drop).await;
                             }
                         }
@@ -640,6 +645,11 @@ pub(crate) async fn run(
                     }
                     for cid in evict {
                         if let Some(st) = conns.remove(&cid) {
+                            if let Some(key) = addr_sock(&st.addr) {
+                                if let Some(c) = candidates.get_mut(&key) {
+                                    c.last_try = Some(std::time::Instant::now());
+                                }
+                            }
                             let _ = st.peer_out.send(PeerOut::Drop).await;
                         }
                     }
@@ -1045,7 +1055,7 @@ async fn run_peer_loop(
                     PeerIn::Connected {
                         client,
                         peer_id: ok.peer_id,
-                        out: out_tx.clone(),
+                        out: out_tx,
                         ext_metadata,
                     },
                 ))
@@ -1129,8 +1139,21 @@ async fn peer_pump(
             }
         }
     }
+    graceful_close(wr, reader, Duration::from_secs(GRACE_CLOSE_SECS)).await;
+}
+
+const GRACE_CLOSE_SECS: u64 = 5;
+
+async fn graceful_close(
+    mut wr: tokio::net::tcp::OwnedWriteHalf,
+    reader: tokio::task::JoinHandle<()>,
+    grace: Duration,
+) {
+    let _ = wr.shutdown().await;
     drop(wr);
-    let _ = tokio::time::timeout(Duration::from_secs(5), reader).await;
+    let mut reader = reader;
+    let _ = tokio::time::timeout(grace, &mut reader).await;
+    reader.abort();
 }
 
 fn new_conn_stat(addr: String) -> ConnStat {
@@ -2798,6 +2821,14 @@ mod tests {
         if sock.write_all(&resp).await.is_err() {
             return;
         }
+        let _ = serve_seeder_stream(sock, data, piece_len).await;
+    }
+
+    async fn serve_seeder_stream(
+        mut sock: TcpStream,
+        data: &[u8],
+        piece_len: usize,
+    ) -> Result<(), BtError> {
         let n = data.len().div_ceil(piece_len);
         let mut bf = vec![0u8; n.div_ceil(8)];
         for i in 0..n {
@@ -2819,7 +2850,7 @@ mod tests {
                     let off = index as usize * piece_len + begin as usize;
                     let end = (off + length as usize).min(data.len());
                     if off >= data.len() {
-                        return;
+                        return Ok(());
                     }
                     let blk = data[off..end].to_vec();
                     let mut f = Vec::new();
@@ -2828,14 +2859,64 @@ mod tests {
                     f.extend_from_slice(&index.to_be_bytes());
                     f.extend_from_slice(&begin.to_be_bytes());
                     f.extend_from_slice(&blk);
-                    if sock.write_all(&f).await.is_err() {
-                        return;
+                    if let Err(e) = sock.write_all(&f).await {
+                        return Err(e.into());
                     }
                 }
                 Ok(_) => {}
-                Err(_) => return,
+                Err(e) => return Err(e),
             }
         }
+    }
+
+    #[derive(Default)]
+    struct SeederProbe {
+        peer_ids: Vec<[u8; 20]>,
+        close_kind: Option<String>,
+    }
+
+    async fn probing_seeder(
+        data: Vec<u8>,
+        piece_len: usize,
+        infohash: [u8; 20],
+        counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        probe: std::sync::Arc<std::sync::Mutex<SeederProbe>>,
+    ) -> u16 {
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let data = std::sync::Arc::new(data);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let data = data.clone();
+                let probe = probe.clone();
+                tokio::spawn(async move {
+                    let mut hs = [0u8; 68];
+                    if sock.read_exact(&mut hs).await.is_err() {
+                        return;
+                    }
+                    let mut pid = [0u8; 20];
+                    pid.copy_from_slice(&hs[48..68]);
+                    probe.lock().expect("probe 锁").peer_ids.push(pid);
+                    let mut resp = Vec::new();
+                    resp.push(19);
+                    resp.extend_from_slice(b"BitTorrent protocol");
+                    resp.extend_from_slice(&[0u8; 8]);
+                    resp.extend_from_slice(&infohash);
+                    resp.extend_from_slice(b"-QX7777-probepeer000");
+                    if sock.write_all(&resp).await.is_err() {
+                        return;
+                    }
+                    if let Err(e) = serve_seeder_stream(sock, &data, piece_len).await {
+                        probe.lock().expect("probe 锁").close_kind = Some(e.to_string());
+                    }
+                });
+            }
+        });
+        port
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -4673,6 +4754,326 @@ mod tests {
             !handle.is_finished(),
             "热调不得重启引擎（引擎任务必须存活）"
         );
+
+        cmd_tx.send(BtTaskCmd::Cancel).await.unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn graceful_close_sends_fin_then_force_closes_after_grace() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let dialer = tokio::spawn(async move {
+            loop {
+                if let Ok(s) = TcpStream::connect(addr).await {
+                    return s;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        });
+        let (peer_sock, _) = listener.accept().await.unwrap();
+        let ezr_sock = dialer.await.unwrap();
+        let (mut pr, pw) = peer_sock.into_split();
+        let (rd, wr) = ezr_sock.into_split();
+        let reader = tokio::spawn(async move {
+            let mut rd = rd;
+            let mut buf = [0u8; 64];
+            loop {
+                match rd.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+            }
+        });
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+        let peer_writer = tokio::spawn(async move {
+            let mut pw = pw;
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            let mid = pw.write_all(b"hello").await.is_ok();
+            let _ = done_rx.await;
+            let _ = pw.write_all(b"x").await;
+            let late = pw.write_all(b"y").await.is_err();
+            (mid, late)
+        });
+        graceful_close(wr, reader, Duration::from_millis(200)).await;
+        let _ = done_tx.send(());
+        let (mid_ok, late_err) = peer_writer.await.unwrap();
+        assert!(mid_ok, "排水窗内对端写入应成功（读半部仍在排水）");
+        let mut buf = [0u8; 8];
+        let n = pr.read(&mut buf).await.unwrap();
+        assert_eq!(n, 0, "对端应读到 FIN/EOF（有序关闭）");
+        assert!(late_err, "排水窗后强制收口，对端写入应失败（无滞留读半部）");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pause_resume_reuses_session_peer_id() {
+        let piece_len = 16 * 1024;
+        let data: Vec<u8> = (0..40_960usize).map(|i| (i % 241) as u8).collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bteng-session-pid");
+        let save_dir = dir.to_string_lossy().into_owned();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let probe = std::sync::Arc::new(std::sync::Mutex::new(SeederProbe::default()));
+
+        let meta0 = make_meta(&data, piece_len, "udp://127.0.0.1:1/announce");
+        let seeder_port = probing_seeder(
+            data.clone(),
+            piece_len,
+            meta0.infohash,
+            counter.clone(),
+            probe.clone(),
+        )
+        .await;
+        let tracker_port = fake_udp_tracker_fast(seeder_port).await;
+        let meta = make_meta(
+            &data,
+            piece_len,
+            &format!("udp://127.0.0.1:{tracker_port}/announce"),
+        );
+
+        let shared = crate::engine::shared_for_tests();
+        let make_spec = |id: u32| crate::engine::BtSpec {
+            id,
+            source: "/tmp/e2e-session-pid.torrent".into(),
+            meta: meta.clone(),
+            save_dir: save_dir.clone(),
+            name: "e2e-session-pid.bin".into(),
+            files: vec![BtFile {
+                path: "e2e-session-pid.bin".into(),
+                size: data.len() as u64,
+                selected: true,
+            }],
+            trackers: vec![format!("udp://127.0.0.1:{tracker_port}/announce")],
+            concurrency: 2,
+            proxy_endpoint: None,
+            seeding: false,
+            max_speed: 0,
+            tunables: Default::default(),
+        };
+
+        let (evt_tx1, mut evt_rx1) = mpsc::channel(256);
+        let (cmd_tx1, cmd_rx1) = mpsc::channel::<BtTaskCmd>(8);
+        let run1 = tokio::spawn(run(make_spec(81), shared.clone(), cmd_rx1, evt_tx1));
+        wait_bt_conns_established(&mut evt_rx1, 1).await;
+        cmd_tx1.send(BtTaskCmd::Cancel).await.unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(5), run1).await;
+
+        let (evt_tx2, mut evt_rx2) = mpsc::channel(256);
+        let (_cmd_tx2, cmd_rx2) = mpsc::channel::<BtTaskCmd>(8);
+        let run2 = tokio::spawn(run(make_spec(82), shared.clone(), cmd_rx2, evt_tx2));
+        wait_bt_conns_established(&mut evt_rx2, 1).await;
+        run2.abort();
+
+        let ids = probe.lock().expect("probe 锁").peer_ids.clone();
+        assert!(ids.len() >= 2, "两轮各应有一次握手，实际 {}", ids.len());
+        assert_eq!(
+            ids[0], ids[1],
+            "跨暂停/重启 peer_id 必须全等（FR-02-27① 会话级稳定）"
+        );
+        assert_eq!(&ids[0][..8], b"-EZ2000-", "握手 peer_id 前缀形态不变");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pause_closes_peer_connections_with_eof_not_reset() {
+        let piece_len = 16 * 1024;
+        let data: Vec<u8> = (0..40_960usize).map(|i| (i % 241) as u8).collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bteng-graceful-eof");
+        let save_dir = dir.to_string_lossy().into_owned();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let probe = std::sync::Arc::new(std::sync::Mutex::new(SeederProbe::default()));
+
+        let meta0 = make_meta(&data, piece_len, "udp://127.0.0.1:1/announce");
+        let seeder_port = probing_seeder(
+            data.clone(),
+            piece_len,
+            meta0.infohash,
+            counter.clone(),
+            probe.clone(),
+        )
+        .await;
+        let tracker_port = fake_udp_tracker_fast(seeder_port).await;
+        let meta = make_meta(
+            &data,
+            piece_len,
+            &format!("udp://127.0.0.1:{tracker_port}/announce"),
+        );
+
+        let shared = crate::engine::shared_for_tests();
+        let spec = crate::engine::BtSpec {
+            id: 83,
+            source: "/tmp/e2e-graceful.torrent".into(),
+            meta: meta.clone(),
+            save_dir,
+            name: "e2e-graceful.bin".into(),
+            files: vec![BtFile {
+                path: "e2e-graceful.bin".into(),
+                size: data.len() as u64,
+                selected: true,
+            }],
+            trackers: vec![format!("udp://127.0.0.1:{tracker_port}/announce")],
+            concurrency: 2,
+            proxy_endpoint: None,
+            seeding: false,
+            max_speed: 0,
+            tunables: Default::default(),
+        };
+
+        let (evt_tx, mut evt_rx) = mpsc::channel(256);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
+        let handle = tokio::spawn(run(spec, shared.clone(), cmd_rx, evt_tx));
+        wait_bt_conns_established(&mut evt_rx, 1).await;
+        cmd_tx.send(BtTaskCmd::Cancel).await.unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let kind = loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "seeder 侧未观察到连接收口"
+            );
+            let k = probe.lock().expect("probe 锁").close_kind.clone();
+            if let Some(k) = k {
+                break k;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        assert!(
+            kind.to_lowercase().contains("eof") && !kind.to_lowercase().contains("reset"),
+            "暂停收口必须为有序 FIN（对端读到 EOF），不得产生 RST（FR-02-27②）；实际收口：{kind}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn shed_then_grow_respects_self_close_cooldown() {
+        let piece_len = 16 * 1024;
+        let data: Vec<u8> = (0..400_000usize).map(|i| (i % 241) as u8).collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bteng-selfclose-cool");
+        let save_dir = dir.to_string_lossy().into_owned();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let ips = [
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 7)),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 8)),
+        ];
+        let meta0 = make_meta(&data, piece_len, "udp://127.0.0.1:1/announce");
+        let mut peer_list = Vec::new();
+        for (i, ip) in ips.iter().enumerate() {
+            let mut pid = *b"-QX7777-seederpeer00";
+            pid[19] = b'0' + i as u8;
+            let port = counting_seeder_any(
+                data.clone(),
+                piece_len,
+                meta0.infohash,
+                counter.clone(),
+                &pid,
+            )
+            .await;
+            peer_list.push((*ip, port));
+        }
+        let tracker_port = fake_udp_tracker_multi(peer_list).await;
+        let meta = make_meta(
+            &data,
+            piece_len,
+            &format!("udp://127.0.0.1:{tracker_port}/announce"),
+        );
+
+        let shared = crate::engine::shared_for_tests();
+        let spec = crate::engine::BtSpec {
+            id: 84,
+            source: "/tmp/e2e-cool.torrent".into(),
+            meta: meta.clone(),
+            save_dir,
+            name: "e2e-cool.bin".into(),
+            files: vec![BtFile {
+                path: "e2e-cool.bin".into(),
+                size: data.len() as u64,
+                selected: true,
+            }],
+            trackers: vec![format!("udp://127.0.0.1:{tracker_port}/announce")],
+            concurrency: 2,
+            proxy_endpoint: None,
+            seeding: false,
+            max_speed: 0,
+            tunables: crate::engine::BtTunables {
+                peer_retry_base_secs: 1,
+                ..Default::default()
+            },
+        };
+
+        let (evt_tx, mut evt_rx) = mpsc::channel(256);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
+        let handle = tokio::spawn(run(spec.clone(), shared.clone(), cmd_rx, evt_tx));
+        wait_bt_conns_established(&mut evt_rx, 2).await;
+
+        for cycle in 0..3 {
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            cmd_tx
+                .send(BtTaskCmd::Reconfigure {
+                    concurrency: 1,
+                    files: spec.files.clone(),
+                    proxy_endpoint: None,
+                })
+                .await
+                .unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "cycle {cycle}: 收缩未生效"
+                );
+                let Some(evt) = tokio::time::timeout(Duration::from_millis(300), evt_rx.recv())
+                    .await
+                    .ok()
+                    .flatten()
+                else {
+                    continue;
+                };
+                if let Evt::BtConns { conns, .. } = evt {
+                    if conns.len() <= 1 {
+                        break;
+                    }
+                }
+            }
+            let t0 = std::time::Instant::now();
+            cmd_tx
+                .send(BtTaskCmd::Reconfigure {
+                    concurrency: 2,
+                    files: spec.files.clone(),
+                    proxy_endpoint: None,
+                })
+                .await
+                .unwrap();
+            let deadline = t0 + Duration::from_secs(6);
+            loop {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "cycle {cycle}: 回补未在期限内建立"
+                );
+                let Some(evt) = tokio::time::timeout(Duration::from_millis(200), evt_rx.recv())
+                    .await
+                    .ok()
+                    .flatten()
+                else {
+                    continue;
+                };
+                if let Evt::BtConns { conns, .. } = evt {
+                    if conns.len() >= 2 {
+                        break;
+                    }
+                }
+            }
+            let elapsed = t0.elapsed();
+            assert!(
+                elapsed >= Duration::from_millis(700),
+                "cycle {cycle}: 回补仅耗时 {elapsed:?}——自关候选被立即重拨（FR-02-27③ 自关冷却缺失）"
+            );
+            assert!(
+                !handle.is_finished(),
+                "热调不得重启引擎（引擎任务必须存活）"
+            );
+        }
 
         cmd_tx.send(BtTaskCmd::Cancel).await.unwrap();
         let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;

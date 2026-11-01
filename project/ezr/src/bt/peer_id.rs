@@ -1,6 +1,12 @@
 const EZ_PREFIX: &[u8; 8] = b"-EZ2000-";
 
 #[must_use]
+pub fn session_peer_id() -> [u8; 20] {
+    static SESSION: std::sync::OnceLock<[u8; 20]> = std::sync::OnceLock::new();
+    *SESSION.get_or_init(make_peer_id)
+}
+
+#[must_use]
 pub fn make_peer_id() -> [u8; 20] {
     let mut id = [0u8; 20];
     id[..8].copy_from_slice(EZ_PREFIX);
@@ -414,6 +420,17 @@ mod tests {
         assert_eq!(&id[..8], EZ_PREFIX);
         for b in &id[8..] {
             assert!(b.is_ascii_alphanumeric(), "随机段 {b} 非字母数字");
+        }
+    }
+
+    #[test]
+    fn session_peer_id_stable_across_calls() {
+        let a = session_peer_id();
+        let b = session_peer_id();
+        assert_eq!(a, b, "同一进程两次获取应全等（会话级 peer_id）");
+        assert_eq!(&a[..8], EZ_PREFIX);
+        for b_ in &a[8..] {
+            assert!(b_.is_ascii_alphanumeric(), "会话随机段 {b_} 非字母数字");
         }
     }
 
