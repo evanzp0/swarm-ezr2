@@ -98,7 +98,7 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         let vw = view.width as usize;
         let base = colw.iter().sum::<usize>() + colw.len().saturating_sub(1);
         if base > vw {
-            colw[5] = vw.saturating_sub(60).max(12);
+            colw[5] = vw.saturating_sub(60).max(26);
         }
     }
     let content_w = colw.iter().sum::<usize>() + colw.len().saturating_sub(1);

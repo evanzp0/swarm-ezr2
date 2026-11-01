@@ -90,6 +90,11 @@
   路径必 404，报错文案是「installer not found」，别据此改判清单缺键）。
 - **口径更新**：空沙箱首选 rsproxy 官方双变量一条命令装齐；crates.io 仍配 rsproxy sparse。
   TUNA/USTC 作为后备（各轮可达性与清单完备性会漂移，装前先 curl 清单验证）。
+- **bug15 轮新沙箱复测（2026-10-31）**：8MB 探针 rsproxy 单路径 `/rustup/dist/<host>/rustup-init`
+  **19.3MB/s** 最快（tuna/ustc/aliyun 单路径 404 属既有双层路径陷阱）；直链下载 rustup-init
+  二进制 + 双变量前台 `-y --profile minimal --default-toolchain nightly --component
+  rustfmt,clippy` 一次装齐（cargo 1.101.0-nightly，EXIT=0，免 init.sh 双跳；直链单路径
+  `/rustup/dist/…` 与 DIST_SERVER 同层，不触发 UPDATE_ROOT 双层陷阱）
 
 ## bug6 轮环境：USTC 全套镜像选型（rustup dist + cargo sparse index）
 - 本轮沙箱 Rust 工具链再次缺位（会话隔离）。镜像实测：延迟 USTC 0.52s < TUNA 0.71s <

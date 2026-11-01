@@ -404,3 +404,5 @@
 - conns 自适应收缩/吸附实现：client_w = 视口<94 时 max(12, vw−60)（BT_CLIENT_SHRINK_BASE=60 = 除客户端外六列宽+分隔）；内容宽动态 = 94−34+client_w；吸附条件 edge+4>content_w && edge<content_w（edge=hs+vw，落入 (c−4,c) 即吸到 max），渲染与滚动条位置同用吸附后偏移。
 - BT 种子路径归一接线点 = dlg_confirm_add_bt 确认链（normalize_save_dir 复用，~ 展开+相对转 cwd 绝对），fs::read 直读归一后路径（expand_tilde 冗余化），判重与 Task.url 同用归一值；预填层不改写。
 
+- D64 收缩下限：client_w 下限 12→26 = 极值样例 ArcticTorrent/100.100.100（25 列+1 空白）所需列宽，BT_CLIENT_MIN 单常量点（ui/conns.rs）；视口 <86 后内容宽 86 > 视口走既有水平滚动条（吸附臂 edge+4>c && edge<c 不变、hmax=内容宽−视口+1 不变），≥94 维持 34 列钦定形态；列位置在客户端列之前者不随 client_w 移动（窄视口 N5 类断言的可见性只取决于列起点不取决于 client_w）。
+- ezr-demo 同构同步点 = ui/conns.rs 收缩式 max(12→26)（demo 无 BT_CLIENT_MIN 常量，colw[5] 内联）+ README 变更记录 + 设计规范「本轮需求修订」块；demo 无引擎故 ezr 独有文案（黑名单 toast/校验 computed=expected/重试计数）不属同步面；chips `A 命令` 两端实现一致（规格/QA 文档写 `A 添加` 为 phase-02 命令窗口改版时的文档滞后，非两端漂移）。

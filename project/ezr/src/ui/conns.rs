@@ -14,7 +14,7 @@ use crate::app::{App, Panel, SbKey};
 
 const BT_COLW: [usize; 7] = [18, 8, 8, 8, 8, 34, 4];
 const BT_CLIENT_SHRINK_BASE: usize = 60;
-const BT_CLIENT_MIN: usize = 12;
+const BT_CLIENT_MIN: usize = 26;
 const BT_PROTO_TEXT_W: usize = 4;
 const BT_CONTENT_W: usize = 94;
 const HTTP_COLW: [usize; 3] = [4, 8, 8];
@@ -711,6 +711,80 @@ mod tests {
         assert!(
             data.contains(&expect),
             "视口 ≥ 94 维持 34 列钦定形态: {data:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bt_client_floor_26_extreme_sample_complete_at_viewport_80() {
+        let mut app = testfx::make_app_in("ezr-conns", "floor26");
+        let mut t = task_with_conns(Protocol::Bt);
+        t.connections.clear();
+        app.tasks.push(t);
+        app.selected = 0;
+        app.bt_conns
+            .insert(1, vec![bt_row_proto("ArcticTorrent/100.100.100")]);
+        let text = conns_render(&mut app, 86, 10).backend().to_string();
+        assert!(
+            !text.contains('…'),
+            "视口 80（< 86）下限 26 后客户端单元格无省略号（D64）: {text}"
+        );
+        let data = text
+            .lines()
+            .find(|l| l.contains("ArcticTorrent"))
+            .unwrap_or_else(|| panic!("明细行缺失: {text}"));
+        assert!(
+            data.contains("ArcticTorrent/100.100.100"),
+            "收缩下限 26 = 极值样例（25 列 + 1 空白）完整显示（D64）: {data:?}"
+        );
+        let head = text
+            .lines()
+            .find(|l| l.contains("客户端"))
+            .unwrap_or_else(|| panic!("表头行缺失: {text}"));
+        for h in [
+            "地址",
+            "下载速度",
+            "上传速度",
+            "累计下载",
+            "累计上传",
+            "客户端",
+        ] {
+            assert!(head.contains(h), "默认视图前六列表头完整: {head:?}");
+        }
+        app.conns_hscroll = 100;
+        let text2 = conns_render(&mut app, 86, 10).backend().to_string();
+        let head2 = text2
+            .lines()
+            .find(|l| l.contains("客户端"))
+            .unwrap_or_else(|| panic!("滚右表头行缺失: {text2}"));
+        assert!(
+            head2.contains("协议") && text2.contains("TCP"),
+            "滚到最右末列「协议」表头与数据完整（D63④ 吸附臂回归）: {head2:?}"
+        );
+        assert!(
+            text2.contains("ArcticTorrent/100.100.100"),
+            "滚到最右客户端值仍完整: {text2}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bt_client_floor_26_applies_below_old_min_regime() {
+        let mut app = testfx::make_app_in("ezr-conns", "floor26b");
+        let mut t = task_with_conns(Protocol::Bt);
+        t.connections.clear();
+        app.tasks.push(t);
+        app.selected = 0;
+        app.bt_conns
+            .insert(1, vec![bt_row_proto("ArcticTorrent/100.100.100")]);
+        let text = conns_render(&mut app, 78, 10).backend().to_string();
+        assert!(
+            !text.contains('…'),
+            "视口 72（旧口径 client = max(12, 72 − 60) = 12 必截断；D64 下恒 26 无省略号）: {text}"
+        );
+        app.conns_hscroll = 100;
+        let text2 = conns_render(&mut app, 78, 10).backend().to_string();
+        assert!(
+            text2.contains("ArcticTorrent/100.100.100") && text2.contains("TCP"),
+            "逐列横向滚动可完整查看客户端值与末列: {text2}"
         );
     }
 
