@@ -31,6 +31,14 @@ pub struct Dialog {
 
     pub conns_edited: bool,
 
+    pub down_limit: TextInput,
+
+    pub up_limit: TextInput,
+
+    pub down_prefill: u64,
+
+    pub up_prefill: u64,
+
     pub ck_type: usize,
 
     pub ck_value: TextInput,
@@ -75,12 +83,15 @@ impl Dialog {
     pub fn text_field_at(&self, focus: usize) -> Option<TextField> {
         match (self.kind, focus) {
             (DialogKind::Add, 0) => Some(TextField::Url),
-            (DialogKind::Add, 1) => Some(TextField::Dir),
+            (DialogKind::Add, 1) | (DialogKind::AddBt, 1) => Some(TextField::Dir),
             (DialogKind::Add, 2) | (DialogKind::Modify, 0) => Some(TextField::Conns),
-            (DialogKind::Add, 4) | (DialogKind::Modify, 2) => Some(TextField::CkValue),
+            (DialogKind::Add, 3) | (DialogKind::Modify, 1) => Some(TextField::DownLimit),
+            (DialogKind::Add, 4) | (DialogKind::Modify, 2) => Some(TextField::UpLimit),
+            (DialogKind::Add, 6) | (DialogKind::Modify, 4) => Some(TextField::CkValue),
             (DialogKind::AddBt, 0) => Some(TextField::Torrent),
-            (DialogKind::AddBt, 1) => Some(TextField::Dir),
             (DialogKind::AddBt, 3) | (DialogKind::ModifyBt, 1) => Some(TextField::Conns),
+            (DialogKind::AddBt, 4) | (DialogKind::ModifyBt, 2) => Some(TextField::DownLimit),
+            (DialogKind::AddBt, 5) | (DialogKind::ModifyBt, 3) => Some(TextField::UpLimit),
             _ => None,
         }
     }
@@ -90,6 +101,8 @@ impl Dialog {
             TextField::Url => &mut self.url,
             TextField::Dir => &mut self.dir,
             TextField::Conns => &mut self.conns,
+            TextField::DownLimit => &mut self.down_limit,
+            TextField::UpLimit => &mut self.up_limit,
             TextField::CkValue => &mut self.ck_value,
             TextField::Torrent => &mut self.torrent,
         }
@@ -98,8 +111,8 @@ impl Dialog {
     /// （仅 AddBt/ModifyBt）trackers 多行输入在对话框内的 focus 编号
     pub fn trackers_focus(&self) -> Option<usize> {
         match self.kind {
-            DialogKind::AddBt => Some(5),
-            DialogKind::ModifyBt => Some(3),
+            DialogKind::AddBt => Some(7),
+            DialogKind::ModifyBt => Some(5),
             _ => None,
         }
     }
@@ -237,6 +250,10 @@ pub enum TextField {
 
     Conns,
 
+    DownLimit,
+
+    UpLimit,
+
     CkValue,
 
     Torrent,
@@ -256,11 +273,23 @@ pub(super) fn proxy_dropdown_open_key(d: &mut Dialog, n: usize, code: KeyCode) {
         KeyCode::Enter | KeyCode::Esc => d.proxy_open = false,
         KeyCode::Tab => {
             d.proxy_open = false;
-            d.focus_field(if d.kind == DialogKind::Add { 6 } else { 4 });
+            let f = match d.kind {
+                DialogKind::Add => 8,
+                DialogKind::Modify => 6,
+                DialogKind::AddBt => 7,
+                _ => 5,
+            };
+            d.focus_field(f);
         }
         KeyCode::BackTab => {
             d.proxy_open = false;
-            d.focus_field(if d.kind == DialogKind::Add { 4 } else { 2 });
+            let f = match d.kind {
+                DialogKind::Add => 4,
+                DialogKind::Modify => 2,
+                DialogKind::AddBt => 5,
+                _ => 3,
+            };
+            d.focus_field(f);
         }
         _ => d.proxy_open = false,
     }
@@ -294,7 +323,13 @@ pub(super) fn ck_dropdown_open_key(d: &mut Dialog, code: KeyCode) {
         KeyCode::Enter | KeyCode::Esc => d.ck_open = false,
         KeyCode::Tab | KeyCode::BackTab => {
             d.ck_open = false;
-            d.focus_field(if code == KeyCode::Tab { 4 } else { 2 });
+            let f = match (d.kind, code) {
+                (DialogKind::Add, KeyCode::Tab) => 6,
+                (DialogKind::Add, KeyCode::BackTab) => 4,
+                (_, KeyCode::Tab) => 4,
+                _ => 2,
+            };
+            d.focus_field(f);
         }
         _ => d.ck_open = false,
     }
@@ -306,7 +341,7 @@ pub(super) fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> 
             d.url.backspace();
             true
         }
-        (DialogKind::Add, 1) => {
+        (DialogKind::Add, 1) | (DialogKind::AddBt, 1) => {
             d.dir.backspace();
             true
         }
@@ -318,7 +353,21 @@ pub(super) fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> 
             d.conns_edited = true;
             true
         }
-        (DialogKind::Add, 4) | (DialogKind::Modify, 2) => {
+        (DialogKind::Add, 3)
+        | (DialogKind::Modify, 1)
+        | (DialogKind::AddBt, 4)
+        | (DialogKind::ModifyBt, 2) => {
+            d.down_limit.backspace();
+            true
+        }
+        (DialogKind::Add, 4)
+        | (DialogKind::Modify, 2)
+        | (DialogKind::AddBt, 5)
+        | (DialogKind::ModifyBt, 3) => {
+            d.up_limit.backspace();
+            true
+        }
+        (DialogKind::Add, 6) | (DialogKind::Modify, 4) => {
             d.ck_value.backspace();
             true
         }
@@ -326,12 +375,8 @@ pub(super) fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> 
             d.torrent.backspace();
             true
         }
-        (DialogKind::AddBt, 1) => {
-            d.dir.backspace();
-            true
-        }
         // trackers 多行输入：退格与上一行合并由 MultiLineBuf 处理
-        (DialogKind::AddBt, 5) | (DialogKind::ModifyBt, 3) => {
+        (DialogKind::AddBt, 7) | (DialogKind::ModifyBt, 5) => {
             d.trackers.backspace();
             true
         }
@@ -347,7 +392,7 @@ pub(super) fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, te
     let clean = paste_sanitize(text);
     match (kind, focus) {
         (DialogKind::Add, 0) => d.url.insert(&clean, 300) > 0,
-        (DialogKind::Add, 1) => d.dir.insert(&clean, 300) > 0,
+        (DialogKind::Add, 1) | (DialogKind::AddBt, 1) => d.dir.insert(&clean, 300) > 0,
         (DialogKind::Add, 2)
         | (DialogKind::Modify, 0)
         | (DialogKind::AddBt, 3)
@@ -357,7 +402,27 @@ pub(super) fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, te
             d.conns_edited |= inserted;
             inserted
         }
-        (DialogKind::Add, 4) | (DialogKind::Modify, 2) => {
+        (DialogKind::Add, 3)
+        | (DialogKind::Modify, 1)
+        | (DialogKind::AddBt, 4)
+        | (DialogKind::ModifyBt, 2) => {
+            let s: String = clean
+                .chars()
+                .filter(|&c| c.is_ascii_alphanumeric() || c == ' ' || c == '/' || c == '.')
+                .collect();
+            d.down_limit.insert(&s, 16) > 0
+        }
+        (DialogKind::Add, 4)
+        | (DialogKind::Modify, 2)
+        | (DialogKind::AddBt, 5)
+        | (DialogKind::ModifyBt, 3) => {
+            let s: String = clean
+                .chars()
+                .filter(|&c| c.is_ascii_alphanumeric() || c == ' ' || c == '/' || c == '.')
+                .collect();
+            d.up_limit.insert(&s, 16) > 0
+        }
+        (DialogKind::Add, 6) | (DialogKind::Modify, 4) => {
             if d.ck_type == CK_NONE {
                 return false;
             }
@@ -365,7 +430,6 @@ pub(super) fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, te
             d.ck_value.insert(&hex, 128) > 0
         }
         (DialogKind::AddBt, 0) => d.torrent.insert(&clean, 300) > 0,
-        (DialogKind::AddBt, 1) => d.dir.insert(&clean, 300) > 0,
         // trackers 多行粘贴不在此处理（需保留换行分段）：on_paste 直通
         // MultiLineBuf::insert_str（粘贴 sanitize 在行内过滤控制字符）
         _ => false,

@@ -438,3 +438,23 @@
 - 自关冷却落地：shed/evict 臂在 conns.remove 后**刷新候选 last_try**（回补/置换调度复用既有 cooldown_ok，fails 不动）——原缺陷 = 自关不刷新 last_try，回补调度对刚关候选零冷却（TDD 红证：回补仅 528µs）。首轮规格「Closed 处理器误记 fails += 1」经实证更正：各自关臂先 remove 再发 Drop，处理器 `conns.remove` 返回 None 整段跳过，fails 从未被污染——**缺陷在调度侧不在记账侧**。
 - TDD 夹具增补：probing_seeder（记录对端握手 peer_ids + 终态读错误串，serve_seeder_stream 抽取复用并 Result 化）——peer_id 会话稳定性（两轮 run 全等）、暂停收口 EOF 判据、自关冷却三测试共用。
 - 陷阱登记：tokio read_exact EOF 文案是 **"early eof"**（非 std 的 "failed to fill whole buffer"）；OwnedWriteHalf 无 Clone（两阶段写测试用 oneshot 门闸单任务内完成）；TCP 半关闭后对端**第一次**写仍成功（RST 由第二次写触发）——强制收口断言必须写两次。
+
+## bug18 轮（specifier，五项功能规格轮）
+
+- 限速现状证据链：全局限速 = EngineShared.throttle 单点（engine/mod.rs start() 构造，仅 HTTP 管道接入）；BtSpec.max_speed 字段带 `#[allow(dead_code)]`（BT 引擎从未消费）——「BT 下载限速未接」遗留项的机制落点；cfg.max_speed 同时被 bt_dialog 预填进 BtSpec.max_speed（形同任务级预填但全链路无效）。限速全域化落点 = 协议无关层共享配额（EngineShared 单点扩上传方向）+ BtSpec 任务级两字段 + Reconfigure 载体扩展（bug16 热调命令面已有）。
+- 反吸血设计口径（D67）：qBittorrent/libtorrent 无贡献比率自动封禁（仅协议违规断开+手动 ban）→ 主参考 BitComet PSR；三判据 leech（up≥1MiB 且 down<64KiB 且存活≥120s，仅下载侧任务，做种豁免——做种无私上传合法，纯 leecher 拉做种不罚）/ bad_piece（3 次）/ protocol（破坏性消息首封、非法区间 request 3 次）；黑名单 = EngineShared 既有名单（is_blacklisted 三过滤面：拨出候选/入连 accept/tracker peers 吸纳）+ blacklist.yaml 持久化层（损坏=空名单+警告非致命——与 config 致命口径分界）。
+- trackers 窗口数据源 = 引擎 tracker 池真实状态（interval 倒计时/失败退避/未运行三态）；t 键退役 = keys.rs cycle_filter 的 t/T 臂删除，页签循环仅 ]/[ 承担（帮助【页签】组条目替换不改总行数）。
+- listen_port：现状每任务 `bind("0.0.0.0:0")` 随机 + `unwrap_or(6881)` 展示兜底；目标 = 进程级共享单端口（qBt 会话口径；每任务独立 listener 的分散形态退役）。
+
+## bug19 追轮（specifier，操作者三条 UI 反馈修复 + trackers 弹窗改版轮）
+
+- 「面板有值、弹窗空」缺陷的机制模式：演示预填数据只进对话框缓冲、不进任务档案（demo_bt_trackers 仅修改面板空任务时预填、确认链不落库）——同源数据的两处消费点（T 弹窗读 t.trackers / 面板预填读 t.trackers）必须同库；演示口径的预填必须走创建链入库。修法 = 新增 BT 任务 trackers 留空确认时按「种子元数据自带」口径预置默认 trackers 入库。
+- wss 泄漏双源修法：源 1 = 演示预填数据本身含 wss（改 4 条 http/https/udp）；源 2 = 用户输入不经校验直落任务档案——确认链逐行 scheme 白名单校验（http/https/udp，大小写不敏感，首违即拒），toast + 焦点回 trackers + 整单不落库（qBt 确认语义），与引擎侧拒入池构成双过滤面。
+- trackers 弹窗改版落点：qBt 列口径 = #/URL/状态/Peers/Seeds/消息（类型并入状态，状态三态不变）；URL 换行 = wrap_by_width 按显示宽贪心折行 + 续行仅回填 URL 列（首行携带全部数据列）；折行后显示行为滚动单位（flat 行集，滚动条 max = 总显示行 − 可视行）；列排版 push_col 按绝对列偏移铺 span（cur 游标推进，CJK 宽度走 w()）；SbKey::Trackers 五件套（enum/bar/max/scroll/set）与 pieces 完全同构。
+
+## bug20 追轮（specifier，操作者六条 UI 反馈：细线分隔/续行同色/反终端自动链接/对称 padding/删底部提示）
+
+- 渲染层反终端自动链接注入纪律：VS15（U+FE0E，零宽、GCB=Extend 不独立成格）+ 相邻 span ±1 微差色（fg_shadow RGB±1）双保险打断终端 URL 模式识别；注入点必须在 disp_window（水平视口切窗）/折行分段**之后**——直接改缓冲会污染数据源并使光标/点击映射失准，注入在切窗前则视口边缘切片可能漏 scheme；共享组件经 `no_link` 参数收口（命令窗口 false、BT trackers 面板 true），udp 行不注入（终端不识别非 http 形态，无需注入）。
+- 浮层删底部提示行的两处联动：可视行公式随动（vis = 内框高 − 3）；滚动条 total 口径把分隔细线计入 flat 行集。删显示类 UI 反馈必须同步翻转验证脚本断言方向（原「有提示」断言改「无提示」），否则旧断言假绿掩盖新口径。
+- 表格右 padding 对称推导：左 padding 2 + 末列文案宽恰好用满 content_w ⇒ 右视觉 padding = 左 padding。本轮 URL 列 36→44 承接增量、状态/Peers/Seeds/消息 右移（49/62/69/76），消息列预算 = content_w − 76 = 8（最长文案「重试 29s」= 8 列）恰好齐平——改列宽的核平公式：最长列文案宽 = content_w − 列偏移。
+- 折行同色的实现口径：续行与首行同一 Style（FG）即可，颜色一致性由 span 构造点保证；验证脚本对纯色差断言无 PTY 手段（文本捕获不带样式），以「续行无 # 前缀回填 URL 列」结构断言 + 代码构造点评审双保险登记。

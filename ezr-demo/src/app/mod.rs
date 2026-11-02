@@ -33,6 +33,8 @@ pub const FILTERS: [&str; 2] = ["正在下载", "已完成"];
 
 pub const MAX_DOWNLOAD_SLOTS: usize = 5;
 
+pub const TASK_LIMIT_DEFAULTS: (u64, u64) = (0, 0);
+
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 pub struct App {
@@ -126,9 +128,13 @@ pub struct App {
 
     pub pieces_sb: Option<scrollbar::Bar>,
 
+    pub trackers_sb: Option<scrollbar::Bar>,
+
     pub help_sb: Option<scrollbar::Bar>,
 
     pub pieces_max_scroll: usize,
+
+    pub trackers_max_scroll: usize,
 
     pub help_max_scroll: usize,
 
@@ -143,6 +149,16 @@ pub struct App {
     pub show_panes: bool,
 
     pub pieces_open: bool,
+
+    pub trackers_open: bool,
+
+    pub trackers_area: Option<Rect>,
+
+    pub trackers_pos: Option<(u16, u16)>,
+
+    pub trackers_drag: Option<(u16, u16)>,
+
+    pub trackers_scroll: usize,
 
     pub pieces_scroll: usize,
 
@@ -334,8 +350,10 @@ impl App {
             conns_v_sb: None,
             conns_h_sb: None,
             pieces_sb: None,
+            trackers_sb: None,
             help_sb: None,
             pieces_max_scroll: 0,
+            trackers_max_scroll: 0,
             help_max_scroll: 0,
             sb_drag: None,
             sb_hold: None,
@@ -343,6 +361,11 @@ impl App {
             sb_flash: None,
             show_panes: true,
             pieces_open: false,
+            trackers_open: false,
+            trackers_area: None,
+            trackers_pos: None,
+            trackers_drag: None,
+            trackers_scroll: 0,
             pieces_scroll: 0,
             pieces_follow: false,
             pieces_area: None,

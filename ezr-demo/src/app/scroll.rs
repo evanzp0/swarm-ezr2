@@ -16,6 +16,8 @@ pub enum SbKey {
 
     Pieces,
 
+    Trackers,
+
     Help,
 
     Val,
@@ -47,6 +49,7 @@ impl SbKey {
             SbKey::ConnsV => app.conns_v_sb,
             SbKey::ConnsH => app.conns_h_sb,
             SbKey::Pieces => app.pieces_sb,
+            SbKey::Trackers => app.trackers_sb,
             SbKey::Help => app.help_sb,
             SbKey::Val => app.val_sb,
             SbKey::CmdText => app.cmd_sb,
@@ -95,6 +98,7 @@ impl App {
 
             SbKey::ConnsH => self.conns_max_hscroll,
             SbKey::Pieces => self.pieces_max_scroll,
+            SbKey::Trackers => self.trackers_max_scroll,
             SbKey::Help => self.help_max_scroll,
             SbKey::Val => self.val_max_scroll,
             SbKey::CmdText => self.cmd.max_scroll,
@@ -130,6 +134,9 @@ impl App {
             }
             SbKey::Pieces => {
                 self.pieces_scroll = clamp_offset(self.pieces_scroll as i64 + delta as i64, max);
+            }
+            SbKey::Trackers => {
+                self.trackers_scroll = clamp_offset(self.trackers_scroll as i64 + delta as i64, max);
             }
             SbKey::Help => {
                 self.help_scroll = clamp_offset(self.help_scroll as i64 + delta as i64, max);
@@ -169,6 +176,7 @@ impl App {
             SbKey::ConnsV => self.conns_scroll = pos,
             SbKey::ConnsH => self.conns_hscroll = pos,
             SbKey::Pieces => self.pieces_scroll = pos,
+            SbKey::Trackers => self.trackers_scroll = pos,
             SbKey::Help => self.help_scroll = pos,
             SbKey::Val => self.val_scroll = pos,
             SbKey::CmdText => {

@@ -13,7 +13,7 @@
      A6 鼠标点击定位光标：点字符格 = 光标停其前；点行尾空白 = 段尾
      A5 种子路径 + Enter（= 触发 [确定] 按钮 click）→ 分流打开「添加任务：BT」
      A-UD ↑↓ 可视行导航（列保持 + 短行落行尾 + 跨 wrap 段行；回归旧版逻辑行+无条件行尾）
-  B. 添加任务：BT（78×26，顶 padding 1 行；列表框 = 对话框内 x+2、y+4、宽 72、高 9 = 7 可视行
+  B. 添加任务：BT（78×28，顶 padding 1 行；列表框 = 对话框内 x+2、y+4、宽 72、高 9 = 7 可视行
      （phase2.10 由 5 加高 2 行）；列表内容行首 2 列 + 行尾 2 列 S2 padding）
      B1 列表框左上标题固定 = 「选择下载文件」（旧动态标题/旧 (x/y) 格式消失）；
         动态统计「已选 x 个文件，共 z」移至列表框右下角（底边框右侧）
@@ -31,7 +31,7 @@
           框高 7 = 边框 2 + 5 可视行；无 word wrap（长行不折行）+ 水平滚动条
           （下边框 ← ═ →，箭头点击右移/不回弹）+ 垂直滚动条；
           ↑↓ 列保持导航（↑ 到上行 / ← 中列 / ↓ 回下行插字中间）
-  C. 修改任务：BT（BT 任务 M 分流；78×24，列表框 y+3，6 可视行）
+  C. 修改任务：BT（BT 任务 M 分流；78×26，列表框 y+3，6 可视行）
      C1 标题 + 右下动态统计 + [全选]/[全不选] 按钮；trackers 预填首行可见
      C2 首行无位移 + 默认收拢
 
@@ -422,19 +422,17 @@ def main():
         else:
             check("B-TP 顶 padding 几何定位", False)
 
-        # B-TR trackers 多行输入 panel：Tab×3（列表 → 并发 → 代理 → trackers）
-        # 焦点循环后到达 trackers；空缓冲显示占位提示；Alt+Enter 换行可视；
-        # 5 可视行 + 无 word wrap + 水平/垂直滚动条
-        s.send(b"\t", 0.15)
-        s.send(b"\t", 0.15)
-        s.send(b"\t", 0.15)
+        # B-TR trackers 多行输入 panel（v1.9 焦点表列表→并发→限速×2→代理→trackers，
+        # Tab 步数随焦点表膨胀，改用点击面板聚焦更稳）；
+        # 空缓冲显示占位提示；Alt+Enter 换行可视；5 可视行 + 无 word wrap +
+        # 水平/垂直滚动条
         rows = s.raw_rows()
         pos = locate_dialog(rows, "添加任务：BT")
         if pos is not None:
             xl, yt, _xr = pos
-            # trackers 框 = 并发/代理行下：Add 布局 y = 列表框底 + 2
-            # （列表框 7 可视行 + 2 边框 = 框高 9；yt+4 = 列表框顶）
-            tr_y = yt + 4 + 9 + 2            # 列表框顶 +2 行偏移 +框高 9 + 并发/代理 2
+            # trackers 框 = 并发/下载限速/上传限速/代理行下：Add 布局 y = 列表框底 + 4
+            # （列表框 7 可视行 + 2 边框 = 框高 9；yt+4 = 列表框顶；v1.9 加限速 2 行）
+            tr_y = yt + 4 + 9 + 4            # 列表框顶 +2 行偏移 +框高 9 + 并发/限速×2/代理 4
             top_tr = rows[tr_y][xl + 3:xl + 3 + 72].replace(CONT, "")
             check("B-TR trackers panel 标题 = trackers", " trackers " in top_tr, top_tr[:44])
             check("B-TR trackers 框高 7 = 边框 2 + 5 可视行（底边框 ╰ ╯ 在 tr_y+6）",
@@ -444,6 +442,9 @@ def main():
             check("B-TR 空缓冲占位提示（可输入多行 traker…）",
                   "可输入多行 traker，使用 ALT+ENTER 换行" in inner_tr,
                   f"内容 = {inner_tr.strip()[:44]!r}")
+            # 点击面板聚焦（0 基 (xl+30, tr_y+2)）后键入
+            s.send(f"\x1b[<0;{xl + 31};{tr_y + 3}M".encode(), 0.15)
+            s.send(f"\x1b[<0;{xl + 31};{tr_y + 3}m".encode(), 0.3)
             # Alt+Enter 换行：tr1 → ESC+\r → tr2（视口跟随光标，第二行可见）
             s.send(b"tr1", 0.3)
             s.send(b"\x1b\r", 0.3)           # Alt+Enter = 换行
@@ -464,17 +465,18 @@ def main():
             check("B-TR ↑↓ 列保持导航（Y 插在下行列 2 = trY2）",
                   rows[tr_y + 2][xl + 4:xl + 4 + 4].replace(CONT, "") == "trY2",
                   f"row = {rows[tr_y + 2][xl + 4:xl + 12]!r}")
-            # 无 word wrap：清空后输入 91 字符无空格长行 ⇒ 只渲染 70 列水平窗口
-            # （跟随行尾光标：view_x 钳在 max_scroll_x=21，首行 = 末 70 列前缀
+            # 无 word wrap：清空后输入 87 字符合法 udp 长 URL ⇒ 只渲染 70 列水平窗口
+            # （跟随行尾光标：view_x 钳在 max_scroll_x=17，首行 = 末 70 列前缀
             # 123456789…），第二行必须为空（不折行）；水平滚动条出现在下边框
-            # （← 轨道 ═ →）
+            # （← 轨道 ═ →）。用合法 scheme 行：后续裸 Enter 确认可直接过
+            # v1.9 scheme 校验（规避本沙箱 PTY 对 \x7f 连发 ~2/批的投递上限）
             # （tr1⏎trY2 = 7 字符 + 1 次行首合并，退格 ≥ 8 次才清空；发 10 次富余）
             s.send(b"\x7f" * 10, 0.4)
-            s.send(b"0123456789" * 9 + b"0", 0.9)
+            s.send(b"udp://t.example/" + b"0123456789" * 7 + b"5", 0.9)
             rows = s.raw_rows()
             row0 = rows[tr_y + 1][xl + 4:xl + 4 + 70].replace(CONT, "")
             row1 = rows[tr_y + 2][xl + 4:xl + 4 + 70].replace(CONT, "")
-            check("B-TR 无 word wrap：91 字符长行不折行（第二行为空）",
+            check("B-TR 无 word wrap：87 字符长行不折行（第二行为空）",
                   row0.startswith("123456789") and row1.strip() == "",
                   f"row0={row0[:16]!r} row1={row1[:16]!r}")
             bot_tr = rows[tr_y + 6][xl + 3:xl + 3 + 72].replace(CONT, "")
@@ -485,22 +487,21 @@ def main():
             rows = s.raw_rows()
             row0 = rows[tr_y + 1][xl + 4:xl + 4 + 70].replace(CONT, "")
             check("B-TR Home 后首行渲染前缀（view_x=0）",
-                  row0.startswith("0123456789"), f"row0={row0[:16]!r}")
+                  row0.startswith("udp://t.example/"), f"row0={row0[:16]!r}")
             # 点水平滚动条 → 箭头（0 基 col xl+72, row tr_y+6）：视口右移 2 列且不回弹
             s.send(f"\x1b[<0;{xl + 73};{tr_y + 7}M".encode(), 0.15)
             s.send(f"\x1b[<0;{xl + 73};{tr_y + 7}m".encode(), 0.25)
             rows = s.raw_rows()
             row0 = rows[tr_y + 1][xl + 4:xl + 4 + 70].replace(CONT, "")
-            check("B-TR 点 → 箭头 → 水平视口右移 2 列（前缀 01 消失）",
-                  row0.startswith("23456789"), f"row0={row0[:16]!r}")
+            check("B-TR 点 → 箭头 → 水平视口右移 2 列（前缀 up 消失）",
+                  row0.startswith("p://t.example/0"), f"row0={row0[:16]!r}")
             s.rd(0.7)                         # 多帧重绘后仍不回弹（按需跟随）
             rows = s.raw_rows()
             row0 = rows[tr_y + 1][xl + 4:xl + 4 + 70].replace(CONT, "")
             check("B-TR 水平视口停留原处（不回贴行首光标）",
-                  row0.startswith("23456789"), f"row0={row0[:16]!r}")
-            # 清空长行后：trackers 焦点下裸 Enter = 确认（与 [立即下载] click 同义）
-            # → 校验分流触发
-            s.send(b"\x7f" * 100, 0.4)
+                  row0.startswith("p://t.example/0"), f"row0={row0[:16]!r}")
+            # trackers 焦点下裸 Enter = 确认（与 [立即下载] click 同义）
+            # → 校验分流触发（87 字符行为合法 udp tracker，可通过 v1.9 scheme 校验）
             s.send(b"\r", 0.6)
             scr = s.screen()
             check("B-TR trackers 焦点 Enter = 确认（窗口关闭并分流）",
@@ -538,7 +539,7 @@ def main():
             pos = locate_dialog(rows, "修改任务：BT")
             if pos is not None:
                 xl, yt, _xr = pos
-                tr_y = yt + 3 + 8 + 2             # 列表框顶 +2 +框高 8 + 并发/代理 2
+                tr_y = yt + 3 + 8 + 4             # 列表框顶 +2 +框高 8 + 并发/限速×2/代理 4
                 top_tr = rows[tr_y][xl + 3:xl + 3 + 72].replace(CONT, "")
                 check("C-TR trackers panel 标题 = trackers", " trackers " in top_tr,
                       top_tr[:44])
@@ -546,13 +547,21 @@ def main():
                       rows[tr_y + 6][xl + 3] == "╰" and rows[tr_y + 6][xl + 3 + 71] == "╯",
                       rows[tr_y + 6][xl + 3:xl + 3 + 72].replace(CONT, ""))
                 inner_tr = rows[tr_y + 1][xl + 4:xl + 4 + 70].replace(CONT, "")
-                check("C-TR trackers 预填首行可见（udp://tracker.ezr.dev…）",
-                      inner_tr.startswith("udp://tracker.ezr.dev"),
+                check("C-TR trackers 预填首行可见（sintel 自带 udp://tracker.example…）",
+                      inner_tr.startswith("udp://tracker.example:6969"),
                       f"首行 = {inner_tr.strip()[:44]!r}")
-                inner_tr4 = rows[tr_y + 4][xl + 4:xl + 4 + 70].replace(CONT, "")
-                check("C-TR 预填 4 行在 5 可视行内全可见（末行 wss://…）",
-                      inner_tr4.startswith("wss://webtorrent.ezr.dev"),
-                      f"末行 = {inner_tr4.strip()[:44]!r}")
+                inner_tr4_raw = rows[tr_y + 2][xl + 4:xl + 4 + 70].replace(CONT, "")
+                inner_tr4 = inner_tr4_raw.replace("\ufe0e", "")
+                inner_tr5 = rows[tr_y + 4][xl + 4:xl + 4 + 70].replace(CONT, "")
+                check("C-TR 预填 2 行全可见（行2 http://…，无 wss://）",
+                      inner_tr4.startswith("http://tracker.example")
+                      and "wss://" not in inner_tr4 and "wss://" not in inner_tr
+                      and inner_tr5.strip() == "",
+                      f"行2 = {inner_tr4.strip()[:44]!r} 行4 = {inner_tr5.strip()[:44]!r}")
+                vs = "\ufe0e"
+                check("C-TR http 行 VS15 反终端自动链接（udp 行无，v1.11）",
+                      vs in inner_tr4_raw and vs not in inner_tr,
+                      f"行2 原文含 VS15 = {vs in inner_tr4_raw}")
             else:
                 check("C-TR trackers 几何定位", False)
         else:

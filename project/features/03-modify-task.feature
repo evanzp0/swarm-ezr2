@@ -1,5 +1,5 @@
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
-#   03-modify-task-01 按 m 弹出修改对话框且四字段预填当前值（v1.32 修订：标题更名、无校验任务预填 NONE）
+#   03-modify-task-01 按 m 弹出修改对话框且六字段预填当前值（v1.32 修订：标题更名；v1.36 修订：+下载限速/上传限速，74×12）
 #   03-modify-task-02 修改并发立即生效（上调连接数上升 / 下调即时收缩，v1.16 修订）
 #   03-modify-task-03 修改代理立即对新连接生效
 #   03-modify-task-04 修改校验算法与校验码，完成校验按新值判定
@@ -8,6 +8,13 @@
 #   03-modify-task-07 已完成任务按 m 拒绝（toast 提示）
 #   03-modify-task-08 修改后注册表立即落盘（重启保留新参数）
 #   03-modify-task-09 修改对话框支持粘贴（校验码/并发字段，v1.17 新增）
+#   03-modify-task-10 修改限速两字段立即生效（v1.36 新增，FR-02-29/FR-02-26）
+# v1.36 修订注（操作者 bug18 轮指令五项功能之二「任务级上传/下载速度限制」；FR-02-29，D67）：
+# ①修改对话框 74×10 → 74×12（字段 4→6：并发 / 下载限速 / 上传限速 / 校验算法 / 校验码 /
+# 代理；两限速字段插在并发之后；焦点表扩展、按钮序号顺延 +2，字段行 y +1、按钮行 y +2）；
+# ②限速字段预填任务当前值（存量任务注册表无该字段 = 0（不限））；输入接受整数 B/s 或十进制
+# 单位字符串；留空 = 保持当前值；非法 = 不生效并聚焦提示（沿 03-modify-task-06 口径，
+# 不关窗）；③确认后立即生效（FR-02-26/FR-01-87 口径）且注册表落盘（03-modify-task-08）。
 # v1.30 同步注（操作者指令，对齐 ezr-demo 重构版）：修改对话框 74×9、无底部提示行（P3/FR-01-107）——
 # 本文件仅场景 07 toast 文案逐字校准（`⚠ 已完成任务不可修改`）与 D20 适用范围口径不变；
 # 对话框通用语义（Tab/Enter/Esc、下拉、拖拽、点击外部忽略）见 01-tui-display-19 与帮助窗口【弹窗】组。
@@ -42,18 +49,19 @@ Feature: 03-modify-task 任务修改对话框（并发/校验/代理热生效）
     And 本地 fixture 服务器已启动且根目录含测试文件
     And 本地 fixture 代理（可区分记录经手请求，支持 --name 多实例）已启动
 
-  Scenario: 03-modify-task-01 按 m 弹出修改对话框且四字段预填当前值（v1.32：标题更名 + NONE 预填臂）
-    Given 添加任务时设并发 <concurrency>、校验 <algo>/<value>、代理 <proxy>
+  Scenario: 03-modify-task-01 按 m 弹出修改对话框且六字段预填当前值（v1.32：标题更名；v1.36：+限速两字段 74×12）
+    Given 添加任务时设并发 <concurrency>、校验 <algo>/<value>、代理 <proxy>、任务级限速 <down>/<up>
     When 列表选中该任务按 m
-    Then 弹出「修改任务：HTTP(S)」对话框（74×10；v1.32 标题更名，原「修改任务」退役；v1.34/FR-01-115：74×9 → 74×10 底部补齐 1 行 padding，字段行 x = 内框 + 2）：
-      并发输入框 = <concurrency>、算法下拉 = <algo>、校验码输入框 = <value>、代理下拉 = <proxy>
-    And 字段焦点次序 = 并发 → 算法 → 校验码 → 代理 → 确定 → 取消（键盘可完整操作）
+    Then 弹出「修改任务：HTTP(S)」对话框（74×12；v1.32 标题更名，原「修改任务」退役；v1.34/FR-01-115：74×9 → 74×10 底部补齐 1 行 padding；v1.36/FR-02-29：74×10 → 74×12 新增限速两字段，字段行 x = 内框 + 2）：
+      并发输入框 = <concurrency>、下载限速输入框 = <down_parsed>、上传限速输入框 = <up_parsed>、算法下拉 = <algo>、校验码输入框 = <value>、代理下拉 = <proxy>
+    And 字段焦点次序 = 并发 → 下载限速 → 上传限速 → 算法 → 校验码 → 代理 → 确定 → 取消（键盘可完整操作）
     When 另选一个无校验码任务（NONE 创建或清除校验后）按 m
     Then 算法下拉预填 "NONE" 且校验码输入框为空、不可输入（v1.32/FR-01-87：无校验任务预填 NONE）
 
     Examples:
-      | concurrency | algo    | value                            | proxy    |
-      | 3           | SHA-256 | <fixture 摘要>                    | 直连     |
+      | concurrency | algo    | value                            | proxy    | down   | up     | down_parsed | up_parsed |
+      | 3           | SHA-256 | <fixture 摘要>                    | 直连     | 0      | 0      | 0           | 0         |
+      | 3           | SHA-256 | <fixture 摘要>                    | 直连     | 1 MB/s | 500 KB/s | 1000000    | 500000    |
 
   Scenario: 03-modify-task-02 修改并发立即生效（上调连接数上升 / 下调即时收缩，v1.16 修订）
     Given 任务以并发 <before> 下载中（文件足够大以维持多块在途）
@@ -150,3 +158,18 @@ Feature: 03-modify-task 任务修改对话框（并发/校验/代理热生效）
       | algo    | pasted                     | expected_hex     | conns_pasted | conns_expected |
       | SHA-256 | "  zzFF88ff00!dead-beef  " | FF88ff00deadbeef | "1a2b3"      | 12             |
       | MD5     | "0123456789abcdefg"        | 0123456789abcdef | "9x64"       | 96             |
+
+
+  # v1.36 新增（操作者 bug18 轮指令，FR-02-29/FR-02-26 + D67）：修改限速两字段立即生效。
+  Scenario: 03-modify-task-10 修改限速两字段立即生效（v1.36，FR-02-29/FR-02-26）
+    Given 任务以任务级下载/上传限速 <before> 运行中（下载中/暂停均可，已完成拒绝不变）
+    When 按 m 将下载限速/上传限速改为 <after> 并确定
+    Then 对话框关闭、任务保持原状态（不重启、不重新排队），速度约束约一进度帧内向 <after> 收敛
+    And toast 报告修改成功且注册表立即落盘（重启后保留新限速，03-modify-task-08 口径）
+    When 限速字段输入非法值（如 "abc"）后确定
+    Then 不生效并聚焦非法字段提示（不关闭对话框，03-modify-task-06 口径）
+
+    Examples:
+      | before   | after    |
+      | 0 / 0    | 1 MB/s / 0 |
+      | 1 MB/s / 0 | 0 / 0      |

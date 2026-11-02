@@ -39,6 +39,9 @@ pub struct MultiLineRendered {
 /// - `wrap = false`：逻辑行 1:1 渲染（不做 word wrap），行内超宽内容经水平
 ///   视口（`view_x` 显示列）滚动，ScrollablePanel 同时绘制垂直（右边框）+
 ///   水平（下边框）滚动条（`ScrollbarMode::Both`，箭头/轨道/滑块拖拽）；
+/// - `no_link = true`：渲染层注入反终端自动链接标记（VS15 + 交替微差色，
+///   `link_break_spans` 口径，与 trackers 弹窗 URL 列同构），仅影响显示，
+///   不改缓冲内容与光标/点击映射（注入发生在 disp_window 切窗之后）；
 /// - 视口跟随为按需制（编辑拉回 / 滚动停留，语义见 `MultiLineBuf`；
 ///   无 wrap 模式水平方向同契约：光标移动回贴列，滚动交互后停留）；
 /// - 滚动条绘制在 panel 边框上（任务列表 ScrollPanel 同构，内容区不预留
@@ -55,6 +58,7 @@ pub fn draw_multi_line_input(
     pressed_v: Option<scrollbar::Arrow>,
     pressed_h: Option<scrollbar::Arrow>,
     wrap: bool,
+    no_link: bool,
     buf: &mut MultiLineBuf,
 ) -> MultiLineRendered {
     // panel = ScrollablePanel（与任务列表同构）：wrap = 垂直条；无 wrap = 垂直+水平
@@ -122,8 +126,8 @@ pub fn draw_multi_line_input(
     let mut lines: Vec<Line> = Vec::with_capacity(view_h);
     for vi in 0..view_h {
         let ri = start + vi;
-        let span = if empty && vi == 0 && !placeholder.is_empty() {
-            Span::styled(placeholder.to_string(), Style::default().fg(DIM2))
+        let row_spans: Vec<Span> = if empty && vi == 0 && !placeholder.is_empty() {
+            vec![Span::styled(placeholder.to_string(), Style::default().fg(DIM2))]
         } else {
             match rows.get(ri) {
                 Some((li, s, n)) => {
@@ -132,12 +136,17 @@ pub fn draw_multi_line_input(
                     } else {
                         disp_window(&buf.lines[*li].value, buf.view_x, text_w)
                     };
-                    Span::styled(text, Style::default().fg(Color::White))
+                    let st = Style::default().fg(Color::White);
+                    if no_link {
+                        link_break_spans(&break_links(&text), st)
+                    } else {
+                        vec![Span::styled(text, st)]
+                    }
                 }
-                None => Span::styled(String::new(), Style::default()),
+                None => vec![Span::styled(String::new(), Style::default())],
             }
         };
-        lines.push(Line::from(span));
+        lines.push(Line::from(row_spans));
     }
     f.render_widget(Paragraph::new(lines), inner);
 

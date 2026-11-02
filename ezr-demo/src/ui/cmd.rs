@@ -78,6 +78,7 @@ pub(crate) fn draw_cmd(f: &mut Frame, app: &mut App, area: Rect) {
         app.sb_arrow_pressed(SbKey::CmdText),
         None,
         true,
+        false,
         &mut app.cmd,
     );
     app.cmd_area = Some(rect);

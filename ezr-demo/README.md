@@ -22,6 +22,54 @@ chmod +x bin/ezr-tui-demo
 
 ## 变更记录（相对上游）
 
+32. **trackers 弹窗六项 UI 反馈同步 + BT 对话框 trackers 面板反终端自动链接（bug20 追轮同步，FR-02-31 v1.9.2）**
+    - 弹窗：相邻明细行之间以 `─` 通栏细线分隔（首条前/末条后不画，同条折行
+      续行间不画，细线计入滚动总行数）；URL 折行续行与首行同色同 FG（不再降暗）；
+      内容区左右 padding 对称各 2 列（URL 列宽 36→44，状态/Peers/Seeds/消息
+      列右移 49/62/69/76，消息列预算 8 列与右 padding 齐平）；底部提示行全部
+      删除（内容区延伸至底边框，可视行数 = 内框高 − 3）
+    - http(s)/www URL 渲染层反终端自动链接（VS15 U+FE0E 零宽注入 + 相邻 span
+      ±1 微差色交替，打断终端 hover 自动下划线识别；udp 行不注入；显示/列宽/
+      滚动/换行计算不变）——弹窗 URL 列与添加/修改 BT 对话框 trackers 面板
+      同口径（面板侧渲染层注入不改缓冲与光标/点击映射，命令窗口文本框不启用）
+    - `draw_multi_line_input` 新增 `no_link` 参数（ui/multiline.rs）；
+      `verify_trackers_popup.py` 同步新口径断言（26 项）；
+      `verify_phase2_ui.py` C-TR 增 http 行 VS15 断言
+
+29. **trackers 弹窗改版 + wss 拒绝 + 默认 trackers 入库（bug19 追轮同步，FR-02-31 v1.9.1）**
+    - 弹窗 74×16 → 90×22；表头改 qBittorrent Trackers 列口径：# / URL / 状态 /
+      Peers / Seeds / 消息（原 序号/URL/类型/状态 退役，类型并入状态口径）；
+      URL 超宽由 `…` 截尾改为 36 列宽列内自动换行（续行仅回填 URL 列）；
+      键盘 ↑↓/PgUp·PgDn/Home·End 与滚轮滚动 + 右缘滚动条（按折行后显示行计数）
+    - 添加/修改 BT 对话框 trackers 确认时逐行校验 scheme（http/https/udp，
+      大小写不敏感）：wss:// 等不支持形态 toast「⚠ 不支持的 tracker 协议
+      （仅 http/https/udp）：…」、焦点回 trackers、不落库（修复「修改面板出现
+      wss://」缺陷；演示预填数据同步去 wss）
+    - 新增 BT 任务 trackers 留空确认时按种子元数据口径预置 4 条默认 tracker
+      入库（修复「面板有值、T 弹窗空」缺陷——T 弹窗与面板一致非空）
+    - 新增 `scripts/verify_trackers_popup.py`（T1 种子任务弹窗 / T2 新任务默认
+      tracker 入库回归 / T3 wss 拒绝，共 21 项 PTY 自验证）
+26. **添加/修改任务对话框：任务级下载/上传限速字段（bug18 同步，FR-02-29/D67）**
+    - 「添加任务：HTTP(S)」74×12→74×14、「修改任务：HTTP(S)」74×10→74×12、
+      「添加任务：BT」78×26→78×28、「修改任务：BT」78×24→78×26——各新增
+      「下载限速」「上传限速」两字段（HTTP 插在并发与校验之间、BT 插在并发与代理之间），
+      焦点表随字段顺延（Add/Modify/AddBt/ModifyBt = 11/8/11/8 个焦点）
+    - 添加框预填 = config 任务级默认值（demo 常量 0/0），可修改，留空或非法确认时回退预填；
+      修改框预填任务当前值，留空保持当前值、非法不生效并聚焦提示；确认后立即生效
+      （FR-02-26 总规则），输入接受整数 B/s 或十进制单位字符串（1 MB=1000000）
+27. **'t' 键 trackers 弹窗 + 页签 t 切换退役（bug18 同步，FR-02-31/D67）**
+    - 任务列表按 T/t 打开当前选中 BT 任务的 trackers 弹窗：74×16 圆角模态、标题
+      「 Trackers 」、[✗] 关闭、可拖拽；表头 序号/URL/类型/状态，9 可视行；
+      状态列 = 真实 tracker 池状态（正常「<n> peers · 下轮 <s>s」/失败退避/待 announce——
+      demo 模拟数据同形态）
+    - 门控：未选中 → toast「未选中任务，无法查看 trackers」；非 BT 任务 →
+      toast「该任务没有 trackers（仅 BT 任务支持）」
+    - 原页签过滤循环的 T/t 臂退役——页签切换仅 ]/[ 承担（帮助文案同步）；demo BT 模拟
+      任务附 2–3 条 http/udp tracker 演示数据
+28. **全局/任务级限速模拟口径（bug18 同步，FR-02-28/D67）**
+    - demo 模拟引擎按任务 task_max_down/task_max_up 建模（确认链解析写回、修改框
+      留空保持当前值）；全局键（global_max_download_speed / global_max_upload_speed）、
+      blacklist.yaml 反吸血、[bt] listen_port 为 ezr 产品端行为，demo 不含模拟
 22. **并发连接面板：客户端列自适应收缩 + 末列完整可见吸附（bug14 同步，D63④）**
     - 与 ezr 产品端同口径：BT 内容宽（94 基准）> 视口宽时客户端列 34 → max(12, 视口宽 − 60)，
       收缩后整表无横向滚动完整可见（「协议」表头不再被视口右缘裁掉半个宽字）
@@ -730,4 +778,5 @@ python3 scripts/verify_footer_pad_scroll.py # 页脚单行化（toast）+ 滚动
 python3 scripts/smoke_v_sync.py             # 冒烟 + v-sync
 python3 scripts/verify_ezr.py               # 全场景回归 169 项
 python3 scripts/verify_phase2_ui.py         # phase2 UI：命令窗口 + BT 文件树/trackers 58 项
+python3 scripts/verify_trackers_popup.py   # trackers 弹窗专项：T1/T2/T3 26 项
 ```

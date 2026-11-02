@@ -226,6 +226,66 @@ impl App {
             return;
         }
 
+        if self.trackers_open {
+            match m.kind {
+                MouseEventKind::ScrollUp => self.trackers_scroll_by(-2),
+                MouseEventKind::ScrollDown => self.trackers_scroll_by(2),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.footer_press = None;
+
+                    if Self::pointer_in(&self.popup_close_rect, m.column, m.row) {
+                        self.x_press = true;
+                        return;
+                    }
+
+                    if let Some(bar) = self.trackers_sb {
+                        if let Some(hit) = bar.hit(m.column, m.row) {
+                            self.sb_press(SbKey::Trackers, &bar, hit);
+                            return;
+                        }
+                    }
+
+                    if Self::pointer_in(&self.trackers_area, m.column, m.row) {
+                        if let Some(r) = self.trackers_area {
+                            self.trackers_drag = Some((
+                                m.column.saturating_sub(r.x),
+                                m.row.saturating_sub(r.y),
+                            ));
+                        }
+                    }
+                }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    if self.x_press {
+                        self.x_press = Self::pointer_in(&self.popup_close_rect, m.column, m.row);
+                        return;
+                    }
+
+                    self.sb_arrow_follow(m);
+                    if self.sb_drag.is_some() {
+                        self.sb_drag_move(m);
+                    } else if let Some((dx, dy)) = self.trackers_drag {
+                        self.trackers_pos =
+                            Some((m.column.saturating_sub(dx), m.row.saturating_sub(dy)));
+                    }
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    if self.x_press {
+                        let hit = Self::pointer_in(&self.popup_close_rect, m.column, m.row);
+                        self.x_press = false;
+                        self.sb_release();
+                        if hit {
+                            self.close_trackers_popup();
+                        }
+                        return;
+                    }
+                    self.trackers_drag = None;
+                    self.sb_release();
+                }
+                _ => {}
+            }
+            return;
+        }
+
         if self.cmd_open {
             match m.kind {
                 MouseEventKind::ScrollUp => self.cmd.scroll_by(-1),
@@ -805,15 +865,15 @@ impl App {
                 }
             }
             let ck_i = match kind {
-                Some(DialogKind::Add) => 3,
-                Some(DialogKind::Modify) => 1,
+                Some(DialogKind::Add) => 5,
+                Some(DialogKind::Modify) => 3,
                 _ => usize::MAX,
             };
             let proxy_i = match kind {
-                Some(DialogKind::Add) => 5,
-                Some(DialogKind::Modify) => 3,
-                Some(DialogKind::AddBt) => 4,
-                Some(DialogKind::ModifyBt) => 2,
+                Some(DialogKind::Add) => 7,
+                Some(DialogKind::Modify) => 5,
+                Some(DialogKind::AddBt) => 6,
+                Some(DialogKind::ModifyBt) => 4,
                 _ => usize::MAX,
             };
             if i == ck_i {

@@ -1,8 +1,8 @@
 # QA 套件 · 07-add-bt 添加任务：BT 对话框（期号 02）
 
-> 对应规格：`project/features/07-add-bt.feature`（9 场景，其中 07-07 已退役留空、09 为 v1.37 新增）。
+> 对应规格：`project/features/07-add-bt.feature`（10 场景，其中 07-07 已退役留空、09 为 v1.37 新增、10 为 v1.38 新增——限速两字段，FR-02-29/D67；对话框 78×28）。
 > 需求依据：`project/mission/phase-02.md` FR-02-02/04、D44/D47–D50/D55/D59。
-> UI 基线：ezr-demo phase2 源码（78×26 / 焦点表 0–8 / TreePanel / trackers 5 可视行无 wrap /
+> UI 基线：ezr-demo phase2 源码（78×28 / 焦点表 0–10 / TreePanel / trackers 5 可视行无 wrap /
 > 全部 toast 文案照录源码，specifier 逐条核证）。
 > 种子来源仅 .torrent 文件路径（D53）；确认链① toast = `⚠ 请输入种子文件路径`
 >（去磁力，D59）；QA-AB-07 退役留空（磁力任务 phase-03）。
@@ -37,5 +37,8 @@
 
 ## 通过准则
 
+| QA-AB-10 | 07-add-bt-10 | 配置 task 两键后命令窗口开 BT 框；改下载限速输入后确认创建 | 限速两字段预填 = config 解析值、插在并发与代理之间；确认后任务级限速落库（注册表）；BT 引擎按 min(全局, 任务级) 生效（判据归口 QA-TP-12）；留空/非法回退 config 默认（同 HTTP 框 QA-01-20） |
+
 - 全部用例结果记 P（通过）/ F（失败）/ S（受限跳过）；S 必须内嵌环境判据文案。
 - 本套件可基于本地 fixture 重复执行，不依赖外网。
+| QA-AB-11 | 07-add-bt-11 | ①添加 BT 对话框 trackers 输入 `wss://tracker.example/ws` 确认；②trackers 留空确认后开 T 弹窗与修改面板比对 | ①toast `⚠ 不支持的 tracker 协议（仅 http/https/udp）：wss://tracker.example/ws…`、焦点回 trackers、对话框不关闭、任务不创建；②任务创建成功且 4 条默认 tracker（http/https/udp）入库，T 弹窗 4 条与面板预填一致（回归：旧版面板预填不入库 → 弹窗空） |

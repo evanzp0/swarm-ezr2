@@ -1,8 +1,8 @@
 # QA 套件 · 08-modify-bt 修改任务：BT 对话框（期号 02）
 
-> 对应规格：`project/features/08-modify-bt.feature`（7 场景，v1.4）。
+> 对应规格：`project/features/08-modify-bt.feature`（8 场景，v1.5——场景 08 新增修改限速立即生效，FR-02-29/D67；对话框 78×26）。
 > 需求依据：`project/mission/phase-02.md` FR-02-03/04/26（v1.7）。
-> UI 基线：ezr-demo phase2 源码（78×24 / 焦点表 0–5 / 预填与确认口径 / toast 文案照录源码，
+> UI 基线：ezr-demo phase2 源码（78×26 / 焦点表 0–7 / 预填与确认口径 / toast 文案照录源码，
 > specifier 逐条核证）。
 > M 键守卫（D45）= state != Completed（demo 核证）——「做种中」BT 任务同样可打开修改。
 > **v1.4（操作者 bug17 轮指令，FR-02-27 连接生命周期礼仪 + D66）**：QA-MB-05 判据追加——下调
@@ -38,5 +38,8 @@
 
 ## 通过准则
 
+| QA-MB-08 | 08-modify-bt-08 | 下载中/做种中任务按 M 改限速（fixture 多连接观察）；非法值确认 | 引擎不重启（无 CancelBt+StartBt/无重新排队/无启动重校验窗）、任务保持运行；下载/上传速度约一进度帧内向新值收敛（min 合成归口 QA-TP-12）；toast `✓ BT 任务已更新…（立即生效）` + 注册表落盘；非法值不生效并聚焦提示 |
+
 - 全部用例结果记 P（通过）/ F（失败）/ S（受限跳过）；S 必须内嵌环境判据文案。
 - 本套件可基于本地 fixture 重复执行，不依赖外网。
+| QA-MB-09 | 08-modify-bt-09 | 2 条 tracker 的 BT 任务按 M 追加 `wss://tracker.example/ws` 后 Enter 确认 | toast `⚠ 不支持的 tracker 协议（仅 http/https/udp）：…`、焦点回 trackers、对话框保持打开；池保持 2 条（引擎无变更、无 announce 变化），重开预填原 2 条 |

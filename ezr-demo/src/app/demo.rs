@@ -71,6 +71,9 @@ pub(super) fn mk(
         proxy: ProxyChoice::Direct,
         created: created.to_string(),
         bt_files: Vec::new(),
+        task_max_down: 0,
+        task_max_up: 0,
+        trackers: Vec::new(),
     }
 }
 
@@ -274,6 +277,11 @@ pub(super) fn demo_tasks() -> Vec<Task> {
     v[2].uploaded = 1_712_000_000;
     v[2].seed_left = 1_800.0;
     v[2].verify_ok = Some(true);
+    v[2].trackers = vec![
+        "http://tracker.example/announce".to_string(),
+        "udp://tracker.example:6969/announce".to_string(),
+        "https://tracker.backup.example/announce".to_string(),
+    ];
 
     v[2].checksum = Some(Checksum {
         algo: "SHA-1",
@@ -289,6 +297,10 @@ pub(super) fn demo_tasks() -> Vec<Task> {
     v[13].peers = 23;
     v[13].upload_speed = 420_000.0;
     v[13].uploaded = 96_000_000;
+    v[13].trackers = vec![
+        "udp://tracker.example:6969/announce".to_string(),
+        "http://tracker.example/announce".to_string(),
+    ];
 
     v[9].error = Some(fail_case(1).0.to_string());
     v[9].retries = 1;

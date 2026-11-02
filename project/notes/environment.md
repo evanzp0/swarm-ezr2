@@ -175,3 +175,6 @@
 - 纪律：**每轮 `bin/swarm complete` 后立即把归档 tar.gz 复制进 /home/z/my-project/**，
   不等多轮攒批；长跑中途的关键产物（如已通过的测试基线记录）随 handoff/notes 落盘，
   不依赖工作区存续。
+
+- bug18 轮：`[/]` 显示层改写与磁盘真实损坏的判别法——输出/回读中 `[h` 开头序列被吞（`[http]`→`ttp]`）是**显示陷阱**（bug16 轮登记的输入/输出双向改写），磁盘可完好；判别 = python bytes 统计 `count(b'[http]')` vs `count(b'ttp]')` 并检查每处 `ttp]` 前缀是否为 `[h`（独立 ttp] = 磁盘真实损坏）。本轮实证：01-config-template 的 ttp] 全为显示假象（磁盘 7 处 [http] 完好），01-persistence-config L195 存在 1 处历史写入侧真实损坏（`+ ttp] 11 键`，本轮修复）。写入含 `[h` 序列的新文本时仍用锚点拼接 + 写后 bytes 终审双保险。
+- bug18 轮：gh-proxy.com 镜像复证（APS clone + babashka v1.13.229 静态包下载均秒过；GitHub 直连 GnuTLS -110 复现）——bb 装机口径 = releases 清单先查（资产名随版本漂移）→ gh-proxy 下载 → .tools/bin/bb + PATH。；bug19 轮：沙箱 PTY 对 \x7f（退格）连发投递上限 ≈2 字节/批（30 字节 burst 仅 2 事件达、8×30 分批仅 ~56/240，char 类 burst 无此限制 30/30 全达）——HEAD worktree 对照实验证伪本轮回归后定性环境预存；PTY 级验证脚本大段清空改「合法 URL 直接确认」绕开退格清空；脚本默认 target/release 路径未构建时子进程秒退 → 全屏空白全 FAIL 的假象（用显式路径传 debug 二进制）

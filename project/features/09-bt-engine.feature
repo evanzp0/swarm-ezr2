@@ -14,6 +14,7 @@
 #   09-bt-engine-13 做种与上传端到端（做种列表行 / 互惠上传 / 倒计时结束 / 空格停止做种 / 做种中交互）
 #   09-bt-engine-14 [bt] 调优键配置生效与回退（三大表重构：bt_concurrency 预填 / seed_duration_secs / 其余键引擎生效与缺省回退）
 #   09-bt-engine-15 peer 连接生命周期礼仪（v1.37，FR-02-27：会话级 peer_id 稳定 / 优雅关闭 / 自关不计失败+冷却）
+#   09-bt-engine-16 BT 监听端口 [bt] listen_port（v1.38，FR-02-32：配置生效 / 未配置随机 / 占用回退+警告 / 进程级共享）
 # 期号 02（phase-02）。需求依据 project/mission/phase-02.md FR-02-06…23、D45/D46/D51/D52/D54/D57/D58。
 # 协议基线 = 操作者钦定 BEP 3/15/23/7/12/9/20；tokio 异步（FR-02-10）。
 # BEP 9 做种侧响应（D53/D45——磁力拉取 phase-03）；上传真实统计（D58）；
@@ -29,6 +30,13 @@
 # 「引擎断开」关闭误记对端失败；修订后 = 会话级 peer_id 稳定（进程内全部 BT 任务共用，跨暂停/
 # 重启/重试/热调不变，仅进程重启更换）+ 全部自发起关闭路径优雅关闭（先关写 FIN、排水窗口、
 # 无 RST）+ 自关后候选进重拨冷却（不递增失败、不立即重拨；真实失败退避不变）。QA 严格检查 = QA-BE-15。
+# v1.38 修订（操作者 bug18 轮指令五项功能之一/二/五：全局与任务级上传下载限速 + [bt] listen_port；
+# Inversion 阶段 1 答案 = 操作者 chat 指令文本，受限退化沿 bug13–17 轮先例；FR-02-28/29/32 新增，
+# 裁决登记 phase-02 D67）：BT 引擎接入任务级下载/上传限速（原 BtSpec.max_speed dead_code 字段
+# 退役，改任务级两字段；做种与互惠上传合计受上传限速约束；Reconfigure 载体扩展限速参数热调，
+# 引擎不重启）与全局限速（全局两键合计配额跨协议共享，合成 = min(全局, 任务级)，见
+# 01-throttle-proxy v1.9）；[bt] 表新增 listen_port 键（20 键 → 21 键，场景 16 专管）；
+# 监听由每任务独立随机端口改为进程级共享单端口（未配置随机、配置生效、占用回退随机 + 警告）。
 Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文件选择）
 
   期号 02。真实 BT 链路：.torrent 解析 → tracker announce（HTTP/UDP、紧凑 peer、
@@ -198,3 +206,21 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
     And 被收缩候选不因自关计入失败退避（fails 不被污染），且自关冷却内不向该候选重拨
       （fixture seeder 观察同候选两次入连间隔 ≥ 冷却下限）
     And 任务全程保持下载中、进度单调不减（收缩/回补判据同 08-modify-bt-05）
+
+
+  # v1.38 新增（操作者 bug18 轮指令五项功能之五，FR-02-32 + D67）：config [bt] listen_port——
+  # 未明确配置则随机绑定端口（现状 0.0.0.0:0 口径转正为回退语义）；配置生效则监听该端口；
+  # 绑定失败（占用）回退随机 + 启动警告；监听为进程级共享单端口（同 qBittorrent：全部 BT 任务
+  # 共用，announce port 参数与入连端口一致）。
+  Scenario: 09-bt-engine-16 BT 监听端口 [bt] listen_port（v1.38，FR-02-32）
+    Given 配置文件 [bt] 表 listen_port = <port>（未配置 / <port> 两分支）
+    When 添加 BT 任务至引擎运行（fixture tracker 记录 announce 参数）
+    Then 监听端口为 <observed>（fixture 侧实际拨入端口与 announce port 参数一致）
+    And 第二个 BT 任务并发运行时 announce port 与首个任务相同（进程级共享单端口，非每任务随机）
+    And 配置 0/负值/非法值时按未配置处理（随机绑定）；配置但绑定失败（端口被占用）时回退随机绑定
+      + 启动警告（沿 config warnings 口径），不阻塞启动
+
+    Examples:
+      | port     | observed          |
+      | 未配置   | 随机端口（非固定值）   |
+      | 51413    | 51413              |

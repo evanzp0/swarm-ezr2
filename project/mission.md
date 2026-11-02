@@ -5,6 +5,7 @@
 > 各期详细需求存放在 `mission/` 目录（每期一个文件）。
 > 后续 feature 与 QA 文档依据**当期**分期的详细需求文件生成，产出文件在文件名或头部标注所属期号。
 > v1.36/v1.37：phase-02 建档并定稿（BT 下载 + 做种上传 + 磁力链不支持，详见 `mission/phase-02.md`）。
+> v1.38：phase-02 v1.9（操作者 bug18 轮指令五项功能：全局上传/下载限速 FR-02-28 + 任务级上传/下载限速 FR-02-29 + BT 自动反吸血 blacklist.yaml FR-02-30 + 't' trackers 弹窗 FR-02-31 + [bt] listen_port FR-02-32；设计定义值 D67 待批，详见 phase-02 v1.9 注记）。
 > 历史逐轮修订注记已按操作者 20261027 指令清理；各期现行需求以 `mission/phase-0*.md` 为准。
 
 ---
@@ -81,7 +82,7 @@ ezr-tui-demo 的 README 与历次修改记录，本大纲与各期详述保持�
 | 期号 | 需求文件 | 一句话主题 |
 |---|---|---|
 | **phase-01** | `mission/phase-01.md` | **HTTP/HTTPS 真实下载内核与 TUI 正式版 MVP**——把 demo 界面接到真实下载：Range 分块并发、断点续传（sidecar 元数据）、重试退避、Checksum 校验、全局限速、HTTP(S)代理、会话持久化与崩溃恢复（已收官，v1.35） |
-| **phase-02** | `mission/phase-02.md` | **BT 下载内核、做种上传与 BT 任务管理**——「命令窗口」A 键新入口（三分流 + 错误窗口）+「添加/修改任务：BT」对话框（文件树勾选/trackers 多行输入）+ BT 引擎（tokio；BEP 3/15/23/7/12/9/20；.torrent 解析，磁力链 phase-03）+ 按文件下载 + **下载完成自动做种/上传真实统计（D45）** + config `http_trackers`/`udp_trackers` |
+| **phase-02** | `mission/phase-02.md` | **BT 下载内核、做种上传与 BT 任务管理**——「命令窗口」A 键新入口（三分流 + 错误窗口）+「添加/修改任务：BT」对话框（文件树勾选/trackers 多行输入）+ BT 引擎（tokio；BEP 3/15/23/7/12/9/20；.torrent 解析，磁力链 phase-03）+ 按文件下载 + **下载完成自动做种/上传真实统计（D45）** + config `http_trackers`/`udp_trackers` + 全局/任务级上传下载限速（FR-02-28/29，v1.38）+ BT 自动反吸血 blacklist.yaml（FR-02-30）+ 't' trackers 弹窗（FR-02-31）+ [bt] listen_port（FR-02-32） |
 | phase-03 | `mission/phase-03.md`（v0.1 计划登记稿） | BT 效率与发现扩展：DHT（BEP 5/32/51）、BEP 10/6/11/14、命令窗口磁力+40 位 infohash、config `dht_entry`（phase2 不处理） |
 | phase-04 | `mission/phase-04.md`（v0.1 计划登记稿） | 传输优化：BEP 29 uTP（先试 UDP 回退 TCP）+ BEP 47 padding files（phase2 不处理） |
 

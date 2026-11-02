@@ -51,6 +51,7 @@ pub(crate) fn overlay_open(app: &App) -> bool {
     app.dialog.is_some()
         || app.cmd_open
         || app.pieces_open
+        || app.trackers_open
         || app.help_open
         || app.about_open
         || app.val_open
@@ -453,6 +454,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_pieces(f, app, area);
     }
 
+    if app.trackers_open {
+        draw_trackers(f, app, area);
+    }
+
     if app.help_open {
         draw_help(f, app, area);
     }
@@ -466,7 +471,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     if let Some((x, y)) = app.dlg_cursor_screen {
-        if !app.pieces_open && !app.help_open && !app.about_open && !app.val_open && !app.cmd_open {
+        if !app.pieces_open
+            && !app.trackers_open
+            && !app.help_open
+            && !app.about_open
+            && !app.val_open
+            && !app.cmd_open
+        {
             f.set_cursor_position(ratatui::layout::Position { x, y });
         }
     }
@@ -504,13 +515,13 @@ mod cursor_tests {
 
         assert_eq!(
             app.dlg_cursor_screen,
-            Some((43, 16)),
+            Some((43, 15)),
             "聚焦文本行光标屏幕位（值区起点 + pre 宽）"
         );
         let pos = term.get_cursor_position().unwrap();
         assert_eq!(
             (pos.x, pos.y),
-            (43, 16),
+            (43, 15),
             "Terminal 收口把原生光标位下发后端"
         );
 
@@ -523,11 +534,11 @@ mod cursor_tests {
         assert_eq!((win.win_lo, win.win_hi), (0, 16));
         assert_eq!(win.cols.last().copied(), Some(16), "cols 末位 = 窗口总宽");
 
-        assert!(app.dlg_field_wins[3].is_none(), "下拉行无窗口几何");
+        assert!(app.dlg_field_wins[5].is_none(), "下拉行无窗口几何");
 
         app.dialog.as_mut().unwrap().url.set_cursor(2);
         term.draw(|f| draw(f, &mut app)).unwrap();
-        assert_eq!(app.dlg_cursor_screen, Some((37, 16)), "光标列随 cursor");
+        assert_eq!(app.dlg_cursor_screen, Some((37, 15)), "光标列随 cursor");
     }
 
     #[test]
@@ -557,13 +568,13 @@ mod cursor_tests {
             app.on_mouse(mev(MouseEventKind::Up(MouseButton::Left), col, row));
         };
 
-        click(&mut app, 40, 16);
+        click(&mut app, 40, 15);
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(d.focus, 0, "点击聚焦 URL 行");
         assert_eq!(d.url.cursor, 5, "光标落点击列对应字符偏移（: 前）");
         let _ = KeyCode::Esc;
 
-        click(&mut app, 90, 16);
+        click(&mut app, 90, 15);
         assert_eq!(app.dialog.as_ref().unwrap().url.cursor, 24, "越末 → 字段尾");
     }
 

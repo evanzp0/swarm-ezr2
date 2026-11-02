@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{chunk_size_label, App, PieceState, SbKey};
+use crate::app::{chunk_size_label, App, PieceState, SbKey, TaskState};
 use crate::scrollable_panel::{ScrollablePanel, ScrollbarMode};
 
 use super::*;
@@ -175,6 +175,296 @@ pub(crate) fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
 const HELP_W: u16 = 70;
 const HELP_H: u16 = 24;
 
+const TRACKERS_W: u16 = 90;
+const TRACKERS_H: u16 = 22;
+
+const TRACKERS_COL_URL: usize = 4;
+const TRACKERS_URL_WRAP: usize = 44;
+const TRACKERS_COL_STATUS: usize = 49;
+const TRACKERS_COL_PEERS: usize = 62;
+const TRACKERS_COL_SEEDS: usize = 69;
+const TRACKERS_COL_MSG: usize = 76;
+
+fn wrap_by_width(s: &str, max: usize) -> Vec<String> {
+    if max == 0 {
+        return vec![s.to_string()];
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut acc = 0;
+    for ch in s.chars() {
+        let cw = w(&ch.to_string());
+        if acc + cw > max && !cur.is_empty() {
+            out.push(std::mem::take(&mut cur));
+            acc = 0;
+        }
+        cur.push(ch);
+        acc += cw;
+    }
+    out.push(cur);
+    out
+}
+
+fn push_col(buf: &mut Vec<Span<'static>>, cur: &mut usize, off: usize, s: String, st: Style) {
+    if off > *cur {
+        buf.push(Span::raw(" ".repeat(off - *cur)));
+    }
+    let cw = w(&s);
+    if !s.is_empty() {
+        buf.push(Span::styled(s, st));
+    }
+    *cur = if cw > 0 { off + cw } else { off };
+}
+
+fn push_col_spans(
+    buf: &mut Vec<Span<'static>>,
+    cur: &mut usize,
+    off: usize,
+    spans: Vec<Span<'static>>,
+    text_w: usize,
+) {
+    if off > *cur {
+        buf.push(Span::raw(" ".repeat(off - *cur)));
+    }
+    buf.extend(spans);
+    *cur = if text_w > 0 { off + text_w } else { off };
+}
+
+pub(crate) fn draw_trackers(f: &mut Frame, app: &mut App, area: Rect) {
+    let (name, state, peers, seeders, id, trackers) = {
+        let snap = app.sel_task().map(|t| {
+            (
+                t.name.clone(),
+                t.state,
+                t.peers,
+                t.seeders,
+                t.id,
+                t.trackers.clone(),
+            )
+        });
+        let Some(snap) = snap else {
+            app.close_trackers_popup();
+            return;
+        };
+        snap
+    };
+    let running = matches!(
+        state,
+        TaskState::Downloading | TaskState::Seeding | TaskState::Verifying | TaskState::PostProcessing
+    );
+
+    let rect = match app.trackers_pos {
+        Some((px, py)) => {
+            let dw = TRACKERS_W.min(area.width);
+            let dh = TRACKERS_H.min(area.height);
+            Rect {
+                x: px.min(area.width.saturating_sub(dw)),
+                y: py.min(area.height.saturating_sub(dh)),
+                width: dw,
+                height: dh,
+            }
+        }
+        None => {
+            let r = dialog_rect(area, TRACKERS_W, TRACKERS_H);
+            app.trackers_pos = Some((r.x, r.y));
+            r
+        }
+    };
+    f.render_widget(Clear, rect);
+
+    clip_wide_at_edges(f, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(panel_border_style(true))
+        .title(Span::styled(" Trackers ", panel_title_style(true)));
+    let mut sb = ScrollablePanel::new(ScrollbarMode::Vertical);
+    sb.thumb(FOCUS_BORDER)
+        .pressed_v(app.sb_arrow_pressed(SbKey::Trackers));
+    let inner = sb.render_block(f, rect, block);
+    app.trackers_area = Some(rect);
+
+    app.popup_close_rect = draw_close_btn(f, app, rect, w(" Trackers "));
+    if inner.width < 50 || inner.height < 12 {
+        return;
+    }
+
+    let content_x = inner.x + 2;
+    let content_w = (inner.width as usize).saturating_sub(4);
+    let vis = (inner.height as usize).saturating_sub(3);
+
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("任务 ", Style::default().fg(DIM)),
+            Span::styled(
+                truncate(&name, content_w.saturating_sub(10)),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        Rect {
+            x: content_x,
+            y: inner.y + 1,
+            width: content_w as u16,
+            height: 1,
+        },
+    );
+
+    let mut header: Vec<Span<'static>> = Vec::new();
+    let mut cur = 0usize;
+    let hs = Style::default().fg(DIM2);
+    push_col(&mut header, &mut cur, 0, "#".to_string(), hs);
+    push_col(&mut header, &mut cur, TRACKERS_COL_URL, "URL".to_string(), hs);
+    push_col(&mut header, &mut cur, TRACKERS_COL_STATUS, "状态".to_string(), hs);
+    push_col(&mut header, &mut cur, TRACKERS_COL_PEERS, "Peers".to_string(), hs);
+    push_col(&mut header, &mut cur, TRACKERS_COL_SEEDS, "Seeds".to_string(), hs);
+    push_col(&mut header, &mut cur, TRACKERS_COL_MSG, "消息".to_string(), hs);
+    f.render_widget(
+        Paragraph::new(Line::from(header)),
+        Rect {
+            x: content_x,
+            y: inner.y + 2,
+            width: content_w as u16,
+            height: 1,
+        },
+    );
+
+    let msg_budget = content_w.saturating_sub(TRACKERS_COL_MSG);
+    let mut flat: Vec<Vec<Span<'static>>> = Vec::new();
+    let url_style = Style::default().fg(FG);
+    for (i, tr) in trackers.iter().enumerate() {
+        let url_lines = wrap_by_width(tr, TRACKERS_URL_WRAP);
+        let (status, status_color, peers_s, seeds_s, msg, msg_color) = if !running {
+            (
+                "待 announce".to_string(),
+                DIM2,
+                "—".to_string(),
+                "—".to_string(),
+                "—".to_string(),
+                DIM2,
+            )
+        } else if (id as usize + i) % 5 == 4 {
+            (
+                "失败".to_string(),
+                RED,
+                "—".to_string(),
+                "—".to_string(),
+                format!("重试 {}s", 5 + (id as usize * 11 + i * 17) % 25),
+                YELLOW,
+            )
+        } else {
+            (
+                "工作中".to_string(),
+                GREEN,
+                peers
+                    .max(3)
+                    .saturating_sub((id as usize * 7 + i * 13) % 9)
+                    .to_string(),
+                seeders
+                    .max(1)
+                    .saturating_sub((id as usize * 5 + i * 7) % 5)
+                    .to_string(),
+                format!("下轮 {}s", 30 + (id as usize * 7 + i * 13) % 40),
+                DIM,
+            )
+        };
+        for (li, ul) in url_lines.iter().enumerate() {
+            let mut row: Vec<Span<'static>> = Vec::new();
+            let mut cur = 0usize;
+            if li == 0 {
+                push_col(
+                    &mut row,
+                    &mut cur,
+                    0,
+                    pad_left(&format!("{}", i + 1), 2),
+                    Style::default().fg(DIM2),
+                );
+            }
+            push_col_spans(
+                &mut row,
+                &mut cur,
+                TRACKERS_COL_URL,
+                link_break_spans(&break_links(ul), url_style),
+                w(ul),
+            );
+            if li == 0 {
+                push_col(
+                    &mut row,
+                    &mut cur,
+                    TRACKERS_COL_STATUS,
+                    status.clone(),
+                    Style::default().fg(status_color),
+                );
+                push_col(
+                    &mut row,
+                    &mut cur,
+                    TRACKERS_COL_PEERS,
+                    pad_left(&peers_s, 4),
+                    Style::default().fg(if running { FG } else { DIM2 }),
+                );
+                push_col(
+                    &mut row,
+                    &mut cur,
+                    TRACKERS_COL_SEEDS,
+                    pad_left(&seeds_s, 4),
+                    Style::default().fg(if running { FG } else { DIM2 }),
+                );
+                if msg_budget > 0 {
+                    push_col(
+                        &mut row,
+                        &mut cur,
+                        TRACKERS_COL_MSG,
+                        truncate(&msg, msg_budget),
+                        Style::default().fg(msg_color),
+                    );
+                }
+            }
+            flat.push(row);
+            if li + 1 == url_lines.len() && i + 1 < trackers.len() {
+                flat.push(vec![Span::styled(
+                    "─".repeat(content_w),
+                    Style::default().fg(BORDER),
+                )]);
+            }
+        }
+    }
+
+    let total = flat.len();
+    app.trackers_scroll = app.trackers_scroll.min(total.saturating_sub(vis));
+    let start = app.trackers_scroll;
+    if total == 0 {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "（无 trackers）",
+                Style::default().fg(DIM2),
+            ))),
+            Rect {
+                x: content_x,
+                y: inner.y + 3,
+                width: content_w as u16,
+                height: 1,
+            },
+        );
+    } else {
+        let end = (start + vis).min(total);
+        let lines: Vec<Line> = flat[start..end].iter().map(|sp| Line::from(sp.clone())).collect();
+        f.render_widget(
+            Paragraph::new(lines),
+            Rect {
+                x: content_x,
+                y: inner.y + 3,
+                width: content_w as u16,
+                height: vis as u16,
+            },
+        );
+    }
+
+    sb.vertical(total, vis, start);
+    app.trackers_sb = sb.render_bars(f, rect).vertical;
+    app.trackers_max_scroll = total.saturating_sub(vis);
+}
+
 pub(crate) fn help_lines() -> Vec<Line<'static>> {
     fn sec(t: &str) -> Line<'static> {
         Line::from(Span::styled(
@@ -208,7 +498,6 @@ pub(crate) fn help_lines() -> Vec<Line<'static>> {
         sec("页签"),
         kd("] / [", "右/左切换页签（正在下载 ⇄ 已完成）"),
         kd("鼠标点击页签", "切换到该页签"),
-        kd("T", "循环切换页签（与 ] 等效）"),
         sec("任务列表"),
         kd("↑ / ↓", "选择上/下一个任务"),
         kd("PgUp / PgDn", "翻页选择（Home / End 跳首/尾）"),
@@ -219,6 +508,7 @@ pub(crate) fn help_lines() -> Vec<Line<'static>> {
         kd("U / J", "上移 / 下移任务"),
         kd("C", "清除已完成任务"),
         kd("P", "查看分块状态（仅分块下载任务）"),
+        kd("T", "查看 trackers 弹窗（仅 BT 任务）"),
         sec("命令窗口（A）"),
         kd("输入内容", "http(s) URL / 本地 .torrent 路径 / 磁力链接"),
         kd("Enter", "确认分流（= 触发 [确定] 按钮 click；Ctrl+Enter / Ctrl+J 同效）"),
@@ -234,7 +524,7 @@ pub(crate) fn help_lines() -> Vec<Line<'static>> {
         kd("Space", "勾选 / 取消光标行（文件单选；目录整目录勾选）"),
         kd("A / N / I", "列表焦点下：全选 / 全不选 / 反选"),
         kd("[全选] / [全不选]", "文件列表框右上角按钮（悬停高亮，点击作用于全部文件与目录）"),
-        kd("Tab / BackTab", "字段焦点循环（种子·目录·列表·并发·代理·trackers·按钮）"),
+        kd("Tab / BackTab", "字段焦点循环（种子·目录·列表·并发·限速·代理·trackers·按钮）"),
         kd("Enter", "确认（添加 = 立即下载；修改 = 保存文件勾选；trackers 焦点下同效）"),
         kd("Alt+Enter", "trackers 文本框内换行（kitty 协议终端 Shift+Enter 同效）"),
         kd("鼠标滚轮", "悬停文件树 / trackers 滚动；滚动条在各自 panel 边框上（与任务列表 ScrollPanel 同构），可拖拽 / 点击轨道 / 箭头"),
@@ -260,7 +550,7 @@ pub(crate) fn help_lines() -> Vec<Line<'static>> {
         kd("点击 ↑↓←→", "步进滚动 1 格；按住不放自动连发"),
         kd("点击轨道", "朝点击方向整页滚动（可按住连发）"),
         kd("方向键", "面板聚焦时 ↑↓ 选择/纵向滚动、←→ 横向滚动（并发）"),
-        sec("弹窗（添加/修改/删除/pieces/帮助/关于/字段值）"),
+        sec("弹窗（添加/修改/删除/pieces/trackers/帮助/关于/字段值）"),
         kd("Tab / ↑↓", "切换字段/焦点（下拉框内选择选项）"),
         kd("Enter", "确认"),
         kd("Esc", "取消/关闭"),
@@ -269,6 +559,12 @@ pub(crate) fn help_lines() -> Vec<Line<'static>> {
         sec("pieces 分块弹窗"),
         kd("↑↓ / PgUp·PgDn", "滚动分块网格（Home / End 跳首/尾）"),
         kd("Esc / P / [✗]", "关闭弹窗（右上角按钮可点击，悬停高亮）"),
+        sec("trackers 弹窗（T）"),
+        kd("↑↓ / PgUp·PgDn", "滚动 tracker 列表（Home / End 跳首/尾）"),
+        kd("T / Esc / q", "关闭弹窗（右上角 [✗] 可点击，悬停高亮）"),
+        kd("鼠标拖拽", "按住窗口空白处拖动移动；滚轮滚动列表"),
+        kd("列（qBittorrent 口径）", "# · URL（超宽自动换行）· 状态 · Peers · Seeds · 消息"),
+        kd("URL 类型", "http(s) = HTTP(S)，udp = UDP；运行中显示 peers/seeds 与下轮 announce 倒计时（模拟）"),
     ]
 }
 

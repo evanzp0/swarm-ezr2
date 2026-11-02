@@ -3,34 +3,93 @@ use std::time::Instant;
 
 use crate::multiline::MultiLineBuf;
 use crate::textfield::TextInput;
-use crate::ui::fmt_size;
+use crate::ui::{fmt_size, truncate};
 
 use super::demo::mk;
 use super::model::ADD_POOL;
 use super::*;
 
-/// 「修改任务：BT」trackers 预填演示数据（4 行，5 可视行内全可见；行超宽可水平滚动）
+/// BT 任务默认 trackers（新增未填时采用；修改面板预填同源；4 行，5 可视行内全可见；行超宽可水平滚动）
 fn demo_bt_trackers() -> Vec<String> {
     vec![
         "udp://tracker.ezr.dev:6969/announce".to_string(),
         "udp://tracker.opentorrent.example:1337/announce".to_string(),
         "https://tracker.ezr.dev/announce".to_string(),
-        "wss://webtorrent.ezr.dev".to_string(),
+        "http://tracker.ezr.dev:8080/announce".to_string(),
     ]
+}
+
+fn tracker_reject(lines: &[String]) -> Option<String> {
+    lines
+        .iter()
+        .find(|l| {
+            let s = l.to_lowercase();
+            !(s.starts_with("http://") || s.starts_with("https://") || s.starts_with("udp://"))
+        })
+        .cloned()
+}
+
+pub(super) fn parse_speed_limit(raw: &str) -> Option<u64> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let split = s
+        .char_indices()
+        .find(|(_, c)| !(c.is_ascii_digit() || *c == '.'))
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    let (num, unit) = s.split_at(split);
+    if num.is_empty() || num.matches('.').count() > 1 {
+        return None;
+    }
+    let n: f64 = num.parse().ok()?;
+    if !n.is_finite() || n < 0.0 {
+        return None;
+    }
+    let unit = unit.trim().trim_end_matches("/s").trim();
+    let mult = match unit.to_lowercase().as_str() {
+        "" | "b" | "bps" => 1.0,
+        "k" | "kb" | "kbps" => 1_000.0,
+        "m" | "mb" | "mbps" => 1_000_000.0,
+        "g" | "gb" | "gbps" => 1_000_000_000.0,
+        _ => return None,
+    };
+    let v = n * mult;
+    if v >= u64::MAX as f64 {
+        return Some(u64::MAX);
+    }
+    Some(v.round() as u64)
+}
+
+pub(super) fn format_speed_limit(v: u64) -> String {
+    if v == 0 {
+        return "0".to_string();
+    }
+    if v % 1_000_000_000 == 0 {
+        return format!("{} GB/s", v / 1_000_000_000);
+    }
+    if v % 1_000_000 == 0 {
+        return format!("{} MB/s", v / 1_000_000);
+    }
+    if v % 1_000 == 0 {
+        return format!("{} KB/s", v / 1_000);
+    }
+    format!("{} B/s", v)
 }
 
 impl App {
     pub(super) fn add_dialog_enter(&mut self, focus: usize) {
-        if focus == 3 {
+        if focus == 5 {
             let d = self.dialog.as_mut().unwrap();
             d.ck_open = true;
             d.ck_sel = d.ck_type;
-        } else if focus == 5 {
+        } else if focus == 7 {
             let d = self.dialog.as_mut().unwrap();
             d.proxy_open = true;
-        } else if focus == 7 {
+        } else if focus == 9 {
             self.dlg_add_only();
-        } else if focus == 8 {
+        } else if focus == 10 {
             self.dialog = None;
         } else {
             self.dlg_confirm_add(false);
@@ -42,18 +101,31 @@ impl App {
     }
 
     pub(super) fn modify_dialog_enter(&mut self, focus: usize) {
-        if focus == 1 {
+        if focus == 3 {
             let d = self.dialog.as_mut().unwrap();
             d.ck_open = true;
             d.ck_sel = d.ck_type;
-        } else if focus == 3 {
+        } else if focus == 5 {
             let d = self.dialog.as_mut().unwrap();
             d.proxy_open = true;
-        } else if focus == 5 {
+        } else if focus == 7 {
             self.dialog = None;
         } else {
             self.dlg_confirm_modify();
         }
+    }
+
+    fn limit_char_slot(kind: DialogKind, focus: usize, c: char) -> Option<usize> {
+        let valid = !c.is_control()
+            && (c.is_ascii_alphanumeric() || c == ' ' || c == '/' || c == '.');
+        let slot = match (kind, focus) {
+            (DialogKind::Add, 3) | (DialogKind::AddBt, 4) => 0,
+            (DialogKind::Add, 4) | (DialogKind::AddBt, 5) => 1,
+            (DialogKind::Modify, 1) | (DialogKind::ModifyBt, 2) => 0,
+            (DialogKind::Modify, 2) | (DialogKind::ModifyBt, 3) => 1,
+            _ => return None,
+        };
+        valid.then_some(slot)
     }
 
     pub(super) fn add_dialog_char(&mut self, focus: usize, c: char) {
@@ -80,13 +152,20 @@ impl App {
                     }
                 }
             }
-        } else if focus == 3 {
+        } else if let Some(slot) = Self::limit_char_slot(DialogKind::Add, focus, c) {
+            let d = self.dialog.as_mut().unwrap();
+            if slot == 0 {
+                d.down_limit.insert(&c.to_string(), 16);
+            } else {
+                d.up_limit.insert(&c.to_string(), 16);
+            }
+        } else if focus == 5 {
             if c == ' ' {
                 let d = self.dialog.as_mut().unwrap();
                 d.ck_open = true;
                 d.ck_sel = d.ck_type;
             }
-        } else if focus == 4 {
+        } else if focus == 6 {
             if self.dialog.as_ref().unwrap().ck_type != CK_NONE && c.is_ascii_hexdigit() {
                 self.dialog
                     .as_mut()
@@ -95,7 +174,7 @@ impl App {
                     .insert(&c.to_string(), 128);
             }
         } else if c == ' ' {
-            if focus == 5 {
+            if focus == 7 {
                 let d = self.dialog.as_mut().unwrap();
                 d.proxy_open = true;
             } else {
@@ -117,13 +196,20 @@ impl App {
             {
                 self.dialog.as_mut().unwrap().conns_edited = true;
             }
-        } else if focus == 1 {
+        } else if let Some(slot) = Self::limit_char_slot(DialogKind::Modify, focus, c) {
+            let d = self.dialog.as_mut().unwrap();
+            if slot == 0 {
+                d.down_limit.insert(&c.to_string(), 16);
+            } else {
+                d.up_limit.insert(&c.to_string(), 16);
+            }
+        } else if focus == 3 {
             if c == ' ' {
                 let d = self.dialog.as_mut().unwrap();
                 d.ck_open = true;
                 d.ck_sel = d.ck_type;
             }
-        } else if focus == 2 {
+        } else if focus == 4 {
             if self.dialog.as_ref().unwrap().ck_type != CK_NONE && c.is_ascii_hexdigit() {
                 self.dialog
                     .as_mut()
@@ -132,7 +218,7 @@ impl App {
                     .insert(&c.to_string(), 128);
             }
         } else if c == ' ' {
-            if focus == 3 {
+            if focus == 5 {
                 let d = self.dialog.as_mut().unwrap();
                 d.proxy_open = true;
             } else {
@@ -143,17 +229,17 @@ impl App {
 
     pub(super) fn dlg_activate_add(&mut self, btn: usize) {
         match btn {
-            6 => self.dlg_confirm_add(false),
-            7 => self.dlg_add_only(),
-            8 => self.dialog = None,
+            8 => self.dlg_confirm_add(false),
+            9 => self.dlg_add_only(),
+            10 => self.dialog = None,
             _ => {}
         }
     }
 
     pub(super) fn dlg_activate_modify(&mut self, btn: usize) {
         match btn {
-            4 => self.dlg_confirm_modify(),
-            5 => self.dialog = None,
+            6 => self.dlg_confirm_modify(),
+            7 => self.dialog = None,
             _ => {}
         }
     }
@@ -170,6 +256,8 @@ impl App {
             return;
         };
         let conns_raw = d.conns.value.trim().to_string();
+        let down_raw = d.down_limit.value.trim().to_string();
+        let up_raw = d.up_limit.value.trim().to_string();
         let ck_raw = d.ck_value.value.trim().to_string();
         let ck_type = d.ck_type;
         let proxy_sel = d.proxy_sel.min(self.proxy_options.len().saturating_sub(1));
@@ -218,6 +306,10 @@ impl App {
 
         {
             let t = &mut self.tasks[idx];
+            let down = parse_speed_limit(&down_raw).unwrap_or(t.task_max_down);
+            let up = parse_speed_limit(&up_raw).unwrap_or(t.task_max_up);
+            t.task_max_down = down;
+            t.task_max_up = up;
             let changed = t.concurrency != concurrency;
             t.concurrency = concurrency;
             t.checksum = checksum;
@@ -280,6 +372,8 @@ impl App {
         }
         let dir_raw = d.dir.value.trim().to_string();
         let conns_raw = d.conns.value.trim().to_string();
+        let down_raw = d.down_limit.value.trim().to_string();
+        let up_raw = d.up_limit.value.trim().to_string();
         let ck_raw = d.ck_value.value.trim().to_string();
         let ck_type = d.ck_type;
 
@@ -335,6 +429,8 @@ impl App {
             self.set_toast("⚠ 任务已存在");
             return;
         }
+        let down_prefill = d.down_prefill;
+        let up_prefill = d.up_prefill;
         self.sync_sim_sidecars();
         let (proto, base_name) = parse_url_task(&url);
 
@@ -401,6 +497,8 @@ impl App {
         }
         t.checksum = checksum;
         t.proxy = proxy;
+        t.task_max_down = parse_speed_limit(&down_raw).unwrap_or(down_prefill);
+        t.task_max_up = parse_speed_limit(&up_raw).unwrap_or(up_prefill);
         self.tasks.push(t);
         self.dialog = None;
 
@@ -512,6 +610,11 @@ impl App {
             conns: TextInput::with_value(default_conns(proto).to_string()),
             conns_edited: false,
 
+            down_limit: TextInput::with_value(format_speed_limit(TASK_LIMIT_DEFAULTS.0)),
+            up_limit: TextInput::with_value(format_speed_limit(TASK_LIMIT_DEFAULTS.1)),
+            down_prefill: TASK_LIMIT_DEFAULTS.0,
+            up_prefill: TASK_LIMIT_DEFAULTS.1,
+
             ck_type: CK_NONE,
             ck_value: TextInput::new(),
             ck_open: false,
@@ -543,6 +646,10 @@ impl App {
             dir: TextInput::with_value("/srv/downloads"),
             conns: TextInput::with_value(default_conns(Protocol::Bt).to_string()),
             conns_edited: false,
+            down_limit: TextInput::with_value(format_speed_limit(TASK_LIMIT_DEFAULTS.0)),
+            up_limit: TextInput::with_value(format_speed_limit(TASK_LIMIT_DEFAULTS.1)),
+            down_prefill: TASK_LIMIT_DEFAULTS.0,
+            up_prefill: TASK_LIMIT_DEFAULTS.1,
             ck_type: CK_NONE,
             ck_value: TextInput::new(),
             ck_open: false,
@@ -571,11 +678,23 @@ impl App {
             self.set_toast("⚠ 已完成任务不可修改");
             return;
         }
-        let (id, name, concurrency, proxy) = (t.id, t.name.clone(), t.concurrency, t.proxy.clone());
+        let (id, name, concurrency, proxy, max_down, max_up) = (
+            t.id,
+            t.name.clone(),
+            t.concurrency,
+            t.proxy.clone(),
+            t.task_max_down,
+            t.task_max_up,
+        );
         let files = if t.bt_files.is_empty() {
             pseudo_bt_files(&name, t.total)
         } else {
             t.bt_files.clone()
+        };
+        let trackers_src = if t.trackers.is_empty() {
+            demo_bt_trackers()
+        } else {
+            t.trackers.clone()
         };
 
         let proxy_sel = match self.proxy_options.iter().position(|o| o == &proxy) {
@@ -599,6 +718,10 @@ impl App {
             dir: TextInput::new(),
             conns: TextInput::with_value(concurrency.to_string()),
             conns_edited: false,
+            down_limit: TextInput::with_value(format_speed_limit(max_down)),
+            up_limit: TextInput::with_value(format_speed_limit(max_up)),
+            down_prefill: max_down,
+            up_prefill: max_up,
             ck_type: CK_NONE,
             ck_value: TextInput::new(),
             ck_open: false,
@@ -615,7 +738,7 @@ impl App {
             bt_follow: true,
             trackers: {
                 let mut tr = MultiLineBuf::new();
-                tr.set_text(&demo_bt_trackers().join("\n"));
+                tr.set_text(&trackers_src.join("\n"));
                 tr
             },
         });
@@ -647,12 +770,14 @@ impl App {
             self.set_toast("⚠ 已完成任务不可修改");
             return;
         }
-        let (id, name, concurrency, checksum, proxy) = (
+        let (id, name, concurrency, checksum, proxy, max_down, max_up) = (
             t.id,
             t.name.clone(),
             t.concurrency,
             t.checksum.clone(),
             t.proxy.clone(),
+            t.task_max_down,
+            t.task_max_up,
         );
         let ck_type = CHECKSUM_ALGOS
             .iter()
@@ -680,6 +805,10 @@ impl App {
             dir: TextInput::new(),
             conns: TextInput::with_value(concurrency.to_string()),
             conns_edited: false,
+            down_limit: TextInput::with_value(format_speed_limit(max_down)),
+            up_limit: TextInput::with_value(format_speed_limit(max_up)),
+            down_prefill: max_down,
+            up_prefill: max_up,
             ck_type,
             ck_value: TextInput::with_value(checksum.map(|c| c.value).unwrap_or_default()),
             ck_open: false,
@@ -716,6 +845,10 @@ impl App {
             dir: TextInput::new(),
             conns: TextInput::new(),
             conns_edited: false,
+            down_limit: TextInput::new(),
+            up_limit: TextInput::new(),
+            down_prefill: 0,
+            up_prefill: 0,
             ck_type: 0,
             ck_value: TextInput::new(),
             ck_open: false,
@@ -750,14 +883,14 @@ impl App {
     pub(super) fn add_bt_dialog_enter(&mut self, focus: usize) {
         // 焦点表：0 种子 / 1 保存到 / 2 文件列表 / 3 并发 / 4 代理 / 5 trackers
         // / 6 立即下载 / 7 仅添加 / 8 取消
-        if focus == 4 {
+        if focus == 6 {
             let d = self.dialog.as_mut().unwrap();
             d.proxy_open = true;
-        } else if focus == 6 {
-            self.dlg_confirm_add_bt(false);
-        } else if focus == 7 {
-            self.dlg_confirm_add_bt(true);
         } else if focus == 8 {
+            self.dlg_confirm_add_bt(false);
+        } else if focus == 9 {
+            self.dlg_confirm_add_bt(true);
+        } else if focus == 10 {
             self.dialog = None;
         } else {
             self.dlg_confirm_add_bt(false);
@@ -766,12 +899,10 @@ impl App {
 
     pub(super) fn modify_bt_dialog_enter(&mut self, focus: usize) {
         // 焦点表：0 文件列表 / 1 并发 / 2 代理 / 3 trackers / 4 确定 / 5 取消
-        if focus == 2 {
+        if focus == 4 {
             let d = self.dialog.as_mut().unwrap();
             d.proxy_open = true;
-        } else if focus == 4 {
-            self.dlg_confirm_modify_bt();
-        } else if focus == 5 {
+        } else if focus == 7 {
             self.dialog = None;
         } else {
             self.dlg_confirm_modify_bt();
@@ -801,10 +932,17 @@ impl App {
                     d.conns_edited = true;
                 }
             }
-        } else if focus == 5 {
+        } else if let Some(slot) = Self::limit_char_slot(DialogKind::AddBt, focus, c) {
+            let d = self.dialog.as_mut().unwrap();
+            if slot == 0 {
+                d.down_limit.insert(&c.to_string(), 16);
+            } else {
+                d.up_limit.insert(&c.to_string(), 16);
+            }
+        } else if focus == 7 {
             self.bt_trackers_char(c);
         } else if c == ' ' {
-            if focus == 4 {
+            if focus == 6 {
                 let d = self.dialog.as_mut().unwrap();
                 d.proxy_open = true;
             } else {
@@ -823,10 +961,17 @@ impl App {
                     d.conns_edited = true;
                 }
             }
-        } else if focus == 3 {
+        } else if let Some(slot) = Self::limit_char_slot(DialogKind::ModifyBt, focus, c) {
+            let d = self.dialog.as_mut().unwrap();
+            if slot == 0 {
+                d.down_limit.insert(&c.to_string(), 16);
+            } else {
+                d.up_limit.insert(&c.to_string(), 16);
+            }
+        } else if focus == 5 {
             self.bt_trackers_char(c);
         } else if c == ' ' {
-            if focus == 2 {
+            if focus == 4 {
                 let d = self.dialog.as_mut().unwrap();
                 d.proxy_open = true;
             } else {
@@ -850,18 +995,31 @@ impl App {
 
     pub(super) fn dlg_activate_add_bt(&mut self, btn: usize) {
         match btn {
-            6 => self.dlg_confirm_add_bt(false),
-            7 => self.dlg_confirm_add_bt(true),
-            8 => self.dialog = None,
+            8 => self.dlg_confirm_add_bt(false),
+            9 => self.dlg_confirm_add_bt(true),
+            10 => self.dialog = None,
             _ => {}
         }
     }
 
     pub(super) fn dlg_activate_modify_bt(&mut self, btn: usize) {
         match btn {
-            4 => self.dlg_confirm_modify_bt(),
-            5 => self.dialog = None,
+            6 => self.dlg_confirm_modify_bt(),
+            7 => self.dialog = None,
             _ => {}
+        }
+    }
+
+    fn reject_bad_trackers(&mut self, trackers: &[String], focus: usize) {
+        let Some(bad) = tracker_reject(trackers) else {
+            return;
+        };
+        self.set_toast(format!(
+            "⚠ 不支持的 tracker 协议（仅 http/https/udp）：{}",
+            truncate(&bad, 44)
+        ));
+        if let Some(d) = self.dialog.as_mut() {
+            d.focus_field(focus);
         }
     }
 
@@ -888,6 +1046,13 @@ impl App {
         let files = d.bt_flatten();
         let dir_raw = d.dir.value.trim().to_string();
         let conns_raw = d.conns.value.trim().to_string();
+        let down_raw = d.down_limit.value.trim().to_string();
+        let up_raw = d.up_limit.value.trim().to_string();
+        let trackers = d.trackers.trim_lines();
+        if tracker_reject(&trackers).is_some() {
+            self.reject_bad_trackers(&trackers, 7);
+            return;
+        }
         let proxy_sel = d.proxy_sel.min(self.proxy_options.len() - 1);
 
         let dir = if dir_raw.is_empty() {
@@ -907,6 +1072,8 @@ impl App {
             self.set_toast("⚠ 任务已存在");
             return;
         }
+        let down_prefill = d.down_prefill;
+        let up_prefill = d.up_prefill;
         self.sync_sim_sidecars();
 
         let resumed = self.sim_sidecars.contains(&(dir.clone(), name0.clone()))
@@ -964,6 +1131,13 @@ impl App {
         t.checksum = None;
         t.proxy = proxy;
         t.bt_files = files;
+        t.task_max_down = parse_speed_limit(&down_raw).unwrap_or(down_prefill);
+        t.task_max_up = parse_speed_limit(&up_raw).unwrap_or(up_prefill);
+        t.trackers = if trackers.is_empty() {
+            demo_bt_trackers()
+        } else {
+            trackers
+        };
         // BT 演示口径：伪生成做种人数/ peers，避免详情全为 0
         let h = (id as u64) % 97;
         t.seeders = (3 + h % 40) as usize;
@@ -1016,6 +1190,13 @@ impl App {
         }
         let files = d.bt_flatten();
         let conns_raw = d.conns.value.trim().to_string();
+        let down_raw = d.down_limit.value.trim().to_string();
+        let up_raw = d.up_limit.value.trim().to_string();
+        let trackers = d.trackers.trim_lines();
+        if tracker_reject(&trackers).is_some() {
+            self.reject_bad_trackers(&trackers, 5);
+            return;
+        }
         let proxy_sel = d.proxy_sel.min(self.proxy_options.len().saturating_sub(1));
         let proxy = self.proxy_options[proxy_sel].clone();
 
@@ -1031,6 +1212,11 @@ impl App {
 
         {
             let t = &mut self.tasks[idx];
+            let down = parse_speed_limit(&down_raw).unwrap_or(t.task_max_down);
+            let up = parse_speed_limit(&up_raw).unwrap_or(t.task_max_up);
+            t.task_max_down = down;
+            t.task_max_up = up;
+            t.trackers = trackers;
             t.bt_files = files;
             t.concurrency = concurrency;
             t.proxy = proxy;

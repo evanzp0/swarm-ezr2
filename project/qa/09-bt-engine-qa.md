@@ -1,12 +1,16 @@
 # QA 套件 · 09-bt-engine BT 下载与做种引擎（期号 02）
 
-> 对应规格：`project/features/09-bt-engine.feature`（15 场景）。
+> 对应规格：`project/features/09-bt-engine.feature`（16 场景；v1.38 新增场景 16）。
 > 需求依据：`project/mission/phase-02.md` FR-02-06…25、D45/D46/D51/D52/D54/D57/D58/D60/D61。
 > 协议基线：操作者钦定 BEP 3/15/23/7/12/9/20；tokio 异步（FR-02-10）。
 > 上传真实统计（互惠/做种，D45/D58）、BEP 9 做种侧响应（D53）、下载完成转做种（D57）；
 > tracker 池三来源（去磁力 tr=，D53）；v1.35（操作者 bug11 轮）：客户端列 全名/版本号、
 > 地址列 ip缩写/port、[bt]/[http] 调优键入配置（FR-02-25，QA-BE-14 新增），D51 两字母缩写
 > 口径随之改判。
+> v1.38 修订（操作者 bug18 轮指令五项功能之一/二/五；FR-02-28/29/32，D67）：QA-BE-16 新增
+> （[bt] listen_port：配置生效/未配置随机/占用回退随机+警告/进程级共享单端口/announce port =
+> 实际监听端口）；BT 引擎接入任务级下载/上传限速（FR-02-29，速度判据归口 QA-TP-12）与全局限速
+> （FR-02-28，归口 QA-TP-02/08）；[bt] 表 20 → 21 键（场景 14 描述含 listen_port 除外键）。
 > v1.36（操作者 bug12 轮指令，客户端列识别修正）：QA-BE-06 客户端列改 qBittorrent 源码口径
 > 两级识别（FR-02-08 v1.3——扩展握手 `v` 自报名优先 + peer id 解码 = libtorrent identify_client
 > 算法与映射表全量移植；BitComet 验收例 1.64；明细客户端列左对齐、列宽 34，见 04-ui-conns
@@ -48,6 +52,8 @@
 | QA-BE-13 | 09-bt-engine-13 | 做种端到端：leecher 连接做种中任务拉数据 → 观察上传统计 → 倒计时归零；再跑一轮空格提前停止；重启恢复 | leecher 从本端拉到字节（fixture 对账）、上传统计真实增长（列表已上传/头部 ↑ 与峰值/面板上传两列/announce uploaded）；倒计时归零 → toast `✓ 做种结束: <name>`、转「已完成」、上传连接清空、tracker 收 stopped；空格 → toast `⏸ 已停止做种（进入已完成）: <name>`、转「已完成」、tracker 收 stopped；重启后做种恢复（uploaded 延续、seed_left 续走，FR-02-22） |
 | QA-BE-14 | 09-bt-engine-14 | 配置 `[bt]` 表 bt_concurrency=8、seed_duration_secs=60、idle_eviction_secs=30 后添加 BT 任务观察至做种；另轮写非法值（0/负/非整数）观察回退；[http] 调优键同理抽验（throttle_burst_secs=0 回退 0.5） | 新 BT 任务并发预填/默认 = 8（v1.35：硬编码 20 退役，缺省回退代码常量）；做种列表行「剩余做种」自 60s 起倒计时；空闲置换按 30s 阈值执行（同 IP 重拨可观察）；其余 [bt] 调优键未配置时按代码常量默认生效、合法配置值引擎按值执行（下载/做种全链路行为不变）；非法值回退默认且启动不报错（统一口径 FR-01-71，与 QA-PC-04 回退行对账） |
 | QA-BE-15 | 09-bt-engine-15 | 下载中任务空格暂停 → 空格开始重复 3 轮（fixture seeder/tracker 全程留档）；另轮修改并发下调收缩一条连接后随即改回 | **生命周期礼仪严格检查（v1.37/FR-02-27）**：每轮新握手 peer_id = 首轮（会话级稳定：进程内全部 BT 任务共用、跨暂停/重启/热调不变，`-EZ2000-` 形态）；每轮暂停 seeder 侧读到 EOF（本端先关写）且全程无 ConnectionReset（优雅关闭非 RST 强拆）；tracker 事件序列 = started → stopped → started 且全程同 peer_id（无「换 ID 重启」形态）；重启后无同 peer 双连（peer_id 去重既有口径）；下调收缩连接 seeder 侧读到 EOF 无 ConnectionReset；被收缩候选不计失败退避（fails 不被污染）且自关冷却内不向该候选重拨（同候选两次入连间隔 ≥ 冷却下限，fixture 观察入连时间戳）；任务全程下载中、进度单调不减 |
+
+| QA-BE-16 | 09-bt-engine-16 | ①[bt] 表 listen_port = 51413 添加任务；②删配置重启两任务；③listen_port 占用（fixture 先占）启动 | ①fixture tracker 记录 announce port = 51413 且 fixture 拨入命中该端口；②两任务 announce port 相同（进程级共享单端口）且为随机值（非 51413）；③回退随机绑定 + 启动警告、不阻塞启动；0/负/非法值同②随机臂 |
 
 ## 通过准则
 

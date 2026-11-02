@@ -77,6 +77,24 @@ impl App {
             return;
         }
 
+        if self.trackers_open {
+            match code {
+                KeyCode::Esc
+                | KeyCode::Char('t')
+                | KeyCode::Char('T')
+                | KeyCode::Char('q')
+                | KeyCode::Char('Q') => self.close_trackers_popup(),
+                KeyCode::Up => self.trackers_scroll_by(-1),
+                KeyCode::Down => self.trackers_scroll_by(1),
+                KeyCode::PageUp => self.trackers_scroll_by(-8),
+                KeyCode::PageDown => self.trackers_scroll_by(8),
+                KeyCode::Home => self.trackers_scroll = 0,
+                KeyCode::End => self.trackers_scroll = usize::MAX,
+                _ => {}
+            }
+            return;
+        }
+
         if self.help_open {
             match code {
                 KeyCode::Esc
@@ -101,7 +119,7 @@ impl App {
             KeyCode::Tab => self.focus = self.focus.next(),
             KeyCode::BackTab => self.focus = self.focus.prev(),
 
-            KeyCode::Char('t') | KeyCode::Char('T') => self.cycle_filter(1),
+            KeyCode::Char('t') | KeyCode::Char('T') => self.open_trackers_popup(),
 
             KeyCode::Char(']') | KeyCode::Char('}') => self.cycle_filter(1),
             KeyCode::Char('[') | KeyCode::Char('{') => self.cycle_filter(-1),
@@ -197,11 +215,11 @@ impl App {
             None => return,
         };
         let nfocus = match kind {
-            DialogKind::Add => 9,
-            DialogKind::Modify => 6,
+            DialogKind::Add => 11,
+            DialogKind::Modify => 8,
             DialogKind::Delete => 3,
-            DialogKind::AddBt => 9,
-            DialogKind::ModifyBt => 6,
+            DialogKind::AddBt => 11,
+            DialogKind::ModifyBt => 8,
         };
 
         let on_bt_list = matches!(

@@ -43,9 +43,18 @@ Feature: 01-config-template 配置模板自动生成
   `# 上传 choker 重排周期（秒）`），「用途要点 + 取值范围要点」契约不变（键名由示例行
   本身承载，注释不重复键名）；proxy 一句头注释同步去前缀（`# proxy：命名代理列表
   （可配置多个）` → `# 命名代理列表（可配置多个）`）。模板钦定文本整体替换为 v1.12 版
-  （174 行 = 标题行 + 3 组「分隔头注释 + 空行 + 表声明行」+ 36 键三行式 +
+  （行数与键集以 v1.14 内嵌原文实测为准 = 标题行 + 3 组「分隔头注释 + 空行 + 表声明行」+ 40 键三行式 +
   [[common.proxy]] 一句头注释 + 双示例块 + 空行分隔，权威机制沿 v1.10：default_template()
   输出与钦定原文逐字节一致，EOF 单换行收尾）。
+
+  v1.14 修订注（操作者 bug18 轮指令五项功能之一/二/五：全局与任务级限速 + listen_port；
+  FR-02-28/29/32，D67）：①模板 36 键 → 40 键——[common] 表 max_speed 退役（旧键按未知键
+  静默忽略，01-throttle-proxy-14；FR-01-60 v1.42 改名注记），改入四键
+  global_max_download_speed / global_max_upload_speed / task_max_download_speed /
+  task_max_upload_speed（全部 = 0，格式 = 整数 B/s 或十进制单位字符串）；(BT_TBL) 表新增
+  listen_port = 0（0 = 随机绑定）；②钦定文本整体替换为 v1.14 版（行集结构同 v1.13，键集
+  变更如上，EOF 单换行收尾；v1.14 内嵌原文实测 = 191 行（含 48 空行））；③非法值回退沿统一回退口径（0/负/非法 → 代码默认；
+  global/task 键回退 = 0 不限速，listen_port 回退 = 随机绑定）。
 
   v1.13 修订（操作者 bug14 轮指令，D63；FR-01-85 v1.13/FR-01-71 v1.39）：模板改版为
   「示例行活跃」形态——36 个键值行与 3 个表声明行（[common]/[http]/[bt]）取消注释成为
@@ -64,9 +73,9 @@ Feature: 01-config-template 配置模板自动生成
     Given 不存在配置文件 <config_path>
     When 启动 ezr 并正常使用
     Then 配置文件 <config_path> 已生成
-    And 3 个表声明行（[common]/[http]/[bt]）与 36 个键值行为活跃 TOML（v1.13 取消注释：无 # 前缀）且其余行（用途/取值范围注释、3 条分隔头注释、proxy 一句头注释、双示例块）保持 # 注释
+    And 3 个表声明行（[common]/[http]/[bt]）与 40 个键值行为活跃 TOML（v1.13 取消注释：无 # 前缀；v1.14：36 → 40 键）且其余行（用途/取值范围注释、3 条分隔头注释、proxy 一句头注释、双示例块）保持 # 注释
     And 生成的文件可解析且解析结果与文件缺失一致（示例值 = 代码常量默认逐键一致，全部默认值生效；活跃模板不改变默认行为）
-    And 模板内容与操作者钦定文本逐字节一致（钦定原文行集内嵌于本场景下方注释块：标题行、3 组「分隔头注释 + 空行 + 表声明行（活跃）」、36 键三行式（首行注释无键名前缀、键值行活跃）、[[common.proxy]] 一句头注释 + 双示例块、空行位置与行序、EOF 单换行收尾全部一致，v1.13）
+    And 模板内容与操作者钦定文本逐字节一致（钦定原文行集内嵌于本场景下方注释块：标题行、3 组「分隔头注释 + 空行 + 表声明行（活跃）」、40 键三行式（首行注释无键名前缀、键值行活跃）、[[common.proxy]] 一句头注释 + 双示例块、空行位置与行序、EOF 单换行收尾全部一致，v1.13）
     And 键 "<key>" 以注释形式给出默认值 "<default_line>"
     And 键 "<key>" 的注释说明含用途要点 "<purpose>" 与取值范围要点 "<range>"
 
@@ -74,7 +83,10 @@ Feature: 01-config-template 配置模板自动生成
       | key                          | default_line                              | purpose                                          | range                                       |
       | download_dir                 | download_dir = ""                       | 默认保存目录                                     | 留空或缺失 = 用户主目录下的下载目录         |
       | download_slots               | download_slots = 5                      | 全局下载槽位数                                   | 正整数（≥1）；0 或非法值回退默认            |
-      | max_speed                    | max_speed = 0                           | 全局下载限速                                     | 支持 "2 MB/s" / "500 KB/s" / 整数 B/s       |
+      | global_max_download_speed    | global_max_download_speed = 0           | 全局下载限速（全部任务合计）                     | ≥0；整数 B/s 或十进制单位字符串             |
+      | global_max_upload_speed      | global_max_upload_speed = 0             | 全局上传限速（BT 上传合计）                      | ≥0；整数 B/s 或十进制单位字符串             |
+      | task_max_download_speed      | task_max_download_speed = 0             | 新任务默认任务级下载限速                         | ≥0；整数 B/s 或十进制单位字符串             |
+      | task_max_upload_speed        | task_max_upload_speed = 0               | 新任务默认任务级上传限速                         | ≥0；整数 B/s 或十进制单位字符串             |
       | block_size_http              | block_size_http = 1048576               | HTTP 分块块大小（字节）                          | 正整数（≥1）；0 或非法值回退默认            |
       | http_concurrency             | http_concurrency = 4                    | 默认并发数                                       | 1–64 的整数；越界钳制到边界                 |
       | max_retries                  | max_retries = 5                         | 自动重试上限次数                                 | ≥1 的整数；0 或非法值回退默认               |
@@ -108,13 +120,14 @@ Feature: 01-config-template 配置模板自动生成
       | udp_base_timeout_secs        | udp_base_timeout_secs = 15              | UDP tracker 单轮超时起始（秒）                   | 正整数（≥1）；0 或非法值回退默认            |
       | udp_retries                  | udp_retries = 3                         | UDP tracker 超时重试次数                         | 正整数（≥1）；0 或非法值回退默认            |
       | seed_duration_secs           | seed_duration_secs = 1800               | 做种时长默认值（秒）                             | >0 的数；0 或非法值回退默认                 |
+      | listen_port                  | listen_port = 0                         | BT 监听端口（0 = 随机绑定）                      | 0 = 随机；1–65535 = 指定（占用回退随机+警告）；负/非法回退随机 |
 
   （v1.13 操作者钦定模板原文——default_template() 输出与其逐字节一致，coder 不得增删改
   任何字符/空行；钦定原文共 174 行 = 标题行 + 3 组「分隔头注释 + 空行 + 表声明行（活跃）」+
-  36 键×3 行三行式（首行注释无键名前缀、键值行活跃）+ [[common.proxy]] 一句头注释 +
-  双示例块（各 7 行 = 1 表头行 + 6 字段行）+ 44 个空行分隔，EOF 以一个换行符收尾。
-  下为权威原文逐字节内嵌（空行即真实空行；示例值与代码常量默认逐键比对 36/36 一致，
-  specifier v1.13）：
+  40 键×3 行三行式（首行注释无键名前缀、键值行活跃）+ [[common.proxy]] 一句头注释 +
+  双示例块（各 7 行 = 1 表头行 + 6 字段行）+ 空行分隔（空行总数以内嵌原文实测为准），
+  EOF 以一个换行符收尾。下为权威原文逐字节内嵌（空行即真实空行；示例值与代码常量
+  默认逐键比对 40/40 一致，specifier v1.14；总行数 v1.14 实测见修订注）：
   # EZR Downloader 配置模板
   
   # ===== 公共配置 =====
@@ -129,9 +142,21 @@ Feature: 01-config-template 配置模板自动生成
   # 取值范围：正整数（≥1）；0 或非法值回退默认
   download_slots = 5
   
-  # 全局下载限速（0 = 不限）
+  # 全局下载限速（全部任务合计；0 = 不限）
   # 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
-  max_speed = 0
+  global_max_download_speed = 0
+
+  # 全局上传限速（BT 上传合计；0 = 不限）
+  # 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
+  global_max_upload_speed = 0
+
+  # 新任务默认任务级下载限速（0 = 不限）
+  # 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
+  task_max_download_speed = 0
+
+  # 新任务默认任务级上传限速（0 = 不限）
+  # 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
+  task_max_upload_speed = 0
   
   # 命名代理列表（可配置多个）
   # [[common.proxy]]
@@ -289,6 +314,10 @@ Feature: 01-config-template 配置模板自动生成
   # 做种时长默认值（秒，任务做种倒计时起点）
   # 取值范围：>0 的数；0 或非法值回退默认
   seed_duration_secs = 1800
+
+  # BT 监听端口（0 = 随机绑定）
+  # 取值范围：0 = 随机绑定；1–65535 = 指定端口（占用时回退随机 + 启动警告）；负值或非法值回退随机
+  listen_port = 0
   ）
 
   Scenario: 01-config-template-02 已有配置文件不重写不覆盖

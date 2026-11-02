@@ -326,6 +326,12 @@ pub struct Task {
 
     /// BT 任务内部文件列表（非 BT 任务恒空；demo 由任务名确定性伪生成）
     pub bt_files: Vec<BtFile>,
+
+    pub task_max_down: u64,
+
+    pub task_max_up: u64,
+
+    pub trackers: Vec<String>,
 }
 
 impl Task {

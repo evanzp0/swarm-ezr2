@@ -1,5 +1,5 @@
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
-#   01-add-task-01 对话框五字段创建任务（v1.32 修订：标题更名、校验默认 NONE——选 SHA-256 输码创建）
+#   01-add-task-01 对话框七字段创建任务（v1.32 修订：标题更名、校验默认 NONE；v1.39 修订：+下载限速/上传限速两字段，74×14）
 #   01-add-task-02 校验算法下拉八项含 NONE（v1.32 修订：七选一改八项、NONE 首行默认、占位提示删除）
 #   01-add-task-03 校验码含非十六进制字符确认报错（v1.32 修订：空提交拒绝臂入本场景）
 #   01-add-task-04 校验码位数与算法不符确认报错
@@ -18,6 +18,15 @@
 #   01-add-task-17 对话框支持粘贴长文本
 #   01-add-task-18 仅添加按钮：只添加任务不下载（v1.30 修订：对话框无提示行，P3/FR-01-107）
 #   01-add-task-19 URL 输入自动回填默认并发与 Esc 取消（v1.30 新增，对齐 ezr-demo 重构版 §6.1）
+#   01-add-task-20 限速两字段预填 config 任务级默认值且可修改（v1.39 新增，FR-02-29）
+# v1.39 修订注（操作者 bug18 轮指令五项功能之二「任务级上传/下载速度限制」；FR-02-29，D67）：
+# ①添加对话框 74×12 → 74×14（字段 6→8：URL / 保存目录 / 并发 / 下载限速 / 上传限速 /
+# 校验算法 / 校验码 + 空行；下载/上传限速两字段插在并发之后、校验算法之前；焦点表扩展
+# （两新字段插入并发之后，按钮序号顺延 +2，字段行 y +1、按钮行 y +2）；②限速字段 = 文本输入框：预填 config
+# [common] task_max_download_speed / task_max_upload_speed 解析后的整数 B/s（0 显示 0），
+# 接受整数 B/s 或十进制单位字符串（parse_speed 同族）；留空或非法确认时回退 config 默认
+# （沿并发字段非法回退默认口径，01-add-task-06）；③粘贴路由覆盖两新字段（FR-01-06
+# 限速字段形态同 URL/目录：控制字符剔除、长度上限 32）。
 # v1.32 同步注（操作者 20261021 指令，对齐 ezr-demo m3 §6.1 与 demo 源码，逐条核证）：①对话框标题
 # 「 添加下载任务 」→「 添加任务：HTTP(S) 」（74×11 不变）；②校验下拉 8 项 = NONE（首行，默认，
 # 右列 — 占位）+ 7 算法；NONE 选中即校验码实时清空且不可输入（逐键/粘贴同拦截）；其余算法校验码
@@ -49,11 +58,12 @@ Feature: 01-add-task 任务添加（对话框与 CLI）
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
     And 本地 fixture 服务器已启动且根目录含测试文件
 
-  Scenario: 01-add-task-01 对话框五字段创建任务
-    When 按 A 打开「添加任务：HTTP(S)」对话框（74×12 圆角边框浮层、终端内居中；v1.32 标题更名，原「添加下载任务」退役；v1.34/FR-01-115：74×11 → 74×12 底部补齐 1 行 padding，字段行 x = 内框 + 2、行宽 = 内框 − 4）
+  Scenario: 01-add-task-01 对话框七字段创建任务（v1.39：+下载限速/上传限速，74×14）
+    When 按 A 打开「添加任务：HTTP(S)」对话框（74×14 圆角边框浮层、终端内居中；v1.32 标题更名，原「添加下载任务」退役；v1.34/FR-01-115：74×11 → 74×12 底部补齐 1 行 padding；v1.39/FR-02-29：74×12 → 74×14 新增限速两字段，字段行 x = 内框 + 2、行宽 = 内框 − 4）
     And 在 URL 字段输入 "<url>"
     And 在保存目录字段输入 "<dir>"
     And 在并发数字段输入 "<concurrency>"
+    And 下载限速/上传限速字段保持预填（config 任务级默认，v1.39）
     And 校验算法选 "SHA-256" 并在校验码字段输入 "<checksum>"（打开时默认 NONE，校验码禁输入）
     And 按 Enter 确认
     Then 任务列表出现任务 "<filename>" 且状态为「等待中」或「下载中」
@@ -272,3 +282,19 @@ Feature: 01-add-task 任务添加（对话框与 CLI）
     Examples:
       | url                                       | filename    | bad_url                    |
       | http://fixture.local/files/paused-one.bin | paused-one.bin | ftp://fixture.local/file   |
+
+
+  # v1.39 新增（操作者 bug18 轮指令，FR-02-29 + D67）：限速两字段预填 config 任务级默认值且可修改。
+  Scenario: 01-add-task-20 限速两字段预填 config 任务级默认值且可修改（v1.39，FR-02-29）
+    Given 配置文件 [common] 表 task_max_download_speed = "<cfg_down>"、task_max_upload_speed = "<cfg_up>"
+    When 按 A 打开「添加任务：HTTP(S)」对话框（74×14）
+    Then 下载限速字段预填 "<down_parsed>"、上传限速字段预填 "<up_parsed>"（config 解析后整数 B/s；0 显示 0）
+    And 两新字段在焦点环内并发字段之后（Tab/BackTab 可达；按钮序号顺延 +2）
+    And 在下载限速字段输入 "<input>" 并填其余必填项后确认
+    Then 任务任务级下载限速落为 "<result>"（注册表落盘；留空或非法回退 config 默认 <down_parsed>）
+
+    Examples:
+      | cfg_down | cfg_up   | down_parsed | up_parsed | input     | result  |
+      | 2 MB/s   | 0        | 2000000     | 0         | 留空      | 2000000 |
+      | 2 MB/s   | 0        | 2000000     | 0         | 500 KB/s  | 500000  |
+      | 0        | 512 KB/s | 0           | 512000    | abc       | 0       |
