@@ -302,7 +302,7 @@ proptest! {
     #[test]
     fn prop_parse_speed_suffix_and_units(
         n in 0u64..1_000_000,
-        unit in prop::sample::select(&["", " KB", " MB", " b", " KB ", " MB  "]),
+        unit in prop::sample::select(&["", " KB", " MB", " b", " KB ", " MB  ", " KiB", " MiB", " GiB"]),
         space in prop::sample::select(&["", " ", "  "]),
     ) {
         let s = format!("{space}{n}{unit}");
@@ -313,6 +313,21 @@ proptest! {
         );
         prop_assert_eq!(crate::model::config::parse_speed(&format!("{n} KB")), n * 1_000);
         prop_assert_eq!(crate::model::config::parse_speed(&format!("{n} MB")), n * 1_000_000);
+        prop_assert_eq!(
+            crate::model::config::parse_speed(&format!("{n} KiB")),
+            n * 1_024,
+            "二进制口径 KiB"
+        );
+        prop_assert_eq!(
+            crate::model::config::parse_speed(&format!("{n} MiB")),
+            n * 1_048_576,
+            "二进制口径 MiB"
+        );
+        prop_assert_eq!(
+            crate::model::config::parse_speed(&format!("{n} GiB")),
+            n * 1_073_741_824,
+            "二进制口径 GiB"
+        );
     }
 
     #[test]

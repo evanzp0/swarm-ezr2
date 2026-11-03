@@ -373,6 +373,7 @@ version = "0.1.0"
 dependencies = [
  "adler",
  "arboard",
+ "base64 0.22.1",
  "crossterm",
  "fs2",
  "futures",

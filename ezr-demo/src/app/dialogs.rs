@@ -289,7 +289,11 @@ impl App {
 
         {
             let t = &mut self.tasks[idx];
-            let down = parse_speed_limit(&down_raw).unwrap_or(t.task_max_down);
+            let down = if down_raw.is_empty() {
+                TASK_LIMIT_DEFAULTS.0
+            } else {
+                parse_speed_limit(&down_raw).unwrap_or(t.task_max_down)
+            };
             t.task_max_down = down;
             let changed = t.concurrency != concurrency;
             t.concurrency = concurrency;
@@ -1182,8 +1186,16 @@ impl App {
 
         {
             let t = &mut self.tasks[idx];
-            let down = parse_speed_limit(&down_raw).unwrap_or(t.task_max_down);
-            let up = parse_speed_limit(&up_raw).unwrap_or(t.task_max_up);
+            let down = if down_raw.is_empty() {
+                TASK_LIMIT_DEFAULTS.0
+            } else {
+                parse_speed_limit(&down_raw).unwrap_or(t.task_max_down)
+            };
+            let up = if up_raw.is_empty() {
+                TASK_LIMIT_DEFAULTS.1
+            } else {
+                parse_speed_limit(&up_raw).unwrap_or(t.task_max_up)
+            };
             t.task_max_down = down;
             t.task_max_up = up;
             t.trackers = trackers;
@@ -1242,5 +1254,91 @@ impl App {
             self.tasks[idx].bt_files.len(),
             fmt_size(self.tasks[idx].total)
         ));
+    }
+}
+
+#[cfg(test)]
+mod limit_backfill_tests {
+    use super::*;
+
+    #[test]
+    fn parse_speed_limit_bare_number_is_b_per_s() {
+        assert_eq!(
+            parse_speed_limit("512"),
+            Some(512),
+            "纯数字按 B/s 解析（bug23 口径）"
+        );
+        assert_eq!(parse_speed_limit("512 B/s"), Some(512));
+        assert_eq!(parse_speed_limit("512 KiB/s"), Some(524_288));
+        assert_eq!(parse_speed_limit("1 MiB/s"), Some(1_048_576));
+    }
+
+    #[test]
+    fn format_speed_limit_round_trips_through_parse() {
+        for v in [0u64, 1, 512, 5120, 1536, 500_000, 1_048_576, 1_073_741_824] {
+            assert_eq!(
+                parse_speed_limit(&format_speed_limit(v)),
+                Some(v),
+                "fmt → parse 恒等：{v}"
+            );
+        }
+    }
+
+    #[test]
+    fn modify_confirm_empty_down_limit_backfills_task_default() {
+        let mut app = App::new();
+        app.tasks[0].task_max_down = 5120;
+        app.open_modify_dialog();
+        assert_eq!(
+            app.dialog.as_ref().unwrap().down_limit.value,
+            format_speed_limit(5120),
+            "修改窗口预填规范化单位显示（5120 = 5 KiB/s）"
+        );
+        app.dialog.as_mut().unwrap().down_limit.clear();
+        app.dlg_confirm_modify();
+        assert_eq!(
+            app.tasks[0].task_max_down, TASK_LIMIT_DEFAULTS.0,
+            "清空确认 = 回填任务级默认限速，而非保留旧值 5120"
+        );
+    }
+
+    #[test]
+    fn modify_bt_confirm_empty_limits_backfill_task_defaults() {
+        let mut app = App::new();
+        let bt0 = app
+            .tasks
+            .iter()
+            .position(|t| t.protocol.is_bt())
+            .expect("demo 任务含 BT");
+        app.selected = bt0;
+        app.open_modify_bt_dialog();
+        let tid = app
+            .dialog
+            .as_ref()
+            .unwrap()
+            .task_id
+            .expect("BT 修改对话框携带任务 id");
+        let idx = app
+            .tasks
+            .iter()
+            .position(|t| t.id == tid)
+            .expect("task_id 可回查任务");
+        app.tasks[idx].task_max_down = 5120;
+        app.tasks[idx].task_max_up = 8192;
+        {
+            let d = app.dialog.as_mut().unwrap();
+            d.down_limit.clear();
+            d.up_limit.clear();
+        }
+        app.dlg_confirm_modify_bt();
+        assert!(app.dialog.is_none(), "确认后关闭");
+        assert_eq!(
+            app.tasks[idx].task_max_down, TASK_LIMIT_DEFAULTS.0,
+            "BT 修改清空确认 = 回填任务级下载限速默认"
+        );
+        assert_eq!(
+            app.tasks[idx].task_max_up, TASK_LIMIT_DEFAULTS.1,
+            "BT 修改清空确认 = 回填任务级上传限速默认"
+        );
     }
 }

@@ -190,3 +190,11 @@
   编辑失败时先 rg 查现状再决定补哪几处，勿盲目重放整批。
 - 根因：chat 工具通道对含反引号包裹路径 + 中文括号长串的锚点匹配不稳定
   （与 bug16 轮双向改写同族：显示文本与匹配文本都不可全信，读回探针是终审）。
+
+## bug23 轮镜像复测（2026-11-03）：rsproxy dist 清单本轮正常，直链二进制 + 双变量一次装齐
+- 8MB 分段吞吐 rsproxy **16.9MB/s** 唯一真实可用（USTC/TUNA 本轮该路径 404——与前几轮
+  结论互换，可达性逐轮漂移再证）；直链下载 rustup-init 二进制 + 官方双变量
+  `RUSTUP_DIST_SERVER/RUSTUP_UPDATE_ROOT=https://rsproxy.cn` 前台 `-y --default-toolchain
+  nightly --profile minimal -c rustfmt -c clippy` 一次装齐（rustup 1.29.2 + nightly
+  1.101.0，EXIT=0），清单缺键问题本轮未复现。装前 curl 清单验 TOML 的纪律仍有效
+  （本轮跳过直接成功属运气好，不改变纪律）。

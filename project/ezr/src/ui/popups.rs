@@ -14,7 +14,7 @@ use crate::app::{App, SbKey};
 use crate::model::TaskState;
 use crate::scrollbar::{DIM, DIM2};
 
-const TRACKERS_W: u16 = 90;
+const TRACKERS_W: u16 = 94;
 const TRACKERS_H: u16 = 22;
 
 const TRACKERS_COL_URL: usize = 4;
@@ -493,7 +493,11 @@ mod tests {
         );
         assert!(!s.contains("wss://"), "不支持协议不出现在弹窗");
         let a = app.trackers_area.expect("area 回填");
-        assert_eq!((a.width, a.height), (90, 22), "窗口几何 90×22");
+        assert_eq!(
+            (a.width, a.height),
+            (94, 22),
+            "窗口几何 94×22（bug24 放宽）"
+        );
 
         let buf = term.backend().buffer();
         let row = |y: u16| -> String {
@@ -595,6 +599,63 @@ mod tests {
             thin_lines, 2,
             "相邻明细行之间恰 2 条细线（3 条 tracker；实测 {thin_lines}）"
         );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn trackers_popup_countdown_fits_multi_digit_seconds() {
+        let mut app = crate::app::testutil::make_app_in("ezr-trkpop4", "status");
+        app.tasks = vec![bt_task_with_trackers(
+            9,
+            &["udp://w.example/announce", "udp://x.example/announce"],
+        )];
+        app.selected = 0;
+        app.trackers_status.insert(
+            9,
+            vec![
+                crate::app::TrackerRow {
+                    url: "udp://w.example/announce".into(),
+                    working: true,
+                    peers: Some(1),
+                    seeds: Some(2),
+                    next_at: Some(Instant::now() + Duration::from_secs(120)),
+                },
+                crate::app::TrackerRow {
+                    url: "udp://x.example/announce".into(),
+                    working: false,
+                    peers: None,
+                    seeds: None,
+                    next_at: Some(Instant::now() + Duration::from_secs(3600)),
+                },
+            ],
+        );
+        app.open_trackers_popup();
+        let mut term = Terminal::new(TestBackend::new(120, 44)).unwrap();
+        term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        let s = term.backend().to_string();
+        let a = app.trackers_area.expect("trackers area");
+        assert_eq!(a.width, 94, "窗口放宽后宽度（bug24 列宽同步）");
+        // 断言抗秒级漂移（测试与渲染两次 Instant::now() 之间可能流逝 ≥1s）：
+        // 取「下轮 」「重试 」后的数字段验证位数与 's' 收尾。旧宽（消息列预算
+        // 8 列）下 3 位文案被截成「下轮 11…」——数字段仅 2 位且无 's' 收尾。
+        let countdown = |label: &str| {
+            let tail = s
+                .split(label)
+                .nth(1)
+                .unwrap_or_else(|| panic!("{label} 倒计时缺失"));
+            let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
+            assert!(
+                digits.len() >= 3,
+                "{label} 倒计时秒数 ≥3 位完整显示（bug24），实测数字段 = {digits:?}"
+            );
+            assert!(
+                tail[digits.len()..].starts_with('s'),
+                "{label} 倒计时以 's' 收尾（截断时为 '…'），实测尾部 = {:?}",
+                &tail[digits.len()..]
+            );
+        };
+        countdown("下轮 ");
+        countdown("重试 ");
         app.shutdown().await;
     }
 }

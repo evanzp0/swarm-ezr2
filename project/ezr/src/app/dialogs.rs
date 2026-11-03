@@ -36,6 +36,22 @@ pub(super) fn parse_speed_limit(raw: &str) -> Option<u64> {
     Some(v.round() as u64)
 }
 
+pub(super) fn fmt_speed_limit(v: u64) -> String {
+    if v == 0 {
+        return "0".to_string();
+    }
+    if v % 1_073_741_824 == 0 {
+        return format!("{} GiB/s", v / 1_073_741_824);
+    }
+    if v % 1_048_576 == 0 {
+        return format!("{} MiB/s", v / 1_048_576);
+    }
+    if v % 1024 == 0 {
+        return format!("{} KiB/s", v / 1024);
+    }
+    format!("{} B/s", v)
+}
+
 impl App {
     pub(crate) fn set_dialog(&mut self, d: Dialog) {
         self.dialog = Some(d);
@@ -119,9 +135,9 @@ impl App {
             conns_raw.parse::<usize>().unwrap_or(0).clamp(1, 64)
         };
 
-        let cur_down = self.tasks[idx].max_download_speed;
+        let cfg_down = self.cfg.task_max_download_speed;
         let new_down = if down_raw.is_empty() {
-            cur_down
+            cfg_down
         } else {
             match parse_speed_limit(&down_raw) {
                 Some(v) => v,
@@ -358,8 +374,8 @@ impl App {
             dir: TextInput::with_value(crate::model::config::default_save_dir_prefill(&self.cfg)),
             conns: TextInput::new(),
             conns_edited: false,
-            down_limit: TextInput::with_value(self.cfg.task_max_download_speed.to_string()),
-            up_limit: TextInput::with_value(self.cfg.task_max_upload_speed.to_string()),
+            down_limit: TextInput::with_value(fmt_speed_limit(self.cfg.task_max_download_speed)),
+            up_limit: TextInput::with_value(fmt_speed_limit(self.cfg.task_max_upload_speed)),
             down_prefill: self.cfg.task_max_download_speed,
             up_prefill: self.cfg.task_max_upload_speed,
             ck_type: CK_NONE,
@@ -418,8 +434,8 @@ impl App {
             dir: TextInput::new(),
             conns: TextInput::with_value(concurrency.to_string()),
             conns_edited: false,
-            down_limit: TextInput::with_value(cur_down.to_string()),
-            up_limit: TextInput::with_value(cur_up.to_string()),
+            down_limit: TextInput::with_value(fmt_speed_limit(cur_down)),
+            up_limit: TextInput::with_value(fmt_speed_limit(cur_up)),
             down_prefill: cur_down,
             up_prefill: cur_up,
             ck_type,
@@ -912,6 +928,124 @@ mod add_dialog_flow_tests {
             .as_deref()
             .is_some_and(|m| m.contains("不可修改")));
         app2.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn modify_confirm_empty_limit_backfills_config_default() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-mod-empty");
+        let reg = dir.join("registry.json").to_string_lossy().to_string();
+        let mut cfg = Config::from_toml("[common]\ntask_max_download_speed = 1048576\n");
+        cfg.warnings.clear();
+        let mut app = App::new(cfg, reg);
+        app.tasks.push(crate::model::Task::new_queued(
+            1,
+            "m2.bin".to_string(),
+            Protocol::Http,
+            "http://example.com/m2.bin".to_string(),
+            "/tmp".to_string(),
+            1024 * 1024,
+            2,
+            5,
+            None,
+            crate::model::ProxyChoice::Direct,
+            0,
+        ));
+        app.tasks[0].max_download_speed = 5120;
+        app.selected = 0;
+        app.on_key(KeyCode::Char('m'), KeyModifiers::NONE);
+        let d = app.dialog.as_ref().expect("m 打开修改对话框");
+        assert_eq!(d.kind, DialogKind::Modify);
+        assert_eq!(
+            d.down_limit.value, "5 KiB/s",
+            "修改窗口预填当前限速（规范化单位显示，5120 = 5×1024）"
+        );
+        app.dialog.as_mut().unwrap().down_limit.clear();
+        app.dlg_confirm_modify();
+        assert!(app.dialog.is_none());
+        assert_eq!(
+            app.tasks[0].max_download_speed, 1_048_576,
+            "清空确认 = 回填 config.toml 任务级默认限速，而非保留旧值 5120"
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fmt_speed_limit_canonical_units() {
+        assert_eq!(fmt_speed_limit(0), "0", "0 = 不限速原样");
+        assert_eq!(fmt_speed_limit(512), "512 B/s", "裸数字 B/s（bug23）");
+        assert_eq!(
+            fmt_speed_limit(500_000),
+            "500000 B/s",
+            "非 1024 倍数回退 B/s"
+        );
+        assert_eq!(fmt_speed_limit(1024), "1 KiB/s");
+        assert_eq!(fmt_speed_limit(5120), "5 KiB/s");
+        assert_eq!(fmt_speed_limit(1536), "1536 B/s", "非整倍数不拆小数");
+        assert_eq!(fmt_speed_limit(1_048_576), "1 MiB/s");
+        assert_eq!(fmt_speed_limit(1_073_741_824), "1 GiB/s");
+        assert_eq!(
+            fmt_speed_limit(u64::MAX),
+            "18446744073709551615 B/s",
+            "2^64-1 非 1024 倍数 → 裸 B/s"
+        );
+    }
+
+    #[test]
+    fn fmt_speed_limit_round_trips_through_parse() {
+        for v in [
+            0u64,
+            1,
+            512,
+            5120,
+            1536,
+            500_000,
+            1_048_576,
+            2_500_000,
+            1_073_741_824,
+            u64::MAX,
+        ] {
+            assert_eq!(
+                parse_speed_limit(&fmt_speed_limit(v)),
+                Some(v),
+                "fmt → parse 恒等：{v}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn modify_window_shows_bare_number_as_b_per_s() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-mod-bps");
+        let reg = dir.join("registry.json").to_string_lossy().to_string();
+        let mut app = App::new(Config::default(), reg);
+        app.tasks.push(crate::model::Task::new_queued(
+            1,
+            "bps.bin".to_string(),
+            Protocol::Http,
+            "http://example.com/bps.bin".to_string(),
+            "/tmp".to_string(),
+            1024 * 1024,
+            2,
+            5,
+            None,
+            crate::model::ProxyChoice::Direct,
+            0,
+        ));
+        app.tasks[0].max_download_speed = 512;
+        app.selected = 0;
+        app.on_key(KeyCode::Char('m'), KeyModifiers::NONE);
+        let d = app.dialog.as_ref().expect("m 打开修改对话框");
+        assert_eq!(
+            d.down_limit.value, "512 B/s",
+            "纯数字 512 在修改窗口显示 512 B/s（bug23 验收判据）"
+        );
+        app.dlg_confirm_modify();
+        assert_eq!(
+            app.tasks[0].max_download_speed, 512,
+            "预填规范形态确认不改值"
+        );
+        app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }
 

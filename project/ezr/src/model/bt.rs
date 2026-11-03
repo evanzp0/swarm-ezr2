@@ -1,3 +1,4 @@
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,17 +57,65 @@ pub const BT_SIDECAR_VERSION: u32 = 1;
 pub struct BtSidecar {
     pub version: u32,
     pub done_pieces: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub partial_pieces: Vec<BtPartialPiece>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BtPartialPiece {
+    pub piece: u32,
+    pub blocks: Vec<BtPartialBlock>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BtPartialBlock {
+    pub begin: u32,
+    #[serde(default)]
+    data_b64: String,
+}
+
+impl BtPartialBlock {
+    #[must_use]
+    pub fn encode_block(begin: u32, data: &[u8]) -> BtPartialBlock {
+        BtPartialBlock {
+            begin,
+            data_b64: base64::engine::general_purpose::STANDARD.encode(data),
+        }
+    }
+
+    #[must_use]
+    pub fn decode_data(&self) -> Option<Vec<u8>> {
+        base64::engine::general_purpose::STANDARD
+            .decode(self.data_b64.as_bytes())
+            .ok()
+    }
 }
 
 impl BtSidecar {
     #[must_use]
     pub fn build(pieces: impl IntoIterator<Item = u32>) -> BtSidecar {
+        BtSidecar::build_full(pieces, Vec::new())
+    }
+
+    #[must_use]
+    pub fn build_full(
+        pieces: impl IntoIterator<Item = u32>,
+        partial: Vec<BtPartialPiece>,
+    ) -> BtSidecar {
         let mut done: Vec<u32> = pieces.into_iter().collect();
         done.sort_unstable();
         done.dedup();
+        let mut partial = partial;
+        partial.sort_by_key(|p| p.piece);
+        for p in &mut partial {
+            p.blocks.sort_by_key(|b| b.begin);
+            p.blocks.dedup_by_key(|b| b.begin);
+        }
+        partial.retain(|p| !p.blocks.is_empty());
         BtSidecar {
             version: BT_SIDECAR_VERSION,
             done_pieces: done,
+            partial_pieces: partial,
         }
     }
 
@@ -75,7 +124,7 @@ impl BtSidecar {
     }
 
     #[must_use]
-    pub fn load_done(path: &str) -> Option<Vec<u32>> {
+    pub fn load_full(path: &str) -> Option<BtSidecar> {
         let text = std::fs::read_to_string(path).ok()?;
         let sc: BtSidecar = serde_json::from_str(&text).ok()?;
         // 版本 1 为当前唯一版本；2 为内部开发期短暂出现过的同形版本号
@@ -84,7 +133,12 @@ impl BtSidecar {
         if sc.version != BT_SIDECAR_VERSION && sc.version != 2 {
             return None;
         }
-        Some(sc.done_pieces)
+        Some(sc)
+    }
+
+    #[must_use]
+    pub fn load_done(path: &str) -> Option<Vec<u32>> {
+        Self::load_full(path).map(|sc| sc.done_pieces)
     }
 
     pub fn remove(path: &str) -> std::io::Result<()> {
@@ -172,6 +226,73 @@ mod tests {
         assert!(!std::path::Path::new(&p).exists());
         BtSidecar::remove(&p).unwrap();
         BtSidecar::remove("/nonexistent/x.ezr").unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn partial_block(begin: u32, byte: u8, len: usize) -> BtPartialBlock {
+        BtPartialBlock::encode_block(begin, &vec![byte; len])
+    }
+
+    #[test]
+    fn partial_blocks_roundtrip_base64_and_ordering() {
+        let dir = tmp_dir("partial");
+        let p = format!("{dir}/tor.ezr");
+        let sc = BtSidecar::build_full(
+            [1],
+            vec![
+                BtPartialPiece {
+                    piece: 7,
+                    blocks: vec![partial_block(16384, 0xBB, 16), partial_block(0, 0xAA, 16)],
+                },
+                BtPartialPiece {
+                    piece: 3,
+                    blocks: vec![partial_block(0, 0xCC, 8)],
+                },
+            ],
+        );
+        sc.save(&p).unwrap();
+        let loaded = BtSidecar::load_full(&p).unwrap();
+        assert_eq!(loaded.done_pieces, vec![1]);
+        assert_eq!(
+            loaded
+                .partial_pieces
+                .iter()
+                .map(|x| x.piece)
+                .collect::<Vec<_>>(),
+            vec![3, 7],
+            "partial 按 piece 序归一"
+        );
+        let p7 = &loaded.partial_pieces[1];
+        assert_eq!(
+            p7.blocks.iter().map(|b| b.begin).collect::<Vec<_>>(),
+            vec![0, 16384],
+            "块按 begin 升序归一"
+        );
+        assert_eq!(p7.blocks[0].decode_data().unwrap(), vec![0xAA; 16]);
+        assert_eq!(p7.blocks[1].decode_data().unwrap(), vec![0xBB; 16]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn legacy_sidecar_without_partial_loads_empty_and_bad_b64_decodes_none() {
+        let dir = tmp_dir("legacy");
+        let p = format!("{dir}/old.ezr");
+        std::fs::write(&p, "{\"version\":1,\"done_pieces\":[0,2]}").unwrap();
+        let sc = BtSidecar::load_full(&p).unwrap();
+        assert!(sc.partial_pieces.is_empty(), "旧格式 partial 缺省空");
+        assert_eq!(sc.done_pieces, vec![0, 2]);
+
+        let p2 = format!("{dir}/bad.ezr");
+        std::fs::write(
+            &p2,
+            "{\"version\":1,\"done_pieces\":[],\"partial_pieces\":[{\"piece\":0,\"blocks\":[{\"begin\":0,\"data_b64\":\"!!!not-b64!!!\"}]}]}",
+        )
+        .unwrap();
+        let sc2 = BtSidecar::load_full(&p2).unwrap();
+        assert!(
+            sc2.partial_pieces[0].blocks[0].decode_data().is_none(),
+            "坏 base64 由消费侧逐块丢弃，不拖垮整档"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

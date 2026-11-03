@@ -325,3 +325,33 @@
   `app::bt_dialog` 测试收编 7 套件（bug21 修订轮口径），`ui::bt_dialog` 测试
   收编 3 套件（engine_backfill/ui_backfill/v115）；对账算术用「基线 + Σ收编」
   核总数，别套用上一轮的收编套件清单。
+
+## bug23 轮：假 peer 请求日志（反吸血断言）与恢复单测的确定性写法
+- **wire 级「没发过某请求」断言 = 假 peer 收集 (index,begin) 到共享 BTreeSet**：
+  fake_logging_peer 循环 accept（跨阶段重建连接）+ Request 全量入账 + serve 集合
+  控制服务行为；「未重请求恢复块」的断言放在**任务完成之后**（sidecar 移除 = 全部
+  请求已发生），不用时间窗内轮询（无法证明「将来也不会发」）。
+- partial 形成的确定性信号不存在（BtProgress 只在整 piece 完成时发、partial 块
+  无事件）：用「假 peer 服务了 (0,0)」的 served 通道信号 + 1.5s settle 再 Pause；
+  断言 sidecar partial 非空本身就是竞态探测器（若 flaky 说明 settle 不足）。
+- restore/save 纯函数单测不用网络：restore_sidecar_partial 直接喂
+  BtPartialPiece 列表 + 真 PieceMap + open_selected_file_handle；**读盘断言用
+  std::fs::read 而不是句柄 read_to_end**（写后句柄 seek 停在 EOF，读回恒空——
+  曾据此误判「没写盘」）；「未落盘」断言注意句柄打开即 set_len 预分配（稀疏
+  全量零填充），应断言内容全零而非文件为空。
+- 私有字段构造绕法：BtPartialBlock.data_b64 私有，引擎测试里构造坏 b64 条目走
+  serde_json::from_str 反序列化（derive 的 Deserialize 不受字段私有影响）。
+- ezr-demo 的 sel_task() 走过滤视图（selected 下标 ≠ tasks 下标）：demo 交互测试
+  打开对话框后用 **d.task_id 回查 tasks 位置**再断言，别假设 selected 与 tasks
+  同序（本次 idx=2 打开的是 id=4 的任务）。
+- 测试内文件读断言与句柄生命周期：handles.remove(&0) 拿回句柄后原 read_to_end
+  方案已废，统一 std::fs::read(path)（写路径 = save_dir/name 平铺）。
+- 基于 Instant 的 UI 倒计时断言要**抗秒级漂移**（bug24）：测试进程插入 next_at 与
+  渲染函数内部两次 `Instant::now()` 之间可能流逝 ≥1s（test 二进制启动/调度延迟），
+  钉具体文案（`下轮 120s`）会随机翻车（实测渲染出 `下轮 119s`）。正确姿势：解析
+  「下轮 」后取连续 ASCII 数字段断言**位数 ≥3** + 后随 's' 收尾——既验证「不被
+  截断成 '…'」（截断时数字段只有 2 位且无 s），又对任意合法剩余秒数恒真。
+- 负载敏感 e2e（真 TCP 桩 + 截止时间）在高负载时段会 2 连败（v147
+  engine_conns_quota_exact_and_unique_ids，25s 截止没跑满即断言失败；单跑 0.31s
+  即绿）：沿 bug17 轮口径复跑判环境性，但**要先把用例单独跑绿 + 确认改动无接触面**
+  再下「非回归」结论；连续复跑仍红时优先怀疑环境负载而非代码。

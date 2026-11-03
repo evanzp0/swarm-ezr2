@@ -30,8 +30,12 @@ impl App {
             ),
             conns: TextInput::with_value(self.cfg.bt_concurrency.to_string()),
             conns_edited: false,
-            down_limit: TextInput::with_value(self.cfg.task_max_download_speed.to_string()),
-            up_limit: TextInput::with_value(self.cfg.task_max_upload_speed.to_string()),
+            down_limit: TextInput::with_value(super::dialogs::fmt_speed_limit(
+                self.cfg.task_max_download_speed,
+            )),
+            up_limit: TextInput::with_value(super::dialogs::fmt_speed_limit(
+                self.cfg.task_max_upload_speed,
+            )),
             down_prefill: self.cfg.task_max_download_speed,
             up_prefill: self.cfg.task_max_upload_speed,
             ck_type: crate::model::checksum::CK_NONE,
@@ -90,8 +94,8 @@ impl App {
             dir: TextInput::new(),
             conns: TextInput::with_value(concurrency.to_string()),
             conns_edited: false,
-            down_limit: TextInput::with_value(cur_down.to_string()),
-            up_limit: TextInput::with_value(cur_up.to_string()),
+            down_limit: TextInput::with_value(super::dialogs::fmt_speed_limit(cur_down)),
+            up_limit: TextInput::with_value(super::dialogs::fmt_speed_limit(cur_up)),
             down_prefill: cur_down,
             up_prefill: cur_up,
             ck_type: crate::model::checksum::CK_NONE,
@@ -553,10 +557,10 @@ impl App {
         } else {
             conns_raw.parse::<usize>().unwrap_or(0).clamp(1, 64)
         };
-        let cur_down = self.tasks[idx].max_download_speed;
-        let cur_up = self.tasks[idx].max_upload_speed;
+        let cfg_down = self.cfg.task_max_download_speed;
+        let cfg_up = self.cfg.task_max_upload_speed;
         let new_down = if down_raw.is_empty() {
-            cur_down
+            cfg_down
         } else {
             match super::dialogs::parse_speed_limit(&down_raw) {
                 Some(v) => v,
@@ -570,7 +574,7 @@ impl App {
             }
         };
         let new_up = if up_raw.is_empty() {
-            cur_up
+            cfg_up
         } else {
             match super::dialogs::parse_speed_limit(&up_raw) {
                 Some(v) => v,
@@ -1168,6 +1172,39 @@ mod tests {
             "trackers 空输入写回保留原池"
         );
         assert_eq!(app.tasks[0].downloaded, 0, "本例原 downloaded = 0");
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn confirm_modify_bt_empty_limits_backfill_config_defaults() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-mod-empty");
+        let path = write_multi_torrent(&dir, "a.torrent");
+        let meta = parse_at(&path);
+        let mut app = make_app("modempty");
+        app.cfg.task_max_download_speed = 1_048_576;
+        app.cfg.task_max_upload_speed = 262_144;
+        app.open_add_bt_dialog_with(&path, &meta);
+        app.dlg_confirm_add_bt(false);
+        app.tasks[0].max_download_speed = 5120;
+        app.tasks[0].max_upload_speed = 8192;
+        app.selected = 0;
+        app.modify_dialog_entry();
+        {
+            let d = app.dialog.as_mut().unwrap();
+            d.down_limit.clear();
+            d.up_limit.clear();
+        }
+        app.dlg_confirm_modify_bt();
+        assert!(app.dialog.is_none(), "确认后关闭");
+        assert_eq!(
+            app.tasks[0].max_download_speed, 1_048_576,
+            "清空确认 = 回填 config 任务级下载限速默认，而非保留旧值 5120"
+        );
+        assert_eq!(
+            app.tasks[0].max_upload_speed, 262_144,
+            "清空确认 = 回填 config 任务级上传限速默认，而非保留旧值 8192"
+        );
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }

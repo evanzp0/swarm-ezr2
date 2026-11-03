@@ -467,3 +467,44 @@
 - 反吸血三判据落点：leech 判据在 1s tick 臂遍历（!seeding && cum_up≥1MiB && cum_down<64KiB && connected_at.elapsed≥120s，做种豁免 = seeding 布尔）；bad_piece 在 on_block 校验失败分支计 st.bad_pieces（≥3 封禁，归属交付完成块的 peer——piece 可能多 peer 拼块，归属近似为完成者，D67 允许实现定义）；protocol 三源 = Unknown 消息 id 首封 + pump 读循环 BtError::Peer(_) 帧错（区别于 BtError::Io 的网络错，不改协议枚举加 PeerIn::ProtocolViolation 变体分类）+ 非法区间 request 计 st.invalid_requests（≥3 封；choking 期间的 request 不计数——合法行为）。统一 ban_and_drop：黑名单落 EngineShared + blacklist.yaml record + ⛔ toast + PeerOut::Drop（graceful_close 自动满足 FR-02-27②）+ 候选池摘除。
 - blacklist.yaml 持久化的测试隔离门 = EngineShared.blacklist_file: Option<PathBuf>（生产 Some(ezr_dir/blacklist.yaml)，shared_for_tests 恒 None）——封禁副作用挂 record 调用点，测试零磁盘副作用；同 IP 重复封禁不重复记条目；损坏=空名单+警告文本返回（load 返回 (entries, Option<warn>)，警告并入口径沿 cfg.warnings 的 ⚠ toast 通道）。
 - trackers 弹窗真实数据源 = TrackerReport 增加 url + interval/retry_secs（失败分支先算退避后 send），引擎 tr_rx 臂转 Evt::BtTrackers{id,url,working,peers,seeds,next_in_secs}；app 侧 TrackerRow{url,working,peers,seeds,next_at} 存 HashMap<task_id, Vec>，渲染按 t.bt.trackers 权威序 + url 查状态；任务未运行（state.shows_conns() false）或无引擎回报 = 待 announce；倒计时存 Instant 在 draw 期换算剩余秒（不存秒数避免静止倒计时）。
+
+## bug23 轮：限速单位口径三层归一与 BT 暂停→恢复的重复下载特征（反吸血修复）
+- 限速单位三层口径（bug23 定案）：config 文件键解析 = **二进制 KiB/MiB/GiB（1024^n）
+  为新规范 + 旧写法 KB/MB/GB 仍按十进制兼容**（parse_speed 的 SPEED_UNITS 表按后缀
+  最长优先排列：gib/mib/kib 先于 gb/mb/kb 先于 b——旧表只有 mb/kb/b，「512 MiB/s」
+  会被 b 后缀截成「512mi」解析为 0 = 静默不限速，这是旧口径真缺陷）；对话框限速
+  字段 = 二进制（speed_unit_mult，bug21 既有）；**裸数字恒为 B/s**（parse_speed 与
+  parse_speed_limit 均然，测试钉死）。
+- 限速预填显示规范 = fmt_speed_limit（GiB→MiB→KiB→B 整除链，非整倍数显裸 B/s，
+  0 显「0」）：5 处预填点全接（Add/Modify HTTP、AddBt/ModifyBt、cmd open_add_dialog_with），
+  fmt→parse 恒等（round-trip 测试钉死）——「修改窗口显示裸整数 51200」类困惑的
+  根治 = 显示层永远带明确单位，而不是改解析。
+- 修改窗口限速**清空确认 = 回填 config.toml 任务级默认**（task_max_download_speed/
+  task_max_upload_speed，HTTP 无上传字段），不再保留旧值；添加窗口空输入本就回退
+  down_prefill（=config 默认）无需改——「空输入」语义两窗口统一为「跟随配置默认」。
+- **BT 暂停→恢复触发 BitComet 反吸血的机制链**：Pause 直接终结引擎任务（连接随
+  引擎退出），partial（已收块、未验完 piece 的内存缓冲）全丢；Resume 拉起新引擎
+  重新向同一 peer 请求**完全相同的 (index, begin, length) 区间**——对端可观测的
+  「同区间重复下载」正是反吸血规则的触发特征（下载量涨、上传恒 0、进度零增益）。
+- 修复三件：①BtSidecar 增可选 partial_pieces（serde default + skip_serializing_if
+  → **版本号不 bump**：旧构建 serde 忽略未知字段照常读 done，新构建读旧文件得空
+  partial——字段级前后向兼容比版本 bump 平滑）；块数据 b64 存 String（字段级
+  decode 失败只丢块不拖垮整档，done 进度免受池鱼）。②restore_sidecar_partial 启动
+  恢复：验证链 = 覆盖内 ∧ 非 done ∧ begin 对齐 REQUEST_BLOCK_LEN ∧ 单调不重叠
+  （next_begin 游标）∧ 界内 → 进 partial；**完整恢复的 piece 直接组装校验落盘转
+  done**（留全 claimed 的未验 piece 会掉进 endgame 陷阱）；校验失败/写盘失败整块
+  丢弃走重下（自愈）。③endgame 必须跳过 partial 已收块——endgame 语义是「找回
+  丢失的请求」，已收块不是丢失；不加此跳过，恢复后的 endgame 窗口照样重发恢复块
+  （实测复现后才定位到：claimed 检查只挡非 endgame 臂）。
+- 启动序列次序陷阱：先 load_full 恢复、再 save_bt_sidecar_full 回写——反过来
+  （先 done-only 保存再加载）会把文件里的 partial 抹掉；启动回写同时完成归一化
+  （滤掉恢复中验证失败/写失败的残条）。
+- 中断点语义边界：启动重校验窗口内的 Pause 仍存「已校验∪未校验余量 + 空 partial」
+  （partial 此刻必空），**恢复后又在重校验窗内再暂停**会丢上一轮 partial——极边缘
+  （重校验窗内连按两次暂停），登记为可接受边界。
+- 弹窗末列宽度口径（bug24）：**末列预算 = content_w − 末列起点偏移**，不是独立
+  常量——放宽窗口只涨 content_w，末列起点（TRACKERS_COL_MSG=76 等）不动即自动
+  变宽；反向陷阱：右移列起点（如 bug20 把消息列推到 76）会**吃掉**末列预算。
+  trackers 弹窗 94×22 下 content_w = 88、末列预算 12（容「下轮 NNNNNNs」6 位秒数）。
+  定宽 CJK 列布局改动时先算一遍「文案宽 ≤ 末列预算」再收工（下轮 5 列 + 秒数 N 列
+  + s 1 列）。

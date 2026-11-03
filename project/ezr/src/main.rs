@@ -139,11 +139,11 @@ fn opt_conns(v: Option<&String>) -> Result<usize, String> {
 }
 
 fn opt_speed(v: Option<&String>) -> Result<u64, String> {
-    let v = v.ok_or("--max-speed 需要速度参数（如 2 MB/s）")?;
+    let v = v.ok_or("--max-speed 需要速度参数（如 2 MiB/s）")?;
     let s = crate::model::config::parse_speed(v);
     if s == 0 && !v.trim().starts_with('0') {
         return Err(format!(
-            "--max-speed 速度非法（{v}）：示例 2 MB/s / 500 KB/s"
+            "--max-speed 速度非法（{v}）：示例 2 MiB/s / 500 KiB/s"
         ));
     }
     Ok(s)
@@ -198,7 +198,7 @@ fn print_help() {
            -c, --concurrency <n>     并发数 1–64（默认 4）\n\
            -x, --checksum <算法>=<校验码>\n\
                                      完整性校验（算法: md5/sha1/sha224/sha256/sha384/sha512/adler32）\n\
-           --max-speed <速度>        全局限速（如 2 MB/s；0 = 不限）\n\
+           --max-speed <速度>        全局限速（如 2 MiB/s；0 = 不限）\n\
            -h, --help                显示本帮助\n\
            -V, --version             显示版本\n\
          \n\

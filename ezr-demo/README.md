@@ -22,6 +22,30 @@ chmod +x bin/ezr-tui-demo
 
 ## 变更记录（相对上游）
 
+36. **Trackers 窗口倒计时列放宽（ezr bug24 轮同步）**
+    - Trackers 弹窗宽度 90 → 94：末列（消息）可用预算 8 → 12 列，「下轮 NNNs」/
+      「重试 NNNs」倒计时 3 位及以上秒数不再被截断成 '…'（与产品端
+      `ui/popups.rs` `TRACKERS_W` 同步放宽）
+    - demo 模拟倒计时数据（`30 + … % 40`，最大 2 位秒数）素来不触发截断，本轮为
+      窗口布局口径对齐；`src/ui/popups.rs` 仅动窗口常量，渲染逻辑未变
+    - 仓库未随包存放 `bin/` 预编译二进制；如需随包发布，按「重新构建」章节重出
+      release 产物（本轮改动已包含在源码内）
+
+35. **限速输入确认语义同步（ezr bug23 轮：清空回填 + 纯数字 B/s 口径）**
+    - 修改任务窗口（HTTP 与 BT）限速输入框**清空后确认 = 回填任务级默认限速**
+      （demo 取 `TASK_LIMIT_DEFAULTS`，即产品 config.toml `task_max_download_speed`/
+      `task_max_upload_speed` 的演示等价物），不再保留旧值——与产品端
+      `dlg_confirm_modify` / `dlg_confirm_modify_bt` 同位点修复
+    - **纯数字按 B/s 解析**口径守卫：`512` 确认后存 512 B/s（demo 解析素来如此，
+      本轮补守卫测试 `parse_speed_limit_bare_number_is_b_per_s` 防漂移）
+    - 预填**规范化单位显示**守卫：修改窗口打开时限速字段显示 `5 KiB/s` /
+      `512 B/s` 形态（GiB/MiB/KiB/B 整除链；demo `format_speed_limit` 素来如此，
+      本轮补 `format_speed_limit_round_trips_through_parse` 与预填断言）
+    - 产品侧同轮另有 BT 引擎「暂停→恢复不再重请求已收块」反吸血修复
+      （sidecar 携带 partial 块）；demo 为模拟数据无 BT 引擎，不涉及
+    - 守卫测试：`src/app/dialogs.rs` 新增 limit_backfill_tests 4 例（全套 35P/0F）；
+      无需重建 bin/ 预编译二进制（本轮未触碰渲染层）
+
 34. **BT 对话框限速字段聚焦光标对账（ezr BT 限速字段聚焦光标修复轮同步）**
     - 对账结论：**demo 侧无同款缺陷、产品源码零改动**——`bt_text_row` 与 HTTP
       对话框文本行素来以 `w(label).max(7)` 动态计算标签宽（8 列宽标签

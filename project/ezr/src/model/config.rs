@@ -514,7 +514,15 @@ impl Config {
     }
 }
 
-const SPEED_UNITS: [(&str, f64); 3] = [("mb", 1_000_000.0), ("kb", 1_000.0), ("b", 1.0)];
+const SPEED_UNITS: [(&str, f64); 7] = [
+    ("gib", 1_073_741_824.0),
+    ("mib", 1_048_576.0),
+    ("kib", 1_024.0),
+    ("gb", 1_000_000_000.0),
+    ("mb", 1_000_000.0),
+    ("kb", 1_000.0),
+    ("b", 1.0),
+];
 
 fn sanitize_trackers(
     entries: Vec<String>,
@@ -677,19 +685,19 @@ download_dir = ""
 download_slots = 5
 
 # 全局下载限速（全部任务合计；0 = 不限）
-# 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
+# 取值范围：≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s
 global_max_download_speed = 0
 
 # 全局上传限速（BT 上传合计；0 = 不限）
-# 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
+# 取值范围：≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s
 global_max_upload_speed = 0
 
 # 新任务默认任务级下载限速（0 = 不限）
-# 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
+# 取值范围：≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s
 task_max_download_speed = 0
 
 # 新任务默认任务级上传限速（0 = 不限）
-# 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
+# 取值范围：≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s
 task_max_upload_speed = 0
 
 # 命名代理列表（可配置多个）
@@ -1018,6 +1026,25 @@ mod tests {
         assert_eq!(parse_speed("1.5 MB"), 1_500_000);
         assert_eq!(parse_speed("garbage"), 0);
         assert_eq!(parse_speed("0"), 0);
+    }
+
+    #[test]
+    fn speed_parsing_binary_units() {
+        assert_eq!(
+            parse_speed("2 MiB/s"),
+            2_097_152,
+            "二进制口径 1 MiB = 1048576 B/s"
+        );
+        assert_eq!(parse_speed("500 KiB/s"), 512_000);
+        assert_eq!(parse_speed("1 GiB/s"), 1_073_741_824);
+        assert_eq!(parse_speed("1.5 MiB"), 1_572_864, "『/s』后缀可省");
+        assert_eq!(parse_speed("2 mib/s"), 2_097_152, "单位大小写不敏感");
+        assert_eq!(parse_speed("512 b/s"), 512);
+        assert_eq!(
+            parse_speed("2 MB/s"),
+            2_000_000,
+            "旧写法 MB/s 仍按十进制兼容解析"
+        );
     }
 
     #[test]

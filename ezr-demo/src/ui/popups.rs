@@ -175,7 +175,7 @@ pub(crate) fn draw_pieces(f: &mut Frame, app: &mut App, area: Rect) {
 const HELP_W: u16 = 70;
 const HELP_H: u16 = 24;
 
-const TRACKERS_W: u16 = 90;
+const TRACKERS_W: u16 = 94;
 const TRACKERS_H: u16 = 22;
 
 const TRACKERS_COL_URL: usize = 4;

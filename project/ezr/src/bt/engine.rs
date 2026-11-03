@@ -268,7 +268,7 @@ pub(crate) async fn run(
                             // 不在，自然排除。
                             let mut final_done = done.clone();
                             final_done.extend(prefilled[pi..].iter().copied());
-                            save_bt_sidecar(&sidecar_path, &final_done);
+                            save_bt_sidecar_full(&sidecar_path, &final_done, &partial);
                         }
                         report_stopped(&evt_tx, id, &done, &partial, downloaded).await;
                         return;
@@ -287,7 +287,20 @@ pub(crate) async fn run(
         }
     }
     if !spec.seeding {
-        save_bt_sidecar(&sidecar_path, &done);
+        let sc_loaded = crate::model::BtSidecar::load_full(&sidecar_path);
+        if let Some(sc) = &sc_loaded {
+            restore_sidecar_partial(
+                &sc.partial_pieces,
+                &pmap,
+                &spec.meta,
+                &mut files_handles,
+                &mut done,
+                &mut partial,
+                &mut downloaded,
+            )
+            .await;
+        }
+        save_bt_sidecar_full(&sidecar_path, &done, &partial);
     }
     let mut sidecar_saved_done: usize = done.len();
 
@@ -359,7 +372,9 @@ pub(crate) async fn run(
             Some(cmd) = cmd_rx.recv() => {
                 match cmd {
                     BtTaskCmd::Pause | BtTaskCmd::StopSeed => {
-                        save_bt_sidecar(&sidecar_path, &done);
+                        if !spec.seeding {
+                            save_bt_sidecar_full(&sidecar_path, &done, &partial);
+                        }
                         let (up, down, left) = live_snapshot(&live);
                         spawn_stopped_announce(&trackers, &spec, &peer_id, listen_port, &shared, up, down, left);
                         report_stopped(&evt_tx, id, &done, &partial, downloaded).await;
@@ -1566,6 +1581,95 @@ async fn send(_conn_id: usize, st: &mut ConnStat, m: peer::PeerMsg) {
     let _ = st.peer_out.send(PeerOut::Send(m)).await;
 }
 
+fn assemble_contiguous(entry: &BTreeMap<u32, Vec<u8>>, plen: usize) -> Option<Vec<u8>> {
+    let mut cursor = 0usize;
+    let mut buf: Vec<u8> = Vec::with_capacity(plen);
+    for (off, blk) in entry.iter() {
+        if *off as usize != cursor || cursor + blk.len() > plen {
+            return None;
+        }
+        buf.extend_from_slice(blk);
+        cursor += blk.len();
+    }
+    if cursor == plen {
+        Some(buf)
+    } else {
+        None
+    }
+}
+
+async fn write_piece_to_files(
+    files: &mut HashMap<usize, tokio::fs::File>,
+    pmap: &PieceMap,
+    index: u32,
+    buf: &[u8],
+) -> bool {
+    use tokio::io::{AsyncSeekExt, SeekFrom};
+    for (fi, off_in_file, off_in_piece, len) in pmap.write_plan(index) {
+        if let Some(fh) = files.get_mut(&fi) {
+            let seek_ok = fh.seek(SeekFrom::Start(off_in_file)).await.is_ok();
+            let write_ok = seek_ok
+                && fh
+                    .write_all(&buf[off_in_piece as usize..(off_in_piece + len) as usize])
+                    .await
+                    .is_ok();
+            let flush_ok = write_ok && fh.flush().await.is_ok();
+            if !flush_ok {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+async fn restore_sidecar_partial(
+    entries: &[crate::model::BtPartialPiece],
+    pmap: &PieceMap,
+    meta: &TorrentMeta,
+    files_handles: &mut HashMap<usize, tokio::fs::File>,
+    done: &mut HashSet<u32>,
+    partial: &mut PartialPieces,
+    downloaded: &mut u64,
+) {
+    for entry in entries {
+        let piece = entry.piece;
+        if done.contains(&piece) || !pmap.covers(piece) {
+            continue;
+        }
+        let plen = pmap.piece_len(piece) as usize;
+        let mut blocks: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
+        let mut next_begin = 0u64;
+        for b in &entry.blocks {
+            let Some(data) = b.decode_data() else {
+                continue;
+            };
+            let begin = u64::from(b.begin);
+            if data.is_empty()
+                || begin % u64::from(REQUEST_BLOCK_LEN) != 0
+                || begin < next_begin
+                || begin + data.len() as u64 > plen as u64
+            {
+                continue;
+            }
+            next_begin = begin + data.len() as u64;
+            blocks.insert(b.begin, data);
+        }
+        if blocks.is_empty() {
+            continue;
+        }
+        if let Some(buf) = assemble_contiguous(&blocks, plen) {
+            if verify_piece(&buf, meta, piece)
+                && write_piece_to_files(files_handles, pmap, piece, &buf).await
+            {
+                done.insert(piece);
+                *downloaded += selected_bytes_of_piece(pmap, piece);
+            }
+            continue;
+        }
+        partial.insert(piece, blocks);
+    }
+}
+
 fn claimed_blocks(
     conns: &HashMap<usize, ConnStat>,
     partial: &PartialPieces,
@@ -1624,14 +1728,15 @@ async fn issue_requests(
     }
     let mut issued = 0usize;
     for &piece in &visit {
-        issued += request_blocks_of_piece(conn_id, st, claimed, pmap, tun, piece, false).await;
+        issued +=
+            request_blocks_of_piece(conn_id, st, claimed, pmap, tun, partial, piece, false).await;
         if st.inflight.len() >= tun.peer_pipeline {
             return;
         }
     }
     if issued == 0 && endgame_active(claimed, pmap, done) {
         for &piece in &visit {
-            request_blocks_of_piece(conn_id, st, claimed, pmap, tun, piece, true).await;
+            request_blocks_of_piece(conn_id, st, claimed, pmap, tun, partial, piece, true).await;
             if st.inflight.len() >= tun.peer_pipeline {
                 return;
             }
@@ -1645,6 +1750,7 @@ async fn request_blocks_of_piece(
     claimed: &HashSet<(u32, u32)>,
     pmap: &PieceMap,
     tun: &BtTunables,
+    partial: &PartialPieces,
     piece: u32,
     endgame: bool,
 ) -> usize {
@@ -1653,7 +1759,13 @@ async fn request_blocks_of_piece(
     let mut begin = 0usize;
     while begin < plen && asked < tun.requests_per_piece && st.inflight.len() < tun.peer_pipeline {
         let key = (piece, begin as u32);
-        if st.inflight.contains_key(&key) || (!endgame && claimed.contains(&key)) {
+        let already_have = partial
+            .get(&piece)
+            .is_some_and(|m| m.contains_key(&(begin as u32)));
+        if st.inflight.contains_key(&key)
+            || (!endgame && claimed.contains(&key))
+            || (endgame && already_have)
+        {
             begin += REQUEST_BLOCK_LEN as usize;
             continue;
         }
@@ -1932,40 +2044,14 @@ async fn on_block(
     let assembled = {
         let entry = partial.entry(index).or_default();
         entry.insert(begin, data);
-        let mut cursor = 0usize;
-        let mut buf: Vec<u8> = Vec::with_capacity(plen);
-        for (off, blk) in entry.iter() {
-            if *off as usize != cursor || cursor + blk.len() > plen {
-                cursor = usize::MAX;
-                break;
-            }
-            buf.extend_from_slice(blk);
-            cursor += blk.len();
-        }
-        if cursor == plen {
-            Some(buf)
-        } else {
-            None
-        }
+        assemble_contiguous(entry, plen)
     };
 
     if let Some(buf) = assembled {
         if verify_piece(&buf, &spec.meta, index) {
-            for (fi, off_in_file, off_in_piece, len) in pmap.write_plan(index) {
-                if let Some(fh) = files.get_mut(&fi) {
-                    use tokio::io::{AsyncSeekExt, SeekFrom};
-                    let seek_ok = fh.seek(SeekFrom::Start(off_in_file)).await.is_ok();
-                    let write_ok = seek_ok
-                        && fh
-                            .write_all(&buf[off_in_piece as usize..(off_in_piece + len) as usize])
-                            .await
-                            .is_ok();
-                    let flush_ok = write_ok && fh.flush().await.is_ok();
-                    if !flush_ok {
-                        conns.insert(conn_id, st);
-                        return None;
-                    }
-                }
+            if !write_piece_to_files(files, pmap, index, &buf).await {
+                conns.insert(conn_id, st);
+                return None;
             }
             done.insert(index);
             *downloaded += selected_bytes_of_piece(pmap, index);
@@ -2107,6 +2193,22 @@ fn conn_views(conns: &mut HashMap<usize, ConnStat>, covered: &[u32]) -> Vec<BtCo
 
 fn save_bt_sidecar(path: &str, done: &HashSet<u32>) {
     let sc = crate::model::BtSidecar::build(done.iter().copied());
+    let _ = sc.save(path);
+}
+
+fn save_bt_sidecar_full(path: &str, done: &HashSet<u32>, partial: &PartialPieces) {
+    let pieces = partial
+        .iter()
+        .filter(|(p, _)| !done.contains(p))
+        .map(|(piece, blocks)| crate::model::BtPartialPiece {
+            piece: *piece,
+            blocks: blocks
+                .iter()
+                .map(|(begin, data)| crate::model::BtPartialBlock::encode_block(*begin, data))
+                .collect(),
+        })
+        .collect();
+    let sc = crate::model::BtSidecar::build_full(done.iter().copied(), pieces);
     let _ = sc.save(path);
 }
 
@@ -3990,6 +4092,405 @@ mod tests {
             "Pause 分支保存的 done_pieces = 磁盘校验通过量（sidecar 预填 ∪ 引擎进度）"
         );
         let _ = handle.await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_bt_sidecar_full_persists_done_and_partial_blocks() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btsc-full");
+        let path = crate::model::namegen::sidecar_path_of(&dir.to_string_lossy(), "full.bin");
+        let mut done = HashSet::new();
+        done.insert(0);
+        let mut partial: PartialPieces = HashMap::new();
+        let mut blocks0 = BTreeMap::new();
+        blocks0.insert(0u32, vec![0xAA; 16]);
+        blocks0.insert(16384u32, vec![0xBB; 16]);
+        partial.insert(1, blocks0);
+        let mut blocks_done = BTreeMap::new();
+        blocks_done.insert(0u32, vec![0xCC; 16]);
+        partial.insert(0, blocks_done);
+        save_bt_sidecar_full(&path, &done, &partial);
+        let sc = crate::model::BtSidecar::load_full(&path).expect("sidecar 可读");
+        assert_eq!(sc.done_pieces, vec![0]);
+        assert_eq!(sc.partial_pieces.len(), 1, "done piece 的 partial 不导出");
+        let p1 = &sc.partial_pieces[0];
+        assert_eq!(p1.piece, 1);
+        assert_eq!(
+            p1.blocks.iter().map(|b| b.begin).collect::<Vec<_>>(),
+            vec![0, 16384]
+        );
+        assert_eq!(p1.blocks[0].decode_data().unwrap(), vec![0xAA; 16]);
+        assert_eq!(p1.blocks[1].decode_data().unwrap(), vec![0xBB; 16]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn restore_sidecar_partial_writes_verified_and_filters_invalid() {
+        let piece_len = 3 * REQUEST_BLOCK_LEN as usize;
+        let data: Vec<u8> = (0..2 * piece_len).map(|i| (i % 211) as u8).collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bt-restore");
+        let save_dir = dir.to_string_lossy().into_owned();
+        let meta = make_meta(&data, piece_len, "udp://127.0.0.1:1/announce");
+        let files = vec![BtFile {
+            path: "r.bin".into(),
+            size: data.len() as u64,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, piece_len as u32);
+        let mut handles: HashMap<usize, tokio::fs::File> = HashMap::new();
+        handles.insert(
+            0,
+            open_selected_file_handle(&save_dir, "r.bin", &files[0])
+                .await
+                .unwrap(),
+        );
+
+        let blk = |piece: u32, idx: usize| {
+            crate::model::BtPartialBlock::encode_block(
+                (idx * REQUEST_BLOCK_LEN as usize) as u32,
+                &data[piece as usize * piece_len + idx * REQUEST_BLOCK_LEN as usize
+                    ..(piece as usize + 1) * piece_len],
+            )
+        };
+        let full0 = crate::model::BtPartialPiece {
+            piece: 0,
+            blocks: vec![blk(0, 0), blk(0, 1), blk(0, 2)],
+        };
+        let uncovered = crate::model::BtPartialPiece {
+            piece: 9,
+            blocks: vec![crate::model::BtPartialBlock::encode_block(0, &[1u8; 16])],
+        };
+        let misaligned = crate::model::BtPartialPiece {
+            piece: 1,
+            blocks: vec![crate::model::BtPartialBlock::encode_block(1, &[1u8; 16])],
+        };
+        let corrupt: crate::model::BtPartialPiece =
+            serde_json::from_str(r#"{"piece":1,"blocks":[{"begin":16384,"data_b64":"!!!"}]}"#)
+                .unwrap();
+        let mut done = HashSet::new();
+        done.insert(1);
+        let mut partial = PartialPieces::new();
+        let mut downloaded = 0u64;
+
+        restore_sidecar_partial(
+            &[full0, uncovered, misaligned, corrupt],
+            &pmap,
+            &meta,
+            &mut handles,
+            &mut done,
+            &mut partial,
+            &mut downloaded,
+        )
+        .await;
+
+        assert!(done.contains(&0), "完整且校验通过 → 直接落盘转 done");
+        assert_eq!(downloaded, selected_bytes_of_piece(&pmap, 0));
+        assert!(partial.is_empty(), "无效条目全部滤除，不进入 partial");
+        let buf = std::fs::read(format!("{save_dir}/r.bin")).unwrap();
+        assert_eq!(&buf[..piece_len], &data[..piece_len], "piece 0 数据落盘");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn restore_sidecar_partial_keeps_incomplete_for_resume() {
+        let piece_len = 3 * REQUEST_BLOCK_LEN as usize;
+        let data: Vec<u8> = (0..piece_len).map(|i| (i % 223) as u8).collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bt-restore-inc");
+        let save_dir = dir.to_string_lossy().into_owned();
+        let meta = make_meta(&data, piece_len, "udp://127.0.0.1:1/announce");
+        let files = vec![BtFile {
+            path: "i.bin".into(),
+            size: data.len() as u64,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, piece_len as u32);
+        let mut handles: HashMap<usize, tokio::fs::File> = HashMap::new();
+        handles.insert(
+            0,
+            open_selected_file_handle(&save_dir, "i.bin", &files[0])
+                .await
+                .unwrap(),
+        );
+        let entries = vec![crate::model::BtPartialPiece {
+            piece: 0,
+            blocks: vec![crate::model::BtPartialBlock::encode_block(
+                0,
+                &data[..REQUEST_BLOCK_LEN as usize],
+            )],
+        }];
+        let mut done = HashSet::new();
+        let mut partial = PartialPieces::new();
+        let mut downloaded = 7u64;
+
+        restore_sidecar_partial(
+            &entries,
+            &pmap,
+            &meta,
+            &mut handles,
+            &mut done,
+            &mut partial,
+            &mut downloaded,
+        )
+        .await;
+
+        assert!(done.is_empty(), "不完整 piece 不转 done");
+        assert_eq!(downloaded, 7, "未校验字节不计入 downloaded");
+        let blocks = partial.get(&0).expect("不完整 piece 留在 partial");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks.get(&0).unwrap(), &data[..REQUEST_BLOCK_LEN as usize]);
+        let buf = std::fs::read(format!("{save_dir}/i.bin")).unwrap();
+        assert_eq!(
+            buf.len(),
+            data.len(),
+            "句柄打开即预分配全量（set_len 稀疏文件）"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    async fn fake_logging_peer(
+        data: Vec<u8>,
+        piece_len: usize,
+        infohash: [u8; 20],
+        serve: std::collections::BTreeSet<(u32, u32)>,
+        req_log: std::sync::Arc<std::sync::Mutex<std::collections::BTreeSet<(u32, u32)>>>,
+        served_tx: tokio::sync::mpsc::UnboundedSender<(u32, u32)>,
+    ) -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                let data = data.clone();
+                let serve = serve.clone();
+                let req_log = req_log.clone();
+                let served_tx = served_tx.clone();
+                tokio::spawn(async move {
+                    let mut hs = [0u8; 68];
+                    if sock.read_exact(&mut hs).await.is_err() {
+                        return;
+                    }
+                    let mut resp = Vec::new();
+                    resp.push(19);
+                    resp.extend_from_slice(b"BitTorrent protocol");
+                    resp.extend_from_slice(&[0u8; 8]);
+                    resp.extend_from_slice(&infohash);
+                    resp.extend_from_slice(b"-QX7777-loggingpeer0");
+                    if sock.write_all(&resp).await.is_err() {
+                        return;
+                    }
+                    let n = data.len().div_ceil(piece_len);
+                    let mut bf = vec![0u8; n.div_ceil(8)];
+                    for i in 0..n {
+                        bf[i / 8] |= 0x80 >> (i % 8);
+                    }
+                    let mut frame = Vec::new();
+                    frame.extend_from_slice(&((1 + bf.len()) as u32).to_be_bytes());
+                    frame.push(5);
+                    frame.extend_from_slice(&bf);
+                    if sock.write_all(&frame).await.is_err() {
+                        return;
+                    }
+                    if sock.write_all(&[0, 0, 0, 1, 1]).await.is_err() {
+                        return;
+                    }
+                    loop {
+                        match peer::read_msg(&mut sock).await {
+                            Ok(peer::PeerMsg::Request {
+                                index,
+                                begin,
+                                length,
+                            }) => {
+                                req_log.lock().unwrap().insert((index, begin));
+                                if serve.contains(&(index, begin)) {
+                                    let off = index as usize * piece_len + begin as usize;
+                                    let end = (off + length as usize).min(data.len());
+                                    let blk = data[off..end].to_vec();
+                                    let mut f = Vec::new();
+                                    f.extend_from_slice(&((9 + blk.len()) as u32).to_be_bytes());
+                                    f.push(7);
+                                    f.extend_from_slice(&index.to_be_bytes());
+                                    f.extend_from_slice(&begin.to_be_bytes());
+                                    f.extend_from_slice(&blk);
+                                    if sock.write_all(&f).await.is_err() {
+                                        return;
+                                    }
+                                    let _ = served_tx.send((index, begin));
+                                }
+                            }
+                            Ok(peer::PeerMsg::Interested) => {}
+                            Ok(peer::PeerMsg::KeepAlive) => {}
+                            Ok(_) => {}
+                            Err(_) => return,
+                        }
+                    }
+                });
+            }
+        });
+        port
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pause_persists_partial_blocks_and_resume_skips_restored_requests() {
+        let piece_len = 3 * REQUEST_BLOCK_LEN as usize;
+        let num_pieces = 3usize;
+        let data: Vec<u8> = (0..piece_len * num_pieces)
+            .map(|i| (i % 199) as u8)
+            .collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bt-antileech");
+        let save_dir = dir.to_string_lossy().into_owned();
+        let name = "al.bin";
+        std::fs::write(format!("{save_dir}/{name}"), &data).unwrap();
+        let meta = make_meta(&data, piece_len, "udp://127.0.0.1:1/announce");
+        let infohash = meta.infohash;
+        let files = vec![BtFile {
+            path: name.to_string(),
+            size: data.len() as u64,
+            selected: true,
+        }];
+        let sc_path = crate::model::namegen::sidecar_path_of(&save_dir, name);
+
+        let (served_tx, mut served_rx) = mpsc::unbounded_channel();
+        let log1 = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+        let seeder1 = fake_logging_peer(
+            data.clone(),
+            piece_len,
+            infohash,
+            std::collections::BTreeSet::from([(0u32, 0u32)]),
+            log1.clone(),
+            served_tx,
+        )
+        .await;
+        let tracker1 = fake_udp_tracker(seeder1).await;
+        let spec = crate::engine::BtSpec {
+            id: 96,
+            source: "/tmp/al.torrent".into(),
+            meta: meta.clone(),
+            save_dir: save_dir.clone(),
+            name: name.to_string(),
+            files: files.clone(),
+            trackers: vec![format!("udp://127.0.0.1:{tracker1}/announce")],
+            concurrency: 2,
+            proxy_endpoint: None,
+            seeding: false,
+            max_download_speed: 0,
+            max_upload_speed: 0,
+            tunables: Default::default(),
+        };
+        let (evt_tx, mut evt_rx) = mpsc::channel(256);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
+        let handle = tokio::spawn(run(spec, crate::engine::shared_for_tests(), cmd_rx, evt_tx));
+
+        let mut served00 = false;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout_at(deadline, served_rx.recv()).await {
+                Ok(Some((0, 0))) => {
+                    served00 = true;
+                    break;
+                }
+                Ok(Some(_)) => continue,
+                _ => break,
+            }
+        }
+        assert!(served00, "phase1: 假 peer 已服务 piece0 块0");
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        cmd_tx.send(BtTaskCmd::Pause).await.unwrap();
+        let mut stopped = false;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        while tokio::time::Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let Some(evt) = tokio::time::timeout(remain, evt_rx.recv())
+                .await
+                .ok()
+                .flatten()
+            else {
+                break;
+            };
+            if matches!(evt, Evt::BtStopped { .. }) {
+                stopped = true;
+                break;
+            }
+        }
+        assert!(stopped, "phase1: 暂停回报 BtStopped");
+        let _ = handle.await;
+        let sc = crate::model::BtSidecar::load_full(&sc_path).expect("phase1: sidecar 存在");
+        assert_eq!(sc.done_pieces, Vec::<u32>::new(), "phase1: 无完整 piece");
+        assert_eq!(sc.partial_pieces.len(), 1, "phase1: partial 块已持久化");
+        let p0 = &sc.partial_pieces[0];
+        assert_eq!(p0.piece, 0);
+        assert_eq!(p0.blocks.len(), 1);
+        assert_eq!(p0.blocks[0].begin, 0);
+        assert_eq!(
+            p0.blocks[0].decode_data().unwrap(),
+            data[..REQUEST_BLOCK_LEN as usize].to_vec(),
+            "phase1: 块数据字节保真"
+        );
+
+        let log2 = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+        let (served2_tx, _served2_rx) = mpsc::unbounded_channel();
+        let mut serve_all = std::collections::BTreeSet::new();
+        for p in 0..num_pieces as u32 {
+            for b in 0..3u32 {
+                serve_all.insert((p, b * REQUEST_BLOCK_LEN));
+            }
+        }
+        let seeder2 = fake_logging_peer(
+            data.clone(),
+            piece_len,
+            infohash,
+            serve_all,
+            log2.clone(),
+            served2_tx,
+        )
+        .await;
+        let tracker2 = fake_udp_tracker(seeder2).await;
+        let spec2 = crate::engine::BtSpec {
+            id: 96,
+            source: "/tmp/al.torrent".into(),
+            meta: meta.clone(),
+            save_dir: save_dir.clone(),
+            name: name.to_string(),
+            files,
+            trackers: vec![format!("udp://127.0.0.1:{tracker2}/announce")],
+            concurrency: 2,
+            proxy_endpoint: None,
+            seeding: false,
+            max_download_speed: 0,
+            max_upload_speed: 0,
+            tunables: Default::default(),
+        };
+        let (evt_tx2, _evt_rx2) = mpsc::channel(256);
+        let (_cmd_tx2, cmd_rx2) = mpsc::channel::<BtTaskCmd>(8);
+        let handle2 = tokio::spawn(run(
+            spec2,
+            crate::engine::shared_for_tests(),
+            cmd_rx2,
+            evt_tx2,
+        ));
+        let mut completed = false;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        while tokio::time::Instant::now() < deadline {
+            if !std::path::Path::new(&sc_path).exists() {
+                completed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        assert!(completed, "phase2: 恢复后借恢复块全量完成（sidecar 移除）");
+        let got = std::fs::read(format!("{save_dir}/{name}")).unwrap();
+        assert_eq!(got, data, "phase2: 恢复块参与组装并完整落盘");
+        assert!(
+            !log2.lock().unwrap().contains(&(0, 0)),
+            "phase2: 已恢复块不再重请求（反吸血关键判据：对端看不到同区间重复下载），实际请求 = {:?}",
+            log2.lock().unwrap()
+        );
+        assert!(
+            log2.lock().unwrap().contains(&(0, REQUEST_BLOCK_LEN)),
+            "phase2: 缺失块正常请求"
+        );
+        handle2.abort();
         let _ = std::fs::remove_dir_all(&dir);
     }
 
