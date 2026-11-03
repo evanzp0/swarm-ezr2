@@ -56,6 +56,14 @@ Feature: 01-config-template 配置模板自动生成
   变更如上，EOF 单换行收尾；v1.14 内嵌原文实测 = 191 行（含 48 空行））；③非法值回退沿统一回退口径（0/负/非法 → 代码默认；
   global/task 键回退 = 0 不限速，listen_port 回退 = 随机绑定）。
 
+  v1.15 修订注（操作者 bug23 轮批准 + bug23 追轮复核反馈；FR-02-28/29 v1.11）：①四限速键
+  取值范围注释改 `# 取值范围：≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s`——只列取值
+  形态，不含换算/兼容性说明文字（操作者复核反馈钦定：旧写法兼容性等说明不进模板）；
+  ②config 键单位口径 = 新写法 KiB/MiB/GiB 二进制 + 裸整数/B 后缀 = B/s，旧写法 KB/MB/GB
+  十进制废弃不再识别（含旧写法的值 = 非法 → 回退 0，FR-01-71；解析器行为，模板注释
+  不展开）；③钦定文本整体替换为 v1.15 版（行数与行集结构不变 = 191 行，仅四键取值范围
+  注释行文本修订，EOF 单换行收尾）。
+
   v1.13 修订（操作者 bug14 轮指令，D63；FR-01-85 v1.13/FR-01-71 v1.39）：模板改版为
   「示例行活跃」形态——36 个键值行与 3 个表声明行（[common]/[http]/[bt]）取消注释成为
   活跃 TOML（示例值仍与代码常量默认逐键一致 ⇒ 解析结果与文件缺失一致，默认值生效不变）；
@@ -83,10 +91,10 @@ Feature: 01-config-template 配置模板自动生成
       | key                          | default_line                              | purpose                                          | range                                       |
       | download_dir                 | download_dir = ""                       | 默认保存目录                                     | 留空或缺失 = 用户主目录下的下载目录         |
       | download_slots               | download_slots = 5                      | 全局下载槽位数                                   | 正整数（≥1）；0 或非法值回退默认            |
-      | global_max_download_speed    | global_max_download_speed = 0           | 全局下载限速（全部任务合计）                     | ≥0；整数 B/s 或十进制单位字符串             |
-      | global_max_upload_speed      | global_max_upload_speed = 0             | 全局上传限速（BT 上传合计）                      | ≥0；整数 B/s 或十进制单位字符串             |
-      | task_max_download_speed      | task_max_download_speed = 0             | 新任务默认任务级下载限速                         | ≥0；整数 B/s 或十进制单位字符串             |
-      | task_max_upload_speed        | task_max_upload_speed = 0               | 新任务默认任务级上传限速                         | ≥0；整数 B/s 或十进制单位字符串             |
+      | global_max_download_speed    | global_max_download_speed = 0           | 全局下载限速（全部任务合计）                     | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
+      | global_max_upload_speed      | global_max_upload_speed = 0             | 全局上传限速（BT 上传合计）                      | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
+      | task_max_download_speed      | task_max_download_speed = 0             | 新任务默认任务级下载限速                         | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
+      | task_max_upload_speed        | task_max_upload_speed = 0               | 新任务默认任务级上传限速                         | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
       | block_size_http              | block_size_http = 1048576               | HTTP 分块块大小（字节）                          | 正整数（≥1）；0 或非法值回退默认            |
       | http_concurrency             | http_concurrency = 4                    | 默认并发数                                       | 1–64 的整数；越界钳制到边界                 |
       | max_retries                  | max_retries = 5                         | 自动重试上限次数                                 | ≥1 的整数；0 或非法值回退默认               |
@@ -143,19 +151,19 @@ Feature: 01-config-template 配置模板自动生成
   download_slots = 5
   
   # 全局下载限速（全部任务合计；0 = 不限）
-  # 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
+  # 取值范围：≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s
   global_max_download_speed = 0
 
   # 全局上传限速（BT 上传合计；0 = 不限）
-  # 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
+  # 取值范围：≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s
   global_max_upload_speed = 0
 
   # 新任务默认任务级下载限速（0 = 不限）
-  # 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
+  # 取值范围：≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s
   task_max_download_speed = 0
 
   # 新任务默认任务级上传限速（0 = 不限）
-  # 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
+  # 取值范围：≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s
   task_max_upload_speed = 0
   
   # 命名代理列表（可配置多个）

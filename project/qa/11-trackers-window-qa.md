@@ -1,6 +1,9 @@
-# QA 套件 · 11-trackers-window trackers 弹窗（期号 02，v1.9 新建 / v1.10 改版同步 / v1.11 六项反馈同步）
+# QA 套件 · 11-trackers-window trackers 弹窗（期号 02，v1.9 新建 / v1.10 改版同步 / v1.11 六项反馈同步 / v1.12 几何修订同步）
 
 > 对应规格：`project/features/11-trackers-window.feature`（6 场景）。
+> **v1.12 同步（bug24 归档轮，D67⑤ v1.11 修订）**：窗口 90×22 → 94×22（内框 92×20、
+> 内容区宽 88；列起点不变），末列「消息」预算 8 → 12 列——QA-TW-02/03 判据修订：
+> 「下轮 <s>s / 重试 <s>s」3–6 位秒数完整显示无 '…' 截断（bug24 验收判据）。
 > 需求依据：`project/mission/phase-02.md` FR-02-31、D67（bug18 轮设计定义值，待批）；
 > v1.10 追轮按操作者三条 UI 反馈改版：窗口 90×22、qBt 式列（#/URL/状态/Peers/Seeds/消息）、
 > URL 36 列宽自动换行；v1.11 追轮按操作者六条 UI 反馈改版：明细行间 ─ 细线分隔、
@@ -27,8 +30,8 @@
 | 用例 | 场景 | 操作 | 通过判据 |
 |---|---|---|---|
 | QA-TW-01 | 11-trackers-window-01 | ①未选中按 t；②选中 HTTP 任务按 t；③选中 BT 任务（下载中/做种中/暂停各一轮）按 t | ①toast `未选中任务，无法查看 trackers`；②toast `该任务没有 trackers（仅 BT 任务支持）`；③三种任务状态均正常开窗（弹窗不打开臂无窗口渲染） |
-| QA-TW-02 | 11-trackers-window-02 | BT 任务（tracker 池 3 条 = config + announce-list + 手输合并去重，含 ≥1 条超 44 列宽 URL）按 t 开窗 | 90×22 圆角模态居中、标题 ` Trackers `、[✗]；布局 = 任务名行/表头（#/URL/状态/Peers/Seeds/消息）/tracker 显示行；**底部无提示行**（v1.11）、**内容区左右 padding 对称各 2 列**；相邻明细行间 **─ 通栏细线分隔**（首条前/末条后不画、同条折行续行间不画）；行 = 右对齐 # + URL（**44 列宽**列内自动换行、续行仅回填 URL 列、**续行与首行同色同 FG**）+ 状态 + Peers/Seeds（右对齐；— = 无）+ 消息；http(s)/www 行渲染层含 VS15 反终端自动链接注入（udp 行无）；3 条 tracker 折行后不超屏无滚动条 |
-| QA-TW-03 | 11-trackers-window-03 | 运行中任务（HTTP tracker 正常 / UDP 正常 / 停服退避中 / 暂停任务）分别开窗读状态/Peers/Seeds/消息列 | 正常 = `工作中`（Peers/Seeds 计数与 fixture peers 响应对账、消息 = `下轮 <s>s` = interval 倒计时）；退避 = `失败`（Peers/Seeds = —、消息 = `重试 <s>s`）；暂停任务 = `待 announce`（三列均 —）；数据与 fixture announce 日志交叉一致 |
+| QA-TW-02 | 11-trackers-window-02 | BT 任务（tracker 池 3 条 = config + announce-list + 手输合并去重，含 ≥1 条超 44 列宽 URL）按 t 开窗 | **94×22**（v1.12：D67⑤ 修订，90×22 退役）圆角模态居中、标题 ` Trackers `、[✗]；布局 = 任务名行/表头（#/URL/状态/Peers/Seeds/消息）/tracker 显示行；**底部无提示行**（v1.11）、**内容区左右 padding 对称各 2 列**；相邻明细行间 **─ 通栏细线分隔**（首条前/末条后不画、同条折行续行间不画）；行 = 右对齐 # + URL（**44 列宽**列内自动换行、续行仅回填 URL 列、**续行与首行同色同 FG**）+ 状态 + Peers/Seeds（右对齐；— = 无）+ 消息；**末列「消息」预算 12 列（起点 76，内容区宽 88 − 76，v1.12）**；http(s)/www 行渲染层含 VS15 反终端自动链接注入（udp 行无）；3 条 tracker 折行后不超屏无滚动条 |
+| QA-TW-03 | 11-trackers-window-03 | 运行中任务（HTTP tracker 正常 / UDP 正常 / 停服退避中 / 暂停任务）分别开窗读状态/Peers/Seeds/消息列；**含 ≥3 位秒数用例（下轮倒计时 ≥100s 与重试退避 ≥100s 各一轮）** | 正常 = `工作中`（Peers/Seeds 计数与 fixture peers 响应对账、消息 = `下轮 <s>s` = interval 倒计时）；退避 = `失败`（Peers/Seeds = —、消息 = `重试 <s>s`）；暂停任务 = `待 announce`（三列均 —）；**3–6 位秒数在 12 列预算内完整显示无 '…' 截断（v1.12，bug24 验收判据：120s/3600s 级全可见）**；数据与 fixture announce 日志交叉一致 |
 | QA-TW-04 | 11-trackers-window-04 | 12 条 tracker 任务（含长 URL 折行）开窗；↑↓/PgUp·PgDn/Home/End/滚轮滚动；拖拽移动；点击外部 | 右缘滚动条出现（FR-01-109：↑│║↓ 恒绿滑块；按折行后显示行计数，**分隔细线同为滚动单位**）；视口滚动首尾钳制（续行与首行同为滚动单位，折行行不被拆断）；拖拽移动钳制终端内、关闭不保留；点击外部 = 无任何操作 |
 | QA-TW-05 | 11-trackers-window-05 | 开窗后依次按 t/T/Esc/q/Q（每次重开）；开窗时按 Ctrl+C；开窗时按 A/D/M | 五通道均关闭且不退出（q/Q 先关窗）；Ctrl+C 退出程序；模态期间 A/D/M 等被窗口消费（不开对话框）；开窗时底层面板降级暗框 |
 | QA-TW-06 | 11-trackers-window-06 | ①主界面按 t/T 观察；②任务 tracker 含 `wss://tracker.example/ws`（手输或 config）后开窗；③添加/修改 BT 对话框 trackers 输入含 wss:// 行后确认 | ①不再切换过滤页签（页签仅 ]/[ 可切；帮助【页签】组无 T 条目、【任务列表】组有 T 条目、【trackers 弹窗（T）】组含列口径与滚动条目）；②引擎拒绝入池（窗口与任务 tracker 列表均无）；③对话框层拒绝：toast `⚠ 不支持的 tracker 协议（仅 http/https/udp）：…`、焦点回 trackers、不落库（对话框保持打开） |

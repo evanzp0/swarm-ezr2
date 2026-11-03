@@ -33,6 +33,16 @@
 #   （场景 01–08/10–14 的 config 键十进制示例不变）；②对话框限速字段（FR-02-29）单位口径改
 #   二进制 + 键入/粘贴即规范化显示 + 占位退役（场景 09/11/12/13 示例随二进制口径调整）；
 #   ③HTTP 添加/修改对话框「上传限速」字段退役（BT 框保留，场景 09/11 断言面随修订）。）
+# v1.11 修订注（操作者 bug23 轮批准 + chat 修订「旧写法 KB/MB/GB 十进制不再支持直接废弃」；
+#   FR-02-28/29 v1.11，D67②）：①config 键（global_max_* / task_max_*）解析口径 = 新写法
+#   KiB/MiB/GiB 二进制（1024^n，大小写不敏感，可带 /s 后缀）+ 裸整数/B 后缀 = B/s；旧写法
+#   KB/MB/GB 十进制废弃不再识别 → 含旧写法的值 = 非法 → 回退默认 0（FR-01-71；取代
+#   v1.10「仍十进制」注记）；②CLI --max-speed 同源 parse_speed：旧写法参数 = 启动报错退出；
+#   ③场景 01/02/03/06/08/09/10 示例值随二进制口径修订（旧十进制写法行退役），场景 05 改版 =
+#   新写法生效 + 旧写法废弃回退，场景 04 增旧写法回退行；场景 09 预填列改 fmt 规范化显示
+#   （GiB→MiB→KiB→B 整除链、非 1024 整倍数显裸 N B/s、0 显 0；fmt→parse 恒等）+ 增裸数字
+#   512 行；④修改框清空回填与回显判据归口 03-modify-task-10 / 08-modify-bt-08
+#   （本文件 11/12 生效语义与示例值不变）。
 Feature: 01-throttle-proxy 全局与任务级限速
 
   期号 01（本轮 v1.9 修订属操作者 bug18 轮指令，需求落 phase-02 FR-02-28/29 并
@@ -50,7 +60,7 @@ Feature: 01-throttle-proxy 全局与任务级限速
 
     Examples:
       | speed   | file        |
-      | 1 MB/s  | five-m.bin  |
+      | 1 MiB/s | five-m.bin  |
 
   Scenario: 01-throttle-proxy-02 多任务并发时限速作用于合计速度
     Given 配置文件设 [common] 表 global_max_download_speed = "<speed>"
@@ -59,17 +69,17 @@ Feature: 01-throttle-proxy 全局与任务级限速
 
     Examples:
       | speed   | tasks | mix        |
-      | 1 MB/s  | 2     | HTTP×2     |
-      | 1 MB/s  | 2     | HTTP+BT    |
+      | 1 MiB/s | 2     | HTTP×2     |
+      | 1 MiB/s | 2     | HTTP+BT    |
 
   Scenario: 01-throttle-proxy-03 --max-speed 参数优先于配置
-    Given 配置文件设 [common] 表 global_max_download_speed = "1 MB/s"
+    Given 配置文件设 [common] 表 global_max_download_speed = "1 MiB/s"
     When 以命令行启动 "ezr <url> --max-speed <param_speed>"
     Then 下载稳定后全局速度按 <param_speed> ±10% 生效（参数覆盖配置）
 
     Examples:
       | url                              | param_speed |
-      | http://fixture.local/files/a.bin | 512 KB/s    |
+      | http://fixture.local/files/a.bin | 512 KiB/s   |
 
   Scenario: 01-throttle-proxy-04 global_max_download_speed 为 0 不限速且非法值回退默认
     Given 配置文件设 [common] 表 global_max_download_speed = "<speed>"
@@ -77,25 +87,29 @@ Feature: 01-throttle-proxy 全局与任务级限速
     Then 全局速度行为为 "<behavior>"
 
     Examples:
-      | speed   | behavior                |
-      | 0       | 不限速（满速下载）     |
-      | abc     | 回退默认 0（不限速）   |
+      | speed   | behavior                                    |
+      | 0       | 不限速（满速下载）                          |
+      | abc     | 回退默认 0（不限速）                        |
+      | 2 MB/s  | 回退默认 0（旧写法 KB/MB/GB 废弃不识别，v1.11） |
 
-  Scenario: 01-throttle-proxy-05 限速值接受十进制单位格式
+  Scenario: 01-throttle-proxy-05 限速值单位格式解析（新写法二进制生效 + 旧写法十进制废弃，v1.11）
     Given 配置文件设 [common] 表 <key> = "<value>"
     When 下载至传输稳定（global_max_upload_speed 场景以 BT 上传观察）
-    Then 限速按 <value> 十进制口径生效（1 MB=1000 KB）
+    Then 限速按 <expected>
 
     Examples:
-      | key                          | value      |
-      | global_max_download_speed    | 2 MB/s     |
-      | global_max_download_speed    | 2 mb/s     |
-      | global_max_download_speed    | 500KB/s    |
-      | global_max_download_speed    | 2000000    |
-      | global_max_upload_speed      | 1 MB/s     |
+      | key                       | value     | expected                                          |
+      | global_max_download_speed | 2 MiB/s   | 2097152 B/s 生效（新写法二进制 1024^2）           |
+      | global_max_download_speed | 500 KiB/s | 512000 B/s 生效（新写法二进制）                   |
+      | global_max_download_speed | 2 GiB/s   | 2147483648 B/s 生效（新写法二进制 1024^3）        |
+      | global_max_download_speed | 2000000   | 2000000 B/s 生效（裸整数 = B/s）                  |
+      | global_max_download_speed | 512 B/s   | 512 B/s 生效（B 后缀 = B/s）                      |
+      | global_max_download_speed | 2 MB/s    | 旧写法废弃不识别 → 非法回退 0（不限速，FR-01-71） |
+      | global_max_download_speed | 500KB/s   | 旧写法废弃不识别 → 非法回退 0（不限速）           |
+      | global_max_upload_speed   | 1 MiB/s   | 1048576 B/s 生效（BT 上传合计观察）               |
 
   Scenario: 01-throttle-proxy-06 限速对不支持续传的任务同样生效
-    Given 配置文件设 [common] 表 global_max_download_speed = "1 MB/s"
+    Given 配置文件设 [common] 表 global_max_download_speed = "1 MiB/s"
     When 下载不支持续传的文件（<file>）至传输稳定
     Then 速度同样受限 ±10%
 
@@ -108,25 +122,27 @@ Feature: 01-throttle-proxy 全局与任务级限速
     Then 头部/图表布局不变且无全局限速控件（添加/修改对话框的任务级限速字段属 FR-02-29，不算全局限速控件）
 
   Scenario: 01-throttle-proxy-08 全局上传限速生效于 BT 上传合计
-    Given 配置文件设 [common] 表 global_max_upload_speed = "1 MB/s"
+    Given 配置文件设 [common] 表 global_max_upload_speed = "1 MiB/s"
     And 本地 BT fixture 已就绪（leecher 对本端做种任务拉取数据）
     When leecher 从本端上传合计稳定
-    Then 全部任务上传合计稳定在 1 MB/s ±10%（头部 ↑ 与列表行上传速度一致；做种与互惠上传均计入）
+    Then 全部任务上传合计稳定在 1 MiB/s ±10%（头部 ↑ 与列表行上传速度一致；做种与互惠上传均计入）
 
-  Scenario: 01-throttle-proxy-09 任务级限速默认值来自 config 且添加对话框预填可改（v1.10 修订：二进制 + HTTP 单字段）
+  Scenario: 01-throttle-proxy-09 任务级限速默认值来自 config 且添加对话框预填可改（v1.10：二进制 + HTTP 单字段；v1.11：预填 fmt 规范化 + 裸数字 B/s + config 旧写法废弃回退）
     Given 配置文件设 [common] 表 task_max_download_speed = "<down>" 与 task_max_upload_speed = "<up>"
     When 按 A 打开「添加任务：HTTP(S)」对话框（v1.10：仅下载限速字段；上传限速字段退役，FR-02-29 v1.10）与命令窗口分流打开的「添加任务：BT」对话框（下载/上传两字段均在）
-    Then 下载限速字段预填 "<down_parsed>"、上传限速字段预填 "<up_parsed>"（config 解析后整数 B/s；0 显示 0；限速字段无占位提示，v1.10）
+    Then 下载限速字段预填 "<down_prefill>"、上传限速字段预填 "<up_prefill>"（config 解析后 fmt 规范化显示：KiB/MiB/GiB 整倍数带单位、非 1024 整倍数显裸 N B/s、0 显 0，v1.11；限速字段无占位提示，v1.10）
     And 限速字段均可编辑（接受整数 B/s 或二进制单位字符串；键入/粘贴即规范化显示，前导零剥离）
     And 输入 "<input>" 后字段即时规范化显示 "<display>"（二进制单位族；退格不回写）
-    And 确认后任务任务级限速落为 "<result>"（留空或非法回退 config 默认 <down>/<up>）
+    And 确认后任务任务级限速落为 "<result>"（留空或非法回退 config 默认，即预填值对应解析值）
 
     Examples:
-      | down   | up       | down_parsed | up_parsed | input | display   | result  |
-      | 2 MB/s | 0        | 2000000     | 0         | 留空  | 2000000   | 2000000 |
-      | 2 MB/s | 0        | 2000000     | 0         | 500k  | 500 KiB/s | 512000  |
-      | 0      | 512 KB/s | 0           | 512000    | 1 M   | 1 MiB/s   | 1048576 |
-      | 0      | 512 KB/s | 0           | 512000    | abc   | abc       | 0       |
+      | down      | up        | down_prefill | up_prefill | input | display     | result  |
+      | 2 MiB/s   | 0         | 2 MiB/s      | 0          | 留空  | 2 MiB/s     | 2097152 |
+      | 2 MiB/s   | 0         | 2 MiB/s      | 0          | 500k  | 500 KiB/s   | 512000  |
+      | 0         | 1 MiB/s   | 0            | 1 MiB/s    | 1 M   | 1 MiB/s     | 1048576 |
+      | 0         | 512 KiB/s | 0            | 500 KiB/s  | 512   | 512         | 512     |
+      | 2000000   | 0         | 2000000 B/s  | 0          | 留空  | 2000000 B/s | 2000000 |
+      | 2 MB/s    | 0         | 0            | 0          | abc   | abc         | 0       |
 
   Scenario: 01-throttle-proxy-10 任务级与全局限速取 min 合成
     Given 配置文件设 [common] 表 global_max_download_speed = "<g_down>" 与 task_max_download_speed = "<t_down>"
@@ -134,10 +150,10 @@ Feature: 01-throttle-proxy 全局与任务级限速
     Then 任务速度稳定在 <expected> ±10%（有效限制 = min(全局, 任务级)；0 视为不限）
 
     Examples:
-      | g_down   | t_down   | expected |
-      | 1 MB/s   | 500 KB/s | 500 KB/s |
-      | 1 MB/s   | 0        | 1 MB/s   |
-      | 0        | 2 MB/s   | 2 MB/s   |
+      | g_down   | t_down    | expected |
+      | 1 MiB/s  | 500 KiB/s | 500 KiB/s |
+      | 1 MiB/s  | 0         | 1 MiB/s  |
+      | 0        | 2 MiB/s   | 2 MiB/s  |
 
   Scenario: 01-throttle-proxy-11 修改 HTTP 任务限速确认后立即生效
     Given 任务 A（HTTP）下载中且任务级下载限速为 "<before>"

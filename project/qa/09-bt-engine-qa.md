@@ -1,6 +1,9 @@
 # QA 套件 · 09-bt-engine BT 下载与做种引擎（期号 02）
 
-> 对应规格：`project/features/09-bt-engine.feature`（16 场景；v1.38 新增场景 16）。
+> 对应规格：`project/features/09-bt-engine.feature`（17 场景；v1.38 新增场景 16；**v1.39 新增场景 17**）。
+> **v1.39 修订（bug23 归档轮，FR-02-22 v1.11 + D68）**：QA-BE-17 新增（partial 持久化与恢复
+> 不重下：暂停重启已收块零重请求 / 完整 piece 直接落盘转 done / 篡改自愈 / 重校验窗二次暂停
+> 允许边界 D68⑥；与 QA-AL 反吸血联合回归）。
 > 需求依据：`project/mission/phase-02.md` FR-02-06…25、D45/D46/D51/D52/D54/D57/D58/D60/D61。
 > 协议基线：操作者钦定 BEP 3/15/23/7/12/9/20；tokio 异步（FR-02-10）。
 > 上传真实统计（互惠/做种，D45/D58）、BEP 9 做种侧响应（D53）、下载完成转做种（D57）；
@@ -54,6 +57,7 @@
 | QA-BE-15 | 09-bt-engine-15 | 下载中任务空格暂停 → 空格开始重复 3 轮（fixture seeder/tracker 全程留档）；另轮修改并发下调收缩一条连接后随即改回 | **生命周期礼仪严格检查（v1.37/FR-02-27）**：每轮新握手 peer_id = 首轮（会话级稳定：进程内全部 BT 任务共用、跨暂停/重启/热调不变，`-EZ2000-` 形态）；每轮暂停 seeder 侧读到 EOF（本端先关写）且全程无 ConnectionReset（优雅关闭非 RST 强拆）；tracker 事件序列 = started → stopped → started 且全程同 peer_id（无「换 ID 重启」形态）；重启后无同 peer 双连（peer_id 去重既有口径）；下调收缩连接 seeder 侧读到 EOF 无 ConnectionReset；被收缩候选不计失败退避（fails 不被污染）且自关冷却内不向该候选重拨（同候选两次入连间隔 ≥ 冷却下限，fixture 观察入连时间戳）；任务全程下载中、进度单调不减 |
 
 | QA-BE-16 | 09-bt-engine-16 | ①[bt] 表 listen_port = 51413 添加任务；②删配置重启两任务；③listen_port 占用（fixture 先占）启动 | ①fixture tracker 记录 announce port = 51413 且 fixture 拨入命中该端口；②两任务 announce port 相同（进程级共享单端口）且为随机值（非 51413）；③回退随机绑定 + 启动警告、不阻塞启动；0/负/非法值同②随机臂 |
+| QA-BE-17 | 09-bt-engine-17 | ①下载至含 partial 块（fixture 限速门控）→ 空格暂停 → 退出重启 → 空格恢复，全程留档 seeder 请求日志；②手工篡改 sidecar partial 记录（越界/重叠/坏 b64/指向已完成 piece 各一次）重启恢复；③启动重校验窗内立即再暂停一轮 | ①恢复后 seeder 请求日志中已收 (piece, offset) 区间**零重请求**（仅缺失块区间被请求）；已收块字节保真（盘上对账）；恢复凑齐的完整 piece 校验通过直接落盘转 done（不等重下）；任务最终完成且产物 = seeder 原始字节；全程无同区间重复请求（BitComet 反吸血特征消除，与 QA-AL 联合回归）；②非法记录逐块丢弃自愈：该部分重下、其余合法块保留不重下、任务不卡死且最终完成；③允许边界（D68⑥）：重校验窗内二次暂停丢弃上一轮 partial（该部分重下）——本臂记录实测口径，不判 F |
 
 ## 通过准则
 

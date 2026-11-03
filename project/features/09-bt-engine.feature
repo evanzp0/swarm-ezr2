@@ -15,6 +15,7 @@
 #   09-bt-engine-14 [bt] 调优键配置生效与回退（三大表重构：bt_concurrency 预填 / seed_duration_secs / 其余键引擎生效与缺省回退）
 #   09-bt-engine-15 peer 连接生命周期礼仪（v1.37，FR-02-27：会话级 peer_id 稳定 / 优雅关闭 / 自关不计失败+冷却）
 #   09-bt-engine-16 BT 监听端口 [bt] listen_port（v1.38，FR-02-32：配置生效 / 未配置随机 / 占用回退+警告 / 进程级共享）
+#   09-bt-engine-17 partial 进度持久化与恢复不重下（v1.39，FR-02-22/D68：暂停重启不重发已收块 / 篡改自愈 / 重校验窗二次暂停允许边界）
 # 期号 02（phase-02）。需求依据 project/mission/phase-02.md FR-02-06…23、D45/D46/D51/D52/D54/D57/D58。
 # 协议基线 = 操作者钦定 BEP 3/15/23/7/12/9/20；tokio 异步（FR-02-10）。
 # BEP 9 做种侧响应（D53/D45——磁力拉取 phase-03）；上传真实统计（D58）；
@@ -37,6 +38,14 @@
 # 引擎不重启）与全局限速（全局两键合计配额跨协议共享，合成 = min(全局, 任务级)，见
 # 01-throttle-proxy v1.9）；[bt] 表新增 listen_port 键（20 键 → 21 键，场景 16 专管）；
 # 监听由每任务独立随机端口改为进程级共享单端口（未配置随机、配置生效、占用回退随机 + 警告）。
+# v1.39 修订（操作者 bug23 轮批准归档，specifier 轮；FR-02-22 v1.11，D68）：新增场景 17
+# ——BT sidecar partial 持久化与恢复不重下：暂停/停止做种全量保存（BtSidecar 可选字段
+# partial_pieces，b64 块数据，版本恒 1 不 bump）；重启恢复验证链（覆盖内 ∧ 非 done ∧
+# 16 KiB 对齐 ∧ 单调不重叠 ∧ 界内）通过后已收块不重发请求；完整 piece 组装校验通过直接
+# 落盘转 done；非法记录逐块丢弃自愈；endgame 跳过已收块；允许边界 = 启动重校验窗内
+# 再次暂停丢弃上一轮 partial（该部分重下，操作者批准登记）。修复前缺陷 = Pause 终结引擎
+# 丢 partial → 恢复后向同一 peer 重发同区间请求（BitComet 反吸血触发源，操作者 bug23 报告）。
+# QA 严格检查 = QA-BE-17。
 Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文件选择）
 
   期号 02。真实 BT 链路：.torrent 解析 → tracker announce（HTTP/UDP、紧凑 peer、
@@ -224,3 +233,18 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
       | port     | observed          |
       | 未配置   | 随机端口（非固定值）   |
       | 51413    | 51413              |
+
+
+  # v1.39 新增（操作者 bug23 轮批准归档，FR-02-22 v1.11 + D68）：BT sidecar partial 持久化与
+  # 恢复不重下——修复「暂停→恢复向同一 peer 重发同区间请求」的重复下载特征（BitComet 反吸血
+  # 触发源）；反吸血联动回归归口 10-bt-anti-leech。
+  Scenario: 09-bt-engine-17 partial 进度持久化与恢复不重下（v1.39，FR-02-22/D68）
+    Given 任务下载中且已收部分块（含未满 piece 的 partial 块，fixture seeder 请求日志可观察已收区间）
+    When 按空格暂停后退出 ezr 并重新启动、恢复该任务
+    Then 启动恢复载入 sidecar partial 块（BtSidecar partial_pieces）：已收块不向 seeder 重发请求（fixture 请求日志：恢复后请求仅覆盖缺失块区间，已收 (piece, offset) 区间零重请求）
+    And 已收块字节保真（sidecar 载入与盘上字节一致；恢复凑齐的完整 piece 组装校验通过后直接落盘转 done，不等重下）
+    And 任务最终下载完成且产物与 seeder 原始数据逐字节一致
+    And 暂停→恢复全程对同一 peer 无同区间重复请求（BitComet 反吸血特征消除，与 10-bt-anti-leech 联合回归）
+    When sidecar partial 记录被篡改（越界 / 区间重叠 / 坏 b64 / 指向已完成 piece）后重启恢复
+    Then 非法记录逐块丢弃自愈（该部分重下、其余合法块保留不重下、任务不卡死且最终完成）
+    And 允许边界（操作者批准登记，D68⑥）：启动重校验窗内再次暂停时上一轮 partial 丢弃（该部分重下）；正常路径（校验窗完成后暂停/退出）partial 完整持久化

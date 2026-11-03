@@ -198,3 +198,7 @@
   nightly --profile minimal -c rustfmt -c clippy` 一次装齐（rustup 1.29.2 + nightly
   1.101.0，EXIT=0），清单缺键问题本轮未复现。装前 curl 清单验 TOML 的纪律仍有效
   （本轮跳过直接成功属运气好，不改变纪律）。
+
+## bug23/bug24 归档轮（specifier）
+- chat 选择题面板通道恢复可用：Inversion 阶段 1 六题经面板逐题作答成功（bug13–18 轮「面板不可用」受限退化沿袭解除）——后续 specifier 轮先试面板逐题作答，仍不可用时再退化 chat 输入答案；面板单轮批量出题与「阶段 1 一次问全」口径天然吻合，操作者 chat 追加指令可即时覆盖面板答案（本轮「旧写法废弃」即如此，以 chat 指令为准）。
+- babashka 资产名漂移实证：v1.12.209 的 linux-amd64 资产实名 = `babashka-1.12.209-linux-amd64-static.tar.gz`（旧名 .tar.xz 直接 404）——「releases 清单先查」条款的直接实例，清单页经 gh-proxy 同样可达。

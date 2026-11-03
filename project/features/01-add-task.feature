@@ -38,6 +38,12 @@
 # （canonical = 数字 + 空格 + 单位，如 512k/512 kb → 512 KiB/s、1 M → 1 MiB/s；前导零剥离；
 # canonical 完成态吸收单位后缀续入 b/i/s//；退格不回写）；占位退役（空态纯空白，原假「0」占位废）；
 # 留空或非法确认时回退 config 默认（口径不变）；③新增并发字段满容量重启录入（场景 21）。
+# v1.41 修订注（操作者 bug23 轮批准；FR-02-29 v1.11，D67②）：①限速字段预填/回显改 fmt
+# 规范化显示——config 解析后按 GiB→MiB→KiB→B 整除链显示（KiB/MiB/GiB 整倍数带对应单位、
+# 非 1024 整倍数显裸 N B/s、0 显 0；fmt→parse 恒等；原「预填整数 B/s」口径退役）；
+# ②裸数字输入确认恒按 B/s（512 → 512 B/s，操作者验收判据，场景 20 新增行）；
+# ③config 键 task_max_* 旧写法 KB/MB/GB 十进制废弃不再识别（含旧写法的值 = 非法 →
+# 回退 0 → 预填 0，FR-02-28 v1.11/FR-01-71；场景 20 新增行）；留空回退 config 默认口径不变。
 # v1.32 同步注（操作者 20261021 指令，对齐 ezr-demo m3 §6.1 与 demo 源码，逐条核证）：①对话框标题
 # 「 添加下载任务 」→「 添加任务：HTTP(S) 」（74×11 不变）；②校验下拉 8 项 = NONE（首行，默认，
 # 右列 — 占位）+ 7 算法；NONE 选中即校验码实时清空且不可输入（逐键/粘贴同拦截）；其余算法校验码
@@ -297,22 +303,24 @@ Feature: 01-add-task 任务添加（对话框与 CLI）
 
   # v1.39 新增（操作者 bug18 轮指令，FR-02-29 + D67）：限速两字段预填 config 任务级默认值且可修改。
   # v1.40 修订（FR-02-29 v1.10）：二进制单位 + 即时规范化显示 + HTTP 单字段（上传限速退役）。
-  Scenario: 01-add-task-20 限速字段预填 config 任务级默认值且可修改（v1.40，FR-02-29）
+  Scenario: 01-add-task-20 限速字段预填 config 任务级默认值且可修改（v1.40，FR-02-29；v1.41：预填 fmt 规范化 + 裸数字 B/s + 旧写法废弃回退）
     Given 配置文件 [common] 表 task_max_download_speed = "<cfg_down>"、task_max_upload_speed = "<cfg_up>"
     When 按 A 打开「添加任务：HTTP(S)」对话框（74×13）
-    Then 下载限速字段预填 "<down_parsed>"（config 解析后整数 B/s；0 显示 0）且无上传限速字段（v1.40 退役）
+    Then 下载限速字段预填 "<down_prefill>"（config 解析后 fmt 规范化显示：KiB/MiB/GiB 整倍数带对应单位、非 1024 整倍数显裸 N B/s、0 显 0，v1.41）且无上传限速字段（v1.40 退役）
     And 下载限速字段无占位提示（空态纯空白，v1.40）
     And 在下载限速字段输入 "<input>"
     Then 字段即时规范化显示 "<display>"（二进制单位族；前导零剥离；退格不回写）
     And 填其余必填项后确认
-    Then 任务任务级下载限速落为 "<result>"（注册表落盘；留空或非法回退 config 默认 <down_parsed>）
+    Then 任务任务级下载限速落为 "<result>"（注册表落盘；留空或非法回退 config 默认，即预填值对应解析值）
 
     Examples:
-      | cfg_down | cfg_up   | down_parsed | up_parsed | input  | display     | result  |
-      | 2 MB/s   | 0        | 2000000     | 0         | 留空   | 2000000     | 2000000 |
-      | 2 MB/s   | 0        | 2000000     | 0         | 500k   | 500 KiB/s   | 512000  |
-      | 0        | 512 KB/s | 0           | 512000    | 1 M    | 1 MiB/s     | 1048576 |
-      | 0        | 512 KB/s | 0           | 512000    | abc    | abc         | 0       |
+      | cfg_down  | cfg_up    | down_prefill | up_prefill | input  | display     | result  |
+      | 2 MiB/s   | 0         | 2 MiB/s      | 0          | 留空   | 2 MiB/s     | 2097152 |
+      | 2 MiB/s   | 0         | 2 MiB/s      | 0          | 500k   | 500 KiB/s   | 512000  |
+      | 0         | 1 MiB/s   | 0            | 1 MiB/s    | 1 M    | 1 MiB/s     | 1048576 |
+      | 0         | 512 KiB/s | 0            | 500 KiB/s  | 512    | 512         | 512     |
+      | 2000000   | 0         | 2000000 B/s  | 0          | 留空   | 2000000 B/s | 2000000 |
+      | 2 MB/s    | 0         | 0            | 0          | abc    | abc         | 0       |
 
   # v1.40 新增（操作者 bug21 修订轮，FR-02-29 v1.10；HTTP/BT 四对话框同口径，BT 侧见 07/08）。
   Scenario: 01-add-task-21 并发字段满容量重启录入（v1.40）

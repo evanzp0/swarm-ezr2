@@ -37,6 +37,11 @@
 # ①BT 对话框两限速字段保留（预填/留空/非法口径不变），单位口径十进制改二进制 + 键入/粘贴即
 # 规范化显示（如 2m → 2 MiB/s，前导零剥离，退格不回写）+ 占位退役（空态纯空白）；②并发字段
 # 满容量重启录入口径同 01-add-task-21（HTTP/BT 四对话框同口径）。
+# v1.40 修订注（操作者 bug23 轮批准；FR-02-29 v1.11，D67②）：①限速字段预填/回显改 fmt
+# 规范化显示（GiB→MiB→KiB→B 整除链、非 1024 整倍数显裸 N B/s、0 显 0；fmt→parse 恒等；
+# 原「预填整数 B/s」口径退役）；②裸数字输入确认恒按 B/s（512 → 512 B/s）；③config 键
+# task_max_* 旧写法 KB/MB/GB 十进制废弃不再识别（含旧写法的值 = 非法 → 回退 0 → 预填 0）;
+# 留空回退 config 默认口径不变。场景 10 随修订。
 Feature: 07-add-bt 添加任务：BT 对话框
 
   期号 02。命令窗口分流打开（仅 .torrent 路径，D53）：种子来源 + 保存到 + 文件树勾选
@@ -160,21 +165,23 @@ Feature: 07-add-bt 添加任务：BT 对话框
 
   # v1.38 新增（操作者 bug18 轮指令，FR-02-29 + D67）：BT 添加对话框限速两字段。
   # v1.39 修订（FR-02-29 v1.10）：二进制单位 + 即时规范化显示 + 占位退役（两字段保留）。
-  Scenario: 07-add-bt-10 限速两字段预填 config 任务级默认值且随任务创建落库（v1.39，FR-02-29）
+  # v1.40 修订（FR-02-29 v1.11）：预填 fmt 规范化显示 + 裸数字 B/s + config 旧写法废弃回退。
+  Scenario: 07-add-bt-10 限速两字段预填 config 任务级默认值且随任务创建落库（v1.39，FR-02-29；v1.40：预填 fmt 规范化 + 裸数字 B/s）
     Given 配置文件 [common] 表 task_max_download_speed = "<cfg_down>"、task_max_upload_speed = "<cfg_up>"
     When 经命令窗口打开「添加任务：BT」对话框
-    Then 下载限速字段预填 "<down_parsed>"、上传限速字段预填 "<up_parsed>"（config 解析后整数 B/s；0 显示 0；插在并发与代理之间；无占位提示，v1.39）
+    Then 下载限速字段预填 "<down_prefill>"、上传限速字段预填 "<up_prefill>"（config 解析后 fmt 规范化显示：KiB/MiB/GiB 整倍数带对应单位、非 1024 整倍数显裸 N B/s、0 显 0，v1.40；插在并发与代理之间；无占位提示，v1.39）
     And 在下载限速字段输入 "<input>"
     Then 字段即时规范化显示 "<display>"（二进制单位族；前导零剥离；退格不回写）
     And 确认创建
-    Then 任务任务级下载/上传限速落为 "<result_down>"/"<up_parsed>"（注册表落盘；BT 引擎按任务级与全局 min 合成生效，01-throttle-proxy-12）
-    And 留空或非法输入确认时回退 config 默认 <down_parsed>（同 HTTP 添加对话框口径）
+    Then 任务任务级下载/上传限速落为 "<result_down>"/<up_raw>（注册表落盘；BT 引擎按任务级与全局 min 合成生效，01-throttle-proxy-12）
+    And 留空或非法输入确认时回退 config 默认（即预填值对应解析值，同 HTTP 添加对话框口径）
 
     Examples:
-      | cfg_down | cfg_up   | down_parsed | up_parsed | input | display  | result_down |
-      | 0        | 1 MB/s   | 0           | 1000000   | 2m    | 2 MiB/s  | 2097152     |
-      | 2 MB/s   | 0        | 2000000     | 0         | 留空  | 2000000  | 2000000     |
-      | 0        | 0        | 0           | 0         | abc   | abc      | 0           |
+      | cfg_down  | cfg_up  | down_prefill | up_prefill | input | display  | result_down | up_raw   |
+      | 2 MiB/s   | 1 MiB/s | 2 MiB/s      | 1 MiB/s    | 2m    | 2 MiB/s  | 2097152     | 1048576  |
+      | 512 KiB/s | 0       | 500 KiB/s    | 0          | 留空  | 500 KiB/s | 512000     | 0        |
+      | 0         | 512 KiB/s | 0          | 500 KiB/s  | 512   | 512      | 512         | 512000   |
+      | 2 MB/s    | 0       | 0            | 0          | abc   | abc      | 0           | 0        |
 
 
   # v1.9.1 新增（操作者 bug18 追轮 UI 反馈；FR-02-31）：trackers scheme 校验与默认 trackers。

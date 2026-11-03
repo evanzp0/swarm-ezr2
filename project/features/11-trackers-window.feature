@@ -1,6 +1,6 @@
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   11-trackers-window-01 t 键门控与拒绝臂（未选中 / HTTP 任务）
-#   11-trackers-window-02 窗口形态与布局（90×22、qBt 式列结构、URL 换行、数据源真实 tracker 池状态）
+#   11-trackers-window-02 窗口形态与布局（94×22、qBt 式列结构、URL 换行、数据源真实 tracker 池状态）
 #   11-trackers-window-03 状态列三态（工作中 / 失败退避 / 待运行）与 Peers/Seeds/消息 列
 #   11-trackers-window-04 滚动与鼠标（滚动条、键盘/滚轮滚动、拖拽移动、点击外部无操作）
 #   11-trackers-window-05 关闭通道与模态（t/Esc/q/Q/✗、浮层集合、Ctrl+C 直通）
@@ -28,6 +28,10 @@
 #   ⑤底部提示行全部删除（内容区延伸至底边框，可视行数 = 内框高 − 3）；
 #   ⑥URL 列宽 36 → 44 列（状态/Peers/Seeds/消息 列右移：49/62/69/76，消息列
 #     预算 8 列与右 padding 齐平）。
+# v1.12（bug24 轮批准归档，specifier；D67⑤ v1.11 修订）：窗口 90×22 → 94×22（内框
+#   92×20、内容区宽 88；列起点不变 #/URL 44/状态 49/Peers 62/Seeds 69/消息 76）；
+#   末列「消息」预算 8 → 12 列——「下轮 Ns / 重试 NNNNs」3–6 位秒数完整显示，
+#   无 '…' 截断（修复前缺陷：预算 8 列 < 「下轮 120s」9 列，三位秒数被截断）。
 Feature: 11-trackers-window trackers 弹窗（t）
 
   期号 02。任务列表选中任务按 t 弹出与该任务关联的 trackers 窗口：只读查看
@@ -52,10 +56,11 @@ Feature: 11-trackers-window trackers 弹窗（t）
   Scenario: 11-trackers-window-02 窗口形态与布局
     Given 选中 BT 任务（tracker 池 = <n> 条，config/announce-list/手输三来源合并）
     When 按 t 打开 trackers 窗口
-    Then 出现 90×22 圆角模态浮层居中显示、标题 " Trackers "、顶边框行右端 [✗]
+    Then 出现 94×22 圆角模态浮层居中显示、标题 " Trackers "、顶边框行右端 [✗]（v1.12：D67⑤ 修订，90×22 退役）
     And 布局 = 任务名行（白色加粗，超宽截尾）/ 表头行（# / URL / 状态 / Peers / Seeds / 消息）/ tracker 显示行（URL 折行后逐行占位）；底部无提示行（v1.11 全部删除，内容区延伸至底边框）；内容区左右 padding 对称各 2 列
     And 相邻 tracker 明细行之间以 ─ 通栏细线分隔（首条之前与末条之后不画，同一 tracker 的折行续行之间不画）
     And 每行首行 = #（右对齐 2 位）/ tracker URL（44 列宽列内自动换行，续行仅回填 URL 列，前缀列留空，续行与首行同色同 FG）/ 状态 / Peers / Seeds / 消息
+    And 末列「消息」预算 12 列（起点 76，内容区宽 88 − 76，v1.12）：「下轮 <s>s」与「重试 <s>s」3–6 位秒数完整显示，无 '…' 截断（bug24）
     And http(s)/www 形态 URL 渲染层注入 VS15（U+FE0E 零宽）+ 相邻 span ±1 微差色交替——反终端 hover 自动下划线识别（udp 行不注入；显示文本、列宽/滚动/换行计算不变）
     And 显示行数（含折行续行与分隔细线）> 可视行数时右缘滚动条（FR-01-109 通用滚动条口径，滑块恒绿）
 
@@ -67,6 +72,7 @@ Feature: 11-trackers-window trackers 弹窗（t）
     Given 选中 BT 任务运行中且其 tracker 池含 <kind> tracker
     When 按 t 打开 trackers 窗口
     Then 该行显示 状态 "<status>"（数据源 = 引擎 tracker 池真实状态，非伪造）
+    And 消息列倒计时秒数（含 3 位及以上，如 120s / 3600s）在 12 列预算内完整显示无 '…' 截断（v1.12，bug24）
 
     Examples:
       | kind   | status                                        |

@@ -1,64 +1,48 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/coder（本轮已完成）→ 建议下一节点 six-pack/specifier
-> （bug23/bug24 新判据落规格三层）或 six-pack/cleaner
-> 会话：ezr-coder-bug24（2026-11-03，bug24 轮 coder：trackers 弹窗末列「消息」倒计时
-> 3 位秒数被 '…' 截断——窗口 90→94、末列预算 8→12 列（容 6 位秒数）；TDD 抗漂移
-> 断言（数字段位数 + 's' 收尾，规避测试与渲染两次 Instant::now() 秒级漂移）；
-> ezr-demo 代码 + README 变更记录 36 + UI 规范 §6.12 同步）
-> 会话：ezr-coder-bug23（2026-11-03，bug23 轮 coder：①config.toml 限速单位口径改二进制
-> B/s·KiB/s·MiB/s（旧 KB/MB 十进制兼容）；②BT/HTTP 添加/修改对话框限速输入——清空确认
-> 回填 config 任务级默认、纯数字恒按 B/s（512 → 512 B/s）、预填/回显规范化单位显示；
-> ③BT 暂停→恢复触发 BitComet 1.64 seeder 反吸血排查与根治（partial 块 sidecar 持久化 +
-> endgame 跳过已收块）；④ezr-demo 代码 + 文档同步）
-> 上游交接：project/handoff.md（bug23 轮 coder 交接；bug24 任务来源 = 操作者 chat
-> 直启 bug 报告；bug23 任务来源 = 操作者 chat 直启 bug 报告三项 + 附加指令）
+> 流程：six-pack　当前节点：six-pack/specifier（本轮已完成）→ 建议下一节点 six-pack/coder
+> （config 键旧写法废弃实现对齐）或 six-pack/cleaner
+> 会话：ezr-specifier-bug23-24（2026-11-03，specifier 归档轮：bug23 四项判据 + bug24 几何判据
+> 落规格三层；Inversion 阶段 1 = chat 选择题面板恢复可用六题作答（五项全做 / 三项反转批准 /
+> 边界规格注记 / 无下一 feature）+ 操作者 chat 修订指令「config 键旧写法 KB/MB/GB 十进制
+> 不再支持，直接废弃」（取代面板兼容答案，废弃值按非法回退默认 0））
+> 上游交接：project/handoff.md（bug24 轮 coder 交接）
 
 ## 一、产物历史完成情况
 
 ### 项目与需求
 - **EZR Downloader**：Rust + tokio + ratatui 终端下载器（单二进制、跨平台）。需求权威
-  `project/mission.md`（分期模式 v1.39）+ `project/mission/phase-01…04.md`。
+  `project/mission.md`（分期模式 v1.40）+ `project/mission/phase-01…04.md`。
 - phase-01（HTTP/HTTPS 内核与 TUI）收官；phase-02（BT 内核/做种/管理）已实现并经
-  互操作夹具多轮收口。历轮 bug11–22 全部落地。
-- **本轮（coder，bug23）**：限速单位三层口径归一（config 键解析 + 对话框字段 + 显示）、
-  对话框限速输入确认语义重定义（清空回填 config 默认 / 纯数字 B/s / 规范化显示）、
-  BT 暂停→恢复重复下载特征根治（反吸血）、ezr-demo 同步。
+  互操作夹具多轮收口。历轮 bug11–24 全部落地。
+- **本轮（specifier，bug23/24 归档）**：bug23 四项判据（限速单位三层口径 / 修改框清空回填 /
+  预填回显 fmt 规范化 / BT sidecar partial 持久化）+ bug24 几何判据（trackers 94×22）
+  落需求/规格/QA 三层；config 键旧写法废弃为规格先行修订（实现对齐属 coder 待办）。
 
 ### 产物总账
 | 节点/切片 | 产物 | 完成情况 | 验证状态 |
 |---|---|---|---|
-| **coder（本轮，bug24）** | `project/ezr/`：ui/popups.rs TRACKERS_W 90→94 + 末列预算 8→12 + 倒计时抗漂移测试 1 例；`ezr-demo/`：popups.rs 同步 + README 变更记录 36 + UI 规范 4 处 | **已交付** | **bin 904P/0F + 集成 12 目标 6044P/0F + demo 35P/0F + clippy 0 警告 + fmt 干净（demo 存量漂移 5 文件沿袭）** |
+| **specifier（本轮，bug23/24 归档）** | 需求层：mission.md v1.40 + phase-02.md v1.11（头注 + FR-02-22/28/29/31 注记 + D67 修订 + D68 新增）；规格层：features 八文件（01-config-template v1.15、01-throttle-proxy v1.11、01-add-task v1.41、03-modify-task v1.38、07-add-bt v1.40、08-modify-bt v1.7、09-bt-engine v1.39 场景 17 新增、11-trackers-window v1.12）；QA 层：qa 八套件同步（QA-TP/QA-01/QA-MT/QA-AB/QA-MB/QA-CT/QA-TW 修订 + QA-BE-17 新增） | **已交付** | **gherkin-parser 8/8 + gherkin-ir-dry-checker 8/8（findings = 建议级 near-duplicate/possible-synonym，与存量同型无结构错误）+ 判据①–⑤覆盖交叉核对全过** |
+| coder（bug24） | `project/ezr/`：ui/popups.rs TRACKERS_W 90→94 + 末列预算 12 + 倒计时抗漂移测试；`ezr-demo/` 同步 | 已交付 | bin 904P/0F + 集成 6044P/0F + demo 35P/0F + clippy 0 警告 + fmt 干净 |
+| coder（bug23） | config.rs 单位表/模板四键/CLI 帮助；dialogs.rs fmt_speed_limit + 预填×2 + 清空回填；bt_dialog.rs；cmd.rs；bt.rs sidecar partial；engine.rs 反吸血三件；新增测试 12 例；ezr-demo 同步 | 已交付 | bin 903P/0F + 集成 6041P/0F + demo 35P/0F + clippy 0 警告 + fmt 干净 |
 | specifier（phase-01/02 及历轮 bug11–22） | features/ 20 份 + qa/ 对应套件 | 已收官/已交付 | 见历轮登记 |
-| coder（phase-02 及历次收口轮，含 bug18/21/22） | `project/ezr/` 全量 | 已交付 | 见历轮登记 |
-| **coder（本轮，bug23）** | `project/ezr/`：config.rs 单位表/模板四键/CLI 帮助；dialogs.rs fmt_speed_limit + 预填×2 + 清空回填；bt_dialog.rs 预填×2 + 清空回填；cmd.rs 预填；bt.rs sidecar partial 字段 + b64 编解码；engine.rs save_full/restore_sidecar_partial/组装写盘因子化/Pause 全量保存/endgame 跳过已收块；新增测试 12 例；`ezr-demo/`：dialogs.rs 清空回填 + limit_backfill_tests 4 例 + README 记录 35 + 规范 §6.1/§6.2 | **已交付** | **bin 903P/0F（基线 891 + 净增 12）+ 集成 12 目标 6041P/0F + demo 35P/0F + clippy 0 警告 + fmt 干净** |
 
-### 遗留受限项（当前有效，沿袭 + 本轮登记）
-- 沿袭（bug14–22 轮登记，全部不变）：cargo-mutants 缺位；死 tracker 约 4 分钟静默窗；
-  TUI 恐慌自愈边界（bug6）；BT partial 进度不持久化——**本轮销项**（见下）；QA-SQ-13
-  竞态沿袭待办；QA-RS-06 沿袭；supervisor block_worker fatal 竞态观察项；`App.windows`
-  失去读者（cleaner 候选裁决）；leech 判据无 e2e 自动化（阈值常量固定）；bad_piece
-  归属口径 = 交付完成块 peer 计 1 次（D67 允许）；Inversion 访谈受限项（chat 选择题
-  面板不可用）。
-- **本轮销项**：①操作者 bug24 报告销项（trackers 末列 3 位倒计时 '…' 截断，窗口与
-  末列同步放宽后完整显示）；②操作者 bug23 复核反馈销项（config 模板注释去换算/兼容
-  说明括注，只列取值形态）；③操作者 bug23 三项报告全部修复销项；④「BT partial 进度
-  不持久化」沿袭受限项随 bug23 反吸血修复销项（sidecar 现携带 partial 块，恢复不重下；
-  启动重校验窗内二次暂停仍丢上一轮 partial，属登记的可接受边界，见 notes）。
-- **本轮登记（flake 观察项）**：bin 1 例、v147 `engine_conns_quota_exact_and_unique_ids`
-  套件负载下 2 连败（真 TCP 桩 + 25s 截止的负载敏感 e2e；单跑 0.31s 即绿），均按
-  notes/testing.md bug17 轮口径复跑全绿判环境性时序非回归——沙箱高负载时段该用例
-  稳定性下降，沿袭观察（不为本轮改动所致：纯 UI 常量 + 测试，无引擎接触面）。
-- **本轮新登记（specifier 轮/后续）**：①「限速单位三层口径」通用判据（config 键
-  二进制 KiB/MiB/GiB 新规范 + 旧 KB/MB 十进制兼容解析、对话框/CLI 同源 parse_speed、
-  裸数字恒 B/s）待 specifier 落 features/QA 三层（沿 bug21/22 先例：coder 先修、
-  specifier 归档）；②「修改窗口清空限速确认 = 回填 config 任务级默认」判据待归档
-  （01-add-task/03-modify-task/07-add-bt/08-modify-bt 四 feature 的确认场景增补）；
-  ③「预填/回显规范化单位显示 + fmt→parse 恒等」判据待归档；④BT sidecar partial
-  持久化行为（恢复不重下、坏块自愈）待归档（09-bt-engine/01-resume-sidecar 相关场景）。
-- 工具链：rustup nightly 1.101.0（rsproxy 双变量直链装齐）+ cargo registry rsproxy；
-  bb/APS 沿袭（.tools/bin、.tools/Acceptance-Pipeline-Specification，本轮未用）；
-  环境不持久时按 notes/environment.md 重建。
+### 遗留受限项（当前有效，沿袭 + 本轮修订）
+- 沿袭（bug14–23 轮登记，除注明外全部不变）：cargo-mutants 缺位；死 tracker 约 4 分钟静默窗；
+  TUI 恐慌自愈边界（bug6）；QA-SQ-13 竞态沿袭待办；QA-RS-06 沿袭；supervisor block_worker
+  fatal 竞态观察项；`App.windows` 失去读者（cleaner 候选裁决）；leech 判据无 e2e 自动化
+  （阈值常量固定）；bad_piece 归属口径 = 交付完成块 peer 计 1 次（D67 允许）；启动重校验
+  窗内二次暂停丢上一轮 partial——**随本轮 D68⑥ 升格为操作者批准的规格允许边界（非受限项）**。
+- **本轮销项**：①「Inversion 访谈受限项（chat 选择题面板不可用）」销项——面板恢复可用，
+  六题作答成功；②上轮 handoff 待办（bug23 四项判据 + bug24 判据落规格三层）销项。
+- **本轮新登记（coder 轮待办，规格先行偏差）**：config 键旧写法 KB/MB/GB 十进制废弃——
+  实现当前仍兼容旧写法（bug23 轮实现 SPEED_UNITS 7 单元含 gb/mb/kb + 兼容测试），与本轮
+  规格（FR-02-28/29 v1.11：旧写法不再识别 → 非法回退 0；CLI --max-speed 旧写法参数报错退出）
+  存在偏差；coder 轮 = SPEED_UNITS 移除三十进制单元 + 兼容测试翻转 + CLI 报错文案核对 +
+  ezr-demo config 键解析同口径核查。
+- 工具链：bb v1.12.209（`.tools/bin/bb`，gh-proxy 下载，资产实名 static.tar.gz）+ APS 仓库
+  （`.tools/Acceptance-Pipeline-Specification`，gh-proxy clone）；rustup nightly 1.101.0 +
+  cargo registry rsproxy；`.tools/` 不跨会话保留，缺时按 notes/environment.md 重建。
 
 ### 实现定义值登记（累计口径，本轮修订处加粗）
 | 值 | 取值 | 位置 |
@@ -69,14 +53,14 @@
 | 限速输入上限 | 32 列（FR-01-06 形态对齐） | routing.rs CAP_LIMIT |
 | 限速非法 toast | `⚠ 限速值非法（整数 B/s 或单位字符串，如 512 KiB/s）`（HTTP/BT、下载/上传四处统一） | dialogs.rs / bt_dialog.rs |
 | 限速字段占位 | 无占位（空态纯空白） | ui/dialog.rs / ui/bt_dialog.rs |
-| **限速单位口径（config 文件键）** | **二进制：1 KiB = 1024 B/s、1 MiB = 1024²、1 GiB = 1024³（本轮新规范）；旧写法 KB/MB/GB 按十进制（10^n）兼容解析不回改；裸整数 = B/s** | config.rs SPEED_UNITS / parse_speed |
+| **限速单位口径（config 文件键，FR-02-28/29 v1.11 规格）** | **新写法 KiB/MiB/GiB 二进制（1024^n，大小写不敏感，可带 /s 后缀）+ 裸整数与 B/s 后缀 = B/s；旧写法 KB/MB/GB 十进制废弃不再识别（含旧写法的值 = 非法 → 回退默认 0，FR-01-71；实现待 coder 轮对齐）** | config.rs SPEED_UNITS（待删 3 单元）/ parse_speed |
 | 限速单位口径（对话框） | 二进制：1 KiB = 1024 B/s、1 MiB = 1024²、1 GiB = 1024³ | routing.rs speed_unit_mult / dialogs.rs parse_speed_limit |
-| **限速输入规范化** | 输入/粘贴即规范化显示（KiB/s、MiB/s、GiB/s、B/s；前导零剥离；canonical 完成态吸收单位后缀续入；退格不回写）；**裸数字不缀单位（输入态保持原样，确认按 B/s 解析）** | routing.rs canonical_speed_form / insert_limit |
-| **限速预填/回显显示** | **fmt_speed_limit 整除链（GiB→MiB→KiB→B，非整倍数显裸 B/s，0 显「0」）；fmt→parse 恒等；5 预填点 = Add/Modify HTTP + AddBt/ModifyBt + cmd open_add_dialog_with** | dialogs.rs fmt_speed_limit |
-| **修改窗口清空限速确认** | **回填 config.toml 任务级默认（task_max_download_speed / task_max_upload_speed），HTTP 修改无上传字段；添加窗口空输入回退同值（down_prefill）** | dialogs.rs dlg_confirm_modify / bt_dialog.rs dlg_confirm_modify_bt |
-| **BT sidecar partial 持久化** | **BtSidecar 增可选 partial_pieces（serde default + skip_if_empty，版本恒 1 不 bump）；块数据 b64（decode 失败逐块丢弃）；Pause/StopSeed 全量保存；启动恢复验证链 = 覆盖内 ∧ 非 done ∧ 16 KiB 对齐 ∧ 单调不重叠 ∧ 界内；完整恢复 piece 组装校验通过直接落盘转 done；校验失败/写盘失败丢弃重下（自愈）** | model/bt.rs BtPartialPiece/BtPartialBlock + bt/engine.rs restore_sidecar_partial / save_bt_sidecar_full |
-| **endgame 已收块豁免** | **endgame 臂跳过 partial 已收块（endgame = 找回丢失请求，已收块重发 = 重复下载特征）** | engine.rs request_blocks_of_piece endgame 分支 |
-| **trackers 弹窗几何** | **94×22（bug24：90→94）**；内框 92×20 + 右缘滚动条列；内容区左右 padding 对称各 2 列；末列「消息」起点 76、预算 = content_w 88 − 76 = **12 列**，「下轮 / 重试 NNNNs」3–6 位秒数完整显示 | ui/popups.rs TRACKERS_W / TRACKERS_COL_MSG |
+| 限速输入规范化 | 输入/粘贴即规范化显示（KiB/s、MiB/s、GiB/s、B/s；前导零剥离；canonical 完成态吸收单位后缀续入；退格不回写）；裸数字不缀单位（输入态保持原样，确认按 B/s 解析） | routing.rs canonical_speed_form / insert_limit |
+| **限速预填/回显显示（FR-02-29 v1.11 规格）** | **fmt_speed_limit 整除链（GiB→MiB→KiB→B，非 1024 整倍数显裸 `N B/s`，0 显「0」）；fmt→parse 恒等；5 预填点 = Add/Modify HTTP + AddBt/ModifyBt + cmd 分流添加对话框** | dialogs.rs fmt_speed_limit |
+| **修改窗口清空限速确认（D67② v1.11 修订）** | **回填 config.toml 任务级默认（task_max_download_speed / task_max_upload_speed），HTTP 修改仅下载字段、BT 框双字段各自回填（原「留空 = 保持当前值」退役）；添加窗口空输入回退同值（down_prefill）** | dialogs.rs dlg_confirm_modify / bt_dialog.rs dlg_confirm_modify_bt |
+| **BT sidecar partial 持久化（D68）** | **BtSidecar 可选 partial_pieces（serde default + skip_if_empty，版本恒 1 不 bump）；块数据 b64（decode 失败逐块丢弃）；Pause/StopSeed 全量保存；启动恢复验证链 = 覆盖内 ∧ 非 done ∧ 16 KiB 对齐 ∧ 单调不重叠 ∧ 界内；完整恢复 piece 组装校验通过直接落盘转 done；校验失败/写盘失败丢弃重下（自愈）；允许边界（D68⑥）= 启动重校验窗内二次暂停丢上一轮 partial** | model/bt.rs + bt/engine.rs |
+| **endgame 已收块豁免（D68⑤）** | endgame 臂跳过 partial 已收块 | engine.rs request_blocks_of_piece endgame 分支 |
+| **trackers 弹窗几何（D67⑤ v1.11 修订）** | **94×22（bug24：90→94）**；内框 92×20 + 右缘滚动条列；内容区左右 padding 对称各 2 列；末列「消息」起点 76、预算 = content_w 88 − 76 = **12 列**，「下轮 / 重试 NNNNs」3–6 位秒数完整显示 | ui/popups.rs TRACKERS_W / TRACKERS_COL_MSG |
 | 并发满容量语义 | 光标在字段末尾且已满 2 位时键入/粘贴数字 = 清空重输；中位不动不插 | routing.rs insert_conns_digit |
 | 多行合并行光标 | 接缝 = 合并前上一行长度处 | multiline.rs backspace |
 | 对话框单行字段聚焦光标位 | 聚焦即光标迁最后字符后方；终端光标列 = 行首 + w(label).max(7) + 2 + 值宽，点击 value_x 同式（bug22） | ui/bt_dialog.rs / ui/dialog.rs / ezr-demo ui/dialogs.rs |
@@ -90,104 +74,56 @@
 ## 二、当前产出情况
 
 ### 本会话产物清单
-- **bug24 轮（trackers 倒计时列截断）**：根因 = TRACKERS_W 90 → content_w 84 →
-  末列预算 = 84 − 76 = 8 列 < 「下轮 120s」9 列 → truncate 加 '…'；修复 =
-  TRACKERS_W 90→94（content_w 88、末列预算 12 列，容 6 位秒数）；新测试
-  `trackers_popup_countdown_fits_multi_digit_seconds`（120s/3600s 双用例，抗秒级
-  漂移断言：'下轮 '/'重试 ' 后数字段 ≥3 位 + 's' 收尾，不钉具体数值——首版钉
-  `下轮 120s` 被测试进程启动耗时 ≥1s 的秒级漂移打破，教训已记 notes）；既有几何
-  测试 90×22 → 94×22 对齐。ezr-demo：TRACKERS_W 同步 94；README 变更记录 36；
-  UI 规范 4 处（头部追轮块 / §6.12 标题 / 尺寸 bullet / 几何汇总行）。
-- **修复①（config 单位口径）**：`model/config.rs` SPEED_UNITS 扩为 7 单元
-  （gib/mib/kib 二进制 1024^n + gb/mb/kb 十进制 10^n 兼容 + b；**后缀最长优先排列
-  修掉旧表「512 MiB/s 被 b 后缀截断解析为 0」的真缺陷**）；配置模板四键注释
-  改「"2 MiB/s" / "500 KiB/s" / 整数 B/s」——操作者复核反馈：模板注释只列取值
-  形态，不写换算/兼容性说明文字（已去掉「二进制口径 1 MiB = …；旧写法 … 兼容解析」
-  括注）；CLI --max-speed 帮助文案同步 MiB 示例；既有
-  十进制断言全部保留为兼容锚。
-- **修复②（清空回填）**：`dlg_confirm_modify`（HTTP）与 `dlg_confirm_modify_bt`
-  空输入臂由「保留任务当前值」改为「回填 self.cfg.task_max_download_speed /
-  task_max_upload_speed」；添加窗口空输入本就回退 down_prefill（= config 默认）
-  不变——两窗口「空输入」语义统一为跟随配置默认。
-- **修复③（纯数字 B/s + 规范化显示）**：新 `fmt_speed_limit`（GiB/MiB/KiB/B
-  整除链）应用于全部 5 个限速预填点（Add/Modify HTTP、AddBt/ModifyBt、cmd
-  open_add_dialog_with），修改窗口对 512 B/s 任务显示 `512 B/s`（操作者验收判据，
-  有专项测试）；裸数字解析恒 B/s（parse_speed/parse_speed_limit 均然，测试钉死）；
-  fmt→parse 恒等（round-trip 测试覆盖 0..u64::MAX 样本）。
-- **修复④（BT 反吸血）**：排查结论 = Pause 终结引擎丢 partial（已收未验块）→
-  Resume 向同一 peer（BitComet）重请求完全相同 (index, begin, length) 区间，
-  构成对端可观测的「同区间重复下载」——反吸血规则触发特征。根治三件：
-  ①`model/bt.rs` BtSidecar 增可选 partial_pieces（版本恒 1、serde default，
-  前后向兼容）+ BtPartialPiece/BtPartialBlock（b64 String，decode 失败逐块丢弃
-  不拖垮整档）；②`engine.rs` save_bt_sidecar_full（Pause/StopSeed 全量保存）+
-  restore_sidecar_partial（启动恢复：对齐/界内/单调不重叠/非 done/覆盖内验证链；
-  完整恢复 piece 组装校验通过直接落盘转 done；失败丢弃自愈）——「BT partial 进度
-  不持久化」沿袭受限项一并销项；③endgame 分支跳过 partial 已收块（endgame =
-  找回丢失请求；不加豁免时恢复后的 endgame 窗口照样重发恢复块，实测复现后定位）。
-  另因子化 assemble_contiguous / write_piece_to_files 供到达路径与恢复路径复用
-  （行为不变）。
-- **新增测试（12 例，防回归）**：config speed_parsing_binary_units + 属性测试
-  KiB/MiB/GiB 扩展；dialogs modify_confirm_empty_limit_backfills_config_default、
-  fmt_speed_limit_canonical_units、fmt_speed_limit_round_trips_through_parse、
-  modify_window_shows_bare_number_as_b_per_s（512 → 显示 `512 B/s` 验收）；bt_dialog
-  confirm_modify_bt_empty_limits_backfill_config_defaults；model/bt
-  partial_blocks_roundtrip_base64_and_ordering、legacy_sidecar_without_partial…；
-  engine save_bt_sidecar_full_persists_done_and_partial_blocks、
-  restore_sidecar_partial_writes_verified_and_filters_invalid、
-  restore_sidecar_partial_keeps_incomplete_for_resume、
-  pause_persists_partial_blocks_and_resume_skips_restored_requests
-  （假 peer 请求日志：phase1 只服务 piece0 块0 → Pause → sidecar 含该块字节保真；
-  phase2 全服务 peer 恢复 → 完成且 **(0,0) 零重请求** + 缺失块正常请求）。
-- **ezr-demo 同步（操作者指令：修改同步给 ezr-demo 文档并改写 demo 代码）**：
-  ①`src/app/dialogs.rs` dlg_confirm_modify / dlg_confirm_modify_bt 空输入臂 →
-  TASK_LIMIT_DEFAULTS（demo 的 config 等价物）——demo 修改窗口与产品同款缺陷，
-  本轮修复；②limit_backfill_tests 4 例守卫（裸数字 B/s / fmt↔parse 恒等 / HTTP
-  修改清空回填 + 预填规范化断言 / BT 修改双字段清空回填）；③README 变更记录 35；
-  ④规范文档 §6.1 mock 注释 + 新增「限速确认语义（bug23）」bullet + §6.2 限速确认
-  语义 bullet。demo 的 parse/format 素来与目标口径一致（纯数字 B/s、规范化显示），
-  只补守卫防漂移。BT 引擎反吸血为产品侧修复，demo 为模拟数据无 BT 引擎，文档注明
-  不涉及。
+- **需求层**：`project/mission.md` v1.40 大纲注记（bug23/24 修订批准一行，指向 phase-02 v1.11）；
+  `project/mission/phase-02.md` v1.11 头注（面板恢复可用 + chat 修订指令记录）+
+  FR-02-28 v1.11 注记（config 键二进制新规范 + 旧写法废弃）+ FR-02-29 v1.11 注记（清空回填 +
+  fmt 预填/回显 + 裸数字 B/s）+ FR-02-22 v1.11 注记（partial 持久化）+ FR-02-31 v1.11 注记
+  （94×22）+ D67②⑤ v1.11 修订 + **D68 新增**（partial 持久化定义六项 + 允许边界 D68⑥）。
+- **规格层（八 feature，稳定序号零重排）**：
+  - `01-config-template.feature` v1.15：四限速键取值范围注释改 `≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s`（只列取值形态、无换算/兼容说明——操作者复核反馈钦定）；Examples 四行 range 列同步；钦定原文四块同步（191 行行集不变）。
+  - `01-throttle-proxy.feature` v1.11：头注 v1.11；场景 01/02/03/06/08/10 示例值二进制化（1 MB/s → 1 MiB/s 等）；场景 04 增 `2 MB/s` 废弃回退行；场景 05 改版「新写法二进制生效 + 旧写法十进制废弃」（8 行 Examples：2 MiB/s / 500 KiB/s / 2 GiB / 2000000 裸 / 512 B/s 生效，2 MB/s / 500KB/s 废弃回退 0）；场景 09 预填列改 fmt 形态 + 裸数字 512 行 + config 旧写法行（6 行 Examples）。
+  - `01-add-task.feature` v1.41：头注 v1.41；场景 20 预填改 fmt 形态 + 512 裸数字行 + `2 MB/s` 废弃回退行（6 行 Examples）。
+  - `03-modify-task.feature` v1.38：头注 v1.38；场景 10 增清空确认回填臂（cfg = 2 MiB/s / 2000000 两形态）+ fmt 回显判据（512 → `512 B/s` 操作者验收判据）+ cfg 列入表。
+  - `07-add-bt.feature` v1.40：头注 v1.40；场景 10 双字段 fmt 预填 + 裸数字 512 行 + 旧写法行（4 行 Examples，up_raw 列新增）。
+  - `08-modify-bt.feature` v1.7：头注 v1.7；场景 02 预填判据改 fmt 口径；场景 08 增双字段清空各自回填（2 MiB/s / 1 MiB/s）+ fmt 回显（512 / 0）。
+  - `09-bt-engine.feature` v1.39：头注 v1.39；**新增场景 17「partial 进度持久化与恢复不重下」**（恢复零重请求 / 字节保真 / 完整 piece 直接落盘 / 篡改自愈 / D68⑥ 允许边界）。
+  - `11-trackers-window.feature` v1.12：头注 v1.12；场景清单与场景 02 改 94×22 + 末列预算 12 列（起点 76、内容区宽 88）；场景 03 增 3–6 位秒数完整显示判据。
+- **QA 层（八套件）**：qa/01-throttle-proxy（TP-01/02/03/06/08/10 二进制化、TP-04/05 废弃回退行、TP-09 fmt 预填 + 512 行）、qa/01-add-task（01-20 修订）、qa/03-modify-task（MT-10 清空回填 + fmt 回显）、qa/07-add-bt（AB-01 fmt 预填 + AB-10 修订）、qa/08-modify-bt（MB-02 fmt + MB-08 清空回填；**顺带修复 MB-08/09 行脱表排版，编号不动**）、qa/09-bt-engine（**BE-17 新增**三臂）、qa/11-trackers-window（TW-02/03 94×22 + 倒计时完整显示）、qa/01-config-template（CT-01 键集陈旧口径 36→40 修正（v1.14 期漏改）+ v1.15 同步注）。
 
 ### 验证证据
 | 验证项 | 结果 | 命令（可复现） |
 |---|---|---|
-| bin 全量单测 | **904P / 0F**（bug23 终态 903 + 净增 1；首轮 1 例时序 flake 复跑即绿） | `cargo test --bin ezr` |
-| 集成 12 目标 | **6044P / 0F**（含 ui 模块的 engine_backfill/ui_backfill/v115 三套件各 +1 收编新测试；v147 首轮 1 例负载时序失败复跑即绿 = 既有登记口径） | `cargo test --test <目标>`（hardening 140 / engine_backfill 807 / g_appcore 707 / g_engine 702 / g_main 2 / g_proxy 16 / g_slots 200 / g_supervisor 676 / g_throttle_err 437 / g_v147 690 / ui_backfill 837 / v115 830） |
-| ezr-demo 全量 | **35P / 0F** | `cargo test`（ezr-demo/） |
-| clippy | 0 警告（--bin 与 --tests） | `cargo clippy --bin ezr --tests` |
-| fmt | ezr 干净；demo 存量漂移 5 文件沿袭未触碰 | `cargo fmt --check` |
+| gherkin-parser | 8/8 通过（八改动 feature） | `(cd .tools/Acceptance-Pipeline-Specification && bb gherkin-parser <feature> .work/tmp/<stem>.json)` |
+| gherkin-ir-dry-checker | 8/8 通过；findings 全为建议级 near-duplicate/possible-synonym（与存量套件同型，无结构错误；剪裁属后续轮裁量） | `(cd .tools/Acceptance-Pipeline-Specification && bb gherkin-ir-dry-checker <ir> .work/tmp/<stem>.dry.json)` |
+| 判据①–⑤覆盖交叉核对 | 全覆盖：①config 键口径 = FR-02-28 v1.11 + 模板 v1.15 + throttle-03/04/05；②清空回填 = FR-02-29 v1.11/D67② + modify-10 + modify-bt-08；③fmt 预填/回显 = throttle-09 + add-20 + add-bt-10 + modify-bt-02/08 + modify-10（512 → `512 B/s` 四处钉死）；④partial 持久化 = FR-02-22 v1.11/D68 + 09-bt-engine-17 + QA-BE-17；⑤94×22 = D67⑤ + trackers-02/03 + QA-TW-02/03 | rg 核对（`_parsed` 残留 0、`废弃`×8、`回填`×10、`94×22`×3） |
 
 ### 对账口径
-- 基线 = bug23 轮登记 bin 903P/0F + 集成 6041P/0F + demo 35P/0F = 6979P/0F；本轮
-  终态 bin 904 + 集成 6044 + demo 35 = **6983P/0F**（净增 +4 = 新测试 1 例在 bin
-  与收编 ui 模块的 3 个集成套件各计 1 次；对账以「全绿 + 逐套件基线吻合」为准）。
-- 本轮无规格/QA 套件改动（coder 直启轮）；bug23 交互语义变更（清空回填/单位口径）
-  与 bug24 几何变更均待 specifier 轮落 spec 三层后，QA runner 同步评估（沿袭待办）。
-- 操作者验收判据对照：①bug24：trackers 窗口末列 3 位倒计时完整显示（无 '…'）✓
-  （专项测试，抗漂移断言）；②bug23：config 模板出现 KiB/s·MiB/s 示例 ✓；③修改窗口
-  清空限速确认后值 = config.toml 对应键 ✓（测试）；④输入 512 确认后修改窗口显示
-  `512 B/s` ✓（专项测试 modify_window_shows_bare_number_as_b_per_s）；⑤暂停→恢复
-  不再向同一 peer 重发已收块 ✓（wire 级请求日志测试）。
+- 本轮纯规格层修订，无代码/测试改动：实现基线维持 bug24 轮登记 6983P/0F 不变。
+- 规格与实现已知偏差唯一一处 = config 键旧写法废弃（规格先行、coder 轮对齐，见遗留受限项）；
+  其余判据实现均已落地并有专项测试。
+- 修订纪律执行：无删除类修订（场景 07-add-bt-07 既有留空先例未触碰）；稳定序号零重排；
+  QA 对账数字均标注以实测为准。
 
 ### 待办与待批
-- **待批（操作者）**：无新增待批项。
-- **待办（specifier 轮）**：bug23 新登记①–④判据 + bug24「trackers 弹窗几何/末列
-  预算」判据落 spec 三层（features 场景增补 + QA 用例）。
-- **待办（QA 轮）**：QA runner 执行层对本轮交互语义（限速确认/单位口径）改动的
-  同步评估（沿袭开放）。
-- **待办（cleaner 轮，沿袭）**：`App.windows` 失去读者裁决；handle_peer_msg 参数
-  收拢；bt/engine.rs 拆分评估；`up_prefill` 在 HTTP 路径已无读者（字段面 BT 专用化
-  归并评估）；`canonical_speed_form` 与 `parse_speed_limit` 的解析前缀重复归并评估
-  （本轮新增 fmt_speed_limit 与 parse_speed_limit 的整除链亦同族，可一并评估）。
+- **待批（操作者）**：规格就绪待批——本轮八 feature + 需求层修订（清单见上）；如对任一裁决
+  有异议可按轮回退（面板答案 + chat 修订指令均已在 phase-02 v1.11 头注留痕）。
+- **待办（coder 轮）**：config.rs SPEED_UNITS 移除 gb/mb/kb 三单元（7 → 4）；兼容测试翻转
+  （`2 MB/s`/`500 KB/s` → 0 回退断言替换兼容断言）；CLI --max-speed 旧写法报错路径核对
+  （opt_speed 已按 0 判非法，验证即可）；ezr-demo config 键解析同口径核查。
+- **待办（QA 轮，沿袭扩大）**：QA runner 执行层同步评估本轮判据改动面（TP-04/05 废弃行、
+  TP-09/01-20/AB-10 fmt 预填、MT-10/MB-08 清空回填与回显、BE-17 新用例、TW-02/03 几何、
+  CT-01 40 键锚点）。
+- **待办（cleaner 轮，沿袭）**：`App.windows` 失去读者裁决；handle_peer_msg 参数收拢；
+  bt/engine.rs 拆分评估；`up_prefill` 归并评估；`canonical_speed_form` 与 `parse_speed_limit`
+  解析前缀重复归并评估（含 fmt_speed_limit 整除链同族）。
 - 无阻塞。
 
 ### 移交建议
-- 下一步 `bin/swarm begin six-pack/specifier`（bug23 四项判据归档）或
+- 下一步 `bin/swarm begin six-pack/coder`（config 键旧写法废弃实现对齐）或
   `bin/swarm begin six-pack/cleaner`（沿袭清理）：以本文件为上游交接。
 - 后续链：specifier → coder / cleaner → architect → hardender → QA（宪法第一章：
   不自动流转）。
 - 操作者授权的收尾口径：`bin/swarm complete` 后立即将产物 tar.gz 复制到
-  `/home/z/my-project/`（沿 bug18/20/21/22 轮授权口径执行）。
-- 工具链交接：rustup nightly 1.101.0（PATH = ~/.cargo/bin）+ cargo registry rsproxy；
-  环境不跨会话持久时按 notes/environment.md 重建（本轮实测 rsproxy 直链 + 双变量
-  一次装齐）。
+  `/home/z/my-project/`（沿 bug18/20/21/22/23/24 轮授权口径执行）。
+- 工具链交接：bb v1.12.209 + APS 已装 `.tools/`（不跨会话保留，重建口径见
+  notes/environment.md）；rustup nightly 1.101.0（PATH = ~/.cargo/bin）+ rsproxy。
