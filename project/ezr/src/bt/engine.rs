@@ -3358,6 +3358,8 @@ mod tests {
             }
             if shared.is_blacklisted(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)) {
                 banned = true;
+            }
+            if banned && saw_toast {
                 break;
             }
         }
@@ -3472,6 +3474,8 @@ mod tests {
             }
             if shared.is_blacklisted(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)) {
                 banned = true;
+            }
+            if banned && saw_toast {
                 break;
             }
         }
@@ -3537,6 +3541,8 @@ mod tests {
             }
             if shared.is_blacklisted(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)) {
                 banned = true;
+            }
+            if banned && saw_toast {
                 break;
             }
         }

@@ -247,10 +247,8 @@ impl App {
 
                     if Self::pointer_in(&self.trackers_area, m.column, m.row) {
                         if let Some(r) = self.trackers_area {
-                            self.trackers_drag = Some((
-                                m.column.saturating_sub(r.x),
-                                m.row.saturating_sub(r.y),
-                            ));
+                            self.trackers_drag =
+                                Some((m.column.saturating_sub(r.x), m.row.saturating_sub(r.y)));
                         }
                     }
                 }
@@ -865,13 +863,13 @@ impl App {
                 }
             }
             let ck_i = match kind {
-                Some(DialogKind::Add) => 5,
-                Some(DialogKind::Modify) => 3,
+                Some(DialogKind::Add) => 4,
+                Some(DialogKind::Modify) => 2,
                 _ => usize::MAX,
             };
             let proxy_i = match kind {
-                Some(DialogKind::Add) => 7,
-                Some(DialogKind::Modify) => 5,
+                Some(DialogKind::Add) => 6,
+                Some(DialogKind::Modify) => 4,
                 Some(DialogKind::AddBt) => 6,
                 Some(DialogKind::ModifyBt) => 4,
                 _ => usize::MAX,

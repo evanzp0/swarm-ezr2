@@ -135,7 +135,7 @@ impl MultiLineBuf {
         true
     }
 
-    /// Backspace：光标前删除；行首则与上一行合并
+    /// Backspace：光标前删除；行首则与上一行合并（光标落接缝 = 被合并行首字符处）
     pub fn backspace(&mut self) {
         self.follow = true;
         if self.row == 0 {
@@ -146,8 +146,10 @@ impl MultiLineBuf {
         if at_start {
             let cur = self.lines.remove(self.row);
             self.row -= 1;
+            let junction = self.lines[self.row].len_chars();
             self.lines[self.row].cursor_end();
             self.lines[self.row].insert_at_cursor(&cur.value);
+            self.lines[self.row].set_cursor(junction);
         } else {
             self.line_mut().backspace();
         }

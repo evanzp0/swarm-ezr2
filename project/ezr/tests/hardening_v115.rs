@@ -127,10 +127,13 @@ async fn add_dialog_field_rows_exact_geometry() {
     assert_eq!(cell(&buf, 26, 16), "保", "保存到行 y=16、label 自 x=26");
     assert_eq!(cell(&buf, 26, 17), "并", "并发行 y=17");
     assert_eq!(cell(&buf, 26, 18), "下", "下载限速行 y=18（FR-02-29）");
-    assert_eq!(cell(&buf, 26, 19), "上", "上传限速行 y=19（FR-02-29）");
-    assert_eq!(cell(&buf, 26, 20), "校", "校验行 y=20");
+    assert_eq!(
+        cell(&buf, 26, 19),
+        "校",
+        "校验行 y=19（bug21：上传限速行退役）"
+    );
     assert!(
-        row_text(&buf, 20, 120).contains("NONE"),
+        row_text(&buf, 19, 120).contains("NONE"),
         "校验行显示默认 NONE（v1.32/FR-01-01：NONE 首行默认）"
     );
     assert_eq!(cell(&buf, 26, 15), "U", "URL label 首字符恰在 x=26");
@@ -154,21 +157,21 @@ async fn add_dialog_button_and_hint_rows_exact_geometry() {
     let (mut a, reg) = app_with_add_dialog();
     let buf = render(&mut a, 120, 40);
     assert!(
-        !a.dlg_btn_rects.is_empty() && a.dlg_btn_rects.iter().all(|(r, _)| r.y == 24),
-        "三个按钮的命中区 y 必须恰为 24（got {:?}）",
+        !a.dlg_btn_rects.is_empty() && a.dlg_btn_rects.iter().all(|(r, _)| r.y == 23),
+        "三个按钮的命中区 y 必须恰为 23（got {:?}）",
         a.dlg_btn_rects.iter().map(|(r, _)| r.y).collect::<Vec<_>>()
     );
     assert_eq!(a.dlg_btn_rects.len(), 3, "三钮（FR-01-103）");
-    assert!(row_text(&buf, 24, 120).contains("立"), "按钮行 y=24");
-    assert!(!row_text(&buf, 23, 120).contains("立"), "按钮不得上移");
+    assert!(row_text(&buf, 23, 120).contains("立"), "按钮行 y=23");
+    assert!(!row_text(&buf, 22, 120).contains("立"), "按钮不得上移");
     assert!(
-        !row_text(&buf, 29, 120).contains("立"),
+        !row_text(&buf, 28, 120).contains("立"),
         "按钮不得下移（n_rows*2 变异）"
     );
     assert!(
-        !row_text(&buf, 25, 120).contains("Enter"),
+        !row_text(&buf, 24, 120).contains("Enter"),
         "底部提示行退役（v1.30）: {:?}",
-        row_text(&buf, 25, 120)
+        row_text(&buf, 24, 120)
     );
     a.shutdown().await;
     let _ = std::fs::remove_file(&reg);
@@ -179,7 +182,7 @@ async fn ck_dropdown_exact_geometry() {
     let (mut a, reg) = app_with_add_dialog();
     {
         let d = a.dialog.as_mut().unwrap();
-        d.focus = 5;
+        d.focus = 4;
         d.ck_open = true;
     }
     let buf = render(&mut a, 120, 21);
@@ -212,13 +215,13 @@ async fn proxy_dropdown_single_item_exact_geometry() {
     let (mut a, reg) = app_with_add_dialog();
     {
         let d = a.dialog.as_mut().unwrap();
-        d.focus = 7;
+        d.focus = 6;
         d.proxy_open = true;
     }
     let buf = render(&mut a, 120, 40);
-    assert_eq!(cell(&buf, 33, 23), "╭", "代理下拉左上角 (33,23)");
-    assert!(row_text(&buf, 24, 120).contains("直"), "唯一选项行 y=24");
-    assert_eq!(cell(&buf, 33, 25), "╰", "代理下拉左下角 (33,25)（ph=3）");
+    assert_eq!(cell(&buf, 33, 22), "╭", "代理下拉左上角 (33,22)");
+    assert!(row_text(&buf, 23, 120).contains("直"), "唯一选项行 y=23");
+    assert_eq!(cell(&buf, 33, 24), "╰", "代理下拉左下角 (33,24)（ph=3）");
     a.shutdown().await;
     let _ = std::fs::remove_file(&reg);
 }
@@ -571,9 +574,9 @@ async fn dialog_clamps_out_of_range_ck_type() {
     }
     let buf = render(&mut a, 120, 40);
     assert!(
-        row_text(&buf, 20, 120).contains("Adler-32"),
+        row_text(&buf, 19, 120).contains("Adler-32"),
         "越界 ck_type 必须钳制显示末项算法（got {:?}）",
-        row_text(&buf, 20, 120).trim()
+        row_text(&buf, 19, 120).trim()
     );
     a.shutdown().await;
     let _ = std::fs::remove_file(&reg);
@@ -1024,21 +1027,21 @@ async fn proxy_dropdown_left_clamp_at_narrow_width() {
     let (mut a, reg) = app_with_add_dialog();
     {
         let d = a.dialog.as_mut().unwrap();
-        d.focus = 7;
+        d.focus = 6;
         d.proxy_open = true;
     }
     let buf = render(&mut a, 27, 40);
     assert_eq!(
-        cell(&buf, 1, 23),
+        cell(&buf, 1, 22),
         "╭",
-        "窄端代理下拉左上角必须在 (1,23)（px = area.x + 1 = 1）"
+        "窄端代理下拉左上角必须在 (1,22)（px = area.x + 1 = 1）"
     );
     assert_eq!(
-        cell(&buf, 0, 23),
+        cell(&buf, 0, 22),
         "│",
         "x=0 必须仍是对话框左边框（px 下限钳制留 1 列边距；+ → * 变异体贴边覆盖为 ╭）"
     );
-    assert!(row_text(&buf, 24, 27).contains("直"), "唯一选项行仍在 y=24");
+    assert!(row_text(&buf, 23, 27).contains("直"), "唯一选项行仍在 y=23");
     a.shutdown().await;
     let _ = std::fs::remove_file(&reg);
 }
@@ -1048,14 +1051,14 @@ async fn proxy_dropdown_no_panic_at_26_cols() {
     let (mut a, reg) = app_with_add_dialog();
     {
         let d = a.dialog.as_mut().unwrap();
-        d.focus = 7;
+        d.focus = 6;
         d.proxy_open = true;
     }
     let buf = render(&mut a, 26, 40);
-    assert_eq!(cell(&buf, 1, 23), "╭", "下拉左上角仍在 (1,23)");
-    assert_eq!(cell(&buf, 0, 23), "│", "x=0 仍是对话框左边框");
-    assert!(row_text(&buf, 24, 26).contains("直"), "唯一选项行仍在 y=24");
-    assert_eq!(cell(&buf, 25, 23), "╮", "浮层右缘钳在末列 x=25");
+    assert_eq!(cell(&buf, 1, 22), "╭", "下拉左上角仍在 (1,22)");
+    assert_eq!(cell(&buf, 0, 22), "│", "x=0 仍是对话框左边框");
+    assert!(row_text(&buf, 23, 26).contains("直"), "唯一选项行仍在 y=23");
+    assert_eq!(cell(&buf, 25, 22), "╮", "浮层右缘钳在末列 x=25");
     a.shutdown().await;
     let _ = std::fs::remove_file(&reg);
 }
@@ -1081,7 +1084,7 @@ async fn proxy_dropdown_no_panic_when_taller_than_terminal() {
     a.on_key(KeyCode::Enter, KeyModifiers::empty());
     {
         let d = a.dialog.as_mut().unwrap();
-        d.focus = 5;
+        d.focus = 4;
         d.proxy_open = true;
     }
     let buf = render(&mut a, 80, 12);

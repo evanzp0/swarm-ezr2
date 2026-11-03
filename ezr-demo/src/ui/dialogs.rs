@@ -110,9 +110,9 @@ struct Row {
 pub(crate) fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) {
     let is_add = kind == DialogKind::Add;
     let (title, dw, dh) = if is_add {
-        (" 添加任务：HTTP(S) ", 74u16, 14u16)
+        (" 添加任务：HTTP(S) ", 74u16, 13u16)
     } else {
-        (" 修改任务：HTTP(S) ", 74, 12)
+        (" 修改任务：HTTP(S) ", 74, 11)
     };
 
     let dlg = dialog_rect_at(area, app.dialog_pos, dw, dh);
@@ -132,12 +132,24 @@ pub(crate) fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: D
     f.render_widget(block, dlg);
 
     app.popup_close_rect = draw_close_btn(f, app, dlg, w(title));
-    let min_h = if is_add { 12 } else { 10 };
+    let min_h = if is_add { 11 } else { 9 };
     if inner.width < 24 || inner.height < min_h {
         return;
     }
 
-    let (focus, url, dir, conns, down_limit, up_limit, ck_type, ck_value, ck_open, ck_sel, proxy_sel, proxy_open) = {
+    let (
+        focus,
+        url,
+        dir,
+        conns,
+        down_limit,
+        ck_type,
+        ck_value,
+        ck_open,
+        ck_sel,
+        proxy_sel,
+        proxy_open,
+    ) = {
         let d = app.dialog.as_ref().unwrap();
         (
             d.focus,
@@ -145,7 +157,6 @@ pub(crate) fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: D
             d.dir.clone(),
             d.conns.clone(),
             d.down_limit.clone(),
-            d.up_limit.clone(),
             d.ck_type,
             d.ck_value.clone(),
             d.ck_open,
@@ -186,12 +197,6 @@ pub(crate) fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: D
     rows.push(Row {
         label: "下载限速",
         input: down_limit,
-        placeholder: String::new(),
-        kind: RowKind::Text,
-    });
-    rows.push(Row {
-        label: "上传限速",
-        input: up_limit,
         placeholder: String::new(),
         kind: RowKind::Text,
     });
@@ -298,9 +303,9 @@ pub(crate) fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: D
 
     let btn_row = inner.y + n_rows + 2;
     let buttons: Vec<(&str, usize)> = if is_add {
-        vec![("立即下载", 8), ("仅添加", 9), ("取消", 10)]
+        vec![("立即下载", 7), ("仅添加", 8), ("取消", 9)]
     } else {
-        vec![("确定", 6), ("取消", 7)]
+        vec![("确定", 5), ("取消", 6)]
     };
     let btn_ws: Vec<usize> = buttons
         .iter()
@@ -831,14 +836,7 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: Dia
             avail,
         );
         field_rects[6] = Some(row_rect(fields_y + 3));
-        bt_dropdown_row(
-            f,
-            focus,
-            6,
-            "代理",
-            &proxy_label,
-            row_rect(fields_y + 3),
-        );
+        bt_dropdown_row(f, focus, 6, "代理", &proxy_label, row_rect(fields_y + 3));
     } else {
         // 任务名行（静态；顶 padding 1 行）
         let name_rect = Rect {
@@ -897,14 +895,7 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: Dia
             avail,
         );
         field_rects[4] = Some(row_rect(fields_y + 3));
-        bt_dropdown_row(
-            f,
-            focus,
-            4,
-            "代理",
-            &proxy_label,
-            row_rect(fields_y + 3),
-        );
+        bt_dropdown_row(f, focus, 4, "代理", &proxy_label, row_rect(fields_y + 3));
     }
 
     // ---------- trackers 多行输入框（可复用组件，无 wrap 模式） ----------

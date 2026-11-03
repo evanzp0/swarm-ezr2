@@ -215,8 +215,8 @@ impl App {
             None => return,
         };
         let nfocus = match kind {
-            DialogKind::Add => 11,
-            DialogKind::Modify => 8,
+            DialogKind::Add => 10,
+            DialogKind::Modify => 7,
             DialogKind::Delete => 3,
             DialogKind::AddBt => 11,
             DialogKind::ModifyBt => 8,

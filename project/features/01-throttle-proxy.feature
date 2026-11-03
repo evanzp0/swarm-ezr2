@@ -7,7 +7,7 @@
 #   01-throttle-proxy-06 限速对不支持续传的任务同样生效
 #   01-throttle-proxy-07 头部与图表不新增全局限速控件（v1.9 修订：措辞收窄——任务对话框限速字段属 FR-02-29）
 #   01-throttle-proxy-08 全局上传限速生效于 BT 上传合计（v1.9 新增，FR-02-28）
-#   01-throttle-proxy-09 任务级限速默认值来自 config 且添加对话框预填可改（v1.9 新增，FR-02-29）
+#   01-throttle-proxy-09 任务级限速默认值来自 config 且添加对话框预填可改（v1.9 新增，FR-02-29；v1.10 修订：二进制单位 + 规范化显示 + HTTP 单字段）
 #   01-throttle-proxy-10 任务级与全局限速取 min 合成（v1.9 新增，FR-02-29）
 #   01-throttle-proxy-11 修改 HTTP 任务限速确认后立即生效（v1.9 新增，FR-02-29/FR-02-26）
 #   01-throttle-proxy-12 修改 BT 任务限速确认后立即生效（v1.9 新增，FR-02-29/FR-02-26）
@@ -28,6 +28,11 @@
 #   新增两字段（预填任务当前值，存量任务缺失按 0），确认后立即生效（FR-02-26）并落注册表；
 #   有效限制 = min(全局, 任务级)（上传/下载两方向独立合成，0 视为不限）。
 #   场景 01–07 键名与合计口径修订，08–14 新增。）
+# （v1.10 修订注（操作者 bug21 修订轮批准，FR-02-29 v1.10/D67② 修订，细则见 phase-02 v1.10 注记
+#   与 01-add-task v1.40 注记）：①config 键（global_max_* / task_max_*）解析口径**不变仍十进制**
+#   （场景 01–08/10–14 的 config 键十进制示例不变）；②对话框限速字段（FR-02-29）单位口径改
+#   二进制 + 键入/粘贴即规范化显示 + 占位退役（场景 09/11/12/13 示例随二进制口径调整）；
+#   ③HTTP 添加/修改对话框「上传限速」字段退役（BT 框保留，场景 09/11 断言面随修订）。）
 Feature: 01-throttle-proxy 全局与任务级限速
 
   期号 01（本轮 v1.9 修订属操作者 bug18 轮指令，需求落 phase-02 FR-02-28/29 并
@@ -108,18 +113,20 @@ Feature: 01-throttle-proxy 全局与任务级限速
     When leecher 从本端上传合计稳定
     Then 全部任务上传合计稳定在 1 MB/s ±10%（头部 ↑ 与列表行上传速度一致；做种与互惠上传均计入）
 
-  Scenario: 01-throttle-proxy-09 任务级限速默认值来自 config 且添加对话框预填可改
+  Scenario: 01-throttle-proxy-09 任务级限速默认值来自 config 且添加对话框预填可改（v1.10 修订：二进制 + HTTP 单字段）
     Given 配置文件设 [common] 表 task_max_download_speed = "<down>" 与 task_max_upload_speed = "<up>"
-    When 按 A 打开「添加任务：HTTP(S)」对话框（或命令窗口分流打开「添加任务：BT」）
-    Then 下载限速字段预填 "<down_parsed>"、上传限速字段预填 "<up_parsed>"（config 解析后整数 B/s；0 显示 0）
-    And 两字段均可编辑（接受整数 B/s 或十进制单位字符串如 "2 MB/s"）
-    And 输入 "<input>" 确认后任务任务级限速落为 "<result>"（留空或非法回退 config 默认 <down>/<up>）
+    When 按 A 打开「添加任务：HTTP(S)」对话框（v1.10：仅下载限速字段；上传限速字段退役，FR-02-29 v1.10）与命令窗口分流打开的「添加任务：BT」对话框（下载/上传两字段均在）
+    Then 下载限速字段预填 "<down_parsed>"、上传限速字段预填 "<up_parsed>"（config 解析后整数 B/s；0 显示 0；限速字段无占位提示，v1.10）
+    And 限速字段均可编辑（接受整数 B/s 或二进制单位字符串；键入/粘贴即规范化显示，前导零剥离）
+    And 输入 "<input>" 后字段即时规范化显示 "<display>"（二进制单位族；退格不回写）
+    And 确认后任务任务级限速落为 "<result>"（留空或非法回退 config 默认 <down>/<up>）
 
     Examples:
-      | down      | up        | down_parsed | up_parsed | input     | result    |
-      | 2 MB/s    | 0         | 2000000     | 0         | 留空      | 2000000   |
-      | 2 MB/s    | 0         | 2000000     | 0         | 500 KB/s  | 500000    |
-      | 0         | 512 KB/s  | 0           | 512000    | abc       | 0         |
+      | down   | up       | down_parsed | up_parsed | input | display   | result  |
+      | 2 MB/s | 0        | 2000000     | 0         | 留空  | 2000000   | 2000000 |
+      | 2 MB/s | 0        | 2000000     | 0         | 500k  | 500 KiB/s | 512000  |
+      | 0      | 512 KB/s | 0           | 512000    | 1 M   | 1 MiB/s   | 1048576 |
+      | 0      | 512 KB/s | 0           | 512000    | abc   | abc       | 0       |
 
   Scenario: 01-throttle-proxy-10 任务级与全局限速取 min 合成
     Given 配置文件设 [common] 表 global_max_download_speed = "<g_down>" 与 task_max_download_speed = "<t_down>"
@@ -139,10 +146,10 @@ Feature: 01-throttle-proxy 全局与任务级限速
     And toast 报告修改成功且注册表立即落盘（重开对话框预填 <after>）
 
     Examples:
-      | before   | after    |
-      | 0        | 1 MB/s   |
-      | 1 MB/s   | 500 KB/s |
-      | 1 MB/s   | 0        |
+      | before    | after     |
+      | 0         | 1 MiB/s   |
+      | 1 MiB/s   | 500 KiB/s |
+      | 500 KiB/s | 0         |
 
   Scenario: 01-throttle-proxy-12 修改 BT 任务限速确认后立即生效
     Given 任务 B（BT）下载中（或做种中）且任务级下载/上传限速为 "<before>"
@@ -152,9 +159,9 @@ Feature: 01-throttle-proxy 全局与任务级限速
     And toast 沿既有 "✓ BT 任务已更新…（立即生效）" 口径且注册表落盘
 
     Examples:
-      | before     | after      |
-      | 0 / 0      | 1 MB/s / 0 |
-      | 1 MB/s / 0 | 0 / 1 MB/s |
+      | before       | after        |
+      | 0 / 0        | 1 MiB/s / 0  |
+      | 1 MiB/s / 0  | 0 / 1 MiB/s  |
 
   Scenario: 01-throttle-proxy-13 任务级限速随注册表持久化
     Given 任务（<proto>）任务级下载/上传限速为 "<down>"/"<up>"
@@ -163,8 +170,8 @@ Feature: 01-throttle-proxy 全局与任务级限速
 
     Examples:
       | proto     | down     | up       |
-      | HTTP      | 1 MB/s   | 0        |
-      | BT        | 0        | 1 MB/s   |
+      | HTTP      | 1 MiB/s  | 0        |
+      | BT        | 0        | 1 MiB/s  |
 
   Scenario: 01-throttle-proxy-14 旧 max_speed 键退役按未知键忽略
     Given 配置文件仅含 [common] 表 max_speed = "1 MB/s"（旧键名）

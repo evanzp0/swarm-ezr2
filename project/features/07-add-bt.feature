@@ -1,5 +1,5 @@
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
-#   07-add-bt-01 对话框布局与预填（78×28；字段预填；文件树按来源解析；trackers 占位提示；v1.38：+限速两字段）
+#   07-add-bt-01 对话框布局与预填（78×28；字段预填；文件树按来源解析；trackers 占位提示；v1.38：+限速两字段；v1.39：限速字段无占位）
 #   07-add-bt-02 文件树交互（目录展开收拢 / 三态勾选 / 统计联动 / [全选][全不选] / A·N·I）
 #   07-add-bt-03 trackers 多行输入框（占位提示 / Alt+Enter 换行 / 无 wrap 双向滚动 / 64 行上限 / Enter = 确认）
 #   07-add-bt-04 确认校验链（空来源 / 0 选中 / 重复任务 / 种子解析失败）
@@ -7,6 +7,8 @@
 #   07-add-bt-06 仅添加（⏸ 已暂停不占槽位 / 空格开始）
 #   07-add-bt-07 [退役] 磁力任务元数据获取与确认——留空不重排（D53：phase2 不处理磁力链，磁力任务 phase-03）
 #   07-add-bt-08 小终端自适应收缩（列表框不低于 1 可视行）
+#   07-add-bt-09 种子来源路径归一（v1.37 新增，D63）
+#   07-add-bt-10 限速两字段预填 config 任务级默认值且随任务创建落库（v1.38 新增，FR-02-29；v1.39 修订：二进制单位 + 输入即规范化显示）
 #   07-add-bt-11 trackers scheme 校验与默认 trackers（v1.9.1：wss 等拒绝不落库 + 留空默认 4 条入库）
 # 期号 02（phase-02）。需求依据 project/mission/phase-02.md FR-02-02/04、D44/D47–D50/D55/D59。
 # UI 基线 = ezr-demo phase2 源码（specifier 逐条核证：ui/dialogs.rs draw_bt_dialog /
@@ -31,6 +33,10 @@
 # ②限速字段 = 文本输入框：预填 config [common] task_max_download_speed /
 # task_max_upload_speed 解析后的整数 B/s（0 显示 0），接受整数 B/s 或十进制单位字符串；
 # 留空或非法确认时回退 config 默认（同 HTTP 添加对话框口径，01-add-task-20）。
+# v1.39 修订注（操作者 bug21 修订轮批准；FR-02-29 v1.10/D67② 修订，细则同 01-add-task v1.40 注记）：
+# ①BT 对话框两限速字段保留（预填/留空/非法口径不变），单位口径十进制改二进制 + 键入/粘贴即
+# 规范化显示（如 2m → 2 MiB/s，前导零剥离，退格不回写）+ 占位退役（空态纯空白）；②并发字段
+# 满容量重启录入口径同 01-add-task-21（HTTP/BT 四对话框同口径）。
 Feature: 07-add-bt 添加任务：BT 对话框
 
   期号 02。命令窗口分流打开（仅 .torrent 路径，D53）：种子来源 + 保存到 + 文件树勾选
@@ -45,7 +51,7 @@ Feature: 07-add-bt 添加任务：BT 对话框
     When 经命令窗口输入 "<source>" 并确认打开「添加任务：BT」对话框
     Then 出现 78×28 圆角模态浮层居中显示、标题 " 添加任务：BT "、顶边框行右端 [✗]（v1.38/FR-02-29：78×26 → 78×28 新增限速两字段）
     And 布局自上而下 = 顶 padding 1 行 / 种子 / 保存到 / 文件列表框（高 9 = 边框 2 + 7 可视行）/ 并发 / 下载限速 / 上传限速 / 代理 / trackers 输入框（高 7 = 边框 2 + 5 可视行）/ 按钮前空行 / 按钮行 / 底 padding
-    And 种子行预填 "<source>"（可编辑，300 字符上限）、保存到预填默认下载目录、并发预填 = [bt] 表 bt_concurrency 配置值（v1.35 三大表重构：缺省回退代码常量 20；越界钳制 1–64）、下载限速预填 = config task_max_download_speed 解析值（整数 B/s）、上传限速预填 = config task_max_upload_speed 解析值（v1.38/FR-02-29）、代理预填默认项（D48：配置 download_dir 缺省链，非 demo 的 /srv/downloads）
+    And 种子行预填 "<source>"（可编辑，300 字符上限）、保存到预填默认下载目录、并发预填 = [bt] 表 bt_concurrency 配置值（v1.35 三大表重构：缺省回退代码常量 20；越界钳制 1–64）、下载限速预填 = config task_max_download_speed 解析值（整数 B/s）、上传限速预填 = config task_max_upload_speed 解析值（v1.38/FR-02-29；限速两字段无占位提示，v1.39）、代理预填默认项（D48：配置 download_dir 缺省链，非 demo 的 /srv/downloads）
     And 文件列表框标题 " 选择下载文件 "、右上角 "[全选]" "[全不选]" 按钮、右下角统计 "已选 <sel_files> 个文件，共 <sel_size>"
     And 文件树按 "<source>" 元数据生成（目录默认收拢 ▸、默认全选——D49）、复选框列 [x] 绿色
     And trackers 输入框标题 " trackers "、空缓冲占位提示 "可输入多行 traker，使用 ALT+ENTER 换行"（DIM）
@@ -153,19 +159,22 @@ Feature: 07-add-bt 添加任务：BT 对话框
 
 
   # v1.38 新增（操作者 bug18 轮指令，FR-02-29 + D67）：BT 添加对话框限速两字段。
-  Scenario: 07-add-bt-10 限速两字段预填 config 任务级默认值且随任务创建落库（v1.38，FR-02-29）
+  # v1.39 修订（FR-02-29 v1.10）：二进制单位 + 即时规范化显示 + 占位退役（两字段保留）。
+  Scenario: 07-add-bt-10 限速两字段预填 config 任务级默认值且随任务创建落库（v1.39，FR-02-29）
     Given 配置文件 [common] 表 task_max_download_speed = "<cfg_down>"、task_max_upload_speed = "<cfg_up>"
     When 经命令窗口打开「添加任务：BT」对话框
-    Then 下载限速字段预填 "<down_parsed>"、上传限速字段预填 "<up_parsed>"（config 解析后整数 B/s；0 显示 0；插在并发与代理之间）
-    And 在下载限速字段输入 "<input>" 后确认创建
+    Then 下载限速字段预填 "<down_parsed>"、上传限速字段预填 "<up_parsed>"（config 解析后整数 B/s；0 显示 0；插在并发与代理之间；无占位提示，v1.39）
+    And 在下载限速字段输入 "<input>"
+    Then 字段即时规范化显示 "<display>"（二进制单位族；前导零剥离；退格不回写）
+    And 确认创建
     Then 任务任务级下载/上传限速落为 "<result_down>"/"<up_parsed>"（注册表落盘；BT 引擎按任务级与全局 min 合成生效，01-throttle-proxy-12）
     And 留空或非法输入确认时回退 config 默认 <down_parsed>（同 HTTP 添加对话框口径）
 
     Examples:
-      | cfg_down | cfg_up   | down_parsed | up_parsed | input     | result_down |
-      | 0        | 1 MB/s   | 0           | 1000000   | 2 MB/s    | 2000000     |
-      | 2 MB/s   | 0        | 2000000     | 0         | 留空      | 2000000     |
-      | 0        | 0        | 0           | 0         | abc       | 0           |
+      | cfg_down | cfg_up   | down_parsed | up_parsed | input | display  | result_down |
+      | 0        | 1 MB/s   | 0           | 1000000   | 2m    | 2 MiB/s  | 2097152     |
+      | 2 MB/s   | 0        | 2000000     | 0         | 留空  | 2000000  | 2000000     |
+      | 0        | 0        | 0           | 0         | abc   | abc      | 0           |
 
 
   # v1.9.1 新增（操作者 bug18 追轮 UI 反馈；FR-02-31）：trackers scheme 校验与默认 trackers。

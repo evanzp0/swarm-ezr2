@@ -534,7 +534,8 @@ mod cursor_tests {
         assert_eq!((win.win_lo, win.win_hi), (0, 16));
         assert_eq!(win.cols.last().copied(), Some(16), "cols 末位 = 窗口总宽");
 
-        assert!(app.dlg_field_wins[5].is_none(), "下拉行无窗口几何");
+        assert!(app.dlg_field_wins[4].is_none(), "下拉行无窗口几何");
+        assert!(app.dlg_field_wins[6].is_none(), "代理行无窗口几何");
 
         app.dialog.as_mut().unwrap().url.set_cursor(2);
         term.draw(|f| draw(f, &mut app)).unwrap();
@@ -628,5 +629,45 @@ mod cursor_tests {
             "焦点切换单源：光标迁至新字段尾"
         );
         assert_eq!(d.dir.cursor, 14);
+    }
+
+    #[test]
+    fn bt_limit_fields_focus_cursor_after_last_char() {
+        // 对账口径（同步自 ezr BT 限速字段聚焦光标修复轮）：BT 添加/修改对话框
+        // 「并发(7 列标签)/下载限速(8 列标签)/上传限速(8 列标签)」聚焦时终端原生
+        // 光标列 = 行首 + 标签宽 + 2 列提示符 + 值宽 = 最后字符后方一格。
+        let mut app = crate::app::App::new();
+        app.open_add_bt_dialog_with("/tmp/demo.torrent");
+        {
+            let d = app.dialog.as_mut().unwrap();
+            d.down_limit.set("512 KiB/s");
+            d.up_limit.set("2 MiB/s");
+        }
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        for (focus, label_cols) in [(3usize, 7u16), (4, 8), (5, 8)] {
+            app.dialog.as_mut().unwrap().focus_field(focus);
+            term.draw(|f| draw(f, &mut app)).unwrap();
+            let value = {
+                let d = app.dialog.as_ref().unwrap();
+                match focus {
+                    3 => d.conns.value.clone(),
+                    4 => d.down_limit.value.clone(),
+                    _ => d.up_limit.value.clone(),
+                }
+            };
+            let (rect, _) = app
+                .dlg_field_rects
+                .iter()
+                .find(|(_, i)| *i == focus)
+                .copied()
+                .expect("BT 字段矩形回填");
+            let (cx, cy) = app.dlg_cursor_screen.expect("BT 聚焦文本行发布终端光标");
+            assert_eq!(cy, rect.y, "focus={focus}: 光标行对齐字段行");
+            assert_eq!(
+                cx,
+                rect.x + label_cols + 2 + crate::textfield::w(&value) as u16,
+                "focus={focus}: 光标列 = 行首+标签宽+2+值宽（最后字符后方一格）"
+            );
+        }
     }
 }

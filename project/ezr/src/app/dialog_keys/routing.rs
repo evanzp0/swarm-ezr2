@@ -23,16 +23,16 @@ pub fn text_field_at(kind: DialogKind, focus: usize) -> Option<TextField> {
     match (kind, focus) {
         (DialogKind::Add, 0) => Some(TextField::Url),
         (DialogKind::Add, 1) => Some(TextField::Dir),
-        (DialogKind::Add, 2) | (DialogKind::Modify, 0) => Some(TextField::Conns),
+        (DialogKind::Add, 2)
+        | (DialogKind::Modify, 0)
+        | (DialogKind::AddBt, 3)
+        | (DialogKind::ModifyBt, 1) => Some(TextField::Conns),
         (DialogKind::Add, 3)
         | (DialogKind::AddBt, 4)
         | (DialogKind::Modify, 1)
         | (DialogKind::ModifyBt, 2) => Some(TextField::DownLimit),
-        (DialogKind::Add, 4)
-        | (DialogKind::AddBt, 5)
-        | (DialogKind::Modify, 2)
-        | (DialogKind::ModifyBt, 3) => Some(TextField::UpLimit),
-        (DialogKind::Add, 6) | (DialogKind::Modify, 4) => Some(TextField::CkValue),
+        (DialogKind::AddBt, 5) | (DialogKind::ModifyBt, 3) => Some(TextField::UpLimit),
+        (DialogKind::Add, 5) | (DialogKind::Modify, 3) => Some(TextField::CkValue),
         _ => None,
     }
 }
@@ -66,6 +66,96 @@ pub fn push_hex_capped(d: &mut Dialog, c: char) {
     }
 }
 
+pub fn insert_conns_digit(d: &mut Dialog, c: char) {
+    if !c.is_ascii_digit() {
+        return;
+    }
+    if d.conns.len_chars() >= CAP_CONNS_DIGITS && d.conns.cursor >= d.conns.len_chars() {
+        d.conns.clear();
+    }
+    if d.conns.insert(&c.to_string(), CAP_CONNS_DIGITS) > 0 {
+        d.conns_edited = true;
+    }
+}
+
+fn speed_unit_label(unit: &str) -> Option<&'static str> {
+    match unit {
+        "" => Some(""),
+        "b" | "bps" => Some("B/s"),
+        "k" | "kb" | "kib" | "kbps" => Some("KiB/s"),
+        "m" | "mb" | "mib" | "mbps" => Some("MiB/s"),
+        "g" | "gb" | "gib" | "gbps" => Some("GiB/s"),
+        _ => None,
+    }
+}
+
+pub fn speed_unit_mult(unit: &str) -> Option<f64> {
+    match unit {
+        "" | "b" | "bps" => Some(1.0),
+        "k" | "kb" | "kib" | "kbps" => Some(1024.0),
+        "m" | "mb" | "mib" | "mbps" => Some(1_048_576.0),
+        "g" | "gb" | "gib" | "gbps" => Some(1_073_741_824.0),
+        _ => None,
+    }
+}
+
+pub fn canonical_speed_form(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let split = s
+        .char_indices()
+        .find(|(_, c)| !(c.is_ascii_digit() || *c == '.'))
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    let (num, unit_raw) = s.split_at(split);
+    if num.is_empty() || num.matches('.').count() > 1 {
+        return None;
+    }
+    let n: f64 = num.parse().ok()?;
+    if !n.is_finite() || n < 0.0 {
+        return None;
+    }
+    let unit = unit_raw.trim().trim_end_matches("/s").trim().to_lowercase();
+    let label = speed_unit_label(&unit)?;
+    let num_disp = if num.contains('.') {
+        num.to_string()
+    } else {
+        let t = num.trim_start_matches('0');
+        if t.is_empty() {
+            "0".to_string()
+        } else {
+            t.to_string()
+        }
+    };
+    if label.is_empty() {
+        return Some(num_disp);
+    }
+    Some(format!("{num_disp} {label}"))
+}
+
+fn speed_display_absorbs(buf: &TextInput, c: char) -> bool {
+    if buf.cursor < buf.len_chars() {
+        return false;
+    }
+    if !matches!(c, 'b' | 'B' | 'i' | 'I' | 's' | 'S' | '/') {
+        return false;
+    }
+    match canonical_speed_form(&buf.value) {
+        Some(canon) => canon == buf.value && canon.ends_with("/s"),
+        None => false,
+    }
+}
+
+pub fn normalize_speed_display(buf: &mut TextInput) {
+    if let Some(canon) = canonical_speed_form(&buf.value) {
+        if canon != buf.value {
+            buf.set(canon);
+        }
+    }
+}
+
 pub(super) const fn kind_add() -> DialogKind {
     DialogKind::Add
 }
@@ -86,11 +176,11 @@ pub fn dropdown_open_key(d: &mut Dialog, code: KeyCode) {
         KeyCode::Enter | KeyCode::Esc => d.ck_open = false,
         KeyCode::Tab => {
             d.ck_open = false;
-            d.focus_field(if d.kind == DialogKind::Add { 6 } else { 4 });
+            d.focus_field(if d.kind == DialogKind::Add { 5 } else { 3 });
         }
         KeyCode::BackTab => {
             d.ck_open = false;
-            d.focus_field(if d.kind == DialogKind::Add { 4 } else { 2 });
+            d.focus_field(if d.kind == DialogKind::Add { 3 } else { 1 });
         }
         _ => d.ck_open = false,
     }
@@ -111,18 +201,18 @@ pub fn proxy_dropdown_open_key(d: &mut Dialog, n: usize, code: KeyCode) {
         KeyCode::Tab => {
             d.proxy_open = false;
             let f = match d.kind {
-                DialogKind::Add => 8,
+                DialogKind::Add => 7,
                 DialogKind::AddBt | DialogKind::ModifyBt => 7,
-                _ => 6,
+                _ => 5,
             };
             d.focus_field(f);
         }
         KeyCode::BackTab => {
             d.proxy_open = false;
             let f = match d.kind {
-                DialogKind::Add => 6,
+                DialogKind::Add => 5,
                 DialogKind::AddBt | DialogKind::ModifyBt => 5,
-                _ => 4,
+                _ => 3,
             };
             d.focus_field(f);
         }
@@ -155,14 +245,11 @@ pub fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> bool {
             d.down_limit.backspace();
             true
         }
-        (DialogKind::Add, 4)
-        | (DialogKind::AddBt, 5)
-        | (DialogKind::Modify, 2)
-        | (DialogKind::ModifyBt, 3) => {
+        (DialogKind::AddBt, 5) | (DialogKind::ModifyBt, 3) => {
             d.up_limit.backspace();
             true
         }
-        (DialogKind::Add, 6) | (DialogKind::Modify, 4) => {
+        (DialogKind::Add, 5) | (DialogKind::Modify, 3) => {
             if d.ck_type == CK_NONE {
                 return true;
             }
@@ -196,10 +283,7 @@ pub fn text_char(kind: DialogKind, d: &mut Dialog, focus: usize, c: char) -> boo
             true
         }
         (DialogKind::Add, 2) | (DialogKind::Modify, 0) => {
-            if c.is_ascii_digit() {
-                d.conns.insert(&c.to_string(), CAP_CONNS_DIGITS);
-                d.conns_edited = true;
-            }
+            insert_conns_digit(d, c);
             true
         }
         (DialogKind::Add, 3)
@@ -209,10 +293,7 @@ pub fn text_char(kind: DialogKind, d: &mut Dialog, focus: usize, c: char) -> boo
             insert_limit(&mut d.down_limit, c);
             true
         }
-        (DialogKind::Add, 4)
-        | (DialogKind::AddBt, 5)
-        | (DialogKind::Modify, 2)
-        | (DialogKind::ModifyBt, 3) => {
+        (DialogKind::AddBt, 5) | (DialogKind::ModifyBt, 3) => {
             insert_limit(&mut d.up_limit, c);
             true
         }
@@ -221,7 +302,12 @@ pub fn text_char(kind: DialogKind, d: &mut Dialog, focus: usize, c: char) -> boo
 }
 
 pub fn insert_limit(buf: &mut TextInput, c: char) {
-    if c.is_ascii_alphanumeric() || c == ' ' || c == '/' || c == '.' {
-        buf.insert(&c.to_string(), CAP_LIMIT);
+    if !(c.is_ascii_alphanumeric() || c == ' ' || c == '/' || c == '.') {
+        return;
     }
+    if speed_display_absorbs(buf, c) {
+        return;
+    }
+    buf.insert(&c.to_string(), CAP_LIMIT);
+    normalize_speed_display(buf);
 }

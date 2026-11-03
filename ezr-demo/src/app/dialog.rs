@@ -86,8 +86,7 @@ impl Dialog {
             (DialogKind::Add, 1) | (DialogKind::AddBt, 1) => Some(TextField::Dir),
             (DialogKind::Add, 2) | (DialogKind::Modify, 0) => Some(TextField::Conns),
             (DialogKind::Add, 3) | (DialogKind::Modify, 1) => Some(TextField::DownLimit),
-            (DialogKind::Add, 4) | (DialogKind::Modify, 2) => Some(TextField::UpLimit),
-            (DialogKind::Add, 6) | (DialogKind::Modify, 4) => Some(TextField::CkValue),
+            (DialogKind::Add, 5) | (DialogKind::Modify, 3) => Some(TextField::CkValue),
             (DialogKind::AddBt, 0) => Some(TextField::Torrent),
             (DialogKind::AddBt, 3) | (DialogKind::ModifyBt, 1) => Some(TextField::Conns),
             (DialogKind::AddBt, 4) | (DialogKind::ModifyBt, 2) => Some(TextField::DownLimit),
@@ -274,8 +273,8 @@ pub(super) fn proxy_dropdown_open_key(d: &mut Dialog, n: usize, code: KeyCode) {
         KeyCode::Tab => {
             d.proxy_open = false;
             let f = match d.kind {
-                DialogKind::Add => 8,
-                DialogKind::Modify => 6,
+                DialogKind::Add => 7,
+                DialogKind::Modify => 5,
                 DialogKind::AddBt => 7,
                 _ => 5,
             };
@@ -284,8 +283,8 @@ pub(super) fn proxy_dropdown_open_key(d: &mut Dialog, n: usize, code: KeyCode) {
         KeyCode::BackTab => {
             d.proxy_open = false;
             let f = match d.kind {
-                DialogKind::Add => 4,
-                DialogKind::Modify => 2,
+                DialogKind::Add => 3,
+                DialogKind::Modify => 1,
                 DialogKind::AddBt => 5,
                 _ => 3,
             };
@@ -324,14 +323,115 @@ pub(super) fn ck_dropdown_open_key(d: &mut Dialog, code: KeyCode) {
         KeyCode::Tab | KeyCode::BackTab => {
             d.ck_open = false;
             let f = match (d.kind, code) {
-                (DialogKind::Add, KeyCode::Tab) => 6,
-                (DialogKind::Add, KeyCode::BackTab) => 4,
-                (_, KeyCode::Tab) => 4,
-                _ => 2,
+                (DialogKind::Add, KeyCode::Tab) => 5,
+                (DialogKind::Add, KeyCode::BackTab) => 3,
+                (_, KeyCode::Tab) => 3,
+                _ => 1,
             };
             d.focus_field(f);
         }
         _ => d.ck_open = false,
+    }
+}
+
+pub fn speed_unit_mult(unit: &str) -> Option<f64> {
+    match unit {
+        "" | "b" | "bps" => Some(1.0),
+        "k" | "kb" | "kib" | "kbps" => Some(1024.0),
+        "m" | "mb" | "mib" | "mbps" => Some(1_048_576.0),
+        "g" | "gb" | "gib" | "gbps" => Some(1_073_741_824.0),
+        _ => None,
+    }
+}
+
+fn speed_unit_label(unit: &str) -> Option<&'static str> {
+    match unit {
+        "" => Some(""),
+        "b" | "bps" => Some("B/s"),
+        "k" | "kb" | "kib" | "kbps" => Some("KiB/s"),
+        "m" | "mb" | "mib" | "mbps" => Some("MiB/s"),
+        "g" | "gb" | "gib" | "gbps" => Some("GiB/s"),
+        _ => None,
+    }
+}
+
+pub fn canonical_speed_form(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let split = s
+        .char_indices()
+        .find(|(_, c)| !(c.is_ascii_digit() || *c == '.'))
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    let (num, unit_raw) = s.split_at(split);
+    if num.is_empty() || num.matches('.').count() > 1 {
+        return None;
+    }
+    let n: f64 = num.parse().ok()?;
+    if !n.is_finite() || n < 0.0 {
+        return None;
+    }
+    let unit = unit_raw.trim().trim_end_matches("/s").trim().to_lowercase();
+    let label = speed_unit_label(&unit)?;
+    let num_disp = if num.contains('.') {
+        num.to_string()
+    } else {
+        let t = num.trim_start_matches('0');
+        if t.is_empty() {
+            "0".to_string()
+        } else {
+            t.to_string()
+        }
+    };
+    if label.is_empty() {
+        return Some(num_disp);
+    }
+    Some(format!("{num_disp} {label}"))
+}
+
+fn speed_display_absorbs(buf: &TextInput, c: char) -> bool {
+    if buf.cursor < buf.len_chars() {
+        return false;
+    }
+    if !matches!(c, 'b' | 'B' | 'i' | 'I' | 's' | 'S' | '/') {
+        return false;
+    }
+    match canonical_speed_form(&buf.value) {
+        Some(canon) => canon == buf.value && canon.ends_with("/s"),
+        None => false,
+    }
+}
+
+pub fn normalize_speed_display(buf: &mut TextInput) {
+    if let Some(canon) = canonical_speed_form(&buf.value) {
+        if canon != buf.value {
+            buf.set(canon);
+        }
+    }
+}
+
+pub fn insert_limit_char(buf: &mut TextInput, c: char) {
+    if !(c.is_ascii_alphanumeric() || c == ' ' || c == '/' || c == '.') {
+        return;
+    }
+    if speed_display_absorbs(buf, c) {
+        return;
+    }
+    buf.insert(&c.to_string(), 32);
+    normalize_speed_display(buf);
+}
+
+pub fn insert_conns_digit(d: &mut Dialog, c: char) {
+    if !c.is_ascii_digit() {
+        return;
+    }
+    if d.conns.len_chars() >= 2 && d.conns.cursor >= d.conns.len_chars() {
+        d.conns.clear();
+    }
+    if d.conns.insert(&c.to_string(), 2) > 0 {
+        d.conns_edited = true;
     }
 }
 
@@ -360,14 +460,11 @@ pub(super) fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> 
             d.down_limit.backspace();
             true
         }
-        (DialogKind::Add, 4)
-        | (DialogKind::Modify, 2)
-        | (DialogKind::AddBt, 5)
-        | (DialogKind::ModifyBt, 3) => {
+        (DialogKind::AddBt, 5) | (DialogKind::ModifyBt, 3) => {
             d.up_limit.backspace();
             true
         }
-        (DialogKind::Add, 6) | (DialogKind::Modify, 4) => {
+        (DialogKind::Add, 5) | (DialogKind::Modify, 3) => {
             d.ck_value.backspace();
             true
         }
@@ -398,6 +495,12 @@ pub(super) fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, te
         | (DialogKind::AddBt, 3)
         | (DialogKind::ModifyBt, 1) => {
             let digits: String = clean.chars().filter(|c| c.is_ascii_digit()).collect();
+            if !digits.is_empty()
+                && d.conns.cursor >= d.conns.len_chars()
+                && d.conns.len_chars() >= 2
+            {
+                d.conns.clear();
+            }
             let inserted = d.conns.insert(&digits, 2) > 0;
             d.conns_edited |= inserted;
             inserted
@@ -410,19 +513,26 @@ pub(super) fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, te
                 .chars()
                 .filter(|&c| c.is_ascii_alphanumeric() || c == ' ' || c == '/' || c == '.')
                 .collect();
-            d.down_limit.insert(&s, 16) > 0
+            if d.down_limit.insert(&s, 32) > 0 {
+                normalize_speed_display(&mut d.down_limit);
+                true
+            } else {
+                false
+            }
         }
-        (DialogKind::Add, 4)
-        | (DialogKind::Modify, 2)
-        | (DialogKind::AddBt, 5)
-        | (DialogKind::ModifyBt, 3) => {
+        (DialogKind::AddBt, 5) | (DialogKind::ModifyBt, 3) => {
             let s: String = clean
                 .chars()
                 .filter(|&c| c.is_ascii_alphanumeric() || c == ' ' || c == '/' || c == '.')
                 .collect();
-            d.up_limit.insert(&s, 16) > 0
+            if d.up_limit.insert(&s, 32) > 0 {
+                normalize_speed_display(&mut d.up_limit);
+                true
+            } else {
+                false
+            }
         }
-        (DialogKind::Add, 6) | (DialogKind::Modify, 4) => {
+        (DialogKind::Add, 5) | (DialogKind::Modify, 3) => {
             if d.ck_type == CK_NONE {
                 return false;
             }

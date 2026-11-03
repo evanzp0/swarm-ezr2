@@ -47,14 +47,8 @@ pub(super) fn parse_speed_limit(raw: &str) -> Option<u64> {
     if !n.is_finite() || n < 0.0 {
         return None;
     }
-    let unit = unit.trim().trim_end_matches("/s").trim();
-    let mult = match unit.to_lowercase().as_str() {
-        "" | "b" | "bps" => 1.0,
-        "k" | "kb" | "kbps" => 1_000.0,
-        "m" | "mb" | "mbps" => 1_000_000.0,
-        "g" | "gb" | "gbps" => 1_000_000_000.0,
-        _ => return None,
-    };
+    let unit = unit.trim().trim_end_matches("/s").trim().to_lowercase();
+    let mult = super::dialog::speed_unit_mult(&unit)?;
     let v = n * mult;
     if v >= u64::MAX as f64 {
         return Some(u64::MAX);
@@ -66,30 +60,30 @@ pub(super) fn format_speed_limit(v: u64) -> String {
     if v == 0 {
         return "0".to_string();
     }
-    if v % 1_000_000_000 == 0 {
-        return format!("{} GB/s", v / 1_000_000_000);
+    if v % 1_073_741_824 == 0 {
+        return format!("{} GiB/s", v / 1_073_741_824);
     }
-    if v % 1_000_000 == 0 {
-        return format!("{} MB/s", v / 1_000_000);
+    if v % 1_048_576 == 0 {
+        return format!("{} MiB/s", v / 1_048_576);
     }
-    if v % 1_000 == 0 {
-        return format!("{} KB/s", v / 1_000);
+    if v % 1024 == 0 {
+        return format!("{} KiB/s", v / 1024);
     }
     format!("{} B/s", v)
 }
 
 impl App {
     pub(super) fn add_dialog_enter(&mut self, focus: usize) {
-        if focus == 5 {
+        if focus == 4 {
             let d = self.dialog.as_mut().unwrap();
             d.ck_open = true;
             d.ck_sel = d.ck_type;
-        } else if focus == 7 {
+        } else if focus == 6 {
             let d = self.dialog.as_mut().unwrap();
             d.proxy_open = true;
-        } else if focus == 9 {
+        } else if focus == 8 {
             self.dlg_add_only();
-        } else if focus == 10 {
+        } else if focus == 9 {
             self.dialog = None;
         } else {
             self.dlg_confirm_add(false);
@@ -101,14 +95,14 @@ impl App {
     }
 
     pub(super) fn modify_dialog_enter(&mut self, focus: usize) {
-        if focus == 3 {
+        if focus == 2 {
             let d = self.dialog.as_mut().unwrap();
             d.ck_open = true;
             d.ck_sel = d.ck_type;
-        } else if focus == 5 {
+        } else if focus == 4 {
             let d = self.dialog.as_mut().unwrap();
             d.proxy_open = true;
-        } else if focus == 7 {
+        } else if focus == 6 {
             self.dialog = None;
         } else {
             self.dlg_confirm_modify();
@@ -116,13 +110,15 @@ impl App {
     }
 
     fn limit_char_slot(kind: DialogKind, focus: usize, c: char) -> Option<usize> {
-        let valid = !c.is_control()
-            && (c.is_ascii_alphanumeric() || c == ' ' || c == '/' || c == '.');
+        let valid =
+            !c.is_control() && (c.is_ascii_alphanumeric() || c == ' ' || c == '/' || c == '.');
         let slot = match (kind, focus) {
-            (DialogKind::Add, 3) | (DialogKind::AddBt, 4) => 0,
-            (DialogKind::Add, 4) | (DialogKind::AddBt, 5) => 1,
-            (DialogKind::Modify, 1) | (DialogKind::ModifyBt, 2) => 0,
-            (DialogKind::Modify, 2) | (DialogKind::ModifyBt, 3) => 1,
+            (DialogKind::Add, 3) => 0,
+            (DialogKind::Modify, 1) => 0,
+            (DialogKind::AddBt, 4) => 0,
+            (DialogKind::ModifyBt, 2) => 0,
+            (DialogKind::AddBt, 5) => 1,
+            (DialogKind::ModifyBt, 3) => 1,
             _ => return None,
         };
         valid.then_some(slot)
@@ -144,28 +140,25 @@ impl App {
                     1 => {
                         d.dir.insert(&c.to_string(), 300);
                     }
-
                     _ => {
-                        if c.is_ascii_digit() && d.conns.insert(&c.to_string(), 2) > 0 {
-                            d.conns_edited = true;
-                        }
+                        super::dialog::insert_conns_digit(d, c);
                     }
                 }
             }
         } else if let Some(slot) = Self::limit_char_slot(DialogKind::Add, focus, c) {
             let d = self.dialog.as_mut().unwrap();
             if slot == 0 {
-                d.down_limit.insert(&c.to_string(), 16);
+                super::dialog::insert_limit_char(&mut d.down_limit, c);
             } else {
-                d.up_limit.insert(&c.to_string(), 16);
+                super::dialog::insert_limit_char(&mut d.up_limit, c);
             }
-        } else if focus == 5 {
+        } else if focus == 4 {
             if c == ' ' {
                 let d = self.dialog.as_mut().unwrap();
                 d.ck_open = true;
                 d.ck_sel = d.ck_type;
             }
-        } else if focus == 6 {
+        } else if focus == 5 {
             if self.dialog.as_ref().unwrap().ck_type != CK_NONE && c.is_ascii_hexdigit() {
                 self.dialog
                     .as_mut()
@@ -174,7 +167,7 @@ impl App {
                     .insert(&c.to_string(), 128);
             }
         } else if c == ' ' {
-            if focus == 7 {
+            if focus == 6 {
                 let d = self.dialog.as_mut().unwrap();
                 d.proxy_open = true;
             } else {
@@ -185,31 +178,22 @@ impl App {
 
     pub(super) fn modify_dialog_char(&mut self, focus: usize, c: char) {
         if focus == 0 {
-            if c.is_ascii_digit()
-                && self
-                    .dialog
-                    .as_mut()
-                    .unwrap()
-                    .conns
-                    .insert(&c.to_string(), 2)
-                    > 0
-            {
-                self.dialog.as_mut().unwrap().conns_edited = true;
-            }
+            let d = self.dialog.as_mut().unwrap();
+            super::dialog::insert_conns_digit(d, c);
         } else if let Some(slot) = Self::limit_char_slot(DialogKind::Modify, focus, c) {
             let d = self.dialog.as_mut().unwrap();
             if slot == 0 {
-                d.down_limit.insert(&c.to_string(), 16);
+                super::dialog::insert_limit_char(&mut d.down_limit, c);
             } else {
-                d.up_limit.insert(&c.to_string(), 16);
+                super::dialog::insert_limit_char(&mut d.up_limit, c);
             }
-        } else if focus == 3 {
+        } else if focus == 2 {
             if c == ' ' {
                 let d = self.dialog.as_mut().unwrap();
                 d.ck_open = true;
                 d.ck_sel = d.ck_type;
             }
-        } else if focus == 4 {
+        } else if focus == 3 {
             if self.dialog.as_ref().unwrap().ck_type != CK_NONE && c.is_ascii_hexdigit() {
                 self.dialog
                     .as_mut()
@@ -218,7 +202,7 @@ impl App {
                     .insert(&c.to_string(), 128);
             }
         } else if c == ' ' {
-            if focus == 5 {
+            if focus == 4 {
                 let d = self.dialog.as_mut().unwrap();
                 d.proxy_open = true;
             } else {
@@ -229,17 +213,17 @@ impl App {
 
     pub(super) fn dlg_activate_add(&mut self, btn: usize) {
         match btn {
-            8 => self.dlg_confirm_add(false),
-            9 => self.dlg_add_only(),
-            10 => self.dialog = None,
+            7 => self.dlg_confirm_add(false),
+            8 => self.dlg_add_only(),
+            9 => self.dialog = None,
             _ => {}
         }
     }
 
     pub(super) fn dlg_activate_modify(&mut self, btn: usize) {
         match btn {
-            6 => self.dlg_confirm_modify(),
-            7 => self.dialog = None,
+            5 => self.dlg_confirm_modify(),
+            6 => self.dialog = None,
             _ => {}
         }
     }
@@ -257,7 +241,6 @@ impl App {
         };
         let conns_raw = d.conns.value.trim().to_string();
         let down_raw = d.down_limit.value.trim().to_string();
-        let up_raw = d.up_limit.value.trim().to_string();
         let ck_raw = d.ck_value.value.trim().to_string();
         let ck_type = d.ck_type;
         let proxy_sel = d.proxy_sel.min(self.proxy_options.len().saturating_sub(1));
@@ -278,7 +261,7 @@ impl App {
                 algo, need
             ));
             if let Some(d) = self.dialog.as_mut() {
-                d.focus_field(2);
+                d.focus_field(3);
             }
             return;
         } else {
@@ -287,7 +270,7 @@ impl App {
             if !v.chars().all(|c| c.is_ascii_hexdigit()) {
                 self.set_toast(format!("⚠ {algo} 校验码只能是十六进制字符（0-9a-f）"));
                 if let Some(d) = self.dialog.as_mut() {
-                    d.focus = 2;
+                    d.focus = 3;
                 }
                 return;
             }
@@ -297,7 +280,7 @@ impl App {
                     "⚠ {algo} 校验码需为 {need} 位十六进制（当前 {len} 位）"
                 ));
                 if let Some(d) = self.dialog.as_mut() {
-                    d.focus = 2;
+                    d.focus = 3;
                 }
                 return;
             }
@@ -307,9 +290,7 @@ impl App {
         {
             let t = &mut self.tasks[idx];
             let down = parse_speed_limit(&down_raw).unwrap_or(t.task_max_down);
-            let up = parse_speed_limit(&up_raw).unwrap_or(t.task_max_up);
             t.task_max_down = down;
-            t.task_max_up = up;
             let changed = t.concurrency != concurrency;
             t.concurrency = concurrency;
             t.checksum = checksum;
@@ -373,7 +354,6 @@ impl App {
         let dir_raw = d.dir.value.trim().to_string();
         let conns_raw = d.conns.value.trim().to_string();
         let down_raw = d.down_limit.value.trim().to_string();
-        let up_raw = d.up_limit.value.trim().to_string();
         let ck_raw = d.ck_value.value.trim().to_string();
         let ck_type = d.ck_type;
 
@@ -388,7 +368,7 @@ impl App {
                 algo, need
             ));
             if let Some(d) = self.dialog.as_mut() {
-                d.focus_field(4);
+                d.focus_field(5);
             }
             return;
         } else {
@@ -397,7 +377,7 @@ impl App {
             if !v.chars().all(|c| c.is_ascii_hexdigit()) {
                 self.set_toast(format!("⚠ {} 校验码只能是十六进制字符（0-9a-f）", algo));
                 if let Some(d) = self.dialog.as_mut() {
-                    d.focus = 4;
+                    d.focus = 5;
                 }
                 return;
             }
@@ -408,7 +388,7 @@ impl App {
                     algo, need, len
                 ));
                 if let Some(d) = self.dialog.as_mut() {
-                    d.focus = 4;
+                    d.focus = 5;
                 }
                 return;
             }
@@ -430,7 +410,6 @@ impl App {
             return;
         }
         let down_prefill = d.down_prefill;
-        let up_prefill = d.up_prefill;
         self.sync_sim_sidecars();
         let (proto, base_name) = parse_url_task(&url);
 
@@ -498,7 +477,6 @@ impl App {
         t.checksum = checksum;
         t.proxy = proxy;
         t.task_max_down = parse_speed_limit(&down_raw).unwrap_or(down_prefill);
-        t.task_max_up = parse_speed_limit(&up_raw).unwrap_or(up_prefill);
         self.tasks.push(t);
         self.dialog = None;
 
@@ -926,18 +904,14 @@ impl App {
         } else if focus == 2 {
             self.bt_list_char(c);
         } else if focus == 3 {
-            if c.is_ascii_digit() {
-                let d = self.dialog.as_mut().unwrap();
-                if d.conns.insert(&c.to_string(), 2) > 0 {
-                    d.conns_edited = true;
-                }
-            }
+            let d = self.dialog.as_mut().unwrap();
+            super::dialog::insert_conns_digit(d, c);
         } else if let Some(slot) = Self::limit_char_slot(DialogKind::AddBt, focus, c) {
             let d = self.dialog.as_mut().unwrap();
             if slot == 0 {
-                d.down_limit.insert(&c.to_string(), 16);
+                super::dialog::insert_limit_char(&mut d.down_limit, c);
             } else {
-                d.up_limit.insert(&c.to_string(), 16);
+                super::dialog::insert_limit_char(&mut d.up_limit, c);
             }
         } else if focus == 7 {
             self.bt_trackers_char(c);
@@ -955,18 +929,14 @@ impl App {
         if focus == 0 {
             self.bt_list_char(c);
         } else if focus == 1 {
-            if c.is_ascii_digit() {
-                let d = self.dialog.as_mut().unwrap();
-                if d.conns.insert(&c.to_string(), 2) > 0 {
-                    d.conns_edited = true;
-                }
-            }
+            let d = self.dialog.as_mut().unwrap();
+            super::dialog::insert_conns_digit(d, c);
         } else if let Some(slot) = Self::limit_char_slot(DialogKind::ModifyBt, focus, c) {
             let d = self.dialog.as_mut().unwrap();
             if slot == 0 {
-                d.down_limit.insert(&c.to_string(), 16);
+                super::dialog::insert_limit_char(&mut d.down_limit, c);
             } else {
-                d.up_limit.insert(&c.to_string(), 16);
+                super::dialog::insert_limit_char(&mut d.up_limit, c);
             }
         } else if focus == 5 {
             self.bt_trackers_char(c);

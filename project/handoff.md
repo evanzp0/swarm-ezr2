@@ -1,154 +1,142 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/coder（本轮已完成）→ 建议下一节点 six-pack/cleaner
-> 会话：ezr-coder-bug18（2026-11-02，五项新功能实现轮：FR-02-28 全局上传/下载限速、
-> FR-02-29 任务级上传/下载限速、FR-02-30 BT 自动反吸血 + blacklist.yaml、
-> FR-02-31 't' trackers 弹窗、FR-02-32 [bt] listen_port；UI/交互以 ezr-demo 为同构参照）
-> 上游交接：project/handoff.md（bug20 specifier 轮交接：规格 v1.9/v1.9.1/v1.9.2 全量
-> 修订 + D67 设计定义值 + ezr-demo 参照同步完成，含「complete 后归档复制
-> /home/z/my-project/」授权）
+> 流程：six-pack　当前节点：six-pack/coder（本轮已完成）→ 建议下一节点 six-pack/specifier（本轮交互判据归档）或 six-pack/cleaner
+> 会话：ezr-coder-bug22（2026-11-03，bug22 轮 coder：修复 BT 添加/修改对话框
+> 「下载限速/上传限速」聚焦光标左偏缺陷——终端光标压在最后字符上、无法退格删最后
+> 字符；根因 = bt_text_row 光标列/点击 value_x 硬编码「标签 7 列」而限速两行标签宽
+> 8 列；修为动态 w(label).max(7) 并补防回归测试；ezr-demo 对账无同款缺陷、产品源码
+> 零改动，补守卫测试 + 文档同步）
+> 上游交接：project/handoff.md（bug21 修订轮 coder 交接；本轮任务来源 = 操作者 chat
+> 直启 bug 报告：BT 限速输入框聚焦光标应停最后字符后方 = ezr 全输入框通用输入模式）
 
 ## 一、产物历史完成情况
 
 ### 项目与需求
 - **EZR Downloader**：Rust + tokio + ratatui 终端下载器（单二进制、跨平台）。需求权威
-  `project/mission.md`（分期模式 v1.38）+ `project/mission/phase-01…04.md`。
-- phase-01（HTTP/HTTPS 内核与 TUI）已收官；phase-02（BT 内核/做种/管理）已实现并经
-  互操作夹具多轮收口。历轮 bug11–17 全部落地；bug18 规格轮（specifier，三期追轮
-  v1.9/v1.9.1/v1.9.2）完成五项新功能规格化；本轮 coder 实现 bug18 五项功能全量落地。
+  `project/mission.md`（分期模式 v1.39）+ `project/mission/phase-01…04.md`。
+- phase-01（HTTP/HTTPS 内核与 TUI）收官；phase-02（BT 内核/做种/管理）已实现并经
+  互操作夹具多轮收口。历轮 bug11–18 全部落地；bug21 轮四项 UI/交互修复已实现；
+  bug21 修订轮（specifier）已把操作者两批裁决（限速二进制批准 + HTTP 上传限速退役
+  FR-02-29 v1.10/D67②）落规格三层（mission/mission注记 + features 6 份 + QA 6 份）。
+- **本轮（coder，bug22）**：BT 对话框限速两行聚焦光标左偏修复——`ui/bt_dialog.rs
+  bt_text_row` 光标 x 与点击 value_x 由硬编码 `+9` 改 `w(label).max(7)` 动态化
+  （与 HTTP 对话框 ui/dialog.rs 及 ezr-demo 同位点公式归一）；逻辑光标（focus_field
+  → cursor_end）本就正确，缺陷纯在渲染/点击映射层。
 
 ### 产物总账
 | 节点/切片 | 产物 | 完成情况 | 验证状态 |
 |---|---|---|---|
-| specifier（phase-01/02 及历轮 bug11–17） | features/ 20 份 + qa/ 对应套件 | 已收官/已交付 | 见历轮登记 |
-| coder（phase-02 及历次收口轮，含 bug15/16/17 落地） | `project/ezr/` 全量 | 已交付 | 见历轮登记（bug17 轮：bin 864P/0F + 集成 5742P/0F） |
-| specifier（bug18 三期追轮） | mission/phase-02 v1.9…v1.9.2 + features ×11 修订/新建 + qa ×7 + ezr-demo 同步（代码/脚本/文档） | 已交付 | APS dry-check 全 EXIT=0；ezr-demo cargo check + PTY 26 项全过 |
-| **coder（本轮 bug18 实现轮）** | `project/ezr/` 全量五项功能（清单见下节） | **已交付** | **全量 6791P/0F（bin 885P/0F + 集成 12 目标 5906P/0F）+ clippy 0 警告 + fmt 干净** |
+| specifier（phase-01/02 及历轮 bug11–18） | features/ 20 份 + qa/ 对应套件 | 已收官/已交付 | 见历轮登记 |
+| coder（phase-02 及历次收口轮，含 bug18/bug21） | `project/ezr/` 全量 | 已交付 | 见历轮登记 |
+| specifier（bug21 修订轮） | mission 注记 + features 6 份修订 + QA 6 份同步 | 已交付 | APS dry-check 全过（见上轮登记） |
+| **coder（bug21 修订轮）** | `project/ezr/`：bt_dialog.rs toast 统一 + 防回归单测新增 + engine.rs 三处测试观察环竞态修复 | 已交付 | bin 890P/0F + 集成 5943P/0F + clippy 0 警告 + fmt 干净（合计 6833P/0F） |
+| **coder（本轮，bug22）** | `project/ezr/`：bt_text_row 标签宽动态化（光标 x + value_x 两处）+ 防回归渲染/点击测试；`ezr-demo/`：对账零产品改动 + 守卫测试 + README 记录 34 + 规范 §6.1 光标规则 bullet | **已交付** | **bin 891P/0F + 集成 12 目标 5946P/0F + demo 31P/0F + clippy 0 警告 + fmt 干净（ezr 全量合计 6837P/0F）** |
 
 ### 遗留受限项（当前有效，沿袭 + 本轮登记）
-- 沿袭（bug14–17 轮登记，全部不变）：cargo-mutants 缺位；死 tracker 约 4 分钟静默窗；
+- 沿袭（bug14–21 轮登记，全部不变）：cargo-mutants 缺位；死 tracker 约 4 分钟静默窗；
   TUI 恐慌自愈边界（bug6）；BT partial 进度不持久化；QA-SQ-13 竞态沿袭待办；QA-RS-06
   沿袭；supervisor block_worker fatal 竞态观察项；`App.windows` 失去读者（cleaner 候选
-  裁决）；ezr-demo verify_ezr.py 场景 N 四项预存假 FAIL；ezr-demo 11 条预存 nightly
-  lint（未触碰文件）。
-- **沿袭解除两项**：①「BT 下载限速未接」（bug14 起登记）——本轮 BtSpec.max_speed
-  dead_code 退役、任务级双字段真实接入引擎（下载 pump 侧 + 上传 spawn 侧）；②「BT 引擎
-  无并发热调命令」之外新增热调载体——限速经 Reconfigure 载体热调生效（不重启引擎）。
-- **本轮新受限项**：①leech 判据（120s 存活窗 + 1MiB 上传阈值）无 e2e 自动化测试——
-  阈值常量固定（LEECH_UP_MIN/LEECH_DOWN_MAX/LEECH_MIN_ALIVE_SECS），e2e 需真实传输
-  ≥1MiB + 120s 等待，测试成本不可接受；判据逻辑与另两判据共享 ban_and_drop 原语，
-  bad_piece/protocol 两判据已有 e2e 覆盖；②QA 套件 runner 化与实跑（含 QA-AL/QA-TW
-  新套件）属 six-pack/QA 职责——本轮交互变更（t/T 键、四对话框 +2 字段、trackers
-  弹窗）对既有 QA runner 的影响未评估未同步（沿 coder 职责边界，QA 轮处理）；
-  ③bad_piece 归属口径 = 交付完成块的 peer 计 1 次（piece 可能多 peer 拼块，
-  实现定义近似，D67 允许）。
-- Inversion 访谈受限项（沿袭）：chat 选择题面板不可用，操作者指令文本即阶段 1 答案。
+  裁决）；leech 判据无 e2e 自动化（阈值常量固定）；bad_piece 归属口径 = 交付完成块
+  peer 计 1 次（D67 允许）；Inversion 访谈受限项（chat 选择题面板不可用）。
+- **本轮销项**：操作者 bug22 报告（BT 限速两行聚焦光标压最后字符）**本轮修复销项**
+  （bug21 修订轮交接无遗留待修项，上轮登记项均已闭环）。
+- **本轮新登记（specifier 轮/后续）**：①「对话框单行字段聚焦光标位」通用判据
+  （聚焦即光标迁最后字符后方，终端光标列 = 行首 + w(label).max(7) + 2 + 值宽；点击
+  value_x 同式）——操作者本轮 chat 明言「ezr 全输入框通用输入模式」，spec 三层
+  （features 01-add-task/03-modify-task/07-add-bt/08-modify-bt 场景增补 + QA 用例）
+  待 specifier 轮归档（沿 bug21 先例：coder 先修、specifier 归档）；②ezr-demo 侧
+  已同口径落规范（§6.1 聚焦光标位 bullet）+ 守卫测试（cursor_tests）+ README 记录 34。
+- 工具链：rustup nightly 1.101.0 + rustfmt + clippy + bb v1.13.229 + APS 均就位
+  （PATH 需含 ~/.cargo/bin 与 .tools/bin；环境不持久时按 notes/environment.md 重建；
+  本轮沙箱 PATH 曾被重置，export 补数即复）。
 
-### 实现定义值登记（本轮新增，累计口径见 mission/phase-02 D67）
+### 实现定义值登记（累计口径，本轮修订处加粗）
 | 值 | 取值 | 位置 |
 |---|---|---|
 | leech 阈值 | up ≥ 1 MiB 且 down < 64 KiB 且存活 ≥ 120s | bt/engine.rs LEECH_* 常量 |
 | bad_piece 阈值 | 同连接累计 3 次 | BAD_PIECE_BAN_THRESHOLD |
 | protocol 阈值 | 未知 id/帧错首次即封；非法区间 request 重复 3 次 | INVALID_REQUEST_BAN_THRESHOLD |
-| 限速输入上限 | 32 列（FR-01-06 形态对齐） | dialog_keys CAP_LIMIT |
-| 限速非法 toast | `⚠ 限速值非法（整数 B/s 或十进制单位字符串，如 2 MB/s）` | dialogs.rs / bt_dialog.rs |
-| 限速字段占位 | `0` | ui/dialog.rs / ui/bt_dialog.rs |
+| 限速输入上限 | 32 列（FR-01-06 形态对齐） | routing.rs CAP_LIMIT |
+| 限速非法 toast | `⚠ 限速值非法（整数 B/s 或单位字符串，如 512 KiB/s）`（**HTTP/BT、下载/上传四处全部统一——本轮收口 bt_dialog.rs 上传臂**） | dialogs.rs / bt_dialog.rs |
+| 限速字段占位 | 无占位（空态纯空白） | ui/dialog.rs / ui/bt_dialog.rs |
+| 限速单位口径（对话框） | 二进制：1 KiB = 1024 B/s、1 MiB = 1024²、1 GiB = 1024³（config 文件键解析口径不变十进制） | routing.rs speed_unit_mult / dialogs.rs parse_speed_limit |
+| 限速输入规范化 | 输入/粘贴即规范化显示（KiB/s、MiB/s、GiB/s、B/s；前导零剥离；canonical 完成态吸收单位后缀续入；退格不回写） | routing.rs canonical_speed_form / insert_limit |
+| 并发满容量语义 | 光标在字段末尾且已满 2 位时键入/粘贴数字 = 清空重输；中位不动不插 | routing.rs insert_conns_digit |
+| 多行合并行光标 | 接缝 = 合并前上一行长度处 | multiline.rs backspace |
+| **对话框单行字段聚焦光标位** | **聚焦即光标迁最后字符后方（cursor = len_chars，退格删最后字符）；终端光标列 = 行首 + w(label).max(7) + 2 + 值宽，点击 value_x 同式（本轮修复 bt_text_row 硬编码 +9 对 8 列宽标签行左偏一列的缺陷，与 HTTP 对话框/ezr-demo 公式归一）** | ui/bt_dialog.rs bt_text_row / ui/dialog.rs / ezr-demo ui/dialogs.rs |
 | 监听占用警告 | `BT 监听端口 {port} 被占用，已回退随机端口` | engine/mod.rs bind_bt_listener |
 | 黑名单损坏警告 | `黑名单文件无法解析（{path}），已按空名单启动` | model/blacklist.rs |
 | banned_at 格式 | unix 秒（u64） | model/blacklist.rs BlacklistEntry |
 | trackers 空态文案 | `（无 trackers）` | ui/popups.rs |
+| HTTP 对话框几何/焦点 | 添加 74×13（字段 7 行焦点 0–6、按钮 7/8/9）；修改 74×11（字段 5 行焦点 0–4、按钮 5/6）；「上传限速」字段退役（HTTP 无上传语义；BT 框保留） | ui/dialog.rs + dialog_keys + mouse.rs |
+| **封禁 toast 与黑名单写入顺序** | **blacklist_add_with 先于 Evt::Toast 发送（实现事实；测试观察环须双条件等齐）** | bt/engine.rs ban 路径 |
 
 ## 二、当前产出情况
 
-### 本会话产物清单（全部在 `project/ezr/`）
-- **FR-02-28 全局限速**：`model/config.rs`（max_speed 键退役 → global_max_download_speed/
-  global_max_upload_speed，旧键按未知键静默忽略；模板 v1.14 钦定原文逐字节内嵌 191 行
-  48 空行 40 键 + 模板测试组全量对齐）；`engine/throttle.rs`（Throttle::set_rate 热调）；
-  `engine/mod.rs`（EngineShared 双桶 throttle_dl/throttle_ul + 访问器 + 启动构造）；
-  `supervisor/workers.rs`、`supervisor/single.rs`（HTTP 每 chunk 全局桶 acquire）；
-  `main.rs`（CLI --max-speed 语义 = 全局下载限速，参数优先不变）。
-- **FR-02-29 任务级限速**：`model/task.rs` + `model/registry.rs`（Task/TaskSnapshot
-  max_download_speed/max_upload_speed，serde default 存量兼容）；`supervisor/mod.rs`
-  （TaskSpec.task_max_download_speed + BtSpec 双字段替代 dead max_speed）；TaskCmd/
-  BtTaskCmd/Cmd 三层 Reconfigure 载体扩展 + download.rs watch 通道热调 + bt/engine
-  set_rate；`app/dialogs.rs`、`app/bt_dialog.rs`（四框 +2 字段：添加框预填 config 默认、
-  留空/非法回退；修改框预填当前值、留空保持、非法 toast + 聚焦不关窗；parse_speed_limit
-  解析整数 B/s / 十进制单位）；`app/dialog_keys/{mod,routing}.rs`、`app/paste.rs`、
-  `app/mouse.rs`（11/8/11/8 焦点矩阵七处登记点全量同步 + 限速粘贴白名单 32 列）；
-  `ui/dialog.rs`（74×14/74×12 + 动态 label 对齐）；`ui/bt_dialog.rs`（78×28/78×26）。
-- **FR-02-30 反吸血**：`model/blacklist.rs` 新建（BlacklistEntry ip/reason/banned_at，
-  serde_yaml 持久化，损坏=空名单+警告；record 原子写、同 IP 去重；Cargo.toml + serde_yaml
-  0.9）；`bt/engine.rs`（ConnStat +connected_at/bad_pieces/invalid_requests；leech 判据
-  1s tick 臂 + 做种豁免；bad_piece 计数封禁；Unknown 消息 id 首封 + PeerIn::ProtocolViolation
-  帧错分类 + 非法区间 request 3 次封禁；ban_and_drop 统一原语：黑名单 + yaml 落盘 + ⛔
-  toast + 优雅关闭 + 候选摘除；三面过滤沿用 is_blacklisted）；`engine/mod.rs`
-  （blacklist_add_with + blacklist_file 门 + 启动加载 seed + 损坏警告）。
-- **FR-02-31 trackers 弹窗**：`bt/engine.rs`（TrackerReport 带 url/interval_secs/
-  retry_secs；spawn_tracker 按池内 URL 回报）；`engine/mod.rs`（Evt::BtTrackers）；
-  `app/engine/evt.rs`（BtTrackers 臂 → TrackerRow 存储）；`app/mod.rs`（TrackerRow +
-  trackers_* 八字段状态组 + overlay_open 扩展）；`app/popups.rs` 新建（门控三臂 toast
-  文案按规格 + 开关/滚动）；`ui/popups.rs` 新建（draw_trackers 90×22 qBt 六列、URL 44 列
-  宽折行、细线分隔计入滚动、对称 padding 2、无底部提示行、VS15+微差色反自动链接、
-  三态真实数据源、滚动条 SbKey::Trackers、拖拽/[✗]）；`app/scrollbar.rs`
-  （SbKey::Trackers 五件套）；`app/keys.rs`（弹窗键臂 + t/T 臂改弹窗入口，页签切换
-  收敛 ]/[）；`app/mouse.rs`（滚轮 ±2/滚动条/拖拽/[✗]）；`ui/multiline.rs`
-  （draw_multi_line_input + no_link 参数，渲染层注入不改缓冲，命令窗口 false/BT
-  trackers 面板 true）；`app/bt_dialog.rs`（trackers 确认链 scheme 白名单
-  http/https/udp 拒绝：toast + 焦点回 trackers + 不落库）；`ui/help.rs`
-  （12 组 75 行：页签 T 删、任务列表 T 增、trackers 弹窗组新增按 feature 置尾）。
-- **FR-02-32 listen_port**：`model/config.rs`（[bt] listen_port，0/负/非法 → 随机）；
-  `engine/mod.rs`（bind_bt_listener 同步 bind + 占用回退随机 + 启动警告；EngineShared
-  std listener + OnceLock<Arc<tokio TcpListener>> 单次 from_std）；`bt/engine.rs`
-  （删除每任务本地 bind，改 shared.bt_listener()；announce port = 实际监听端口全任务
-  共享）。
-- **测试新增 +26**：config（speed_limit_keys/legacy_max_speed 退役/listen_port 四分支/
-  模板 40 键）；blacklist 5 项（缺文件/round-trip/损坏/非法 IP 跳过/手工解封）；
-  throttle set_rate 2 项；parse_speed_limit 2 项；bind_bt_listener 3 项；trackers 弹窗
-  渲染 2 项（几何六列折行 + 三态真实数据源/细线计数）；反吸血 e2e 3 项（未知消息 id
-  首封/非法 request 三振/坏 piece 三振）+ tracker 状态事件 1 项。
+### 本会话产物清单
+- **修复（bug22）**：`ui/bt_dialog.rs::bt_text_row` 终端光标列与点击 value_x 由
+  硬编码 `rect.x + 9 + …`（= 标签 7 列 + "> " 2 列）改为 `rect.x + label_cols + 2 + …`，
+  `label_cols = w(label).max(7)` 动态计算——「下载限速/上传限速」标签 4 个 CJK =
+  8 显示列（pad_right(7) 超宽不截断），旧实现限速两行光标/点击基准左偏 1 列 →
+  聚焦光标压在最后字符上、退格看似删不到最后字符；种子/保存到/并发（标签 ≤7 列）
+  恰好不触发。与 HTTP 对话框（ui/dialog.rs `w(row.label).max(7)`）及 ezr-demo 同位点
+  公式归一；逻辑光标（focus_field → cursor_end）本就正确，缺陷纯在渲染/点击映射层。
+- **新增测试（防回归）**：`ui/bt_dialog.rs` tests 新增
+  `bt_limit_focus_cursor_lands_after_last_char`——AddBt 并发(3)/下载限速(4)/上传限速(5)
+  + ModifyBt 并发(1)/下载限速(2)/上传限速(3) 六行聚焦断言（自校准矩形：
+  `dlg_cursor_screen == rect.x + label_cols + 2 + w(value)` + 逻辑 cursor = len_chars）；
+  点击映射判据（value_x = 行首+10、首字符格/末字符格/越尾/右侧空白四点）；
+  末尾光标退格删最后字符行为断言（旧硬编码实现下必红）。
+- **ezr-demo 对账（操作者指令：若不同则同步）**：逐位点核对 demo `bt_text_row` 与
+  HTTP 文本行——**素来动态计算 label_cols，无同款缺陷，产品源码零改动**；同步落
+  三件：①守卫测试 `bt_limit_fields_focus_cursor_after_last_char`（src/ui/mod.rs
+  cursor_tests，AddBt 三行同口径断言，31P/0F）；②规范文档 §6.1 新增「聚焦光标位
+  （全应用单行字段通用输入模式）」bullet（规则 + 对账结论；§6.9 经「与 §6.1
+  同口径」覆盖）；③README 变更记录 34（对账结论 + 守卫 + 文档同步；无需重建
+  bin/ 预编译二进制——产品源码未动）。demo 存量 fmt 漂移 5 文件
+  （scroll/multiline/popups，rustfmt 版本差遗留）未触碰，本轮改文件 fmt 干净。
 
 ### 验证证据
 | 验证项 | 结果 | 命令（可复现） |
 |---|---|---|
-| bin 全量单测 | **885P / 0F**（基线 864 + 21 新增） | `cargo test --bin ezr` |
-| 集成 12 目标 | **5906P / 0F**（基线 5742 + 164，挂载套件自动收编本轮 src 新测试） | `cargo test --test hardening…`（12 目标分块跑） |
-| 全量合计 | **6791P / 0F**（基线 6606 + 185） | 上述之和 |
-| clippy | 0 警告（--bin 与 --tests 均 0） | `cargo clippy --bin ezr --tests` |
-| fmt | 干净 | `cargo fmt --check` |
-| 时序 flake 复核 | hardening_v115 / hardening_g_v147 各 1 次单点 FAIL，原样复跑全绿（811P/673P）——环境性时序，非回归 | 复跑同命令 |
+| bin 全量单测 | **891P / 0F**（基线 890 + 净增 1） | `cargo test --bin ezr`（一次全绿） |
+| 集成 12 目标 | **5946P / 0F** | `cargo test --test <目标>`（hardening 139 / engine_backfill 794 / g_appcore 695 / g_engine 690 / g_main 2 / g_proxy 16 / g_slots 197 / g_supervisor 664 / g_throttle_err 430 / g_v147 678 / ui_backfill 824 / v115 817；v147 首轮 1 例时序 flake，复跑即绿 = 既有登记口径） |
+| ezr 全量合计 | **6837P / 0F** | 上述之和 |
+| ezr-demo 全量 | **31P / 0F**（含新守卫测试） | `cargo test`（ezr-demo/） |
+| clippy | 0 警告（--bin 与 --tests） | `cargo clippy --bin ezr --tests` |
+| fmt | ezr 干净；demo 本轮改文件干净 | `cargo fmt --check` |
 
 ### 对账口径
-- 基线 = bug17 轮登记 bin 864P/0F + 集成 5742P/0F = 6606P/0F（本会话开工首日复现一致，
-  hardening_g_engine 首轮 1 次时序 flake 复跑全绿）。本轮终态 6791P/0F = +185
-  （bin +21 直增；集成 +164 为挂载套件对 src 新测试的自动收编重复计数，实际新增测试
-  同源）。
-- 五项功能与 FR 逐项对应：FR-02-28（config 两键改名退役 + 双桶 + HTTP/BT 接入 + CLI
-  保留）、FR-02-29（任务字段 + 四对话框 + Reconfigure 热调 + min 合成）、FR-02-30
-  （三判据 + yaml + 三面过滤 + B 键共存）、FR-02-31（门控/90×22/qBt 六列/折行/细线/
-  padding/无提示/VS15/t 退役/wss 双过滤面/帮助同步）、FR-02-32（listen_port 四分支 +
-  共享单端口 + 占用回退警告）。
-- bug20 六条 UI 反馈全部纳入 ezr 端弹窗实现（细线/续行同色/VS15/对称 padding/无提示
-  行/44 列）+ 对话框 no_link。
+- 基线 = bug21 修订轮登记 bin 890P/0F + 集成 5943P/0F = 6833P/0F；本轮终态 6837P/0F
+  （bin +1 新渲染测试；集成 +3 = 新测试属 `ui::bt_dialog` 模块，收编面 =
+  engine_backfill/ui_backfill/v115 三套件各 +1——**收编面按测试所在模块分流**，
+  与上轮 `app::bt_dialog` 收编 7 套件的清单不同，+1+3 = +4 同源吻合）。
+- v147 首轮 1F = 时序 flake（复跑 678P/0F；总数 678 与上轮持平 = v147 未收编本轮
+  ui 模块测试，失败与本轮改动无关）。
+- 集成存量断言扫描：`dlg_cursor_screen`/`value_x` 在 tests/ 仅两处命中
+  （hardening_v115.rs:147 = HTTP 框 URL 行动态公式断言、hardening_ui_backfill.rs:868
+  = 详情面板 URL 行布局常量），均与本轮 bt_dialog 位点无关，实测全绿佐证。
+- 操作者验收判据：BT 添加/修改对话框 Tab/点击进入「下载限速/上传限速」→ 终端光标
+  停最后字符后方，Backspace 删最后字符；与「并发」框行为一致。
 
 ### 待办与待批
-- **待批（操作者）**：D67 设计定义值（沿袭 specifier 轮，全部已按 D67 实现，若对任一
-  裁决有异议可回退）；本轮实现定义值登记表（上表 10 项）。
-- **待办（cleaner 轮）**：`App.windows` 失去读者裁决；handle_peer_msg 参数进一步收拢
-  （现有 #[allow(clippy::too_many_arguments)]）；bt/engine.rs 体量（5300+ 行）拆分评估；
-  ezr-demo `add_bt_dialog_enter`/`modify_bt_dialog_enter` 陈旧注释清理（demo 侧）。
-- **待办（QA 轮）**：QA 套件 runner 化与实跑（QA-TP 修订版/QA-AL/QA-TW 新套件 + 既有
-  套件对本轮交互变更的同步评估：t/T 键改判、四对话框 74×14/78×28 几何、trackers 弹窗）。
-- **待办（hardender 轮沿袭）**：cargo-mutants 缺位待环境补齐。
+- **待批（操作者）**：无新增待批项（本轮为缺陷修复 + demo 对账同步）。
+- **待办（specifier 轮）**：「对话框单行字段聚焦光标位」通用判据落 spec 三层
+  （features 01-add-task/03-modify-task/07-add-bt/08-modify-bt 场景增补 + QA 用例；
+  本轮新登记①）。
+- **待办（QA 轮）**：QA runner 执行层对修订规格/QA 套件改动的同步评估（沿袭开放）。
+- **待办（cleaner 轮，沿袭）**：`App.windows` 失去读者裁决；handle_peer_msg 参数收拢；
+  bt/engine.rs 拆分评估；`up_prefill` 在 HTTP 路径已无读者（字段面 BT 专用化归并评估）；
+  `canonical_speed_form` 与 `parse_speed_limit` 的解析前缀重复归并评估。
 - 无阻塞。
 
 ### 移交建议
-- 下一步 `bin/swarm begin six-pack/cleaner`：以本文件为上游交接。coder 侧已知清理候选：
-  `App.windows` 死字段裁决、handle_peer_msg 参数结构化、bt/engine.rs 拆分评估（变异点
-  密度见 notes/rust.md 每文件计数口径）、`speed_limit_of`/`listen_port_of` 与既有 helper
-  的归并评估。
-- 后续链：cleaner → architect → hardender → QA（宪法第一章：不自动流转）。
+- 下一步 `bin/swarm begin six-pack/specifier`（本轮判据归档）或
+  `bin/swarm begin six-pack/cleaner`（沿上轮建议）：以本文件为上游交接。
+- 后续链：specifier → coder / cleaner → architect → hardender → QA（宪法第一章：
+  不自动流转）。
 - 操作者授权的收尾口径：`bin/swarm complete` 后立即将产物 tar.gz 复制到
-  `/home/z/my-project/`（沿 bug18 主轮授权，本轮按同口径执行）。
-- 工具链交接：rustup 已装（TUNA 镜像 nightly 1.101.0 + rustfmt + clippy，PATH =
-  ~/.cargo/bin 与 ~/.local/bin——后者为 lld 桥接符号链接 ld.lld → rust-lld，环境不跨
-  会话持久时按 notes/rust.md 重建）；serde_yaml 0.9 新依赖已入 Cargo.toml/Cargo.lock。
+  `/home/z/my-project/`（沿 bug18/bug20/bug21 轮授权口径执行）。
+- 工具链交接：rustup nightly 1.101.0（PATH = ~/.cargo/bin）+ cargo registry rsproxy；
+  bb + APS 已装（.tools/bin、.tools/Acceptance-Pipeline-Specification）——
+  环境不跨会话持久时按 notes/environment.md 重建。

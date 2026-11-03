@@ -228,15 +228,8 @@ impl App {
         } else if focus == 2 {
             self.bt_list_char(c);
         } else if focus == 3 {
-            if c.is_ascii_digit() {
-                let d = self.dialog.as_mut().unwrap();
-                if d.conns
-                    .insert(&c.to_string(), super::dialog_keys::CAP_CONNS_DIGITS)
-                    > 0
-                {
-                    d.conns_edited = true;
-                }
-            }
+            let d = self.dialog.as_mut().unwrap();
+            super::dialog_keys::insert_conns_digit(d, c);
         } else if focus == 4 || focus == 5 {
             if !c.is_control() {
                 let d = self.dialog.as_mut().unwrap();
@@ -262,15 +255,8 @@ impl App {
         if focus == 0 {
             self.bt_list_char(c);
         } else if focus == 1 {
-            if c.is_ascii_digit() {
-                let d = self.dialog.as_mut().unwrap();
-                if d.conns
-                    .insert(&c.to_string(), super::dialog_keys::CAP_CONNS_DIGITS)
-                    > 0
-                {
-                    d.conns_edited = true;
-                }
-            }
+            let d = self.dialog.as_mut().unwrap();
+            super::dialog_keys::insert_conns_digit(d, c);
         } else if focus == 2 || focus == 3 {
             if !c.is_control() {
                 let d = self.dialog.as_mut().unwrap();
@@ -575,7 +561,7 @@ impl App {
             match super::dialogs::parse_speed_limit(&down_raw) {
                 Some(v) => v,
                 None => {
-                    self.set_toast("⚠ 限速值非法（整数 B/s 或十进制单位字符串，如 2 MB/s）");
+                    self.set_toast("⚠ 限速值非法（整数 B/s 或单位字符串，如 512 KiB/s）");
                     if let Some(d) = self.dialog.as_mut() {
                         d.focus_field(2);
                     }
@@ -589,7 +575,7 @@ impl App {
             match super::dialogs::parse_speed_limit(&up_raw) {
                 Some(v) => v,
                 None => {
-                    self.set_toast("⚠ 限速值非法（整数 B/s 或十进制单位字符串，如 2 MB/s）");
+                    self.set_toast("⚠ 限速值非法（整数 B/s 或单位字符串，如 512 KiB/s）");
                     if let Some(d) = self.dialog.as_mut() {
                         d.focus_field(3);
                     }
@@ -1118,6 +1104,28 @@ mod tests {
         app.modify_dialog_entry();
         assert!(app.dialog.is_none());
         assert_eq!(app.toast.as_deref(), Some("⚠ 已完成任务不可修改"));
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn modify_bt_invalid_upload_limit_toast_unified() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-uptoast");
+        let path = write_multi_torrent(&dir, "a.torrent");
+        let meta = parse_at(&path);
+        let mut app = make_app("uptoast");
+        app.open_add_bt_dialog_with(&path, &meta);
+        app.dlg_confirm_add_bt(false);
+        app.selected = 0;
+        app.modify_dialog_entry();
+        app.dialog.as_mut().unwrap().up_limit.set("abc");
+        app.dlg_confirm_modify_bt();
+        assert_eq!(
+            app.toast.as_deref(),
+            Some("⚠ 限速值非法（整数 B/s 或单位字符串，如 512 KiB/s）"),
+            "上传限速非法 toast 与下载字段同文案（08-modify-bt-08 v1.6）"
+        );
+        assert!(app.dialog.is_some(), "不关窗（非法不生效）");
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }

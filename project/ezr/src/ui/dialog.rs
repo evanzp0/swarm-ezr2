@@ -167,9 +167,9 @@ struct Row {
 fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) {
     let is_add = kind == DialogKind::Add;
     let (title, dw, dh) = if is_add {
-        (" 添加任务：HTTP(S) ", 74u16, 14u16)
+        (" 添加任务：HTTP(S) ", 74u16, 13u16)
     } else {
-        (" 修改任务：HTTP(S) ", 74, 12)
+        (" 修改任务：HTTP(S) ", 74, 11)
     };
     let dlg = {
         let r = overlay_rect(area, dw, dh, app.dlg_pos);
@@ -200,7 +200,6 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         dir,
         conns,
         down_limit,
-        up_limit,
         ck_type,
         ck_value,
         ck_open,
@@ -215,7 +214,6 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
             d.dir.clone(),
             d.conns.clone(),
             d.down_limit.clone(),
-            d.up_limit.clone(),
             d.ck_type,
             d.ck_value.clone(),
             d.ck_open,
@@ -256,13 +254,7 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
     rows.push(Row {
         label: "下载限速",
         input: down_limit,
-        placeholder: "0".to_string(),
-        kind: RowKind::Text,
-    });
-    rows.push(Row {
-        label: "上传限速",
-        input: up_limit,
-        placeholder: "0".to_string(),
+        placeholder: String::new(),
         kind: RowKind::Text,
     });
     rows.push(Row {
@@ -350,9 +342,9 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
 
     let n_rows = rows.len() as u16;
     let buttons: Vec<(&str, usize)> = if is_add {
-        vec![("立即下载", 8), ("仅添加", 9), ("取消", 10)]
+        vec![("立即下载", 7), ("仅添加", 8), ("取消", 9)]
     } else {
-        vec![("确定", 6), ("取消", 7)]
+        vec![("确定", 5), ("取消", 6)]
     };
     draw_button_row(f, app, inner, inner.y + n_rows + 2, &buttons, focus);
 
@@ -521,7 +513,8 @@ mod tests {
         assert_eq!(win.value_x, 35);
         assert_eq!((win.win_lo, win.win_hi), (0, 16));
         assert_eq!(win.cols.last().copied(), Some(16), "cols 末位 = 窗口总宽");
-        assert!(app.dlg_field_wins[5].is_none(), "下拉行无窗口几何");
+        assert!(app.dlg_field_wins[4].is_none(), "下拉行无窗口几何");
+        assert!(app.dlg_field_wins[6].is_none(), "代理行无窗口几何");
         app.dialog.as_mut().unwrap().url.set_cursor(2);
         term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         assert_eq!(app.dlg_cursor_screen, Some((37, 15)), "光标列随 cursor");
@@ -536,7 +529,7 @@ mod tests {
         term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         assert_eq!(app.dlg_pos, Some((13, 8)), "首帧居中并记忆");
         let a = app.dlg_area.expect("dlg_area 回填");
-        assert_eq!((a.x, a.y, a.width, a.height), (13, 8, 74, 14));
+        assert_eq!((a.x, a.y, a.width, a.height), (13, 8, 74, 13));
         app.shutdown().await;
     }
 
@@ -551,7 +544,7 @@ mod tests {
         let a = app.dlg_area.expect("dlg_area 回填");
         assert_eq!(
             (a.x, a.y, a.width, a.height),
-            (26, 16, 74, 14),
+            (26, 17, 74, 13),
             "绘制矩形钳制终端内"
         );
         let s = term.backend().to_string();

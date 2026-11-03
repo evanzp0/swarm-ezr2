@@ -27,14 +27,8 @@ pub(super) fn parse_speed_limit(raw: &str) -> Option<u64> {
     if !n.is_finite() || n < 0.0 {
         return None;
     }
-    let unit = unit.trim().trim_end_matches("/s").trim();
-    let mult = match unit.to_lowercase().as_str() {
-        "" | "b" | "bps" => 1.0,
-        "k" | "kb" | "kbps" => 1_000.0,
-        "m" | "mb" | "mbps" => 1_000_000.0,
-        "g" | "gb" | "gbps" => 1_000_000_000.0,
-        _ => return None,
-    };
+    let unit = unit.trim().trim_end_matches("/s").trim().to_lowercase();
+    let mult = super::dialog_keys::speed_unit_mult(&unit)?;
     let v = n * mult;
     if v >= u64::MAX as f64 {
         return Some(u64::MAX);
@@ -86,17 +80,17 @@ impl App {
 
     pub(super) fn dlg_activate_add(&mut self, btn: usize) {
         match btn {
-            8 => self.dlg_confirm_add(),
-            9 => self.dlg_add_only(),
-            10 => self.dialog = None,
+            7 => self.dlg_confirm_add(),
+            8 => self.dlg_add_only(),
+            9 => self.dialog = None,
             _ => {}
         }
     }
 
     pub(super) fn dlg_activate_modify(&mut self, btn: usize) {
         match btn {
-            6 => self.dlg_confirm_modify(),
-            7 => self.dialog = None,
+            5 => self.dlg_confirm_modify(),
+            6 => self.dialog = None,
             _ => {}
         }
     }
@@ -114,7 +108,6 @@ impl App {
         };
         let conns_raw = d.conns.value.trim().to_string();
         let down_raw = d.down_limit.value.trim().to_string();
-        let up_raw = d.up_limit.value.trim().to_string();
         let ck_raw = d.ck_value.value.trim().to_string();
         let ck_type = d.ck_type;
         let proxy_sel = d.proxy_sel.min(self.proxy_options.len().saturating_sub(1));
@@ -127,14 +120,13 @@ impl App {
         };
 
         let cur_down = self.tasks[idx].max_download_speed;
-        let cur_up = self.tasks[idx].max_upload_speed;
         let new_down = if down_raw.is_empty() {
             cur_down
         } else {
             match parse_speed_limit(&down_raw) {
                 Some(v) => v,
                 None => {
-                    self.set_toast("⚠ 限速值非法（整数 B/s 或十进制单位字符串，如 2 MB/s）");
+                    self.set_toast("⚠ 限速值非法（整数 B/s 或单位字符串，如 512 KiB/s）");
                     if let Some(d) = self.dialog.as_mut() {
                         d.focus_field(1);
                     }
@@ -142,22 +134,8 @@ impl App {
                 }
             }
         };
-        let new_up = if up_raw.is_empty() {
-            cur_up
-        } else {
-            match parse_speed_limit(&up_raw) {
-                Some(v) => v,
-                None => {
-                    self.set_toast("⚠ 限速值非法（整数 B/s 或十进制单位字符串，如 2 MB/s）");
-                    if let Some(d) = self.dialog.as_mut() {
-                        d.focus_field(2);
-                    }
-                    return;
-                }
-            }
-        };
 
-        let Some(checksum) = self.checksum_from_input(ck_type, &ck_raw, 4) else {
+        let Some(checksum) = self.checksum_from_input(ck_type, &ck_raw, 3) else {
             return;
         };
 
@@ -174,7 +152,6 @@ impl App {
             t.checksum = checksum;
             t.proxy = proxy;
             t.max_download_speed = new_down;
-            t.max_upload_speed = new_up;
         }
         self.dialog = None;
         let engine = self.engine.clone();
@@ -216,14 +193,12 @@ impl App {
         let dir_raw = d.dir.value.trim().to_string();
         let conns_raw = d.conns.value.trim().to_string();
         let down_raw = d.down_limit.value.clone();
-        let up_raw = d.up_limit.value.clone();
         let down_prefill = d.down_prefill;
-        let up_prefill = d.up_prefill;
         let ck_raw = d.ck_value.value.trim().to_string();
         let ck_type = d.ck_type;
         let proxy = self.proxy_options[d.proxy_sel.min(self.proxy_options.len() - 1)].clone();
 
-        let Some(checksum) = self.checksum_from_input(ck_type, &ck_raw, 4) else {
+        let Some(checksum) = self.checksum_from_input(ck_type, &ck_raw, 5) else {
             return;
         };
 
@@ -265,7 +240,6 @@ impl App {
             _ => self.cfg.http_concurrency,
         };
         let down_limit = parse_speed_limit(&down_raw).unwrap_or(down_prefill);
-        let up_limit = parse_speed_limit(&up_raw).unwrap_or(up_prefill);
         let checksum = Self::resolve_checksum(&dir, &name, checksum);
         let ts = unix_now();
         let mut t = Task::new_queued(
@@ -288,7 +262,6 @@ impl App {
             t.name_locked = true;
         }
         t.max_download_speed = down_limit;
-        t.max_upload_speed = up_limit;
         self.tasks.push(t);
         self.dialog = None;
         self.filter = 0;
@@ -506,18 +479,33 @@ mod speed_limit_tests {
     use super::parse_speed_limit;
 
     #[test]
-    fn parse_speed_limit_accepts_integer_and_units() {
+    fn parse_speed_limit_accepts_integer_and_binary_units() {
         assert_eq!(parse_speed_limit("0"), Some(0), "0 = 合法不限速");
         assert_eq!(parse_speed_limit("500000"), Some(500_000));
-        assert_eq!(parse_speed_limit("2 MB/s"), Some(2_000_000));
-        assert_eq!(parse_speed_limit("500KB/s"), Some(500_000));
+        assert_eq!(parse_speed_limit("512"), Some(512));
         assert_eq!(
-            parse_speed_limit(" 2 mb/s "),
-            Some(2_000_000),
+            parse_speed_limit("512 KiB/s"),
+            Some(524_288),
+            "KiB = 1024（bug21 二进制口径）"
+        );
+        assert_eq!(parse_speed_limit("512k"), Some(524_288), "k 后缀");
+        assert_eq!(parse_speed_limit("1 MiB/s"), Some(1_048_576));
+        assert_eq!(parse_speed_limit("1m"), Some(1_048_576));
+        assert_eq!(
+            parse_speed_limit("2 MB/s"),
+            Some(2_097_152),
+            "MB 同 MiB 二进制"
+        );
+        assert_eq!(parse_speed_limit("500KB/s"), Some(512_000));
+        assert_eq!(
+            parse_speed_limit(" 2 mib/s "),
+            Some(2_097_152),
             "大小写与空白"
         );
-        assert_eq!(parse_speed_limit("1.5 MB/s"), Some(1_500_000));
-        assert_eq!(parse_speed_limit("2 MB"), Some(2_000_000), "/s 后缀可省");
+        assert_eq!(parse_speed_limit("1.5 KiB/s"), Some(1536));
+        assert_eq!(parse_speed_limit("2 MiB"), Some(2_097_152), "/s 后缀可省");
+        assert_eq!(parse_speed_limit("1 GiB/s"), Some(1_073_741_824));
+        assert_eq!(parse_speed_limit("512 B/s"), Some(512));
     }
 
     #[test]
@@ -604,7 +592,7 @@ mod add_dialog_flow_tests {
             bt_follow: true,
             trackers: crate::multiline::MultiLineBuf::new(),
         });
-        app.dlg_activate_add(9);
+        app.dlg_activate_add(8);
         assert!(app.dialog.is_none(), "仅添加后关闭对话框");
         assert_eq!(app.tasks.len(), 1);
         let t = &app.tasks[0];
@@ -663,7 +651,7 @@ mod add_dialog_flow_tests {
             trackers: crate::multiline::MultiLineBuf::new(),
         });
         crate::app::testutil::preset_resume_sidecar(&dir);
-        app.dlg_activate_add(9);
+        app.dlg_activate_add(8);
         assert!(app.dialog.is_none(), "仅添加后关闭");
         assert_eq!(app.tasks[0].name, "r.bin", "断点接续沿用原名");
         assert!(
@@ -785,7 +773,7 @@ mod add_dialog_flow_tests {
             bt_follow: true,
             trackers: crate::multiline::MultiLineBuf::new(),
         });
-        app.dlg_activate_add(9);
+        app.dlg_activate_add(8);
         assert!(app.dialog.is_some(), "非法 URL 拒绝，对话框保持");
         assert!(app.tasks.is_empty(), "无任务创建");
         assert!(app

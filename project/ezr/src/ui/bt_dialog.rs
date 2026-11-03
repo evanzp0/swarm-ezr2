@@ -448,17 +448,18 @@ fn bt_text_row(
     ];
     let fd = input.field_window(ph, avail, focused);
     let base = Style::default().fg(if input.is_empty() { DIM2 } else { Color::White });
+    let label_cols = w(label).max(7) as u16;
     if focused {
         let pre_cols = w(&fd.pre) as u16;
         spans.push(Span::styled(fd.pre.clone(), base));
         spans.push(Span::styled(fd.post.clone(), base));
-        app.dlg_cursor_screen = Some((rect.x + 9 + pre_cols, rect.y));
+        app.dlg_cursor_screen = Some((rect.x + label_cols + 2 + pre_cols, rect.y));
     } else {
         spans.push(Span::styled(format!("{}{}", fd.pre, fd.post), base));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), rect);
     let mut win = fd.win;
-    win.value_x = rect.x + 9;
+    win.value_x = rect.x + label_cols + 2;
     Some(win)
 }
 
@@ -599,6 +600,146 @@ mod tests {
             app.proxy_labels.len(),
             "选项热区"
         );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn bt_limit_focus_cursor_lands_after_last_char() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-uibtdlg-cursorend");
+        let path = write_multi_torrent(&dir, "a.torrent");
+        let meta = TorrentMeta::parse(&std::fs::read(&path).unwrap()).unwrap();
+        let mut app = make_app("cursorend");
+        app.open_add_bt_dialog_with(&path, &meta);
+        {
+            let d = app.dialog.as_mut().unwrap();
+            d.down_limit.set("512 KiB/s");
+            d.up_limit.set("2 MiB/s");
+        }
+        let mut term = Terminal::new(TestBackend::new(110, 36)).unwrap();
+
+        // (focus, label_cols)：并发标签 4 列补齐 7；下载/上传限速标签 8 列（超 7 不截断）
+        for (focus, label_cols) in [(3usize, 7u16), (4, 8), (5, 8)] {
+            app.dialog.as_mut().unwrap().focus_field(focus);
+            term.draw(|f| crate::ui::dialog::draw_dialogs(f, &mut app, f.area()))
+                .unwrap();
+            let (value, cursor, len) = {
+                let d = app.dialog.as_ref().unwrap();
+                match focus {
+                    3 => (d.conns.value.clone(), d.conns.cursor, d.conns.len_chars()),
+                    4 => (
+                        d.down_limit.value.clone(),
+                        d.down_limit.cursor,
+                        d.down_limit.len_chars(),
+                    ),
+                    _ => (
+                        d.up_limit.value.clone(),
+                        d.up_limit.cursor,
+                        d.up_limit.len_chars(),
+                    ),
+                }
+            };
+            assert_eq!(
+                cursor, len,
+                "focus={focus}: 聚焦即光标在最后字符后方（逻辑口径）"
+            );
+            let (rect, _) = app
+                .dlg_field_rects
+                .iter()
+                .find(|(_, i)| *i == focus)
+                .copied()
+                .expect("聚焦字段矩形已回填");
+            let (cx, cy) = app.dlg_cursor_screen.expect("聚焦文本行发布终端光标");
+            assert_eq!(cy, rect.y, "focus={focus}: 光标行对齐字段行");
+            assert_eq!(
+                cx,
+                rect.x + label_cols + 2 + crate::ui::text::w(&value) as u16,
+                "focus={focus}: 终端光标列 = 行首+标签宽+2+值宽（最后字符后方一格）"
+            );
+        }
+
+        // 点击映射：value_x 动态 = 行首 + 8 列标签 + 2 列提示符（回归：旧硬编码 +9 左偏一列）
+        app.dialog.as_mut().unwrap().focus_field(4);
+        term.draw(|f| crate::ui::dialog::draw_dialogs(f, &mut app, f.area()))
+            .unwrap();
+        let (pos4, idx4) = app
+            .dlg_field_rects
+            .iter()
+            .enumerate()
+            .find(|(_, (_, i))| *i == 4)
+            .map(|(k, (r, _))| (*r, k))
+            .expect("下载限速行矩形");
+        let win4 = app.dlg_field_wins[idx4].clone().expect("下载限速行窗口");
+        assert_eq!(
+            win4.value_x,
+            pos4.x + 10,
+            "限速行 value_x = 行首+8列标签+2列提示符"
+        );
+        assert_eq!(
+            TextInput::click_offset(&win4, win4.value_x),
+            0,
+            "点击首字符格 = 停其前"
+        );
+        assert_eq!(
+            TextInput::click_offset(&win4, win4.value_x + 8),
+            8,
+            "点击末字符格 = 停其前"
+        );
+        assert_eq!(
+            TextInput::click_offset(&win4, win4.value_x + 9),
+            9,
+            "点击越尾 = 最后字符后方"
+        );
+        assert_eq!(
+            TextInput::click_offset(&win4, win4.value_x + 20),
+            9,
+            "右侧空白 = 末尾"
+        );
+        // 末尾光标退格删最后字符（通用输入模式语义）
+        app.dialog.as_mut().unwrap().down_limit.set_cursor(9);
+        app.dialog.as_mut().unwrap().down_limit.backspace();
+        assert_eq!(app.dialog.as_ref().unwrap().down_limit.value, "512 KiB/");
+
+        // ModifyBt：并发(1)/下载限速(2)/上传限速(3) 同口径
+        app.dlg_confirm_add_bt(false);
+        app.selected = 0;
+        app.modify_dialog_entry();
+        assert_eq!(app.dialog.as_ref().unwrap().kind, DialogKind::ModifyBt);
+        for (focus, label_cols) in [(1usize, 7u16), (2, 8), (3, 8)] {
+            app.dialog.as_mut().unwrap().focus_field(focus);
+            term.draw(|f| crate::ui::dialog::draw_dialogs(f, &mut app, f.area()))
+                .unwrap();
+            let (value, cursor, len) = {
+                let d = app.dialog.as_ref().unwrap();
+                match focus {
+                    1 => (d.conns.value.clone(), d.conns.cursor, d.conns.len_chars()),
+                    2 => (
+                        d.down_limit.value.clone(),
+                        d.down_limit.cursor,
+                        d.down_limit.len_chars(),
+                    ),
+                    _ => (
+                        d.up_limit.value.clone(),
+                        d.up_limit.cursor,
+                        d.up_limit.len_chars(),
+                    ),
+                }
+            };
+            assert_eq!(cursor, len, "ModifyBt focus={focus}: 光标在最后字符后方");
+            let (rect, _) = app
+                .dlg_field_rects
+                .iter()
+                .find(|(_, i)| *i == focus)
+                .copied()
+                .expect("聚焦字段矩形已回填");
+            let (cx, cy) = app.dlg_cursor_screen.expect("聚焦文本行发布终端光标");
+            assert_eq!(cy, rect.y, "ModifyBt focus={focus}: 光标行对齐字段行");
+            assert_eq!(
+                cx,
+                rect.x + label_cols + 2 + crate::ui::text::w(&value) as u16,
+                "ModifyBt focus={focus}: 光标列 = 行首+标签宽+2+值宽"
+            );
+        }
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }

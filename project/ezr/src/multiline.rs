@@ -110,8 +110,10 @@ impl MultiLineBuf {
         if at_start {
             let cur = self.lines.remove(self.row);
             self.row -= 1;
+            let junction = self.lines[self.row].len_chars();
             self.lines[self.row].cursor_end();
             self.lines[self.row].insert_at_cursor(&cur.value);
+            self.lines[self.row].set_cursor(junction);
         } else {
             self.line_mut().backspace();
         }
@@ -566,7 +568,31 @@ mod tests {
         b.backspace();
         assert_eq!(b.lines.len(), 1);
         assert_eq!(b.lines[0].value, "abcdef");
-        assert_eq!(b.lines[0].cursor, 6);
+        assert_eq!(b.lines[0].cursor, 3, "光标落在被合并行首字符处（接缝）");
+    }
+
+    #[test]
+    fn backspace_merge_cursor_junction_wide_chars() {
+        let mut b = buf_with(&["中文", "abc"], false, 40);
+        b.row = 1;
+        b.line_mut().set_cursor(0);
+        b.backspace();
+        assert_eq!(b.lines[0].value, "中文abc");
+        assert_eq!(b.lines[0].cursor, 2, "接缝 = 上一行字符数（宽字按字符计）");
+        b.backspace();
+        assert_eq!(b.lines[0].cursor, 1, "继续退格逐字左移");
+    }
+
+    #[test]
+    fn backspace_merge_empty_previous_line_cursor_at_home() {
+        let mut b = buf_with(&["", "xyz"], false, 40);
+        b.row = 1;
+        b.line_mut().set_cursor(1);
+        b.left();
+        b.backspace();
+        assert_eq!(b.lines.len(), 1);
+        assert_eq!(b.lines[0].value, "xyz");
+        assert_eq!(b.lines[0].cursor, 0, "上一行为空时接缝 = 行首");
     }
 
     #[test]

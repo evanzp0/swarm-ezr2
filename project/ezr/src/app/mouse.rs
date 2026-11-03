@@ -550,13 +550,13 @@ impl App {
                 let btn_rects = self.dlg_btn_rects.clone();
                 if let Some(i) = hit(&field_rects) {
                     let ck_i = match kind {
-                        Some(DialogKind::Add) => 5,
-                        Some(DialogKind::Modify) => 3,
+                        Some(DialogKind::Add) => 4,
+                        Some(DialogKind::Modify) => 2,
                         _ => usize::MAX,
                     };
                     let proxy_i = match kind {
-                        Some(DialogKind::Add) => 7,
-                        Some(DialogKind::Modify) => 5,
+                        Some(DialogKind::Add) => 6,
+                        Some(DialogKind::Modify) => 4,
                         Some(DialogKind::AddBt) => 6,
                         Some(DialogKind::ModifyBt) => 4,
                         _ => usize::MAX,
@@ -1256,7 +1256,7 @@ mod mouse_tests {
                     width: 30,
                     height: 1,
                 },
-                5,
+                4,
             ),
             (
                 Rect {
@@ -1265,7 +1265,7 @@ mod mouse_tests {
                     width: 30,
                     height: 1,
                 },
-                7,
+                6,
             ),
         ];
         app.dlg_btn_rects = vec![
@@ -1276,7 +1276,7 @@ mod mouse_tests {
                     width: 10,
                     height: 1,
                 },
-                8,
+                7,
             ),
             (
                 Rect {
@@ -1285,7 +1285,7 @@ mod mouse_tests {
                     width: 10,
                     height: 1,
                 },
-                9,
+                8,
             ),
             (
                 Rect {
@@ -1294,13 +1294,13 @@ mod mouse_tests {
                     width: 10,
                     height: 1,
                 },
-                10,
+                9,
             ),
         ];
 
         app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 5, 5));
         let d = app.dialog.as_ref().unwrap();
-        assert_eq!(d.focus, 5, "算法行点击聚焦");
+        assert_eq!(d.focus, 4, "算法行点击聚焦");
         assert!(d.ck_open, "算法行点击展开下拉");
 
         app.dlg_ck_rects = vec![(
@@ -1370,7 +1370,7 @@ mod mouse_tests {
                 width: 10,
                 height: 1,
             },
-            7,
+            6,
         )];
         app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 16, 12));
         assert!(app.dialog.is_none(), "Modify 取消按钮关闭");
@@ -1383,7 +1383,7 @@ mod mouse_tests {
                 width: 10,
                 height: 1,
             },
-            6,
+            5,
         )];
         app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 4, 12));
         assert!(app.dialog.is_some(), "确认不生效（无任务上下文）");
