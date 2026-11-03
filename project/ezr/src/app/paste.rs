@@ -1,4 +1,6 @@
-use super::dialog_keys::{text_field_at, TextField, CAP_CK_HEX, CAP_CONNS_DIGITS, CAP_TEXT};
+use super::dialog_keys::{
+    text_field_at, TextField, CAP_CK_HEX, CAP_CONNS_DIGITS, CAP_LIMIT, CAP_TEXT,
+};
 use super::{App, Dialog, DialogKind};
 use crate::model::checksum::CK_NONE;
 
@@ -51,6 +53,20 @@ fn dlg_apply_paste(kind: DialogKind, d: &mut Dialog, focus: usize, text: &str) -
             let inserted = d.conns.insert(&digits, CAP_CONNS_DIGITS);
             d.conns_edited |= inserted > 0;
             inserted > 0
+        }
+        Some(TextField::DownLimit) => {
+            let filtered: String = clean
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == ' ' || *c == '/' || *c == '.')
+                .collect();
+            d.down_limit.insert(&filtered, CAP_LIMIT) > 0
+        }
+        Some(TextField::UpLimit) => {
+            let filtered: String = clean
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == ' ' || *c == '/' || *c == '.')
+                .collect();
+            d.up_limit.insert(&filtered, CAP_LIMIT) > 0
         }
         Some(TextField::CkValue) => {
             if d.ck_type == CK_NONE {
@@ -116,29 +132,43 @@ mod paste_tests {
 
     #[test]
     fn paste_checksum_filters_hex_and_caps() {
-        let mut d = add_dialog(4);
+        let mut d = add_dialog(6);
         assert!(dlg_apply_paste(
             DialogKind::Add,
             &mut d,
-            4,
+            6,
             "  zzFF88ff00!dead-beef  "
         ));
         assert_eq!(d.ck_value.value, "FF88ff00deadbeef");
         let blob = "f".repeat(200);
-        assert!(dlg_apply_paste(DialogKind::Add, &mut d, 4, &blob));
+        assert!(dlg_apply_paste(DialogKind::Add, &mut d, 6, &blob));
         assert_eq!(d.ck_value.len_chars(), 128);
     }
 
     #[test]
+    fn paste_limit_fields_filter_and_cap() {
+        let mut d = add_dialog(3);
+        assert!(dlg_apply_paste(DialogKind::Add, &mut d, 3, "2 MB/s"));
+        assert_eq!(d.down_limit.value, "2 MB/s", "下载限速粘贴白名单");
+        let blob = "1".repeat(40);
+        assert!(dlg_apply_paste(DialogKind::Add, &mut d, 3, &blob));
+        assert_eq!(
+            d.down_limit.len_chars(),
+            32,
+            "限速 32 列上限（FR-01-06 形态）"
+        );
+    }
+
+    #[test]
     fn paste_modify_checksum_field_accepts_hex() {
-        let mut d = modify_dialog(2);
+        let mut d = modify_dialog(4);
         assert!(
-            dlg_apply_paste(DialogKind::Modify, &mut d, 2, "  zzFF88ff00!dead-beef  "),
+            dlg_apply_paste(DialogKind::Modify, &mut d, 4, "  zzFF88ff00!dead-beef  "),
             "旧实现门条件仅放行 Add，Modify 粘贴被整门拒绝（红路径）"
         );
         assert_eq!(d.ck_value.value, "FF88ff00deadbeef");
         let blob = "f".repeat(200);
-        assert!(dlg_apply_paste(DialogKind::Modify, &mut d, 2, &blob));
+        assert!(dlg_apply_paste(DialogKind::Modify, &mut d, 4, &blob));
         assert_eq!(d.ck_value.len_chars(), 128);
     }
 
@@ -155,11 +185,11 @@ mod paste_tests {
 
     #[test]
     fn paste_modify_dropdown_rows_and_buttons_ignore() {
-        let mut d = modify_dialog(1);
-        assert!(!dlg_apply_paste(DialogKind::Modify, &mut d, 1, "deadbeef"));
-        assert!(!dlg_apply_paste(DialogKind::Modify, &mut d, 3, "x"));
-        assert!(!dlg_apply_paste(DialogKind::Modify, &mut d, 4, "x"));
+        let mut d = modify_dialog(3);
+        assert!(!dlg_apply_paste(DialogKind::Modify, &mut d, 3, "deadbeef"));
         assert!(!dlg_apply_paste(DialogKind::Modify, &mut d, 5, "x"));
+        assert!(!dlg_apply_paste(DialogKind::Modify, &mut d, 6, "x"));
+        assert!(!dlg_apply_paste(DialogKind::Modify, &mut d, 7, "x"));
         assert!(d.ck_value.is_empty());
     }
 
@@ -218,7 +248,7 @@ mod paste_tests {
     async fn on_paste_bt_dialog_trackers_multiline_and_fields() {
         let mut app = make_app("btpaste");
 
-        app.dialog = Some(crate::app::testutil::dialog(DialogKind::AddBt, 5));
+        app.dialog = Some(crate::app::testutil::dialog(DialogKind::AddBt, 7));
         app.on_paste("udp://a/ann\nudp://b/ann\r\nhttp://c/ann");
         {
             let d = app.dialog.as_ref().unwrap();
@@ -244,7 +274,7 @@ mod paste_tests {
             assert!(d.conns_edited);
         }
 
-        app.dialog = Some(crate::app::testutil::dialog(DialogKind::ModifyBt, 3));
+        app.dialog = Some(crate::app::testutil::dialog(DialogKind::ModifyBt, 5));
         app.on_paste("udp://m/ann");
         {
             let d = app.dialog.as_ref().unwrap();
@@ -259,9 +289,9 @@ mod paste_tests {
 
     #[test]
     fn field_insert_respects_char_boundary() {
-        let mut d = add_dialog(4);
+        let mut d = add_dialog(6);
         d.ck_value.set("下载");
-        assert!(dlg_apply_paste(DialogKind::Add, &mut d, 4, "器abc"));
+        assert!(dlg_apply_paste(DialogKind::Add, &mut d, 6, "器abc"));
         assert_eq!(d.ck_value.value, "下载abc", "hex 过滤剔除非十六进制字符");
         assert_eq!(d.ck_value.cursor, 5, "光标随迁插入文本之后");
         let mut d2 = modify_dialog(0);
@@ -311,7 +341,7 @@ mod paste_tests {
             "下拉展开时不接收粘贴"
         );
 
-        app.dialog = Some(modify_dialog(2));
+        app.dialog = Some(modify_dialog(4));
         app.on_paste("FF00dead\r\n");
         assert_eq!(
             app.dialog.as_ref().unwrap().ck_value.value,

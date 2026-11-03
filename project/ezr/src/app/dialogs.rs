@@ -8,6 +8,40 @@ use crate::model::{
 };
 use crate::textfield::TextInput;
 
+#[must_use]
+pub(super) fn parse_speed_limit(raw: &str) -> Option<u64> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let split = s
+        .char_indices()
+        .find(|(_, c)| !(c.is_ascii_digit() || *c == '.'))
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    let (num, unit) = s.split_at(split);
+    if num.is_empty() || num.matches('.').count() > 1 {
+        return None;
+    }
+    let n: f64 = num.parse().ok()?;
+    if !n.is_finite() || n < 0.0 {
+        return None;
+    }
+    let unit = unit.trim().trim_end_matches("/s").trim();
+    let mult = match unit.to_lowercase().as_str() {
+        "" | "b" | "bps" => 1.0,
+        "k" | "kb" | "kbps" => 1_000.0,
+        "m" | "mb" | "mbps" => 1_000_000.0,
+        "g" | "gb" | "gbps" => 1_000_000_000.0,
+        _ => return None,
+    };
+    let v = n * mult;
+    if v >= u64::MAX as f64 {
+        return Some(u64::MAX);
+    }
+    Some(v.round() as u64)
+}
+
 impl App {
     pub(crate) fn set_dialog(&mut self, d: Dialog) {
         self.dialog = Some(d);
@@ -52,17 +86,17 @@ impl App {
 
     pub(super) fn dlg_activate_add(&mut self, btn: usize) {
         match btn {
-            6 => self.dlg_confirm_add(),
-            7 => self.dlg_add_only(),
-            8 => self.dialog = None,
+            8 => self.dlg_confirm_add(),
+            9 => self.dlg_add_only(),
+            10 => self.dialog = None,
             _ => {}
         }
     }
 
     pub(super) fn dlg_activate_modify(&mut self, btn: usize) {
         match btn {
-            4 => self.dlg_confirm_modify(),
-            5 => self.dialog = None,
+            6 => self.dlg_confirm_modify(),
+            7 => self.dialog = None,
             _ => {}
         }
     }
@@ -79,6 +113,8 @@ impl App {
             return;
         };
         let conns_raw = d.conns.value.trim().to_string();
+        let down_raw = d.down_limit.value.trim().to_string();
+        let up_raw = d.up_limit.value.trim().to_string();
         let ck_raw = d.ck_value.value.trim().to_string();
         let ck_type = d.ck_type;
         let proxy_sel = d.proxy_sel.min(self.proxy_options.len().saturating_sub(1));
@@ -90,7 +126,38 @@ impl App {
             conns_raw.parse::<usize>().unwrap_or(0).clamp(1, 64)
         };
 
-        let Some(checksum) = self.checksum_from_input(ck_type, &ck_raw, 2) else {
+        let cur_down = self.tasks[idx].max_download_speed;
+        let cur_up = self.tasks[idx].max_upload_speed;
+        let new_down = if down_raw.is_empty() {
+            cur_down
+        } else {
+            match parse_speed_limit(&down_raw) {
+                Some(v) => v,
+                None => {
+                    self.set_toast("⚠ 限速值非法（整数 B/s 或十进制单位字符串，如 2 MB/s）");
+                    if let Some(d) = self.dialog.as_mut() {
+                        d.focus_field(1);
+                    }
+                    return;
+                }
+            }
+        };
+        let new_up = if up_raw.is_empty() {
+            cur_up
+        } else {
+            match parse_speed_limit(&up_raw) {
+                Some(v) => v,
+                None => {
+                    self.set_toast("⚠ 限速值非法（整数 B/s 或十进制单位字符串，如 2 MB/s）");
+                    if let Some(d) = self.dialog.as_mut() {
+                        d.focus_field(2);
+                    }
+                    return;
+                }
+            }
+        };
+
+        let Some(checksum) = self.checksum_from_input(ck_type, &ck_raw, 4) else {
             return;
         };
 
@@ -106,6 +173,8 @@ impl App {
             t.concurrency = concurrency;
             t.checksum = checksum;
             t.proxy = proxy;
+            t.max_download_speed = new_down;
+            t.max_upload_speed = new_up;
         }
         self.dialog = None;
         let engine = self.engine.clone();
@@ -115,6 +184,7 @@ impl App {
                     id,
                     concurrency,
                     endpoint,
+                    max_download_speed: new_down,
                 })
                 .await;
         });
@@ -145,6 +215,10 @@ impl App {
         }
         let dir_raw = d.dir.value.trim().to_string();
         let conns_raw = d.conns.value.trim().to_string();
+        let down_raw = d.down_limit.value.clone();
+        let up_raw = d.up_limit.value.clone();
+        let down_prefill = d.down_prefill;
+        let up_prefill = d.up_prefill;
         let ck_raw = d.ck_value.value.trim().to_string();
         let ck_type = d.ck_type;
         let proxy = self.proxy_options[d.proxy_sel.min(self.proxy_options.len() - 1)].clone();
@@ -190,6 +264,8 @@ impl App {
             Ok(v) if (1..=64).contains(&v) => v,
             _ => self.cfg.http_concurrency,
         };
+        let down_limit = parse_speed_limit(&down_raw).unwrap_or(down_prefill);
+        let up_limit = parse_speed_limit(&up_raw).unwrap_or(up_prefill);
         let checksum = Self::resolve_checksum(&dir, &name, checksum);
         let ts = unix_now();
         let mut t = Task::new_queued(
@@ -211,6 +287,8 @@ impl App {
         if resumed {
             t.name_locked = true;
         }
+        t.max_download_speed = down_limit;
+        t.max_upload_speed = up_limit;
         self.tasks.push(t);
         self.dialog = None;
         self.filter = 0;
@@ -307,6 +385,10 @@ impl App {
             dir: TextInput::with_value(crate::model::config::default_save_dir_prefill(&self.cfg)),
             conns: TextInput::new(),
             conns_edited: false,
+            down_limit: TextInput::with_value(self.cfg.task_max_download_speed.to_string()),
+            up_limit: TextInput::with_value(self.cfg.task_max_upload_speed.to_string()),
+            down_prefill: self.cfg.task_max_download_speed,
+            up_prefill: self.cfg.task_max_upload_speed,
             ck_type: CK_NONE,
             ck_value: TextInput::new(),
             ck_open: false,
@@ -334,12 +416,14 @@ impl App {
             self.set_toast("⚠ 已完成任务不可修改");
             return;
         }
-        let (id, name, concurrency, checksum, proxy) = (
+        let (id, name, concurrency, checksum, proxy, cur_down, cur_up) = (
             t.id,
             t.name.clone(),
             t.concurrency,
             t.checksum.clone(),
             t.proxy.clone(),
+            t.max_download_speed,
+            t.max_upload_speed,
         );
         let ck_type = checksum
             .as_ref()
@@ -361,6 +445,10 @@ impl App {
             dir: TextInput::new(),
             conns: TextInput::with_value(concurrency.to_string()),
             conns_edited: false,
+            down_limit: TextInput::with_value(cur_down.to_string()),
+            up_limit: TextInput::with_value(cur_up.to_string()),
+            down_prefill: cur_down,
+            up_prefill: cur_up,
             ck_type,
             ck_value: TextInput::with_value(checksum.map(|c| c.value).unwrap_or_default()),
             ck_open: false,
@@ -390,6 +478,10 @@ impl App {
             dir: TextInput::new(),
             conns: TextInput::new(),
             conns_edited: false,
+            down_limit: TextInput::new(),
+            up_limit: TextInput::new(),
+            down_prefill: 0,
+            up_prefill: 0,
             ck_type: 0,
             ck_value: TextInput::new(),
             ck_open: false,
@@ -406,6 +498,35 @@ impl App {
             bt_follow: true,
             trackers: crate::multiline::MultiLineBuf::new(),
         });
+    }
+}
+
+#[cfg(test)]
+mod speed_limit_tests {
+    use super::parse_speed_limit;
+
+    #[test]
+    fn parse_speed_limit_accepts_integer_and_units() {
+        assert_eq!(parse_speed_limit("0"), Some(0), "0 = 合法不限速");
+        assert_eq!(parse_speed_limit("500000"), Some(500_000));
+        assert_eq!(parse_speed_limit("2 MB/s"), Some(2_000_000));
+        assert_eq!(parse_speed_limit("500KB/s"), Some(500_000));
+        assert_eq!(
+            parse_speed_limit(" 2 mb/s "),
+            Some(2_000_000),
+            "大小写与空白"
+        );
+        assert_eq!(parse_speed_limit("1.5 MB/s"), Some(1_500_000));
+        assert_eq!(parse_speed_limit("2 MB"), Some(2_000_000), "/s 后缀可省");
+    }
+
+    #[test]
+    fn parse_speed_limit_rejects_empty_and_garbage() {
+        assert_eq!(parse_speed_limit(""), None, "留空 = None（回退/保持语义）");
+        assert_eq!(parse_speed_limit("   "), None);
+        assert_eq!(parse_speed_limit("abc"), None, "非法 = None");
+        assert_eq!(parse_speed_limit("1 MB/h"), None, "未知单位 = None");
+        assert_eq!(parse_speed_limit("1.2.3 MB/s"), None);
     }
 }
 
@@ -463,6 +584,10 @@ mod add_dialog_flow_tests {
             dir: TextInput::with_value(dir.to_string_lossy().to_string()),
             conns: TextInput::new(),
             conns_edited: false,
+            down_limit: TextInput::new(),
+            up_limit: TextInput::new(),
+            down_prefill: 0,
+            up_prefill: 0,
             ck_type: CK_NONE,
             ck_value: TextInput::new(),
             ck_open: false,
@@ -479,7 +604,7 @@ mod add_dialog_flow_tests {
             bt_follow: true,
             trackers: crate::multiline::MultiLineBuf::new(),
         });
-        app.dlg_activate_add(7);
+        app.dlg_activate_add(9);
         assert!(app.dialog.is_none(), "仅添加后关闭对话框");
         assert_eq!(app.tasks.len(), 1);
         let t = &app.tasks[0];
@@ -517,6 +642,10 @@ mod add_dialog_flow_tests {
             dir: TextInput::with_value(dir.to_string_lossy().into_owned()),
             conns: TextInput::new(),
             conns_edited: false,
+            down_limit: TextInput::new(),
+            up_limit: TextInput::new(),
+            down_prefill: 0,
+            up_prefill: 0,
             ck_type: CK_NONE,
             ck_value: TextInput::new(),
             ck_open: false,
@@ -534,7 +663,7 @@ mod add_dialog_flow_tests {
             trackers: crate::multiline::MultiLineBuf::new(),
         });
         crate::app::testutil::preset_resume_sidecar(&dir);
-        app.dlg_activate_add(7);
+        app.dlg_activate_add(9);
         assert!(app.dialog.is_none(), "仅添加后关闭");
         assert_eq!(app.tasks[0].name, "r.bin", "断点接续沿用原名");
         assert!(
@@ -566,6 +695,10 @@ mod add_dialog_flow_tests {
             dir: TextInput::with_value(dir.to_string_lossy().into_owned()),
             conns: TextInput::new(),
             conns_edited: false,
+            down_limit: TextInput::new(),
+            up_limit: TextInput::new(),
+            down_prefill: 0,
+            up_prefill: 0,
             ck_type: CK_NONE,
             ck_value: TextInput::new(),
             ck_open: false,
@@ -632,6 +765,10 @@ mod add_dialog_flow_tests {
             dir: TextInput::new(),
             conns: TextInput::new(),
             conns_edited: false,
+            down_limit: TextInput::new(),
+            up_limit: TextInput::new(),
+            down_prefill: 0,
+            up_prefill: 0,
             ck_type: CK_NONE,
             ck_value: TextInput::new(),
             ck_open: false,
@@ -648,7 +785,7 @@ mod add_dialog_flow_tests {
             bt_follow: true,
             trackers: crate::multiline::MultiLineBuf::new(),
         });
-        app.dlg_activate_add(7);
+        app.dlg_activate_add(9);
         assert!(app.dialog.is_some(), "非法 URL 拒绝，对话框保持");
         assert!(app.tasks.is_empty(), "无任务创建");
         assert!(app
@@ -836,6 +973,10 @@ mod add_dialog_flow_tests {
             dir: TextInput::with_value(format!("~/{target}")),
             conns: TextInput::new(),
             conns_edited: false,
+            down_limit: TextInput::new(),
+            up_limit: TextInput::new(),
+            down_prefill: 0,
+            up_prefill: 0,
             ck_type: CK_NONE,
             ck_value: TextInput::new(),
             ck_open: false,
@@ -877,6 +1018,10 @@ mod add_dialog_flow_tests {
             dir: TextInput::with_value("ezr-relsub-test/sub"),
             conns: TextInput::new(),
             conns_edited: false,
+            down_limit: TextInput::new(),
+            up_limit: TextInput::new(),
+            down_prefill: 0,
+            up_prefill: 0,
             ck_type: CK_NONE,
             ck_value: TextInput::new(),
             ck_open: false,

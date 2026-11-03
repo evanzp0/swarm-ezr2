@@ -1,3 +1,4 @@
+pub mod blacklist;
 pub mod bt;
 pub mod checksum;
 pub mod chunk;
@@ -135,6 +136,8 @@ pub(crate) fn save_json_atomic<T: serde::Serialize>(value: &T, path: &str) -> st
 #[cfg(test)]
 pub(crate) fn sample_task() -> Task {
     Task {
+        max_download_speed: 0,
+        max_upload_speed: 0,
         id: 1,
         name: "f.bin".to_string(),
         protocol: Protocol::Http,

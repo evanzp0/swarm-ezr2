@@ -17,9 +17,7 @@ pub use error::classify_reqwest;
 #[allow(unused_imports)]
 pub use error::parse_retry_after_header;
 pub use supervisor::{BtSpec, BtTunables, TaskSpec, VerifySpec};
-#[cfg(test)]
-#[allow(unused_imports)]
-pub use throttle::Throttle;
+pub(crate) use throttle::Throttle;
 #[cfg(test)]
 #[allow(unused_imports)]
 pub use throttle::{bucket_step, BURST_SECS, SLEEP_MS};
@@ -44,6 +42,7 @@ pub enum Cmd {
         id: u32,
         concurrency: usize,
         endpoint: Option<crate::model::ProxyEndpoint>,
+        max_download_speed: u64,
     },
     StartBt {
         spec: Box<supervisor::BtSpec>,
@@ -53,6 +52,8 @@ pub enum Cmd {
         concurrency: usize,
         files: Vec<crate::model::BtFile>,
         proxy_endpoint: Option<crate::model::ProxyEndpoint>,
+        max_download_speed: u64,
+        max_upload_speed: u64,
     },
     BtUpdateTrackers {
         id: u32,
@@ -147,6 +148,14 @@ pub enum Evt {
         id: u32,
         total: u64,
     },
+    BtTrackers {
+        id: u32,
+        url: String,
+        working: bool,
+        peers: Option<u32>,
+        seeds: Option<u32>,
+        next_in_secs: u64,
+    },
     BtStopped {
         id: u32,
         downloaded: u64,
@@ -188,21 +197,69 @@ pub(crate) enum TaskCmd {
     Reconfigure {
         concurrency: usize,
         endpoint: Option<crate::model::ProxyEndpoint>,
+        max_download_speed: u64,
     },
 }
 
 pub(crate) struct EngineShared {
     pub client: reqwest::Client,
     clients: std::sync::Mutex<HashMap<String, reqwest::Client>>,
-    throttle: Arc<throttle::Throttle>,
+    throttle_dl: Arc<throttle::Throttle>,
+    throttle_ul: Arc<throttle::Throttle>,
+    throttle_burst_secs: f64,
+    throttle_sleep_ms: u64,
     blacklist: std::sync::Mutex<HashSet<IpAddr>>,
+    blacklist_file: Option<std::path::PathBuf>,
     grace: std::time::Duration,
     upload_read_permits: Arc<tokio::sync::Semaphore>,
+    bt_listener_std: std::net::TcpListener,
+    bt_listener: std::sync::OnceLock<Arc<tokio::net::TcpListener>>,
 }
 
 impl EngineShared {
+    pub(crate) fn dl_throttle(&self) -> &Arc<throttle::Throttle> {
+        &self.throttle_dl
+    }
+
+    pub(crate) fn ul_throttle(&self) -> &Arc<throttle::Throttle> {
+        &self.throttle_ul
+    }
+
+    pub(crate) fn throttle_burst_secs(&self) -> f64 {
+        self.throttle_burst_secs
+    }
+
+    pub(crate) fn throttle_sleep_ms(&self) -> u64 {
+        self.throttle_sleep_ms
+    }
+
+    pub(crate) fn bt_listener(&self) -> Arc<tokio::net::TcpListener> {
+        self.bt_listener
+            .get_or_init(|| {
+                let std_listener = self
+                    .bt_listener_std
+                    .try_clone()
+                    .expect("BT 监听 socket 克隆失败");
+                std_listener
+                    .set_nonblocking(true)
+                    .expect("BT 监听 socket 设非阻塞失败");
+                Arc::new(
+                    tokio::net::TcpListener::from_std(std_listener)
+                        .expect("BT 监听 socket 注册失败"),
+                )
+            })
+            .clone()
+    }
+
     pub(crate) fn blacklist_add(&self, ip: IpAddr) {
+        self.blacklist_add_with(ip, "manual");
+    }
+
+    pub(crate) fn blacklist_add_with(&self, ip: IpAddr, reason: &str) {
         self.blacklist.lock().expect("BT 黑名单锁").insert(ip);
+        if let Some(path) = &self.blacklist_file {
+            crate::model::blacklist::record(path, ip, reason);
+        }
     }
 
     pub(crate) fn is_blacklisted(&self, ip: IpAddr) -> bool {
@@ -306,20 +363,39 @@ impl EngineHandle {
         let client = base_client_builder(grace)
             .build()
             .expect("HTTP 客户端构建失败");
+        let (listener, mut startup_warnings) = bind_bt_listener(cfg.bt_listen_port);
+        let (seed, mut blacklist_warnings) = load_blacklist_seed();
+        startup_warnings.append(&mut blacklist_warnings);
         let shared = Arc::new(EngineShared {
             client,
             clients: std::sync::Mutex::new(HashMap::new()),
-            throttle: Arc::new(throttle::Throttle::with_params(
-                cfg.max_speed,
+            throttle_dl: Arc::new(throttle::Throttle::with_params(
+                cfg.global_max_download_speed,
                 cfg.throttle_burst_secs,
                 cfg.throttle_sleep_ms,
             )),
-            blacklist: std::sync::Mutex::new(HashSet::new()),
+            throttle_ul: Arc::new(throttle::Throttle::with_params(
+                cfg.global_max_upload_speed,
+                cfg.throttle_burst_secs,
+                cfg.throttle_sleep_ms,
+            )),
+            throttle_burst_secs: cfg.throttle_burst_secs,
+            throttle_sleep_ms: cfg.throttle_sleep_ms,
+            blacklist: std::sync::Mutex::new(seed),
+            blacklist_file: crate::model::config::ezr_dir().map(|d| d.join("blacklist.yaml")),
             grace,
             upload_read_permits: Arc::new(tokio::sync::Semaphore::new(cfg.upload_read_concurrency)),
+            bt_listener_std: listener,
+            bt_listener: std::sync::OnceLock::new(),
         });
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>(64);
-        tokio::spawn(main_loop(shared, cmd_rx, evt_tx));
+        tokio::spawn(main_loop(shared, cmd_rx, evt_tx.clone()));
+        if !startup_warnings.is_empty() {
+            let msg = startup_warnings.join("；");
+            tokio::spawn(async move {
+                let _ = evt_tx.send(Evt::Toast(format!("⚠ {msg}"))).await;
+            });
+        }
         EngineHandle { cmd_tx }
     }
 
@@ -331,6 +407,46 @@ impl EngineHandle {
     pub(crate) fn from_sender(cmd_tx: mpsc::Sender<Cmd>) -> EngineHandle {
         EngineHandle { cmd_tx }
     }
+}
+
+fn bind_bt_listener(port: u16) -> (std::net::TcpListener, Vec<String>) {
+    let addr = format!("0.0.0.0:{port}");
+    match std::net::TcpListener::bind(&addr) {
+        Ok(l) => (l, Vec::new()),
+        Err(_) if port == 0 => (
+            std::net::TcpListener::bind("0.0.0.0:0").expect("BT 随机监听端口绑定失败"),
+            Vec::new(),
+        ),
+        Err(_) => match std::net::TcpListener::bind("0.0.0.0:0") {
+            Ok(l) => (
+                l,
+                vec![format!("BT 监听端口 {port} 被占用，已回退随机端口")],
+            ),
+            Err(e) => {
+                panic!("BT 监听端口绑定失败：{e}")
+            }
+        },
+    }
+}
+
+fn load_blacklist_seed() -> (HashSet<IpAddr>, Vec<String>) {
+    let Some(dir) = crate::model::config::ezr_dir() else {
+        return (HashSet::new(), Vec::new());
+    };
+    if !dir.exists() {
+        let _ = std::fs::create_dir_all(&dir);
+    }
+    let path = dir.join("blacklist.yaml");
+    let (entries, warn) = crate::model::blacklist::load(&path);
+    let mut warnings = Vec::new();
+    if let Some(w) = warn {
+        warnings.push(w);
+    }
+    let seed = entries
+        .iter()
+        .filter_map(|e| e.ip.parse::<IpAddr>().ok())
+        .collect();
+    (seed, warnings)
 }
 
 async fn main_loop(
@@ -375,6 +491,7 @@ async fn handle_cmd(
             id,
             concurrency,
             endpoint,
+            max_download_speed,
         } => {
             let endpoint = match &endpoint {
                 Some(ep) if !endpoint_valid(ep) => {
@@ -391,7 +508,7 @@ async fn handle_cmd(
                 }
                 other => other.clone(),
             };
-            reconfigure_task(tasks, id, concurrency, endpoint).await;
+            reconfigure_task(tasks, id, concurrency, endpoint, max_download_speed).await;
             false
         }
         Cmd::StartBt { spec } => {
@@ -403,6 +520,8 @@ async fn handle_cmd(
             concurrency,
             files,
             proxy_endpoint,
+            max_download_speed,
+            max_upload_speed,
         } => bt_send(
             bt_tasks,
             id,
@@ -410,6 +529,8 @@ async fn handle_cmd(
                 concurrency,
                 files,
                 proxy_endpoint,
+                max_download_speed,
+                max_upload_speed,
             },
         ),
         Cmd::PauseBt { id } => bt_send(bt_tasks, id, crate::bt::BtTaskCmd::Pause),
@@ -519,12 +640,14 @@ async fn reconfigure_task(
     id: u32,
     concurrency: usize,
     endpoint: Option<crate::model::ProxyEndpoint>,
+    max_download_speed: u64,
 ) {
     if let Some(h) = tasks.get(&id) {
         let _ = h
             .send(TaskCmd::Reconfigure {
                 concurrency,
                 endpoint,
+                max_download_speed,
             })
             .await;
     }
@@ -574,13 +697,60 @@ pub(crate) fn shared_for_tests() -> Arc<EngineShared> {
     Arc::new(EngineShared {
         client,
         clients: std::sync::Mutex::new(HashMap::new()),
-        throttle: Arc::new(throttle::Throttle::new(0)),
+        throttle_dl: Arc::new(throttle::Throttle::new(0)),
+        throttle_ul: Arc::new(throttle::Throttle::new(0)),
+        throttle_burst_secs: crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
+        throttle_sleep_ms: crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
         blacklist: std::sync::Mutex::new(HashSet::new()),
+        blacklist_file: None,
         grace: dns::GRACE,
         upload_read_permits: Arc::new(tokio::sync::Semaphore::new(
             crate::model::config::DEFAULT_UPLOAD_READ_CONCURRENCY,
         )),
+        bt_listener_std: test_listener(),
+        bt_listener: std::sync::OnceLock::new(),
     })
+}
+
+#[cfg(test)]
+fn test_listener() -> std::net::TcpListener {
+    std::net::TcpListener::bind("127.0.0.1:0").expect("测试监听端口绑定失败")
+}
+
+#[cfg(test)]
+mod listener_tests {
+    use super::*;
+
+    #[test]
+    fn bind_bt_listener_random_when_unconfigured() {
+        let (l, warns) = bind_bt_listener(0);
+        assert!(warns.is_empty());
+        assert_ne!(l.local_addr().unwrap().port(), 0, "随机绑定得实际端口");
+    }
+
+    #[test]
+    fn bind_bt_listener_configured_port_binds() {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let (l, warns) = bind_bt_listener(port);
+        assert!(warns.is_empty(), "可用端口直接绑定无警告");
+        assert_eq!(l.local_addr().unwrap().port(), port);
+    }
+
+    #[test]
+    fn bind_bt_listener_occupied_falls_back_with_warning() {
+        let holder = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = holder.local_addr().unwrap().port();
+        let (l, warns) = bind_bt_listener(port);
+        assert_eq!(warns.len(), 1, "占用回退必须给启动警告");
+        assert!(
+            warns[0].contains(&port.to_string()),
+            "警告含端口: {:?}",
+            warns
+        );
+        assert_ne!(l.local_addr().unwrap().port(), port, "回退随机端口");
+    }
 }
 
 #[cfg(test)]
@@ -591,12 +761,18 @@ mod main_loop_tests {
         EngineShared {
             client: reqwest::Client::builder().no_proxy().build().unwrap(),
             clients: std::sync::Mutex::new(HashMap::new()),
-            throttle: Arc::new(throttle::Throttle::new(0)),
+            throttle_dl: Arc::new(throttle::Throttle::new(0)),
+            throttle_ul: Arc::new(throttle::Throttle::new(0)),
+            throttle_burst_secs: crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
+            throttle_sleep_ms: crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
             blacklist: std::sync::Mutex::new(HashSet::new()),
+            blacklist_file: None,
             grace: dns::GRACE,
             upload_read_permits: Arc::new(tokio::sync::Semaphore::new(
                 crate::model::config::DEFAULT_UPLOAD_READ_CONCURRENCY,
             )),
+            bt_listener_std: test_listener(),
+            bt_listener: std::sync::OnceLock::new(),
         }
     }
 
@@ -620,6 +796,7 @@ mod main_loop_tests {
             proxy_endpoint: None,
             progress_tick_ms: 100,
             sidecar_flush_secs: 2,
+            task_max_download_speed: 0,
         }
     }
 
@@ -636,6 +813,7 @@ mod main_loop_tests {
                 id: 999,
                 concurrency: 4,
                 endpoint: None,
+                max_download_speed: 0,
             },
             &shared,
             &tx,
@@ -664,6 +842,7 @@ mod main_loop_tests {
                     username: None,
                     password: None,
                 }),
+                max_download_speed: 0,
             },
             &shared,
             &tx,
@@ -674,6 +853,7 @@ mod main_loop_tests {
             Some(TaskCmd::Reconfigure {
                 concurrency,
                 endpoint,
+                ..
             }) => {
                 assert_eq!(concurrency, 2);
                 assert!(endpoint.is_none(), "非法端点按直连转发");

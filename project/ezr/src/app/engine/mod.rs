@@ -97,6 +97,7 @@ impl App {
             proxy_endpoint,
             progress_tick_ms: self.cfg.progress_tick_ms,
             sidecar_flush_secs: self.cfg.sidecar_flush_secs,
+            task_max_download_speed: t.max_download_speed,
         }
     }
 
@@ -414,6 +415,7 @@ mod tick_tests {
                 id: app.tasks[0].id,
                 concurrency: 2,
                 endpoint: None,
+                max_download_speed: 0,
             })
             .await;
         for _ in 0..20 {

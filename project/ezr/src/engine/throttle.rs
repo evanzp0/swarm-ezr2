@@ -56,6 +56,17 @@ impl Throttle {
         }
     }
 
+    pub fn set_rate(&self, rate_bps: u64) {
+        let new_rate = rate_bps as f64;
+        *self.rate.lock().unwrap() = new_rate;
+        let mut tokens = self.tokens.lock().unwrap();
+        *tokens = if rate_bps == 0 {
+            f64::INFINITY
+        } else {
+            (*tokens).min(new_rate * self.burst_secs)
+        };
+    }
+
     pub async fn acquire(&self, n: u64) {
         let mut remaining = n as f64;
         while remaining > 0.0 {
@@ -140,6 +151,39 @@ mod tests {
         assert_eq!(wait, 1_500, "deficit 3000B @ 2000B/s = 1500ms");
         let (_, _, wait) = step(1_000_000.0, 0.0, 0.0, 1.0);
         assert_eq!(wait, SLEEP_MS, "防忙轮询下限");
+    }
+
+    #[tokio::test]
+    async fn set_rate_retargets_bucket_hot() {
+        let t = Throttle::new(1_000_000);
+        let start = std::time::Instant::now();
+        t.acquire(300_000).await;
+        assert!(start.elapsed().as_millis() < 400, "突发窗内快取");
+        t.set_rate(0);
+        let start = std::time::Instant::now();
+        t.acquire(10_000_000).await;
+        assert!(
+            start.elapsed().as_millis() < 50,
+            "set_rate(0) = 不限速立即放行"
+        );
+        let t2 = Throttle::new(0);
+        t2.set_rate(1_000_000);
+        let start = std::time::Instant::now();
+        t2.acquire(2_000_000).await;
+        let took = start.elapsed().as_secs_f64();
+        assert!(took > 1.0, "0→限速热切换生效 took={took}");
+        assert!(took < 4.0, "took={took}");
+    }
+
+    #[test]
+    fn set_rate_never_grows_tokens_beyond_new_burst() {
+        let t = Throttle::new(10_000_000);
+        let rate = *t.rate.lock().unwrap();
+        assert_eq!(rate, 10_000_000.0);
+        t.set_rate(100);
+        assert_eq!(*t.rate.lock().unwrap(), 100.0);
+        let tokens = *t.tokens.lock().unwrap();
+        assert!(tokens <= 100.0 * 0.5 + 0.001, "令牌钳到新速率突发窗内");
     }
 
     #[test]

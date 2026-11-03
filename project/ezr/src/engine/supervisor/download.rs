@@ -175,6 +175,12 @@ pub(super) async fn download(
     let (stop_tx, stop_rx) = watch::channel(false);
     let (quota_tx, quota_rx) = watch::channel(spec.concurrency.clamp(1, 64));
     let (ep_tx, ep_rx) = watch::channel(Arc::new(spec.proxy_endpoint.clone()));
+    let (speed_tx, speed_rx) = watch::channel(spec.task_max_download_speed);
+    let task_dl = Arc::new(super::super::throttle::Throttle::with_params(
+        spec.task_max_download_speed,
+        shared.throttle_burst_secs(),
+        shared.throttle_sleep_ms(),
+    ));
     let blocks_shared = Arc::new(tokio::sync::Mutex::new(blocks.clone()));
     let base_downloaded = blocks.downloaded();
     let lease_next = Arc::new(AtomicU32::new(0));
@@ -192,6 +198,8 @@ pub(super) async fn download(
         stop_rx: stop_rx.clone(),
         quota_rx: quota_rx.clone(),
         ep_rx: ep_rx.clone(),
+        task_dl: task_dl.clone(),
+        speed_rx: speed_rx.clone(),
         total_written: total_written.clone(),
         failure: failure.clone(),
         conns: conns.clone(),
@@ -208,10 +216,11 @@ pub(super) async fn download(
     loop {
         tokio::select! {
             cmd = cmd_rx.recv() => match cmd {
-                Some(TaskCmd::Reconfigure { concurrency, endpoint }) => {
+                Some(TaskCmd::Reconfigure { concurrency, endpoint, max_download_speed }) => {
                     let q = concurrency.clamp(1, 64);
                     let _ = ep_tx.send(Arc::new(endpoint));
                     let _ = quota_tx.send(q);
+                    let _ = speed_tx.send(max_download_speed);
                     deps.conns.lock().await.retain(|c| c.id <= q);
                     prune_finished(&mut handles);
                     fill_workers(&mut handles, &deps, shared, q);

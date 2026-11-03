@@ -23,6 +23,7 @@ mod keys;
 mod mouse;
 mod paste;
 mod pieces;
+mod popups;
 mod scrollbar;
 mod tasks;
 
@@ -121,6 +122,10 @@ pub struct Dialog {
     pub dir: TextInput,
     pub conns: TextInput,
     pub conns_edited: bool,
+    pub down_limit: TextInput,
+    pub up_limit: TextInput,
+    pub down_prefill: u64,
+    pub up_prefill: u64,
     pub ck_type: usize,
     pub ck_value: TextInput,
     pub ck_open: bool,
@@ -240,6 +245,14 @@ pub struct App {
     pub pieces_area: Option<Rect>,
     pub pieces_pos: Option<(u16, u16)>,
     pub pieces_drag: Option<(u16, u16)>,
+    pub trackers_open: bool,
+    pub trackers_scroll: usize,
+    pub trackers_max_scroll: usize,
+    pub trackers_sb: Option<SbBar>,
+    pub trackers_area: Option<Rect>,
+    pub trackers_pos: Option<(u16, u16)>,
+    pub trackers_drag: Option<(u16, u16)>,
+    pub trackers_status: HashMap<u32, Vec<TrackerRow>>,
     pending_deletes: HashMap<u32, (String, String)>,
     pub dlg_btfile_rects: Vec<(Rect, usize)>,
     pub dlg_btbtn_rects: Vec<(Rect, usize)>,
@@ -285,6 +298,15 @@ pub struct BtConnRow {
     pub cum_up: u64,
     pub client: String,
     pub seeder: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrackerRow {
+    pub url: String,
+    pub working: bool,
+    pub peers: Option<u32>,
+    pub seeds: Option<u32>,
+    pub next_at: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -398,6 +420,14 @@ impl App {
             pieces_area: None,
             pieces_pos: None,
             pieces_drag: None,
+            trackers_open: false,
+            trackers_scroll: 0,
+            trackers_max_scroll: 0,
+            trackers_sb: None,
+            trackers_area: None,
+            trackers_pos: None,
+            trackers_drag: None,
+            trackers_status: HashMap::new(),
             help_open: false,
             help_scroll: 0,
             help_pos: None,
@@ -522,6 +552,7 @@ impl App {
     pub fn overlay_open(&self) -> bool {
         self.dialog.is_some()
             || self.pieces_open
+            || self.trackers_open
             || self.help_open
             || self.about_open
             || self.val_open

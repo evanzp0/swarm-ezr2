@@ -22,13 +22,13 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect) {
         .unwrap_or(DialogKind::AddBt);
     let is_add = kind == DialogKind::AddBt;
     let (title, dw, dh) = if is_add {
-        (" 添加任务：BT ", 78u16, 26u16)
+        (" 添加任务：BT ", 78u16, 28u16)
     } else {
-        (" 修改任务：BT ", 78, 24)
+        (" 修改任务：BT ", 78, 26)
     };
-    let nfocus = if is_add { 9usize } else { 6usize };
+    let nfocus = if is_add { 11usize } else { 8usize };
     let list_focus = if is_add { 2usize } else { 0usize };
-    let trackers_focus = if is_add { 5usize } else { 3usize };
+    let trackers_focus = if is_add { 7usize } else { 5usize };
 
     app.dlg_btfile_rects.clear();
     app.dlg_btbtn_rects.clear();
@@ -58,18 +58,20 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(block, dlg);
 
     app.popup_close_rect = draw_close_btn(f, app, dlg, w(title));
-    let min_h = if is_add { 18 } else { 17 };
+    let min_h = if is_add { 20 } else { 19 };
     if inner.width < 30 || inner.height < min_h {
         return;
     }
 
-    let (focus, torrent, dir, conns, proxy_sel, proxy_open, task_name) = {
+    let (focus, torrent, dir, conns, down_limit, up_limit, proxy_sel, proxy_open, task_name) = {
         let d = app.dialog.as_ref().unwrap();
         (
             d.focus,
             d.torrent.clone(),
             d.dir.clone(),
             d.conns.clone(),
+            d.down_limit.clone(),
+            d.up_limit.clone(),
             d.proxy_sel,
             d.proxy_open,
             d.task_name.clone(),
@@ -234,13 +236,37 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect) {
             avail,
         );
         field_rects[4] = Some(row_rect(list_y + box_rect.height + 1));
+        field_wins[4] = bt_text_row(
+            f,
+            app,
+            focus,
+            4,
+            "下载限速",
+            &down_limit,
+            "0",
+            row_rect(list_y + box_rect.height + 1),
+            avail,
+        );
+        field_rects[5] = Some(row_rect(list_y + box_rect.height + 2));
+        field_wins[5] = bt_text_row(
+            f,
+            app,
+            focus,
+            5,
+            "上传限速",
+            &up_limit,
+            "0",
+            row_rect(list_y + box_rect.height + 2),
+            avail,
+        );
+        field_rects[6] = Some(row_rect(list_y + box_rect.height + 3));
         bt_dropdown_row(
             f,
             focus,
-            4,
+            6,
             "代理",
             &proxy_label,
-            row_rect(list_y + box_rect.height + 1),
+            row_rect(list_y + box_rect.height + 3),
         );
     } else {
         let name_rect = Rect {
@@ -274,19 +300,43 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect) {
             avail,
         );
         field_rects[2] = Some(row_rect(list_y + box_rect.height + 1));
+        field_wins[2] = bt_text_row(
+            f,
+            app,
+            focus,
+            2,
+            "下载限速",
+            &down_limit,
+            "0",
+            row_rect(list_y + box_rect.height + 1),
+            avail,
+        );
+        field_rects[3] = Some(row_rect(list_y + box_rect.height + 2));
+        field_wins[3] = bt_text_row(
+            f,
+            app,
+            focus,
+            3,
+            "上传限速",
+            &up_limit,
+            "0",
+            row_rect(list_y + box_rect.height + 2),
+            avail,
+        );
+        field_rects[4] = Some(row_rect(list_y + box_rect.height + 3));
         bt_dropdown_row(
             f,
             focus,
-            2,
+            4,
             "代理",
             &proxy_label,
-            row_rect(list_y + box_rect.height + 1),
+            row_rect(list_y + box_rect.height + 3),
         );
     }
 
     let trackers_rect = Rect {
         x: inner.x + 2,
-        y: list_y + box_rect.height + 2,
+        y: list_y + box_rect.height + 4,
         width: inner.width.saturating_sub(4),
         height: 7,
     };
@@ -305,6 +355,7 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect) {
             trackers_pressed_v,
             trackers_pressed_h,
             false,
+            true,
             &mut d.trackers,
         )
     };
@@ -325,9 +376,9 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect) {
 
     let btn_row = inner.y + inner.height - 2;
     let buttons: Vec<(&str, usize)> = if is_add {
-        vec![("立即下载", 6), ("仅添加", 7), ("取消", 8)]
+        vec![("立即下载", 8), ("仅添加", 9), ("取消", 10)]
     } else {
-        vec![("确定", 4), ("取消", 5)]
+        vec![("确定", 6), ("取消", 7)]
     };
     let btn_ws: Vec<usize> = buttons
         .iter()
@@ -488,10 +539,14 @@ mod tests {
         assert!(app.dlg_trackers_area.is_some(), "trackers 内容区回填");
         assert!(app.dlg_bt_area.is_some());
         let field_focuses: Vec<usize> = app.dlg_field_rects.iter().map(|(_, i)| *i).collect();
-        assert_eq!(field_focuses, vec![0, 1, 2, 3, 4, 5], "焦点表矩形回填");
+        assert_eq!(
+            field_focuses,
+            vec![0, 1, 2, 3, 4, 5, 6, 7],
+            "焦点表矩形回填"
+        );
         assert_eq!(app.dlg_btn_rects.len(), 3, "三按钮热区");
         let a = app.dlg_area.unwrap();
-        assert_eq!((a.x, a.y, a.width, a.height), (16, 5, 78, 26));
+        assert_eq!((a.x, a.y, a.width, a.height), (16, 4, 78, 28));
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -518,7 +573,7 @@ mod tests {
         assert!(!s.contains("立即下载"), "修改框无立即下载: {s}");
         assert_eq!(app.dlg_bt_visible, 6, "Modify 列表 6 可视行");
         let field_focuses: Vec<usize> = app.dlg_field_rects.iter().map(|(_, i)| *i).collect();
-        assert_eq!(field_focuses, vec![0, 1, 2, 3], "焦点表 0–3 矩形回填");
+        assert_eq!(field_focuses, vec![0, 1, 2, 3, 4, 5], "焦点表 0–5 矩形回填");
         assert_eq!(app.dlg_btn_rects.len(), 2);
         assert!(s.contains("udp://seed/ann"), "trackers 预填渲染: {s}");
         app.shutdown().await;

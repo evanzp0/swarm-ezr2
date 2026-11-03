@@ -108,6 +108,8 @@ pub struct Task {
     pub peers: usize,
     #[allow(dead_code)]
     pub seed_left: f64,
+    pub max_download_speed: u64,
+    pub max_upload_speed: u64,
     pub created: String,
     pub added_at: u64,
     pub bt: Option<super::bt::BtTaskData>,
@@ -167,6 +169,8 @@ impl Task {
             seeders: 0,
             peers: 0,
             seed_left: 0.0,
+            max_download_speed: 0,
+            max_upload_speed: 0,
             created: fmt_created(added_at),
             added_at,
             bt: None,

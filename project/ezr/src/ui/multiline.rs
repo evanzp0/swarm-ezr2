@@ -30,6 +30,7 @@ pub(crate) fn draw_multi_line_input(
     pressed_v: Option<SbArrow>,
     pressed_h: Option<SbArrow>,
     wrap: bool,
+    no_link: bool,
     buf: &mut MultiLineBuf,
 ) -> MultiLineRendered {
     let mode = if wrap {
@@ -91,8 +92,11 @@ pub(crate) fn draw_multi_line_input(
     let mut lines: Vec<Line> = Vec::with_capacity(view_h);
     for vi in 0..view_h {
         let ri = start + vi;
-        let span = if empty && vi == 0 && !placeholder.is_empty() {
-            Span::styled(placeholder.to_string(), Style::default().fg(DIM2))
+        let span: Line = if empty && vi == 0 && !placeholder.is_empty() {
+            Line::from(Span::styled(
+                placeholder.to_string(),
+                Style::default().fg(DIM2),
+            ))
         } else {
             match rows.get(ri) {
                 Some((li, s, n)) => {
@@ -101,12 +105,18 @@ pub(crate) fn draw_multi_line_input(
                     } else {
                         disp_window(&buf.lines[*li].value, buf.view_x, text_w)
                     };
-                    Span::styled(text, Style::default().fg(Color::White))
+                    let st = Style::default().fg(Color::White);
+                    let spans: Vec<Span> = if no_link {
+                        super::popups::link_break_spans(&super::popups::break_links(&text), st)
+                    } else {
+                        vec![Span::styled(text, st)]
+                    };
+                    Line::from(spans)
                 }
-                None => Span::styled(String::new(), Style::default()),
+                None => Line::from(Span::styled(String::new(), Style::default())),
             }
         };
-        lines.push(Line::from(span));
+        lines.push(span);
     }
     f.render_widget(Paragraph::new(lines), inner);
 
@@ -159,6 +169,7 @@ mod tests {
                 true,
                 None,
                 None,
+                false,
                 false,
                 &mut buf,
             );

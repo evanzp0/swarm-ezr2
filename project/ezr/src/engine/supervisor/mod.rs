@@ -43,6 +43,7 @@ pub struct TaskSpec {
     pub proxy_endpoint: Option<ProxyEndpoint>,
     pub progress_tick_ms: u64,
     pub sidecar_flush_secs: u64,
+    pub task_max_download_speed: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -104,8 +105,8 @@ pub struct BtSpec {
     pub concurrency: usize,
     pub proxy_endpoint: Option<ProxyEndpoint>,
     pub seeding: bool,
-    #[allow(dead_code)]
-    pub max_speed: u64,
+    pub max_download_speed: u64,
+    pub max_upload_speed: u64,
     pub tunables: BtTunables,
 }
 
@@ -424,6 +425,7 @@ mod tests {
             proxy_endpoint: None,
             progress_tick_ms: 100,
             sidecar_flush_secs: 2,
+            task_max_download_speed: 0,
         }
     }
 
@@ -431,18 +433,28 @@ mod tests {
         Arc::new(super::super::EngineShared {
             client: reqwest::Client::builder().no_proxy().build().unwrap(),
             clients: std::sync::Mutex::new(std::collections::HashMap::new()),
-            throttle: Arc::new(super::super::throttle::Throttle::with_params(
+            throttle_dl: Arc::new(super::super::throttle::Throttle::with_params(
                 0,
                 crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
                 crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
             )),
+            throttle_ul: Arc::new(super::super::throttle::Throttle::with_params(
+                0,
+                crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
+                crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
+            )),
+            throttle_burst_secs: crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
+            throttle_sleep_ms: crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
             blacklist: std::sync::Mutex::new(std::collections::HashSet::new()),
+            blacklist_file: None,
             grace: std::time::Duration::from_millis(
                 crate::model::config::DEFAULT_DNS_RACE_GRACE_MS,
             ),
             upload_read_permits: Arc::new(tokio::sync::Semaphore::new(
                 crate::model::config::DEFAULT_UPLOAD_READ_CONCURRENCY,
             )),
+            bt_listener_std: std::net::TcpListener::bind("127.0.0.1:0").unwrap(),
+            bt_listener: std::sync::OnceLock::new(),
         })
     }
 
@@ -509,6 +521,7 @@ mod tests {
                         .send(TaskCmd::Reconfigure {
                             concurrency: 4,
                             endpoint: None,
+                            max_download_speed: 0,
                         })
                         .await
                         .unwrap();
@@ -650,6 +663,7 @@ mod tests {
                         .send(TaskCmd::Reconfigure {
                             concurrency: 1,
                             endpoint: None,
+                            max_download_speed: 0,
                         })
                         .await
                         .unwrap();

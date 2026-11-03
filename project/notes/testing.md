@@ -264,3 +264,12 @@
 - 暂停收口判据轮询 seeder 探针的 close_kind（deadline 10s），断言 `contains("eof") && !contains("reset")`——不要断言具体 io 文案（tokio/std 文案不同且版本可漂移）。
 - 自关冷却测试的时序锚：冷却锚定在 **shed 时刻**（last_try 刷新点）而非 grow 时刻——grow 在 shed 后 ~300ms 才发送，断言阈值按 shed→established ≥ 700ms（base=1s tunable）留 300ms 偏斜余量；被收缩候选是唯一非连接候选（同 IP 去重过滤另一在连候选），重拨路径确定。
 - 先让连接成熟（sleep 1.5s > base）再收缩：否则旧 last_try 未过期，旧实现也天然带冷却，红测失效。；bug19 轮：回归归因用 git worktree add /tmp <HEAD> + 独立构建跑同一脚本对照（失败集合 HEAD 与工作区完全同形 = 环境预存非本轮回归；比 stash 快且不动工作区，用后 git worktree remove --force）；PTY 验证脚本几何断言随对话框加字段整体平移（trackers 行号 tr_y 每新增一字段行 +1）；焦点表膨胀后 Tab 步进数不稳，改鼠标点击面板聚焦（click → focus_field）更稳
+
+## bug18-coder 轮
+
+- 对话框焦点矩阵变更（新增字段/nfocus 变化）的测试同步面实测清单：①dialog_keys 走焦类测试的 Tab 步进数与终态 focus 断言（每测试单独数步，勿批量替换）；②text_field_at/text_backspace/text_char 的 (kind,focus) 矩阵断言与 proptest 的 is_text/is_bs_field 矩阵（两处独立硬编码，漏一处假绿）；③paste 分发矩阵（dlg_apply_paste 焦点入参）；④mouse 对话框热区测试的 dlg_field_rects/dlg_btn_rects 登记下标；⑤确认链按钮序号（dlg_activate_* match 臂）；⑥挂载套件（hardening_v115 等几何 exact 断言）的 y 平移 = dh 增量/2（居中对话框 y = (H−dh)/2，行号与按钮行 y 同步平移、下拉框锚点 y 随所属行平移）。
+- TestBackend 宽字残影新形态：对话框 y 平移后若标题行与底层列表宽字行重叠，buffer 内出现「标题宽字与底层宽字逐格交错」（两套宽字各占奇偶格），to_string 与 buffer 直读都呈现交错串——文本 contains 断言在这种行上不可靠，改用 ASCII 连续子串锚点（如标题里的 "HTTP(S)"）或 ASCII 邻域探针。幂因：ratatui diff 对空符号（宽字右半格）跳过回写，后端缓冲残留前帧字符。
+- 压缩口径分工再确认：to_string()（压缩宽字、保文字序列）适合 contains 文本断言；裸 buffer 直读适合几何/单格字符断言，但对宽字第二半格返回空格而非空串——跨宽字的子串匹配只能走 to_string。
+- 引擎封禁类 e2e 夹具：探测 peer 常驻 accept 循环 + 行为闭包（Arc<dyn Fn(TcpStream)->Pin<Box<Future>>>），观察面用「轮询 evt_rx 收 Evt::Toast(⛔) + shared.is_blacklisted(ip)」双证据；fake peer 等 Unchoke 的陷阱 = 引擎对同一连接只发一次 Unchoke（am_choking 置位），等多次 Unchoke 的夹具永远凑不齐触发次数——首个 Unchoke 后立即发齐全部违规帧。bad_piece 夹具 = corrupt_seeder（bitfield 全有 + request 应答纯垃圾数据），依赖引擎坏片重下机制自然凑满 3 次。
+- 挂载套件对账：src 内 #[cfg(test)] 新增测试会被全部 hardening_* 挂载套件自动收编（每套件 +N 重复计数），总账对账按「bin 增量 × 套件数 + 套件自有增量」复算，勿把收编增量误记为独立新测试。
+- 时序 flake 复跑口径沿 bug17 轮：单套件单点 FAIL（v115/v147 各 1 次）原样复跑全绿即判环境性时序，非回归；不要为 flake 放宽断言。

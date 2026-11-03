@@ -7,11 +7,15 @@ use crate::textfield::TextInput;
 
 const CK_DROPDOWN_LEN: usize = CHECKSUM_ALGOS.len() + 1;
 
+pub const CAP_LIMIT: usize = 32;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TextField {
     Url,
     Dir,
     Conns,
+    DownLimit,
+    UpLimit,
     CkValue,
 }
 
@@ -20,7 +24,15 @@ pub fn text_field_at(kind: DialogKind, focus: usize) -> Option<TextField> {
         (DialogKind::Add, 0) => Some(TextField::Url),
         (DialogKind::Add, 1) => Some(TextField::Dir),
         (DialogKind::Add, 2) | (DialogKind::Modify, 0) => Some(TextField::Conns),
-        (DialogKind::Add, 4) | (DialogKind::Modify, 2) => Some(TextField::CkValue),
+        (DialogKind::Add, 3)
+        | (DialogKind::AddBt, 4)
+        | (DialogKind::Modify, 1)
+        | (DialogKind::ModifyBt, 2) => Some(TextField::DownLimit),
+        (DialogKind::Add, 4)
+        | (DialogKind::AddBt, 5)
+        | (DialogKind::Modify, 2)
+        | (DialogKind::ModifyBt, 3) => Some(TextField::UpLimit),
+        (DialogKind::Add, 6) | (DialogKind::Modify, 4) => Some(TextField::CkValue),
         _ => None,
     }
 }
@@ -31,6 +43,8 @@ impl Dialog {
             TextField::Url => &mut self.url,
             TextField::Dir => &mut self.dir,
             TextField::Conns => &mut self.conns,
+            TextField::DownLimit => &mut self.down_limit,
+            TextField::UpLimit => &mut self.up_limit,
             TextField::CkValue => &mut self.ck_value,
         }
     }
@@ -70,9 +84,13 @@ pub fn dropdown_open_key(d: &mut Dialog, code: KeyCode) {
         KeyCode::Home => select(d, CK_NONE),
         KeyCode::End => select(d, CK_DROPDOWN_LEN - 1),
         KeyCode::Enter | KeyCode::Esc => d.ck_open = false,
-        KeyCode::Tab | KeyCode::BackTab => {
+        KeyCode::Tab => {
             d.ck_open = false;
-            d.focus_field(if code == KeyCode::Tab { 4 } else { 2 });
+            d.focus_field(if d.kind == DialogKind::Add { 6 } else { 4 });
+        }
+        KeyCode::BackTab => {
+            d.ck_open = false;
+            d.focus_field(if d.kind == DialogKind::Add { 4 } else { 2 });
         }
         _ => d.ck_open = false,
     }
@@ -92,11 +110,21 @@ pub fn proxy_dropdown_open_key(d: &mut Dialog, n: usize, code: KeyCode) {
         KeyCode::Enter | KeyCode::Esc => d.proxy_open = false,
         KeyCode::Tab => {
             d.proxy_open = false;
-            d.focus_field(if d.kind == DialogKind::Add { 6 } else { 4 });
+            let f = match d.kind {
+                DialogKind::Add => 8,
+                DialogKind::AddBt | DialogKind::ModifyBt => 7,
+                _ => 6,
+            };
+            d.focus_field(f);
         }
         KeyCode::BackTab => {
             d.proxy_open = false;
-            d.focus_field(if d.kind == DialogKind::Add { 4 } else { 2 });
+            let f = match d.kind {
+                DialogKind::Add => 6,
+                DialogKind::AddBt | DialogKind::ModifyBt => 5,
+                _ => 4,
+            };
+            d.focus_field(f);
         }
         _ => d.proxy_open = false,
     }
@@ -120,7 +148,21 @@ pub fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> bool {
             d.conns_edited = true;
             true
         }
-        (DialogKind::Add, 4) | (DialogKind::Modify, 2) => {
+        (DialogKind::Add, 3)
+        | (DialogKind::AddBt, 4)
+        | (DialogKind::Modify, 1)
+        | (DialogKind::ModifyBt, 2) => {
+            d.down_limit.backspace();
+            true
+        }
+        (DialogKind::Add, 4)
+        | (DialogKind::AddBt, 5)
+        | (DialogKind::Modify, 2)
+        | (DialogKind::ModifyBt, 3) => {
+            d.up_limit.backspace();
+            true
+        }
+        (DialogKind::Add, 6) | (DialogKind::Modify, 4) => {
             if d.ck_type == CK_NONE {
                 return true;
             }
@@ -135,7 +177,7 @@ pub fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> bool {
             d.dir.backspace();
             true
         }
-        (DialogKind::AddBt, 5) | (DialogKind::ModifyBt, 3) => {
+        (DialogKind::AddBt, 7) | (DialogKind::ModifyBt, 5) => {
             d.trackers.backspace();
             true
         }
@@ -160,6 +202,26 @@ pub fn text_char(kind: DialogKind, d: &mut Dialog, focus: usize, c: char) -> boo
             }
             true
         }
+        (DialogKind::Add, 3)
+        | (DialogKind::AddBt, 4)
+        | (DialogKind::Modify, 1)
+        | (DialogKind::ModifyBt, 2) => {
+            insert_limit(&mut d.down_limit, c);
+            true
+        }
+        (DialogKind::Add, 4)
+        | (DialogKind::AddBt, 5)
+        | (DialogKind::Modify, 2)
+        | (DialogKind::ModifyBt, 3) => {
+            insert_limit(&mut d.up_limit, c);
+            true
+        }
         _ => false,
+    }
+}
+
+pub fn insert_limit(buf: &mut TextInput, c: char) {
+    if c.is_ascii_alphanumeric() || c == ' ' || c == '/' || c == '.' {
+        buf.insert(&c.to_string(), CAP_LIMIT);
     }
 }

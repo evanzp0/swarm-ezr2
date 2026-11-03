@@ -1003,6 +1003,7 @@ async fn engine_progress_freezes_after_failure_event() {
         proxy_endpoint: None,
         progress_tick_ms: 100,
         sidecar_flush_secs: 2,
+        task_max_download_speed: 0,
     };
     handle.send(engine::Cmd::Start { spec }).await;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
@@ -1057,6 +1058,7 @@ async fn engine_conns_quota_exact_and_unique_ids() {
         proxy_endpoint: None,
         progress_tick_ms: 100,
         sidecar_flush_secs: 2,
+        task_max_download_speed: 0,
     };
     handle.send(engine::Cmd::Start { spec }).await;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(25);

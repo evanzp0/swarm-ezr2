@@ -45,7 +45,6 @@ fn help_lines() -> Vec<Line<'static>> {
         sec("页签"),
         kd("] / [", "右/左切换页签（正在下载 ⇄ 已完成）"),
         kd("鼠标点击页签", "切换到该页签"),
-        kd("T", "循环切换页签（与 ] 等效）"),
         sec("任务列表"),
         kd("↑ / ↓", "选择上/下一个任务"),
         kd("PgUp / PgDn", "翻页选择（Home / End 跳首/尾）"),
@@ -56,6 +55,7 @@ fn help_lines() -> Vec<Line<'static>> {
         kd("U / J", "上移 / 下移任务"),
         kd("C", "清除已完成任务"),
         kd("P", "查看分块状态（仅分块下载任务）"),
+        kd("T", "查看 trackers 弹窗（仅 BT 任务）"),
         sec("命令窗口（A）"),
         kd("输入内容", "http(s) URL / 本地 .torrent 路径"),
         kd("Enter", "确认分流（= 触发 [确定] 按钮 click；Ctrl+Enter / Ctrl+J 同效）"),
@@ -71,7 +71,7 @@ fn help_lines() -> Vec<Line<'static>> {
         kd("Space", "勾选 / 取消光标行（文件单选；目录整目录勾选）"),
         kd("A / N / I", "列表焦点下：全选 / 全不选 / 反选"),
         kd("[全选] / [全不选]", "文件列表框右上角按钮（悬停高亮，点击作用于全部文件与目录）"),
-        kd("Tab / BackTab", "字段焦点循环（种子·目录·列表·并发·代理·trackers·按钮）"),
+        kd("Tab / BackTab", "字段焦点循环（种子·目录·列表·并发·限速·代理·trackers·按钮）"),
         kd("Enter", "确认（添加 = 立即下载；修改 = 保存文件勾选；trackers 焦点下同效）"),
         kd("Alt+Enter", "trackers 文本框内换行（kitty 协议终端 Shift+Enter 同效）"),
         kd("鼠标滚轮", "悬停文件树 / trackers 滚动；滚动条在各自 panel 边框上（与任务列表 ScrollPanel 同构），可拖拽 / 点击轨道 / 箭头"),
@@ -97,7 +97,7 @@ fn help_lines() -> Vec<Line<'static>> {
         kd("点击 ↑↓←→", "步进滚动 1 格；按住不放自动连发"),
         kd("点击轨道", "朝点击方向整页滚动（可按住连发）"),
         kd("方向键", "面板聚焦时 ↑↓ 选择/纵向滚动、←→ 横向滚动（并发）"),
-        sec("弹窗（添加/修改/删除/pieces/帮助/关于/字段值）"),
+        sec("弹窗（添加/修改/删除/pieces/trackers/帮助/关于/字段值）"),
         kd("Tab / ↑↓", "切换字段/焦点（下拉框内选择选项）"),
         kd("Enter", "确认"),
         kd("Esc", "取消/关闭"),
@@ -106,6 +106,11 @@ fn help_lines() -> Vec<Line<'static>> {
         sec("pieces 分块弹窗"),
         kd("↑↓ / PgUp·PgDn", "滚动分块网格（Home / End 跳首/尾）"),
         kd("Esc / P / [✗]", "关闭弹窗（右上角按钮可点击，悬停高亮）"),
+        sec("trackers 弹窗（T）"),
+        kd("↑↓ / PgUp·PgDn", "滚动 tracker 列表（Home / End 跳首/尾）"),
+        kd("T / Esc / q", "关闭弹窗（右上角 [✗] 可点击，悬停高亮）"),
+        kd("鼠标拖拽 / 滚轮", "按住窗口空白处拖动移动·滚轮滚动列表（每滚 2 行）"),
+        kd("列（qBt 口径）", "# · URL（自动换行）· 状态 · Peers · Seeds · 消息"),
     ]
 }
 
@@ -236,6 +241,10 @@ mod tests {
             "校验 / URL / 失败 / 路径 复制对应值",
             "打开完整值弹窗（悬停显示下划线）",
             "复制窗口全部内容（完整字段值）",
+            "【并发连接】",
+            "选择连接明细（视口跟随滚动）",
+            "横向滚动明细列（客户端/协议等超宽列）",
+            "悬停并发面板 = 滚动连接明细（±2/格）",
         ];
         for needle in needles {
             let mut found = false;
@@ -254,26 +263,18 @@ mod tests {
         let mut term2 = Terminal::new(TestBackend::new(120, 40)).unwrap();
         term2.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         let s2 = term2.backend().to_string();
-        assert_eq!(app.help_scroll, 50, "End 钳制 = 70 − 20（末页视窗 50..69）");
+        assert_eq!(app.help_scroll, 55, "End 钳制 = 75 − 20（末页视窗 55..74）");
         for sec in [
-            "【并发连接】",
             "【滚动条（通用组件）】",
-            "【弹窗（添加/修改/删除/pieces/帮助/关于/字段值）】",
+            "【trackers 弹窗（T）】",
+            "【弹窗（添加/修改/删除/pieces/trackers/帮助/关于/字段值）】",
             "【pieces 分块弹窗】",
         ] {
             assert!(s2.contains(sec), "滚动后组标题 {sec}: {s2}");
         }
         assert!(
-            s2.contains("选择连接明细（视口跟随滚动）"),
-            "并发连接 ↑↓ 条目 v1.32 文案: {s2}"
-        );
-        assert!(
-            s2.contains("横向滚动明细列（客户端/协议等超宽列）"),
-            "并发连接 ←→ 条目（v1.32 新增）: {s2}"
-        );
-        assert!(
-            s2.contains("悬停并发面板 = 滚动连接明细（±2/格）"),
-            "并发连接滚轮条目（v1.32 新增）: {s2}"
+            s2.contains("# · URL（自动换行）· 状态 · Peers · Seeds · 消息"),
+            "trackers 组 qBt 六列条目: {s2}"
         );
         assert!(
             s2.contains("按住双线滑块拖动 = 比例滚动内容"),
@@ -309,8 +310,8 @@ mod tests {
         let mut app = testfx::make_app_in("ezr-help", "scroll");
         let total = super::help_lines_len();
         assert_eq!(
-            total, 70,
-            "phase-02 内容 70 行（十一组 = 11 组标题 + 59 条目；九组 50 行 +1（A/M-D 拆分）+9（命令窗口）+10（BT 对话框））"
+            total, 75,
+            "phase-02 内容 75 行（十二组 = 12 组标题 + 63 条目；11 组 70 行 −页签 T +1（任务列表 T）+6（trackers 弹窗组））"
         );
         app.help_scroll = usize::MAX;
         let term = render_help(&mut app, 120, 40);

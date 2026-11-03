@@ -167,9 +167,9 @@ struct Row {
 fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) {
     let is_add = kind == DialogKind::Add;
     let (title, dw, dh) = if is_add {
-        (" 添加任务：HTTP(S) ", 74u16, 12u16)
+        (" 添加任务：HTTP(S) ", 74u16, 14u16)
     } else {
-        (" 修改任务：HTTP(S) ", 74, 10)
+        (" 修改任务：HTTP(S) ", 74, 12)
     };
     let dlg = {
         let r = overlay_rect(area, dw, dh, app.dlg_pos);
@@ -194,13 +194,28 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         return;
     }
 
-    let (focus, url, dir, conns, ck_type, ck_value, ck_open, ck_sel, proxy_sel, proxy_open) = {
+    let (
+        focus,
+        url,
+        dir,
+        conns,
+        down_limit,
+        up_limit,
+        ck_type,
+        ck_value,
+        ck_open,
+        ck_sel,
+        proxy_sel,
+        proxy_open,
+    ) = {
         let d = app.dialog.as_ref().unwrap();
         (
             d.focus,
             d.url.clone(),
             d.dir.clone(),
             d.conns.clone(),
+            d.down_limit.clone(),
+            d.up_limit.clone(),
             d.ck_type,
             d.ck_value.clone(),
             d.ck_open,
@@ -239,6 +254,18 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         kind: RowKind::Text,
     });
     rows.push(Row {
+        label: "下载限速",
+        input: down_limit,
+        placeholder: "0".to_string(),
+        kind: RowKind::Text,
+    });
+    rows.push(Row {
+        label: "上传限速",
+        input: up_limit,
+        placeholder: "0".to_string(),
+        kind: RowKind::Text,
+    });
+    rows.push(Row {
         label: "校验",
         input: TextInput::new(),
         placeholder: String::new(),
@@ -257,7 +284,7 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         kind: RowKind::ProxySel,
     });
 
-    let avail = (inner.width as usize).saturating_sub(13);
+    let avail_base = (inner.width as usize).saturating_sub(13);
     let mut ck_row_y = inner.y;
     let mut proxy_row_y = inner.y;
     for (i, row) in rows.iter().enumerate() {
@@ -268,6 +295,8 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
             RowKind::ProxySel => proxy_row_y = row_y,
             RowKind::Text => {}
         }
+        let label_cols = w(row.label).max(7);
+        let avail = avail_base.saturating_sub(label_cols - 7);
         let mut spans = vec![
             Span::styled(
                 pad_right(row.label, 7),
@@ -310,9 +339,9 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
         f.render_widget(Paragraph::new(Line::from(spans)), rect);
         let mut win = text_win.take();
         if let Some(w0) = win.as_mut() {
-            w0.value_x = rect.x + 9;
+            w0.value_x = rect.x + 2 + label_cols as u16;
             if focused {
-                app.dlg_cursor_screen = Some((rect.x + 9 + pre_cols, row_y));
+                app.dlg_cursor_screen = Some((rect.x + 2 + label_cols as u16 + pre_cols, row_y));
             }
         }
         app.dlg_field_rects.push((rect, i));
@@ -321,9 +350,9 @@ fn draw_task_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) 
 
     let n_rows = rows.len() as u16;
     let buttons: Vec<(&str, usize)> = if is_add {
-        vec![("立即下载", 6), ("仅添加", 7), ("取消", 8)]
+        vec![("立即下载", 8), ("仅添加", 9), ("取消", 10)]
     } else {
-        vec![("确定", 4), ("取消", 5)]
+        vec![("确定", 6), ("取消", 7)]
     };
     draw_button_row(f, app, inner, inner.y + n_rows + 2, &buttons, focus);
 
@@ -476,13 +505,13 @@ mod tests {
         term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         assert_eq!(
             app.dlg_cursor_screen,
-            Some((43, 16)),
+            Some((43, 15)),
             "聚焦文本行光标屏幕位（值区起点 + pre 宽）"
         );
         let pos = term.get_cursor_position().unwrap();
         assert_eq!(
             (pos.x, pos.y),
-            (43, 16),
+            (43, 15),
             "Terminal 收口把原生光标位下发后端"
         );
         let s = term.backend().to_string();
@@ -492,10 +521,10 @@ mod tests {
         assert_eq!(win.value_x, 35);
         assert_eq!((win.win_lo, win.win_hi), (0, 16));
         assert_eq!(win.cols.last().copied(), Some(16), "cols 末位 = 窗口总宽");
-        assert!(app.dlg_field_wins[3].is_none(), "下拉行无窗口几何");
+        assert!(app.dlg_field_wins[5].is_none(), "下拉行无窗口几何");
         app.dialog.as_mut().unwrap().url.set_cursor(2);
         term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-        assert_eq!(app.dlg_cursor_screen, Some((37, 16)), "光标列随 cursor");
+        assert_eq!(app.dlg_cursor_screen, Some((37, 15)), "光标列随 cursor");
         app.shutdown().await;
     }
 
@@ -505,9 +534,9 @@ mod tests {
         app.open_add_dialog();
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
         term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
-        assert_eq!(app.dlg_pos, Some((13, 9)), "首帧居中并记忆");
+        assert_eq!(app.dlg_pos, Some((13, 8)), "首帧居中并记忆");
         let a = app.dlg_area.expect("dlg_area 回填");
-        assert_eq!((a.x, a.y, a.width, a.height), (13, 9, 74, 12));
+        assert_eq!((a.x, a.y, a.width, a.height), (13, 8, 74, 14));
         app.shutdown().await;
     }
 
@@ -522,7 +551,7 @@ mod tests {
         let a = app.dlg_area.expect("dlg_area 回填");
         assert_eq!(
             (a.x, a.y, a.width, a.height),
-            (26, 18, 74, 12),
+            (26, 16, 74, 14),
             "绘制矩形钳制终端内"
         );
         let s = term.backend().to_string();

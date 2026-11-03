@@ -27,6 +27,10 @@ impl App {
             self.on_mouse_pieces(m);
             return;
         }
+        if self.trackers_open {
+            self.on_mouse_trackers(m);
+            return;
+        }
         if self.err_open {
             self.on_mouse_err(m);
             return;
@@ -163,6 +167,57 @@ impl App {
                     self.x_press = false;
                     if hit {
                         self.close_pieces();
+                    }
+                }
+                self.sb_release();
+            }
+            _ => {}
+        }
+    }
+
+    fn on_mouse_trackers(&mut self, m: MouseEvent) {
+        match m.kind {
+            MouseEventKind::ScrollUp => self.trackers_scroll_by(-2),
+            MouseEventKind::ScrollDown => self.trackers_scroll_by(2),
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.footer_press = None;
+                if pointer_in(&self.popup_close_rect, m.column, m.row) {
+                    self.x_press = true;
+                    return;
+                }
+                if let Some(bar) = SbKey::Trackers.bar(self) {
+                    if let Some(hit) = bar.hit(m.column, m.row) {
+                        self.sb_press(SbKey::Trackers, &bar, hit);
+                        return;
+                    }
+                }
+                if pointer_in(&self.trackers_area, m.column, m.row) {
+                    if let Some(r) = self.trackers_area {
+                        self.trackers_drag =
+                            Some((m.column.saturating_sub(r.x), m.row.saturating_sub(r.y)));
+                    }
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if self.x_press {
+                    self.x_press = pointer_in(&self.popup_close_rect, m.column, m.row);
+                    return;
+                }
+                self.sb_arrow_follow(m.column, m.row);
+                if self.sb_drag.is_some() {
+                    self.sb_drag_move(m.column, m.row);
+                } else if let Some((dx, dy)) = self.trackers_drag {
+                    self.trackers_pos =
+                        Some((m.column.saturating_sub(dx), m.row.saturating_sub(dy)));
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.trackers_drag = None;
+                if self.x_press {
+                    let hit = pointer_in(&self.popup_close_rect, m.column, m.row);
+                    self.x_press = false;
+                    if hit {
+                        self.close_trackers_popup();
                     }
                 }
                 self.sb_release();
@@ -495,15 +550,15 @@ impl App {
                 let btn_rects = self.dlg_btn_rects.clone();
                 if let Some(i) = hit(&field_rects) {
                     let ck_i = match kind {
-                        Some(DialogKind::Add) => 3,
-                        Some(DialogKind::Modify) => 1,
+                        Some(DialogKind::Add) => 5,
+                        Some(DialogKind::Modify) => 3,
                         _ => usize::MAX,
                     };
                     let proxy_i = match kind {
-                        Some(DialogKind::Add) => 5,
-                        Some(DialogKind::Modify) => 3,
-                        Some(DialogKind::AddBt) => 4,
-                        Some(DialogKind::ModifyBt) => 2,
+                        Some(DialogKind::Add) => 7,
+                        Some(DialogKind::Modify) => 5,
+                        Some(DialogKind::AddBt) => 6,
+                        Some(DialogKind::ModifyBt) => 4,
                         _ => usize::MAX,
                     };
                     let is_trackers = self
@@ -1201,7 +1256,7 @@ mod mouse_tests {
                     width: 30,
                     height: 1,
                 },
-                3,
+                5,
             ),
             (
                 Rect {
@@ -1210,7 +1265,7 @@ mod mouse_tests {
                     width: 30,
                     height: 1,
                 },
-                5,
+                7,
             ),
         ];
         app.dlg_btn_rects = vec![
@@ -1221,7 +1276,7 @@ mod mouse_tests {
                     width: 10,
                     height: 1,
                 },
-                6,
+                8,
             ),
             (
                 Rect {
@@ -1230,7 +1285,7 @@ mod mouse_tests {
                     width: 10,
                     height: 1,
                 },
-                7,
+                9,
             ),
             (
                 Rect {
@@ -1239,13 +1294,13 @@ mod mouse_tests {
                     width: 10,
                     height: 1,
                 },
-                8,
+                10,
             ),
         ];
 
         app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 5, 5));
         let d = app.dialog.as_ref().unwrap();
-        assert_eq!(d.focus, 3, "算法行点击聚焦");
+        assert_eq!(d.focus, 5, "算法行点击聚焦");
         assert!(d.ck_open, "算法行点击展开下拉");
 
         app.dlg_ck_rects = vec![(
@@ -1307,7 +1362,7 @@ mod mouse_tests {
     async fn dialog_click_modify_delete_buttons() {
         let mut app = make_app("mdbtn");
 
-        app.dialog = Some(dlg(DialogKind::Modify, 4));
+        app.dialog = Some(dlg(DialogKind::Modify, 6));
         app.dlg_btn_rects = vec![(
             Rect {
                 x: 14,
@@ -1315,12 +1370,12 @@ mod mouse_tests {
                 width: 10,
                 height: 1,
             },
-            5,
+            7,
         )];
         app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 16, 12));
         assert!(app.dialog.is_none(), "Modify 取消按钮关闭");
 
-        app.dialog = Some(dlg(DialogKind::Modify, 4));
+        app.dialog = Some(dlg(DialogKind::Modify, 6));
         app.dlg_btn_rects = vec![(
             Rect {
                 x: 2,
@@ -1328,7 +1383,7 @@ mod mouse_tests {
                 width: 10,
                 height: 1,
             },
-            4,
+            6,
         )];
         app.on_mouse(mev(MouseEventKind::Down(MouseButton::Left), 4, 12));
         assert!(app.dialog.is_some(), "确认不生效（无任务上下文）");

@@ -296,7 +296,7 @@ async fn ezr_main() -> std::io::Result<()> {
         None => Config::default(),
     };
     if let Some(ms) = cli.max_speed {
-        cfg.max_speed = ms;
+        cfg.global_max_download_speed = ms;
     }
 
     let registry_path: String = state_dir()
@@ -724,10 +724,20 @@ mod cli_parse_tests {
 
         app.open_add_dialog();
         term.draw(|f| ui::draw(f, &mut app)).unwrap();
-        let s_open = term.backend().to_string();
+        let dlg = app.dlg_area.expect("帧 2 已回填对话框区域");
+        let title_row: String = (dlg.x + 1..dlg.right())
+            .map(|x| {
+                term.backend()
+                    .buffer()
+                    .cell((x, dlg.y))
+                    .expect("界内")
+                    .symbol()
+                    .to_string()
+            })
+            .collect();
         assert!(
-            s_open.contains("添加任务：HTTP(S)"),
-            "帧 2 对话框已绘制（v1.32 标题）"
+            title_row.contains("HTTP(S)") && title_row.contains('添'),
+            "帧 2 对话框已绘制（v1.32 标题；ASCII 锚点避 TestBackend 宽字残影）: {title_row}"
         );
         let dlg = app.dlg_area.expect("帧 2 已回填对话框区域");
         for y in dlg.top()..dlg.bottom() {

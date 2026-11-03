@@ -75,6 +75,10 @@ pub struct TaskSnapshot {
     #[serde(default)]
     pub seed_left: f64,
     #[serde(default)]
+    pub max_download_speed: u64,
+    #[serde(default)]
+    pub max_upload_speed: u64,
+    #[serde(default)]
     pub bt: Option<super::bt::BtTaskData>,
 }
 
@@ -107,6 +111,8 @@ impl From<&Task> for TaskSnapshot {
             added_at: t.added_at,
             uploaded: t.uploaded,
             seed_left: t.seed_left,
+            max_download_speed: t.max_download_speed,
+            max_upload_speed: t.max_upload_speed,
             bt: t.bt.clone(),
         }
     }
@@ -155,6 +161,8 @@ impl From<&TaskSnapshot> for Task {
             seeders: 0,
             peers: 0,
             seed_left: s.seed_left,
+            max_download_speed: s.max_download_speed,
+            max_upload_speed: s.max_upload_speed,
             created: s.created.clone(),
             added_at: s.added_at,
             bt: s.bt.clone(),

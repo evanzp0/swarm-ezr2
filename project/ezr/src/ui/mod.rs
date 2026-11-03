@@ -22,6 +22,7 @@ mod help;
 mod list;
 mod multiline;
 mod pieces;
+mod popups;
 mod scrollable_panel;
 mod task_lines;
 pub(crate) mod text;
@@ -190,6 +191,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     if app.pieces_open {
         draw_pieces(f, app, area);
+    }
+
+    if app.trackers_open {
+        popups::draw_trackers(f, app, area);
     }
 
     if app.help_open {
@@ -773,7 +778,7 @@ mod ui_tests {
         app.on_key(KeyCode::Char('['), KeyModifiers::NONE);
         assert_eq!(app.filter, 0, "[ 回首");
         app.on_key(KeyCode::Char('T'), KeyModifiers::NONE);
-        assert_eq!(app.filter, 1, "T 循环");
+        assert_eq!(app.filter, 0, "T 页签循环退役（FR-02-31）");
         app.on_key(KeyCode::Char('T'), KeyModifiers::NONE);
         assert_eq!(app.filter, 0);
 
@@ -839,6 +844,10 @@ mod ui_tests {
             dir: crate::textfield::TextInput::new(),
             conns: crate::textfield::TextInput::new(),
             conns_edited: false,
+            down_limit: crate::textfield::TextInput::new(),
+            up_limit: crate::textfield::TextInput::new(),
+            down_prefill: 0,
+            up_prefill: 0,
             ck_type: 0,
             ck_value: crate::textfield::TextInput::new(),
             ck_open: true,

@@ -105,7 +105,10 @@ pub struct ProxyEndpoint {
 pub struct Config {
     pub download_dir: Option<String>,
     pub download_slots: usize,
-    pub max_speed: u64,
+    pub global_max_download_speed: u64,
+    pub global_max_upload_speed: u64,
+    pub task_max_download_speed: u64,
+    pub task_max_upload_speed: u64,
     pub proxies: Vec<ProxyConfig>,
     pub block_size_http: u64,
     pub http_concurrency: usize,
@@ -140,6 +143,7 @@ pub struct Config {
     pub udp_base_timeout_secs: u64,
     pub udp_retries: u32,
     pub seed_duration_secs: f64,
+    pub bt_listen_port: u16,
     pub warnings: Vec<String>,
 }
 
@@ -148,7 +152,10 @@ impl Default for Config {
         Config {
             download_dir: None,
             download_slots: DEFAULT_DOWNLOAD_SLOTS,
-            max_speed: 0,
+            global_max_download_speed: 0,
+            global_max_upload_speed: 0,
+            task_max_download_speed: 0,
+            task_max_upload_speed: 0,
             proxies: Vec::new(),
             block_size_http: DEFAULT_BLOCK_SIZE_HTTP,
             http_concurrency: DEFAULT_HTTP_CONCURRENCY,
@@ -183,6 +190,7 @@ impl Default for Config {
             udp_base_timeout_secs: DEFAULT_UDP_BASE_TIMEOUT_SECS,
             udp_retries: DEFAULT_UDP_RETRIES,
             seed_duration_secs: DEFAULT_SEED_DURATION_SECS,
+            bt_listen_port: 0,
             warnings: Vec::new(),
         }
     }
@@ -203,7 +211,10 @@ struct ProxyRaw {
 struct CommonRaw {
     download_dir: Option<String>,
     download_slots: Option<i64>,
-    max_speed: Option<toml::Value>,
+    global_max_download_speed: Option<toml::Value>,
+    global_max_upload_speed: Option<toml::Value>,
+    task_max_download_speed: Option<toml::Value>,
+    task_max_upload_speed: Option<toml::Value>,
     proxy: Option<Vec<ProxyRaw>>,
 }
 
@@ -246,6 +257,7 @@ struct BtRaw {
     udp_base_timeout_secs: Option<i64>,
     udp_retries: Option<i64>,
     seed_duration_secs: Option<toml::Value>,
+    listen_port: Option<toml::Value>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -292,10 +304,17 @@ fn pos_f64(v: Option<f64>, d: f64) -> f64 {
     v.filter(|v| *v > 0.0 && v.is_finite()).unwrap_or(d)
 }
 
-fn max_speed_of(v: Option<toml::Value>) -> u64 {
+fn speed_limit_of(v: Option<toml::Value>) -> u64 {
     match v {
         Some(toml::Value::String(s)) => parse_speed(&s),
         Some(toml::Value::Integer(n)) => parse_speed(&n.to_string()),
+        _ => 0,
+    }
+}
+
+fn listen_port_of(v: Option<toml::Value>) -> u16 {
+    match v {
+        Some(toml::Value::Integer(n)) => u16::try_from(n).ok().unwrap_or(0),
         _ => 0,
     }
 }
@@ -402,7 +421,10 @@ impl Config {
         Ok(Config {
             download_dir: common.download_dir.filter(|s| !s.trim().is_empty()),
             download_slots: min1_usize(common.download_slots, d.download_slots),
-            max_speed: max_speed_of(common.max_speed),
+            global_max_download_speed: speed_limit_of(common.global_max_download_speed),
+            global_max_upload_speed: speed_limit_of(common.global_max_upload_speed),
+            task_max_download_speed: speed_limit_of(common.task_max_download_speed),
+            task_max_upload_speed: speed_limit_of(common.task_max_upload_speed),
             proxies,
             block_size_http: http
                 .block_size_http
@@ -467,6 +489,7 @@ impl Config {
             udp_base_timeout_secs: min1_u64(bt.udp_base_timeout_secs, d.udp_base_timeout_secs),
             udp_retries: min1_u32(bt.udp_retries, d.udp_retries),
             seed_duration_secs: num_f64(bt.seed_duration_secs, d.seed_duration_secs),
+            bt_listen_port: listen_port_of(bt.listen_port),
             warnings,
         })
     }
@@ -653,9 +676,21 @@ download_dir = ""
 # 取值范围：正整数（≥1）；0 或非法值回退默认
 download_slots = 5
 
-# 全局下载限速（0 = 不限）
+# 全局下载限速（全部任务合计；0 = 不限）
 # 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
-max_speed = 0
+global_max_download_speed = 0
+
+# 全局上传限速（BT 上传合计；0 = 不限）
+# 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
+global_max_upload_speed = 0
+
+# 新任务默认任务级下载限速（0 = 不限）
+# 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
+task_max_download_speed = 0
+
+# 新任务默认任务级上传限速（0 = 不限）
+# 取值范围：≥0；支持 "2 MB/s" / "500 KB/s" / 整数 B/s（十进制口径 1 MB = 1000000 B/s）
+task_max_upload_speed = 0
 
 # 命名代理列表（可配置多个）
 # [[common.proxy]]
@@ -813,6 +848,10 @@ udp_retries = 3
 # 做种时长默认值（秒，任务做种倒计时起点）
 # 取值范围：>0 的数；0 或非法值回退默认
 seed_duration_secs = 1800
+
+# BT 监听端口（0 = 随机绑定）
+# 取值范围：0 = 随机绑定；1–65535 = 指定端口（占用时回退随机 + 启动警告）；负值或非法值回退随机
+listen_port = 0
 "#;
 
 impl Config {
@@ -982,13 +1021,42 @@ mod tests {
     }
 
     #[test]
-    fn max_speed_accepts_string_and_integer() {
-        let c = Config::from_toml("[common]\nmax_speed = \"2 MB/s\"\n");
-        assert_eq!(c.max_speed, 2_000_000);
-        let c2 = Config::from_toml("[common]\nmax_speed = 1048576\n");
-        assert_eq!(c2.max_speed, 1_048_576, "整数 B/s 形态直接生效");
-        let c3 = Config::from_toml("[common]\nmax_speed = \"xyz\"\n");
-        assert_eq!(c3.max_speed, 0, "不可解析限速弃用");
+    fn speed_limit_keys_accept_string_and_integer() {
+        let c = Config::from_toml("[common]\nglobal_max_download_speed = \"2 MB/s\"\n");
+        assert_eq!(c.global_max_download_speed, 2_000_000);
+        let c2 = Config::from_toml("[common]\nglobal_max_upload_speed = 1048576\n");
+        assert_eq!(
+            c2.global_max_upload_speed, 1_048_576,
+            "整数 B/s 形态直接生效"
+        );
+        let c3 = Config::from_toml("[common]\ntask_max_download_speed = \"500 KB/s\"\n");
+        assert_eq!(c3.task_max_download_speed, 500_000);
+        let c4 = Config::from_toml("[common]\ntask_max_upload_speed = \"xyz\"\n");
+        assert_eq!(c4.task_max_upload_speed, 0, "不可解析限速弃用");
+    }
+
+    #[test]
+    fn legacy_max_speed_key_retired_as_unknown() {
+        let c = Config::from_toml("[common]\nmax_speed = \"1 MB/s\"\n");
+        assert_eq!(
+            c.global_max_download_speed, 0,
+            "旧键按未知键静默忽略（01-throttle-proxy-14）"
+        );
+        assert!(c.warnings.is_empty(), "零警告口径");
+    }
+
+    #[test]
+    fn listen_port_valid_range_and_fallback() {
+        let c = Config::from_toml("[bt]\nlisten_port = 51413\n");
+        assert_eq!(c.bt_listen_port, 51413);
+        let c0 = Config::from_toml("[bt]\nlisten_port = 0\n");
+        assert_eq!(c0.bt_listen_port, 0, "0 = 随机绑定");
+        let cn = Config::from_toml("[bt]\nlisten_port = -5\n");
+        assert_eq!(cn.bt_listen_port, 0, "负值回退随机");
+        let cb = Config::from_toml("[bt]\nlisten_port = 70000\n");
+        assert_eq!(cb.bt_listen_port, 0, "越界回退随机");
+        let cs = Config::from_toml("[bt]\nlisten_port = \"abc\"\n");
+        assert_eq!(cs.bt_listen_port, 0, "非法类型回退随机");
     }
 
     #[test]
@@ -1242,8 +1310,8 @@ mod tests {
     fn template_line_count_is_174() {
         assert_eq!(
             Config::default_template().lines().count(),
-            174,
-            "钦定模板 v1.12 = 174 行"
+            190,
+            "钦定模板 v1.14 = 190 行（split 计数 191，含 48 空行）"
         );
         assert!(Config::default_template().ends_with('\n'));
         assert!(
@@ -1282,15 +1350,15 @@ mod tests {
             "proxy 双示例块保持注释（D63②：占位主机/凭证不激活）"
         );
         assert!(t.contains("# 取值范围"), "用途/取值范围注释保持");
-        assert_eq!(t.matches("取值范围").count(), 36, "36 键各一段取值范围标注");
+        assert_eq!(t.matches("取值范围").count(), 40, "40 键各一段取值范围标注");
         let active: Vec<&str> = t
             .lines()
             .filter(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
             .collect();
         assert_eq!(
             active.len(),
-            39,
-            "活跃行 = 36 键值行 + 3 表声明行，实际 {active:?}"
+            43,
+            "活跃行 = 40 键值行 + 3 表声明行，实际 {active:?}"
         );
     }
 
@@ -1300,7 +1368,10 @@ mod tests {
         let keys = [
             "download_dir",
             "download_slots",
-            "max_speed",
+            "global_max_download_speed",
+            "global_max_upload_speed",
+            "task_max_download_speed",
+            "task_max_upload_speed",
             "block_size_http",
             "http_concurrency",
             "max_retries",
@@ -1334,8 +1405,9 @@ mod tests {
             "udp_base_timeout_secs",
             "udp_retries",
             "seed_duration_secs",
+            "listen_port",
         ];
-        assert_eq!(keys.len(), 36);
+        assert_eq!(keys.len(), 40);
         for k in keys {
             assert!(
                 t.contains(&format!("\n{k} = ")),
@@ -1365,7 +1437,7 @@ mod tests {
             let range = lines[name_line_idx - 1];
             assert!(range.starts_with("# 取值范围"), "键 {k} 取值范围行占位");
         }
-        assert_eq!(t.matches("取值范围").count(), 36, "36 键各一段取值范围标注");
+        assert_eq!(t.matches("取值范围").count(), 40, "40 键各一段取值范围标注");
     }
 
     #[test]
@@ -1374,7 +1446,10 @@ mod tests {
         for expected in [
             "download_dir = \"\"",
             "download_slots = 5",
-            "max_speed = 0",
+            "global_max_download_speed = 0",
+            "global_max_upload_speed = 0",
+            "task_max_download_speed = 0",
+            "task_max_upload_speed = 0",
             "block_size_http = 1048576",
             "http_concurrency = 4",
             "max_retries = 5",
@@ -1408,12 +1483,17 @@ mod tests {
             "udp_base_timeout_secs = 15",
             "udp_retries = 3",
             "seed_duration_secs = 1800",
+            "listen_port = 0",
         ] {
             assert!(t.contains(expected), "模板缺默认值行：{expected}");
         }
         assert!(
             !t.contains("proxies"),
             "proxies 键已改名 proxy 并迁入 [common]，模板不得输出旧键名"
+        );
+        assert!(
+            !t.contains("\nmax_speed = "),
+            "旧键 max_speed 退役，模板不得输出（01-throttle-proxy-14）"
         );
     }
 

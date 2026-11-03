@@ -6,6 +6,7 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::watch;
 
 use super::super::error::{classify_reqwest, EngineFailure};
+use super::super::throttle::Throttle;
 use super::super::ConnView;
 use super::finalize::block_span;
 use super::http::req_checked;
@@ -56,6 +57,8 @@ pub(super) struct WorkerDeps {
     pub(super) stop_rx: watch::Receiver<bool>,
     pub(super) quota_rx: watch::Receiver<usize>,
     pub(super) ep_rx: watch::Receiver<Arc<Option<ProxyEndpoint>>>,
+    pub(super) task_dl: Arc<Throttle>,
+    pub(super) speed_rx: watch::Receiver<u64>,
     pub(super) total_written: Arc<AtomicU64>,
     pub(super) failure: Arc<tokio::sync::Mutex<Option<EngineFailure>>>,
     pub(super) conns: Arc<tokio::sync::Mutex<Vec<ConnView>>>,
@@ -81,6 +84,8 @@ async fn block_worker(wid: usize, shared: Arc<super::super::EngineShared>, deps:
         mut stop_rx,
         mut quota_rx,
         mut ep_rx,
+        task_dl,
+        mut speed_rx,
         total_written,
         failure,
         conns,
@@ -191,10 +196,14 @@ async fn block_worker(wid: usize, shared: Arc<super::super::EngineShared>, deps:
                         aborted = true;
                     }
                 }
+                _ = speed_rx.changed() => {
+                    task_dl.set_rate(*speed_rx.borrow_and_update());
+                }
                 chunk = resp.chunk() => {
                     match chunk {
                         Ok(Some(bytes)) => {
-                            shared.throttle.acquire(bytes.len() as u64).await;
+                            shared.dl_throttle().acquire(bytes.len() as u64).await;
+                            task_dl.acquire(bytes.len() as u64).await;
                             if file.write_all(&bytes).await.is_err() {
                                 *failure.lock().await = Some(EngineFailure::fatal("磁盘写入失败"));
                                 aborted = true;

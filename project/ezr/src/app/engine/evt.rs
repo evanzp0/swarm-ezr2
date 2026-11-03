@@ -324,6 +324,39 @@ impl App {
             Evt::BtDone { id, total } => {
                 self.on_bt_done(id, total);
             }
+            Evt::BtTrackers {
+                id,
+                url,
+                working,
+                peers,
+                seeds,
+                next_in_secs,
+            } => {
+                let live = self
+                    .tasks
+                    .iter()
+                    .any(|t| t.id == id && t.state.shows_conns());
+                if live {
+                    let rows = self.trackers_status.entry(id).or_default();
+                    let now = Instant::now();
+                    let next_at = now + std::time::Duration::from_secs(next_in_secs);
+                    match rows.iter_mut().find(|r| r.url == url) {
+                        Some(r) => {
+                            r.working = working;
+                            r.peers = peers;
+                            r.seeds = seeds;
+                            r.next_at = Some(next_at);
+                        }
+                        None => rows.push(crate::app::TrackerRow {
+                            url,
+                            working,
+                            peers,
+                            seeds,
+                            next_at: Some(next_at),
+                        }),
+                    }
+                }
+            }
             Evt::BtStopped {
                 id,
                 downloaded,

@@ -4,8 +4,8 @@ mod routing;
 
 use routing::kind_add;
 pub(crate) use routing::{
-    dropdown_open_key, proxy_dropdown_open_key, push_hex_capped, text_backspace, text_char,
-    text_field_at, TextField,
+    dropdown_open_key, insert_limit, proxy_dropdown_open_key, push_hex_capped, text_backspace,
+    text_char, text_field_at, TextField, CAP_LIMIT,
 };
 
 use super::{Dialog, DialogKind};
@@ -37,11 +37,11 @@ impl super::App {
             None => return,
         };
         let nfocus = match kind {
-            DialogKind::Add => 9,
-            DialogKind::Modify => 6,
+            DialogKind::Add => 11,
+            DialogKind::Modify => 8,
             DialogKind::Delete => 3,
-            DialogKind::AddBt => 9,
-            DialogKind::ModifyBt => 6,
+            DialogKind::AddBt => 11,
+            DialogKind::ModifyBt => 8,
         };
         if self.dialog.as_ref().is_some_and(|d| d.ck_open) {
             if let Some(d) = self.dialog.as_mut() {
@@ -190,6 +190,23 @@ impl super::App {
     }
 
     fn add_dialog_enter(&mut self, focus: usize) {
+        if focus == 5 {
+            let d = self.dialog.as_mut().unwrap();
+            d.ck_open = true;
+            d.ck_sel = d.ck_type;
+        } else if focus == 7 {
+            let d = self.dialog.as_mut().unwrap();
+            d.proxy_open = true;
+        } else if focus == 9 {
+            self.dlg_add_only();
+        } else if focus == 10 {
+            self.dialog = None;
+        } else {
+            self.dlg_confirm_add();
+        }
+    }
+
+    fn modify_dialog_enter(&mut self, focus: usize) {
         if focus == 3 {
             let d = self.dialog.as_mut().unwrap();
             d.ck_open = true;
@@ -198,23 +215,6 @@ impl super::App {
             let d = self.dialog.as_mut().unwrap();
             d.proxy_open = true;
         } else if focus == 7 {
-            self.dlg_add_only();
-        } else if focus == 8 {
-            self.dialog = None;
-        } else {
-            self.dlg_confirm_add();
-        }
-    }
-
-    fn modify_dialog_enter(&mut self, focus: usize) {
-        if focus == 1 {
-            let d = self.dialog.as_mut().unwrap();
-            d.ck_open = true;
-            d.ck_sel = d.ck_type;
-        } else if focus == 3 {
-            let d = self.dialog.as_mut().unwrap();
-            d.proxy_open = true;
-        } else if focus == 5 {
             self.dialog = None;
         } else {
             self.dlg_confirm_modify();
@@ -222,7 +222,7 @@ impl super::App {
     }
 
     fn add_dialog_char(&mut self, focus: usize, c: char) {
-        if focus < 3 {
+        if focus < 5 {
             if !c.is_control() {
                 if let Some(d) = self.dialog.as_mut() {
                     text_char(kind_add(), d, focus, c);
@@ -230,6 +230,33 @@ impl super::App {
             }
             if focus == 0 {
                 self.sync_default_conns_after_url_change();
+            }
+        } else if focus == 5 {
+            if c == ' ' {
+                let d = self.dialog.as_mut().unwrap();
+                d.ck_open = true;
+                d.ck_sel = d.ck_type;
+            }
+        } else if focus == 6 {
+            if let Some(d) = self.dialog.as_mut() {
+                push_hex_capped(d, c);
+            }
+        } else if c == ' ' {
+            if focus == 7 {
+                let d = self.dialog.as_mut().unwrap();
+                d.proxy_open = true;
+            } else {
+                self.dlg_activate_add(focus);
+            }
+        }
+    }
+
+    fn modify_dialog_char(&mut self, focus: usize, c: char) {
+        if focus < 3 {
+            if !c.is_control() {
+                if let Some(d) = self.dialog.as_mut() {
+                    text_char(DialogKind::Modify, d, focus, c);
+                }
             }
         } else if focus == 3 {
             if c == ' ' {
@@ -243,33 +270,6 @@ impl super::App {
             }
         } else if c == ' ' {
             if focus == 5 {
-                let d = self.dialog.as_mut().unwrap();
-                d.proxy_open = true;
-            } else {
-                self.dlg_activate_add(focus);
-            }
-        }
-    }
-
-    fn modify_dialog_char(&mut self, focus: usize, c: char) {
-        if focus == 0 {
-            if !c.is_control() {
-                if let Some(d) = self.dialog.as_mut() {
-                    text_char(DialogKind::Modify, d, focus, c);
-                }
-            }
-        } else if focus == 1 {
-            if c == ' ' {
-                let d = self.dialog.as_mut().unwrap();
-                d.ck_open = true;
-                d.ck_sel = d.ck_type;
-            }
-        } else if focus == 2 {
-            if let Some(d) = self.dialog.as_mut() {
-                push_hex_capped(d, c);
-            }
-        } else if c == ' ' {
-            if focus == 3 {
                 let d = self.dialog.as_mut().unwrap();
                 d.proxy_open = true;
             } else {
@@ -325,10 +325,10 @@ mod dialog_key_tests {
         d.ck_open = true;
         dropdown_open_key(&mut d, KeyCode::Tab);
         assert!(!d.ck_open);
-        assert_eq!(d.focus, 4);
+        assert_eq!(d.focus, 6);
         d.ck_open = true;
         dropdown_open_key(&mut d, KeyCode::BackTab);
-        assert_eq!(d.focus, 2);
+        assert_eq!(d.focus, 4);
         d.ck_open = true;
         dropdown_open_key(&mut d, KeyCode::Char('x'));
         assert!(!d.ck_open);
@@ -355,9 +355,14 @@ mod dialog_key_tests {
         assert_eq!(d.conns.value, "1");
         assert!(d.conns_edited);
         d.ck_value.insert("ff", CAP_CK_HEX);
-        assert!(text_backspace(DialogKind::Add, &mut d, 4));
+        assert!(text_backspace(DialogKind::Add, &mut d, 6));
         assert_eq!(d.ck_value.value, "f");
-        assert!(!text_backspace(DialogKind::Add, &mut d, 3));
+        d.down_limit.insert("2 MB/s", 16);
+        assert!(text_backspace(DialogKind::Add, &mut d, 3));
+        assert_eq!(d.down_limit.value, "2 MB/", "下载限速退格");
+        d.up_limit.insert("500 KB/s", 16);
+        assert!(text_backspace(DialogKind::Add, &mut d, 4));
+        assert_eq!(d.up_limit.value, "500 KB/", "上传限速退格");
         assert!(!text_backspace(DialogKind::Add, &mut d, 5));
     }
 
@@ -417,7 +422,7 @@ mod dialog_key_tests {
         app.dlg_confirm_add();
         assert!(app.dialog.is_some(), "重复任务拒绝");
         assert_eq!(app.tasks.len(), 1);
-        app.dlg_activate_add(8);
+        app.dlg_activate_add(10);
         assert!(app.dialog.is_none(), "取消按钮关闭对话框");
         app.shutdown().await;
     }
@@ -454,11 +459,11 @@ mod dialog_key_tests {
         assert_eq!(app.dialog.as_ref().unwrap().focus, 1);
         app.on_dialog_key(KeyCode::BackTab, crossterm::event::KeyModifiers::NONE);
         app.on_dialog_key(KeyCode::BackTab, crossterm::event::KeyModifiers::NONE);
-        assert_eq!(app.dialog.as_ref().unwrap().focus, 8, "BackTab 环绕到末位");
+        assert_eq!(app.dialog.as_ref().unwrap().focus, 10, "BackTab 环绕到末位");
         app.on_dialog_key(KeyCode::Left, crossterm::event::KeyModifiers::NONE);
-        assert_eq!(app.dialog.as_ref().unwrap().focus, 7, "按钮行 Left 后退");
+        assert_eq!(app.dialog.as_ref().unwrap().focus, 9, "按钮行 Left 后退");
         app.on_dialog_key(KeyCode::Down, crossterm::event::KeyModifiers::NONE);
-        assert_eq!(app.dialog.as_ref().unwrap().focus, 8, "按钮行 Down 前进");
+        assert_eq!(app.dialog.as_ref().unwrap().focus, 10, "按钮行 Down 前进");
 
         app.on_dialog_key(KeyCode::Esc, crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.is_none(), "Esc 关闭对话框");
@@ -530,6 +535,15 @@ mod dialog_key_tests {
         assert!(app.dialog.as_ref().unwrap().conns_edited, "手动编辑置位");
 
         app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Char('2'), crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Char('M'), crossterm::event::KeyModifiers::NONE);
+        assert!(
+            app.dialog.as_ref().unwrap().down_limit.value.contains('2'),
+            "限速字段接收字符"
+        );
+
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
         app.on_dialog_key(KeyCode::Char(' '), crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.as_ref().unwrap().ck_open, "空格展开算法下拉");
         app.on_dialog_key(KeyCode::Esc, crossterm::event::KeyModifiers::NONE);
@@ -553,7 +567,7 @@ mod dialog_key_tests {
         app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
         app.on_dialog_key(KeyCode::Char(' '), crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.is_some(), "非法校验码不生效");
-        assert_eq!(app.dialog.as_ref().unwrap().focus, 2, "聚焦回校验码");
+        assert_eq!(app.dialog.as_ref().unwrap().focus, 4, "聚焦回校验码");
 
         let d = app.dialog.as_mut().unwrap();
         d.ck_type = CK_NONE;
@@ -566,10 +580,10 @@ mod dialog_key_tests {
 
         app.selected = 0;
         app.on_key(KeyCode::Char('m'), crossterm::event::KeyModifiers::NONE);
-        for _ in 0..5 {
+        for _ in 0..7 {
             app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
         }
-        assert_eq!(app.dialog.as_ref().unwrap().focus, 5);
+        assert_eq!(app.dialog.as_ref().unwrap().focus, 7);
         app.on_dialog_key(KeyCode::Char(' '), crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.is_none(), "取消按钮直接关闭");
         app.shutdown().await;
@@ -595,6 +609,8 @@ mod dialog_key_tests {
         app.on_key(KeyCode::Char('m'), crossterm::event::KeyModifiers::NONE);
 
         app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
         app.on_dialog_key(KeyCode::Enter, crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.as_ref().unwrap().ck_open, "Enter 展开算法下拉");
         app.on_dialog_key(KeyCode::Esc, crossterm::event::KeyModifiers::NONE);
@@ -611,13 +627,15 @@ mod dialog_key_tests {
         app.on_dialog_key(KeyCode::BackTab, crossterm::event::KeyModifiers::NONE);
         app.on_dialog_key(KeyCode::BackTab, crossterm::event::KeyModifiers::NONE);
         app.on_dialog_key(KeyCode::BackTab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::BackTab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::BackTab, crossterm::event::KeyModifiers::NONE);
         app.on_dialog_key(KeyCode::Enter, crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.is_none(), "确认后关闭");
         assert_eq!(app.tasks[0].concurrency, 4, "并发空值保持当前");
 
         app.selected = 0;
         app.on_key(KeyCode::Char('m'), crossterm::event::KeyModifiers::NONE);
-        for _ in 0..5 {
+        for _ in 0..7 {
             app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
         }
         app.on_dialog_key(KeyCode::Enter, crossterm::event::KeyModifiers::NONE);
@@ -644,11 +662,11 @@ mod dialog_key_tests {
         d.proxy_open = true;
         proxy_dropdown_open_key(&mut d, 2, KeyCode::Tab);
         assert!(!d.proxy_open);
-        assert_eq!(d.focus, 6, "Add 布局 Tab 跳确认按钮");
+        assert_eq!(d.focus, 8, "Add 布局 Tab 跳确认按钮");
         d.proxy_open = true;
         proxy_dropdown_open_key(&mut d, 2, KeyCode::BackTab);
         assert!(!d.proxy_open);
-        assert_eq!(d.focus, 4, "Add 布局 BackTab 跳校验码");
+        assert_eq!(d.focus, 6, "Add 布局 BackTab 跳校验");
         d.proxy_open = true;
         proxy_dropdown_open_key(&mut d, 2, KeyCode::Char('x'));
         assert!(!d.proxy_open, "其余键仅关闭");
@@ -656,10 +674,10 @@ mod dialog_key_tests {
         let mut m = modify_dlg();
         m.proxy_open = true;
         proxy_dropdown_open_key(&mut m, 3, KeyCode::Tab);
-        assert_eq!(m.focus, 4, "Modify 布局 Tab 跳确认按钮");
+        assert_eq!(m.focus, 6, "Modify 布局 Tab 跳确认按钮");
         m.proxy_open = true;
         proxy_dropdown_open_key(&mut m, 3, KeyCode::BackTab);
-        assert_eq!(m.focus, 2, "Modify 布局 BackTab 跳校验码");
+        assert_eq!(m.focus, 4, "Modify 布局 BackTab 跳校验码");
 
         let mut z = add_dlg();
         proxy_dropdown_open_key(&mut z, 0, KeyCode::End);
@@ -675,6 +693,8 @@ mod dialog_key_tests {
 
         app.on_dialog_key(KeyCode::Char('\u{1}'), crossterm::event::KeyModifiers::NONE);
         assert!(app.dialog.as_ref().unwrap().url.is_empty(), "控制字符被拒");
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
         app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
         app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
         app.on_dialog_key(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
@@ -800,7 +820,7 @@ mod dialog_key_tests {
     #[tokio::test]
     async fn bt_dialog_trackers_edit_delete_and_navigation() {
         let mut app = make_app("trkedit");
-        app.dialog = Some(bt_add_dlg(5));
+        app.dialog = Some(bt_add_dlg(7));
 
         for c in "udp://a/ann".chars() {
             app.on_dialog_key(KeyCode::Char(c), crossterm::event::KeyModifiers::NONE);
@@ -913,7 +933,7 @@ mod dialog_key_tests {
     #[tokio::test]
     async fn modify_bt_dialog_trackers_backspace() {
         let mut app = make_app("mtrk");
-        app.dialog = Some(crate::app::testutil::dialog(DialogKind::ModifyBt, 3));
+        app.dialog = Some(crate::app::testutil::dialog(DialogKind::ModifyBt, 5));
         app.dialog
             .as_mut()
             .unwrap()

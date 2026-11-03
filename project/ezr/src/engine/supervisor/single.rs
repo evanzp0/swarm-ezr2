@@ -106,6 +106,11 @@ pub(super) async fn single_stream(
         let _ = file.seek(std::io::SeekFrom::Start(resumed)).await;
     }
     let mut last_emit = std::time::Instant::now();
+    let task_dl = Arc::new(super::super::throttle::Throttle::with_params(
+        spec.task_max_download_speed,
+        shared.throttle_burst_secs(),
+        shared.throttle_sleep_ms(),
+    ));
     loop {
         tokio::select! {
             cmd = cmd_rx.recv() => match cmd {
@@ -122,11 +127,14 @@ pub(super) async fn single_stream(
                     });
                 }
                 Some(TaskCmd::Cancel) | None => return Flow::Cancelled,
-                Some(TaskCmd::Reconfigure { .. }) => {}
+                Some(TaskCmd::Reconfigure { max_download_speed, .. }) => {
+                    task_dl.set_rate(max_download_speed);
+                }
             },
             chunk = resp.chunk() => match chunk {
                 Ok(Some(bytes)) => {
-                    shared.throttle.acquire(bytes.len() as u64).await;
+                    shared.dl_throttle().acquire(bytes.len() as u64).await;
+                    task_dl.acquire(bytes.len() as u64).await;
                     if file.write_all(&bytes).await.is_err() {
                         return Flow::Failed(
                             EngineFailure::fatal("磁盘写入失败"),

@@ -458,3 +458,12 @@
 - 浮层删底部提示行的两处联动：可视行公式随动（vis = 内框高 − 3）；滚动条 total 口径把分隔细线计入 flat 行集。删显示类 UI 反馈必须同步翻转验证脚本断言方向（原「有提示」断言改「无提示」），否则旧断言假绿掩盖新口径。
 - 表格右 padding 对称推导：左 padding 2 + 末列文案宽恰好用满 content_w ⇒ 右视觉 padding = 左 padding。本轮 URL 列 36→44 承接增量、状态/Peers/Seeds/消息 右移（49/62/69/76），消息列预算 = content_w − 76 = 8（最长文案「重试 29s」= 8 列）恰好齐平——改列宽的核平公式：最长列文案宽 = content_w − 列偏移。
 - 折行同色的实现口径：续行与首行同一 Style（FG）即可，颜色一致性由 span 构造点保证；验证脚本对纯色差断言无 PTY 手段（文本捕获不带样式），以「续行无 # 前缀回填 URL 列」结构断言 + 代码构造点评审双保险登记。
+
+## bug18-coder 轮（2026-11-02，五项功能实现落地图谱）
+
+- 全局/任务级限速的 min 合成实现口径 = 每 chunk 对全局桶与任务桶**各 acquire 一次**（两桶串联取币，紧桶自然成为瓶颈）——不能预合成 min 值建单桶：全局桶是跨任务共享配额，任务桶归任务私有，合成语义必须在消费点保持两桶独立。EngineShared 拆 throttle_dl/throttle_ul 双桶（dl = HTTP+BT 下载共享，ul = BT 上传），Throttle 新增 set_rate 支持运行时热调（rate=0 = INFINITY 不限）。
+- BT 下载限速挂点 = peer_pump 读循环（read_msg 后、转发 PeerIn::Msg 前，仅 Block 消息 acquire）：per-conn 并行取币不阻塞引擎主循环——若挂 on_block（主循环）会让 accept/tick/cmd 全部被限速等待拖住。上传挂点 = Request 臂 spawn 任务内、send(Block) 前（ul 全局桶 + 任务桶），不阻塞 select 主循环。DlFlow{global,task} 经 spawn_outgoing/incoming_peer → run_peer_loop → peer_pump 透传。
+- 进程级共享监听端口的落地形态 = std::net::TcpListener 同步 bind（EngineHandle::start，占用回退随机 + 启动警告收集后 toast）+ EngineShared 持 std listener 与 `OnceLock<Arc<tokio TcpListener>>`：tokio from_std 只能注册一次，首个 BT 任务在 run() 内 get_or_init 转换，后续任务 clone Arc；announce port = listener.local_addr().port() 全任务同值。bind_bt_listener 必须在 cfg 解析后、main_loop spawn 前执行。
+- 反吸血三判据落点：leech 判据在 1s tick 臂遍历（!seeding && cum_up≥1MiB && cum_down<64KiB && connected_at.elapsed≥120s，做种豁免 = seeding 布尔）；bad_piece 在 on_block 校验失败分支计 st.bad_pieces（≥3 封禁，归属交付完成块的 peer——piece 可能多 peer 拼块，归属近似为完成者，D67 允许实现定义）；protocol 三源 = Unknown 消息 id 首封 + pump 读循环 BtError::Peer(_) 帧错（区别于 BtError::Io 的网络错，不改协议枚举加 PeerIn::ProtocolViolation 变体分类）+ 非法区间 request 计 st.invalid_requests（≥3 封；choking 期间的 request 不计数——合法行为）。统一 ban_and_drop：黑名单落 EngineShared + blacklist.yaml record + ⛔ toast + PeerOut::Drop（graceful_close 自动满足 FR-02-27②）+ 候选池摘除。
+- blacklist.yaml 持久化的测试隔离门 = EngineShared.blacklist_file: Option<PathBuf>（生产 Some(ezr_dir/blacklist.yaml)，shared_for_tests 恒 None）——封禁副作用挂 record 调用点，测试零磁盘副作用；同 IP 重复封禁不重复记条目；损坏=空名单+警告文本返回（load 返回 (entries, Option<warn>)，警告并入口径沿 cfg.warnings 的 ⚠ toast 通道）。
+- trackers 弹窗真实数据源 = TrackerReport 增加 url + interval/retry_secs（失败分支先算退避后 send），引擎 tr_rx 臂转 Evt::BtTrackers{id,url,working,peers,seeds,next_in_secs}；app 侧 TrackerRow{url,working,peers,seeds,next_at} 存 HashMap<task_id, Vec>，渲染按 t.bt.trackers 权威序 + url 查状态；任务未运行（state.shows_conns() false）或无引擎回报 = 待 announce；倒计时存 Instant 在 draw 期换算剩余秒（不存秒数避免静止倒计时）。

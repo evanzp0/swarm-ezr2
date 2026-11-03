@@ -829,7 +829,11 @@ proptest! {
             (DialogKind::Add, 0)
                 | (DialogKind::Add, 1)
                 | (DialogKind::Add, 2)
+                | (DialogKind::Add, 3)
+                | (DialogKind::Add, 4)
                 | (DialogKind::Modify, 0)
+                | (DialogKind::Modify, 1)
+                | (DialogKind::Modify, 2)
         );
         for c in &chars {
             let consumed = crate::app::text_char(kind, &mut d, focus, *c);
@@ -841,6 +845,8 @@ proptest! {
             if !d.conns.is_empty() {
                 prop_assert!(d.conns_edited, "并发非空时 edited 必已置位");
             }
+            prop_assert!(d.down_limit.len_chars() <= 32, "限速 ≤ 32 列");
+            prop_assert!(d.up_limit.len_chars() <= 32, "限速 ≤ 32 列");
             let fields = [
                 (crate::app::TextField::Url, d.url.len_chars(), d.url.cursor),
                 (crate::app::TextField::Dir, d.dir.len_chars(), d.dir.cursor),
@@ -865,14 +871,20 @@ proptest! {
         d.dir.set(seed_s.clone());
         d.conns.set("42");
         d.ck_value.set(seed_s.clone());
+        d.down_limit.set(seed_s.clone());
+        d.up_limit.set(seed_s.clone());
         let is_bs_field = matches!(
             (kind, focus),
             (DialogKind::Add, 0)
                 | (DialogKind::Add, 1)
                 | (DialogKind::Add, 2)
+                | (DialogKind::Add, 3)
                 | (DialogKind::Add, 4)
+                | (DialogKind::Add, 6)
                 | (DialogKind::Modify, 0)
+                | (DialogKind::Modify, 1)
                 | (DialogKind::Modify, 2)
+                | (DialogKind::Modify, 4)
         );
         let (url0, dir0, conns0, ck0) = (
             d.url.value.clone(),
@@ -905,13 +917,19 @@ proptest! {
                 expect_pop(&dir0, &d.dir.value);
                 follow(cursor0.1, d.dir.len_chars(), d.dir.cursor);
             }
-            (DialogKind::Add, 4) => {
+            (DialogKind::Add, 6) => {
                 expect_pop(&ck0, &d.ck_value.value);
                 follow(cursor0.3, d.ck_value.len_chars(), d.ck_value.cursor);
             }
-            (DialogKind::Modify, 2) => {
+            (DialogKind::Modify, 4) => {
                 expect_pop(&ck0, &d.ck_value.value);
                 follow(cursor0.3, d.ck_value.len_chars(), d.ck_value.cursor);
+            }
+            (DialogKind::Add, 3) | (DialogKind::Modify, 1) => {
+                expect_pop(&seed_s, &d.down_limit.value);
+            }
+            (DialogKind::Add, 4) | (DialogKind::Modify, 2) => {
+                expect_pop(&seed_s, &d.up_limit.value);
             }
             (DialogKind::Add, 2) | (DialogKind::Modify, 0) => {
                 expect_pop(&conns0, &d.conns.value);
@@ -923,6 +941,9 @@ proptest! {
                 prop_assert_eq!(&d.dir.value, &dir0, "非退格字段零变化");
                 prop_assert_eq!(&d.conns.value, &conns0, "非退格字段零变化");
                 prop_assert_eq!(&d.ck_value.value, &ck0, "非退格字段零变化");
+                prop_assert_eq!(&d.down_limit.value, &seed_s, "非退格字段零变化");
+                prop_assert_eq!(&d.up_limit.value, &seed_s, "非退格字段零变化");
+                let _ = &url0;
             }
         }
     }
@@ -970,10 +991,10 @@ proptest! {
                 prop_assert!(d.ck_value.is_empty(), "选中 NONE 时校验码实时清空");
             }
             if *k == KeyCode::Tab {
-                prop_assert_eq!(d.focus, 4, "Tab 关闭并跳焦 4");
+                prop_assert_eq!(d.focus, 6, "Tab 关闭并跳焦 6");
             }
             if *k == KeyCode::BackTab {
-                prop_assert_eq!(d.focus, 2, "BackTab 关闭并跳焦 2");
+                prop_assert_eq!(d.focus, 4, "BackTab 关闭并跳焦 4");
             }
         }
     }
@@ -995,10 +1016,10 @@ proptest! {
             crate::app::proxy_dropdown_open_key(&mut d, n, *k);
             prop_assert!(d.proxy_sel < n.max(1), "proxy_sel 恒在界内（n=0 守卫后 n'=1）");
             let expect_focus = match (kind, k) {
-                (DialogKind::Add, KeyCode::Tab) => Some(6),
-                (DialogKind::Add, KeyCode::BackTab) => Some(4),
-                (DialogKind::Modify, KeyCode::Tab) => Some(4),
-                (DialogKind::Modify, KeyCode::BackTab) => Some(2),
+                (DialogKind::Add, KeyCode::Tab) => Some(8),
+                (DialogKind::Add, KeyCode::BackTab) => Some(6),
+                (DialogKind::Modify, KeyCode::Tab) => Some(6),
+                (DialogKind::Modify, KeyCode::BackTab) => Some(4),
                 _ => None,
             };
             if let Some(f) = expect_focus {

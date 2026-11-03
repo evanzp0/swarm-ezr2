@@ -74,6 +74,23 @@ impl App {
             }
             return;
         }
+        if self.trackers_open {
+            match code {
+                KeyCode::Esc
+                | KeyCode::Char('t')
+                | KeyCode::Char('T')
+                | KeyCode::Char('q')
+                | KeyCode::Char('Q') => self.close_trackers_popup(),
+                KeyCode::Up => self.trackers_scroll_by(-1),
+                KeyCode::Down => self.trackers_scroll_by(1),
+                KeyCode::PageUp => self.trackers_scroll_by(-8),
+                KeyCode::PageDown => self.trackers_scroll_by(8),
+                KeyCode::Home => self.trackers_scroll = 0,
+                KeyCode::End => self.trackers_scroll = usize::MAX,
+                _ => {}
+            }
+            return;
+        }
         if self.help_open {
             match code {
                 KeyCode::Esc
@@ -96,7 +113,7 @@ impl App {
             KeyCode::Char('q') | KeyCode::Char('Q') => self.quit = true,
             KeyCode::Tab => self.focus = self.focus.next(),
             KeyCode::BackTab => self.focus = self.focus.prev(),
-            KeyCode::Char('t') | KeyCode::Char('T') => self.cycle_filter(1),
+            KeyCode::Char('t') | KeyCode::Char('T') => self.open_trackers_popup(),
             KeyCode::Char(']') | KeyCode::Char('}') => self.cycle_filter(1),
             KeyCode::Char('[') | KeyCode::Char('{') => self.cycle_filter(-1),
             KeyCode::Char('h') | KeyCode::Char('H') => {
@@ -670,9 +687,19 @@ mod tab_key_tests {
         app.on_key(KeyCode::Char('{'), KeyModifiers::NONE);
         assert_eq!(app.filter, 0);
         app.on_key(KeyCode::Char('T'), KeyModifiers::NONE);
-        assert_eq!(app.filter, 1, "T 循环切换");
+        assert_eq!(
+            app.filter, 0,
+            "t/T 页签切换退役（FR-02-31）：空任务 toast 拒绝"
+        );
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|m| m.contains("未选中任务，无法查看 trackers")),
+            "t 门控臂 toast: {:?}",
+            app.toast
+        );
         app.on_key(KeyCode::Char('t'), KeyModifiers::NONE);
-        assert_eq!(app.filter, 0, "t 同效");
+        assert_eq!(app.filter, 0, "t 同效（退役后不切页签）");
         app.shutdown().await;
     }
 }
