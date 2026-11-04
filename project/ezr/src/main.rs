@@ -438,7 +438,7 @@ mod cli_parse_tests {
             "-c",
             "8",
             "--max-speed",
-            "2 MB/s",
+            "2 MiB/s",
             "http://h/f.bin",
             "-h",
             "-V",
@@ -446,7 +446,7 @@ mod cli_parse_tests {
         .unwrap();
         assert_eq!(c.dir.as_deref(), Some("/tmp/dl"));
         assert_eq!(c.conns, Some(8));
-        assert_eq!(c.max_speed, Some(2_000_000));
+        assert_eq!(c.max_speed, Some(2_097_152), "新写法二进制生效");
         assert_eq!(c.urls, vec!["http://h/f.bin".to_string()]);
         assert!(c.help && c.version);
     }
@@ -485,6 +485,11 @@ mod cli_parse_tests {
         );
         assert!(parse_cli(&args(&["--max-speed", "nonsense"])).is_err());
         assert!(parse_cli(&args(&["--max-speed"])).is_err());
+        assert!(
+            parse_cli(&args(&["--max-speed", "2 MB/s"])).is_err(),
+            "旧写法 KB/MB/GB 十进制废弃：CLI 参数报错退出（FR-02-28 v1.11）"
+        );
+        assert!(parse_cli(&args(&["--max-speed", "500 KB/s"])).is_err());
     }
 
     #[test]

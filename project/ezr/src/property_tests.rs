@@ -302,7 +302,7 @@ proptest! {
     #[test]
     fn prop_parse_speed_suffix_and_units(
         n in 0u64..1_000_000,
-        unit in prop::sample::select(&["", " KB", " MB", " b", " KB ", " MB  ", " KiB", " MiB", " GiB"]),
+        unit in prop::sample::select(&["", " b", " KiB", " MiB", " GiB"]),
         space in prop::sample::select(&["", " ", "  "]),
     ) {
         let s = format!("{space}{n}{unit}");
@@ -311,8 +311,16 @@ proptest! {
             crate::model::config::parse_speed(&format!("{s}/s")),
             "『/s』后缀不影响解析结果"
         );
-        prop_assert_eq!(crate::model::config::parse_speed(&format!("{n} KB")), n * 1_000);
-        prop_assert_eq!(crate::model::config::parse_speed(&format!("{n} MB")), n * 1_000_000);
+        prop_assert_eq!(
+            crate::model::config::parse_speed(&format!("{n} KB")),
+            0,
+            "旧写法 KB 十进制废弃归零（FR-02-28 v1.11）"
+        );
+        prop_assert_eq!(
+            crate::model::config::parse_speed(&format!("{n} MB")),
+            0,
+            "旧写法 MB 十进制废弃归零"
+        );
         prop_assert_eq!(
             crate::model::config::parse_speed(&format!("{n} KiB")),
             n * 1_024,
@@ -336,16 +344,29 @@ proptest! {
         upper in prop::bool::ANY,
         garbage in "[a-hj-z]{1,6}",
     ) {
-        let s = format!("{n} MB");
+        let s = format!("{n} MiB");
         let variant = if upper { s.to_uppercase() } else { s.to_lowercase() };
-        prop_assert_eq!(crate::model::config::parse_speed(&variant), n * 1_000_000, "大小写归一");
-        prop_assert_eq!(crate::model::config::parse_speed(&format!("{n}kb")), n * 1_000, "无空格后缀");
+        prop_assert_eq!(
+            crate::model::config::parse_speed(&variant),
+            n * 1_048_576,
+            "大小写归一（二进制口径）"
+        );
+        prop_assert_eq!(
+            crate::model::config::parse_speed(&format!("{n}kib")),
+            n * 1_024,
+            "无空格后缀"
+        );
+        prop_assert_eq!(
+            crate::model::config::parse_speed(&format!("{n}kb")),
+            0,
+            "旧写法 kb 十进制废弃归零（无空格后缀同废弃）"
+        );
         prop_assert_eq!(crate::model::config::parse_speed(garbage.as_str()), 0, "非数字归零（不限速）");
         prop_assert!(
-            crate::model::config::parse_speed("1 MB")
-                > crate::model::config::parse_speed("1 KB")
-                && crate::model::config::parse_speed("1 KB") > crate::model::config::parse_speed("1 b"),
-            "单位乘数单调 MB > KB > b"
+            crate::model::config::parse_speed("1 MiB")
+                > crate::model::config::parse_speed("1 KiB")
+                && crate::model::config::parse_speed("1 KiB") > crate::model::config::parse_speed("1 b"),
+            "单位乘数单调 MiB > KiB > b"
         );
     }
 

@@ -1274,6 +1274,25 @@ mod limit_backfill_tests {
     }
 
     #[test]
+    fn dialog_input_shorthand_decimal_spelling_maps_to_binary() {
+        assert_eq!(
+            parse_speed_limit("512 kb/s"),
+            Some(524_288),
+            "对话框速记面 kb → 二进制 1024（与产品 routing.rs speed_unit_mult 同表同构）"
+        );
+        assert_eq!(
+            parse_speed_limit("2 MB/s"),
+            Some(2_097_152),
+            "对话框速记面 MB → MiB 二进制；区别于产品 config 键解析面（KB/MB/GB 十进制已废弃归 0），两层口径不同属有意设计"
+        );
+        assert_eq!(
+            parse_speed_limit("1.5 gb"),
+            Some(1_610_612_736),
+            "对话框速记面 gb → GiB 二进制"
+        );
+    }
+
+    #[test]
     fn format_speed_limit_round_trips_through_parse() {
         for v in [0u64, 1, 512, 5120, 1536, 500_000, 1_048_576, 1_073_741_824] {
             assert_eq!(

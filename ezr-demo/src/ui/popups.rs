@@ -250,7 +250,10 @@ pub(crate) fn draw_trackers(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let running = matches!(
         state,
-        TaskState::Downloading | TaskState::Seeding | TaskState::Verifying | TaskState::PostProcessing
+        TaskState::Downloading
+            | TaskState::Seeding
+            | TaskState::Verifying
+            | TaskState::PostProcessing
     );
 
     let rect = match app.trackers_pos {
@@ -315,11 +318,41 @@ pub(crate) fn draw_trackers(f: &mut Frame, app: &mut App, area: Rect) {
     let mut cur = 0usize;
     let hs = Style::default().fg(DIM2);
     push_col(&mut header, &mut cur, 0, "#".to_string(), hs);
-    push_col(&mut header, &mut cur, TRACKERS_COL_URL, "URL".to_string(), hs);
-    push_col(&mut header, &mut cur, TRACKERS_COL_STATUS, "状态".to_string(), hs);
-    push_col(&mut header, &mut cur, TRACKERS_COL_PEERS, "Peers".to_string(), hs);
-    push_col(&mut header, &mut cur, TRACKERS_COL_SEEDS, "Seeds".to_string(), hs);
-    push_col(&mut header, &mut cur, TRACKERS_COL_MSG, "消息".to_string(), hs);
+    push_col(
+        &mut header,
+        &mut cur,
+        TRACKERS_COL_URL,
+        "URL".to_string(),
+        hs,
+    );
+    push_col(
+        &mut header,
+        &mut cur,
+        TRACKERS_COL_STATUS,
+        "状态".to_string(),
+        hs,
+    );
+    push_col(
+        &mut header,
+        &mut cur,
+        TRACKERS_COL_PEERS,
+        "Peers".to_string(),
+        hs,
+    );
+    push_col(
+        &mut header,
+        &mut cur,
+        TRACKERS_COL_SEEDS,
+        "Seeds".to_string(),
+        hs,
+    );
+    push_col(
+        &mut header,
+        &mut cur,
+        TRACKERS_COL_MSG,
+        "消息".to_string(),
+        hs,
+    );
     f.render_widget(
         Paragraph::new(Line::from(header)),
         Rect {
@@ -448,7 +481,10 @@ pub(crate) fn draw_trackers(f: &mut Frame, app: &mut App, area: Rect) {
         );
     } else {
         let end = (start + vis).min(total);
-        let lines: Vec<Line> = flat[start..end].iter().map(|sp| Line::from(sp.clone())).collect();
+        let lines: Vec<Line> = flat[start..end]
+            .iter()
+            .map(|sp| Line::from(sp.clone()))
+            .collect();
         f.render_widget(
             Paragraph::new(lines),
             Rect {

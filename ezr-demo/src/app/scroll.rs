@@ -136,7 +136,8 @@ impl App {
                 self.pieces_scroll = clamp_offset(self.pieces_scroll as i64 + delta as i64, max);
             }
             SbKey::Trackers => {
-                self.trackers_scroll = clamp_offset(self.trackers_scroll as i64 + delta as i64, max);
+                self.trackers_scroll =
+                    clamp_offset(self.trackers_scroll as i64 + delta as i64, max);
             }
             SbKey::Help => {
                 self.help_scroll = clamp_offset(self.help_scroll as i64 + delta as i64, max);

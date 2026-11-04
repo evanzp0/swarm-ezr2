@@ -514,13 +514,10 @@ impl Config {
     }
 }
 
-const SPEED_UNITS: [(&str, f64); 7] = [
+const SPEED_UNITS: [(&str, f64); 4] = [
     ("gib", 1_073_741_824.0),
     ("mib", 1_048_576.0),
     ("kib", 1_024.0),
-    ("gb", 1_000_000_000.0),
-    ("mb", 1_000_000.0),
-    ("kb", 1_000.0),
     ("b", 1.0),
 ];
 
@@ -1020,12 +1017,25 @@ mod tests {
 
     #[test]
     fn speed_parsing() {
-        assert_eq!(parse_speed("2 MB/s"), 2_000_000);
-        assert_eq!(parse_speed("500 KB/s"), 500_000);
         assert_eq!(parse_speed("1048576"), 1_048_576);
-        assert_eq!(parse_speed("1.5 MB"), 1_500_000);
         assert_eq!(parse_speed("garbage"), 0);
         assert_eq!(parse_speed("0"), 0);
+    }
+
+    #[test]
+    fn speed_parsing_decimal_units_retired() {
+        assert_eq!(
+            parse_speed("2 MB/s"),
+            0,
+            "旧写法 KB/MB/GB 十进制废弃不再识别"
+        );
+        assert_eq!(
+            parse_speed("500 KB/s"),
+            0,
+            "旧写法废弃 → 非法回退 0（FR-02-28 v1.11）"
+        );
+        assert_eq!(parse_speed("1.5 MB"), 0, "『/s』后缀可省同废弃");
+        assert_eq!(parse_speed("2 gb"), 0);
     }
 
     #[test]
@@ -1042,24 +1052,37 @@ mod tests {
         assert_eq!(parse_speed("512 b/s"), 512);
         assert_eq!(
             parse_speed("2 MB/s"),
-            2_000_000,
-            "旧写法 MB/s 仍按十进制兼容解析"
+            0,
+            "旧写法 MB/s 十进制废弃不再识别（FR-02-28 v1.11）"
         );
     }
 
     #[test]
     fn speed_limit_keys_accept_string_and_integer() {
-        let c = Config::from_toml("[common]\nglobal_max_download_speed = \"2 MB/s\"\n");
-        assert_eq!(c.global_max_download_speed, 2_000_000);
+        let c = Config::from_toml("[common]\nglobal_max_download_speed = \"2 MiB/s\"\n");
+        assert_eq!(c.global_max_download_speed, 2_097_152, "新写法二进制生效");
         let c2 = Config::from_toml("[common]\nglobal_max_upload_speed = 1048576\n");
         assert_eq!(
             c2.global_max_upload_speed, 1_048_576,
             "整数 B/s 形态直接生效"
         );
-        let c3 = Config::from_toml("[common]\ntask_max_download_speed = \"500 KB/s\"\n");
-        assert_eq!(c3.task_max_download_speed, 500_000);
+        let c3 = Config::from_toml("[common]\ntask_max_download_speed = \"500 KiB/s\"\n");
+        assert_eq!(c3.task_max_download_speed, 512_000);
         let c4 = Config::from_toml("[common]\ntask_max_upload_speed = \"xyz\"\n");
         assert_eq!(c4.task_max_upload_speed, 0, "不可解析限速弃用");
+    }
+
+    #[test]
+    fn speed_limit_keys_decimal_old_style_fall_back_zero() {
+        let c = Config::from_toml("[common]\nglobal_max_download_speed = \"2 MB/s\"\n");
+        assert_eq!(
+            c.global_max_download_speed, 0,
+            "旧写法废弃 → 非法回退默认 0（FR-02-28 v1.11）"
+        );
+        let c3 = Config::from_toml("[common]\ntask_max_download_speed = \"500 KB/s\"\n");
+        assert_eq!(c3.task_max_download_speed, 0, "旧写法废弃回退 0");
+        let c5 = Config::from_toml("[common]\nglobal_max_upload_speed = \"2 GB\"\n");
+        assert_eq!(c5.global_max_upload_speed, 0);
     }
 
     #[test]

@@ -22,6 +22,25 @@ chmod +x bin/ezr-tui-demo
 
 ## 变更记录（相对上游）
 
+37. **限速单位口径分层注记（ezr config 键旧写法废弃轮同步）**
+    - 产品端 config 键（`global_max_download_speed`/`global_max_upload_speed`/
+      `task_max_download_speed`/`task_max_upload_speed` 四键）与 CLI `--max-speed`
+      限速值只认二进制新写法（`KiB/MiB/GiB` 大小写不敏感、`/s` 后缀可省；裸整数与
+      `B/s` 后缀 = B/s），旧写法 `KB/MB/GB` 十进制**废弃不再识别**——config 键值
+      非法回退默认 0、CLI 参数报错退出（本轮产品侧 `config.rs` SPEED_UNITS
+      7 → 4 单元 + 兼容测试翻转 + CLI 报错路径实机验证，FR-02-28/29 v1.11）
+    - **demo 无 config 解析面**（全源码 `toml|config|Config` 零命中）：
+      `TASK_LIMIT_DEFAULTS` 数值常量即产品 config 任务级默认的演示等价物，
+      本轮同口径核查通过、解析代码无需改动
+    - **对话框层口径不变**：限速输入速记 `kb/mb/gb` = 二进制补全（`512 kb` →
+      `512 KiB/s`），与产品 `routing.rs speed_unit_mult` 同表同构——**区别于**
+      产品 config 键解析面（旧写法废弃），两层口径不同属有意设计（`2 MB/s`
+      在对话框层 = 2 MiB，在产品 config 键层 = 非法归 0）
+    - 守卫测试：`src/app/dialogs.rs` limit_backfill_tests 新增
+      `dialog_input_shorthand_decimal_spelling_maps_to_binary`（全套 36P/0F）；
+      文档同步：规范文档头部注记 + §6.1「限速单位口径分层」bullet；
+      无需重建 bin/ 预编译二进制（本轮未触碰渲染层）
+
 36. **Trackers 窗口倒计时列放宽（ezr bug24 轮同步）**
     - Trackers 弹窗宽度 90 → 94：末列（消息）可用预算 8 → 12 列，「下轮 NNNs」/
       「重试 NNNs」倒计时 3 位及以上秒数不再被截断成 '…'（与产品端

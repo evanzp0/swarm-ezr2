@@ -127,7 +127,10 @@ pub fn draw_multi_line_input(
     for vi in 0..view_h {
         let ri = start + vi;
         let row_spans: Vec<Span> = if empty && vi == 0 && !placeholder.is_empty() {
-            vec![Span::styled(placeholder.to_string(), Style::default().fg(DIM2))]
+            vec![Span::styled(
+                placeholder.to_string(),
+                Style::default().fg(DIM2),
+            )]
         } else {
             match rows.get(ri) {
                 Some((li, s, n)) => {

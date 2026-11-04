@@ -19,6 +19,9 @@
 - 第二层空间：跑完全量后 `target/debug/deps` 里的测试可执行文件（无扩展名、单个
   20M~数百M，全仓 ~3.8G）可安全删除——clippy 只 check 不链接，后续若需重跑测试仅
   重新链接（秒级）不重编译。全量测试期间设 `CARGO_INCREMENTAL=0` 防增量缓存回填。
+- **build 命令同受小盘约束**（config 废弃轮复现）：`cargo build` 漏带
+  `CARGO_INCREMENTAL=0` 时 incremental 会话目录写入同样爆盘（os error 28）——
+  测试命令带了、build 命令漏带照样翻车；所有 cargo 调用统一带。
 
 ## harness 的 tracker/seeder 是会话级临时进程：BT 手测前先起夹具
 - **现象**：操作者报告「BT 连不上 tracker、无 peer」；实测 e2e 三连 PASS、产品无回归。
@@ -108,6 +111,10 @@
 - **工具陷阱**：`bin/swarm begin` 的输出被管道截断（如 `| head`）时，脚本会因 SIGPIPE
   在写 session 状态前中断，`complete` 报「没有进行中的会话」——begin/complete 输出
   重定向到文件再查看，不要用管道截头。
+- **begin 会清空 `.work/tmp/`**（config 废弃轮发现）：begin 入口
+  `find "$TMPD" -mindepth 1 -exec rm -rf {} +`——重定向目标放 `.work/tmp/begin.log`
+  会被脚本自己删掉（表象 = redirect 成功但 cat 不到了，会话已正常建立）；
+  begin 输出日志放 `.work/` 根或直接看 stdout，不入 tmp/。
 
 ## harness 速度基准的 piece 粒度压测口径（--piece-kib）
 - `swarm_e2e.py` 新增 `--piece-kib`（默认 256 不变）：速度回归必须补一组小 piece
@@ -202,3 +209,14 @@
 ## bug23/bug24 归档轮（specifier）
 - chat 选择题面板通道恢复可用：Inversion 阶段 1 六题经面板逐题作答成功（bug13–18 轮「面板不可用」受限退化沿袭解除）——后续 specifier 轮先试面板逐题作答，仍不可用时再退化 chat 输入答案；面板单轮批量出题与「阶段 1 一次问全」口径天然吻合，操作者 chat 追加指令可即时覆盖面板答案（本轮「旧写法废弃」即如此，以 chat 指令为准）。
 - babashka 资产名漂移实证：v1.12.209 的 linux-amd64 资产实名 = `babashka-1.12.209-linux-amd64-static.tar.gz`（旧名 .tar.xz 直接 404）——「releases 清单先查」条款的直接实例，清单页经 gh-proxy 同样可达。
+
+## config 废弃轮镜像复测（2026-11-04）：USTC 单路径唯一完整可用
+- 六镜 10s 吞吐探针：**USTC 13.6MB/s 唯一真实可用**（21MB 直链拉完，清单
+  channel-rust-nightly.toml 900KB 正常 TOML、date 2026-11-03）；官方直连仅
+  0.29MB/s；TUNA/rsproxy/aliyun/nju 单路径全 404（TUNA 双层路径陷阱、rsproxy
+  `/rustup/dist/` 清单 404 第 6 次观测）——「测速快 ≠ 能装、装前 curl 清单」纪律
+  持续有效。
+- 本轮口径：USTC 直链 rustup-init + 双变量（RUSTUP_DIST_SERVER/UPDATE_ROOT =
+  mirrors.ustc.edu.cn/rust-static）前台 `-y --profile minimal --default-toolchain
+  nightly -c rustfmt -c clippy` 一次装齐（EXIT=0，cargo 1.101.0-nightly）；
+  cargo registry 配 USTC sparse。可达性逐轮漂移再证，下轮仍需先探针。
