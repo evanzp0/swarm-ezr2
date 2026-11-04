@@ -90,7 +90,7 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let mut colw: Vec<usize> = if is_bt {
-        vec![18, 8, 8, 8, 8, 34, 4]
+        vec![18, 4, 8, 8, 8, 8, 34, 4]
     } else {
         vec![4, 8, 8]
     };
@@ -98,7 +98,7 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         let vw = view.width as usize;
         let base = colw.iter().sum::<usize>() + colw.len().saturating_sub(1);
         if base > vw {
-            colw[5] = vw.saturating_sub(60).max(26);
+            colw[6] = vw.saturating_sub(65).max(26);
         }
     }
     let content_w = colw.iter().sum::<usize>() + colw.len().saturating_sub(1);
@@ -109,6 +109,8 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         vec![
             head_cell("地址", 18),
             Span::raw(" "),
+            head_cell("标志", 4),
+            Span::raw(" "),
             head_cell("下载速度", 8),
             Span::raw(" "),
             head_cell("上传速度", 8),
@@ -117,7 +119,7 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
             Span::raw(" "),
             head_cell("累计上传", 8),
             Span::raw(" "),
-            head_cell("客户端", colw[5]),
+            head_cell("客户端", colw[6]),
             Span::raw(" "),
             head_cell("协议", 4),
         ]
@@ -158,6 +160,8 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                         .bg(bg),
                 ),
                 Span::styled(" ", Style::default().bg(bg)),
+                Span::styled(pad_right(&c.flags, 4), Style::default().fg(DIM).bg(bg)),
+                Span::styled(" ", Style::default().bg(bg)),
                 cell(
                     if dl_on {
                         fmt_speed(c.speed)
@@ -183,7 +187,7 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                 cell(fmt_size(c.cum_up), 8, FG),
                 Span::styled(" ", Style::default().bg(bg)),
                 Span::styled(
-                    pad_right(&truncate(c.client, colw[5]), colw[5]),
+                    pad_right(&truncate(c.client, colw[6]), colw[6]),
                     Style::default().fg(DIM).bg(bg),
                 ),
                 Span::styled(" ", Style::default().bg(bg)),

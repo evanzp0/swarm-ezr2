@@ -671,3 +671,115 @@ mod cursor_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod conns_flags_tests {
+    use ratatui::{backend::TestBackend, Terminal};
+
+    use super::*;
+    use crate::app::Panel;
+
+    fn render_conns(app: &mut App, w: u16, h: u16) -> String {
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let area = Rect::new(0, 0, w, h);
+        term.draw(|f| draw_conns(f, app, area)).unwrap();
+        term.backend().to_string()
+    }
+
+    #[test]
+    fn bt_conns_panel_renders_eight_columns_with_flags() {
+        let mut app = App::new();
+        app.focus = Panel::Conns;
+        let bt = *app
+            .filtered()
+            .iter()
+            .find(|&&i| app.tasks[i].protocol.is_bt() && app.tasks[i].state.shows_conns())
+            .expect("正在下载页签含可显示并发的 BT 任务");
+        app.selected = app.filtered().iter().position(|&i| i == bt).unwrap();
+        assert!(!app.tasks[bt].connections.is_empty(), "BT 任务有并发明细");
+        app.tasks[bt].connections[0].flags = "DUOI".to_string();
+        app.tasks[bt].connections[0].speed = 1024.0;
+
+        let text = render_conns(&mut app, 120, 14);
+        let head = text
+            .lines()
+            .find(|l| l.contains("地址"))
+            .unwrap_or_else(|| panic!("BT 表头行缺失: {text}"));
+        assert!(
+            head.contains("标志"),
+            "表头含标志列（FR-02-33 八列）: {head:?}"
+        );
+        let a = head.find("地址").unwrap();
+        let fl = head.find("标志").unwrap();
+        let d = head.find("下载速度").unwrap();
+        assert!(a < fl && fl < d, "标志列位于地址后第二列: {head:?}");
+        assert!(head.contains("协议"), "末列协议仍在: {head:?}");
+        let row = text
+            .lines()
+            .find(|l| l.contains("TCP"))
+            .unwrap_or_else(|| panic!("明细行缺失: {text}"));
+        assert!(
+            row.contains("DUOI"),
+            "极值 4 枚连写 DUOI 左对齐渲染（数据宽 4 + 分隔 1 = 视觉列宽 5）: {row:?}"
+        );
+    }
+
+    #[test]
+    fn bt_conns_panel_flags_no_flag_dash_and_shrink_base_65() {
+        let mut app = App::new();
+        app.focus = Panel::Conns;
+        let bt = *app
+            .filtered()
+            .iter()
+            .find(|&&i| app.tasks[i].protocol.is_bt() && app.tasks[i].state.shows_conns())
+            .expect("正在下载页签含可显示并发的 BT 任务");
+        app.selected = app.filtered().iter().position(|&i| i == bt).unwrap();
+        app.tasks[bt].connections[0].flags = "-".to_string();
+        let text = render_conns(&mut app, 120, 14);
+        assert!(text.contains("标志"), "表头含标志列: {text}");
+        assert!(!text.contains('…'), "宽视口无省略号截断: {text}");
+
+        let narrow = render_conns(&mut app, 80, 14);
+        let head = narrow
+            .lines()
+            .find(|l| l.contains("地址"))
+            .unwrap_or_else(|| panic!("窄视口表头缺失: {narrow}"));
+        assert!(head.contains("标志"), "窄视口标志列仍首屏可见: {head:?}");
+        assert!(
+            !narrow.contains('…'),
+            "收缩基线 65（下限 26）后客户端单元格无省略号（D69⑥ 同构）: {narrow}"
+        );
+    }
+
+    #[test]
+    fn help_window_contains_five_flag_legend_entries() {
+        let lines = super::popups::help_lines();
+        let text = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            lines.len(),
+            81,
+            "帮助内容 81 行（源码实测基线 76 + 5 标志缩写条目，FR-02-33/D69）"
+        );
+        for needle in [
+            "D=正在下载 · d=欲下被 choke",
+            "U=正在上传 · u=欲传被 choke",
+            "O=乐观免 choke · I=入连（对方拨入）",
+            "K=对方未 choke 我方，且我方对其无需求",
+            "?=我方未 choke 对方，且对方对我方无兴趣",
+        ] {
+            assert!(
+                text.contains(needle),
+                "帮助【并发连接】组标志缩写条目缺失: {needle}"
+            );
+        }
+    }
+}

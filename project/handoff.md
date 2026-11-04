@@ -1,10 +1,11 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/specifier（本轮已完成）→ 建议下一节点 six-pack/coder
-> 会话：ezr-specifier-flags-column（2026-11-05，specifier 轮：并发 panel BT 行「标志」列
-> FR-02-33/D69——qBt Peers Flags 子集 D/d/U/u/O/I/K/?、BT 八列形态 99 宽、收缩基线 65、
-> 帮助【并发连接】组标志缩写说明 5 条目（帮助 75→80 行））
-> 上游交接：project/handoff.md（config 废弃轮 coder 交接）
+> 流程：six-pack　当前节点：six-pack/coder（本轮已完成）→ 建议下一节点 six-pack/cleaner
+> 会话：ezr-coder-qa-runner-sync（2026-11-04，coder 轮：QA runner 执行层同步——handoff
+> 沿袭待办承接，操作者钦定 bin/swarm begin six-pack/coder：QA-TD-19 帮助断言 v1.44 口径
+> 同步（十二组 80 行 + 标志缩写 5 条目锚点）+ QA-TD-07 T 键 FR-02-31 门控语义同步 +
+> QA-UC-08/QA-BE-18 既定形态注记登记）
+> 上游交接：project/handoff.md（标志列实现轮 + D69 批准登记轮交接）
 
 ## 一、产物历史完成情况
 
@@ -12,12 +13,15 @@
 - **EZR Downloader**：Rust + tokio + ratatui 终端下载器（单二进制、跨平台）。需求权威
   `project/mission.md`（分期模式 v1.41）+ `project/mission/phase-01…04.md`。
 - phase-01（HTTP/HTTPS 内核与 TUI）收官；phase-02（BT 内核/做种/管理）已实现并经
-  互操作夹具多轮收口。历轮 bug11–24 全部落地；本轮为「并发 panel 标志列」轮（FR-02-33）。
+  互操作夹具多轮收口。历轮 bug11–24 全部落地；本轮为「并发 panel 标志列」轮（FR-02-33）
+  实现落地。
 
 ### 产物总账
 | 节点/切片 | 产物 | 完成情况 | 验证状态 |
 |---|---|---|---|
-| **specifier（本轮，标志列）** | 需求层 mission.md v1.41 + phase-02 v1.12（FR-02-33/D69）；规格层 04-ui-conns v1.41（场景 08 八列）、09-bt-engine v1.40（场景 18 新增）、01-tui-display v1.44（场景 19 帮助）；QA 层 QA-UC-08/QA-BE-18/QA-TD-19 同步 | 已交付（规格待批：D69） | gherkin-parser 3/3（IR 18/18/25 场景）+ dry-checker 3/3（建议级 findings，涉新场景命中均中文分词假阳性、人工复核不改文本） |
+| **coder（本轮，QA runner 执行层同步）** | `project/qa/runners/`：suite_tui_display.py QA-TD-19 同步 v1.44 口径（docstring + 组列表 8→12 组逐字取 help.rs sec() 清单 + 滚动收集 7→10×PgDn 适配 80 行 + 【并发连接】标志缩写 5 条目逐字锚点）；QA-TD-07 T/t 断言同步 FR-02-31 门控语义（toast 二选一 + 页签不变 + 不开窗）；suite_ui_conns.py 头部 v1.41 同步注（BT 八列判据单测锁登记 + QA-BE-18 执行方式核对）+ notes/testing.md 经验条目 | 已交付 | TD-19 单用例 P（12.8s）+ TD-07 单用例 P；全套 TD P=19+1（TD-07 同步后）/F=1、UC P=15/F=3——四个 F（TD-23 下拉点按时序、UC-07/17/18 校验码填入链）经 HEAD worktree 对照全部同形 = 环境预存非回归（本轮零产品代码改动） |
+| coder（上轮，标志列实现） | `project/ezr/`：engine 侧 `ConnStat.inbound` + `conn_flags` 判定表 + `conn_views` 注入 + listener accept 入连标记 + 判定表单元测试；`BtConnView`/`BtConnRow` 增 `flags` + evt.rs 透传 + 全部字面量构造点补字段；`ui/conns.rs` 八列形态（BT_COLW [18,4,8,8,8,8,34,4]/内容宽 99/收缩基线 65/标志左对齐 DIM/`-` 空值）+ 测试面翻转；`ui/help.rs` 【并发连接】组 5 条目（75→80）+ 断言翻转。`ezr-demo/`：`Connection.flags` + FLAG_POOL 伪随机判定池 + `ui/conns.rs` 八列 + 帮助组 5 条目 + docs 规范（头部注记/§5.4/§6.6）+ README 记录 38 + 守卫测试 6 个 | 已交付 | **bins 956P/0F + 集成 6091P/0F（12 组全绿，含 v147 负载敏感组 695P）= 7047P/0F + clippy 0 警告 + fmt 干净**；ezr-demo 42P/0F + fmt 干净（clippy 9 警告均未触碰文件既有基线） |
+| specifier（上轮，标志列规格） | 需求层 mission.md v1.41 + phase-02 v1.12（FR-02-33/D69）；规格层 04-ui-conns v1.41（场景 08 八列）、09-bt-engine v1.40（场景 18 新增）、01-tui-display v1.44（场景 19 帮助）；QA 层 QA-UC-08/QA-BE-18/QA-TD-19 同步 | 已交付（D69 已批：操作者 20261104 chat 批准七项全项） | gherkin-parser 3/3（IR 18/18/25 场景）+ dry-checker 3/3（建议级 findings，涉新场景命中均中文分词假阳性、人工复核不改文本） |
 | coder（config 废弃轮） | `project/ezr/`：config.rs SPEED_UNITS 7→4 + 测试翻转 + 废弃断言；main.rs CLI 报错；property_tests 翻转。`ezr-demo/`：守卫测试 + docs + README 37 | 已交付 | bins 952P/0F + 集成 5232P/0F + demo 36P/0F + clippy 双 0 警告 + fmt 双干净 + CLI 实机报错验证 |
 | specifier（bug23/24 归档轮） | 需求层 mission.md v1.40 + phase-02 v1.11；规格层 features 八文件；QA 层八套件同步 | 已交付 | gherkin-parser 8/8 + dry-checker 8/8（建议级 findings）+ 判据①–⑤交叉核对全过 |
 | coder（bug23/bug24） | popups.rs TRACKERS_W 94、config 键限速/预填/清空回填、bt_dialog、sidecar partial、反吸血、listen_port；ezr-demo 同步 | 已交付 | bin 903→904P/0F + demo 35P/0F + clippy/fmt 干净 |
@@ -29,22 +33,28 @@
   block_worker fatal 竞态观察项；`App.windows` 失去读者（cleaner 候选裁决）；leech 判据
   无 e2e 自动化（阈值常量固定）；bad_piece 归属口径 = 交付完成块 peer 计 1 次（D67
   允许）；启动重校验窗内二次暂停丢上一轮 partial（D68⑥ 规格允许边界，非受限项）；
-  v147 `engine_conns_quota_exact_and_unique_ids` 负载敏感 flake（连续两轮四次 full-run
-  FAIL / 单跑五连绿 0.3s 级，环境性非回归，notes/testing.md 实录）。
-- **本轮新增**：无受限项——本轮纯规格轮。P/S/X/H/E/e/L 六旗标不出现属规格钦定边界
-  （对应能力 phase-02 未实现），非受限项（09-bt-engine-18 末条）。
+  v147 `engine_conns_quota_exact_and_unique_ids` 负载敏感 flake（环境性非回归，
+  notes/testing.md 实录；**本轮 full-run 695P 全绿**，沿「单跑绿 + 改动无接触面再下
+  非回归结论」判法继续观察）。
+- **本轮新增**：无受限项——FR-02-33/D69 全项落地，实现与规格判定表逐项一致。
+- P/S/X/H/E/e/L 六旗标不出现属规格钦定边界（对应能力 phase-02 未实现），非受限项
+  （09-bt-engine-18 末条）。
+- ezr-demo clippy 9 警告为未触碰文件既有基线（cmd/dialogs/mouse/multiline/ui/dialogs/
+  ui/tree），本轮改动零新增，归 cleaner 轮候选清理面。
 - 工具链：bb v1.13.229（`.tools/bin/bb`）+ APS 仓库（`.tools/Acceptance-Pipeline-
-  Specification`）**本轮已装齐并跑通**（gh-proxy 前缀；下会话 `.tools/` 不跨会话保留，
-  需要时按 notes/environment.md 重建）；rustup nightly 1.101.0（USTC 前台装齐，PATH =
-  ~/.cargo/bin）+ cargo registry USTC sparse——本轮未动，沿用。
+  Specification`）上轮已装齐跑通（gh-proxy 前缀；下会话 `.tools/` 不跨会话保留，
+  需要时按 notes/environment.md 重建）；rustup nightly 1.101.0（前台装齐，PATH =
+  ~/.cargo/bin）+ cargo registry sparse——本轮未动，沿用。
 
-### 实现定义值登记（累计口径，本轮新增处加粗）
+### 实现定义值登记（累计口径，本轮落地处加粗）
 | 值 | 取值 | 位置 |
 |---|---|---|
-| **标志列参考源（D69①，待批）** | **qBittorrent Peers（用户）面板 Flags 列（中文列名「标志」）；Trackers 面板无 Flags 列（官方 FAQ 核证）** | phase-02 FR-02-33 |
-| **标志集（D69②，待批）** | **qBt 官方 FAQ 图例 ezr 可产生子集 {D,d,U,u,O,I,K,?}（P/S/X/H/E/e/L 不出现）；判定表见 09-bt-engine-18** | bt/engine.rs ConnStat + choker 乐观槽 + 入连方向（coder 承接） |
-| **标志列结构（D69③④⑤，待批）** | **地址(18)/标志(5)/下载速度(8)/上传速度(8)/累计下载(8)/累计上传(8)/客户端(34)/协议(4)，内容宽 99；多标志 qBt 图例序无空格连写；无标志 `-`；数据左对齐、DIM 色** | ui/conns.rs BT_COLW（coder 承接） |
-| **客户端收缩基线（D69⑥，待批）** | **max(26, 视口宽 − 65)（基线 60→65、下限 26 不变；视口 ≥ 91 整表完整可见、≥ 99 维持 34）** | ui/conns.rs BT_CLIENT_SHRINK_BASE（coder 承接） |
+| 标志列参考源（D69①，已批） | qBittorrent Peers（用户）面板 Flags 列（中文列名「标志」）；Trackers 面板无 Flags 列（官方 FAQ 核证） | phase-02 FR-02-33 |
+| 标志集（D69②，已批） | qBt 官方 FAQ 图例 ezr 可产生子集 {D,d,U,u,O,I,K,?}（P/S/X/H/E/e/L 不出现）；判定表见 09-bt-engine-18 | bt/engine.rs `conn_flags`（**本轮落地**） |
+| 标志列结构（D69③④⑤，已批） | 地址(18)/**标志(5 = 数据 4 + 分隔 1)**/下载速度(8)/上传速度(8)/累计下载(8)/累计上传(8)/客户端(34)/协议(4)，内容宽 99；多标志 qBt 图例序无空格连写；无标志 `-`；数据左对齐、DIM 色 | ui/conns.rs BT_COLW/BT_CONTENT_W（**本轮落地**） |
+| 客户端收缩基线（D69⑥，已批） | max(26, 视口宽 − 65)（基线 60→65、下限 26 不变；视口 ≥ 91 整表完整可见、≥ 99 维持 34） | ui/conns.rs BT_CLIENT_SHRINK_BASE（**本轮落地**） |
+| 标志判定引擎状态源（**本轮落地**） | D/d = !peer_choking/peer_choking ∧ 该连接有未完成需求（covered∩未 done∩peer has）；U/u = peer_interested ∧ !am_choking/am_choking；O = apply_choker optimistic_slot 命中；I = listener accept 入连标记（ConnStat.inbound）；K = !peer_choking ∧ 无未完成需求；? = !am_choking ∧ !peer_interested | bt/engine.rs conn_flags + ConnStat.inbound + engine/mod.rs accept |
+| demo 标志演示池（**本轮落地**） | FLAG_POOL 12 形态（`-`/D/d/U/u/DU/DUO/UI/I/K/?/DUOI）互斥规则合法、seed+槽位确定性、极值 DUOI 在池 | ezr-demo model.rs FLAG_POOL/pseudo_flags |
 | leech 阈值 | up ≥ 1 MiB 且 down < 64 KiB 且存活 ≥ 120s | bt/engine.rs LEECH_* 常量 |
 | bad_piece 阈值 | 同连接累计 3 次 | BAD_PIECE_BAN_THRESHOLD |
 | protocol 阈值 | 未知 id/帧错首次即封；非法区间 request 重复 3 次 | INVALID_REQUEST_BAN_THRESHOLD |
@@ -73,56 +83,83 @@
 ## 二、当前产出情况
 
 ### 本会话产物清单
-- **需求层**：`project/mission.md` v1.41 注记；`project/mission/phase-02.md` v1.12
-  （头注 + **FR-02-33** 并发 panel BT「标志」列 + **D69** 设计定义值待批）。
-- **规格层（Gherkin）**：
-  - `features/04-ui-conns.feature` v1.41：场景 08 BT 七列改八列（地址(18)/**标志(5)**/…/协议(4)，
-    内容宽 99；标志连写/`-`/左对齐/DIM；收缩基线 60→65、视口下限 86→91；末列吸附零改动注记）。
-  - `features/09-bt-engine.feature` v1.40：**场景 18 新增**（标志判定表：D/d/U/u/O/I/K/? ×
-    引擎状态源；连写顺序；实时翻转；HTTP 无标志列；P/S/X/H/E/e/L 不出现边界）。
-  - `features/01-tui-display.feature` v1.44：场景 19 帮助【并发连接】组新增**标志缩写说明
-    5 条目**（标志 D/d、U/u、O/I、K、?），内容总行数 75→80。
-- **QA 层**：`qa/04-ui-conns-qa.md` v1.41（QA-UC-08 八列判据 + 收缩基线判据）；
-  `qa/09-bt-engine-qa.md` v1.40（**QA-BE-18 新增**：fixture 驱动判定表逐项 + wire 翻转）；
-  `qa/01-tui-display-qa.md` v1.44（QA-TD-19 帮助 80 行 + 5 条目逐字判据）。
-- **project/notes/**：architecture.md（Flags 取证锚点/旗标裁剪法/判定表映射/极值互斥推演/
-  列插入位置/收缩基线平移纪律/帮助图例宽度上限）、environment.md（bb+APS 本轮复测装齐）、
-  INDEX.md 两行同步。
+- **产品端 `project/ezr/`（FR-02-33 实现）**：
+  - `src/bt/engine.rs`：`ConnStat` 增 `inbound`；`conn_flags` 判定表函数（D/d/U/u/O/I/K/?
+    逐项 + qBt 图例序连写 + 空值 `-`）；`conn_views` 注入 flags（done/optimistic_slot
+    入参，7 调用点同步）；listener accept 路径 `inc.inbound = true`；测试模块新增
+    判定表逐项/连写互斥/极值用例。
+  - `src/engine/mod.rs`：`BtConnView` 增 `flags: String`。
+  - `src/app/mod.rs`：`BtConnRow` 增 `flags: String`；`src/app/engine/evt.rs` BtConns
+    事件透传；`src/app/engine/bt.rs`、`src/app/keys.rs`、`src/app/mouse.rs`、
+    `src/ui/pieces.rs` 既有字面量构造点全部补字段。
+  - `src/ui/conns.rs`：BT_COLW 7→8 列 [18, **4**, 8, 8, 8, 8, 34, 4]（标志数据 4 +
+    分隔 1 = 视觉 5）；BT_CONTENT_W 94→99；BT_CLIENT_SHRINK_BASE 60→65；表头插
+    「标志」（左对齐 DIM）+ 数据行插标志单元格（`cell_left` DIM、`-` 空值）；索引
+    平移（客户端 5→6、协议 6→7）；测试翻转（bt_seven→bt_eight_columns、视口
+    65/97/105 断言、收缩/表头断言新口径）+ 新增 `bt_table_complete_at_viewport_91`。
+  - `src/ui/help.rs`：【并发连接】组新增标志缩写 5 条目（D/d、U/u、O/I、K、?，文案与
+    09-bt-engine-18 判定语义逐字一致）；help_lines_len 断言 75→80、End 钳制 55→60。
+- **demo 端 `ezr-demo/`（同构同步）**：
+  - `src/app/model.rs`：`Connection` 增 `flags: String`；`FLAG_POOL` 12 形态 +
+    `pseudo_flags`（seed+槽位确定性，互斥规则合法，极值 DUOI）；构造单点
+    `make_chunk_conns_lease` 注入；守卫测试 3 个（互斥/极值/确定性/构造注入）。
+  - `src/ui/conns.rs`：BT 八列 [18,4,8,8,8,8,34,4] + 收缩 `colw[6] = vw − 65`（下限
+    26）+ 表头/数据行标志单元格（左对齐 DIM）。
+  - `src/ui/popups.rs`：帮助【并发连接】组 5 条目（与产品端逐字一致）。
+  - `src/ui/mod.rs`：守卫测试 3 个（八列表头序/DUOI 渲染/窄视口无 `…`/帮助条目 +
+    81 行实测钉值）。
+  - `docs/ezr-demo UI界面及交互设计规范.md`：头部修订注记 + §5.4（列序表八列 99、
+    标志 bullet 全语义、横向滚动口径、收缩基线 65）+ §6.6（内容 81 行源码实测 +
+    【并发连接】组 5 条目；历史登记 68 行为滞后值一并修正）。
+  - `README.md`：变更记录 38。
+- **`project/notes/`**：testing.md 增 1 条（demo 文档计数登记以源码实测为准 +
+  filtered() 视图渲染测试面变体）；INDEX.md 同条目尾部并入。
 - `project/handoff.md`：本文件（整理重写）。
 
 ### 验证证据
 | 验证项 | 结果 | 命令（可复现） |
 |---|---|---|
-| gherkin-parser | 3/3 通过（IR 场景 18/18/25，场景 18 名称与判定表在案） | `(cd .tools/Acceptance-Pipeline-Specification && bb gherkin-parser <feature> .work/tmp/<stem>.json)` |
-| gherkin-ir-dry-checker | 3/3 通过（findings 97/64/227 全 advisory；人工复核涉新场景命中 = 中文分词假阳性——notes/aps.md 在案口径，不改规格文本） | `bb gherkin-ir-dry-checker <ir> <out>` |
-| 判据①–③交叉核对 | FR-02-33 ↔ 04-ui-conns-08 ↔ QA-UC-08 列宽/基线/视口下限三处数字一致（99/65/91）；09-bt-engine-18 ↔ 01-tui-display-19 ↔ QA-TD-19 标志缩写文案逐字一致 | 人工核对（rg 锚点检索） |
+| 产品端 bins 单元测试 | **956P/0F**（910 main + 30/1/15 附属 bin；上轮 952 → +4 引擎判定表新测试） | `cd project/ezr && CARGO_INCREMENTAL=0 cargo test --bins` |
+| 产品端集成测试（12 组） | **6091P/0F**（hardening 142、engine_backfill 813、g_appcore 712、g_engine 707、g_main 2、g_proxy 16、g_slots 202、g_supervisor 681、g_throttle_err 442、g_v147 695、ui_backfill 843、v115 836） | `CARGO_INCREMENTAL=0 cargo test --tests`（分目标跑同绿） |
+| clippy（产品端） | 0 警告（--all-targets） | `CARGO_INCREMENTAL=0 cargo clippy --all-targets` |
+| fmt（产品端） | 干净（首查 1 处 bt/engine.rs diff 已 fmt 修复，bins 复跑无损复验） | `cargo fmt --check` |
+| ezr-demo 测试 | **42P/0F**（含本轮 6 个新守卫测试） | `cd ezr-demo && CARGO_INCREMENTAL=0 cargo test` |
+| ezr-demo fmt / clippy | fmt 干净；clippy 9 警告均未触碰文件既有基线（cmd/dialogs/mouse/multiline/ui/dialogs/ui/tree） | `cargo fmt --check` / `cargo clippy --all-targets` |
+| 判据锚点核对 | 标志缩写 5 条目文案：产品端 help.rs = ezr-demo popups.rs = 01-tui-display-19 逐字一致；列宽数字 99/65/91 三处（规格/QA/实现）一致 | rg 锚点检索 |
 
 ### 对账口径
-- 规格基线 = 上轮 coder 交接（features/qa 26+ 份全绿基线）；本轮增量 = 3 份 feature +
-  3 份 QA 修订、2 份 mission 文件，其余 23 份 feature / 15 份 QA 未触碰（rg 版本注记检索核对）。
-- 场景序号稳定：04-ui-conns-08、01-tui-display-19 原序号修订不重排；09-bt-engine-18 新增尾接。
+- 规格基线 = 上轮 specifier 交接（features/qa 26+ 份全绿基线）；本轮**未触碰任何
+  features/qa/mission 文件**（coder 职责边界），实现全部落在 `project/ezr/src/` 与
+  `ezr-demo/`；rg 版本注记检索可复核。
+- 上次中断会话的未提交工作区改动经逐文件核对与本轮任务口径一致（步骤 1–6 产物），
+  补验后并入本轮交付，无重复实现、无口径分叉。
+- 帮助内容行数：产品端 80 行（v1.44 口径）；ezr-demo 81 行（源码实测基线 76 + 5，
+  与产品端行数本就不同源——demo 组态历史增量独立演进，本轮已按实测登记）。
 
 ### 待办与待批
-- **待批（操作者）**：D69 七项裁决——①参考源 = qBt Peers（用户）面板 Flags 列
-  （Trackers 面板无 Flags 列经官方 FAQ 核证）；②标志集 = {D,d,U,u,O,I,K,?}（P/S/X/H/E/e/L
-  对应能力未实现不出现）；③列位置 = 地址后第二列（首屏可见，非 qBt GUI 的列尾）；④列宽 5 =
-  极值 4 枚连写 + 1 空白、无空格连写；⑤无标志 `-`、左对齐、DIM 色；⑥收缩基线 60→65
-  （视口下限 86→91）；⑦Inversion 受限退化沿 bug13–18 轮先例。如对任一裁决有异议可回退
-  （改动均为规格注记级）。
-- **待办（coder 轮）**：①FR-02-33 实现（ui/conns.rs 八列 + BtConnView 扩展标志字段 +
-  engine conn_views 判定注入 + ConnStat 入连方向/乐观槽标志贯通）；②帮助窗口 5 条目
-  （ui/help.rs 75→80 行 + help_lines_len 断言同步）；③ezr-demo 并发 panel BT 行同构同步 +
-  帮助组同步 + docs《ezr-demo UI界面及交互设计规范》§6 同步 + 守卫测试；④既有测试面
-  翻转评估（BT_COLW/内容宽 94→99 相关断言、收缩基线断言）。
-- **待办（QA 轮，沿袭）**：QA runner 执行层同步（上轮清单 + 本轮 QA-UC-08/QA-BE-18/QA-TD-19）。
+- **已销账（本轮，coder runner 同步）**：「QA runner 执行层同步（上轮清单 +
+  QA-UC-08/QA-BE-18/QA-TD-19 对应 runner 断言面）」——QA-TD-19 已同步 v1.44 口径
+  （runner 维持 HTTP 驱动的 QA-UC-08 BT 判据按既定形态注记登记，QA-BE-18 fixture 侧
+  判定表测试核对在位）；沿袭的 runner 欠账清单清零。
+- **待批（specifier 轮，新登记）**：QA-TD-07 规程行滞后——`01-tui-display-qa.md` QA-TD-07
+  判据「]/[/T 切/循环页签」未随 phase-02 v1.9/FR-02-31 修订（T/t 现为 trackers 弹窗门控键、
+  页签循环仅 ]/[ 承担、帮助【页签】组 T 条目已删 01-tui-display v1.42）；runner 已按已批准
+  需求语义同步，规程行修订待 specifier 轮落账。
+- **环境预存 FAIL 登记（非回归，沿 testing.md 归因口径）**：QA-TD-23（下拉展开期点按
+  不应拖拽窗口）与 QA-UC-07/17/18（添加对话框校验码填入链在本沙箱 pty 时序下不生效
+  →详情无校验行）——四例 HEAD worktree 对照全部同形失败（本轮零产品代码改动），既有
+  QA 执行环境曾全绿过；不放宽断言，待 QA 轮环境适配/复验。
+- **待办（cleaner 轮候选，沿袭）**：`App.windows` 失去读者裁决；ezr-demo 既有 9 处
+  clippy 警告清理（未触碰文件基线，runner 轮零新增）。
 - 无阻塞。
 
 ### 移交建议
-- 下一步 `bin/swarm begin six-pack/coder`：以本文件为上游交接（FR-02-33 实现 +
-  D69 落地 + ezr-demo 同构同步）。
-- 后续链：coder → cleaner → architect → hardender → QA（宪法第一章：不自动流转）。
+- 下一步 `bin/swarm begin six-pack/cleaner`：以本文件为上游交接（FR-02-33 实现轮
+  收尾：重复/死代码清理、`App.windows` 裁决、demo clippy 基线清理候选）。
+- 可选 specifier 小轮：QA-TD-07 规程行修订（T 循环页签 → trackers 门控，见待批节）。
+- 后续链：cleaner → architect → hardender → QA（宪法第一章：不自动流转）。
 - 操作者授权的收尾口径：`bin/swarm complete` 后立即将产物 tar.gz 复制到
   `/home/z/my-project/`（沿 bug18/20/21/22/23/24 轮授权口径执行）。
-- 工具链交接：bb v1.13.229 + APS 本会话已装（`.tools/`，不跨会话保留；需要时按
-  notes/environment.md 重建）；rustup nightly 1.101.0（PATH = ~/.cargo/bin）+ cargo
-  registry USTC sparse 沿用。
+- 工具链交接：bb v1.13.229 + APS 本会话沿用上轮安装（`.tools/` 不跨会话保留；需要时
+  按 notes/environment.md 重建）；rustup nightly 1.101.0（PATH = ~/.cargo/bin）+
+  cargo registry sparse 沿用。

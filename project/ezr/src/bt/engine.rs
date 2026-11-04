@@ -67,6 +67,7 @@ struct ConnStat {
     peer_choking: bool,
     am_choking: bool,
     peer_interested: bool,
+    inbound: bool,
     tit_prev: (u64, std::time::Instant),
     cum_down: u64,
     cum_up: u64,
@@ -499,7 +500,7 @@ pub(crate) async fn run(
                             completed_notifies = notifies;
                             tr_handles = handles;
                         }
-                        let views = conn_views(&mut conns, pmap.covered_pieces());
+                        let views = conn_views(&mut conns, pmap.covered_pieces(), &done, optimistic_slot);
                         let _ = evt_tx.send(Evt::BtConns { id, conns: views }).await;
                     }
                 }
@@ -567,7 +568,9 @@ pub(crate) async fn run(
                         peer_tx.clone(),
                         dl_flow.clone(),
                     );
-                    conns.insert(next_conn, new_conn_stat(addr.to_string()));
+                    let mut inc = new_conn_stat(addr.to_string());
+                    inc.inbound = true;
+                    conns.insert(next_conn, inc);
                     next_conn += 1;
                 } else {
                     drop(stream);
@@ -628,7 +631,7 @@ pub(crate) async fn run(
                                     .await;
                             }
                         }
-                        let views = conn_views(&mut conns, pmap.covered_pieces());
+                        let views = conn_views(&mut conns, pmap.covered_pieces(), &done, optimistic_slot);
                         let _ = evt_tx.send(Evt::BtConns { id, conns: views }).await;
                     }
                     PeerIn::Closed { reason } => {
@@ -661,7 +664,7 @@ pub(crate) async fn run(
                             BanKind::Protocol,
                         )
                         .await;
-                        let views = conn_views(&mut conns, pmap.covered_pieces());
+                        let views = conn_views(&mut conns, pmap.covered_pieces(), &done, optimistic_slot);
                         let _ = evt_tx.send(Evt::BtConns { id, conns: views }).await;
                     }
                     PeerIn::Msg(msg) => {
@@ -694,7 +697,7 @@ pub(crate) async fn run(
                                 kind,
                             )
                             .await;
-                            let views = conn_views(&mut conns, pmap.covered_pieces());
+                            let views = conn_views(&mut conns, pmap.covered_pieces(), &done, optimistic_slot);
                             let _ = evt_tx.send(Evt::BtConns { id, conns: views }).await;
                         }
                         if downloaded != prev_downloaded {
@@ -709,7 +712,7 @@ pub(crate) async fn run(
                             // 对进度与速度显示足够（qBittorrent 同为秒级刷新）。
                             if progress_emit_due(last_emit, std::time::Instant::now(), tun.progress_emit_min_interval_ms) {
                                 last_emit = std::time::Instant::now();
-                                let views = conn_views(&mut conns, pmap.covered_pieces());
+                                let views = conn_views(&mut conns, pmap.covered_pieces(), &done, optimistic_slot);
                                 let _ = evt_tx.send(Evt::BtProgress {
                                     id,
                                     downloaded,
@@ -846,7 +849,7 @@ pub(crate) async fn run(
                     let _ = evt_tx.send(Evt::BtDone { id, total: pmap.selected_total() }).await;
                 }
                 last_emit = now;
-                let views = conn_views(&mut conns, pmap.covered_pieces());
+                let views = conn_views(&mut conns, pmap.covered_pieces(), &done, optimistic_slot);
                 let _ = evt_tx.send(Evt::BtProgress {
                     id,
                     downloaded,
@@ -1332,6 +1335,7 @@ fn new_conn_stat(addr: String) -> ConnStat {
         peer_choking: true,
         am_choking: true,
         peer_interested: false,
+        inbound: false,
         tit_prev: (0, std::time::Instant::now()),
         cum_down: 0,
         cum_up: 0,
@@ -2158,7 +2162,54 @@ async fn read_piece_from_disk(
     }
 }
 
-fn conn_views(conns: &mut HashMap<usize, ConnStat>, covered: &[u32]) -> Vec<BtConnView> {
+fn conn_flags(
+    st: &ConnStat,
+    covered: &[u32],
+    done: &HashSet<u32>,
+    optimistic_slot: Option<usize>,
+    conn_id: usize,
+) -> String {
+    let we_want = covered
+        .iter()
+        .any(|&p| !done.contains(&p) && st.has.contains(&p));
+    let mut flags = String::new();
+    if we_want && !st.peer_choking {
+        flags.push('D');
+    }
+    if we_want && st.peer_choking {
+        flags.push('d');
+    }
+    if st.peer_interested && !st.am_choking {
+        flags.push('U');
+    }
+    if st.peer_interested && st.am_choking {
+        flags.push('u');
+    }
+    if optimistic_slot == Some(conn_id) {
+        flags.push('O');
+    }
+    if st.inbound {
+        flags.push('I');
+    }
+    if !we_want && !st.peer_choking {
+        flags.push('K');
+    }
+    if !st.am_choking && !st.peer_interested {
+        flags.push('?');
+    }
+    if flags.is_empty() {
+        "-".to_string()
+    } else {
+        flags
+    }
+}
+
+fn conn_views(
+    conns: &mut HashMap<usize, ConnStat>,
+    covered: &[u32],
+    done: &HashSet<u32>,
+    optimistic_slot: Option<usize>,
+) -> Vec<BtConnView> {
     let now = std::time::Instant::now();
     let mut views = Vec::with_capacity(conns.len());
     for (cid, st) in conns.iter_mut() {
@@ -2185,6 +2236,7 @@ fn conn_views(conns: &mut HashMap<usize, ConnStat>, covered: &[u32]) -> Vec<BtCo
             cum_up: st.cum_up,
             client: st.client.clone(),
             seeder,
+            flags: conn_flags(st, covered, done, optimistic_slot, *cid),
         });
     }
     views.sort_unstable_by_key(|v| v.id);
@@ -4829,13 +4881,245 @@ mod tests {
             selected: true,
         }];
         let pmap = PieceMap::new(&files, 32 * 1024);
-        let views = conn_views(&mut conns, pmap.covered_pieces());
+        let views = conn_views(&mut conns, pmap.covered_pieces(), &HashSet::new(), None);
         assert_eq!(
             views.len(),
             1,
             "握手未完成的连接不得出现在并发 panel（同 IP 两行根因）"
         );
         assert_eq!(views[0].addr, "10.0.0.7:51413", "保留的是已建立连接");
+    }
+
+    fn flags_case(
+        conn_id: usize,
+        covered: &[u32],
+        done: &HashSet<u32>,
+        peer_choking: bool,
+        am_choking: bool,
+        peer_interested: bool,
+        has: &[u32],
+        inbound: bool,
+        optimistic: Option<usize>,
+    ) -> String {
+        let mut st = new_conn_stat(format!("10.0.0.{conn_id}:6881"));
+        st.peer_id = Some([conn_id as u8; 20]);
+        st.peer_choking = peer_choking;
+        st.am_choking = am_choking;
+        st.peer_interested = peer_interested;
+        st.inbound = inbound;
+        for &p in has {
+            st.has.insert(p);
+        }
+        conn_flags(&st, covered, done, optimistic, conn_id)
+    }
+
+    #[test]
+    fn conn_flags_decision_table_covers_all_eight_flags() {
+        let covered = [0u32, 1, 2];
+        let mut done = HashSet::new();
+        done.insert(0u32);
+        done.insert(1u32);
+        done.insert(2u32);
+        let dl_done: HashSet<u32> = done.clone();
+
+        assert_eq!(
+            flags_case(
+                1,
+                &covered,
+                &HashSet::new(),
+                false,
+                true,
+                false,
+                &[0, 1],
+                false,
+                None
+            ),
+            "D",
+            "D = 未 choke ∧ 我方有未完成需求"
+        );
+        assert_eq!(
+            flags_case(
+                1,
+                &covered,
+                &HashSet::new(),
+                true,
+                true,
+                false,
+                &[0, 1],
+                false,
+                None
+            ),
+            "d",
+            "d = choke ∧ 我方有未完成需求"
+        );
+        assert_eq!(
+            flags_case(1, &covered, &dl_done, true, false, true, &[], false, None),
+            "U",
+            "U = 对方 interested ∧ 我方未 choke（对方 choke 且我方无需求，避免 K/? 并入）"
+        );
+        assert_eq!(
+            flags_case(1, &covered, &dl_done, true, true, true, &[], false, None),
+            "u",
+            "u = 对方 interested ∧ 我方 choke"
+        );
+        assert_eq!(
+            flags_case(
+                1,
+                &covered,
+                &dl_done,
+                true,
+                false,
+                true,
+                &[],
+                false,
+                Some(1)
+            ),
+            "UO",
+            "O = 乐观槽命中（池 = interested 对端，必伴随 U；qBt 图例序 U 在 O 前）"
+        );
+        assert_eq!(
+            flags_case(1, &covered, &dl_done, true, true, false, &[], true, None),
+            "I",
+            "I = 入连方向"
+        );
+        assert_eq!(
+            flags_case(1, &covered, &dl_done, false, true, false, &[], false, None),
+            "K",
+            "K = 未 choke ∧ 我方无未完成需求"
+        );
+        assert_eq!(
+            flags_case(1, &covered, &dl_done, true, false, false, &[], false, None),
+            "?",
+            "? = 我方未 choke ∧ 对方无 interest"
+        );
+    }
+
+    #[test]
+    fn conn_flags_multi_flag_ordering_and_mutual_exclusions() {
+        let covered = [0u32, 1, 2];
+        let all_done: HashSet<u32> = [0u32, 1, 2].into_iter().collect();
+
+        assert_eq!(
+            flags_case(
+                1,
+                &covered,
+                &HashSet::new(),
+                false,
+                false,
+                true,
+                &[0, 1],
+                false,
+                None
+            ),
+            "DU",
+            "下载互惠连接 = DU（qBt 图例序）"
+        );
+        assert_eq!(
+            flags_case(
+                1,
+                &covered,
+                &HashSet::new(),
+                false,
+                false,
+                true,
+                &[0, 1],
+                false,
+                Some(1)
+            ),
+            "DUO",
+            "乐观槽互惠连接 = DUO（O 尾接）"
+        );
+        assert_eq!(
+            flags_case(
+                1,
+                &covered,
+                &HashSet::new(),
+                true,
+                false,
+                true,
+                &[],
+                true,
+                None
+            ),
+            "UI",
+            "做种入连上传中 = UI"
+        );
+        assert_eq!(
+            flags_case(
+                1,
+                &covered,
+                &HashSet::new(),
+                false,
+                false,
+                true,
+                &[0, 1],
+                true,
+                Some(1)
+            ),
+            "DUOI",
+            "极值组合 = DUOI 四枚（D+U+O+I）"
+        );
+        assert_eq!(
+            flags_case(1, &covered, &all_done, false, false, false, &[], true, None),
+            "IK?",
+            "做种入连互不 choke 且双方无兴趣 = IK?（qBt 图例序 I 在 K/? 前）"
+        );
+        assert_eq!(
+            flags_case(
+                1,
+                &covered,
+                &HashSet::new(),
+                true,
+                true,
+                true,
+                &[0, 1],
+                true,
+                None
+            ),
+            "duI",
+            "被 choke 候选源入连 = duI（小写互斥对）"
+        );
+    }
+
+    #[test]
+    fn conn_flags_empty_renders_dash_and_independent_flags_coexist() {
+        let covered = [0u32, 1, 2];
+        let mut done = HashSet::new();
+        done.insert(0u32);
+        done.insert(1u32);
+        done.insert(2u32);
+        let all_done: HashSet<u32> = done;
+
+        assert_eq!(
+            flags_case(
+                1,
+                &covered,
+                &HashSet::new(),
+                true,
+                true,
+                false,
+                &[],
+                false,
+                None
+            ),
+            "-",
+            "刚建立双方均 choke 且无 interest 的新连接 = -（空值占位）"
+        );
+        assert_eq!(
+            flags_case(
+                1,
+                &covered,
+                &all_done,
+                false,
+                false,
+                false,
+                &[],
+                false,
+                None
+            ),
+            "K?",
+            "K 与 ? 条件独立可并存（对方未 choke 我方且我方无需求 + 我方未 choke 且对方无兴趣）"
+        );
     }
 
     #[tokio::test]

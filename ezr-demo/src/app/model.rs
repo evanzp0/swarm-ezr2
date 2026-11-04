@@ -155,6 +155,21 @@ fn pseudo_transport(seed: u64, idx: usize) -> Transport {
     }
 }
 
+const FLAG_POOL: [&str; 12] = [
+    "-", "D", "d", "U", "u", "DU", "DUO", "UI", "I", "K", "?", "DUOI",
+];
+
+fn pseudo_flags(seed: u64, idx: usize) -> String {
+    let mix = |mut x: u64| {
+        x ^= x >> 33;
+        x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        x ^= x >> 33;
+        x
+    };
+    let h = mix(seed ^ mix((idx as u64 + 13).wrapping_mul(0x9E37_79B9_7F4A_7C15)));
+    FLAG_POOL[(h % FLAG_POOL.len() as u64) as usize].to_string()
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ConnPhase {
     Connecting,
@@ -191,6 +206,8 @@ pub struct Connection {
     pub cum_down: u64,
 
     pub cum_up: u64,
+
+    pub flags: String,
 
     pub phase: ConnPhase,
 
@@ -1131,10 +1148,85 @@ pub(super) fn make_chunk_conns_lease(
                 cum_down: partial,
                 cum_up: 0,
 
+                flags: pseudo_flags(seed, i),
+
                 phase: ConnPhase::Connected,
                 phase_in: 0.0,
             }
         })
         .collect();
     (conns, x as u32)
+}
+
+#[cfg(test)]
+mod connection_flags_tests {
+    use super::*;
+
+    #[test]
+    fn pseudo_flags_pool_respects_qbt_mutex_rules() {
+        for f in FLAG_POOL {
+            if f == "-" {
+                continue;
+            }
+            assert!(
+                f.chars().all(|c| "DdUuOIK?".contains(c)),
+                "旗标字符集 ⊆ qBt ezr 子集 DdUuOIK?: {f}"
+            );
+            assert!(!f.contains('D') || !f.contains('d'), "D/d 互斥: {f}");
+            assert!(
+                !f.contains('D') || !f.contains('K'),
+                "D/K 互斥（我方 interest 相反）: {f}"
+            );
+            assert!(
+                !f.contains('d') || !f.contains('K'),
+                "d/K 互斥（我方 interest 相反）: {f}"
+            );
+            assert!(!f.contains('U') || !f.contains('u'), "U/u 互斥: {f}");
+            assert!(
+                !f.contains('U') || !f.contains('?'),
+                "U/? 互斥（对方 interest 相反）: {f}"
+            );
+            assert!(
+                !f.contains('u') || !f.contains('?'),
+                "u/? 互斥（对方 interest 相反）: {f}"
+            );
+            assert!(
+                !f.contains('O') || !f.contains('u'),
+                "O/u 互斥（乐观槽必 unchoke）: {f}"
+            );
+        }
+    }
+
+    #[test]
+    fn pseudo_flags_pool_has_extreme_and_empty_and_is_deterministic() {
+        assert!(FLAG_POOL.contains(&"-"), "无标志空值形态在池内");
+        assert!(
+            FLAG_POOL.contains(&"DUOI"),
+            "极值 4 枚连写 DUOI 在池内（列宽 5 判定依据）"
+        );
+        for f in FLAG_POOL {
+            assert!(
+                f.chars().count() <= 4,
+                "极值 4 枚（D+U+O+I），列宽数据 4 + 分隔 1: {f}"
+            );
+        }
+        assert_eq!(
+            pseudo_flags(42, 3),
+            pseudo_flags(42, 3),
+            "同 seed 同槽位确定性"
+        );
+    }
+
+    #[test]
+    fn make_chunk_conns_fills_flags_field() {
+        let (conns, _) = make_chunk_conns(1 << 20, 0, 4, 64 * 1024, 7);
+        assert_eq!(conns.len(), 4);
+        for c in &conns {
+            assert!(
+                FLAG_POOL.contains(&c.flags.as_str()),
+                "flags 取自判定池: {}",
+                c.flags
+            );
+        }
+    }
 }

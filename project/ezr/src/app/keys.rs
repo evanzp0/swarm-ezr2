@@ -734,6 +734,7 @@ mod bt_key_tests {
             cum_up: 0,
             client: "QB".to_string(),
             seeder: false,
+            flags: "-".to_string(),
         }
     }
 

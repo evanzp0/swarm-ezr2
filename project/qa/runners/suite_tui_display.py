@@ -222,8 +222,9 @@ class TuiDisplaySuite(Suite):
         """QA-TD-07 依次按 A/D/]/[/T/H/O/C/U/J/Esc：对话框与行为正确。
 
         规程 v1.30/31/32 同步口径（qa/01-tui-display-qa.md QA-TD-07 行）：
-        ]/[/T 切/循环页签（v1.30：Tab 不再切页签，G 图表快捷键随 FR-01-94
-        流量图内嵌退役）；H 弹出帮助窗口；O 弹出关于窗口（40×7，再按关闭，
+        ]/[ 切页签（v1.30：Tab 不再切页签，G 图表快捷键随 FR-01-94
+        流量图内嵌退役）；v1.9/FR-02-31 起 t/T 页签循环退役改 trackers 弹窗
+        门控键（toast 拒绝且不开窗、页签不变）；H 弹出帮助窗口；O 弹出关于窗口（40×7，再按关闭，
         v1.32/FR-01-111）；Esc 主界面无动作（v1.30/FR-01-108）。
         """
         @self.case("QA-TD-07")
@@ -245,7 +246,8 @@ class TuiDisplaySuite(Suite):
                     assert_in(opt, app.text(), f"删除选项 {opt}")
                 app.send("esc")
                 app.pump(0.3)
-                # ]/[/T 页签切换与循环（v1.30：Tab 不再切页签）
+                # ]/[ 页签切换（v1.30：Tab 不再切页签；v1.9/FR-02-31 起 t/T 页签
+                # 循环退役，页签切换仅 ]/[ 承担——T/t 改 trackers 弹窗门控键）
                 app.send("]")
                 app.pump(0.4)
                 assert_in("（此页签下没有任务", app.text(),
@@ -253,12 +255,25 @@ class TuiDisplaySuite(Suite):
                 app.send("[")
                 app.pump(0.4)
                 assert_in("three-m.bin", app.text(), "[ 应回正在下载页签")
+                # T/t trackers 弹窗门控（FR-02-31/bug18 轮已批准语义）：toast 拒绝
+                # 且不开窗、页签不变（toast 文案二选一 = 选中 HTTP 任务或未选中
+                # 态，均在 FR-02-31 门控臂内；QA-TD-07 规程行「T 循环页签」滞后
+                # 登记 handoff 待 specifier 修订）
+                app.send("T")
+                app.pump(0.4)
+                assert ("该任务没有 trackers（仅 BT 任务支持）" in app.text()
+                        or "未选中任务，无法查看 trackers" in app.text()), \
+                    "T 应 toast 拒绝（trackers 门控，FR-02-31）"
+                assert_in("three-m.bin", app.text(),
+                          "T 拒绝后应停留正在下载页签（页签循环退役）")
+                assert_not_in("Trackers", app.text(),
+                              "T 不应打开 trackers 窗口")
                 app.send("t")
                 app.pump(0.4)
-                assert_in("（此页签下没有任务", app.text(), "T 应循环切页签")
-                app.send("t")
-                app.pump(0.4)
-                assert_in("three-m.bin", app.text(), "T 应循环回正在下载页签")
+                assert ("该任务没有 trackers（仅 BT 任务支持）" in app.text()
+                        or "未选中任务，无法查看 trackers" in app.text()), \
+                    "t 同口径 toast 拒绝（trackers 门控，FR-02-31）"
+                assert_in("three-m.bin", app.text(), "t 拒绝后页签不变")
                 # H 帮助窗口（FR-01-107；【全局】组为窗口内文锚点）
                 app.send("h")
                 assert app.wait_for("【全局】", 3), "H 应弹出帮助窗口"
@@ -820,7 +835,7 @@ class TuiDisplaySuite(Suite):
                 app.graceful_quit()
 
     def _case_19(self):
-        """QA-TD-19 帮助窗口（v1.32 口径）：八组 44 行、O 条目、四键关闭、位置记忆、模态。"""
+        """QA-TD-19 帮助窗口（v1.44 口径）：十二组 80 行、【并发连接】标志缩写 5 条目（FR-02-33/D69）、O 条目、四键关闭、位置记忆、模态。"""
         @self.case("QA-TD-19")
         def go(env: Env):
             app = EzrApp(env.home, save_dir=env.save_dir)
@@ -836,20 +851,22 @@ class TuiDisplaySuite(Suite):
                 bot = next(i for i in range(ty + 1, app.screen.lines)
                            if "╰" in app.screen.display[i])
                 assert bot - ty == 23, f"帮助窗口应 24 行（实测 {bot - ty + 1}）"
-                # 八组分类逐字齐全（v1.32 内容 44 行 > 24 行窗口——滚动收集全文：
-                # Home 起步 PgDn ±8 行步进至末页，聚合各视口快照）
+                # 十二组分类逐字齐全（v1.44 内容 80 行 > 24 行窗口——滚动收集全文：
+                # Home 起步 PgDn ±8 行步进至末页钳制，聚合各视口快照；
+                # 滚动深度 80−20=60 ⌈60/8⌉=8 步，取 10 次冗余，末页钳制快照重复无害）
                 parts: list[str] = []
                 app.send("home")
                 app.pump(0.3)
                 parts.append(app.text())
-                for _ in range(7):
+                for _ in range(10):
                     app.send("pgdn")
                     app.pump(0.25)
                     parts.append(app.text())
                 full = "\n".join(parts)
                 for grp in ("【全局】", "【页签】", "【任务列表】", "【任务详情】",
-                            "【并发连接】", "【滚动条（通用组件）】", "【弹窗",
-                            "【pieces 分块弹窗】"):
+                            "【字段值弹窗】", "【并发连接】", "【滚动条（通用组件）】",
+                            "【弹窗", "【pieces 分块弹窗】", "【命令窗口（A）】",
+                            "【BT 对话框（添加/修改：BT）】", "【trackers 弹窗（T）】"):
                     assert_in(grp, full, f"帮助应含 {grp}")
                 # v1.32 内容点：O 条目、横向滚动条目、滚动条组四条目、拖拽文案
                 # 逐字锚点 = help_lines 钦定文案（ui/help.rs，与单测同源）
@@ -858,6 +875,15 @@ class TuiDisplaySuite(Suite):
                              "拖拽滑块 ═║", "按住不放自动连发", "点击轨道",
                              "按住弹窗内空白处拖动移动窗口（滑块/边框除外）"):
                     assert_in(frag, full, f"帮助内容应含「{frag}」（v1.32）")
+                # v1.44 增判据（FR-02-33/D69）：【并发连接】组标志缩写 5 条目逐字
+                # 齐全（锚点 = help_lines 钦定文案，与单测/QA 判据同源；逐字命中
+                # 同时验证条目描述在 70 宽窗口内框完整可见不截尾）
+                for frag in ("标志 D / d", "D=正在下载 · d=欲下被 choke",
+                             "标志 U / u", "U=正在上传 · u=欲传被 choke",
+                             "标志 O / I", "O=乐观免 choke · I=入连（对方拨入）",
+                             "标志 K", "K=对方未 choke 我方，且我方对其无需求",
+                             "标志 ?", "?=我方未 choke 对方，且对方对我方无兴趣"):
+                    assert_in(frag, full, f"帮助内容应含「{frag}」（v1.44/D69）")
                 # 滚动：End 到末页钳制（末行提示常驻）
                 app.send("end")
                 app.pump(0.3)

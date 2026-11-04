@@ -395,6 +395,7 @@ mod bt_progress_speed_tests {
             cum_up: cum / 2,
             client: "QB".into(),
             seeder,
+            flags: "-".into(),
         }
     }
 

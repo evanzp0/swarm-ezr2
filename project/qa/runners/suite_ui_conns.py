@@ -17,6 +17,13 @@ FR-01-100…102（v1.14/v1.15 详情类型行、链接样式复制、速度同�
 v1.38 同步注（bug14 轮，D63③）：QA-UC-09 新增 ①b 任务速度=Σ并发行同帧断言（HTTP 驱动）；
 BT 臂同口径由单测锁（http_task_speed_equals_sum_of_conn_rows 等）+ QA 会话覆盖，runner 维持 HTTP 驱动。
 D63④（客户端列自适应收缩 + 末列完整可见吸附）BT 面板判据由单测锁（bt_protocol_header_complete_at_viewport_92 等）+ QA 会话覆盖。
+v1.41 同步注（标志列轮，FR-02-33/D69）：QA-UC-08 v1.41 增判据（BT 八列形态——地址后插「标志」列
+宽 5、内容宽 99、标志判定旗标连写/`-` 空值/DIM 左对齐、收缩基线 60→65、视口 ≥ 91/≥ 99 口径）
+由单测锁（ui/conns.rs bt_eight_columns_render_engine_rows、bt_seven_columns 改版组、收缩 65 断言、
+bt/engine.rs conn_flags 判定表测试）+ QA 会话覆盖，runner 维持 HTTP 驱动不变；
+HTTP 三列形态 v1.41 明确不变（无标志列），本文件 HTTP 断言零改动。
+QA-BE-18（标志判定引擎语义）执行方式核对：fixture 侧 = cargo 集成测试
+（bt/engine.rs conn_flags_decision_table_covers_all_eight_flags 等），无独立 pty runner 属既定形态。
 v1.37 同步注（bug13 轮，D62④）：QA-UC-11 新增 BT 同口径判据——多 peer 明细中
 ↓/↑/鼠标可选中任意 peer 行、选择不随 tick 复位、B 断开作用于选中行。BT peer 明细
 需真实 swarm（harness territory），本 runner 维持 HTTP 明细驱动；BT 判据由

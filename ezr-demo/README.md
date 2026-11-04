@@ -22,6 +22,24 @@ chmod +x bin/ezr-tui-demo
 
 ## 变更记录（相对上游）
 
+38. **并发 panel BT「标志」列同构同步（ezr FR-02-33/D69 轮同步）**
+    - 并发连接面板 BT 七列改**八列**：地址后第二列插入 `标志` 列（数据宽 4 +
+      分隔空白 1 = 视觉列宽 5，极值 4 枚连写 DUOI 恒完整），内容宽 94 → **99 列**
+    - `Connection` 增 `flags: String`：演示池确定性伪随机（`pseudo_flags`，
+      qBt 图例序互斥规则合法池 `-`/D/d/U/u/DU/DUO/UI/I/K/?/DUOI，seed+槽位
+      确定性，无运行时随机依赖），构造单点 `make_chunk_conns_lease` 注入
+    - 渲染口径与产品端同构：多标志无空格连写、无标志显 `-`、数据左对齐、
+      前景 DIM；标志列不参与收缩；客户端列自适应收缩基线 60 → **65**
+      （下限 26 不变，视口 ≥ 91 整表完整可见、≥ 99 维持 34 列钦定形态）；
+      HTTP 三列形态不变
+    - 帮助窗口【并发连接】组新增**标志缩写说明 5 条目**（内容源码实测 76 → 81 行，
+      历史登记 68 行为滞后值一并修正；文案与产品端逐字一致）
+    - 守卫测试：`src/app/model.rs` connection_flags_tests（互斥规则/极值/确定性/
+      构造注入）+ `src/ui/mod.rs` conns_flags_tests（八列表头序/DUOI 渲染/
+      窄视口无 `…` 截断/帮助 5 条目可见）
+    - 文档同步：《ezr-demo UI界面及交互设计规范》头部修订注记 + §5.4（列序表/
+      标志 bullet/横向滚动 99 列）+ §6.6（内容 73 行 + 【并发连接】组 5 条目）
+
 37. **限速单位口径分层注记（ezr config 键旧写法废弃轮同步）**
     - 产品端 config 键（`global_max_download_speed`/`global_max_upload_speed`/
       `task_max_download_speed`/`task_max_upload_speed` 四键）与 CLI `--max-speed`

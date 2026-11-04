@@ -294,6 +294,7 @@ impl App {
                                 cum_up: c.cum_up,
                                 client: c.client,
                                 seeder: c.seeder,
+                                flags: c.flags,
                             })
                             .collect(),
                     );

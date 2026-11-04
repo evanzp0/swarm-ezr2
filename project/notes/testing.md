@@ -365,3 +365,35 @@
   `--max-speed "2 MB/s"` 验报错退出 + 文案）。实测：单元翻转后 proptest 2 例
   立即红，漏翻即交付缺口；兼容旧行为的 fixture 字符串（如已退役键的无关值）
   不在翻转面内，键已废弃时值串不参与解析。
+- **标志列轮 coder：ezr-demo 文档计数登记以源码实测为准**：demo 帮助行数在
+  规范文档 §6.6 登记 68 行，历轮条目增量（v1.35–bug24 各轮加条目）从未同步
+  计数，源码 `help_lines().len()` 实测基线实为 76——计数类登记（行数/条目数/
+  列宽合计）直接以源码常量或运行时实测回填，测试断言同步钉实测值；同步轮
+  顺序 = 先实测 → 再写 docs/README → 断言钉同一实测值，避免「文档钉旧登记、
+  测试钉猜测」双源漂移。另：demo 渲染测试选任务必须走 `filtered()` 视图
+  （`selected` 是过滤后下标，raw `tasks.position` 与其错位——bug23 轮既有
+  条目「selected 下标 ≠ tasks 下标」的渲染测试面同型，复证实例 = position
+  选中的 Seeding BT 任务不在「正在下载」页签渲染出 0/y 空态）。
+
+## 标志列轮 coder 续：QA runner 执行层同步（2026-11-04）
+
+- **runner 同步欠账的三层形态盘点**：①断言落后于规格版本（TD-19 帮助 44 行旧口径，实际内容
+  经 v1.34/v1.36/v1.42/v1.44 四轮涨到 80 行、八组→十二组）；②语义退役未翻转（TD-07 仍断言
+  T 循环页签，而 phase-02 v1.9/FR-02-31 已把 T/t 改 trackers 弹窗门控键——runner 假红）；
+  ③既定形态注记缺失（UC-08 的「BT 判据由单测锁 + QA 会话覆盖、runner 维持 HTTP 驱动」注记
+  先例见 v1.36/37/38 同步注，新判据轮照此登记即可，HTTP 断言零改动）。
+- **滚动收集步数公式**：内容 L 行、可视 V 行、PgDn 步长 8 → 收集步数 = ⌈(L−V)/8⌉ + 冗余
+  （80−20=60 → 8 步，取 10 冗余）。内容行数每轮上涨时旧步数静默漏读——但组标题断言落在
+  文本尾部会假 FAIL 而非假绿，恰是暴露点；改步数时同步核对新组标题列表（本次 8→12 组，
+  补【字段值弹窗】【命令窗口（A）】【BT 对话框（添加/修改：BT）】【trackers 弹窗（T）】，
+  逐字取 help.rs sec() 调用清单，勿凭 QA 文档转写）。
+- **环境 FAIL 归因三连口径**：复跑×3 判 flake → HEAD worktree 对照同形判环境预存 → 不放宽
+  断言只登记。本轮实测：TD-23（下拉展开期点按时序）工作区 F 3/3 + HEAD F 2/2；UC-07/17/18
+  （校验码填入链：下拉 ↓×4 选 SHA-256 + Tab + 输码在本沙箱 pty 时序下不生效，详情无校验行）
+  UC-07 工作区 F 3/3 + HEAD F 1/1——四例全部环境预存，与本轮 runner 注记/断言改动零交集。
+- **HEAD worktree 对照操作细节**：`git worktree add /tmp/<name> HEAD` + 独立 target 构建
+  （~2min）+ 同一 runner 单用例直调（`s._case_XX()`）；`worktree remove --force` 必须在
+  主仓库目录执行（在 worktree 内执行报 not a working tree）；worktree 内 harness 的
+  EZR_BIN 相对路径自解析到 worktree 内二进制，无需改代码。
+- **pyte 环境重建**：runner 依赖 pyte（pty 画面捕获），沙箱重置后 `pip3 install pyte`
+  即可（无 __version__ 属性，验证用 Screen 实例化探针）。

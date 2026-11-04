@@ -188,6 +188,7 @@ pub struct BtConnView {
     pub cum_up: u64,
     pub client: String,
     pub seeder: bool,
+    pub flags: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

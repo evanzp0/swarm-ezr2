@@ -89,6 +89,11 @@ fn help_lines() -> Vec<Line<'static>> {
         kd("← / →", "横向滚动明细列（客户端/协议等超宽列）"),
         kd("鼠标滚轮", "悬停并发面板 = 滚动连接明细（±2/格）"),
         kd("B", "阻塞并移除选中连接（仅 BT 任务）"),
+        kd("标志 D / d", "D=正在下载 · d=欲下被 choke"),
+        kd("标志 U / u", "U=正在上传 · u=欲传被 choke"),
+        kd("标志 O / I", "O=乐观免 choke · I=入连（对方拨入）"),
+        kd("标志 K", "K=对方未 choke 我方，且我方对其无需求"),
+        kd("标志 ?", "?=我方未 choke 对方，且对方对我方无兴趣"),
         sec("滚动条（通用组件）"),
         kd(
             "拖拽滑块 ═║",
@@ -245,6 +250,12 @@ mod tests {
             "选择连接明细（视口跟随滚动）",
             "横向滚动明细列（客户端/协议等超宽列）",
             "悬停并发面板 = 滚动连接明细（±2/格）",
+            "阻塞并移除选中连接（仅 BT 任务）",
+            "D=正在下载 · d=欲下被 choke",
+            "U=正在上传 · u=欲传被 choke",
+            "O=乐观免 choke · I=入连（对方拨入）",
+            "K=对方未 choke 我方，且我方对其无需求",
+            "?=我方未 choke 对方，且对方对我方无兴趣",
         ];
         for needle in needles {
             let mut found = false;
@@ -263,7 +274,7 @@ mod tests {
         let mut term2 = Terminal::new(TestBackend::new(120, 40)).unwrap();
         term2.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         let s2 = term2.backend().to_string();
-        assert_eq!(app.help_scroll, 55, "End 钳制 = 75 − 20（末页视窗 55..74）");
+        assert_eq!(app.help_scroll, 60, "End 钳制 = 80 − 20（末页视窗 60..79）");
         for sec in [
             "【滚动条（通用组件）】",
             "【trackers 弹窗（T）】",
@@ -279,10 +290,6 @@ mod tests {
         assert!(
             s2.contains("按住双线滑块拖动 = 比例滚动内容"),
             "滚动条组条目（v1.32 新增组；尾括注超内框宽被截，断言可见前段）: {s2}"
-        );
-        assert!(
-            s2.contains("阻塞并移除选中连接（仅 BT 任务）"),
-            "B 条目照录（D26 预留）: {s2}"
         );
         assert!(
             s2.contains("关闭当前弹窗（右上角按钮，悬停高亮）"),
@@ -310,8 +317,8 @@ mod tests {
         let mut app = testfx::make_app_in("ezr-help", "scroll");
         let total = super::help_lines_len();
         assert_eq!(
-            total, 75,
-            "phase-02 内容 75 行（十二组 = 12 组标题 + 63 条目；11 组 70 行 −页签 T +1（任务列表 T）+6（trackers 弹窗组））"
+            total, 80,
+            "phase-02 内容 80 行（十二组 = 12 组标题 + 68 条目；v1.44 【并发连接】组新增标志缩写 5 条目，FR-02-33）"
         );
         app.help_scroll = usize::MAX;
         let term = render_help(&mut app, 120, 40);
