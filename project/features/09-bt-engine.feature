@@ -16,6 +16,7 @@
 #   09-bt-engine-15 peer 连接生命周期礼仪（v1.37，FR-02-27：会话级 peer_id 稳定 / 优雅关闭 / 自关不计失败+冷却）
 #   09-bt-engine-16 BT 监听端口 [bt] listen_port（v1.38，FR-02-32：配置生效 / 未配置随机 / 占用回退+警告 / 进程级共享）
 #   09-bt-engine-17 partial 进度持久化与恢复不重下（v1.39，FR-02-22/D68：暂停重启不重发已收块 / 篡改自愈 / 重校验窗二次暂停允许边界）
+#   09-bt-engine-18 并发 panel 标志列数据语义（v1.40，FR-02-33/D69：qBt Peers Flags 子集 D/d/U/u/O/I/K/? 判定表 / 连写顺序 / 实时刷新）
 # 期号 02（phase-02）。需求依据 project/mission/phase-02.md FR-02-06…23、D45/D46/D51/D52/D54/D57/D58。
 # 协议基线 = 操作者钦定 BEP 3/15/23/7/12/9/20；tokio 异步（FR-02-10）。
 # BEP 9 做种侧响应（D53/D45——磁力拉取 phase-03）；上传真实统计（D58）；
@@ -38,6 +39,12 @@
 # 引擎不重启）与全局限速（全局两键合计配额跨协议共享，合成 = min(全局, 任务级)，见
 # 01-throttle-proxy v1.9）；[bt] 表新增 listen_port 键（20 键 → 21 键，场景 16 专管）；
 # 监听由每任务独立随机端口改为进程级共享单端口（未配置随机、配置生效、占用回退随机 + 警告）。
+# v1.40 修订（操作者「并发 panel 标志列」轮指令，FR-02-33 新增/D69 裁决待批；Inversion 受限退化
+# 沿 bug13–18 轮先例，操作者 chat 指令文本即阶段 1 答案）：新增场景 18——并发行标志数据语义：
+# 标志集 = qBt 官方 FAQ Flags 图例的 ezr 引擎可产生子集 {D,d,U,u,O,I,K,?}（P/S/X/H/E/e/L 对应
+# μTP/snubbed/PEX/DHT/协议加密/本地发现未实现不出现）；参考源判定 = qBt Peers（用户）面板
+# Flags 列（Trackers 面板无 Flags 列，官方 FAQ 核证）。QA 严格检查 = QA-BE-18（fixture 侧
+# choke/interest/入连/乐观槽可观察驱动）。
 # v1.39 修订（操作者 bug23 轮批准归档，specifier 轮；FR-02-22 v1.11，D68）：新增场景 17
 # ——BT sidecar partial 持久化与恢复不重下：暂停/停止做种全量保存（BtSidecar 可选字段
 # partial_pieces，b64 块数据，版本恒 1 不 bump）；重启恢复验证链（覆盖内 ∧ 非 done ∧
@@ -248,3 +255,31 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
     When sidecar partial 记录被篡改（越界 / 区间重叠 / 坏 b64 / 指向已完成 piece）后重启恢复
     Then 非法记录逐块丢弃自愈（该部分重下、其余合法块保留不重下、任务不卡死且最终完成）
     And 允许边界（操作者批准登记，D68⑥）：启动重校验窗内再次暂停时上一轮 partial 丢弃（该部分重下）；正常路径（校验窗完成后暂停/退出）partial 完整持久化
+
+  # v1.40 新增（FR-02-33/D69）：并发 panel BT 行「标志」列的数据语义层——显示形态（列序/列宽/
+  # 连写/空值/对齐/配色）属 04-ui-conns-08 v1.41，本场景只定义每连接的标志判定与数据源。
+  # 引擎状态源 = ConnStat 既有 peer_choking/am_choking/peer_interested 三字段 + choker 乐观槽
+  # （apply_choker optimistic_slot）+ 入连/出连方向（listen accept vs 外连 dial）；「我方对其
+  # 无需求」= 本端未对该 peer 声明 interested（无未完成 piece 需求，既有 Bitfield/Have want
+  # 判定同口径可复算）。实现映射方式（新增 am_interested 跟踪或按 has∩缺口复算）属实现细节，
+  # 规格只锁可观察判定。
+  Scenario: 09-bt-engine-18 并发 panel 标志列数据语义（v1.40，FR-02-33/D69）
+    Given BT 任务下载中或做种中且并发明细存在至少一条已建立连接（fixture seeder/leecher 可观察）
+    Then 每条并发行标志按下列判定表逐连接独立计算（每 tick 随 BtConns 事件同帧刷新，与速度列同节拍）：
+      | 标志 | 判定（qBt 官方 FAQ 图例语义）                                | 引擎状态源 |
+      | D    | 我方已声明 interested 且对方未 choke（Currently downloading） | !peer_choking ∧ 我方有未完成需求 |
+      | d    | 我方已声明 interested 但对方 choke（interested and choked）   | peer_choking ∧ 我方有未完成需求 |
+      | U    | 对方 interested 且我方未 choke（Currently uploading）         | !am_choking ∧ peer_interested |
+      | u    | 对方 interested 但我方 choke（interested and choked）         | am_choking ∧ peer_interested |
+      | O    | 本轮乐观槽选中该连接（Optimistic unchoke）                    | apply_choker optimistic_slot 命中 |
+      | I    | 对方主动拨入、本端 accept（incoming connection）              | 入连方向标记（listen accept） |
+      | K    | 对方未 choke 我方且我方对其无需求（qBt K 图例）               | !peer_choking ∧ 我方无未完成需求 |
+      | ?    | 我方未 choke 对方且对方对我方无兴趣（qBt ? 图例）             | !am_choking ∧ !peer_interested |
+    And 多标志按 qBt 图例序 D d U u O I K ? 无空格连写（如下载互惠连接 = DU、被 choke 的候选源 = d、
+      乐观槽互惠连接 = DUO、做种入连上传中 = UI）；无任何标志（如刚建立双方均 choke 且无 interest 的新连接）显示 `-`
+    And 标志随状态变化实时翻转：被对方 choke（Choke 消息）D→d、解除 choke（Unchoke 消息）d→D、
+      对方 interested（Interested 消息）出现 U/u、我方 choke（choker 轮换）U→u、乐观槽轮换 O 换位、
+      下一明细帧可见（fixture 侧发送对应 wire 消息驱动，可观察判定）
+    And 仅 BT 任务并发行显示标志（HTTP 三列形态不变）；握手未完成连接不显示（既有 peer_id=None 过滤口径）
+    And qBt 图例其余旗标 P/S/X/H/E/e/L 不出现（μTP/snubbed/PEX/DHT/协议加密/本地发现为 phase-02 未实现能力，
+      phase-03/04 落地时再评估扩充；fixture 侧无法触发即 QA 无判据，不作为缺陷）

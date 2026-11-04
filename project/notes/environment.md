@@ -220,3 +220,8 @@
   mirrors.ustc.edu.cn/rust-static）前台 `-y --profile minimal --default-toolchain
   nightly -c rustfmt -c clippy` 一次装齐（EXIT=0，cargo 1.101.0-nightly）；
   cargo registry 配 USTC sparse。可达性逐轮漂移再证，下轮仍需先探针。
+
+标志列轮复测（2026-11-05）：api.github.com releases 清单直连可用（babashka v1.13.229 资产名
+  babashka-1.13.229-linux-amd64-static.tar.gz 与 v1.12.209 同族——「清单先查」条款再证）；
+  gh-proxy.com 前缀下载 bb 静态包 + clone APS 仓库秒级完成；bb + APS 按既有口径装 .tools/ 成功，
+  gherkin-parser/dry-checker 三 feature 全跑通。

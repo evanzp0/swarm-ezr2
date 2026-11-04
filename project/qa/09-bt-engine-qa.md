@@ -1,6 +1,9 @@
 # QA 套件 · 09-bt-engine BT 下载与做种引擎（期号 02）
 
-> 对应规格：`project/features/09-bt-engine.feature`（17 场景；v1.38 新增场景 16；**v1.39 新增场景 17**）。
+> 对应规格：`project/features/09-bt-engine.feature`（18 场景；v1.38 新增场景 16；v1.39 新增场景 17；**v1.40 新增场景 18**）。
+> **v1.40 修订（标志列轮，FR-02-33/D69）**：QA-BE-18 新增（并发 panel 标志列数据语义：qBt Peers Flags
+> 子集 D/d/U/u/O/I/K/? 判定表——choke/interest 翻转、乐观槽轮换、入连方向逐项 fixture 驱动；
+> 无标志 `-`、连写顺序、HTTP 无标志列；与 QA-UC-08 v1.41 显示形态判据配对）。
 > **v1.39 修订（bug23 归档轮，FR-02-22 v1.11 + D68）**：QA-BE-17 新增（partial 持久化与恢复
 > 不重下：暂停重启已收块零重请求 / 完整 piece 直接落盘转 done / 篡改自愈 / 重校验窗二次暂停
 > 允许边界 D68⑥；与 QA-AL 反吸血联合回归）。
@@ -58,6 +61,7 @@
 
 | QA-BE-16 | 09-bt-engine-16 | ①[bt] 表 listen_port = 51413 添加任务；②删配置重启两任务；③listen_port 占用（fixture 先占）启动 | ①fixture tracker 记录 announce port = 51413 且 fixture 拨入命中该端口；②两任务 announce port 相同（进程级共享单端口）且为随机值（非 51413）；③回退随机绑定 + 启动警告、不阻塞启动；0/负/非法值同②随机臂 |
 | QA-BE-17 | 09-bt-engine-17 | ①下载至含 partial 块（fixture 限速门控）→ 空格暂停 → 退出重启 → 空格恢复，全程留档 seeder 请求日志；②手工篡改 sidecar partial 记录（越界/重叠/坏 b64/指向已完成 piece 各一次）重启恢复；③启动重校验窗内立即再暂停一轮 | ①恢复后 seeder 请求日志中已收 (piece, offset) 区间**零重请求**（仅缺失块区间被请求）；已收块字节保真（盘上对账）；恢复凑齐的完整 piece 校验通过直接落盘转 done（不等重下）；任务最终完成且产物 = seeder 原始字节；全程无同区间重复请求（BitComet 反吸血特征消除，与 QA-AL 联合回归）；②非法记录逐块丢弃自愈：该部分重下、其余合法块保留不重下、任务不卡死且最终完成；③允许边界（D68⑥）：重校验窗内二次暂停丢弃上一轮 partial（该部分重下）——本臂记录实测口径，不判 F |
+| QA-BE-18 | 09-bt-engine-18 | ①BT 下载任务多 peer 观察（fixture seeder/leecher：一个正常供块 seeder、一个 choke 后恢复的 seeder、一个 interested 的 leecher、一个入连 leecher、一个刚建立无 interest 的新连接）逐帧读并发行标志；②wire 驱动翻转：fixture seeder 发 Choke→Unchoke、fixture leecher 发 Interested、choker 轮换（乐观槽周期）观察下一明细帧；③做种任务观察 | ①判定表逐项命中：供块 seeder 行 = D（+对方 interested 时 U/DU）、被 choke 的 seeder 行 = d、我方未 choke 的 interested leecher 行 = U、我方 choke 的 interested leecher 行 = u、乐观槽连接行含 O、入连行含 I、刚建立无 interest 连接行 = `-`；连写按 qBt 图例序无空格（如 DU/DUO/UI）；标志列内容与 04-ui-conns-08 v1.41 显示形态判据（QA-UC-08 v1.41）一致（左对齐、DIM、`-` 空值、连写）；②翻转逐项下一明细帧可见（D→d、d→D、U/u 出现与消失、O 轮换换位）；③做种行 = K/UI/`-` 等（我方无需求臂；对方无 interest 未 choke 臂 = ? 可出现）；全程 P/S/X/H/E/e/L 零出现（fixture 无对应能力，无判据不判 F）；HTTP 任务并发行无标志列（三列形态不变） |
 
 ## 通过准则
 

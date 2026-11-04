@@ -508,3 +508,17 @@
   trackers 弹窗 94×22 下 content_w = 88、末列预算 12（容「下轮 NNNNNNs」6 位秒数）。
   定宽 CJK 列布局改动时先算一遍「文案宽 ≤ 末列预算」再收工（下轮 5 列 + 秒数 N 列
   + s 1 列）。
+
+标志列轮（v1.41/D69）：qBt「Flags 列」取证锚点 = 官方 FAQ（Trackers 面板无 Flags 列、
+  Peers（用户）面板 Flags 中文列名「标志」——操作者口中的「trackers panel Flags」按 Peers 面板判定，
+  先取证再落地防臆造列）；qBt 全集 15 旗标裁剪法 = 只收引擎已具备状态源对应的旗标（P/S/X/H/E/e/L
+  无状态源不收，防死旗标列）；判定表直接映射 ConnStat 既有 peer_choking/am_choking/peer_interested
+  三字段 + choker 乐观槽 + 入连方向，am_interested 不必新增跟踪（Bitfield/Have want 判定同口径复算）；
+  标志极值列宽推演 = 组合互斥分析（D/d 互斥 K 于我方 interest、U/u 互斥 ? 于对方 interest∧choke 配对、
+  O 互斥 u 于乐观必 unchoke ⇒ 极值 DUOI 4 枚 + 1 空白 = 列宽 5）；列插入位置 = 地址后第二列
+  （状态列首屏可见性优先于 qBt GUI 的列尾位置——TUI 视口窄横向滚动常态化， bury 在 91 列外的状态列不可用；
+  附带收益 = 末列「协议」吸附语义零改动）；**收缩基线随列插入平移纪律 = client_w = max(下限, vw_pre − 基线)，
+  基线 = 内容宽 − 客户端列宽，插列后基线 + 列宽（60→65）、整表完整可见视口下限同步平移（86→91）——
+  改 BT 列集必须同步重推收缩基线与视口下限两数，漏推 = 收缩臂失效假完整**；帮助窗口缩写图例 = 每条 kd 描述
+  ≤ 内框余宽 46 显示列（70 宽 − 4 缩进 − 16 键名列 − 4 余量），超宽被 Paragraph 无 wrap 截尾，
+  一行放不下拆多条目（8 缩写 → 5 条目）。
