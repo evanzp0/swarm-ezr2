@@ -15,7 +15,9 @@ harness/
   tracker/
     pybtracker/            第三方 elektito/pybtracker（BEP 15 UDP tracker，纯 Python asyncio）
     pybtracker_server.py   pybtracker 启动包装器（tuple 绑定 + asyncio.run）
-    mini_http_tracker.py   自研极简 BEP 3 HTTP tracker（stdlib-only，JSONL announce 日志）
+    mini_http_tracker.py   自研极简 BEP 3 HTTP tracker（stdlib-only，JSONL announce 日志；
+                           --static-peer IP:PORT 注入静态 peer、--only-static-peers 只回静态
+                           peer（延迟代理基准用，见 notes/architecture.md 代理观测法））
   swarm_e2e.py             主编排：造种 → 双 tracker → seeder → ezr pty 驱动 → leecher 同时下载 → 对账
   bench_multipeer.py       多 peer 速度基准：N seeder + M 并行 leecher 对照（限速/中途加入/侧车采样速度曲线）
   README.md                本文件
@@ -120,6 +122,15 @@ python3 bench_multipeer.py --ezr-bin ../ezr/target/release/ezr \
 - 判据：finished + sha256_match。速度结论看 `avg_speed_Bps` 与曲线拐点。
 
 ## 结果记录
+
+- **2026-11-06 速度优化轮（排队时间动态管线 + 紧急重拨）**：延迟代理基准（seeder 限速
+  2560KiB/s、双向注 3ms 延迟）优化前 ezr 2.01MB/s vs libtorrent leecher 2.31MB/s——线级
+  帧统计显示 ezr 在飞请求恒 64（400ms 队列）而 lt 维持 ~440（3s 队列），差距全在启动段
+  （首 piece 14.1s，握手碰撞吃满 10s 超时 + 深退避）与队列深度；优化后 ezr 2.35MB/s、
+  在飞 514+、首 piece 5.3s，0/3/8ms 全平（2.32–2.35，lt@8ms 2.35）。loopback 直连基线
+  （bench_multipeer s1 限速 2560）优化前后均 ~2.44MB/s（无回归）。观测工具与口径见
+  notes/architecture.md「用户态延迟代理 + BT 帧感知观测法」（工具本体在会话 .work/tmp，
+  不随工作区流转）。
 
 - **2026-10-28 首轮（三连 PASS）**：ezr 2.2s 完成下载并转做种；ezr / libtorrent-leecher /
   原始 payload 三方 SHA-256 一致；HTTP(BEP 3) 与 UDP(BEP 15) 双协议 announce 证据齐备

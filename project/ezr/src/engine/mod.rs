@@ -291,6 +291,28 @@ impl EngineShared {
         map.insert(key, client.clone());
         client
     }
+
+    #[cfg(test)]
+    pub(crate) fn for_test() -> EngineShared {
+        EngineShared {
+            client: reqwest::Client::builder().no_proxy().build().unwrap(),
+            clients: std::sync::Mutex::new(std::collections::HashMap::new()),
+            throttle_dl: Arc::new(throttle::Throttle::new(0)),
+            throttle_ul: Arc::new(throttle::Throttle::new(0)),
+            throttle_burst_secs: crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
+            throttle_sleep_ms: crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
+            blacklist: std::sync::Mutex::new(std::collections::HashSet::new()),
+            blacklist_file: None,
+            grace: std::time::Duration::from_millis(
+                crate::model::config::DEFAULT_DNS_RACE_GRACE_MS,
+            ),
+            upload_read_permits: Arc::new(tokio::sync::Semaphore::new(
+                crate::model::config::DEFAULT_UPLOAD_READ_CONCURRENCY,
+            )),
+            bt_listener_std: std::net::TcpListener::bind("127.0.0.1:0").unwrap(),
+            bt_listener: std::sync::OnceLock::new(),
+        }
+    }
 }
 
 fn proxy_fingerprint(ep: &crate::model::ProxyEndpoint) -> String {

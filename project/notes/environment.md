@@ -225,3 +225,14 @@
   babashka-1.13.229-linux-amd64-static.tar.gz 与 v1.12.209 同族——「清单先查」条款再证）；
   gh-proxy.com 前缀下载 bb 静态包 + clone APS 仓库秒级完成；bb + APS 按既有口径装 .tools/ 成功，
   gherkin-parser/dry-checker 三 feature 全跑通。
+- **rustup 镜像复测（本轮）**：rsproxy.cn 可用且最快（rustup-init 直链两次 25.1/17.9MB/s，
+  USTC 同轮 12.5/3.7MB/s，官方 static.rust-lang.org 20KB/s 超时）；官方 rustup-init.sh 的
+  `RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup/rustup` 双层路径 404（报「installer not
+  found」勿误判平台缺支持）——本轮正确组合 = 直链下载
+  `https://rsproxy.cn/rustup/dist/x86_64-unknown-linux-gnu/rustup-init` 二进制 +
+  `RUSTUP_DIST_SERVER=https://rsproxy.cn`（清单在 /dist/channel-*.toml）+
+  `RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup`（rustup-init 在 /rustup/dist/<arch>/），
+  前台一次装齐 nightly minimal+rustfmt+clippy；cargo registry 沿 rsproxy-sparse。
+- **lan_bench/proxy 端口段**：代理监听 17905、seeder 绑 127.0.0.2:17903、tracker 17901
+  （only-static 模式，UDP tracker 不起——torrent announce-list 里的 udp:// 会失败退避，
+  无碍），与 QA fixture 端口段不冲突。

@@ -55,6 +55,8 @@ def compact_peers(peers: list[dict]) -> bytes:
 class AnnounceHandler(BaseHTTPRequestHandler):
     tracker_log = None
     interval = DEFAULT_INTERVAL
+    static_peers: list[dict] = []
+    only_static = False
 
     def log_message(self, fmt, *args):
         pass
@@ -112,7 +114,11 @@ class AnnounceHandler(BaseHTTPRequestHandler):
             all_peers = list(swarm.values())
             peers_by_id = {pid: p for pid, p in swarm.items()}
 
-        reply_peers = [p for p in all_peers if not (p["ip"] == ip and p["port"] == port)]
+        if self.only_static:
+            reply_peers = [dict(p) for p in self.static_peers]
+        else:
+            reply_peers = [p for p in all_peers if not (p["ip"] == ip and p["port"] == port)]
+            reply_peers = reply_peers + [dict(p) for p in self.static_peers]
         if numwant >= 0:
             reply_peers = reply_peers[:numwant]
         complete = sum(1 for p in all_peers if p["left"] == 0 or p["event"] == "completed")
@@ -168,9 +174,15 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=17901)
     ap.add_argument("--interval", type=int, default=DEFAULT_INTERVAL)
     ap.add_argument("--log", default=None, help="JSONL announce log path")
+    ap.add_argument("--static-peer", action="append", default=[], metavar="IP:PORT")
+    ap.add_argument("--only-static-peers", action="store_true")
     args = ap.parse_args()
 
     AnnounceHandler.interval = args.interval
+    for spec in args.static_peer:
+        host, _, sport = spec.rpartition(":")
+        AnnounceHandler.static_peers.append({"ip": host, "port": int(sport)})
+    AnnounceHandler.only_static = args.only_static_peers
     if args.log:
         Path(args.log).parent.mkdir(parents=True, exist_ok=True)
         Path(args.log).write_text("")

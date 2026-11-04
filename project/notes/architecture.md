@@ -522,3 +522,64 @@
   改 BT 列集必须同步重推收缩基线与视口下限两数，漏推 = 收缩臂失效假完整**；帮助窗口缩写图例 = 每条 kd 描述
   ≤ 内框余宽 46 显示列（70 宽 − 4 缩进 − 16 键名列 − 4 余量），超宽被 Paragraph 无 wrap 截尾，
   一行放不下拆多条目（8 缩写 → 5 条目）。
+
+- **BT 下载排队时间动态管线（libtorrent update_desired_queue_size 移植）**：现象：固定 64 深
+  请求管线在带 RTT/抖动的真实链路上给 seeder 的排队缓冲只有 ~400ms（64×16KiB），线级实测
+  qBt 内核 libtorrent 维持 330–460 在飞请求（≈3s 数据量），延迟尖峰期间 ezr 队列先耗尽、
+  seeder 断粮、管道空转；处置：`issue_requests` 目标深度 = `clamp(3s × per-conn 速率EMA ÷ 16KiB,
+  64, [bt] peer_pipeline)`，速率源 = `ConnStat::speed(&down_window, cum_down)`（conn_views
+  周期性翻转窗口），默认上限 64→512（3s×2.5MiB/s=480 与 libtorrent 实测吻合；<
+  libtorrent `max_allowed_in_request_queue` 2000 丢弃线，安全）；根因：libtorrent 的
+  `request_queue_time=3s` 语义——在飞请求数应正比于下载速率而非固定值，起步阶段速率 0
+  自然回落到下限形成事实上的 slow-start。
+- **BT 零连接紧急重拨**：现象：握手挂起（双向互拨碰撞/丢包/半开）时 ezr 要吃满
+  handshake_timeout 10s + `peer_retry_base << fails` 退避（5s×2^n）才重试，单候选场景一次
+  碰撞 = 白等 20s+（基准里首 piece 前 14s）；处置：`fill_peer_slots` 在 `conns.is_empty()`
+  时退避基数与上限都降 1s（有连接时维持原节奏防拨号风暴，失败连接本身还有
+  connect_timeout 3s 兜底节流）；根因：BT swarm 里双方同时互拨是常态，libtorrent 靠
+  并行拨多候选 + 快速重复试掩盖单点挂起，ezr 单候选时没有并行兜底，只能靠快重拨。
+- **用户态延迟代理 + BT 帧感知观测法**：现象：沙箱无 netem 权限（`tc qdisc` RTNETLINK
+  EPERM），局域网 RTT/抖动场景无法直接复现，限速 seeder 下 ezr 线速已达 cap，瓶颈
+  （队列深度、启动死时）在传统速度曲线上不可见；处置：asyncio TCP 代理（监听
+  127.0.0.1:17905 → 转发 127.0.0.2:17903，双向 read→sleep→write 注入延迟）+ 帧级 tap
+  （68B 握手偏移 + 4B 长度前缀流式解析，按消息 id 统计 request(6)/block(7)/cancel(8)，
+  每秒采样 outstanding = req − block − cancel 落 JSONL）+ mini_http_tracker 加
+  `--static-peer/--only-static-peers` 把代理地址注入 announce 应答；根因：wire 级帧统计
+  能无侵入量化「seeder 侧请求在飞深度」这个速度问题的直接因变量，配合速度曲线把
+  差距拆成「稳态 vs 启动」两个可分别归因的成分。
+
+## 速度追查第二轮（2026-11-06，连接去重端点化 + 管线速率源引擎级 EMA）
+- **per-IP 连接去重是 libtorrent 语义的误移植（本轮最重要发现）**：现象：bench s1l1
+  （1 seeder + 1 并行 lt leecher，同 127.0.0.1）ezr 前 60s 只连到 leecher（标志 K 互瞪），
+  seeder 候选被既有连接按裸 IP 挡死，60s 空闲置换才解套，均速 1.16MB/s；处置：候选拨出
+  与入连接受都改端点级（ip:port）判定，同一客户端实例的出连+入连双通道交握手后 peer_id
+  重复裁决收口；根因：libtorrent `peer_list` 的 allow_multiple_connections_per_ip=false
+  真实语义 = peer 表按地址单条目 + add_peer 同地址只更新端口 + new_connection 仅在
+  同地址且有活连接时按方向（双向出/双向入拒新、一出一入按端口比较裁决）处置，连接一死
+  条目即刻可复用——从不因「同 IP 已有连接」拒绝不同端口的 peer；ezr 的 per-IP 规则把
+  「防双连」错做成了「防同 IP 一切连接」，且以 60s 空闲置换为唯一逃生口。
+- **管线速率源曾被 UI 快照窗口污染**：现象：动态管线目标（3s×速率）在真实突发-间隙
+  流量下于 64↔512 间振荡，低目标期间 `issue_requests` 直接拒绝补管线（inflight ≥ target
+  即 return），seeder 断粮空转——夹具回环/代理基准因流量平滑测不出；处置：速率源改
+  ConnStat 独立字段（pipe_ema/pipe_sample），仅引擎 1s tick 更新，UI 的 conn_views 继续
+  翻转 down_window 但不再影响管线；根因：`conn_views`（250ms 进度节流 + 1s tick + 事件
+  路径多处调用）每调用即重置 down_window，issue_requests 逐块读取的「速率」实为距上次
+  UI 快照的瞬时值，突发后第一个块把速率估成 ~0，目标塌向下限并拒绝补管线，形成
+  「浅管线→间隙→更低估计」的自锁；libtorrent 对照 = stat_channel 整数 EMA
+  （avg×4/5 + sample/5，每秒一次）喂 update_desired_queue_size，与 UI 完全解耦。
+- **libtorrent 请求队列全参数口径（移植对齐基准）**：desired_queue_size 成员初始化 4；
+  slow-start 期间每收一块 +1 且 EMA 不覆盖，退出口径 = 未被 choke ∧ 上一秒有进账 ∧
+  上一秒+5KiB ≥ 本秒进账（速率平台）；非 slow-start 每秒重算 3s×EMA÷block，钳
+  [min_request_queue=2, max_out_request_queue=500]；snub（块超时）把 desired 压 1；
+  发请求守卫 = download_queue ≥ desired 即停（低目标同样阻断补管线，故速率源质量是
+  生死线）；seeder 侧 max_allowed_in_request_queue=2000 之外，在飞请求超
+  max_out_request_queue(500) 会被对端丢弃——ezr peer_pipeline=512 略高于 500，注意。
+- **seeder 端 choker 不构成 ezr 劣势（反吸血疑云排除）**：choker.cpp 三算法
+  （round_robin/fastest_upload/anti_leech，qBt 默认 round_robin）首键都是
+  downloaded_in_last_round（纯 seeder 恒 0）、次键 upload 优先级；round_robin 配额
+  = piece_length×seeding_piece_quota(20) 且 unchoke ≥1 分钟才轮替，多 leecher 公平
+  分摊——差距只能来自连接生命周期与请求管线，不在 choke 策略。
+- **第三方同 IP 纠缠不可修只可绕**：lt leecher 在 ezr 拨入时按端口比较裁决误杀自己的
+  seeder 连接（libtorrent 自身在多客户端同 IP 拓扑下的已知纠缠），修复后 ezr 的残余
+  14s 启动段 = seeder 对第二个同 IP 入连的 duplicate_peer_id 拒绝 + 一次 5s<<1 退避，
+  属第三方行为；真实局域网（各机独立 IP）无此段。

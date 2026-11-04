@@ -12,7 +12,7 @@ pub const DEFAULT_THROTTLE_BURST_SECS: f64 = 0.5;
 pub const DEFAULT_THROTTLE_SLEEP_MS: u64 = 20;
 pub const DEFAULT_DNS_RACE_GRACE_MS: u64 = 1000;
 pub const DEFAULT_BT_CONCURRENCY: usize = 20;
-pub const DEFAULT_PEER_PIPELINE: usize = 64;
+pub const DEFAULT_PEER_PIPELINE: usize = 512;
 pub const DEFAULT_UPLOAD_SLOTS: usize = 4;
 pub const DEFAULT_UPLOAD_READ_CONCURRENCY: usize = 128;
 pub const DEFAULT_IDLE_EVICTION_SECS: u64 = 60;
@@ -778,9 +778,9 @@ udp_trackers = []
 # 取值范围：1–64 的整数；越界钳制到边界
 bt_concurrency = 20
 
-# 单 peer 在飞请求块数上限（×16 KiB = 在飞窗口）
+# 单 peer 在飞请求块数上限（×16 KiB = 在飞窗口上限；引擎按下载速率×3s 排队时间动态取值，钳在此上限内）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
-peer_pipeline = 64
+peer_pipeline = 512
 
 # 同时获得上传槽位的 peer 数（choker 周期分配）
 # 取值范围：正整数（≥1）；0 或非法值回退默认
@@ -1514,7 +1514,7 @@ mod tests {
             "http_trackers = []",
             "udp_trackers = []",
             "bt_concurrency = 20",
-            "peer_pipeline = 64",
+            "peer_pipeline = 512",
             "upload_slots = 4",
             "upload_read_concurrency = 128",
             "idle_eviction_secs = 60",

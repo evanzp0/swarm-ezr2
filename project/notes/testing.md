@@ -397,3 +397,33 @@
   EZR_BIN 相对路径自解析到 worktree 内二进制，无需改代码。
 - **pyte 环境重建**：runner 依赖 pyte（pty 画面捕获），沙箱重置后 `pip3 install pyte`
   即可（无 __version__ 属性，验证用 Screen 实例化探针）。
+- **延迟代理基准实验口径（.work/tmp/lan/lan_bench.py + proxy_delay.py）**：`--workdir` 必须绝对
+  路径（相对路径经 pty chdir 后 torrent 失效 →「无法读取种子文件」错误弹窗，与
+  bench_multipeer `--ezr-bin` 同坑族）；only-static tracker 模式下 seeder 也会收到代理 peer
+  地址并经代理自拨自己，产生「c2s 握手已发、s2c 永不回复」的假 hung 连接——用握手载荷
+  peer_id 前缀区分（-EZ2000- = ezr，-LT2110- = libtorrent seeder 自连），勿误判 ezr 握手
+  缺陷；outstanding 计数必须合并两方向（c2s.req − s2c.block − c2s.cancel），单方向流上
+  恒为负值；libtorrent 对照组在飞深度 ~440（3s 排队时间语义），ezr 优化前后 64 → 514+ 是
+  管线优化生效的直接证据；EMA 速率驱动的动态深度单测断言用区间（如 470..=480）不钉值
+  （Instant 计时漂移 ±1）；管线目标 > visits×requests_per_piece 时首拍不满、靠逐块
+  refill 1:1 补满（每拍每 piece 再发 4 个未请求块），小种子几次到达内收敛，属预期。
+- **负载敏感 flake 复验沿例**：v147 `engine_conns_quota_exact_and_unique_ids` 本轮 full-run
+  FAIL（left: 0 = 连接窗口内未建立）单跑即刻绿，改动无接触面（失败形态是少连接非多连接，
+  与管线/重拨改动方向相反），沿 notes 既有非回归口径登记。
+
+## 速度追查第二轮（2026-11-06）
+- **slow-start 起步深度改变了假 peer 测试的可达性前提**：管线目标初值 64→4
+  （libtorrent 成员初始化口径）后，「假 peer 只服务单一指定块」的旧形态会死锁——首访
+  piece 由 jitter 随机决定，单块 serve 集大概率永远等不到请求；改法 = serve 集 = 全块
+  减去目标 piece 的其余块（目标 piece 永不完整 → done 不含它是确定性断言），partial
+  断言按 piece 定位（`iter().find(|p| p.piece == 0)`）而非下标/全集计数；推论：任何
+  「假 peer 部分服务」测试在 slow-start 语义下都必须保证目标块之前的请求链能被喂饱。
+- **负载敏感 flake 两例沿例（失败形态与改动方向相反）**：`pause_persists_partial…`
+  全量首跑 FAIL（假 peer 15s 窗口未等到块）实为初值 64→4 的真回归，serve 集改造后
+  连续全绿；`periodic_flush_writes_sidecar_mid_download`（HTTP 206 滴流，v147 套件）
+  FAIL 属已登记负载敏感家族——BT 轮改动不可能影响 HTTP 下载状态迁移，单跑即刻绿、
+  全量复跑绿，沿非回归口径继续观察。
+- **bench_multipeer 结果判读口径**：s1l1（竞享 seeder）修复后 ezr 稳态吃满 seeder
+  上限且为中继（lt leecher 显示 >2.5MB/s 的瞬时值 = 从 ezr 拉取），均速包含 ~14s
+  第三方拓扑启动段；判定修复有效看三件：死区消失（curve 无 60s 零增长段）、
+  均速接近 payload/(seeder 上限理论时停 + 启动段)、s1l0 对照无回归。

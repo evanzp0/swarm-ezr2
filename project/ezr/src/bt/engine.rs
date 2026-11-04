@@ -32,6 +32,42 @@ enum BanKind {
     Protocol,
 }
 
+const PIPELINE_QUEUE_TIME_SECS: u64 = 3;
+const PIPELINE_MIN: usize = 2;
+const PIPELINE_SLOW_START_SLACK_BYTES: u64 = 5000;
+
+fn ema_target(ema_rate_bps: u64, cap: usize) -> usize {
+    let want = (PIPELINE_QUEUE_TIME_SECS * ema_rate_bps / u64::from(REQUEST_BLOCK_LEN)) as usize;
+    want.max(PIPELINE_MIN).min(cap).max(1)
+}
+
+fn tick_pipeline(st: &mut ConnStat, now: std::time::Instant, cap: usize) {
+    let dt_ms = now
+        .duration_since(st.pipe_sample.1)
+        .as_millis() as u64;
+    let dt_ms = dt_ms.max(1);
+    let sample = st
+        .cum_down
+        .saturating_sub(st.pipe_sample.0)
+        .saturating_mul(1000)
+        / dt_ms;
+    st.pipe_ema = st.pipe_ema * 4 / 5 + sample / 5;
+    st.pipe_sample = (st.cum_down, now);
+    if st.pipe_slow_start {
+        let cur = st.cum_down.saturating_sub(st.tick_prev_down);
+        if !st.peer_choking
+            && st.pipe_last_second > 0
+            && st.pipe_last_second + PIPELINE_SLOW_START_SLACK_BYTES >= cur
+        {
+            st.pipe_slow_start = false;
+        }
+        st.pipe_last_second = cur;
+    } else {
+        st.pipe_target = ema_target(st.pipe_ema, cap);
+    }
+    st.tick_prev_down = st.cum_down;
+}
+
 struct DlFlow {
     global: Arc<Throttle>,
     task: Arc<Throttle>,
@@ -74,6 +110,12 @@ struct ConnStat {
     down_window: (u64, std::time::Instant),
     up_window: (u64, std::time::Instant),
     idle_check: (u64, std::time::Instant),
+    pipe_target: usize,
+    pipe_slow_start: bool,
+    pipe_ema: u64,
+    pipe_sample: (u64, std::time::Instant),
+    tick_prev_down: u64,
+    pipe_last_second: u64,
     connected_at: std::time::Instant,
     bad_pieces: u32,
     invalid_requests: u32,
@@ -185,8 +227,15 @@ fn idle_evict_due(st: &ConnStat, now: std::time::Instant, idle_secs: u64) -> boo
     st.cum_down == st.idle_check.0 && now.duration_since(st.idle_check.1).as_secs() >= idle_secs
 }
 
-fn inbound_admitted(conns: &HashMap<usize, ConnStat>, ip: IpAddr, cap: usize) -> bool {
-    conns.len() < cap && !conns.values().any(|st| addr_ip(&st.addr) == Some(ip))
+fn inbound_admitted(
+    conns: &HashMap<usize, ConnStat>,
+    addr: (IpAddr, u16),
+    cap: usize,
+) -> bool {
+    conns.len() < cap
+        && !conns
+            .values()
+            .any(|st| addr_sock(&st.addr) == Some(addr))
 }
 
 /// piece 的伪随机权重：同一 (piece, seed) 恒定不变。
@@ -556,7 +605,8 @@ pub(crate) async fn run(
                 }
             }
             Ok((stream, addr)) = listener.accept() => {
-                if inbound_admitted(&conns, addr.ip(), spec.concurrency.max(1) + 8)
+                let sock_key = (addr.ip(), addr.port());
+                if inbound_admitted(&conns, sock_key, spec.concurrency.max(1) + 8)
                     && !shared.is_blacklisted(addr.ip())
                 {
                     spawn_incoming_peer(
@@ -794,6 +844,7 @@ pub(crate) async fn run(
                 }
                 let mut stale: Vec<usize> = Vec::new();
                 for (cid, st) in conns.iter_mut() {
+                    tick_pipeline(st, now, tun.peer_pipeline);
                     let before = st.inflight.len();
                     st.inflight
                         .retain(|_, (_, at)| now.duration_since(*at).as_secs() < tun.request_timeout_secs);
@@ -1342,6 +1393,12 @@ fn new_conn_stat(addr: String) -> ConnStat {
         down_window: (0, std::time::Instant::now()),
         up_window: (0, std::time::Instant::now()),
         idle_check: (0, std::time::Instant::now()),
+        pipe_target: 4,
+        pipe_slow_start: true,
+        pipe_ema: 0,
+        pipe_sample: (0, std::time::Instant::now()),
+        tick_prev_down: 0,
+        pipe_last_second: 0,
         connected_at: std::time::Instant::now(),
         bad_pieces: 0,
         invalid_requests: 0,
@@ -1720,7 +1777,8 @@ async fn issue_requests(
     partial: &PartialPieces,
     order: &mut PieceOrderCache,
 ) {
-    if st.peer_choking || st.inflight.len() >= tun.peer_pipeline {
+    let target = st.pipe_target;
+    if st.peer_choking || st.inflight.len() >= target {
         return;
     }
     if order.dirty {
@@ -1732,16 +1790,21 @@ async fn issue_requests(
     }
     let mut issued = 0usize;
     for &piece in &visit {
-        issued +=
-            request_blocks_of_piece(conn_id, st, claimed, pmap, tun, partial, piece, false).await;
-        if st.inflight.len() >= tun.peer_pipeline {
+        issued += request_blocks_of_piece(
+            conn_id, st, claimed, pmap, tun, partial, piece, false, target,
+        )
+        .await;
+        if st.inflight.len() >= target {
             return;
         }
     }
     if issued == 0 && endgame_active(claimed, pmap, done) {
         for &piece in &visit {
-            request_blocks_of_piece(conn_id, st, claimed, pmap, tun, partial, piece, true).await;
-            if st.inflight.len() >= tun.peer_pipeline {
+            request_blocks_of_piece(
+                conn_id, st, claimed, pmap, tun, partial, piece, true, target,
+            )
+            .await;
+            if st.inflight.len() >= target {
                 return;
             }
         }
@@ -1757,11 +1820,12 @@ async fn request_blocks_of_piece(
     partial: &PartialPieces,
     piece: u32,
     endgame: bool,
+    target: usize,
 ) -> usize {
     let plen = pmap.piece_len(piece) as usize;
     let mut asked = 0usize;
     let mut begin = 0usize;
-    while begin < plen && asked < tun.requests_per_piece && st.inflight.len() < tun.peer_pipeline {
+    while begin < plen && asked < tun.requests_per_piece && st.inflight.len() < target {
         let key = (piece, begin as u32);
         let already_have = partial
             .get(&piece)
@@ -1868,21 +1932,35 @@ fn fill_peer_slots(
     next_conn: &mut usize,
     dl_flow: &Arc<DlFlow>,
 ) {
-    // 同 IP 只连一条（libtorrent allow_multiple_connections_per_ip=false 口径）：
-    // tracker 给出的 ip:listen 与对端入连的 ip:ephemeral 是同 IP 不同端口，
-    // 按 ip:port 去重挡不住，必须按 IP 去重。
-    let connected_ips: HashSet<IpAddr> =
-        conns.values().filter_map(|st| addr_ip(&st.addr)).collect();
+    // 端点级（ip:port）去重：候选 = tracker/PEX 给出的 ip:listen，连接 = 出连
+    // ip:listen 或入连 ip:ephemeral。同 IP 不同端口的多个 peer（多客户端一台机/
+    // NAT 共享出口）都必须可达；同一客户端实例的出连+入连双通道由握手后
+    // peer_id 重复裁决收口（libtorrent duplicate_peer_id 口径），
+    // 不再按裸 IP 拒绝——libtorrent peer_list::new_connection 只在
+    // 同地址且有活连接时按方向裁决，连接死亡条目即刻可复用，
+    // 永不因「同 IP 已有连接」拒绝不同端口的 peer。
+    let connected_eps: HashSet<(IpAddr, u16)> = conns
+        .values()
+        .filter_map(|st| addr_sock(&st.addr))
+        .collect();
+    let emergency = conns.is_empty();
+    let retry_base = if emergency {
+        1
+    } else {
+        spec.tunables.peer_retry_base_secs
+    };
+    let retry_cap = if emergency {
+        1
+    } else {
+        spec.tunables.peer_retry_cap_secs
+    };
     while conns.len() < spec.concurrency.max(1) {
         let Some(key) = candidates
             .iter()
             .filter(|(k, c)| {
-                !connected_ips.contains(&k.0)
+                !connected_eps.contains(k)
                     && !shared.is_blacklisted(k.0)
-                    && c.cooldown_ok(
-                        spec.tunables.peer_retry_base_secs,
-                        spec.tunables.peer_retry_cap_secs,
-                    )
+                    && c.cooldown_ok(retry_base, retry_cap)
             })
             .min_by_key(|(_, c)| (c.last_try, c.fails))
             .map(|(k, _)| *k)
@@ -1993,6 +2071,12 @@ async fn on_block(
         None => return None,
     };
     st.inflight.remove(&(index, begin));
+    if st.pipe_slow_start {
+        st.pipe_target = st
+            .pipe_target
+            .saturating_add(1)
+            .min(spec.tunables.peer_pipeline.max(1));
+    }
     if !pmap.covers(index) {
         conns.insert(conn_id, st);
         let claimed = claimed_blocks(conns, partial);
@@ -4405,11 +4489,19 @@ mod tests {
 
         let (served_tx, mut served_rx) = mpsc::unbounded_channel();
         let log1 = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+        let mut serve1 = std::collections::BTreeSet::new();
+        for p in 0..num_pieces as u32 {
+            for b in 0..3u32 {
+                serve1.insert((p, b * REQUEST_BLOCK_LEN));
+            }
+        }
+        serve1.remove(&(0u32, REQUEST_BLOCK_LEN));
+        serve1.remove(&(0u32, 2 * REQUEST_BLOCK_LEN));
         let seeder1 = fake_logging_peer(
             data.clone(),
             piece_len,
             infohash,
-            std::collections::BTreeSet::from([(0u32, 0u32)]),
+            serve1,
             log1.clone(),
             served_tx,
         )
@@ -4468,10 +4560,15 @@ mod tests {
         assert!(stopped, "phase1: 暂停回报 BtStopped");
         let _ = handle.await;
         let sc = crate::model::BtSidecar::load_full(&sc_path).expect("phase1: sidecar 存在");
-        assert_eq!(sc.done_pieces, Vec::<u32>::new(), "phase1: 无完整 piece");
-        assert_eq!(sc.partial_pieces.len(), 1, "phase1: partial 块已持久化");
-        let p0 = &sc.partial_pieces[0];
-        assert_eq!(p0.piece, 0);
+        assert!(
+            !sc.done_pieces.contains(&0),
+            "phase1: piece0 缺块不完整（serve 集排空 (0,1)(0,2)）"
+        );
+        let p0 = sc
+            .partial_pieces
+            .iter()
+            .find(|p| p.piece == 0)
+            .expect("phase1: partial piece0 已持久化");
         assert_eq!(p0.blocks.len(), 1);
         assert_eq!(p0.blocks[0].begin, 0);
         assert_eq!(
@@ -4662,22 +4759,27 @@ mod tests {
     }
 
     #[test]
-    fn inbound_admitted_blocks_same_ip_and_cap() {
+    fn inbound_admitted_blocks_same_endpoint_and_cap() {
         let mut conns: HashMap<usize, ConnStat> = HashMap::new();
         conns.insert(1, new_conn_stat("127.0.0.1:17903".into()));
-        let ip: IpAddr = "127.0.0.1".parse().unwrap();
+        let same_ep: (IpAddr, u16) = ("127.0.0.1".parse().unwrap(), 17903);
         assert!(
-            !inbound_admitted(&conns, ip, 28),
-            "同 IP 已有连接时入连拒绝（入连不得占住同 IP 出连名额）"
+            !inbound_admitted(&conns, same_ep, 28),
+            "同端点已有连接时入连拒绝"
         );
-        let other: IpAddr = "10.0.0.8".parse().unwrap();
+        let same_ip_other_port: (IpAddr, u16) = ("127.0.0.1".parse().unwrap(), 55555);
+        assert!(
+            inbound_admitted(&conns, same_ip_other_port, 28),
+            "同 IP 不同端口入连放行（多客户端一台机/NAT 共享出口场景）"
+        );
+        let other: (IpAddr, u16) = ("10.0.0.8".parse().unwrap(), 1234);
         assert!(inbound_admitted(&conns, other, 28), "不同 IP 入连放行");
         assert!(!inbound_admitted(&conns, other, 1), "容量满时入连拒绝");
         let unparseable = new_conn_stat("未知地址".into());
         conns.insert(2, unparseable);
         assert!(
             inbound_admitted(&conns, other, 28),
-            "地址不可解析的既有连接不挡同 IP 判定"
+            "地址不可解析的既有连接不参与端点判定"
         );
     }
 
@@ -4822,6 +4924,380 @@ mod tests {
             vec![3, 5, 7],
             "partial 优先（3 已收 2 块 > 5 的 1 块），缓存序跳过 partial/done"
         );
+    }
+
+    #[test]
+    fn ema_target_floor_cap_and_rate_scaling() {
+        assert_eq!(ema_target(0, 512), 2, "零速率取下限 2（libtorrent min_request_queue）");
+        assert_eq!(ema_target(16_384, 512), 3, "3s × 16KiB/s ÷ 16KiB = 3");
+        assert_eq!(
+            ema_target(2_621_440, 512),
+            480,
+            "3s × 2.5MiB/s ÷ 16KiB = 480"
+        );
+        assert_eq!(ema_target(52_428_800, 512), 512, "高速率钳上限");
+        assert_eq!(ema_target(2_621_440, 64), 64, "上限钳制生效");
+        assert_eq!(ema_target(2_621_440, 1), 1, "极小上限不被抬升且不 panic");
+    }
+
+    #[test]
+    fn tick_pipeline_slow_start_grows_and_exits_at_plateau() {
+        let mut st = new_conn_stat("10.0.0.1:51413".into());
+        let mut t = std::time::Instant::now();
+        tick_pipeline(&mut st, t, 512);
+        assert_eq!(st.pipe_target, 4, "首个 tick 无进账不退 slow-start（初始深度 = libtorrent 成员初始化 4）");
+        assert!(st.pipe_slow_start);
+        t += Duration::from_secs(1);
+        st.cum_down = 300_000;
+        tick_pipeline(&mut st, t, 512);
+        assert!(st.pipe_slow_start, "首秒有进账但无上一秒样本不退 slow-start");
+        t += Duration::from_secs(1);
+        st.cum_down = 700_000;
+        tick_pipeline(&mut st, t, 512);
+        assert!(st.pipe_slow_start, "400KB > 300KB 仍在增长，slow-start 继续");
+        st.peer_choking = true;
+        t += Duration::from_secs(1);
+        st.cum_down = 703_000;
+        tick_pipeline(&mut st, t, 512);
+        assert!(
+            st.pipe_slow_start,
+            "choke 期间停滞不触发退出口径（对齐 libtorrent !m_peer_choked）"
+        );
+        st.peer_choking = false;
+        t += Duration::from_secs(1);
+        st.cum_down = 704_000;
+        tick_pipeline(&mut st, t, 512);
+        assert!(!st.pipe_slow_start, "未 choke 且增长停滞（1KB ≤ 3KB+5KB）退出 slow-start");
+        let ema_after = st.pipe_ema;
+        t += Duration::from_secs(1);
+        st.cum_down += 2_621_440;
+        tick_pipeline(&mut st, t, 512);
+        assert_eq!(
+            st.pipe_target,
+            ema_target(ema_after * 4 / 5 + 2_621_440 / 5, 512),
+            "退出后目标 = 3s × EMA ÷ 16KiB（整数均值口径同 libtorrent stat_channel）"
+        );
+    }
+
+    #[test]
+    fn tick_pipeline_ema_stable_under_ui_snapshot_resets() {
+        let mut st = new_conn_stat("10.0.0.1:51413".into());
+        st.pipe_slow_start = false;
+        st.pipe_ema = 2_621_440;
+        let mut t = std::time::Instant::now();
+        t += Duration::from_secs(1);
+        st.cum_down += 2_621_440;
+        tick_pipeline(&mut st, t, 512);
+        st.down_window = (st.cum_down, t);
+        assert_eq!(
+            st.pipe_target, 480,
+            "稳态 2.5MiB/s → 3s 队列深度 480；UI 快照重置 down_window 不影响管线口径"
+        );
+        t += Duration::from_secs(1);
+        tick_pipeline(&mut st, t, 512);
+        st.down_window = (st.cum_down, t);
+        assert_eq!(
+            st.pipe_target, 384,
+            "单秒断流只衰减 1/5（480→384），不再随 UI 窗口重置塌向下限"
+        );
+    }
+
+    fn rate_conn(has: HashSet<u32>, pipe_target: usize) -> ConnStat {
+        let mut st = new_conn_stat("10.0.0.1:51413".into());
+        st.has = has;
+        st.peer_choking = false;
+        st.pipe_slow_start = false;
+        st.pipe_target = pipe_target;
+        st
+    }
+
+    async fn drain_issue_requests(
+        st: &mut ConnStat,
+        pmap: &PieceMap,
+        tun: &BtTunables,
+        done: &HashSet<u32>,
+        partial: &mut PartialPieces,
+        order: &mut PieceOrderCache,
+        rounds: usize,
+    ) {
+        for _ in 0..rounds {
+            let claimed: HashSet<(u32, u32)> = st.inflight.keys().copied().collect();
+            issue_requests(1, st, &claimed, pmap, tun, done, partial, order).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn issue_requests_scales_queue_with_rate() {
+        let piece_len = 262144usize;
+        let data = vec![0x5Au8; 32 * piece_len];
+        let _meta = make_meta(&data, piece_len, "http://127.0.0.1:1/announce");
+        let files = vec![BtFile {
+            path: "e2e.bin".into(),
+            size: data.len() as u64,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, piece_len as u32);
+        let n = pmap.num_pieces();
+        let has: HashSet<u32> = (0..n).collect();
+        let tun = BtTunables {
+            peer_pipeline: 512,
+            ..BtTunables::default()
+        };
+        let done: HashSet<u32> = HashSet::new();
+        let mut partial: PartialPieces = HashMap::new();
+        let mut order = PieceOrderCache::new();
+
+        let mut st = rate_conn(has.clone(), 480);
+        for p in 0..n {
+            order.peer_gained(p);
+        }
+        drain_issue_requests(&mut st, &pmap, &tun, &done, &mut partial, &mut order, 40).await;
+        assert_eq!(
+            st.inflight.len(), 480,
+            "目标深度 480（3s × 2.5MiB/s ÷ 16KiB）时在飞恰好钳在目标"
+        );
+        let asked_lens: HashSet<u32> = st.inflight.values().map(|(len, _)| *len).collect();
+        assert!(asked_lens.iter().all(|&l| l == 16384), "整块 16KiB 请求");
+
+        let mut st_capped = rate_conn(has, 64);
+        let tun_capped = BtTunables {
+            peer_pipeline: 64,
+            ..BtTunables::default()
+        };
+        for p in 0..n {
+            order.peer_gained(p);
+        }
+        drain_issue_requests(
+            &mut st_capped,
+            &pmap,
+            &tun_capped,
+            &done,
+            &mut partial,
+            &mut order,
+            40,
+        )
+        .await;
+        assert_eq!(st_capped.inflight.len(), 64, "config 上限仍然生效");
+    }
+
+    #[tokio::test]
+    async fn issue_requests_fresh_connection_ramps_per_block_in_slow_start() {
+        let piece_len = 262144usize;
+        let data = vec![0x5Au8; 8 * piece_len];
+        let _meta = make_meta(&data, piece_len, "http://127.0.0.1:1/announce");
+        let files = vec![BtFile {
+            path: "e2e.bin".into(),
+            size: data.len() as u64,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, piece_len as u32);
+        let n = pmap.num_pieces();
+        let has: HashSet<u32> = (0..n).collect();
+        let tun = BtTunables::default();
+        let done: HashSet<u32> = HashSet::new();
+        let mut partial: PartialPieces = HashMap::new();
+        let mut order = PieceOrderCache::new();
+        let mut st = new_conn_stat("10.0.0.1:51413".into());
+        st.has = has;
+        st.peer_choking = false;
+        for p in 0..n {
+            order.peer_gained(p);
+        }
+        drain_issue_requests(&mut st, &pmap, &tun, &done, &mut partial, &mut order, 40).await;
+        assert_eq!(
+            st.inflight.len(), 4,
+            "新连接 slow-start 起步深度 = 4（libtorrent m_desired_queue_size 成员初始化）"
+        );
+        for _ in 0..16 {
+            st.pipe_target = st.pipe_target.saturating_add(1);
+        }
+        drain_issue_requests(&mut st, &pmap, &tun, &done, &mut partial, &mut order, 40).await;
+        assert_eq!(
+            st.inflight.len(), 20,
+            "slow-start 每收一块 +1，在飞随目标线性爬坡"
+        );
+    }
+
+    fn shared_for_fill_test() -> EngineShared {
+        EngineShared::for_test()
+    }
+
+    fn spec_for_fill_test(concurrency: usize) -> crate::engine::BtSpec {
+        let meta = make_meta(&[0u8; 262144], 262144, "http://127.0.0.1:1/announce");
+        crate::engine::BtSpec {
+            id: 1,
+            source: "test".into(),
+            meta,
+            save_dir: "/tmp/ezr-fill-test".into(),
+            name: "e2e.bin".into(),
+            files: vec![BtFile {
+                path: "e2e.bin".into(),
+                size: 262144,
+                selected: true,
+            }],
+            trackers: vec![],
+            concurrency,
+            proxy_endpoint: None,
+            seeding: false,
+            max_download_speed: 0,
+            max_upload_speed: 0,
+            tunables: BtTunables::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn fill_peer_slots_redials_immediately_when_no_connections() {
+        let spec = spec_for_fill_test(4);
+        let shared = shared_for_fill_test();
+        let (tx, mut rx) = mpsc::channel(8);
+        let peer_id = [0u8; 20];
+        let dl_flow = std::sync::Arc::new(DlFlow {
+            global: std::sync::Arc::new(Throttle::new(0)),
+            task: std::sync::Arc::new(Throttle::new(0)),
+        });
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        let mut candidates: HashMap<(IpAddr, u16), PeerCandidate> = HashMap::new();
+        candidates.insert(
+            ("10.0.0.9".parse().unwrap(), 51413),
+            PeerCandidate {
+                fails: 5,
+                last_try: Some(std::time::Instant::now() - Duration::from_millis(1100)),
+            },
+        );
+        let mut next_conn = 0usize;
+        fill_peer_slots(
+            &spec,
+            &peer_id,
+            &tx,
+            &shared,
+            &mut conns,
+            &mut candidates,
+            &mut next_conn,
+            &dl_flow,
+        );
+        assert_eq!(
+            conns.len(),
+            1,
+            "零连接紧急重拨：深退避候选在 1s 后立即拨出（非紧急口径需 120s）"
+        );
+        let _ = rx.try_recv();
+    }
+
+    #[tokio::test]
+    async fn fill_peer_slots_respects_cooldown_when_connections_remain() {
+        let spec = spec_for_fill_test(4);
+        let shared = shared_for_fill_test();
+        let (tx, mut rx) = mpsc::channel(8);
+        let peer_id = [0u8; 20];
+        let dl_flow = std::sync::Arc::new(DlFlow {
+            global: std::sync::Arc::new(Throttle::new(0)),
+            task: std::sync::Arc::new(Throttle::new(0)),
+        });
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        conns.insert(7, new_conn_stat("10.0.0.1:51413".into()));
+        let mut candidates: HashMap<(IpAddr, u16), PeerCandidate> = HashMap::new();
+        candidates.insert(
+            ("10.0.0.9".parse().unwrap(), 51413),
+            PeerCandidate {
+                fails: 5,
+                last_try: Some(std::time::Instant::now()),
+            },
+        );
+        let mut next_conn = 0usize;
+        fill_peer_slots(
+            &spec,
+            &peer_id,
+            &tx,
+            &shared,
+            &mut conns,
+            &mut candidates,
+            &mut next_conn,
+            &dl_flow,
+        );
+        assert_eq!(
+            conns.len(),
+            1,
+            "仍有连接时保持退避节奏，不因紧急口径提前重拨"
+        );
+        let _ = rx.try_recv();
+    }
+
+    #[tokio::test]
+    async fn fill_peer_slots_dials_same_ip_different_endpoint() {
+        let spec = spec_for_fill_test(4);
+        let shared = shared_for_fill_test();
+        let (tx, mut rx) = mpsc::channel(8);
+        let peer_id = [0u8; 20];
+        let dl_flow = std::sync::Arc::new(DlFlow {
+            global: std::sync::Arc::new(Throttle::new(0)),
+            task: std::sync::Arc::new(Throttle::new(0)),
+        });
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        conns.insert(7, new_conn_stat("127.0.0.1:17920".into()));
+        let mut candidates: HashMap<(IpAddr, u16), PeerCandidate> = HashMap::new();
+        candidates.insert(
+            ("127.0.0.1".parse().unwrap(), 17903),
+            PeerCandidate {
+                fails: 0,
+                last_try: None,
+            },
+        );
+        let mut next_conn = 0usize;
+        fill_peer_slots(
+            &spec,
+            &peer_id,
+            &tx,
+            &shared,
+            &mut conns,
+            &mut candidates,
+            &mut next_conn,
+            &dl_flow,
+        );
+        assert_eq!(
+            conns.len(),
+            2,
+            "同 IP 不同端口的 seeder 候选不被已有连接阻断（反 60s 死区）"
+        );
+        let _ = rx.try_recv();
+    }
+
+    #[tokio::test]
+    async fn fill_peer_slots_skips_connected_endpoint() {
+        let spec = spec_for_fill_test(4);
+        let shared = shared_for_fill_test();
+        let (tx, mut rx) = mpsc::channel(8);
+        let peer_id = [0u8; 20];
+        let dl_flow = std::sync::Arc::new(DlFlow {
+            global: std::sync::Arc::new(Throttle::new(0)),
+            task: std::sync::Arc::new(Throttle::new(0)),
+        });
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        conns.insert(7, new_conn_stat("127.0.0.1:17903".into()));
+        let mut candidates: HashMap<(IpAddr, u16), PeerCandidate> = HashMap::new();
+        candidates.insert(
+            ("127.0.0.1".parse().unwrap(), 17903),
+            PeerCandidate {
+                fails: 0,
+                last_try: None,
+            },
+        );
+        let mut next_conn = 0usize;
+        fill_peer_slots(
+            &spec,
+            &peer_id,
+            &tx,
+            &shared,
+            &mut conns,
+            &mut candidates,
+            &mut next_conn,
+            &dl_flow,
+        );
+        assert_eq!(
+            conns.len(),
+            1,
+            "同端点已有连接时不重复拨出（同一客户端单连接）"
+        );
+        let _ = rx.try_recv();
     }
 
     #[test]
