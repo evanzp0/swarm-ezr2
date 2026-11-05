@@ -90,20 +90,21 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let mut colw: Vec<usize> = if is_bt {
-        vec![18, 4, 8, 8, 8, 8, 34, 4]
+        vec![18, 4, 12, 12, 10, 10, 34, 4]
     } else {
-        vec![4, 8, 8]
+        vec![4, 12, 10]
     };
     if is_bt {
         let vw = view.width as usize;
         let base = colw.iter().sum::<usize>() + colw.len().saturating_sub(1);
         if base > vw {
-            colw[6] = vw.saturating_sub(65).max(26);
+            colw[6] = vw.saturating_sub(77).max(26);
         }
     }
     let content_w = colw.iter().sum::<usize>() + colw.len().saturating_sub(1);
 
     let head_cell = |s: &str, wd: usize| Span::styled(pad_right(s, wd), Style::default().fg(DIM));
+    let head_cell_r = |s: &str, wd: usize| Span::styled(pad_left(s, wd), Style::default().fg(DIM));
 
     let head = if is_bt {
         vec![
@@ -111,13 +112,13 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
             Span::raw(" "),
             head_cell("标志", 4),
             Span::raw(" "),
-            head_cell("下载速度", 8),
+            head_cell_r("下载速度", 12),
             Span::raw(" "),
-            head_cell("上传速度", 8),
+            head_cell_r("上传速度", 12),
             Span::raw(" "),
-            head_cell("累计下载", 8),
+            head_cell_r("累计下载", 10),
             Span::raw(" "),
-            head_cell("累计上传", 8),
+            head_cell_r("累计上传", 10),
             Span::raw(" "),
             head_cell("客户端", colw[6]),
             Span::raw(" "),
@@ -127,9 +128,9 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         vec![
             head_cell("序号", 4),
             Span::raw(" "),
-            head_cell("下载速度", 8),
+            head_cell_r("下载速度", 12),
             Span::raw(" "),
-            head_cell("累计下载", 8),
+            head_cell_r("累计下载", 10),
         ]
     };
     let mut lines = vec![Line::from(head)];
@@ -168,7 +169,7 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                     } else {
                         "-".to_string()
                     },
-                    8,
+                    colw[2],
                     if dl_on { LIGHT_BLUE } else { DIM2 },
                 ),
                 Span::styled(" ", Style::default().bg(bg)),
@@ -178,13 +179,13 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                     } else {
                         "-".to_string()
                     },
-                    8,
+                    colw[3],
                     if up_on { MAGENTA } else { DIM2 },
                 ),
                 Span::styled(" ", Style::default().bg(bg)),
-                cell(fmt_size(c.cum_down), 8, FG),
+                cell(fmt_size(c.cum_down), colw[4], FG),
                 Span::styled(" ", Style::default().bg(bg)),
-                cell(fmt_size(c.cum_up), 8, FG),
+                cell(fmt_size(c.cum_up), colw[5], FG),
                 Span::styled(" ", Style::default().bg(bg)),
                 Span::styled(
                     pad_right(&truncate(c.client, colw[6]), colw[6]),
@@ -207,11 +208,11 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                     } else {
                         "-".to_string()
                     },
-                    8,
+                    colw[1],
                     if dl_on { LIGHT_BLUE } else { DIM2 },
                 ),
                 Span::styled(" ", Style::default().bg(bg)),
-                cell(fmt_size(c.cum_down), 8, FG),
+                cell(fmt_size(c.cum_down), colw[2], FG),
             ]
         };
         lines.push(Line::from(spans));

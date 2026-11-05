@@ -97,8 +97,8 @@
                         R 让槽队首递补）；做种中（arch）明细显示
                         （BT 七列、首列掩码 IP、徽标 1/1 项）。
 场景 R（v1.28 同步）：  生产同步轮八（URL 权威模型交互同步）两段运行：
-                        R1 正路径——同 URL 同目录重复添加被拒（toast「任务已存在」、
-                        对话框保持打开）；「仅删除任务（保留文件）」后异 URL 同
+                        R1 正路径——同 URL 同目录重复添加被拒（bug25：错误
+                        窗口「该链接的任务已存在」、对话框保持打开）；「仅删除任务（保留文件）」后异 URL 同
                         推导名再添加 → 路径基断点接续（v1.28/FR-01-26：toast
                         「发现有效断点，将自动接续」、沿用推导原名无 .1 后缀、
                         等待中带断点分块进度 x>0 非从零）；
@@ -1172,7 +1172,7 @@ def scenario_r():
     keys = (
         ["a"] + clear_and_type(url_a) + ["ctrlj", "enter"]  # 命令窗口确认分流 → 添加任务（等待中）
         + ["a"] + clear_and_type(url_a) + ["ctrlj", "enter"]  # 同 URL 同目录重复添加 → 拒绝
-        + ["esc"]  # 关闭保持打开的对话框
+        + ["esc", "esc"]  # 第一 Esc 关错误窗口（bug25 载体），第二 Esc 关保持打开的对话框
         + ["d", "1"]  # 仅删除任务（保留文件）→ 模拟盘 sidecar 残留
         + ["a"] + clear_and_type(url_b) + ["ctrlj", "enter"]  # 异 URL 同推导名 → 路径基接续
     )
@@ -1183,10 +1183,11 @@ def scenario_r():
 
     check("R1-1 添加任务 alpha-release.bin 成功",
           "已添加任务 #" in all_text1 and "alpha-release.bin" in all_text1)
-    check("R1-2 同 URL 同目录重复添加被拒（toast「任务已存在」）",
-          "任务已存在" in all_text1)
+    check("R1-2 同 URL 同目录重复添加被拒（错误窗口「该链接的任务已存在」，bug25）",
+          "该链接的任务已存在" in all_text1)
     dup_open = any(
-        "任务已存在" in "\n".join(rows) and "添加任务：HTTP(S)" in "\n".join(rows)
+        "该链接的任务已存在" in "\n".join(rows)
+        and "添加任务：HTTP(S)" in "\n".join(rows)
         for _, rows in samples1)
     check("R1-3 拒绝后对话框保持打开（与其他校验失败一致）", dup_open)
     check("R1-4 仅删除任务（保留文件）",

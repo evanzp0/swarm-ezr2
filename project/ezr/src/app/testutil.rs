@@ -103,3 +103,14 @@ pub(crate) fn task_with_conns(
         .collect();
     t
 }
+
+#[cfg(test)]
+pub(crate) fn seed_bt_conn_speeds(app: &mut App, task_id: u32, conn_id: usize, down: f64, up: f64) {
+    use crate::app::BtConnSpeedStat;
+    let mut st = BtConnSpeedStat::default();
+    for _ in 0..60 {
+        st.down_ema.push(down);
+        st.up_ema.push(up);
+    }
+    app.bt_conn_stats.insert((task_id, conn_id), st);
+}

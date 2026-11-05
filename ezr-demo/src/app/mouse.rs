@@ -11,6 +11,11 @@ impl App {
     pub fn on_mouse(&mut self, m: MouseEvent) {
         self.pointer = Some((m.column, m.row));
 
+        if self.err_open {
+            self.on_mouse_err(m);
+            return;
+        }
+
         if self.about_open {
             match m.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
@@ -724,6 +729,48 @@ impl App {
                     let vis = self.visible_rows.max(1);
                     let maxs = self.filtered().len().saturating_sub(vis);
                     self.scroll = (self.scroll + 2).min(maxs);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn on_mouse_err(&mut self, m: MouseEvent) {
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.footer_press = None;
+                if Self::pointer_in(&self.popup_close_rect, m.column, m.row) {
+                    self.x_press = true;
+                    return;
+                }
+                if Self::pointer_in(&self.err_btn_rect, m.column, m.row) {
+                    self.close_error_window();
+                    return;
+                }
+                if Self::pointer_in(&self.err_area, m.column, m.row) {
+                    if let Some(r) = self.err_area {
+                        self.err_drag =
+                            Some((m.column.saturating_sub(r.x), m.row.saturating_sub(r.y)));
+                    }
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if self.x_press {
+                    self.x_press = Self::pointer_in(&self.popup_close_rect, m.column, m.row);
+                    return;
+                }
+                if let Some((dx, dy)) = self.err_drag {
+                    self.err_pos = Some((m.column.saturating_sub(dx), m.row.saturating_sub(dy)));
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.err_drag = None;
+                if self.x_press {
+                    let hit = Self::pointer_in(&self.popup_close_rect, m.column, m.row);
+                    self.x_press = false;
+                    if hit {
+                        self.close_error_window();
+                    }
                 }
             }
             _ => {}

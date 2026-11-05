@@ -427,3 +427,15 @@
   上限且为中继（lt leecher 显示 >2.5MB/s 的瞬时值 = 从 ezr 拉取），均速包含 ~14s
   第三方拓扑启动段；判定修复有效看三件：死区消失（curve 无 60s 零增长段）、
   均速接近 payload/(seeder 上限理论时停 + 启动段)、s1l0 对照无回归。
+
+## bug25 轮：EMA 收敛显示断言取值、载体改判断言翻转面、demo PTY 基线对照归因
+- **EMA 收敛显示断言**：SmoothedSpeed push 30 次收敛 99.9% 仍可能跨档回退显示
+  （1024 seed → 1023.998 → `{:.0}` = "1024 B/s"，KiB 档断言假红）——显示档位断言
+  seed 取档位中段值（1100 → 稳落 KiB 档 "1 KiB/s"）+ push ≥60 次（0.8^60 ≈ 1.5e-6）。
+- **载体改判（toast→错误窗口）断言翻转面**：err_open/err_msg 正断言 + toast 不再承载
+  该文案；「toast 为空」断言须用 assert_ne（同轮早前的成功 toast 仍在槽位，is_none
+  假红）；对话框保持打开断言保留（错误窗口 z 序在对话框之上，keys/mouse err_open
+  先于 dialog 消费）。
+- **demo PTY 场景预存 FAIL 归因**：`git stash push -- <目录> → 跑基线 → pop` 对照——
+  基线同败 = 环境预存非回归（verify_ezr.py 场景 R1-1 基本添加亦败，同
+  verify_phase2_ui.py A 段沙箱预存同形）；stash 带 pathspec 不触 .work/ 未跟踪状态。

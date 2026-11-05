@@ -25,12 +25,16 @@ pub fn pad_left(s: &str, width: usize) -> String {
 pub use crate::model::sizefmt::{fmt_size, fmt_size_pair};
 
 pub fn fmt_speed(bps: f64) -> String {
-    const MB: f64 = 1_000_000.0;
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = 1_048_576.0;
+    const GIB: f64 = 1_073_741_824.0;
     let bps = if bps == 0.0 { 0.0 } else { bps };
-    if bps >= MB {
-        format!("{:.1} MB/s", bps / MB)
-    } else if bps >= 1000.0 {
-        format!("{:.0} KB/s", bps / 1000.0)
+    if bps >= GIB {
+        format!("{:.2} GiB/s", bps / GIB)
+    } else if bps >= MIB {
+        format!("{:.1} MiB/s", bps / MIB)
+    } else if bps >= KIB {
+        format!("{:.0} KiB/s", bps / KIB)
     } else {
         format!("{:.0} B/s", bps)
     }
@@ -209,8 +213,13 @@ mod tests {
     fn fmt_speed_normalizes_negative_zero() {
         assert_eq!(fmt_speed(-0.0), "0 B/s");
         assert_eq!(fmt_speed(0.0), "0 B/s");
-        assert_eq!(fmt_speed(1500.0), "2 KB/s");
-        assert_eq!(fmt_speed(2_000_000.0), "2.0 MB/s");
+        assert_eq!(fmt_speed(1023.0), "1023 B/s");
+        assert_eq!(fmt_speed(1024.0), "1 KiB/s");
+        assert_eq!(fmt_speed(1500.0), "1 KiB/s");
+        assert_eq!(fmt_speed(307_200.0), "300 KiB/s");
+        assert_eq!(fmt_speed(1_048_576.0), "1.0 MiB/s");
+        assert_eq!(fmt_speed(2_097_152.0), "2.0 MiB/s");
+        assert_eq!(fmt_speed(1_073_741_824.0), "1.00 GiB/s");
     }
 
     #[test]

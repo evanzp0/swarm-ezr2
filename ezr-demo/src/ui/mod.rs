@@ -12,6 +12,7 @@ mod cmd;
 mod conns;
 mod detail;
 mod dialogs;
+mod err;
 mod footer;
 mod header;
 mod list;
@@ -50,6 +51,7 @@ pub(crate) const FOCUS_BORDER: Color = Color::Green;
 pub(crate) fn overlay_open(app: &App) -> bool {
     app.dialog.is_some()
         || app.cmd_open
+        || app.err_open
         || app.pieces_open
         || app.trackers_open
         || app.help_open
@@ -218,11 +220,16 @@ pub(crate) fn fmt_size(bytes: u64) -> String {
 }
 
 pub(crate) fn fmt_speed(bps: f64) -> String {
-    const MB: f64 = 1_000_000.0;
-    if bps >= MB {
-        format!("{:.1} MB/s", bps / MB)
-    } else if bps >= 1000.0 {
-        format!("{:.0} KB/s", bps / 1000.0)
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = 1_048_576.0;
+    const GIB: f64 = 1_073_741_824.0;
+    let bps = if bps == 0.0 { 0.0 } else { bps };
+    if bps >= GIB {
+        format!("{:.2} GiB/s", bps / GIB)
+    } else if bps >= MIB {
+        format!("{:.1} MiB/s", bps / MIB)
+    } else if bps >= KIB {
+        format!("{:.0} KiB/s", bps / KIB)
     } else {
         format!("{:.0} B/s", bps)
     }
@@ -448,6 +455,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     if app.cmd_open {
         draw_cmd(f, app, area);
+    }
+
+    if app.err_open {
+        err::draw_err(f, app, area);
     }
 
     if app.pieces_open {
@@ -781,5 +792,23 @@ mod conns_flags_tests {
                 "帮助【并发连接】组标志缩写条目缺失: {needle}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod fmt_speed_binary_tests {
+    use super::*;
+
+    #[test]
+    fn speed_units_binary_four_tiers() {
+        assert_eq!(fmt_speed(0.0), "0 B/s");
+        assert_eq!(fmt_speed(1023.0), "1023 B/s");
+        assert_eq!(fmt_speed(1024.0), "1 KiB/s");
+        assert_eq!(fmt_speed(1500.0), "1 KiB/s");
+        assert_eq!(fmt_speed(307_200.0), "300 KiB/s");
+        assert_eq!(fmt_speed(1_048_576.0), "1.0 MiB/s");
+        assert_eq!(fmt_speed(1_073_741_824.0), "1.00 GiB/s");
+        assert!(!fmt_speed(2_000_000.0).contains("MB/s"));
+        assert!(!fmt_speed(1500.0).contains("KB/s"));
     }
 }

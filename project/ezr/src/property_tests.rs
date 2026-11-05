@@ -819,10 +819,12 @@ proptest! {
             "负零归一"
         );
         let text = crate::ui::fmt_speed(bps);
-        let expected = if bps >= 1_000_000.0 {
-            "MB/s"
-        } else if bps >= 1_000.0 {
-            "KB/s"
+        let expected = if bps >= 1_073_741_824.0 {
+            "GiB/s"
+        } else if bps >= 1_048_576.0 {
+            "MiB/s"
+        } else if bps >= 1024.0 {
+            "KiB/s"
         } else {
             "B/s"
         };

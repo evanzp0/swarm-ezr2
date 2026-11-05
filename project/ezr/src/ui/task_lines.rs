@@ -499,13 +499,13 @@ mod tests {
     #[test]
     fn stat_http_downloading_layout_matches_demo_spacing() {
         let mut t = mk(TaskState::Downloading, false);
-        t.speed = 1_000_000.0;
+        t.speed = 1_048_576.0;
         let s = text_of(&stat_http_rest(&t));
-        assert!(s.contains("MB/s  "), "速度后 2 列分隔: {s}");
-        assert!(!s.contains("MB/s1.0"), "速度与字节不粘连: {s}");
-        assert!(s.contains("↓ 1.0 MB/s  1.0 MB/3.0 MB"), "列序: {s}");
+        assert!(s.contains("MiB/s  "), "速度后 2 列分隔: {s}");
+        assert!(!s.contains("MiB/s1.0"), "速度与字节不粘连: {s}");
+        assert!(s.contains("↓ 1.0 MiB/s  1.0 MB/3.0 MB"), "列序: {s}");
         let mut t = mk_streaming(TaskState::Downloading);
-        t.speed = 1000.0;
+        t.speed = 500.0;
         let s = text_of(&stat_http_rest(&t));
         assert!(
             s.contains("B/s  ") && s.contains("  1.0 MB/? B"),
@@ -516,13 +516,13 @@ mod tests {
     #[test]
     fn stat_bt_downloading_layout_matches_demo_spacing() {
         let mut t = mk(TaskState::Downloading, true);
-        t.speed = 2_000_000.0;
-        t.upload_speed = 300_000.0;
+        t.speed = 2_097_152.0;
+        t.upload_speed = 307_200.0;
         t.seeders = 3;
         t.peers = 5;
         let s = text_of(&stat_bt_rest(&t));
-        assert!(s.contains("↓ 2.0 MB/s"), "{s}");
-        assert!(s.contains(" ↑ 300 KB/s"), "{s}");
+        assert!(s.contains("↓ 2.0 MiB/s"), "{s}");
+        assert!(s.contains(" ↑ 300 KiB/s"), "{s}");
         assert!(s.contains("  3/5"), "{s}");
         assert!(s.contains("  1.0/3.0 MB"), "{s}");
         assert!(s.contains("  剩余 "), "{s}");

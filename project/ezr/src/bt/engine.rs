@@ -42,9 +42,7 @@ fn ema_target(ema_rate_bps: u64, cap: usize) -> usize {
 }
 
 fn tick_pipeline(st: &mut ConnStat, now: std::time::Instant, cap: usize) {
-    let dt_ms = now
-        .duration_since(st.pipe_sample.1)
-        .as_millis() as u64;
+    let dt_ms = now.duration_since(st.pipe_sample.1).as_millis() as u64;
     let dt_ms = dt_ms.max(1);
     let sample = st
         .cum_down
@@ -227,15 +225,8 @@ fn idle_evict_due(st: &ConnStat, now: std::time::Instant, idle_secs: u64) -> boo
     st.cum_down == st.idle_check.0 && now.duration_since(st.idle_check.1).as_secs() >= idle_secs
 }
 
-fn inbound_admitted(
-    conns: &HashMap<usize, ConnStat>,
-    addr: (IpAddr, u16),
-    cap: usize,
-) -> bool {
-    conns.len() < cap
-        && !conns
-            .values()
-            .any(|st| addr_sock(&st.addr) == Some(addr))
+fn inbound_admitted(conns: &HashMap<usize, ConnStat>, addr: (IpAddr, u16), cap: usize) -> bool {
+    conns.len() < cap && !conns.values().any(|st| addr_sock(&st.addr) == Some(addr))
 }
 
 /// piece 的伪随机权重：同一 (piece, seed) 恒定不变。
@@ -4928,7 +4919,11 @@ mod tests {
 
     #[test]
     fn ema_target_floor_cap_and_rate_scaling() {
-        assert_eq!(ema_target(0, 512), 2, "零速率取下限 2（libtorrent min_request_queue）");
+        assert_eq!(
+            ema_target(0, 512),
+            2,
+            "零速率取下限 2（libtorrent min_request_queue）"
+        );
         assert_eq!(ema_target(16_384, 512), 3, "3s × 16KiB/s ÷ 16KiB = 3");
         assert_eq!(
             ema_target(2_621_440, 512),
@@ -4945,16 +4940,25 @@ mod tests {
         let mut st = new_conn_stat("10.0.0.1:51413".into());
         let mut t = std::time::Instant::now();
         tick_pipeline(&mut st, t, 512);
-        assert_eq!(st.pipe_target, 4, "首个 tick 无进账不退 slow-start（初始深度 = libtorrent 成员初始化 4）");
+        assert_eq!(
+            st.pipe_target, 4,
+            "首个 tick 无进账不退 slow-start（初始深度 = libtorrent 成员初始化 4）"
+        );
         assert!(st.pipe_slow_start);
         t += Duration::from_secs(1);
         st.cum_down = 300_000;
         tick_pipeline(&mut st, t, 512);
-        assert!(st.pipe_slow_start, "首秒有进账但无上一秒样本不退 slow-start");
+        assert!(
+            st.pipe_slow_start,
+            "首秒有进账但无上一秒样本不退 slow-start"
+        );
         t += Duration::from_secs(1);
         st.cum_down = 700_000;
         tick_pipeline(&mut st, t, 512);
-        assert!(st.pipe_slow_start, "400KB > 300KB 仍在增长，slow-start 继续");
+        assert!(
+            st.pipe_slow_start,
+            "400KB > 300KB 仍在增长，slow-start 继续"
+        );
         st.peer_choking = true;
         t += Duration::from_secs(1);
         st.cum_down = 703_000;
@@ -4967,7 +4971,10 @@ mod tests {
         t += Duration::from_secs(1);
         st.cum_down = 704_000;
         tick_pipeline(&mut st, t, 512);
-        assert!(!st.pipe_slow_start, "未 choke 且增长停滞（1KB ≤ 3KB+5KB）退出 slow-start");
+        assert!(
+            !st.pipe_slow_start,
+            "未 choke 且增长停滞（1KB ≤ 3KB+5KB）退出 slow-start"
+        );
         let ema_after = st.pipe_ema;
         t += Duration::from_secs(1);
         st.cum_down += 2_621_440;
@@ -5053,7 +5060,8 @@ mod tests {
         }
         drain_issue_requests(&mut st, &pmap, &tun, &done, &mut partial, &mut order, 40).await;
         assert_eq!(
-            st.inflight.len(), 480,
+            st.inflight.len(),
+            480,
             "目标深度 480（3s × 2.5MiB/s ÷ 16KiB）时在飞恰好钳在目标"
         );
         let asked_lens: HashSet<u32> = st.inflight.values().map(|(len, _)| *len).collect();
@@ -5105,7 +5113,8 @@ mod tests {
         }
         drain_issue_requests(&mut st, &pmap, &tun, &done, &mut partial, &mut order, 40).await;
         assert_eq!(
-            st.inflight.len(), 4,
+            st.inflight.len(),
+            4,
             "新连接 slow-start 起步深度 = 4（libtorrent m_desired_queue_size 成员初始化）"
         );
         for _ in 0..16 {
@@ -5113,7 +5122,8 @@ mod tests {
         }
         drain_issue_requests(&mut st, &pmap, &tun, &done, &mut partial, &mut order, 40).await;
         assert_eq!(
-            st.inflight.len(), 20,
+            st.inflight.len(),
+            20,
             "slow-start 每收一块 +1，在飞随目标线性爬坡"
         );
     }

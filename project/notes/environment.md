@@ -236,3 +236,15 @@
 - **lan_bench/proxy 端口段**：代理监听 17905、seeder 绑 127.0.0.2:17903、tracker 17901
   （only-static 模式，UDP tracker 不起——torrent announce-list 里的 udp:// 会失败退避，
   无碍），与 QA fixture 端口段不冲突。
+
+## bug25 轮：分离长编译进程仍被回收、.work/session 中段消失、rustup 镜像新鲜度判据
+- **现象/处置**：①nohup+setsid 双保险分离的 `cargo test --tests` 长编译进程两次被
+  环境回收（log 0 字节、进程消失）——集成测试改前台分块（先 `--no-run` 编译、再逐组
+  前台跑，单组 ≤2 分钟不触 600s 上限）。②`.work/session` 在会话中段消失（plan.md/
+  rag/tmp 存活）——按宪法中断恢复口径凭 plan.md 勾选状态重 begin 同角色后 complete，
+  产物无损；git stash pathspec（-- ezr-demo/ project/）不触 .work/，非 stash 所为。
+  ③rustup 镜像「最快」判据必须含**新鲜度**：Aliyun rustup dist 实测最快（4.2MB/s）
+  但快照停在 2026-05（nightly 1.98，滞后约半年，装旧 nightly 编译依赖有风险）；
+  TUNA 新鲜（Last-Modified 2026-11-03，nightly 1.101.0 与历轮同版）1.2MB/s——
+  装前 curl dist/channel-rust-nightly.toml 的 Last-Modified 先验，工具链走 TUNA、
+  rustup-init 本体可走 Aliyun；镜像结论沿 environment.md 历轮口径继续漂移观察。

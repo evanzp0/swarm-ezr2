@@ -266,6 +266,18 @@ pub struct App {
     /// 命令窗口确定按钮热区
     pub cmd_btn_rect: Option<Rect>,
 
+    pub err_open: bool,
+
+    pub err_msg: String,
+
+    pub err_pos: Option<(u16, u16)>,
+
+    pub err_drag: Option<(u16, u16)>,
+
+    pub err_area: Option<Rect>,
+
+    pub err_btn_rect: Option<Rect>,
+
     /// 命令窗口光标屏幕位（渲染层发布，draw 收口 set_cursor_position）
     pub cmd_cursor_screen: Option<(u16, u16)>,
 
@@ -412,6 +424,12 @@ impl App {
             cmd_text_area: None,
             cmd_sb: None,
             cmd_btn_rect: None,
+            err_open: false,
+            err_msg: String::new(),
+            err_pos: None,
+            err_drag: None,
+            err_area: None,
+            err_btn_rect: None,
             cmd_cursor_screen: None,
             footer_cmd_rects: Vec::new(),
             footer_press: None,

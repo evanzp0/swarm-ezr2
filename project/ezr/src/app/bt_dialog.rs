@@ -417,7 +417,7 @@ impl App {
             .iter()
             .any(|t| t.url == source && t.save_dir == dir)
         {
-            self.set_toast("⚠ 任务已存在");
+            self.open_error_window("该链接的任务已存在");
             return;
         }
 
@@ -823,9 +823,9 @@ mod tests {
         app.open_add_bt_dialog_with(&tilde, &meta);
         app.dlg_confirm_add_bt(false);
         assert!(
-            app.toast.as_deref() == Some("⚠ 任务已存在"),
-            "同来源不同写法（绝对 vs ~/）判重命中（归一后比对）: {:?}",
-            app.toast
+            app.err_open && app.err_msg == "该链接的任务已存在",
+            "同来源不同写法（绝对 vs ~/）判重命中 → 错误窗口（bug25 文案）: {:?}",
+            (app.err_open, app.err_msg)
         );
         assert_eq!(app.tasks.len(), 1, "未重复建任务");
         app.shutdown().await;
@@ -1045,7 +1045,13 @@ mod tests {
         app.open_add_bt_dialog_with(&path, &meta);
         app.dlg_confirm_add_bt(false);
         assert!(app.dialog.is_some(), "重复任务拒绝保持对话框");
-        assert_eq!(app.toast.as_deref(), Some("⚠ 任务已存在"));
+        assert!(app.err_open, "重复任务 → 错误窗口（bug25 载体改判）");
+        assert_eq!(app.err_msg, "该链接的任务已存在");
+        assert_ne!(
+            app.toast.as_deref(),
+            Some("⚠ 任务已存在"),
+            "toast 承载退役（成功 toast 不受影响）"
+        );
         assert_eq!(app.tasks.len(), 1);
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();

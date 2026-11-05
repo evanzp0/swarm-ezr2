@@ -410,7 +410,7 @@ impl App {
             .iter()
             .any(|t| t.url == url && save_dir_of(&t.save_path) == dir)
         {
-            self.set_toast("⚠ 任务已存在");
+            self.open_error_window("该链接的任务已存在");
             return;
         }
         let down_prefill = d.down_prefill;
@@ -724,6 +724,24 @@ impl App {
                 tr
             },
         });
+    }
+
+    pub fn open_error_window(&mut self, msg: &str) {
+        self.err_open = true;
+        self.err_msg = msg.to_string();
+        self.err_pos = None;
+        self.err_drag = None;
+        self.err_area = None;
+        self.err_btn_rect = None;
+    }
+
+    pub fn close_error_window(&mut self) {
+        self.err_open = false;
+        self.err_msg = String::new();
+        self.err_pos = None;
+        self.err_drag = None;
+        self.err_area = None;
+        self.err_btn_rect = None;
     }
 
     pub fn open_about(&mut self) {
@@ -1043,7 +1061,7 @@ impl App {
             .iter()
             .any(|t| t.url == url && save_dir_of(&t.save_path) == dir)
         {
-            self.set_toast("⚠ 任务已存在");
+            self.open_error_window("该链接的任务已存在");
             return;
         }
         let down_prefill = d.down_prefill;
@@ -1359,5 +1377,32 @@ mod limit_backfill_tests {
             app.tasks[idx].task_max_up, TASK_LIMIT_DEFAULTS.1,
             "BT 修改清空确认 = 回填任务级上传限速默认"
         );
+    }
+}
+
+#[cfg(test)]
+mod duplicate_error_window_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_add_opens_error_window() {
+        let mut app = App::new();
+        let base = app.tasks.len();
+        app.open_add_dialog_with("http://fixture.local/a.bin");
+        app.dlg_confirm_add(false);
+        assert_eq!(app.tasks.len(), base + 1, "首次添加成功");
+        app.open_add_dialog_with("http://fixture.local/a.bin");
+        app.dlg_confirm_add(false);
+        assert!(
+            app.err_open && app.err_msg == "该链接的任务已存在",
+            "重复任务 → 错误窗口（bug25 文案）: {:?}",
+            (app.err_open, app.err_msg)
+        );
+        assert!(app.dialog.is_some(), "添加对话框保持打开");
+        assert_ne!(app.toast.as_deref(), Some("⚠ 任务已存在"), "toast 承载退役");
+        assert_eq!(app.tasks.len(), base + 1, "未重复建任务");
+        app.close_error_window();
+        assert!(!app.err_open && app.err_msg.is_empty(), "位置关闭即清");
+        assert!(app.dialog.is_some(), "关闭错误窗口后回对话框");
     }
 }

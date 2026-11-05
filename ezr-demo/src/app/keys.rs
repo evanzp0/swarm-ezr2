@@ -17,6 +17,16 @@ impl App {
             return;
         }
 
+        if self.err_open {
+            match code {
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('Q') => {
+                    self.close_error_window()
+                }
+                _ => {}
+            }
+            return;
+        }
+
         if self.about_open {
             match code {
                 KeyCode::Esc

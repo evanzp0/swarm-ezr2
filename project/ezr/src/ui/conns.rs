@@ -12,13 +12,13 @@ use super::{
 };
 use crate::app::{App, Panel, SbKey};
 
-const BT_COLW: [usize; 8] = [18, 4, 8, 8, 8, 8, 34, 4];
-const BT_CLIENT_SHRINK_BASE: usize = 65;
+const BT_COLW: [usize; 8] = [18, 4, 12, 12, 10, 10, 34, 4];
+const BT_CLIENT_SHRINK_BASE: usize = 77;
 const BT_CLIENT_MIN: usize = 26;
 const BT_PROTO_TEXT_W: usize = 4;
-const BT_CONTENT_W: usize = 99;
-const HTTP_COLW: [usize; 3] = [4, 8, 8];
-const HTTP_CONTENT_W: usize = 22;
+const BT_CONTENT_W: usize = 111;
+const HTTP_COLW: [usize; 3] = [4, 12, 10];
+const HTTP_CONTENT_W: usize = 28;
 
 fn active_title(active: usize, max_conc: usize) -> String {
     format!(" {active}/{max_conc} 项 ")
@@ -194,19 +194,20 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         BT_COLW[6]
     };
     let head_cell = |s: &str, wd: usize| Span::styled(pad_right(s, wd), Style::default().fg(DIM));
+    let head_cell_r = |s: &str, wd: usize| Span::styled(pad_left(s, wd), Style::default().fg(DIM));
     let head = if is_bt {
         vec![
             head_cell("地址", BT_COLW[0]),
             Span::raw(" "),
             head_cell("标志", BT_COLW[1]),
             Span::raw(" "),
-            head_cell("下载速度", BT_COLW[2]),
+            head_cell_r("下载速度", BT_COLW[2]),
             Span::raw(" "),
-            head_cell("上传速度", BT_COLW[3]),
+            head_cell_r("上传速度", BT_COLW[3]),
             Span::raw(" "),
-            head_cell("累计下载", BT_COLW[4]),
+            head_cell_r("累计下载", BT_COLW[4]),
             Span::raw(" "),
-            head_cell("累计上传", BT_COLW[5]),
+            head_cell_r("累计上传", BT_COLW[5]),
             Span::raw(" "),
             head_cell("客户端", client_w),
             Span::raw(" "),
@@ -216,9 +217,9 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         vec![
             head_cell("序号", HTTP_COLW[0]),
             Span::raw(" "),
-            head_cell("下载速度", HTTP_COLW[1]),
+            head_cell_r("下载速度", HTTP_COLW[1]),
             Span::raw(" "),
-            head_cell("累计下载", HTTP_COLW[2]),
+            head_cell_r("累计下载", HTTP_COLW[2]),
         ]
     };
     let mut lines = vec![Line::from(head)];
@@ -312,11 +313,11 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                         } else {
                             "-".to_string()
                         },
-                        8,
+                        HTTP_COLW[1],
                         if *transferring { LIGHT_BLUE } else { DIM2 },
                     ),
                     sep(),
-                    cell(fmt_size(*cum), 8, FG),
+                    cell(fmt_size(*cum), HTTP_COLW[2], FG),
                 ]
             }
         };
@@ -537,7 +538,7 @@ mod tests {
                 bt_row("5.6.7.8:51401", 1024.0, 4096, "-"),
             ],
         );
-        let text = conns_render(&mut app, 65, 14).backend().to_string();
+        let text = conns_render(&mut app, 78, 14).backend().to_string();
         assert!(text.contains("地址"), "表头 地址: {text}");
         assert!(text.contains("标志"), "表头 标志（FR-02-33 八列）: {text}");
         assert!(
@@ -563,7 +564,7 @@ mod tests {
         assert!(!text.contains("1.2.3.4"), "完整 IP 不得出现: {text}");
         assert!(text.contains("2/4 项"), "徽标 x = bt_conns 行数: {text}");
         app.conns_hscroll = app.conns_max_hscroll;
-        let text2 = conns_render(&mut app, 65, 14).backend().to_string();
+        let text2 = conns_render(&mut app, 78, 14).backend().to_string();
         assert!(text2.contains("TCP"), "协议列恒 TCP: {text2}");
         assert!(text2.contains("4 KB"), "累计下载: {text2}");
     }
@@ -643,12 +644,17 @@ mod tests {
             "标志数据宽 4 + 分隔空白 1 = 视觉列宽 5（D69④ 极值 DUOI 4 枚连写 + 1 空白）"
         );
         assert_eq!(
-            BT_COLW[6], 34,
-            "客户端列宽 34（Propagate Data Client/35.35.35.35 = 33 + 1 空白，v1.36）"
+            BT_COLW[2], 12,
+            "下载速度列宽 12（1023.9 MiB/s 极值，bug25）"
         );
+        assert_eq!(BT_COLW[3], 12, "上传速度列宽 12（bug25）");
+        assert_eq!(BT_COLW[4], 10, "累计下载列宽 10（bug25）");
+        assert_eq!(BT_COLW[5], 10, "累计上传列宽 10（bug25）");
+        assert_eq!(BT_COLW[6], 34, "客户端列宽 34（v1.36 不变）");
+        assert_eq!(BT_COLW[7], 4, "协议列宽 4（不变）");
         assert_eq!(
-            BT_CONTENT_W, 99,
-            "BT 内容宽 = 八列数据 92 + 7 分隔（v1.41/FR-02-33）"
+            BT_CONTENT_W, 111,
+            "BT 内容宽 = 八列数据 104 + 7 分隔（bug25）"
         );
     }
 
@@ -667,28 +673,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bt_protocol_header_complete_at_viewport_92() {
-        let mut app = testfx::make_app_in("ezr-conns", "proto92");
+    async fn bt_protocol_header_complete_at_viewport_103() {
+        let mut app = testfx::make_app_in("ezr-conns", "proto103");
         let mut t = task_with_conns(Protocol::Bt);
         t.connections.clear();
         app.tasks.push(t);
         app.selected = 0;
         app.bt_conns
             .insert(1, vec![bt_row_proto("qBittorrent/2.5.0.0")]);
-        let text = conns_render(&mut app, 98, 10).backend().to_string();
+        let text = conns_render(&mut app, 109, 10).backend().to_string();
         let head = text
             .lines()
             .find(|l| l.contains("客户端"))
             .unwrap_or_else(|| panic!("BT 表头行缺失: {text}"));
         assert!(
             head.contains("协议"),
-            "视口 92 默认视图：客户端收缩后整表可见，协议表头完整（D63④）: {head:?}"
+            "视口 103 默认视图：客户端收缩后整表可见，协议表头完整（bug25 基线 77 平移）: {head:?}"
         );
     }
 
     #[tokio::test]
     async fn bt_protocol_header_snaps_to_complete_at_right_end() {
-        for hs in [48usize, 49, 50, 51] {
+        for hs in [56usize, 57, 58, 60] {
             let mut app = testfx::make_app_in("ezr-conns", "snap");
             let mut t = task_with_conns(Protocol::Bt);
             t.connections.clear();
@@ -700,25 +706,25 @@ mod tests {
             let text = conns_render(&mut app, 50, 10).backend().to_string();
             let head = text
                 .lines()
-                .find(|l| l.contains("客户端"))
+                .find(|l| l.contains("客户端") || l.contains("协议"))
                 .unwrap_or_else(|| panic!("hs={hs} BT 表头行缺失: {text}"));
             assert!(
                 head.contains("协议"),
-                "hscroll={hs} 吸附后协议表头完整（D63④右端吸附）: {head:?}"
+                "hscroll={hs} 吸附后协议表头完整（D63④右端吸附，bug25 内容宽 103 平移）: {head:?}"
             );
         }
     }
 
     #[tokio::test]
     async fn bt_client_column_fixed_34_when_viewport_fits() {
-        let mut app = testfx::make_app_in("ezr-conns", "fit94");
+        let mut app = testfx::make_app_in("ezr-conns", "fit111");
         let mut t = task_with_conns(Protocol::Bt);
         t.connections.clear();
         app.tasks.push(t);
         app.selected = 0;
         app.bt_conns
             .insert(1, vec![bt_row_proto("qBittorrent/2.5.0.0")]);
-        let text = conns_render(&mut app, 105, 10).backend().to_string();
+        let text = conns_render(&mut app, 117, 10).backend().to_string();
         let data = text
             .lines()
             .find(|l| l.contains("qBittorrent"))
@@ -726,27 +732,27 @@ mod tests {
         let expect = format!("qBittorrent/2.5.0.0{}TCP", " ".repeat(34 - 19 + 1 + 1));
         assert!(
             data.contains(&expect),
-            "视口 ≥ 99 维持 34 列钦定形态: {data:?}"
+            "视口 ≥ 111 维持 34 列钦定形态（bug25 内容宽 111 平移）: {data:?}"
         );
     }
 
     #[tokio::test]
-    async fn bt_table_complete_at_viewport_91() {
-        let mut app = testfx::make_app_in("ezr-conns", "vw91");
+    async fn bt_table_complete_at_viewport_103() {
+        let mut app = testfx::make_app_in("ezr-conns", "vw103");
         let mut t = task_with_conns(Protocol::Bt);
         t.connections.clear();
         app.tasks.push(t);
         app.selected = 0;
         app.bt_conns
             .insert(1, vec![bt_row_proto("ArcticTorrent/100.100.100")]);
-        let text = conns_render(&mut app, 97, 10).backend().to_string();
+        let text = conns_render(&mut app, 109, 10).backend().to_string();
         let head = text
             .lines()
             .find(|l| l.contains("标志"))
             .unwrap_or_else(|| panic!("BT 表头行缺失: {text}"));
         assert!(
             head.contains("协议"),
-            "视口 91 整表含标志列无横向滚动完整可见（D69⑥ 下限平移）: {head:?}"
+            "视口 103 整表含标志列无横向滚动完整可见（bug25 基线 77 平移）: {head:?}"
         );
     }
 
@@ -762,7 +768,7 @@ mod tests {
         let text = conns_render(&mut app, 86, 10).backend().to_string();
         assert!(
             !text.contains('…'),
-            "视口 80（< 91）下限 26 后客户端单元格无省略号（D69⑥）: {text}"
+            "视口 80（< 103）下限 26 后客户端单元格无省略号（bug25 基线平移）: {text}"
         );
         let head = text
             .lines()
@@ -867,8 +873,8 @@ mod tests {
             "地址列左对齐、右侧空格填充至 18 列（4 列字宽 + 14 填充 + 1 分隔），后接标志表头: {head_line:?}"
         );
         assert!(
-            head_line.contains("标志 下载速度"),
-            "标志表头左对齐、4 显示列填满数据宽 4 + 1 分隔（视觉列宽 5）: {head_line:?}"
+            head_line.contains("标志     下载速度"),
+            "速度表头右对齐至 12 列（左对齐形态「标志 下载速度」退役；bug25）: {head_line:?}"
         );
         assert!(
             head_line.contains("客户端                             协议"),
@@ -885,6 +891,60 @@ mod tests {
         assert!(
             data_line.contains("qBittorrent/2.5.0.0                 TCP"),
             "客户端数据左对齐至 34 列（右填充 15 + 分隔 1 + 协议 pad_left 1，v1.36）: {data_line:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bt_speed_cum_columns_binary_and_right_aligned() {
+        fn bt_row(down: f64, up: f64, cum_down: u64, cum_up: u64) -> BtConnRow {
+            BtConnRow {
+                id: 0,
+                addr: "1.2.3.4:51400".to_string(),
+                down_speed: down,
+                cum_down,
+                up_speed: up,
+                cum_up,
+                client: "QB".to_string(),
+                flags: "-".to_string(),
+                seeder: false,
+            }
+        }
+        let mut app = testfx::make_app_in("ezr-conns", "btspeed");
+        let mut t = task_with_conns(Protocol::Bt);
+        t.connections.clear();
+        app.tasks.push(t);
+        app.selected = 0;
+        app.bt_conns
+            .insert(1, vec![bt_row(1024.0, 512.0, 4096, 2048)]);
+        testfx::seed_bt_conn_speeds(&mut app, 1, 0, 1100.0, 512.0);
+        let text = conns_render(&mut app, 120, 14).backend().to_string();
+        let head = text
+            .lines()
+            .find(|l| l.contains("下载速度") && l.contains("客户端"))
+            .unwrap_or_else(|| panic!("BT 表头行缺失: {text}"));
+        assert!(
+            head.contains("上传速度   累计下载"),
+            "上传速度/累计下载表头右对齐（左对齐形态单空格分隔退役，bug25）: {head:?}"
+        );
+        assert!(
+            head.contains("累计下载   累计上传"),
+            "累计下载/累计上传表头右对齐（bug25）: {head:?}"
+        );
+        let data = text
+            .lines()
+            .find(|l| l.contains("1.*.4/51400"))
+            .unwrap_or_else(|| panic!("明细行缺失: {text}"));
+        assert!(
+            data.contains("-         1 KiB/s"),
+            "下载速度数据右对齐至 12 列 + 二进制单位 KiB/s（bug25）: {data:?}"
+        );
+        assert!(
+            data.contains("1 KiB/s      512 B/s"),
+            "上传速度数据右对齐至 12 列（bug25）: {data:?}"
+        );
+        assert!(
+            data.contains("512 B/s       4 KB") && data.contains("4 KB       2 KB"),
+            "累计两列数据右对齐至 10 列（尺寸口径 fmt_size 不变）: {data:?}"
         );
     }
 
@@ -952,8 +1012,12 @@ mod tests {
             "序号表头靠左（边框与 padding 之外无填充空白）: {head_line:?}"
         );
         assert!(
-            head_line.contains("序号 下载速度"),
-            "表头单元格左对齐（单空格分隔、右侧填充无额外空白可见）: {head_line:?}"
+            head_line.contains("序号     下载速度"),
+            "下载速度表头右对齐至 12 列（左对齐形态「序号 下载速度」退役；bug25）：序号表头维持左对齐: {head_line:?}"
+        );
+        assert!(
+            head_line.contains("下载速度   累计下载"),
+            "HTTP 累计下载表头右对齐至 10 列（bug25）: {head_line:?}"
         );
     }
 }

@@ -1,151 +1,106 @@
 # 交接（handoff）
 
 > 流程：six-pack　当前节点：six-pack/coder（本轮已完成）→ 建议下一节点 six-pack/cleaner
-> 会话：ezr-coder-bt-speed-endpoint-ema（2026-11-06，coder 轮：BT 下载速度追查第二轮——
-> 操作者反馈「实测 ezr 仍比 qtorrent 慢」，怀疑反吸血触发面追加面不合理；落点 =
-> 连接去重端点化（废除 per-IP 阻断/60s 空闲置换逃生口）+ 管线速率源引擎级 EMA 与
-> libtorrent slow-start 移植）
-> 上游交接：project/handoff.md（上轮 coder 排队时间动态管线轮交接）
+> 会话：ezr-bug25-ui-units-columns-dup-error（2026-11-06，coder 轮：bug25 三项 UI 修正实现
+> + ezr-demo 同构同步）
+> 上游交接：project/handoff.md（specifier 轮交接 = bug25 三项规格 + ezr-demo 同步口径 +
+> 实现定义值登记）
 
 ## 一、产物历史完成情况
 
 ### 项目与需求
-- **EZR Downloader**：Rust + tokio + ratatui 终端下载器（单二进制、跨平台）。需求权威
-  `project/mission.md`（分期模式 v1.41）+ `project/mission/phase-01…04.md`。
-- phase-01（HTTP/HTTPS 内核与 TUI）收官；phase-02（BT 内核/做种/管理）已实现并经
-  互操作夹具多轮收口。历轮 bug11–24、标志列（FR-02-33/D69）全部落地；上上轮「BT 下载
-  速度优化」（排队时间动态管线 + 零连接紧急重拨）与上轮 QA runner 同步轮均交付；
-  本轮为「BT 下载速度追查第二轮」（纯性能轮，无 features/qa/mission 文件变更）。
+- **EZR Downloader**：Rust + tokio + ratatui 终端下载器。需求权威 `project/mission.md`
+  （分期模式 v1.42）+ `project/mission/phase-01…04.md`（本轮 bug25 轮修订）。
+- phase-01/02 已实现并多轮收口；本轮为 **bug25 UI 修正轮**：①面板层速度单位二进制统一
+  ②并发面板列宽/表头对齐 ③重复任务报错载体改判（错误窗口「该链接的任务已存在」）+
+  **ezr-demo 文档与代码同构同步**（操作者指令第 3 条）。
 
 ### 产物总账
 | 节点/切片 | 产物 | 完成情况 | 验证状态 |
 |---|---|---|---|
-| **coder（本轮，速度追查二轮）** | `project/ezr/`：`bt/engine.rs` 连接去重端点化（`inbound_admitted` 改 (ip,port) 判定 + `fill_peer_slots` 的 connected_ips 集改 connected_eps，per-IP 阻断与 60s 空闲置换逃生口退役，peer_id 重复裁决保留为单连接收口）+ 管线速率源改造（ConnStat 新增 pipe_target/pipe_slow_start/pipe_ema/pipe_sample/tick_prev_down/pipe_last_second 六字段，`tick_pipeline` 仅在引擎 1s tick 更新：整数 EMA α=1/5 + slow-start 每收一块 +1 + 平台退出 + `ema_target` 钳 [2, peer_pipeline]，`issue_requests`/`request_blocks_of_piece` 改读 pipe_target，on_block 顶部 slow-start 增量）+ 4 个新单测（ema_target 口径/slow-start 平台退出/UI 快照隔离/同 IP 异端口候选与同端点去重/端点级入连改写）+ 4 个旧单测改写（rate_conn 助手/fresh 连接爬坡/inbound 断言/fill 两例）；`project/notes/` 三文件 + INDEX 同步 | 已交付 | **bins 919P/0F + 集成 12 组全绿**（hardening 142、engine_backfill 822、g_appcore 721、g_engine 716、g_main 2、g_proxy 16、g_slots 202、g_supervisor 690、g_throttle_err 451、g_v147 704（HTTP 滴流 flake 单跑绿沿例）、ui_backfill 852、v115 845）+ clippy 0 警告 + fmt 干净 + swarm_e2e PASS 三方 SHA-256 一致 |
-| coder（上上轮，BT 速度优化一轮） | 排队时间动态管线（当时速率源=down_window）+ 零连接紧急重拨 + peer_pipeline 64→512 | 已交付（速率源缺陷本轮修正） | 本轮 s1l0 复测 2.39MB/s 无回归 |
-| coder（上轮，QA runner 执行层同步） | suite_tui_display.py 等 runner 同步 | 已交付 | 沿袭 |
+| specifier（上轮） | mission/phase/features/qa 四层 bug25 规格 | 已交付 | APS dry-checker 四份通过（沿袭） |
+| **coder（本轮，ezr 产品端）** | `project/ezr/`：①`src/ui/text.rs::fmt_speed` 二进制四档（B/s {:.0} / KiB/s {:.0} / MiB/s {:.1} / GiB/s {:.2}，1024 进位）+ 9 断言单测改判；`src/property_tests.rs::prop_fmt_speed_suffix_domain` 域改判（GiB/MiB/KiB/B）；`src/ui/task_lines.rs` 两测试改判（MiB/s/KiB/s 二进制值锚点）。②`src/ui/conns.rs`：BT_COLW **[18,4,12,12,10,10,34,4]**、BT_CONTENT_W **111**、HTTP_COLW **[4,12,10]**、HTTP_CONTENT_W **28**、BT_CLIENT_SHRINK_BASE **77**；head_cell_r（pad_left）用于下载速度/上传速度/累计下载/累计上传四表头（HTTP 下载速度/累计下载同）；HTTP 行单元格改读 HTTP_COLW；测试改判 6 处 + 新增 `bt_speed_cum_columns_binary_and_right_aligned` + `seed_bt_conn_speeds` 测试助手（app/testutil.rs + ui/testfx 转发）。③`src/app/dialogs.rs::dlg_finish_add` 与 `src/app/bt_dialog.rs::dlg_confirm_add_bt` 判重命中处改 `open_error_window("该链接的任务已存在")`（toast 承载退役）+ 4 处测试改判 | 已交付 | **bins 920P/0F**（919 基线 + 1 新增）+ **集成 12 组全绿**（hardening 142、engine_backfill 823、g_appcore 721、g_engine 716、g_main 2、g_proxy 16、g_slots 202、g_supervisor 690、g_throttle_err 451、g_v147 704（flake 单跑绿沿例）、ui_backfill 853、v115 846）+ **clippy 0 警告** + **fmt 干净** |
+| **coder（本轮，ezr-demo 同构同步）** | `ezr-demo/`：①`src/ui/mod.rs::fmt_speed` 二进制四档（与 ezr 同口径）+ 新增 fmt_speed_binary_tests；②`src/ui/conns.rs`：colw [18,4,12,12,10,10,34,4]/[4,12,10]、收缩基线 65→77、head_cell_r 右对齐、行单元格改读 colw；③**新增 `src/ui/err.rs`**（66×7「错误」窗口：dialog_rect_at 居中、RED 消息行、[确定] 按钮、draw_close_btn [✗]；z 序 = 对话框/命令窗口之后、pieces 之前）+ App 六字段（err_open/err_msg/err_pos/err_drag/err_area/err_btn_rect）+ keys/mouse 路由（Esc/Enter/q/Q/[确定]/[✗] 关闭、拖拽移动、点击外部无操作、模态消费）+ overlay_open 收编；④`src/app/dialogs.rs` 两处判重改 open_error_window + 新增 duplicate_error_window_tests；⑤docs《ezr-demo UI界面及交互设计规范.md》bug25 轮注记 + §5.1/§5.2 速度单位 + §5.4 列宽表头（111/28/基线 77/右对齐/单位）+ §6.1/§6.9 重复任务错误窗口 + **新增 §6.13 错误窗口** + TOC；⑥`scripts/verify_ezr.py` 场景 R 同步（R1-2/R1-3 断言改「该链接的任务已存在」、重复后 esc→esc esc 双关） | 已交付 | **demo 测试 44P/0F** + **clippy 9 处既有基线零新增** + **fmt 干净** + cargo check 干净 |
+| coder（历轮，速度追查二轮等） | bt/engine.rs 端点化去重 + 管线 EMA | 已交付 | 沿袭全绿 |
 
-### 遗留受限项（当前有效，沿袭 + 本轮修订）
-- 沿袭（历轮登记，除注明外全部不变）：cargo-mutants 缺位；死 tracker 约 4 分钟静默窗；
-  TUI 恐慌自愈边界（bug6）；QA-SQ-13 竞态沿袭待办；QA-RS-06 沿袭；supervisor
-  block_worker fatal 竞态观察项；`App.windows` 失去读者（cleaner 候选裁决）；leech 判据
-  无 e2e 自动化（阈值常量固定）；bad_piece 归属口径 = 交付完成块 peer 计 1 次（D67
-  允许）；QA-TD-23 与 QA-UC-07/17/18 环境预存 FAIL 待 QA 轮复验。
-- **本轮修订**：上轮登记的 v147 `engine_conns_quota_exact_and_unique_ids` flake 本轮
-  未复现（该用例复验绿）；新增沿袭一条 = `periodic_flush_writes_sidecar_mid_download`
-  （HTTP 206 滴流，BT 改动零接触面）full-run 单次 FAIL，单跑即刻绿 + 全量复跑绿，
-  沿 notes/testing.md 非回归口径继续观察。
-- **本轮新增受限项**：①同 IP 拓扑的残余启动段（~10-14s）= 第三方 seeder 对第二个同 IP
-  入连的 duplicate_peer_id 拒绝 + 一次 5s 退避，属 libtorrent 自身行为，ezr 不可修；
-  ②leech 封禁/黑名单仍按裸 IP（D67 口径）：同 IP 多 peer 场景封一个 peer 会连坐同 IP
-  其他 peer（含 seeder），真实局域网各机独立 IP 无此问题，同机多客户端压测场景需注意；
-  ③ezr 不发 KeepAlive（libtorrent keep_alive 按超时半程补发）：默认 inactivity_timeout
-  600s 下无影响，未移植。
-- ezr-demo clippy 9 警告为未触碰文件既有基线（本轮未触碰 ezr-demo）。
-- 工具链：rustup nightly 1.101.0（PATH = ~/.cargo/bin）+ cargo registry rsproxy-sparse
-  + libtorrent 2.1.1/torf/pyte（pip 阿里云镜像）本轮可用；libtorrent C++ 源码浅克隆在
-  会话 `.work/tmp/lt-src/`（RC_2_0，gh-proxy 镜像，complete 后随会话清除，语义结论已
-  沉淀 notes/architecture.md）。
+### 遗留受限项（当前有效，沿袭 + 本轮登记）
+- 沿袭（历轮登记，全部不变）：cargo-mutants 缺位；死 tracker 约 4 分钟静默窗；TUI 恐慌
+  自愈边界（bug6）；QA-SQ-13 竞态沿袭待办；QA-RS-06 沿袭；supervisor block_worker fatal
+  竞态观察项；`App.windows` 失去读者（cleaner 候选裁决）；leech 判据无 e2e 自动化；
+  bad_piece 归属口径（D67 允许）；QA-TD-23 与 QA-UC-07/17/18 环境预存 FAIL 待 QA 轮复验；
+  `periodic_flush_writes_sidecar_mid_download` HTTP 滴流 flake 单跑绿沿例；同 IP 拓扑
+  残余启动段；leech 封禁按裸 IP 连坐面；ezr 不发 KeepAlive。
+- **本轮沿袭 flake**：`engine_conns_quota_exact_and_unique_ids`（g_v147）本轮复现 1 次
+  FAIL，**单跑即刻绿**（沿 notes/testing.md 非回归口径；上轮曾单跑复验绿），与 bug25
+  改动面（UI 展示层 + 对话框报错文案）无接触面。
+- **本轮新增受限项**：`ezr-demo scripts/verify_ezr.py` 场景 R 及部分场景在本沙箱 PTY
+  环境预存 FAIL（R1-1 基本添加亦失败）——**经 git stash 对照基线归因：基线同样失败，
+  非本轮回归**（同 verify_phase2_ui.py A 段沙箱预存同形）；R1-2/R1-3 断言已按错误窗口
+  新口径同步，待 PTY 可用环境复验。
+- ezr-demo clippy 9 警告为未触碰区域既有基线（本轮触碰面零新增）。
 
 ### 实现定义值登记（累计口径，本轮落地处加粗）
 | 值 | 取值 | 位置 |
 |---|---|---|
-| **连接去重口径（本轮落地）** | **端点级 (ip:port)**：候选拨出与入连接受按端点判重；同一客户端实例的出连+入连双通道由握手后 peer_id 重复裁决收口（保留） | bt/engine.rs `fill_peer_slots` / `inbound_admitted` |
-| **管线深度目标（本轮落地）** | **pipe_target：slow-start 初值 4（libtorrent 成员初始化）+ 每收一块 +1；平台退出（未 choke ∧ 上秒进账>0 ∧ 上秒+5KiB≥本秒）后 = 3s × EMA ÷ 16KiB，钳 [2, peer_pipeline]**；EMA = 整数 avg×4/5 + sample/5（α=1/5），仅引擎 1s tick 采样，与 UI 窗口解耦 | bt/engine.rs `tick_pipeline` / `ema_target` |
-| **[bt] peer_pipeline 缺省** | 512（不变；语义 = EMA 深度上限；libtorrent max_out_request_queue=500 临近，>500 在飞会被对端丢弃） | config.rs DEFAULT_PEER_PIPELINE |
-| **零连接紧急重拨** | conns 空时重试退避基数与上限均降 1s（不变） | bt/engine.rs fill_peer_slots |
-| 标志列参考源（D69①，已批） | qBittorrent Peers（用户）面板 Flags 列 | phase-02 FR-02-33 |
-| 标志集（D69②，已批） | qBt 图例 ezr 可产生子集 {D,d,U,u,O,I,K,?} | bt/engine.rs `conn_flags` |
-| 标志列结构（D69③④⑤，已批） | 地址(18)/标志(5)/下载速度(8)/上传速度(8)/累计下载(8)/累计上传(8)/客户端(34)/协议(4)，内容宽 99 | ui/conns.rs BT_COLW/BT_CONTENT_W |
-| 客户端收缩基线（D69⑥，已批） | max(26, 视口宽 − 65) | ui/conns.rs BT_CLIENT_SHRINK_BASE |
-| leech 阈值 | up ≥ 1 MiB 且 down < 64 KiB 且存活 ≥ 120s | bt/engine.rs LEECH_* 常量 |
-| bad_piece 阈值 | 同连接累计 3 次 | BAD_PIECE_BAN_THRESHOLD |
-| protocol 阈值 | 未知 id/帧错首次即封；非法区间 request 重复 3 次 | INVALID_REQUEST_BAN_THRESHOLD |
-| 限速输入上限 | 32 列（FR-01-06 形态对齐） | routing.rs CAP_LIMIT |
-| 限速单位口径（config 文件键） | KiB/MiB/GiB 二进制 + 裸整数与 B/s = B/s；KB/MB/GB 十进制废弃 | config.rs SPEED_UNITS / parse_speed |
-| BT sidecar partial 持久化（D68） | BtSidecar 可选 partial_pieces（版本恒 1）；恢复验证链五条件 | model/bt.rs + bt/engine.rs |
-| endgame 已收块豁免（D68⑤） | endgame 臂跳过 partial 已收块 | engine.rs request_blocks_of_piece |
-| trackers 弹窗几何（D67⑤） | 94×22；末列「消息」起点 76、预算 12 列 | ui/popups.rs |
-| 修改窗口清空限速确认（D67②） | 回填 config.toml 任务级默认 | dialogs.rs / bt_dialog.rs |
+| **面板层速度格式化（本轮落地）** | **B/s `N`、KiB/s `N`、MiB/s `N.N`、GiB/s `N.NN`**（阈值 1024/1048576/1073741824；四舍五入；0 与 -0.0 归一 `0 B/s`） | **ui/text.rs `fmt_speed`**（ezr）+ **ui/mod.rs `fmt_speed`**（demo） |
+| **BT 并发列宽（本轮落地）** | 地址(18)/标志(4)/**速度(12)×2/累计(10)×2**/客户端(34)/协议(4)，内容宽 **111**（数据 104 + 7 分隔） | **ui/conns.rs `BT_COLW`/`BT_CONTENT_W`**（ezr）+ demo colw 同构 |
+| **HTTP 并发列宽（本轮落地）** | 序号(4)/**速度(12)/累计(10)**，内容宽 **28** | **ui/conns.rs `HTTP_COLW`/`HTTP_CONTENT_W`**（ezr）+ demo colw 同构 |
+| **客户端收缩基线（本轮落地）** | **77**（下限 26；整表可见视口 ≥ 103；≥ 111 维持 34） | **ui/conns.rs `BT_CLIENT_SHRINK_BASE`**（ezr）+ demo 77 同构 |
+| **并发表头对齐（本轮落地）** | 速度×2/累计×2（HTTP 速度/累计）表头 pad_left 右对齐；地址/标志/客户端/协议/序号维持 pad_left 左对齐 | **ui/conns.rs `head_cell_r`**（ezr）+ demo head_cell_r 同构 |
+| **重复任务错误窗口（本轮落地）** | `open_error_window("该链接的任务已存在")`（D56 第三臂；HTTP = dlg_finish_add 判重、BT = dlg_confirm_add_bt 判重；对话框保持打开） | **app/dialogs.rs / app/bt_dialog.rs**（ezr）+ demo dialogs.rs 同构 + demo ui/err.rs 新组件 |
+| 管线深度目标/连接去重口径 | 端点级 (ip,port) + pipe_target slow-start/EMA（上轮登记，不变） | bt/engine.rs |
+| 标志列结构（D69③④⑤） | 地址(18)/标志(5)/速度(12×2)/累计(10×2)/客户端(34)/协议(4)，内容宽 111（v1.42 口径） | ui/conns.rs BT_COLW |
+| trackers 弹窗几何（D67⑤） | 94×22；消息列预算 12（不变） | ui/popups.rs |
+| 限速单位口径（config 键） | KiB/MiB/GiB 二进制 + 裸整数与 B/s = B/s；KB/MB/GB 十进制废弃（不变） | config.rs |
 
 ## 二、当前产出情况
 
 ### 本会话产物清单
-- **产品端 `project/ezr/`（仅 `src/bt/engine.rs` 一个文件）**：
-  - 连接去重端点化：`inbound_admitted(conns, (IpAddr, u16), cap)`（原 (conns, ip, cap)
-    同 IP 拒绝改同端点拒绝）；`fill_peer_slots` 的 `connected_ips: HashSet<IpAddr>` →
-    `connected_eps: HashSet<(IpAddr, u16)>`（候选过滤 `!connected_eps.contains(k)`）；
-    注释改写为 libtorrent peer_list 真实语义口径。peer_id 重复裁决（Connected 臂）原样
-    保留，成为「同一客户端实例单连接」的唯一收口。
-  - 管线速率源：ConnStat 新增 6 字段（pipe_target=4 起步/pipe_slow_start=true 起步/
-    pipe_ema=0/pipe_sample=(0,now)/tick_prev_down=0/pipe_last_second=0）；
-    `tick_pipeline(st, now, cap)`（整数 EMA α=1/5 采样 + slow-start 平台退出 + EMA 目标
-    重算）挂入引擎 1s tick 的 conns 遍历（与 inflight 超时 retain 同循环）；
-    `on_block` 顶部 slow-start 每块 +1（min(peer_pipeline)）；`issue_requests` 的
-    `pipeline_target(speed(down_window))` → `st.pipe_target`；常量 PIPELINE_MIN 64→2、
-    PIPELINE_QUEUE_TIME_SECS f64 3.0 → u64 3；`pipeline_target` 纯函数退役 →
-    `ema_target(ema_rate, cap)`。
-  - 测试：新增 `ema_target_floor_cap_and_rate_scaling`、
-    `tick_pipeline_slow_start_grows_and_exits_at_plateau`、
-    `tick_pipeline_ema_stable_under_ui_snapshot_resets`、
-    `fill_peer_slots_dials_same_ip_different_endpoint`、
-    `fill_peer_slots_skips_connected_endpoint`；改写
-    `issue_requests_scales_queue_with_rate`（直接设 pipe_target 480/64）、
-    `issue_requests_fresh_connection_ramps_per_block_in_slow_start`（4→20 爬坡）、
-    `inbound_admitted_blocks_same_endpoint_and_cap`（同端点拒/同 IP 异端口放行）、
-    pause_persists…（假 peer serve 集 = 全块减 (0,1)(0,2)，partial 断言按 piece 定位，
-    适配 slow-start 起步深度 4 下的请求可达性）。
-- **`project/notes/`**：architecture.md 新增「速度追查第二轮」节 5 条（per-IP 误移植/
-  速率源污染/libtorrent 请求队列全参数/choker 反吸血疑云排除/第三方同 IP 纠缠不可修）；
-  testing.md 新增 3 条（slow-start 下假 peer serve 集可达性前提/负载敏感 flake 沿例/
-  bench s1l1 判读口径）；INDEX.md 两行同步。
+- **ezr 产品端（7 文件）**：`src/ui/text.rs`（fmt_speed + 单测）、`src/ui/conns.rs`（列宽/
+  表头/收缩基线 + 测试改判与新增）、`src/ui/task_lines.rs`（2 测试改判）、
+  `src/property_tests.rs`（prop 域改判）、`src/ui/mod.rs`（testfx 转发助手）、
+  `src/app/testutil.rs`（seed_bt_conn_speeds）、`src/app/dialogs.rs` + `src/app/bt_dialog.rs`
+  （判重错误窗口 + 测试改判）。
+- **ezr-demo（9 文件）**：`src/ui/err.rs`（新增）、`src/ui/mod.rs`（fmt_speed + 模块注册 +
+  z 序 + overlay_open + fmt 测试）、`src/ui/conns.rs`（列宽/表头/基线）、`src/app/mod.rs`
+  （err 六字段）、`src/app/keys.rs`、`src/app/mouse.rs`（err 路由）、`src/app/dialogs.rs`
+  （open/close_error_window + 判重改判 + 测试）、`docs/ezr-demo UI界面及交互设计规范.md`
+  （bug25 注记 + §5.1/5.2/5.4/6.1/6.9 + §6.13 + TOC）、`scripts/verify_ezr.py`（场景 R 同步）。
 
 ### 验证证据
 | 验证项 | 结果 | 命令（可复现） |
 |---|---|---|
-| 产品端 bins 单元测试 | **919P/0F**（915 基线 + 5 新 − 1 合并改写） | `cd project/ezr && CARGO_INCREMENTAL=0 cargo test --bins` |
-| 产品端集成测试（12 组） | **全绿**（142+822+721+716+2+16+202+690+451+704+852+845） | `CARGO_INCREMENTAL=0 cargo test --test <套件名>` 逐组 |
-| clippy / fmt | 0 警告 / 干净 | `cargo clippy --all-targets` / `cargo fmt --check` |
-| BT 互操作回归 | PASS（双 tracker + libtorrent 对端 + 三方 SHA-256 一致） | `cd project/harness && python3 swarm_e2e.py --ezr-bin ../ezr/target/release/ezr --payload-mb 4` |
-| **竞享 seeder 基准（用户场景复现，核心证据）** | **修复前 ezr 115.9s / 均速 1.16MB/s（前 60s 死区：只连 leecher 17920，seeder 17903 被同 IP 规则挡死，t≈64s 空闲置换才满速）；修复后 64.9s / 均速 2.07MB/s（死区→~14s 第三方拒绝+一次退避；稳态 ezr 吃满 seeder 2560KiB/s 上限并中继给 lt leecher）**，sha256_match | `python3 bench_multipeer.py --ezr-bin ../ezr/target/release/ezr --seeders 1 --leechers 1 --payload-mb 128 --seeder-upload-kbps 2560 --workdir <abs>` |
-| 单 leecher 基准（无回归对照） | 56.1s / 2.39MB/s（基线 ~2.44，理论上限 2.5 = seeder 限速），sha256_match | `python3 bench_multipeer.py --seeders 1 --leechers 0 --payload-mb 128 --seeder-upload-kbps 2560 --workdir <abs>` |
+| ezr bins 单元测试 | **920P/0F** | `cd project/ezr && CARGO_INCREMENTAL=0 cargo test --bins` |
+| ezr 集成测试（12 组） | **全绿**（142+823+721+716+2+16+202+690+451+704（flake 单跑绿）+853+846） | `CARGO_INCREMENTAL=0 cargo test --test <套件名>` 逐组 |
+| ezr clippy / fmt | **0 警告 / 干净** | `cargo clippy --all-targets` / `cargo fmt --check` |
+| ezr-demo 测试 | **44P/0F**（含新增 duplicate_error_window_tests + fmt_speed_binary_tests） | `cd ezr-demo && cargo test` |
+| ezr-demo clippy / fmt / check | **9 处既有基线零新增 / 干净 / 干净** | `cargo clippy --all-targets`（触碰面零新增） |
+| demo PTY 守卫 | verify_ezr.py 场景 R 断言已同步错误窗口口径；本沙箱 PTY 预存 FAIL 经 stash 基线对照归因（非回归） | `python3 scripts/verify_ezr.py r`（待 PTY 可用环境复验） |
 
 ### 对账口径
-- 规格基线 = 上轮交接；本轮**未触碰任何 features/qa/mission 文件**（coder 职责边界），
-  实现全部落在 `project/ezr/src/bt/engine.rs` 与 `project/notes/`；本轮为性能追查轮，
-  mission 版本不变。
-- 配置兼容性：`peer_pipeline` 键名/键位/取值范围不变（语义 = EMA 深度上限，与上轮
-  「动态深度上限」口径一致）；无新增配置键（EMA/slow-start 参数为代码常量，登记见上表）。
-- **操作者问题「反吸血触发面追加面是否不合理」的结论**：bug17/bug23 的追加面（会话
-  peer_id/优雅 FIN/last_try 刷新/恢复去重）本身合理且保留；真正不合理的是更早轮次的
-  **per-IP 连接去重**（候选阻断 + 入连拒绝 + 60s 空闲置换）——它把「防同一客户端双连」
-  错做成「防同 IP 一切连接」，在 seeder 与其他 peer 同 IP 的拓扑（同机多客户端压测、
-  NAT 共享出口）里制造 60s 级死区，是「实测仍慢」的主因；次要因 = 动态管线速率源被
-  UI 快照窗口污染，突发-间隙流量下目标塌向下限并拒绝补管线（夹具平滑流量测不出）。
-  两处均已按 libtorrent 源码（RC_2_0 peer_list/choker/peer_connection/stat）口径收口。
-- 速度归因链更新（接上轮口径）：启动段死时 = 握手碰撞吃满超时 + 深退避（上轮紧急重拨
-  收口）+ **同 IP 拓扑候选阻断死区（本轮收口）**；稳态段 = **速率源污染导致的管线塌陷
-  （本轮收口）**；实测 1.5 vs 2.4 的量级差由两段叠加呈现。
+- 规格基线 = specifier 轮交接（mission v1.42 / phase-01 v1.44 / phase-02 v1.13 +
+  features 四份 + QA 四份）；实现全部落在登记表加粗处，未触碰 features/qa/mission 文件。
+- 速度单位口径：面板层 fmt_speed 唯一实现点改判完成；尺寸类 fmt_size/fmt_size_pair、
+  限速 fmt_speed_limit/parse_speed（输入层 kb/mb 二进制速记）与 config 键旧写法废弃
+  口径均未触碰（规格明确不在范围）。
+- 列宽口径：`content_w_matches_colw` 不变式自动成立（111 = 104+7、28 = 26+2）；
+  表头右对齐仅速度/累计四列（HTTP 两列），数据单元格对齐零改动。
+- 错误窗口口径：ezr err 组件/键位/鼠标路由零改动（仅新增两个调用点）；D53/D55 两臂
+  文案与分流臂③行为不变（cmd.rs `confirm_other_inputs_open_unsupported_error` 断言
+  原样通过）；demo 侧为新增组件 + 路由（对齐 ezr 行为语义）。
+- demo 守卫脚本：R1 键序 esc→esc esc（第一 Esc 关错误窗口）、R1-2/R1-3 断言改
+  「该链接的任务已存在」；场景 I 注记概念不变。
 
 ### 待办与待批
-- **待批（如操作者认为需要规格化）**：本轮为纯性能轮，未登记新 FR；若操作者希望把
-  「端点级连接去重 + 管线深度引擎级 EMA/slow-start」写入 phase-02 需求（含 [bt]
-  peer_pipeline 语义口径微调），建议开 specifier 小轮归档。
-- **待办（cleaner 轮候选，沿袭）**：`App.windows` 失去读者裁决；ezr-demo 既有 9 处
-  clippy 警告清理。
-- **待办（QA 轮沿袭）**：QA-TD-23 与 QA-UC-07/17/18 环境预存 FAIL 复验。
-- **待办（观察项，本轮新增）**：leech 封禁按裸 IP 在同 IP 多 peer 场景的连坐面（见
-  遗留受限项②）；ezr 无 KeepAlive 在超长静默窗的断连面（见③）。
+- 无待批。沿袭待办（cleaner 轮候选）：`App.windows` 失去读者裁决；ezr-demo 9 处 clippy
+  基线清理；（QA 轮）QA-TD-23 与 QA-UC-07/17/18 复验；场景 R PTY 复验。
 - 无阻塞。
 
 ### 移交建议
-- 下一步 `bin/swarm begin six-pack/cleaner`：以本文件为上游交接（本轮改动面收敛于
-  bt/engine.rs 单文件 + notes，cleaner 重点沿袭候选：`App.windows` 裁决、demo clippy
-  基线）。
-- 后续链：cleaner → architect → hardender → QA（宪法第一章：不自动流转）。
-- 操作者授权的收尾口径：`bin/swarm complete` 后立即将产物 tar.gz 复制到
-  `/home/z/my-project/`（沿历轮授权口径执行）。
-- 工具链交接：rustup nightly 1.101.0 已装（PATH = ~/.cargo/bin）；harness Python 依赖
-  （libtorrent 2.1.1/torf/pyte）本会话可用；libtorrent C++ 源码浅克隆在
-  `.work/tmp/lt-src/`（complete 后清除，语义结论已沉淀 notes/architecture.md，需要
-  复查时 gh-proxy 镜像浅克隆 RC_2_0 即可）；本轮基准产物在 `.work/tmp/bench-compete|
-  compete2|solo2/`（随会话清除）。
+- 下一步 `bin/swarm begin six-pack/cleaner`（可选）；操作者授权的收尾口径：直接
+  `bin/swarm complete`，并将产物 tar.gz 复制到 `/home/z/my-project/`（沿历轮授权）。
+- 工具链交接：rustup nightly 1.101.0（2026-11-02，PATH = ~/.cargo/bin）经 TUNA 镜像
+  装毕（RUSTUP_DIST_SERVER/RUSTUP_UPDATE_ROOT 已写入 ~/.bashrc；rustup-init 本体经
+  Aliyun rustup 镜像装——Aliyun 速最快但 dist 快照停在 2026-05，故工具链走 TUNA）；
+  cargo registry = TUNA sparse（~/.cargo/config.toml）；pyte 经 pip 阿里云镜像装（demo
+  verify 脚本依赖）；APS bb + 仓库缓存于 `.tools/`（specifie 轮重建）。

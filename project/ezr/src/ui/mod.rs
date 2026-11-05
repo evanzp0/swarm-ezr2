@@ -1399,6 +1399,16 @@ pub(crate) mod testfx {
         App::new(Config::default(), reg)
     }
 
+    pub(crate) fn seed_bt_conn_speeds(
+        app: &mut App,
+        task_id: u32,
+        conn_id: usize,
+        down: f64,
+        up: f64,
+    ) {
+        crate::app::testutil::seed_bt_conn_speeds(app, task_id, conn_id, down, up);
+    }
+
     pub(crate) fn task_in(id: u32, name: &str, state: TaskState) -> Task {
         let mut t = crate::model::sample_task();
         t.id = id;

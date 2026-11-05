@@ -230,7 +230,7 @@ impl App {
 
         let protocol = protocol_of_url(&url);
         if self.tasks.iter().any(|t| t.url == url && t.save_dir == dir) {
-            self.set_toast("⚠ 任务已存在");
+            self.open_error_window("该链接的任务已存在");
             return;
         }
         let base_name = namegen::derive_name(None, None, &url);
