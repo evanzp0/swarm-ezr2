@@ -1,3 +1,7 @@
+// 绘制层辅助函数（bt_text_row 9 参 / draw_tree_panel 10 参）与 ezr main.rs 同口径：
+// TUI 面板渲染参数面属结构事实，以 allow 登记而非硬造参数结构体。
+#![allow(clippy::too_many_arguments)]
+
 mod app;
 mod multiline;
 mod scrollable_panel;

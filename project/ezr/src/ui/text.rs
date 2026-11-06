@@ -28,6 +28,7 @@ pub fn fmt_speed(bps: f64) -> String {
     const KIB: f64 = 1024.0;
     const MIB: f64 = 1_048_576.0;
     const GIB: f64 = 1_073_741_824.0;
+    // IEEE -0.0 == 0.0：借此归一负零，避免 format! 输出 "-0 B/s"。
     let bps = if bps == 0.0 { 0.0 } else { bps };
     if bps >= GIB {
         format!("{:.2} GiB/s", bps / GIB)

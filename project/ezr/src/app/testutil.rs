@@ -104,7 +104,6 @@ pub(crate) fn task_with_conns(
     t
 }
 
-#[cfg(test)]
 pub(crate) fn seed_bt_conn_speeds(app: &mut App, task_id: u32, conn_id: usize, down: f64, up: f64) {
     use crate::app::BtConnSpeedStat;
     let mut st = BtConnSpeedStat::default();

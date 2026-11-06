@@ -191,7 +191,6 @@ pub struct App {
     pub max_slots: usize,
     engine: EngineHandle,
     evt_rx: tokio::sync::mpsc::Receiver<Evt>,
-    windows: HashMap<u32, SpeedWindow>,
     last_speed_tick: Instant,
     pub proxy_options: Vec<crate::model::ProxyChoice>,
     pub proxy_labels: Vec<String>,
@@ -354,7 +353,6 @@ impl App {
             max_slots: cfg.download_slots,
             engine,
             evt_rx,
-            windows: HashMap::new(),
             cfg,
             registry_path,
             last_save: Instant::now(),
@@ -1051,6 +1049,50 @@ mod interaction_tests {
         assert!(!app.about_open && app.help_open, "关闭后回帮助");
         app.on_key(KeyCode::Esc, KeyModifiers::NONE);
         assert!(!app.help_open);
+        app.shutdown().await;
+    }
+
+    // ---- 判重错误窗口（bug25 轮 cleaner 补测，纯追加）----
+
+    #[tokio::test]
+    async fn finish_add_duplicate_opens_error_window() {
+        let mut app = make_app("dup-err");
+        let mut t = crate::app::testutil::dl_task(1, "a.bin");
+        t.url = "http://example.com/a.bin".to_string();
+        t.save_dir = crate::model::config::normalize_save_dir("ezr-dup-err-dir");
+        app.tasks.push(t);
+        let mut d = crate::app::testutil::dialog(crate::app::DialogKind::Add, 0);
+        d.url.set("http://example.com/a.bin");
+        d.dir.set("ezr-dup-err-dir");
+        d.ck_type = crate::model::checksum::CK_NONE;
+        app.dialog = Some(d);
+        app.dlg_confirm_add();
+        assert!(
+            app.err_open && app.err_msg == "该链接的任务已存在",
+            "HTTP 判重命中 → 错误窗口（D56 第三臂），err={:?}",
+            app.err_msg
+        );
+        assert_eq!(app.tasks.len(), 1, "判重命中不新增任务");
+        assert!(app.dialog.is_some(), "对话框保持打开（规格口径）");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn finish_add_different_dir_is_not_duplicate() {
+        let mut app = make_app("dup-dir");
+        let mut t = crate::app::testutil::dl_task(1, "a.bin");
+        t.url = "http://example.com/a.bin".to_string();
+        t.save_dir = crate::model::config::normalize_save_dir("ezr-dup-err-dir");
+        app.tasks.push(t);
+        let mut d = crate::app::testutil::dialog(crate::app::DialogKind::Add, 0);
+        d.url.set("http://example.com/a.bin");
+        d.dir.set("ezr-dup-err-dir-other");
+        d.ck_type = crate::model::checksum::CK_NONE;
+        app.dialog = Some(d);
+        app.dlg_confirm_add();
+        assert!(!app.err_open, "同 URL 不同目录不判重");
+        assert_eq!(app.tasks.len(), 2, "不同目录允许再次添加（同步入列）");
+        assert!(app.dialog.is_none(), "添加成功关闭对话框");
         app.shutdown().await;
     }
 }

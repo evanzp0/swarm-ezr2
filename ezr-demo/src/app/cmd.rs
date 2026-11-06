@@ -108,7 +108,7 @@ impl App {
             token.to_string()
         };
         let scan_dir = match expanded.rsplit_once('/') {
-            Some((d, _)) if d.is_empty() => "/".to_string(),
+            Some(("", _)) => "/".to_string(),
             Some((d, _)) => d.to_string(),
             None => ".".to_string(),
         };

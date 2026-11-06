@@ -14,7 +14,6 @@ impl App {
                 self.tasks[idx].state = TaskState::Paused;
                 self.tasks[idx].speed = 0.0;
                 self.tasks[idx].has_slot = false;
-                self.windows.remove(&self.tasks[idx].id);
                 let id = self.tasks[idx].id;
                 let is_bt = self.tasks[idx].protocol.is_bt();
                 if is_bt {
@@ -225,7 +224,6 @@ impl App {
                 t.speed = 0.0;
                 t.connections.clear();
             }
-            self.windows.remove(&id);
             self.clear_conn_stats(id);
             self.set_toast(format!("✓ 文件已完整，直接完成（无校验）: {name}"));
             self.save_registry();
@@ -239,7 +237,6 @@ impl App {
             t.connections.clear();
             t.speed = 0.0;
         }
-        self.windows.remove(&id);
         self.session_seen.insert(id, 0);
         self.clear_conn_stats(id);
         self.set_toast(format!(
@@ -257,7 +254,6 @@ impl App {
             .collect();
         self.tasks.retain(|t| t.state != TaskState::Completed);
         for id in removed {
-            self.windows.remove(&id);
             self.clear_conn_stats(id);
             self.clear_bt_conn_stats(id);
         }

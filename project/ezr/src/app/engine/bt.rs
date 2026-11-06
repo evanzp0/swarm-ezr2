@@ -1,7 +1,4 @@
-use std::time::Instant;
-
 use super::App;
-use crate::model::speed::SpeedWindow;
 use crate::model::{FailKind, TaskState};
 
 impl App {
@@ -36,18 +33,6 @@ impl App {
         t.done_blocks = done_blocks;
         t.partial_blocks = partial_blocks;
         t.active_blocks = active_blocks;
-        if t.state == TaskState::Downloading && !t.protocol.is_bt() {
-            // BT 任务速度不走进度窗口：任务速度与并发 panel 行同源
-            // （Σ per-conn EMA，见 sample_bt_conn_speed_display），
-            // 逐块喂窗只会让 piece 粒度的 downloaded 增量与行速度对不上。
-            if let Some(w) = self.windows.get_mut(&id) {
-                w.push(Instant::now(), downloaded);
-            } else {
-                let mut w = SpeedWindow::new();
-                w.push(Instant::now(), downloaded);
-                self.windows.insert(id, w);
-            }
-        }
     }
 
     pub(super) fn on_bt_done(&mut self, id: u32, total: u64) {
@@ -106,7 +91,6 @@ impl App {
                 t.has_slot = false;
                 self.bt_conns.remove(&id);
                 self.clear_bt_conn_stats(id);
-                self.windows.remove(&id);
             }
             TaskState::Completed => {
                 // 停止做种流：状态已置 Completed，仅清理连接与速度显示。
@@ -116,7 +100,6 @@ impl App {
                 t.has_slot = false;
                 self.bt_conns.remove(&id);
                 self.clear_bt_conn_stats(id);
-                self.windows.remove(&id);
             }
             _ => {
                 // Queued/Downloading/Seeding：旧引擎滞后退出的竞态回报，
@@ -163,19 +146,6 @@ mod bt_progress_speed_tests {
             }],
         });
         t
-    }
-
-    #[tokio::test]
-    async fn bt_progress_does_not_feed_speed_window() {
-        let mut app = make_app("bt-no-window");
-        app.tasks.push(bt_task(1, TaskState::Downloading));
-        app.on_bt_progress(1, 4096, 1, vec![], vec![], vec![], 0);
-        app.on_bt_progress(1, 8192, 2, vec![0], vec![], vec![], 0);
-        assert!(
-            !app.windows.contains_key(&1),
-            "BT 任务速度不得来自进度窗口（速度与并发行同源：Σ per-conn EMA）"
-        );
-        app.shutdown().await;
     }
 
     #[tokio::test]
@@ -266,18 +236,6 @@ mod bt_progress_speed_tests {
             "做种任务上传速度与并发行同源（shows_conns 含 Seeding）"
         );
         assert_eq!(t.speed, 0.0, "做种任务无下载速度");
-        app.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn bt_progress_while_seeding_does_not_recreate_speed_window() {
-        let mut app = make_app("seed-no-window");
-        app.tasks.push(bt_task(1, TaskState::Seeding));
-        app.on_bt_progress(1, 8192, 2, vec![0], vec![], vec![], 0);
-        assert!(
-            !app.windows.contains_key(&1),
-            "做种态不重建速度滑窗（on_bt_done 已清窗，滑窗生命周期只属下载态）"
-        );
         app.shutdown().await;
     }
 

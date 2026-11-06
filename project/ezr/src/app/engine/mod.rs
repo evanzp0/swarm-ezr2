@@ -795,9 +795,8 @@ mod evt_tests {
     }
 
     #[tokio::test]
-    async fn progress_ghost_cleans_speed_state_without_touching_tasks() {
+    async fn progress_ghost_is_noop_without_touching_tasks() {
         let mut app = make_app("progress-ghost");
-        app.windows.insert(9, SpeedWindow::new());
         app.on_evt(Evt::Progress {
             id: 9,
             downloaded: 100,
@@ -807,16 +806,12 @@ mod evt_tests {
             partial_blocks: Vec::new(),
         })
         .await;
-        assert!(
-            !app.windows.contains_key(&9),
-            "已删除/未知任务的幽灵进度：速度滑窗一并清除"
-        );
         assert!(app.tasks.is_empty());
         app.shutdown().await;
     }
 
     #[tokio::test]
-    async fn progress_seeds_window_and_updates_task_view() {
+    async fn progress_updates_task_view() {
         let mut app = make_app("progress-seed");
         let mut t = seed_task(1, "f.bin");
         t.state = TaskState::Downloading;
@@ -830,7 +825,6 @@ mod evt_tests {
             partial_blocks: Vec::new(),
         })
         .await;
-        assert!(app.windows.contains_key(&1), "首次进度为任务建速度滑窗");
         let t = &app.tasks[0];
         assert_eq!(t.downloaded, 500);
         assert_eq!(t.chunk_done, 3);
@@ -858,7 +852,6 @@ mod evt_tests {
         })
         .await;
         assert!(!app.tasks[0].made_progress, "零字节进度不算进展");
-        assert!(app.windows.contains_key(&1), "窗口仍然建立（观测后续速率）");
         app.shutdown().await;
     }
 
@@ -945,7 +938,7 @@ mod evt_tests {
     }
 
     #[tokio::test]
-    async fn paused_done_snapshots_breakpoint_and_clears_window() {
+    async fn paused_done_snapshots_breakpoint() {
         let mut app = make_app("paused-snap");
         let mut t = seed_task(1, "f.bin");
         t.state = TaskState::Downloading;
@@ -954,7 +947,6 @@ mod evt_tests {
         t.has_slot = true;
         t.speed = 999.0;
         app.tasks.push(t);
-        app.windows.insert(1, SpeedWindow::new());
         app.on_evt(Evt::PausedDone {
             id: 1,
             downloaded: 50,
@@ -971,7 +963,6 @@ mod evt_tests {
             "断点视图快照含事件块数（snap=0 → max 取 2）"
         );
         assert_eq!(t.connections.len(), 1, "快照推导连接视图（详情页分块表）");
-        assert!(!app.windows.contains_key(&1), "速度窗口随暂停清除");
         app.shutdown().await;
     }
 
@@ -1003,7 +994,6 @@ mod evt_tests {
         t.downloaded = 100;
         t.has_slot = true;
         app.tasks.push(t);
-        app.windows.insert(1, SpeedWindow::new());
         app.on_evt(Evt::Failed {
             id: 1,
             kind: FailKind::Transient,
@@ -1023,7 +1013,6 @@ mod evt_tests {
         assert_eq!(t.downloaded, 400, "失败时点进度取较大值落账");
         assert_eq!(t.error.as_deref(), Some("连接被重置"));
         assert_eq!(t.speed, 0.0);
-        assert!(!app.windows.contains_key(&1), "失败清除速度窗口");
         let toast = app.toast.clone().unwrap_or_default();
         assert!(
             toast.contains("8s 后自动重试") && toast.contains("1/5"),
@@ -1106,7 +1095,6 @@ mod evt_tests {
             done: 50,
         }];
         app.tasks.push(t);
-        app.windows.insert(1, SpeedWindow::new());
         app.session_seen.insert(1, 500);
         app.on_evt(Evt::Invalidated { id: 1 }).await;
         let t = &app.tasks[0];
@@ -1121,7 +1109,6 @@ mod evt_tests {
         assert_eq!(t.chunk_done, 0);
         assert!(t.connections.is_empty());
         assert_eq!(t.speed, 0.0);
-        assert!(!app.windows.contains_key(&1));
         assert_eq!(
             app.session_seen.get(&1),
             Some(&0),
@@ -1171,7 +1158,6 @@ mod evt_tests {
             done: 100,
         }];
         app.tasks.push(t);
-        app.windows.insert(1, SpeedWindow::new());
         app.on_evt(Evt::DownloadDone { id: 1, total: 1000 }).await;
         let t = &app.tasks[0];
         assert_eq!(t.state, TaskState::Completed, "无校验值直接完成");
@@ -1180,7 +1166,6 @@ mod evt_tests {
         assert!(!t.has_slot);
         assert!(t.verify_ok.is_none(), "未校验 → 结果 None");
         assert!(t.connections.is_empty(), "连接视图随完成清空");
-        assert!(!app.windows.contains_key(&1));
         let toast = app.toast.clone().unwrap_or_default();
         assert!(toast.contains("无校验"), "toast={toast}");
         assert!(
@@ -1441,7 +1426,6 @@ mod evt_tests {
         .await;
         assert_eq!(app.tasks[0].downloaded, 0, "非下载中：进度不被采纳");
         assert_eq!(app.tasks[0].state, TaskState::Paused);
-        assert!(!app.windows.contains_key(&1), "不产生幽灵速度窗");
         app.shutdown().await;
     }
 

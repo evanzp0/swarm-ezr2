@@ -248,3 +248,20 @@
   TUNA 新鲜（Last-Modified 2026-11-03，nightly 1.101.0 与历轮同版）1.2MB/s——
   装前 curl dist/channel-rust-nightly.toml 的 Last-Modified 先验，工具链走 TUNA、
   rustup-init 本体可走 Aliyun；镜像结论沿 environment.md 历轮口径继续漂移观察。
+
+## cleaner 轮（2026-11-05）：cargo registry 镜像 404 挂死陷阱与 clippy metadata 噪音
+- **TUNA sparse registry 对部分新发布 crate 404**：`windows_x86_64_gnu 0.52.6` 等新包
+  TUNA 返回 404（未缓存），cargo 自动 fallback 直连 static.crates.io——沙箱内挂死
+  （`cargo fetch` 570s 零 Downloaded 输出、无任何 spurious 重试日志）。判据：fetch/
+  clippy 长时间停在 `Downloading crates ...` 且无进展行即此坑。处置：`~/.cargo/
+  config.toml` 换 rsproxy.cn sparse（`sparse+https://rsproxy.cn/index/`，与 rustup
+  镜像同源），fetch 一次过（单文件 1.5-2MB/s）。
+- **source 切换后缓存目录隔离可复用**：cargo 按 `<registry-host>-<hash>` 分缓存目录
+  （`.cargo/registry/cache/`），换源即"全量重下"假象——同内容 `.crate` 文件校验和
+  一致，可直接 `cp` 复用（276 个/31MB 免重下，cargo 校验通过）。
+- **clippy cargo 组 lint 的 metadata 失败噪音**：`clippy::multiple-crate-versions`
+  等需读完整 cargo metadata；依赖图缺 crate（404/offline）时报 "could not read cargo
+  metadata" 且把 lint 失败本身当警告输出（`generated 1 warning`、`-W clippy::cargo`
+  help 尾注、无 `-->` 代码位置）——本轮 17 轮分块跑出的"警告"全是此坑，切 rsproxy +
+  cargo fetch 补齐 12 个 crate 后复跑证实 **0 警告**（nightly 11-04 无漂移新 lint）。
+  判据：警告无代码位置 + metadata 错误文案 = 环境噪音 ≠ 代码问题，先补全依赖再复跑。

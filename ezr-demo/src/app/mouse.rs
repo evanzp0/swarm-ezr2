@@ -403,17 +403,17 @@ impl App {
                     }
                 }
                 MouseEventKind::ScrollLeft => {
+                    // 水平滚轮（部分终端 shift+滚轮映射）：trackers 视口左移
                     if Self::pointer_in(&self.dlg_trackers_area, m.column, m.row) {
-                        // 水平滚轮（部分终端 shift+滚轮映射）：trackers 视口左移
                         self.sb_scroll(SbKey::BtTrackersH, -1);
                         return;
                     }
                 }
-                MouseEventKind::ScrollRight => {
-                    if Self::pointer_in(&self.dlg_trackers_area, m.column, m.row) {
-                        self.sb_scroll(SbKey::BtTrackersH, 1);
-                        return;
-                    }
+                MouseEventKind::ScrollRight
+                    if Self::pointer_in(&self.dlg_trackers_area, m.column, m.row) =>
+                {
+                    self.sb_scroll(SbKey::BtTrackersH, 1);
+                    return;
                 }
                 _ => {}
             }

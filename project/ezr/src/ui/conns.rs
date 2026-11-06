@@ -305,7 +305,11 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
             Rows::Http(v) => {
                 let (cid, speed, cum, transferring) = &v[i];
                 vec![
-                    cell(format!("{cid}"), 4, if sel { Color::White } else { FG }),
+                    cell(
+                        format!("{cid}"),
+                        HTTP_COLW[0],
+                        if sel { Color::White } else { FG },
+                    ),
                     sep(),
                     cell(
                         if *transferring {

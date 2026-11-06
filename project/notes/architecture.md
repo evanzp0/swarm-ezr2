@@ -603,3 +603,18 @@
 - **根因**：显示单位口径分层（面板活速 vs 对话框输入 vs config 键）历史割裂；列宽
   派生量（内容宽/收缩基线/视口阈值）是列宽表的隐式函数；ratatui 逐 cell 跳过在宽字
   中缝的可见窗收缩一格。
+
+## cleaner 轮（2026-11-05）：App.windows 死状态裁决与判重口径单点化
+- **只写不读字段的识别与手术**：`App.windows: HashMap<u32, SpeedWindow>` 全部引用 =
+  insert/get_mut+push/remove/contains_key（测试），零 get/iter/values 消费者——数据
+  只进不出。语义换代注释即废弃信号（"BT 任务速度不走进度窗口：任务速度与并发 panel
+  行同源"，BT 分支已排除喂窗；HTTP 的 t.speed 亦另源）。手术 = 删字段+init+5 文件
+  喂窗/清窗点（bt.rs on_progress 整块、evt.rs Progress/PausedDone/Failed/DownloadDone/
+  Invalidated/ghost 臂、tasks.rs 4 处、dialogs.rs remove_task）+ SpeedWindow/WINDOW
+  import 按残余使用保留（conn_windows 活跃）。识别判据：rg 全引用按读写分类，写面
+  覆盖读面缺失即死状态；"失去读者"类 cleaner 候选先查 UI 消费链再裁决。
+- **判重口径与目录口径耦合单点化**：HTTP/BT 两条添加确认链的"空输入回退默认目录 +
+  normalize"重复（2 处 9 行）且判重比较（t.save_dir == dir）直接消费该解析结果——
+  提取 `App::resolve_confirm_dir` 单点化，防判重口径与目录口径漂移。jscpd min-tokens
+  40 扫 7 变更面文件 68 clones（10.48%），bug25 区间相关 19 个：生产代码 2 处收敛、
+  既有测试 fixture 群（追加纪律不动）、新增测试小段预置保持可读性，逐个裁决登记。

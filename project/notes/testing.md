@@ -439,3 +439,18 @@
 - **demo PTY 场景预存 FAIL 归因**：`git stash push -- <目录> → 跑基线 → pop` 对照——
   基线同败 = 环境预存非回归（verify_ezr.py 场景 R1-1 基本添加亦败，同
   verify_phase2_ui.py A 段沙箱预存同形）；stash 带 pathspec 不触 .work/ 未跟踪状态。
+
+## cleaner 轮（2026-11-05）：挂载套件 ±N 对账与 quota flake 间歇态确认
+- **挂载套件对账双向适用**：src `#[cfg(test)]` 测试的增删在包含该模块的每个集成套件
+  同步反映——本轮 bt.rs 删 2 个窗口守护测试 → engine_backfill/g_appcore/g_engine/
+  g_supervisor/ui_backfill/v115 六套件各 **-2**；bt_dialog.rs 追加 5 + app/mod.rs
+  追加 2 → 同六套件各 **+7**。对账 = 每套件前后计数差必须与改动面精确吻合，差值即
+  隐性丢失/意外收编信号。
+- **g_v147 quota flake 间歇态**：`engine_conns_quota_exact_and_unique_ids` 本轮 4 次
+  全量跑 2 次 FAIL（701P/1F、708P/1F）+ 1 次全量绿 + 单跑恒绿（3 连）——比上轮
+  "1 次复现"更频但仍符合单跑绿沿例口径；与改动面（UI 展示层/对话框报错/App.windows
+  死状态）零接触面，2 核调度压力敏感。沿袭登记不阻断。
+- **只写不读字段的守护测试随守护对象退役**：删除死状态字段时，专测"不该发生行为"
+  的守护测试（`bt_progress_does_not_feed_speed_window` 等）随字段一并删除，改名类
+  测试（`progress_seeds_window_and_updates_task_view` → `progress_updates_task_view`）
+  同步去掉名称与断言中的窗口语义——改名不改变断言覆盖面。

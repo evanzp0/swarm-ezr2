@@ -59,6 +59,21 @@ impl App {
         self.dlg_drag = None;
         self.dlg_area = None;
     }
+
+    /// 添加确认链的保存目录解析：空输入回退配置/默认目录，再归一化。
+    /// HTTP/BT 判重（t.save_dir == dir）与任务构造共用本口径。
+    pub(super) fn resolve_confirm_dir(&self, dir_raw: &str) -> String {
+        let dir = if dir_raw.is_empty() {
+            self.cfg
+                .download_dir
+                .clone()
+                .unwrap_or_else(crate::model::config::default_download_dir)
+        } else {
+            dir_raw.to_string()
+        };
+        crate::model::config::normalize_save_dir(&dir)
+    }
+
     fn checksum_from_input(
         &mut self,
         ck_type: usize,
@@ -218,17 +233,8 @@ impl App {
             return;
         };
 
-        let dir = if dir_raw.is_empty() {
-            self.cfg
-                .download_dir
-                .clone()
-                .unwrap_or_else(crate::model::config::default_download_dir)
-        } else {
-            dir_raw
-        };
-        let dir = crate::model::config::normalize_save_dir(&dir);
-
         let protocol = protocol_of_url(&url);
+        let dir = self.resolve_confirm_dir(&dir_raw);
         if self.tasks.iter().any(|t| t.url == url && t.save_dir == dir) {
             self.open_error_window("该链接的任务已存在");
             return;
@@ -341,7 +347,6 @@ impl App {
             (t.save_dir.clone(), t.name.clone())
         };
         self.tasks.remove(idx);
-        self.windows.remove(&id);
         self.clear_conn_stats(id);
         self.clear_bt_conn_stats(id);
         if delete_files {

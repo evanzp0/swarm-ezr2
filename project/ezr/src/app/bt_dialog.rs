@@ -402,15 +402,7 @@ impl App {
         let conns_raw = d.conns.value.trim().to_string();
         let proxy_sel = d.proxy_sel.min(self.proxy_options.len() - 1);
 
-        let dir = if dir_raw.is_empty() {
-            self.cfg
-                .download_dir
-                .clone()
-                .unwrap_or_else(crate::model::config::default_download_dir)
-        } else {
-            dir_raw
-        };
-        let dir = crate::model::config::normalize_save_dir(&dir);
+        let dir = self.resolve_confirm_dir(&dir_raw);
 
         if self
             .tasks
@@ -686,6 +678,7 @@ fn new_total_of(files: &[BtFile]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::testutil::dialog;
 
     fn make_app(tag: &str) -> App {
         crate::app::testutil::make_app_in("ezr-btdlg", tag)
@@ -1494,5 +1487,190 @@ mod tests {
         );
         app2.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---- 对话框按键/激活入口覆盖（cleaner 轮纯追加）----
+
+    fn bt_node(name: &str, size: u64, selected: bool) -> crate::app::bt_tree::BtNode {
+        crate::app::bt_tree::BtNode {
+            name: name.to_string(),
+            path: name.to_string(),
+            is_dir: false,
+            size,
+            depth: 0,
+            expanded: false,
+            selected,
+            partial: false,
+            children: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn add_bt_dialog_enter_routes_focus() {
+        let mut app = make_app("bt-enter-add");
+        // focus=10：取消按钮关闭对话框
+        app.dialog = Some(dialog(DialogKind::AddBt, 10));
+        app.add_bt_dialog_enter(10);
+        assert!(app.dialog.is_none(), "取消按钮关闭对话框");
+        // focus=6：代理选择打开
+        app.dialog = Some(dialog(DialogKind::AddBt, 6));
+        app.add_bt_dialog_enter(6);
+        assert!(app.dialog.as_ref().unwrap().proxy_open, "代理弹层打开");
+        // 默认臂（focus=8 确认）：已选文件 + 无效种子路径 → 读取失败 toast，对话框保留
+        let mut d = dialog(DialogKind::AddBt, 8);
+        d.torrent.set("/nonexistent/ezr-x.torrent");
+        d.bt_tree = vec![bt_node("f1", 10, true)];
+        app.dialog = Some(d);
+        app.add_bt_dialog_enter(8);
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|t| t.contains("无法读取种子")),
+            "无效种子路径 → 读取失败 toast，toast={:?}",
+            app.toast
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn add_bt_dialog_char_routes_by_focus() {
+        let mut app = make_app("bt-char-add");
+        // focus=0：种子路径输入（控制字符被拒）
+        app.dialog = Some(dialog(DialogKind::AddBt, 0));
+        app.add_bt_dialog_char(0, '\x07');
+        assert!(
+            app.dialog.as_ref().unwrap().torrent.value.is_empty(),
+            "控制字符不插入"
+        );
+        app.add_bt_dialog_char(0, 'a');
+        assert_eq!(app.dialog.as_ref().unwrap().torrent.value, "a");
+        // focus=2：文件列表快捷键 a 全选 / 空格翻转 cursor
+        app.dialog.as_mut().unwrap().bt_tree =
+            vec![bt_node("f1", 10, false), bt_node("f2", 20, false)];
+        app.add_bt_dialog_char(2, 'A');
+        assert!(
+            app.dialog
+                .as_ref()
+                .unwrap()
+                .bt_tree
+                .iter()
+                .all(|n| n.selected),
+            "a 全选"
+        );
+        app.dialog.as_mut().unwrap().bt_cursor = 1;
+        app.add_bt_dialog_char(2, ' ');
+        assert!(
+            !app.dialog.as_ref().unwrap().bt_tree[1].selected,
+            "空格翻转 cursor 处选中态"
+        );
+        // focus=3：并发数字
+        app.dialog = Some(dialog(DialogKind::AddBt, 3));
+        app.add_bt_dialog_char(3, '5');
+        assert_eq!(app.dialog.as_ref().unwrap().conns.value, "5");
+        // focus=4/5：限速输入
+        app.add_bt_dialog_char(4, '9');
+        assert_eq!(app.dialog.as_ref().unwrap().down_limit.value, "9");
+        app.add_bt_dialog_char(5, '3');
+        assert_eq!(app.dialog.as_ref().unwrap().up_limit.value, "3");
+        // focus=7：trackers 输入
+        app.add_bt_dialog_char(7, 'x');
+        assert_eq!(
+            app.dialog.as_ref().unwrap().trackers.lines[0].value,
+            "x",
+            "trackers 首行插入"
+        );
+        // focus=6：空格打开代理弹层
+        app.dialog = Some(dialog(DialogKind::AddBt, 6));
+        app.add_bt_dialog_char(6, ' ');
+        assert!(app.dialog.as_ref().unwrap().proxy_open);
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn modify_bt_dialog_enter_routes_focus() {
+        let mut app = make_app("bt-enter-mod");
+        // focus=7：取消关闭
+        app.dialog = Some(dialog(DialogKind::ModifyBt, 7));
+        app.modify_bt_dialog_enter(7);
+        assert!(app.dialog.is_none(), "取消按钮关闭修改对话框");
+        // focus=4：代理打开
+        app.dialog = Some(dialog(DialogKind::ModifyBt, 4));
+        app.modify_bt_dialog_enter(4);
+        assert!(app.dialog.as_ref().unwrap().proxy_open);
+        // 默认臂（focus=6 确认）：task_id 指向不存在任务 → 对话框关闭
+        let mut d = dialog(DialogKind::ModifyBt, 6);
+        d.task_id = Some(999);
+        app.dialog = Some(d);
+        app.modify_bt_dialog_enter(6);
+        assert!(app.dialog.is_none(), "幽灵 task_id → 对话框关闭");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn modify_bt_dialog_char_routes_by_focus() {
+        let mut app = make_app("bt-char-mod");
+        // focus=0：文件列表 i 反选
+        app.dialog = Some(dialog(DialogKind::ModifyBt, 0));
+        app.dialog.as_mut().unwrap().bt_tree =
+            vec![bt_node("f1", 10, true), bt_node("f2", 20, true)];
+        app.modify_bt_dialog_char(0, 'I');
+        assert!(
+            app.dialog
+                .as_ref()
+                .unwrap()
+                .bt_tree
+                .iter()
+                .all(|n| !n.selected),
+            "i 全部反选"
+        );
+        // focus=1：并发数字
+        app.modify_bt_dialog_char(1, '4');
+        assert_eq!(app.dialog.as_ref().unwrap().conns.value, "4");
+        // focus=2/3：限速
+        app.modify_bt_dialog_char(2, '8');
+        assert_eq!(app.dialog.as_ref().unwrap().down_limit.value, "8");
+        app.modify_bt_dialog_char(3, '2');
+        assert_eq!(app.dialog.as_ref().unwrap().up_limit.value, "2");
+        // focus=5：trackers
+        app.modify_bt_dialog_char(5, 'z');
+        assert_eq!(
+            app.dialog.as_ref().unwrap().trackers.lines[0].value,
+            "z",
+            "trackers 首行插入"
+        );
+        // focus=4：空格开代理
+        app.dialog = Some(dialog(DialogKind::ModifyBt, 4));
+        app.modify_bt_dialog_char(4, ' ');
+        assert!(app.dialog.as_ref().unwrap().proxy_open);
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn dlg_activate_buttons_route() {
+        let mut app = make_app("bt-activate");
+        // AddBt：btn=10 取消关闭 / btn=99 无操作
+        app.dialog = Some(dialog(DialogKind::AddBt, 0));
+        app.dlg_activate_add_bt(10);
+        assert!(app.dialog.is_none(), "取消按钮关闭");
+        app.dialog = Some(dialog(DialogKind::AddBt, 0));
+        app.dlg_activate_add_bt(99);
+        assert!(app.dialog.is_some(), "未知按钮无操作");
+        app.dialog = Some(dialog(DialogKind::AddBt, 8));
+        if let Some(d) = app.dialog.as_mut() {
+            d.torrent.set("/nonexistent/ezr-x.torrent");
+            d.bt_tree = vec![bt_node("f1", 10, true)];
+        }
+        app.dlg_activate_add_bt(8);
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|t| t.contains("无法读取种子")),
+            "确认按钮走校验链（无效路径 toast）"
+        );
+        // ModifyBt：btn=7 取消关闭
+        app.dialog = Some(dialog(DialogKind::ModifyBt, 7));
+        app.dlg_activate_modify_bt(7);
+        assert!(app.dialog.is_none(), "修改对话框取消按钮关闭");
+        app.shutdown().await;
     }
 }

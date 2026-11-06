@@ -232,7 +232,7 @@ impl MultiLineBuf {
         let mut off = 0usize;
         for k in 0..n.min(chars.len().saturating_sub(s)) {
             let cw = w(&chars[s + k].to_string());
-            if vcol < acc + (cw + 1) / 2 {
+            if vcol < acc + cw.div_ceil(2) {
                 off = k;
                 break;
             }
@@ -244,6 +244,7 @@ impl MultiLineBuf {
     }
 
     /// Home：全文首（首行行首）
+    #[allow(clippy::wrong_self_convention)]
     pub fn to_first(&mut self) {
         self.follow = true;
         self.row = 0;
@@ -251,6 +252,7 @@ impl MultiLineBuf {
     }
 
     /// End：全文尾（末行行尾）
+    #[allow(clippy::wrong_self_convention)]
     pub fn to_last(&mut self) {
         self.follow = true;
         self.row = self.lines.len() - 1;
@@ -483,7 +485,7 @@ impl MultiLineBuf {
         let mut off = 0usize;
         for k in 0..n.min(chars.len().saturating_sub(s)) {
             let cw = w(&chars[s + k].to_string()) as u16;
-            if col < x.saturating_add(acc + (cw + 1) / 2) {
+            if col < x.saturating_add(acc + cw.div_ceil(2)) {
                 off = k;
                 break;
             }

@@ -130,11 +130,9 @@ impl App {
                 let d = self.dialog.as_mut().unwrap();
                 match focus {
                     0 => {
-                        if d.url.insert(&c.to_string(), 300) > 0 {
-                            if !d.conns_edited {
-                                let (p, _) = parse_url_task(d.url.value.trim());
-                                d.conns.set(default_conns(p).to_string());
-                            }
+                        if d.url.insert(&c.to_string(), 300) > 0 && !d.conns_edited {
+                            let (p, _) = parse_url_task(d.url.value.trim());
+                            d.conns.set(default_conns(p).to_string());
                         }
                     }
                     1 => {

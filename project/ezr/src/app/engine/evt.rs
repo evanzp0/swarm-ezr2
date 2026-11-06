@@ -3,7 +3,6 @@ use std::time::Instant;
 use super::{conn_from_view, update_conn_stats};
 use crate::app::App;
 use crate::engine::{Cmd, Evt};
-use crate::model::speed::SpeedWindow;
 use crate::model::{namegen, FailKind, TaskState};
 
 impl App {
@@ -57,18 +56,10 @@ impl App {
                 partial_blocks,
             } => {
                 let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else {
-                    self.windows.remove(&id);
                     return;
                 };
                 if t.state != TaskState::Downloading {
                     return;
-                }
-                if let Some(w) = self.windows.get_mut(&id) {
-                    w.push(Instant::now(), downloaded);
-                } else {
-                    let mut w = SpeedWindow::new();
-                    w.push(Instant::now(), downloaded);
-                    self.windows.insert(id, w);
                 }
                 t.downloaded = downloaded;
                 t.chunk_done = chunk_done;
@@ -104,7 +95,6 @@ impl App {
                     t.partial_blocks = partial_blocks;
                     t.apply_chunk_snapshot(downloaded, chunk_done);
                 }
-                self.windows.remove(&id);
             }
             Evt::Failed {
                 id,
@@ -141,7 +131,6 @@ impl App {
                 t.partial_blocks.clear();
                 t.connections.clear();
                 t.speed = 0.0;
-                self.windows.remove(&id);
                 self.session_seen.insert(id, 0);
                 if stop_wait {
                     t.state = TaskState::Failed;
@@ -169,7 +158,6 @@ impl App {
                 t.downloaded = total;
                 t.total = total;
                 t.speed = 0.0;
-                self.windows.remove(&id);
                 let name = t.name.clone();
                 let verify_now = t.checksum.is_some();
                 if verify_now {
@@ -437,7 +425,6 @@ impl App {
             }
         };
         t.apply_chunk_snapshot(t.downloaded, chunk_done);
-        self.windows.remove(&id);
         self.set_toast(toast);
         self.save_registry();
     }
