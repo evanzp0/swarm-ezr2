@@ -179,18 +179,31 @@ fi
 #   （app 层写、ui 只读），不豁免——未来 ui 渲染路径改写它们即红（白名单
 #   精确对齐判例，防误报压力放宽真规则，engineering.md）；新增面板的渲染钳制
 #   写入会在此响亮失败，需显式扩白名单。）
+#   dlg_(bt|trackers|trackers_h)_sb / cmd_sb / trackers_sb（对话框文件树、
+#   BT/trackers 弹窗、命令窗滚动条渲染态回填：渲染重置 None + 渲染派生
+#   SbBar 回填，消费点 app/scrollbar.rs SbKey 映射与 app/mouse.rs 命中测试——
+#   与 _scrollbar 白名单同类命中几何回填；bug19/24 轮与命令窗新增面未登记的
+#   存量收口，architect 本轮白名单扩展，阳性对照实测本轮会话：扩展前
+#   即红、扩展后全绿、策略字段注入仍红。）
+#   cmd_cursor_screen（命令窗原生光标屏幕位发布：渲染重置/发布，
+#   ui::draw 光标绘制消费——dlg_cursor_screen 同款 v1.34 原生光标模式，
+#   architect 本轮白名单扩展。）
+#   trackers_scroll 追加至面板滚动钳制组（trackers 弹窗渲染期
+#   min(max) 钳制：app 键盘/滚动写（popups.rs trackers_scroll_by、
+#   scrollbar.rs 拖拽置位）+ ui 渲染期钳制双写形态——与 help/pieces/val
+#   同款，architect 本轮白名单扩展。）
 ui_product_lines=$(for f in src/ui/*.rs; do
   awk '/#\[cfg\(test\)\]/{exit} {print FILENAME":"FNR":"$0}' "$f"
 done)
 hit=$(printf '%s\n' "$ui_product_lines" \
   | grep -E 'app\.[a-z_]+([[:space:]]*=[^=]|\.(push|clear|insert|remove|retain|swap|drain|resize|append|truncate)\()' \
-  | grep -vE 'app\.[a-z_]*(rect|area|visible|_pos|_scrollbar|max_hscroll|max_scroll|follow|dlg_field_wins|dlg_cursor_screen)' \
-  | grep -vE 'app\.(help|pieces|val)_scroll\b' \
+  | grep -vE 'app\.[a-z_]*(rect|area|visible|_pos|_scrollbar|max_hscroll|max_scroll|follow|dlg_field_wins|dlg_cursor_screen|cmd_cursor_screen|(dlg_(bt|trackers|trackers_h)|cmd|trackers)_sb)' \
+  | grep -vE 'app\.(help|pieces|val|trackers)_scroll\b' \
   | grep -vE ':[0-9]+:[[:space:]]*//' || true)
 if [ -n "$hit" ]; then
   echo "[FAIL] ui 渲染路径改写非回填 App 字段（写面只限回填白名单，政策字段零豁免）:"; echo "$hit"; fails=$((fails+1))
 else
-  echo "[ OK ] ui 渲染路径只回填白名单字段（rect/area/visible/_pos/_scrollbar/max_*/follow/面板 scroll 钳制/对话框字段几何与原生光标回填）"
+  echo "[ OK ] ui 渲染路径只回填白名单字段（rect/area/visible/_pos/_scrollbar/max_*/follow/面板 scroll 钳制/对话框字段几何与原生光标回填/滚动条回填全家）"
 fi
 
 # 规则 15【窄接口】supervisor 实现子模块保持私有（architect v145：supervisor

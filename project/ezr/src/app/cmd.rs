@@ -165,7 +165,10 @@ impl App {
         };
 
         let expanded = if let Some(rest) = token.strip_prefix('~') {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
+            let home = crate::model::config::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("/"))
+                .to_string_lossy()
+                .into_owned();
             format!("{home}{rest}")
         } else {
             token.to_string()

@@ -4,7 +4,10 @@ use crossterm::event::KeyCode;
 use proptest::prelude::*;
 
 use crate::app::DialogKind;
+use crate::bt::bencode::{decode, decode_all, encode, BValue};
+use crate::bt::pieces::PieceMap;
 use crate::engine::{merge_answers, parse_retry_after_header, HostsFile};
+use crate::model::bt::BtFile;
 use crate::model::checksum::{
     algo_index_exact_or_default, parse_companion_content, CHECKSUM_ALGOS,
 };
@@ -1949,6 +1952,174 @@ proptest! {
                 lw <= width || l.chars().count() == 1,
                 "行宽 ≤ 折行宽（单宽字豁免）: {l:?} w={lw} width={width}"
             );
+        }
+    }
+}
+
+fn arb_bvalue(depth: u32) -> proptest::strategy::BoxedStrategy<BValue> {
+    let leaf = prop_oneof![
+        any::<i64>().prop_map(BValue::Int),
+        prop::collection::vec(any::<u8>(), 0..48).prop_map(BValue::Bytes),
+    ];
+    if depth == 0 {
+        leaf.boxed()
+    } else {
+        prop_oneof![
+            leaf,
+            prop::collection::vec(arb_bvalue(depth - 1), 0..6).prop_map(BValue::List),
+            prop::collection::btree_map(
+                prop::collection::vec(any::<u8>(), 0..24),
+                arb_bvalue(depth - 1),
+                0..6
+            )
+            .prop_map(BValue::Dict),
+        ]
+        .boxed()
+    }
+}
+
+fn arb_btfile() -> impl Strategy<Value = BtFile> {
+    (any::<usize>(), 0u64..1024, any::<bool>())
+        .prop_map(|(n, size, selected)| BtFile {
+            path: format!("f{n}"),
+            size,
+            selected,
+        })
+        .no_shrink()
+}
+
+proptest! {
+    #[test]
+    fn prop_bencode_round_trip(v in arb_bvalue(3)) {
+        let bytes = encode(&v);
+        let decoded = decode_all(&bytes)
+            .unwrap_or_else(|e| panic!("规范编码必须可解析: {e}"));
+        prop_assert_eq!(&decoded, &v, "编码→解析恒等");
+        let re = encode(&decoded);
+        prop_assert_eq!(re, bytes, "编码确定性（同值再编码逐字节同形）");
+    }
+
+    #[test]
+    fn prop_bencode_decode_contract(v in arb_bvalue(2)) {
+        let bytes = encode(&v);
+        let (decoded, consumed) =
+            decode(&bytes).unwrap_or_else(|e| panic!("规范编码必须可解析: {e}"));
+        prop_assert_eq!(consumed, bytes.len(), "decode 恰好消费整段编码");
+        prop_assert_eq!(decoded, v);
+        let mut tail = bytes.clone();
+        tail.push(b'x');
+        prop_assert!(decode_all(&tail).is_err(), "尾部多余字节必须拒绝");
+    }
+
+    #[test]
+    fn prop_piece_map_conservation(
+        (files, piece_length) in (prop::collection::vec(arb_btfile(), 0..6), 1u32..4096u32)
+    ) {
+        let pm = PieceMap::new(&files, piece_length);
+        let pl = u64::from(piece_length).max(1);
+        let selected_sum: u64 =
+            files.iter().filter(|f| f.selected).map(|f| f.size).sum();
+        prop_assert_eq!(pm.selected_total(), selected_sum, "选中字节守恒");
+        let total_all: u64 = files.iter().map(|f| f.size).sum();
+        let covered = pm.covered_pieces();
+        for w in covered.windows(2) {
+            prop_assert!(w[0] < w[1], "覆盖集升序唯一: {} vs {}", w[0], w[1]);
+        }
+        let num = pm.num_pieces();
+        if total_all == 0 {
+            prop_assert!(
+                covered.is_empty(),
+                "全空映射无覆盖 piece"
+            );
+        } else {
+            prop_assert_eq!(
+                u64::from(num),
+                total_all.div_ceil(pl),
+                "piece 数 = total_all/pl 向上取整"
+            );
+            for p in 0..num {
+                let len = pm.piece_len(p);
+                prop_assert!(
+                    (1..=pl).contains(&len),
+                    "片长在 1..=pl: piece={} len={} pl={}",
+                    p,
+                    len,
+                    pl
+                );
+            }
+            let mut planned: u64 = 0;
+            for &p in covered {
+                let plan = pm.write_plan(p);
+                for w in plan.windows(2) {
+                    prop_assert!(w[0].0 < w[1].0, "计划内文件下标严格递增");
+                }
+                let mut prev_hi: u64 = 0;
+                for e in &plan {
+                    let f = &files[e.0];
+                    prop_assert!(
+                        f.selected && f.size > 0,
+                        "计划只落选中非空文件: idx={}", e.0
+                    );
+                    prop_assert!(
+                        e.1 + e.3 <= f.size,
+                        "文件内偏移+长度不越界: idx={} off={} len={}", e.0, e.1, e.3
+                    );
+                    prop_assert!(
+                        e.2 >= prev_hi,
+                        "piece 内计划区间不重叠: off={} prev_hi={}", e.2, prev_hi
+                    );
+                    prev_hi = e.2 + e.3;
+                    prop_assert!(
+                        prev_hi <= pl,
+                        "piece 内计划不越片界: end={} pl={}", prev_hi, pl
+                    );
+                }
+                planned += plan.iter().map(|e| e.3).sum::<u64>();
+            }
+            prop_assert_eq!(
+                planned,
+                pm.selected_total(),
+                "全部覆盖 piece 的写盘计划字节守恒选中总量"
+            );
+        }
+        let mut file_off: u64 = 0;
+        for (i, f) in files.iter().enumerate() {
+            let (first, last) = pm.pieces_of_file(i);
+            if f.size == 0 {
+                prop_assert_eq!(
+                    (first, last),
+                    (0, 0),
+                    "空文件 piece 区间为零: idx={}",
+                    i
+                );
+            } else {
+                prop_assert_eq!(
+                    u64::from(first),
+                    file_off / pl,
+                    "首 piece = 文件偏移/piece_len: idx={}",
+                    i
+                );
+                prop_assert_eq!(
+                    u64::from(last),
+                    (file_off + f.size - 1) / pl,
+                    "末 piece = 文件末字节/piece_len: idx={}",
+                    i
+                );
+                if f.selected {
+                    for &p in covered {
+                        let in_range = p >= first && p <= last;
+                        let has_i = pm.write_plan(p).iter().any(|e| e.0 == i);
+                        prop_assert_eq!(
+                            in_range,
+                            has_i,
+                            "pieces_of_file 区间与写盘计划交叉一致: idx={} piece={}",
+                            i,
+                            p
+                        );
+                    }
+                }
+            }
+            file_off += f.size;
         }
     }
 }

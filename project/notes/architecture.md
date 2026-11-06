@@ -618,3 +618,5 @@
   提取 `App::resolve_confirm_dir` 单点化，防判重口径与目录口径漂移。jscpd min-tokens
   40 扫 7 变更面文件 68 clones（10.48%），bug25 区间相关 19 个：生产代码 2 处收敛、
   既有测试 fixture 群（追加纪律不动）、新增测试小段预置保持可读性，逐个裁决登记。
+
+architect 轮（2026-11-06）：arch_check.sh 规则 14 白名单漂移是「响亮失败」设计而非误报——后续轮新增面板（命令窗 cmd_sb/cmd_cursor_screen、trackers 弹窗 trackers_scroll/trackers_sb、BT 对话框 dlg_bt_sb/dlg_trackers_sb/dlg_trackers_h_sb）的渲染回填字段未登记白名单即红；修复路径 = 逐一核实消费点确证同类回填模式（SbKey 映射/鼠标命中测试/ui::draw 光标绘制消费/键盘写+渲染钳制双写）后**显式扩白名单 + 注释登记判例**，不做字段重命名迁就检查器；白名单扩展必须配阳性对照（注入 app.selected 写 → 红还原 → 绿）。engine↔bt 模块级双向类型引用（bt/engine.rs use crate::engine + engine/mod.rs use crate::bt）= 既定协调枢纽模式而非依赖环：EngineShared/BtTaskCmd/Evt/BtTunables/BtConnView/TorrentMeta 是契约类型，Rust 可见性已强制窄接口（bt 只能见 engine 的 pub 门面，impl 子模块 pub(super) 对 crate 树外不可见）——拆分属「依赖共享可变状态的长分派拆分」不安全类，登记移交 hardender 变异暴露后针对性拆。PieceMap 写盘计划的真不变量是**全局守恒**（Σ 覆盖 piece 的计划字节 == selected_total）：逐 piece 守恒与「未选文件零区间」都是假不变量——未选文件贡献 piece 网格（num_pieces 按 total_all 含未选算）但无计划条目、piece 与选中区边界相交时计划只含交集字节、pieces_of_file 按 size>0 返回 span 与 selected 无关（selected=false size>0 返回真实区间，仅 size==0 返回 (0,0)）。

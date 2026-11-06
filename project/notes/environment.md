@@ -265,3 +265,5 @@
   help 尾注、无 `-->` 代码位置）——本轮 17 轮分块跑出的"警告"全是此坑，切 rsproxy +
   cargo fetch 补齐 12 个 crate 后复跑证实 **0 警告**（nightly 11-04 无漂移新 lint）。
   判据：警告无代码位置 + metadata 错误文案 = 环境噪音 ≠ 代码问题，先补全依赖再复跑。
+
+architect 轮环境重建实录（2026-11-06，全新沙箱零工具链）：rustup 镜像测速（清单文件 channel-rust-nightly.toml 计速）TUNA 最快 7MB/s 且 200（rsproxy/USTC/SJTU 该路径 404）——**ghfast.top 取官方 rustup-init.sh + RUSTUP_DIST_SERVER/UPDATE_ROOT 双变量指 TUNA 前台装齐** nightly 1.101.0（minimal profile + rustfmt + clippy 组件），与 bug25 轮记录的 1.101 工具链版本带对齐；cargo registry 按 cleaner 轮口径直接写 rsproxy sparse（cargo fetch 一次过零 404，rsproxy dist 清单缺键问题未复现第 7 次）；本项目无 .cargo/config.toml 链接器配置，无 lld 桥接需求。沙箱 Write 工具限主目录 → swarm 工作区 /tmp 迁 /home/z/swarm-ezr2（bin/swarm 按 BASH_SOURCE 自定位解析路径，begin 后迁移会话无损，status 复核即可）。夜间默认 DEV/TEST DEBUG=0 + CARGO_INCREMENTAL=0 全程压盘，全量 bins+12 套件+clippy 后盘余 4.4G 无清理需求。
