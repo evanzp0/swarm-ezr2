@@ -9,7 +9,7 @@
 用普通 subprocess 捕获退出码与 stderr（无需 PTY）。
 
 v1.15 同步（QA v138 会话）：新增 QA-01-18（仅添加按钮，FR-01-103/D28/D29）——
-按钮行 [ 立即下载 ] [ 仅添加 ] [ 取消 ]（焦点 6/7/8，Add nfocus=9）；仅添加只建
+按钮行 [ 立即下载 ] [ 仅添加 ] [ 取消 ]（v1.38 限速字段插入后焦点 7/8/9，Add nfocus=10）；仅添加只建
 不下载（任务落「已暂停」、不占槽位），toast 钦定文案「已添加任务…已暂停，按空格
 开始下载」（D29）；校验链与立即下载一致。
 """
@@ -57,7 +57,12 @@ class AddTaskSuite(Suite):
     # -- 用例 -----------------------------------------------------------------
 
     def run(self) -> list[CaseResult]:
-        for i in range(1, 20):
+        # QA_AT_ONLY=20 → 只跑 _case_20。沙箱前台单命令 10min 上限对策
+        # （v141 QA_TP_ONLY 同款）；缺省全量，结果仅含所跑用例。
+        only = os.environ.get("QA_AT_ONLY", "").strip()
+        idxs = ([int(x) for x in only.split(",") if x.strip().isdigit()]
+                if only else range(1, 22))
+        for i in idxs:
             getattr(self, f"_case_{i:02d}")()
         return self.results
 
@@ -101,7 +106,7 @@ class AddTaskSuite(Suite):
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 open_add_dialog_via_cmd(app, env.fixture.url("small.bin"))
-                app.send("tab", "tab", "tab")  # 焦点至校验字段
+                app.send("tab", "tab", "tab", "tab")  # URL0→保存到1→并发2→下载限速3→校验4（v1.38 限速字段插入）
                 # v1.32：默认 NONE + 占位提示删除（URL/校验码占位、尾注全 removed）
                 assert_in("NONE", app.text(), "默认应选中 NONE（v1.32）")
                 assert_not_in("位十六进制", app.text(), "占位提示应已删除（v1.32/P3）")
@@ -144,12 +149,12 @@ class AddTaskSuite(Suite):
                 app.send("tab")
                 clear_dir_prefill(app)
                 app.type_text(env.save_dir)
-                app.send("tab", "tab")          # 保存到1 → 并发2 → 校验3
+                app.send("tab", "tab", "tab")    # 保存到1 → 并发2 → 下载限速3 → 校验4（v1.38）
                 app.send("enter")               # 展开下拉
                 app.send("home")                # NONE（基点）
                 app.send("down")                # MD5（v1.32 表序：NONE 后第 1）
                 app.send("enter")               # 选中 MD5 并收起（焦点留 3）
-                app.send("tab")                 # 校验3 → 校验码4
+                app.send("tab")                 # 校验4 → 校验码5（v1.38）
                 app.type_text("zz" + "-" * 30)
                 app.pump(0.3)
                 # 非法字符逐键拒绝：字段保持空；v1.32 占位提示已删除——
@@ -174,7 +179,7 @@ class AddTaskSuite(Suite):
                 app = EzrApp(env.home, save_dir=env.save_dir)
                 try:
                     open_add_dialog_via_cmd(app, env.fixture.url("small.bin"))
-                    app.send("tab", "tab", "tab")  # 焦点至校验字段
+                    app.send("tab", "tab", "tab", "tab")  # 焦点至校验字段（校验4，v1.38）
                     app.send("enter")              # 展开下拉
                     app.send("home")               # NONE 基点
                     app.send(*(["down"] * downs))  # → SHA-256 / MD5
@@ -206,7 +211,7 @@ class AddTaskSuite(Suite):
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 open_add_dialog_via_cmd(app, env.fixture.url("small.bin"))
-                app.send("tab", "tab", "tab", "enter")  # 展开下拉（焦点 3）
+                app.send("tab", "tab", "tab", "tab", "enter")  # 展开下拉（校验4，v1.38）
                 app.send("home")                        # NONE 基点
                 app.send("down")                        # MD5
                 app.send("enter")                       # 选中并收起（焦点留 3）
@@ -225,7 +230,7 @@ class AddTaskSuite(Suite):
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 open_add_dialog_via_cmd(app, env.fixture.url("ten-m.bin?speed=400000"))
-                app.send("tab", "tab", "tab", "enter")
+                app.send("tab", "tab", "tab", "tab", "enter")  # 展开校验下拉（校验4，v1.38）
                 app.send("home")
                 app.send("down")  # MD5（v1.32 表序）
                 app.pump(0.2)
@@ -596,7 +601,7 @@ class AddTaskSuite(Suite):
         （D29 钦定）；③空格后转「等待中/下载中」并开始传输；④非法 URL 激活
         「仅添加」：toast 报错 URL 非法、对话框保持、无任务创建。
 
-        焦点序：从保存到字段（焦点 1）Tab×6 至仅添加钮（焦点 7）；落态为确定
+        焦点序：从保存到字段（焦点 1）Tab×7 至仅添加钮（焦点 8）；落态为确定
         性判据（Tab 数错则任务会立即下载，断言必红）。
         """
         @self.case("QA-01-18")
@@ -611,9 +616,9 @@ class AddTaskSuite(Suite):
                 # v1.30/FR-01-107：对话框无底部操作提示行（交互说明收敛帮助窗口）
                 assert_not_in("Enter 立即下载", text, "提示行应已删除（v1.30/P3）")
                 # Tab 环绕：焦点从 URL 起经全部字段与三钮后回到首字段
-                app.send(*(["tab"] * 9))
+                app.send(*(["tab"] * 10))
                 app.pump(0.2)
-                assert_in("添加任务：HTTP(S)", app.text(), "Tab×9 后应环绕回 URL 字段（对话框仍开）")
+                assert_in("添加任务：HTTP(S)", app.text(), "Tab×10 后应环绕回 URL 字段（对话框仍开，nfocus=10）")
                 app.send("esc")
                 app.pump(0.3)
                 # ② 合法 URL + 仅添加
@@ -622,7 +627,7 @@ class AddTaskSuite(Suite):
                 app.send("tab")
                 clear_dir_prefill(app)
                 app.type_text(env.save_dir)
-                app.send(*(["tab"] * 6))  # 焦点 1（保存到）→ 7（仅添加）
+                app.send(*(["tab"] * 7))  # 焦点 1（保存到）→ 8（仅添加）（v1.38 限速字段插入）
                 app.send("enter")
                 assert app.wait_for("已添加任务", 6), "应 toast 已添加任务（D29）"
                 text = app.text()
@@ -654,7 +659,7 @@ class AddTaskSuite(Suite):
                 open_add_dialog_via_cmd(app, DUMMY_URL)
                 app.send(*(["bs"] * len(DUMMY_URL)))  # 清空预填再注入 ftp URL（对话框级校验）
                 app.type_text("ftp://example.invalid/file.bin")
-                app.send(*(["tab"] * 6))
+                app.send(*(["tab"] * 7))  # URL0 → 立即下载(7)（v1.38 限速字段插入）
                 app.send("enter")
                 app.pump(0.5)
                 text = app.text()
@@ -702,6 +707,101 @@ class AddTaskSuite(Suite):
                 app.pump(0.4)
                 assert_not_in("添加任务：HTTP(S)", app.text(), "对话框应关闭")
                 assert_in("正在下载 (0) │ 已完成 (0)", app.text(), "无任务创建")
+            finally:
+                app.graceful_quit()
+
+
+    def _case_20(self):
+        """QA-01-20（v1.41 修订同步）任务级限速键预填 fmt 规范化 + 键入规范化 + 无上传限速字段。
+
+        规程 v1.40/v1.41 口径：config task_max_download_speed 三代表行——
+        "2 MiB/s" → 预填 `2 MiB/s`；2000000（裸整数）→ `2000000 B/s`；
+        "2 MB/s"（旧写法废弃）→ 回退 0 → 预填 `0`；无上传限速字段行
+        （v1.40 退役）；限速字段无占位提示；键入即规范化（500k → `500 KiB/s`）。
+        主行（2 MiB/s）确认创建（改输 500k → 任务限速 512000）；其余行
+        预填断言后 Esc（有效性由 TP-10 实跑承载，此处不重复计时断言）。
+        """
+        @self.case("QA-01-20")
+        def go(env: Env):
+            import re
+            import subprocess
+            rows = (
+                ("2 MiB/s", "2 MiB/s"),
+                ("2000000", "2000000 B/s"),
+                ("2 MB/s", "0"),
+            )
+            for seq, (cfgval, prefill) in enumerate(rows):
+                env.write_config(
+                    f'[common]\ntask_max_download_speed = "{cfgval}"\n')
+                app = EzrApp(env.home, save_dir=env.save_dir)
+                try:
+                    open_add_dialog_via_cmd(
+                        app, env.fixture.url(f"five-m.bin?speed=900000&cd=a20_{seq}"))
+                    text = app.text()
+                    assert re.search(rf"下载限速\s*>\s*{re.escape(prefill)}\b", text), \
+                        f"config {cfgval!r} 预填应 fmt 为 {prefill!r}"
+                    assert_not_in("上传限速", text, "上传限速字段应已退役（v1.40）")
+                    if seq == 0:
+                        # 键入即规范化：URL0 →(Tab×3) 下载限速3，清预填 → 500k →
+                        # `500 KiB/s`（打开焦点 URL0；上传限速退役后下载限速 = Tab×3）
+                        app.send(*(["tab"] * 3))
+                        for _ in range(16):
+                            app.send("bs")
+                        app.type_text("500k")
+                        app.pump(0.3)
+                        assert re.search(r"下载限速\s*>\s*500 KiB/s", app.text()), \
+                            "键入 500k 应即规范化显示 500 KiB/s"
+                        # 确认创建（下载限速3 → 立即下载7 = Tab×4）
+                        app.send(*(["tab"] * 4))
+                        app.send("enter")
+                        assert app.wait_for("已添加任务", 6), "主行应创建成功"
+                    else:
+                        app.send("esc")
+                        app.pump(0.3)
+                finally:
+                    app.graceful_quit()
+
+    def _case_21(self):
+        """QA-01-21（v1.40 新增）并发字段满容量重启录入口径。
+
+        规程：输入 64（满 2 位）→ 末尾键入 8 = 清空重输（显示 8）；中位
+        键入被忽略（不插不动）；末尾满容量粘贴数字串 = 清空后录入粘贴值
+        2 位封顶（789 → 78）。产品单测锚：dialog_keys 满容量重启条目
+        （bug21 轮），本用例为端到端 UI 层同口径验证。
+        """
+        @self.case("QA-01-21")
+        def go(env: Env):
+            import re
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                open_add_dialog_via_cmd(app, env.fixture.url("three-m.bin?speed=400000"))
+                app.send("tab", "tab")  # URL0 → 保存到1 → 并发2
+                app.type_text("64")
+                app.pump(0.2)
+                assert re.search(r"并发\s*>\s*64\b", app.text()), "应输入 64"
+                # 末尾满 2 位键入 = 清空重输
+                app.type_text("8")
+                app.pump(0.2)
+                assert re.search(r"并发\s*>\s*8\b", app.text()), \
+                    "末尾满容量键入应清空重输（显示 8）"
+                assert_not_in("并发 > 64", app.text(), "清空重输后不应残留 64")
+                # 中位键入被忽略：光标移至行首（字段单字符，任意非行尾位）
+                app.send("left")
+                app.type_text("5")
+                app.pump(0.2)
+                assert re.search(r"并发\s*>\s*8\b", app.text()), \
+                    "中位键入应被忽略（不插不动）"
+                # 光标归行尾后粘贴 789：清空重输 + 2 位封顶 = 78
+                app.send("end")
+                os.write(app.fd, b"\x1b[200~" + b"789" + b"\x1b[201~")
+                app.pump(0.4)
+                text = app.text()
+                assert re.search(r"并发\s*>\s*78\b", text), \
+                    f"粘贴应清空重输且 2 位封顶（78）: {text[:120]!r}"
+                assert_not_in("并发 > 789", text, "粘贴第三位应被钳制")
+                app.send("esc")
+                app.pump(0.3)
+                assert_in("正在下载 (0) │ 已完成 (0)", app.text(), "Esc 后无任务创建")
             finally:
                 app.graceful_quit()
 

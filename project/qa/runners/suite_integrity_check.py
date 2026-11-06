@@ -373,7 +373,7 @@ class IntegrityCheckSuite(Suite):
                 # Tab → 焦点2(校验码) Enter 确认
                 app.send("m")
                 assert app.wait_for("修改任务", 3)
-                app.send("tab")
+                app.send("tab", "tab")
                 app.send("enter")
                 app.send("home")
                 app.send("enter")
@@ -414,7 +414,7 @@ class IntegrityCheckSuite(Suite):
                 app.send("m")
                 assert app.wait_for("修改任务", 3)
                 # 清除校验走 v1.32 NONE 选项承载（同主相口径，见主相注记）
-                app.send("tab")
+                app.send("tab", "tab")
                 app.send("enter")
                 app.send("home")
                 app.send("enter")

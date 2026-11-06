@@ -193,6 +193,22 @@ fn stub_206_trickle() -> std::net::SocketAddr {
     std::thread::spawn(move || {
         for c in listener.incoming().flatten() {
             let mut c = c;
+            // 先读完请求头再响应：早先版本 accept 后立即写响应，loopback 下
+            // 调度抖动时 hyper 会在请求发送中途收到响应 → "received unexpected
+            // message from connection" → 探测秒败 → 任务 Transient Failed、
+            // 无连接行（遗留受限项 quota flake「left:0」家族的真实根因）。
+            {
+                let mut reader = BufReader::new(&c);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    if line == "\r\n" || line == "\n" {
+                        break;
+                    }
+                }
+            }
             let _ = c.write_all(
                 b"HTTP/1.1 206 Partial Content\r\nContent-Length: 3000000\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
             );
@@ -217,6 +233,19 @@ fn stub_200_norange_slow() -> std::net::SocketAddr {
     std::thread::spawn(move || {
         for c in listener.incoming().flatten() {
             let mut c = c;
+            // 同 stub_206_trickle：先读请求头再响应（write-before-read 竞态根因同源）
+            {
+                let mut reader = BufReader::new(&c);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    if line == "\r\n" || line == "\n" {
+                        break;
+                    }
+                }
+            }
             let _ = c.write_all(
                 b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\n",
             );
@@ -379,16 +408,27 @@ async fn periodic_flush_writes_sidecar_mid_download() {
     );
     let dl = wait_state(&mut a, 0, TaskState::Downloading, 20).await;
     assert!(dl, "滴流分块应进入下载中");
-    tokio::time::sleep(std::time::Duration::from_millis(4600)).await;
-    a.tick().await;
+    // 周期落盘判定改轮询：滴流节奏受 2 核负载与 tick 对齐影响，原固定 4.6s 单次读
+    // 存在时序悬崖（notes/testing.md 假 FAIL 家族，遗留受限项修复）。轮询至首个
+    // flush 落盘，上限 20s（≈4 倍 flush 周期），判据语义不变——中途落盘本身即判据，
+    // flush_sidecar→() 突变体仍被超时杀伤。
     let sc = dir.join("f.bin.ezr");
-    let content = std::fs::read_to_string(&sc).unwrap_or_default();
+    let mut flushed = false;
+    for _ in 0..100 {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        if std::fs::read_to_string(&sc)
+            .map(|c| c.contains("\"downloaded\""))
+            .unwrap_or(false)
+        {
+            flushed = true;
+            break;
+        }
+    }
     assert!(
-        sc.exists() && content.contains("\"downloaded\""),
+        flushed,
         "分块下载中途必须周期落盘 sidecar（54:5 突变体 flush_sidecar→() 不落盘）；\
-         sc={} content_len={}",
-        sc.display(),
-        content.len()
+         sc={}",
+        sc.display()
     );
     a.on_key(KeyCode::Char(' '), KeyModifiers::empty());
     a.tick().await;
@@ -1061,11 +1101,16 @@ async fn engine_conns_quota_exact_and_unique_ids() {
         task_max_download_speed: 0,
     };
     handle.send(engine::Cmd::Start { spec }).await;
+    // 起步等待 150→300ms：2 核负载下引擎冷启动抖动，起步过早只会空转采样窗
+    // （遗留受限项 quota flake 家族的测试侧加固，断言语义不变）
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(25);
     let mut max_len = 0usize;
     let mut seen_ids: Vec<usize> = Vec::new();
     while std::time::Instant::now() < deadline {
-        match tokio::time::timeout(std::time::Duration::from_millis(400), erx.recv()).await {
+        // 单事件窗 400→800ms：2 核调度下事件到达抖动，采样容差加宽不改收集语义
+        // （25s deadline 上限不变，max_len==3 与序号互异断言原样）
+        match tokio::time::timeout(std::time::Duration::from_millis(800), erx.recv()).await {
             Ok(Some(engine::Evt::Progress { conns, .. })) => {
                 max_len = max_len.max(conns.len());
                 if conns.len() >= 3 {

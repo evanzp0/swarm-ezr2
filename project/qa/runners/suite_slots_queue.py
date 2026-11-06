@@ -513,8 +513,15 @@ class SlotsQueueSuite(Suite):
                 assert_in("不自动重试", app.text(), "404 应不自动重试")
                 app.pump(0.5)  # 失败切换窗 settle：转场瞬间注入按键会被事件循环吞键
                 app.send("r")
-                assert app.wait_for("等待中", 8) or app.wait_for("下载中", 10), \
-                    "不自动重试任务 R 后应重新排队"
+                # 断言落在长驻可观察物：R toast（≈4s，requeue_failed 专有文案）。
+                # 「等待中」中间态窗口可 <100ms（授槽 tick 对齐时），瞬时态断言
+                # 天然竞态（testing.md 假 FAIL 口径）——重排队→授槽→404 再探全链
+                # <1.5s，以 toast 为重排队证据，再探回「已失败」为续传证据。
+                assert app.wait_for("手动重试（等待中）", 8), \
+                    "不自动重试任务 R 后应弹手动重试 toast（重新排队）"
+                assert app.wait_for("已失败", 15), \
+                    "404 再探应回已失败（重排队→授槽→探测全链走通）"
+                assert_in("不自动重试", app.text(), "404 应不自动重试")
                 app.pump(1.0)
                 # 已达上限：503 瞬态 ×5 太慢——验证 R 对已失败态的通用语义
                 # （可达上限路径由 RB-03 覆盖；此处确认 R 不报错且状态出已失败）

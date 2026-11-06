@@ -119,7 +119,7 @@ class NamedProxySuite(Suite):
     def _dropdown_options(app: EzrApp) -> str:
         """展开添加对话框代理下拉并返回全画面文本（选项行内嵌其中）。"""
         open_add_dialog_via_cmd(app, DUMMY_URL)
-        app.send(*(["tab"] * 5))  # URL→目录→并发→校验→校验码→代理
+        app.send(*(["tab"] * 6))  # URL→目录→并发→下载限速→校验→校验码→代理（v1.38 限速字段插入）
         app.send("enter")         # 展开代理下拉
         assert app.wait_for("选择代理", 3), "代理下拉未展开"
         text = app.text()
@@ -137,8 +137,8 @@ class NamedProxySuite(Suite):
         if save_dir is None or save_dir:
             clear_dir_prefill(app)
         app.type_text(env.save_dir if save_dir is None else save_dir)
-        app.send(*(["tab"] * 3))                         # 目录→并发→校验→校验码
-        app.send("tab")                                  # 校验码(4)→代理(5)
+        app.send(*(["tab"] * 3))                         # 目录→并发→下载限速→校验
+        app.send(*(["tab"] * 2))                         # 校验(4)→校验码(5)→代理(6)（v1.38 限速字段插入）
         app.send("enter")                                # 展开代理下拉
         assert app.wait_for("选择代理", 3), "代理下拉未展开"
         app.send("home")
@@ -146,7 +146,7 @@ class NamedProxySuite(Suite):
             app.send("down")
         app.send("enter")                                # 选中
         app.pump(0.2)
-        app.send("tab")                                  # 代理(5)→确认(6)
+        app.send("tab")                                  # 代理(6)→立即下载(7)（v1.38 限速字段插入）
         app.send("enter")
         app.pump(0.3)
 

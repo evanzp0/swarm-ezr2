@@ -96,7 +96,7 @@ class TuiDisplaySuite(Suite):
                 ok = False
                 while time.time() < deadline:
                     app.pump(0.5)
-                    if re.search(r"↓ [1-9][\d.]* [KMG]?B/s", app.text()):
+                    if re.search(r"↓ [1-9][\d.]* [KMG]?i?B/s", app.text()):
                         ok = True
                         break
                 assert ok, "下载中应出现非零速度行"
@@ -332,10 +332,10 @@ class TuiDisplaySuite(Suite):
     def _case_09(self):
         """QA-TD-09 toast 反馈自动消失：出现清晰可读、数秒后消失无残留。
 
-        触发路径同步（v1.21 QA v138 会话）：原「满槽 Space 继续」toast 已随
-        v1.21 满槽提示退役而不可达（01-tui-display-09 括号示例已随 v1.21
-        退役口径同步）——改用「任务已存在」重复添加 toast
-        （QA-01-16 同源路径，稳定可达）：出现、数秒后自动消失、无残留。
+        触发路径同步（本轮）：原「任务已存在」toast 已随 v1.42/bug25 退役为
+        「错误」模态窗口（01-add-task-16，D56）——模态窗不自动消失，不可承载
+        toast 消失验证——改用「已添加任务」成功 toast（QA-01-20 同源路径，
+        稳定可达）：出现、数秒后自动消失、无残留。
         """
         @self.case("QA-TD-09")
         def go(env: Env):
@@ -343,15 +343,8 @@ class TuiDisplaySuite(Suite):
             try:
                 add_task_via_dialog(
                     app, env, env.fixture.url("five-m.bin?speed=500000"))
-                assert app.wait_for("已添加任务", 6)
-                # 重复添加同 URL 同目录 → 「任务已存在」toast
-                open_add_dialog_via_cmd(app, env.fixture.url("five-m.bin?speed=500000"))
-                app.send("tab")
-                clear_dir_prefill(app)
-                app.type_text(env.save_dir)
-                app.send("enter")
-                assert app.wait_for("任务已存在", 5), "toast 应出现且清晰可读"
-                assert app.wait_gone("任务已存在", 12), "toast 应数秒后自动消失"
+                assert app.wait_for("已添加任务", 6), "toast 应出现且清晰可读"
+                assert app.wait_gone("已添加任务", 12), "toast 应数秒后自动消失"
                 assert_not_in("◆ ⏳", app.text(), "toast 消失后无残留")
             finally:
                 app.graceful_quit()
@@ -412,13 +405,13 @@ class TuiDisplaySuite(Suite):
                 header = ""
                 while time.time() < deadline:
                     app.pump(0.4)
-                    m = re.search(r"全局 ↓ ([1-9][\d.]* [KMG]?B/s)", app.text())
+                    m = re.search(r"全局 ↓ ([1-9][\d.]* [KMG]?i?B/s)", app.text())
                     if m:
                         header = m.group(0)
                         break
                 assert header, "头部 ↓ 应显示真实速度（非零）"
                 text = app.text()
-                m = re.search(r"↑ ([\d.]+ [KMG]?B/s)", text)
+                m = re.search(r"↑ ([\d.]+ [KMG]?i?B/s)", text)
                 assert m and m.group(1) == "0 B/s", \
                     f"↑ 应恒为 0: {m.group(1) if m else '?'}"
                 m = re.search(r"并发 (\d+)", text)
@@ -456,7 +449,7 @@ class TuiDisplaySuite(Suite):
 
     @staticmethod
     def _task_speed_sample(app: "EzrApp") -> str | None:
-        """选中任务行（列表区，左 64 列）的速度读数（↓ X.X KB/s）；无读数返回 None。
+        """选中任务行（列表区，左 64 列）的速度读数（↓ X.X KiB/s，二进制族 v1.45）；无读数返回 None。
 
         跳过含「全局」的头部行与标题行；详情面板在右 64 列起，不参与匹配。
         （QA v148 轮注：本 helper 原置于 _case_14 与 _case_15 之间——_case_14
@@ -466,7 +459,7 @@ class TuiDisplaySuite(Suite):
             left = row[:64]
             if "全局" in left or "EZR Downloader" in left:
                 continue
-            m = re.search(r"↓ (\d+(?:\.\d+)? [KMG]?B/s)", left)
+            m = re.search(r"↓ (\d+(?:\.\d+)? [KMG]?i?B/s)", left)
             if m:
                 return m.group(1)
         return None
@@ -524,7 +517,7 @@ class TuiDisplaySuite(Suite):
                 while time.time() < zero_deadline:
                     app.pump(0.1)
                     row = self._task_speed_sample(app)
-                    m = re.search(r"全局\s+↓ (\d+(?:\.\d+)? [KMG]?B/s)",
+                    m = re.search(r"全局\s+↓ (\d+(?:\.\d+)? [KMG]?i?B/s)",
                                   app.text())
                     hdr = m.group(1) if m else None
                     if row is None and hdr is not None \
@@ -588,7 +581,7 @@ class TuiDisplaySuite(Suite):
             t = row_text(y, x0 + 1)
             if t.startswith("╰"):
                 break
-            m = re.match(r"\s*\d+\s+([\d.]+ [KMG]?B/s|-)\s+[\d.]+ [KMG]?B", t)
+            m = re.match(r"\s*\d+\s+([\d.]+ [KMG]?i?B/s|-)\s+[\d.]+ [KMG]?B", t)
             if not m:
                 continue
             v = m.group(1)
@@ -639,9 +632,9 @@ class TuiDisplaySuite(Suite):
                 while time.time() < deadline and len(samples) < 3:
                     app.pump(0.1)
                     ts = self._task_speed_sample(app)
-                    m = re.search(r"全局\s+↓ (\d+(?:\.\d+)? [KMG]?B/s)", app.text())
+                    m = re.search(r"全局\s+↓ (\d+(?:\.\d+)? [KMG]?i?B/s)", app.text())
                     conns = self._conn_speeds(app)
-                    dm = re.search(r"↓ \d+(?:\.\d+)? [KMG]?B/s\s+([\d.]+ [KMG]?B)/",
+                    dm = re.search(r"↓ \d+(?:\.\d+)? [KMG]?i?B/s\s+([\d.]+ [KMG]?B)/",
                                    app.text())
                     if ts is None or m is None or not conns or dm is None:
                         time.sleep(0.3)
@@ -1271,7 +1264,7 @@ class TuiDisplaySuite(Suite):
                 gd = self._panel_span(app, "添加任务：HTTP(S)")
                 assert gd is not None
                 tyd, ld, _rd = gd
-                app.send("tab", "tab", "tab")  # URL0→保存到1→并发2→校验3
+                app.send("tab", "tab", "tab", "tab")  # URL0→保存到1→并发2→下载限速3→校验4（v1.38 限速字段插入）
                 app.send("enter")              # 展开校验下拉
                 app.pump(0.3)
                 app.send(f"mclick:{ld + 10}:{tyd + 6}")

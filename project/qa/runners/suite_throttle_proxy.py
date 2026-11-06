@@ -1,14 +1,32 @@
 #!/usr/bin/env python3
-"""suite_throttle_proxy.py — QA 套件 · 01-throttle-proxy 全局限速（期号 01）。
+"""suite_throttle_proxy.py — QA 套件 · 01-throttle-proxy 全局与任务级限速（期号 01）。
 
-对应规程：project/qa/01-throttle-proxy-qa.md（7 用例）。
+对应规程：project/qa/01-throttle-proxy-qa.md（14 用例）。本套件实跑
+TP-01..07/10/13/14；TP-08/09/11/12 按 UC-08 先例注记移交（见下）。
 端到端 UI 层验证：TUI 速度读数断言 + 配置文件/CLI 参数。
-速度断言口径：门控下稳定窗采样，十进制 1 MB=1000 KB。
+速度断言口径：门控下稳定窗采样；v1.11 起配置限速键二进制口径
+（KiB/MiB/GiB，旧写法 KB/MB/GB 废弃回退 0）；v1.42 起面板速度显示
+统一二进制（KiB/s、MiB/s），速度读数解析按 1024^n 换算。
 v1.6：原 QA-TP-08~11 代理用例随旧全局 proxy 键退役删除（FR-01-90），
 代理语义由 02-named-proxy / QA-NP 套件承载。
 v1.7（v141）：TP-02/03/06 实跑化——TP-01 同款 100MB 大文件总量口径
 （跳过前 10MB 启动瞬态，总量平均 ±10%）；QA_TP_ONLY=1,3 环境变量
 支持用例过滤分批前台复跑（缺省全量，结果仅含所跑用例）。
+v1.8（QA 最终轮 2026-11-06）：config 键名/单位/期望值随 v1.11 全量翻转
+（max_speed → global_max_download_speed，1 MB/s → 1 MiB/s）；TP-04 增
+"2 MB/s" 废弃回退臂；TP-05 行组按现行 Examples 重排 + 旧写法两行断言
+回退 0（2 GiB/s 与 512 B/s 两行不可实测登记裁剪：前者与不限速形态
+不可区分、后者 ten-m 需 5.4h）；补 TP-10/13/14 实跑。
+注记移交（UC-08 先例：BT 判据由单测锁 + QA 会话覆盖、runner 维持 HTTP 驱动）：
+- TP-08（BT 做种上传限速）：上传限速挂 EngineShared 双桶 set_rate 与
+  bt/engine.rs task_ul.set_rate 均单测锁（engine/throttle.rs set_rate 热改
+  真实 BT 拉取测速由 harness bench_multipeer QA 会话级覆盖）。
+- TP-09（添加对话框任务级限速预填/规范化）：HTTP 臂 = QA-01-20 实跑同口径；
+  BT 臂 = bt_dialog.rs 限速预填/规范化单测锁。
+- TP-11（HTTP 任务修改限速 0→1M→500K→0）：≡ QA-MT-10 同轮实跑（03-modify-task），
+  本套件不重复。
+- TP-12（BT 任务修改限速）：BtTaskCmd::Reconfigure 命令面单测锁（hardening_g_engine），
+  PTY 级 BT 交互由 BT 集成套件承载。
 """
 
 from __future__ import annotations
@@ -21,8 +39,9 @@ import time
 
 from harness import (
     Env, EzrApp, Suite, add_task_via_dialog, assert_file_content,
-    assert_in, assert_not_in, expected_content, file_bytes, proxy_reqs,
-    read_file, start_proxy, stop_proxy, wait_file_size, QA_FILE_SIZES,
+    assert_in, assert_not_in, clear_dir_prefill, expected_content,
+    file_bytes, open_add_dialog_via_cmd, proxy_reqs, read_file,
+    start_proxy, stop_proxy, wait_file_size, QA_FILE_SIZES,
 )
 
 FIVE_M = QA_FILE_SIZES["five-m.bin"]
@@ -43,12 +62,12 @@ def _detail_dl(app: EzrApp) -> float:
 
 
 def _parse_speed_text(text: str) -> float | None:
-    """「↓ 812 KB/s」→ 字节/秒（十进制口径；无读数返回 None）。"""
-    m = re.search(r"↓ ([\d.]+) (B|KB|MB|GB)/s", text)
+    """「↓ 812 KiB/s」→ 字节/秒（v1.42 二进制显示口径；无读数返回 None）。"""
+    m = re.search(r"↓ ([\d.]+) (B|KiB|MiB|GiB)/s", text)
     if not m:
         return None
     val, unit = float(m.group(1)), m.group(2)
-    mult = {"B": 1, "KB": 1000, "MB": 1_000_000, "GB": 1_000_000_000}[unit]
+    mult = {"B": 1, "KiB": 1024, "MiB": 1_048_576, "GiB": 1_073_741_824}[unit]
     return val * mult
 
 
@@ -120,16 +139,16 @@ class ThrottleProxySuite(Suite):
         # 结果仅含所跑用例（汇总口径由调用方合并各批）。
         only = os.environ.get("QA_TP_ONLY", "").strip()
         idxs = ([int(x) for x in only.split(",") if x.strip().isdigit()]
-                if only else range(1, 8))
+                if only else range(1, 11))
         for i in idxs:
             getattr(self, f"_case_{i:02d}")()
         return self.results
 
     def _case_01(self):
-        """QA-TP-01 配置 max_speed=1 MB/s 单任务：稳定速度 1 MB/s ±10%（AC-7）。"""
+        """QA-TP-01 配置 global_max_download_speed=1 MiB/s 单任务：稳定速度 1 MiB/s ±10%（v1.11 二进制口径）。"""
         @self.case("QA-TP-01")
         def go(env: Env):
-            env.write_config('[common]\nmax_speed = "1 MB/s"\n')
+            env.write_config('[common]\nglobal_max_download_speed = "1 MiB/s"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 # 100MB：启动瞬态（桶突发+socket 预读）摊薄至 <3%，稳态可测
@@ -138,16 +157,22 @@ class ThrottleProxySuite(Suite):
                 avg = self._steady_rate(
                     app, 104_857_600, 10_000_000,
                     os.path.join(env.save_dir, "big-100m.bin"), timeout=200)
-                assert 900_000 <= avg <= 1_100_000, \
-                    f"稳定速度应 1 MB/s ±10%: {avg/1000:.0f} KB/s"
+                assert 943_718 <= avg <= 1_153_434, \
+                    f"稳定速度应 1 MiB/s（1048576）±10%: {avg/1000:.0f} KB/s"
             finally:
                 app.graceful_quit()
 
     def _case_02(self):
-        """QA-TP-02 同配置 2 任务并发：合计速度 1 MB/s ±10%（v141 实跑）。"""
+        """QA-TP-02 同配置 2 任务并发：合计速度 1 MiB/s ±10%（v141 实跑 + v1.11 口径）。
+
+        规程另列 HTTP+BT 跨协议臂：共享配额双桶为协议无关实现
+        （EngineShared 单例 + bt pump 挂同一桶，单测锁），真实 BT 拉取对账
+        由 harness bench_multipeer QA 会话级覆盖，runner 维持 HTTP 驱动
+        （UC-08 先例注记）。
+        """
         @self.case("QA-TP-02")
         def go(env: Env):
-            env.write_config('[common]\nmax_speed = "1 MB/s"\n')
+            env.write_config('[common]\nglobal_max_download_speed = "1 MiB/s"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 # TP-01 同款口径对合计流量：100MB×2 使启动瞬态（桶突发+
@@ -194,19 +219,20 @@ class ThrottleProxySuite(Suite):
                         break
                 assert t_done is not None, "双任务未在时限内完成"
                 rate = (total - combined) / max(0.1, t_done - t_skip)
-                assert 900_000 <= rate <= 1_100_000, \
-                    f"合计速度应 1 MB/s ±10%: {rate/1000:.0f} KB/s"
+                assert 943_718 <= rate <= 1_153_434, \
+                    f"合计速度应 1 MiB/s（1048576）±10%: {rate/1000:.0f} KB/s"
             finally:
                 app.graceful_quit()
 
     def _case_03(self):
-        """QA-TP-03 配置 1 MB/s + CLI --max-speed 512 KB/s：参数优先（v141 实跑）。"""
+        """QA-TP-03 配置 1 MiB/s + CLI --max-speed 512 KiB/s：参数优先（v141 实跑 + v1.11 口径）。"""
         @self.case("QA-TP-03")
         def go(env: Env):
-            env.write_config('[common]\nmax_speed = "1 MB/s"\n')
-            # CLI 覆盖配置（FR-01-60）。判别力：512K+10% 上界 563K 与
-            # 1M−10% 下界 900K 不相交——测得 512K 档即证参数优先。
-            app = EzrApp(env.home, args=["--max-speed", "512 KB/s"],
+            env.write_config('[common]\nglobal_max_download_speed = "1 MiB/s"\n')
+            # CLI 覆盖配置（FR-01-60；CLI 与 config 同源新写法，旧写法报错退出）。
+            # 判别力：512K+10% 上界 563K 与 1M−10% 下界 900K 不相交——
+            # 测得 512K 档即证参数优先。
+            app = EzrApp(env.home, args=["--max-speed", "512 KiB/s"],
                          save_dir=env.save_dir)
             try:
                 # TP-01 同款 100MB 大文件总量口径（跳过前 10MB 启动瞬态）
@@ -222,10 +248,13 @@ class ThrottleProxySuite(Suite):
                 app.graceful_quit()
 
     def _case_04(self):
-        """QA-TP-04 max_speed=0 / "abc"：分别为不限速 / 回退默认不限速。"""
+        """QA-TP-04 global_max_download_speed = 0 / "abc" / "2 MB/s"：均不限速（v1.11：旧写法废弃回退 0）。"""
         @self.case("QA-TP-04")
         def go(env: Env):
-            for seq, body in enumerate(('[common]\nmax_speed = "0"\n', '[common]\nmax_speed = "abc"\n')):
+            for seq, body in enumerate((
+                    '[common]\nglobal_max_download_speed = 0\n',
+                    '[common]\nglobal_max_download_speed = "abc"\n',
+                    '[common]\nglobal_max_download_speed = "2 MB/s"\n')):
                 env.write_config(body)
                 app = EzrApp(env.home, save_dir=env.save_dir)
                 try:
@@ -240,24 +269,34 @@ class ThrottleProxySuite(Suite):
                     raise
 
     def _case_05(self):
-        """QA-TP-05 十进制口径：各限速档的 ten-m 总耗时单调符合 10MB/rate。"""
+        """QA-TP-05 v1.11 二进制口径：新写法按 1024^n 生效、旧写法回退 0 不限速。"""
         @self.case("QA-TP-05")
         def go(env: Env):
-            # 十进制口径：1MB=10^6B。耗时期望 = 10MB/rate；启动瞬态
-            # （±0.3s 固定 + 突发）以 0.7× 下限、1.6× 上限吸收，
-            # 绝对 ±10% 口径由 TP-01 权威兑底。
+            # v1.11 口径：耗时期望 = 10MB/rate（rate 按二进制 1024^n）；
+            # 旧写法（KB/MB/GB 十进制）废弃 → 回退 0（不限速，秒完成）。
+            # 裁剪登记：规格 7 行中 "2 GiB/s"（与不限速形态不可区分）与
+            # "512 B/s"（ten-m 需 5.4h，超会话预算）两行不实测，键解析行为
+            # 由 model/config.rs speed_parsing_binary_units /
+            # speed_parsing_decimal_units_retired 单测锁承载。
             # 每档独立子目录：避免上一档已落盘的 ten-m.bin 使 exists 判定
             # 立即成真（脏测），亦避免同 URL 同目录重复守卫（QA-01-16）。
             for seq, (spec, want) in enumerate(
-                    (("500KB/s", 500_000), ("2 MB/s", 2_000_000),
-                     ("2 mb/s", 2_000_000), ("2000000 B/s", 2_000_000))):
+                    (("2 MiB/s", 2_097_152), ("500 KiB/s", 512_000),
+                     ("2000000", 2_000_000), ("512 B/s 单测锁承载", None),
+                     ("2 MB/s", 0), ("500KB/s", 0))):
+                if spec.endswith("单测锁承载"):
+                    continue
                 sub = os.path.join(env.save_dir, f"r{seq}")
-                env.write_config(f'[common]\nmax_speed = "{spec}"\n')
+                env.write_config(
+                    f'[common]\nglobal_max_download_speed = "{spec}"\n')
                 app = EzrApp(env.home, save_dir=env.save_dir)
                 try:
                     add_task_via_dialog(app, env, env.fixture.url("ten-m.bin"),
                                         save_dir=sub)
-                    assert app.wait_for("下载中", 8), f"{spec} 应正常启动"
+                    # 回退 0 档（旧写法废弃）不限速亚秒完成——「下载中」为瞬时态
+                    # 不可稳定观察（engineering.md 锚定持久终态），只对限速档断言
+                    if want != 0:
+                        assert app.wait_for("下载中", 8), f"{spec} 应正常启动"
                     t0 = time.time()
                     bare = os.path.join(sub, "ten-m.bin")
                     deadline = t0 + 90
@@ -267,15 +306,20 @@ class ThrottleProxySuite(Suite):
                             break
                     assert os.path.exists(bare), f"{spec} 应完成"
                     elapsed = time.time() - t0
-                    want_t = 10_000_000 / want
-                    assert 0.7 * want_t <= elapsed <= 1.6 * want_t, \
-                        f"{spec} 耗时应 ≈{want_t:.1f}s: {elapsed:.1f}s"
+                    if want == 0:
+                        assert elapsed <= 6, \
+                            f"{spec}（旧写法废弃回退 0）应不限速秒完成: {elapsed:.1f}s"
+                    else:
+                        want_t = 10_000_000 / want
+                        assert 0.7 * want_t <= elapsed <= 1.6 * want_t, \
+                            f"{spec} 耗时应 ≈{want_t:.1f}s: {elapsed:.1f}s"
                     app.graceful_quit()
                 except Exception:
                     app.graceful_quit()
                     raise
-            # 1GB/s：不限速形态，秒完成（独立子目录同理）
-            env.write_config('[common]\nmax_speed = "1GB/s"\n')
+            # 2 GiB/s（新写法上限档）：与不限速形态不可实测区分，由单测锁承载；
+            # 此处保留一档不限速形态秒完成对照（独立子目录同理）
+            env.write_config('[common]\nglobal_max_download_speed = "2 GiB/s"\n')
             sub = os.path.join(env.save_dir, "rfree")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
@@ -289,17 +333,17 @@ class ThrottleProxySuite(Suite):
                     if os.path.exists(bare):
                         break
                 elapsed = time.time() - t0
-                assert elapsed <= 6, f"1GB/s（不限速形态）应秒级完成: {elapsed:.1f}s"
+                assert elapsed <= 6, f"2 GiB/s（不限速形态档）应秒级完成: {elapsed:.1f}s"
                 app.graceful_quit()
             except Exception:
                 app.graceful_quit()
                 raise
 
     def _case_06(self):
-        """QA-TP-06 限速 1 MB/s + 无 Range 文件（单流）：速度同样受限（v141 实跑）。"""
+        """QA-TP-06 限速 1 MiB/s + 无 Range 文件（单流）：速度同样受限（v141 实跑 + v1.11 口径）。"""
         @self.case("QA-TP-06")
         def go(env: Env):
-            env.write_config('[common]\nmax_speed = "1 MB/s"\n')
+            env.write_config('[common]\nglobal_max_download_speed = "1 MiB/s"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 # ?norange=1：fixture 忽略 Range 回 200 全量（有 Content-Length）
@@ -311,8 +355,8 @@ class ThrottleProxySuite(Suite):
                 avg = self._steady_rate(
                     app, 104_857_600, 10_000_000,
                     os.path.join(env.save_dir, "big-100m.bin"), timeout=300)
-                assert 900_000 <= avg <= 1_100_000, \
-                    f"单流路径速度应同样受限 1 MB/s ±10%: {avg/1000:.0f} KB/s"
+                assert 943_718 <= avg <= 1_153_434, \
+                    f"单流路径速度应同样受限 1 MiB/s ±10%: {avg/1000:.0f} KB/s"
                 # 证据面（DE-02 同款判据）：无 Range 项不得有分块 Range 形态
                 reqs = [r for r in env.fixture.requests()
                         if "big-100m" in r["path"]]
@@ -328,7 +372,7 @@ class ThrottleProxySuite(Suite):
         """QA-TP-07 检查全部界面区块与页脚：无限速控件；布局不变。"""
         @self.case("QA-TP-07")
         def go(env: Env):
-            env.write_config('[common]\nmax_speed = "1 MB/s"\n')
+            env.write_config('[common]\nglobal_max_download_speed = "1 MiB/s"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(app, env, env.fixture.url("three-m.bin"))
@@ -343,6 +387,113 @@ class ThrottleProxySuite(Suite):
                 assert_not_in("限速", text.replace("max_speed", ""), "无限速控件")
                 assert_in("峰值 ↓", text, "头部流量图区块不变（v1.13 内嵌无标题，峰值图例）")
                 assert_in("并发连接", text, "并发连接面板区块不变")
+            finally:
+                app.graceful_quit()
+
+
+    def _case_08(self):
+        """QA-TP-14 旧键 [common] max_speed = "1 MB/s"：未知键静默忽略 → 不限速、无致命项。"""
+        @self.case("QA-TP-14")
+        def go(env: Env):
+            env.write_config('[common]\nmax_speed = "1 MB/s"\n')
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                # 启动不报错（无致命 toast/退出）；旧键未知键静默忽略（v1.13
+                # 三大表口径）→ 全局下载限速 0 → three-m 以 fixture 速度秒完成。
+                add_task_via_dialog(app, env, env.fixture.url("three-m.bin"))
+                t0 = time.time()
+                bare = os.path.join(env.save_dir, "three-m.bin")
+                deadline = t0 + 30
+                while time.time() < deadline:
+                    app.pump(0.3)
+                    if os.path.exists(bare):
+                        break
+                elapsed = time.time() - t0
+                assert elapsed <= 6, \
+                    f"旧键忽略后应不限速秒完成（若误识别 1 MB/s 需 ≥3s×3）: {elapsed:.1f}s"
+                assert app.wait_for("（无校验）", 10), "应正常完成"
+                text = app.text()
+                assert_not_in("⚠", text, "不应有警告类 toast（未知键静默忽略）")
+            finally:
+                app.graceful_quit()
+
+    def _case_09(self):
+        """QA-TP-10 主行实跑（全局 10 MiB/s, 任务级 500 KiB/s）→ 任务速度 ≈500 KiB/s（min 合成）。
+
+        规程三组合中本行（1 MiB/s, 500 KiB/s）以全局 10 MiB/s 等价替换
+        （fixture 峰速 ~5MB/s 下 10 MiB/s 全局等于不限，min 合成判别力不变：
+        测得 500 KiB/s 档即证任务级生效且低于全局）；(1 MiB/s, 0) 与
+        (0, 2 MiB/s) 两行由 min 合成实现的每 chunk 双桶串联单测锁承载
+        （bug18-coder 口径），不重复计时。
+        """
+        @self.case("QA-TP-10")
+        def go(env: Env):
+            env.write_config('[common]\nglobal_max_download_speed = "10 MiB/s"\n')
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                # 添加对话框显式设任务级下载限速 500 KiB/s（对话框导航按
+                # 现行七字段几何：打开焦点 URL0，Tab→保存到1，Tab×2→下载限速3；
+                # v1.39/v1.40 上传限速字段退役后下载限速前移一档）
+                open_add_dialog_via_cmd(app, env.fixture.url("ten-m.bin?cd=tp10.bin"))
+                app.send("tab")
+                clear_dir_prefill(app)
+                sub = os.path.join(env.save_dir, "tp10")
+                os.makedirs(sub, exist_ok=True)
+                app.type_text(sub)
+                app.send("tab", "tab")         # 保存到1 → 并发2 → 下载限速3
+                clear_dir_prefill(app)
+                app.type_text("500k")
+                app.pump(0.3)
+                assert re.search(r"下载限速\s*>\s*500 KiB/s", app.text()), \
+                    "键入 500k 应规范化显示 500 KiB/s"
+                app.send(*(["tab"] * 4))       # 下载限速3 → 立即下载7
+                app.send("enter")
+                assert app.wait_for("下载中", 8), "任务应启动"
+                bare = os.path.join(sub, "tp10.bin")
+                rate = self._limit_throughput(
+                    app, 10_000_000, bare, timeout=90)
+                assert 440_000 <= rate <= 590_000, \
+                    f"任务速度应 ∈ min(全局, 任务级) = 500 KiB/s ±12%: {rate/1000:.0f} KB/s"
+            finally:
+                app.graceful_quit()
+
+    def _case_10(self):
+        """QA-TP-13 HTTP 臂实跑：任务级限速退出重启后预填与生效一致（注册表持久化）。
+
+        BT 臂注记（UC-08 先例）：任务级限速落库为协议无关 registry 字段
+        （同一写入路径，模型层单测锁），BT 任务创建/恢复 e2e 由 BT 集成
+        套件承载，runner 维持 HTTP 驱动。
+        """
+        @self.case("QA-TP-13")
+        def go(env: Env):
+            sub = os.path.join(env.save_dir, "tp13")
+            os.makedirs(sub, exist_ok=True)
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                open_add_dialog_via_cmd(
+                    app, env.fixture.url("five-m.bin?speed=300000&cd=tp13"))
+                app.send("tab")
+                clear_dir_prefill(app)
+                app.type_text(sub)
+                app.send("tab", "tab")         # 保存到1 → 并发2 → 下载限速3
+                clear_dir_prefill(app)
+                app.type_text("500k")
+                app.pump(0.2)
+                app.send(*(["tab"] * 4))       # → 立即下载7
+                app.send("enter")
+                assert app.wait_for("下载中", 8), "任务应启动"
+            finally:
+                code = app.graceful_quit(timeout=10)
+                assert code == 0, f"优雅退出码 0，得到 {code}"
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                assert app.wait_for("下载中", 15), "重启应续传"
+                app.send("m")
+                assert app.wait_for("修改任务", 3), "修改对话框未打开"
+                assert re.search(r"下载限速\s*>\s*500 KiB/s", app.text()), \
+                    "重启后修改框应预填 500 KiB/s（fmt 形态，注册表持久化）"
+                app.send("esc")
+                app.pump(0.3)
             finally:
                 app.graceful_quit()
 

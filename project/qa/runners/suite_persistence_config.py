@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """suite_persistence_config.py — QA 套件 · 01-persistence-config 持久化配置与生命周期（期号 01）。
 
-对应规程：project/qa/01-persistence-config-qa.md（9 用例）。
+对应规程：project/qa/01-persistence-config-qa.md（12 用例；本套件实跑 PC-01..11，PC-12 注记移交 hardening_v115）。
+QA-PC-12（旧格式 config 兼容口径）按 UC-08 先例注记移交：行为由
+hardening_v115.rs（锚 01-persistence-config-12）集成套件锁死，本 pty 套件不重复。
 端到端 UI 层验证：CLI 启动/退出操作 + ~/.ezr 磁盘产物观察 + TUI 状态断言 + 双实例进程操作。
 只经用户可达入口，不进入项目内部 API。
 
@@ -143,7 +145,7 @@ class PersistenceConfigSuite(Suite):
         @self.case("QA-PC-02")
         def go(env: Env):
             # 引擎侧限速拉开下载窗：sidecar 随首块落盘，完成前有稳定观察窗
-            env.write_config('[common]\nmax_speed = "1 MB/s"\n')
+            env.write_config('[common]\nglobal_max_download_speed = "1 MiB/s"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(app, env, env.fixture.url("three-m.bin?speed=700000"))
@@ -247,7 +249,7 @@ class PersistenceConfigSuite(Suite):
             # ④ http_concurrency = 99 → 钳制 64（规格已随实现，Gherkin/规程已同步）
             # 口径：详情并发为「活跃连接数」随限速/块完成波动，不等于配置值；
             # 确定性口径 = sidecar 落盘的任务 concurrency（spec 钳制后值）。
-            env.write_config('[http]\nhttp_concurrency = 99\n\n[common]\nmax_speed = "2 MB/s"\n')
+            env.write_config('[http]\nhttp_concurrency = 99\n\n[common]\nglobal_max_download_speed = "2 MiB/s"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(app, env, env.fixture.url("ten-m.bin"))
@@ -269,8 +271,8 @@ class PersistenceConfigSuite(Suite):
             except Exception:
                 app.graceful_quit()
                 raise
-            # ⑤ max_speed = xyz → 解析 0 不限速
-            env.write_config('[common]\nmax_speed = "xyz"\n')
+            # ⑤ global_max_download_speed = xyz → 非法值回退 0 不限速
+            env.write_config('[common]\nglobal_max_download_speed = "xyz"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 add_task_via_dialog(app, env, env.fixture.url("three-m.bin"))
@@ -317,8 +319,8 @@ class PersistenceConfigSuite(Suite):
         @self.case("QA-PC-06")
         def go(env: Env):
             # 引擎侧限速：fixture ?speed 为单请求口径，多连接聚合后失效；
-            # max_speed 保证任务占用槽位的时间窗（TP-01 权威口径）
-            env.write_config('[common]\ndownload_slots = 2\nmax_speed = "1 MB/s"\n')
+            # global_max_download_speed 保证任务占用槽位的时间窗（TP-01 权威口径）
+            env.write_config('[common]\ndownload_slots = 2\nglobal_max_download_speed = "1 MiB/s"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
                 for i in range(4):
@@ -364,7 +366,7 @@ class PersistenceConfigSuite(Suite):
         def go(env: Env):
             # 引擎侧限速：续传窗口多秒级，「下载中」徽标可被多帧捕获；
             # 1 MB/s 保证退出时任务仍在途（sidecar 未删除）
-            env.write_config('[common]\nmax_speed = "1 MB/s"\n')
+            env.write_config('[common]\nglobal_max_download_speed = "1 MiB/s"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             add_task_via_dialog(app, env, env.fixture.url("five-m.bin"))
             self._pause_at_progress(app, min_pct=30.0)
@@ -399,7 +401,7 @@ class PersistenceConfigSuite(Suite):
             # 引擎侧限速保证续传窗口（同 PC-08 口径）
             for seq, key in enumerate(("esc", "ctrl_c")):
                 sub = os.path.join(env.save_dir, f"k{seq}")
-                env.write_config('[common]\nmax_speed = "1 MB/s"\n')
+                env.write_config('[common]\nglobal_max_download_speed = "1 MiB/s"\n')
                 app = EzrApp(env.home, save_dir=env.save_dir)
                 add_task_via_dialog(app, env, env.fixture.url("five-m.bin"),
                                     save_dir=sub)
@@ -437,7 +439,7 @@ class PersistenceConfigSuite(Suite):
         """QA-PC-13（v1.18 新增）全量 36 键合法非默认值生效冒烟（D62③）。
 
         零警告 + 可观察键逐项生效（download_dir 预填/落盘、download_slots、
-        block_size_http、http_concurrency 回填、max_speed）+ BT 键预填生效
+        block_size_http、http_concurrency 回填、global_max_download_speed）+ BT 键预填生效
         （bt_concurrency、http/udp trackers）+ 下载完成产物完整。
         """
         @self.case("QA-PC-13")
@@ -447,7 +449,7 @@ class PersistenceConfigSuite(Suite):
                 "[common]\n"
                 f'download_dir = "{cfg_dir}"\n'
                 "download_slots = 3\n"
-                'max_speed = "2 MB/s"\n'
+                'global_max_download_speed = "2 MiB/s"\n'
                 "\n"
                 '[[common.proxy]]\n'
                 'name = "QA13-HTTP"\n'

@@ -152,17 +152,17 @@ def _conns_data_rows(app: EzrApp) -> list[tuple[int, str | None, str | None]]:
     out: list[tuple[int, str | None, str | None]] = []
     for y in range(start + 1, app.screen.lines):
         seg = _right_text(app, y).replace("│", " ")
-        m = re.match(r"\s*(\d+)\s+([\d.]+ [KMG]?B/s|-)\s+([\d.]+ [KMG]?B)\s*$", seg)
+        m = re.match(r"\s*(\d+)\s+([\d.]+ [KMG]?i?B/s|-)\s+([\d.]+ [KMG]?B)\s*$", seg)
         if m:
             out.append((int(m.group(1)), m.group(2), m.group(3)))
     return out
 
 
 def _speed_to_bs(text: str) -> float:
-    """把 fmt_speed 形态（如 '196.9 KB/s'）解析为 B/s（十进制口径）。"""
-    m = re.match(r"([\d.]+) ([KMG]?)B/s", text.strip())
+    """把 fmt_speed 形态（如 '196.9 KiB/s'）解析为 B/s（v1.42 二进制族口径）。"""
+    m = re.match(r"([\d.]+) ([KMG]?)(i?)B/s", text.strip())
     assert m, f"速度形态不符: {text!r}"
-    mult = {"": 1.0, "K": 1e3, "M": 1e6, "G": 1e9}[m.group(2)]
+    mult = {"": 1.0, "K": 1024.0, "M": 1024.0**2, "G": 1024.0**3}[m.group(2)]
     return float(m.group(1)) * mult
 
 
@@ -485,7 +485,7 @@ class UiConnsSuite(Suite):
                     if ms:
                         mult = {"": 1.0, "K": 1e3, "M": 1e6, "G": 1e9}[ms.group(2)]
                         sess_seen.append(int(float(ms.group(1)) * mult))
-                    mg = re.search(r"全局 ↓ ([1-9][\d.]* [KMG]?B/s)", text)
+                    mg = re.search(r"全局 ↓ ([1-9][\d.]* [KMG]?i?B/s)", text)
                     if mg:
                         global_seen = parse_speed(mg.group(1))
                     if len(peak_seen) >= 3 and len(sess_seen) >= 3 and global_seen > 0:
@@ -496,10 +496,10 @@ class UiConnsSuite(Suite):
                 assert len(sess_seen) >= 2 and sess_seen[-1] > sess_seen[0], \
                     f"会话已下载应随进度增量累计: {sess_seen[:6]}"
                 assert global_seen > 0, "全局 ↓ 应为各任务速度和（非零）"
-                mu = re.search(r"↑ (\d+(?:\.\d+)? [KMG]?B/s)", app.text())
+                mu = re.search(r"↑ (\d+(?:\.\d+)? [KMG]?i?B/s)", app.text())
                 assert mu and mu.group(1) == "0 B/s", f"↑ 应恒 0: {mu.group(1) if mu else '?'}"
                 # 峰值 = 历史最大（与采样一致、单调不减）
-                mp = re.search(r"峰值 ↓ (\d+(?:\.\d+)? [KMG]?B/s)", app.text())
+                mp = re.search(r"峰值 ↓ (\d+(?:\.\d+)? [KMG]?i?B/s)", app.text())
                 assert mp, "峰值 ↓ 应显示"
                 assert parse_speed(mp.group(1)) >= global_seen * 0.5, \
                     "峰值应 ≥ 近期速度采样（历史最大口径）"
@@ -564,13 +564,15 @@ class UiConnsSuite(Suite):
                         break
                 assert active, "12s 内应出现活跃连接（徽标 x/y 项 的 x 非零）"
                 c = _title_row(app, "并发连接")
-                # 表头三列：序号(4)/下载速度(8)/累计下载(8) 单空格分隔（列空间定位）
+                # 表头三列：序号(4 左对齐)/下载速度(12 右对齐)/累计下载(10 右对齐)
+                # 单空格分隔（v1.42/bug25：速度 8→12、累计 8→10、速度/累计表头
+                # 右对齐——CJK 表头显示宽 8，右对齐起点 = 列起点+列宽−8）
                 xs = _find_in_row(app, c + 1, "序号", start_col=64)
                 assert xs is not None, "表头应有序号列"
                 xd = _find_in_row(app, c + 1, "下载速度", start_col=xs + 2)
                 xc = _find_in_row(app, c + 1, "累计下载", start_col=xd + 4)
-                assert xd == xs + 5 and xc == xd + 9, \
-                    f"表头列宽应 4/8/8 单空格分隔: 序号@{xs} 速度@{xd} 累计@{xc}"
+                assert xd == xs + 9 and xc == xd + 11, \
+                    f"表头列宽应 4/12/10 右对齐（v1.42）: 序号@{xs} 速度@{xd} 累计@{xc}"
                 # 数据行 1 基升序
                 data = _conns_data_rows(app)
                 ids = [r[0] for r in data]

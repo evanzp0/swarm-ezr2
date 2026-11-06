@@ -1319,8 +1319,15 @@ async fn peer_pump(
         }
     });
     loop {
-        match out_rx.recv().await {
-            Some(PeerOut::Send(m)) => {
+        // recv 是 channel 操作（取消安全），timeout 到期仅代表本窗内无出站帧，
+        // 不存在半帧消费问题；读半部仍由独立 reader 任务独占。
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(PEER_KEEPALIVE_SECS),
+            out_rx.recv(),
+        )
+        .await
+        {
+            Ok(Some(PeerOut::Send(m))) => {
                 let frame = peer::encode_msg(&m);
                 if wr.write_all(&frame).await.is_err() {
                     let _ = tx
@@ -1335,7 +1342,7 @@ async fn peer_pump(
                 }
                 let _ = wr.flush().await;
             }
-            Some(PeerOut::Drop) | None => {
+            Ok(Some(PeerOut::Drop)) | Ok(None) => {
                 let _ = tx
                     .send((
                         conn_id,
@@ -1346,12 +1353,36 @@ async fn peer_pump(
                     .await;
                 break;
             }
+            Err(_idle) => {
+                // 线路空闲超阈值：发 keep-alive（0 长帧）防对端按 ~2 分钟静默超时断连。
+                // timeout 每轮重置，仅连续空闲达阈值才触发；被置换连接先收
+                // PeerOut::Drop（优先级高于保活），二者不竞争。
+                let frame = peer::encode_msg(&peer::PeerMsg::KeepAlive);
+                if wr.write_all(&frame).await.is_err() {
+                    let _ = tx
+                        .send((
+                            conn_id,
+                            PeerIn::Closed {
+                                reason: "写入失败".into(),
+                            },
+                        ))
+                        .await;
+                    break;
+                }
+                let _ = wr.flush().await;
+            }
         }
     }
     graceful_close(wr, reader, Duration::from_secs(GRACE_CLOSE_SECS)).await;
 }
 
 const GRACE_CLOSE_SECS: u64 = 5;
+
+/// 线路空闲超过该秒数发送 keep-alive（0 长帧）：对端普遍按 ~2 分钟静默断连（BEP 3 惯例），
+/// 90s 低于该阈值、高于空闲置换窗（默认 60s）——被置换连接先收 PeerOut::Drop，
+/// keep-alive 不与之竞争。做种任务不参与空闲置换（!seeding 门控），
+/// 其长闲置连接依赖本保活维持（遗留受限项「ezr 不发 KeepAlive」的修复）。
+const PEER_KEEPALIVE_SECS: u64 = 90;
 
 async fn graceful_close(
     mut wr: tokio::net::tcp::OwnedWriteHalf,

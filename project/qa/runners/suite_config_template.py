@@ -38,10 +38,10 @@ def operator_template_text() -> str:
     with open(FEATURE_PATH, encoding="utf-8") as f:
         lines = f.read().split("\n")
     start = next(i for i, l in enumerate(lines)
-                 if l.rstrip().endswith("specifier v1.13）："))
+                 if l.rstrip().endswith("修订注）："))
     end = next(i for i, l in enumerate(lines) if i > start and l.strip() == "）")
     body = [l[2:] if l.startswith("  ") else l for l in lines[start + 1:end]]
-    assert len(body) == 174, f"钦定原文应为 174 行，解析得 {len(body)}"
+    assert len(body) == 190, f"钦定原文应为 190 行，解析得 {len(body)}"
     for sep, decl in (("# ===== 公共配置 =====", "[common]"),
                       ("# ===== HTTP 引擎配置 =====", "[http]"),
                       ("# ===== BT 引擎配置 =====", "[bt]")):
@@ -54,10 +54,10 @@ def operator_template_text() -> str:
     assert not any(_re.match(r"^# [a-z_][a-z_0-9]*：", l) for l in body), \
         "v1.12：键注释首行不得再带键名前缀"
     active = [l for l in body if l.strip() and not l.startswith("#")]
-    assert len(active) == 39, \
-        f"v1.13 活跃行 = 36 键值 + 3 表声明，解析得 {len(active)}"
-    assert sum(1 for l in body if l.startswith("# 取值范围")) == 36, \
-        "v1.13：36 键取值范围注释保持"
+    assert len(active) == 43, \
+        f"v1.14 活跃行 = 40 键值 + 3 表声明，解析得 {len(active)}"
+    assert sum(1 for l in body if l.startswith("# 取值范围")) == 40, \
+        "v1.14：40 键取值范围注释保持"
     assert sum(1 for l in body if l.startswith("# [[common.proxy]]")) == 2, \
         "v1.13：proxy 双示例块保持注释（D63②）"
     return "\n".join(body) + "\n"
@@ -103,13 +103,16 @@ class ConfigTemplateSuite(Suite):
                     body = f.read().split("\n")
                 nonblank = [l for l in body if l.strip()]
                 active = [l for l in nonblank if not l.startswith("#")]
-                assert len(active) == 39, \
-                    f"v1.13 活跃行 = 36 键值 + 3 表声明，实得 {len(active)}"
-                # 36 键示例值与默认值口径逐一相符（v1.11 三表版抽验全集）
+                assert len(active) == 43, \
+                    f"v1.14 活跃行 = 40 键值 + 3 表声明，实得 {len(active)}"
+                # 40 键示例值与默认值口径逐一相符（v1.14 四限速键 + listen_port）
                 text = "\n".join(body)
                 for key_line in ("download_dir = \"\"",
                                  "download_slots = 5",
-                                 "max_speed = 0",
+                                 "global_max_download_speed = 0",
+                                 "global_max_upload_speed = 0",
+                                 "task_max_download_speed = 0",
+                                 "task_max_upload_speed = 0",
                                  "block_size_http = 1048576",
                                  "http_concurrency = 4",
                                  "max_retries = 5",
@@ -143,6 +146,7 @@ class ConfigTemplateSuite(Suite):
                                  "udp_base_timeout_secs = 15",
                                  "udp_retries = 3",
                                  "seed_duration_secs = 1800",
+                                 "listen_port = 0",
                                  "# [[common.proxy]]"):
                     assert_in(key_line, text, f"键示例行 {key_line}")
                 assert_not_in("# [[proxies]]", text, "旧 [[proxies]] 表头退役")

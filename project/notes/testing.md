@@ -456,3 +456,58 @@
   同步去掉名称与断言中的窗口语义——改名不改变断言覆盖面。
 
 architect 轮（2026-11-06）：proptest 断言消息**内联捕获 {var} 在 prop_assert! 与 prop_assert_eq! 全系编译失败**（error: there is no argument named）——两宏都经 concat 展开格式串，rust.md「prop_assert_eq! 不能隐式捕获」条款实证扩展到 prop_assert!；一律显式位置参数（"msg {} {}", var）。属性测试揭穿测试侧错误断言的判别法：proptest 自动 shrink 给出最小失败输入直接指认过界断言（逐 piece 守恒假不变量 88B 未选文件/pl=1、selected 零区间假不变量 362B 未选文件），先读实现源码核对真实契约再改断言——本轮 2 轮揭穿全是测试错、实现对，**实现零改动**；属性红 ≠ 产品回归，先归因断言侧。属性测试收敛后并入 cargo test --bins 的计数对账（925→928，+3 属性随主 bin 计数），独立命令口径不变（cargo test property_tests::）。clippy::needless_range_loop 在「下标要传参 + 元素要用」双需求场景（pieces_of_file(i)/files[i]）改 `for (i, f) in files.iter().enumerate()`，不要回退索引循环。
+QA 轮（2026-11-06）：对话框焦点几何漂移的探针实证法——添加对话框打开焦点恒 URL0、Tab 序 URL0→保存到1→并发2→下载限速3→校验4→校验码5→代理6→按钮行，v1.39/v1.40 上传限速字段退役后下载限速前移一档（从保存到起 Tab×2、从打开起 Tab×3），runner 仍按旧几何 tab×3 即越位到校验字段，断言落错字段（「键入 500k 应规范化」假红）与提交失败（enter 未落立即下载）是同一根因的两种显形；判定用哨兵字符串探针（每 tab 后键入唯一标记读屏落位）比静态读源码/数注释可靠，修复=重推现行几何+落位后 clear 预填再键入；fixture `cd=` 查询参数 = Content-Disposition filename 覆盖（namegen::derive_name 优先级 1），落盘名 ≠ URL 末段——runner 的完成观测路径必须与 cd= 值严格一致（tp10.bin ≠ cd=tp10 落盘的 tp10，任务早已完成但观测路径永不出现 → 「90s 未完成」假红）。前台 10min 上限的套件内过滤机制推广：QA_TP_ONLY 先例复制为 QA_AT_ONLY（Suite.run() 读环境变量过滤 _case_NN，缺省全量、结果仅含所跑用例、汇总由调用方合并各批），修复后只需复跑失败用例（QA_TP_ONLY=9 / QA_AT_ONLY=20 单用例秒级-分钟级）。llvm-cov 沙箱工件挥发对策：cargo-llvm-cov 跑完 deps/.fingerprint 可能被清（profraw 残留）→ 手工管线替代：RUSTFLAGS=-C instrument-coverage cargo test --bin ezr --no-run --target-dir <临时> → 测试二进制在 build/<hash>/out/ 下 → LLVM_PROFILE_FILE=... 跑二进制 --skip property_tests（engineering:53 属性测试不进覆盖率命令）→ llvm-profdata merge -sparse → llvm-cov report <bin> --instr-profile=... --show-functions --sources <src>；每函数多实例化行，取无泛型后缀的主实例化行（泛型变体 100% 是噪声）；CRAP 复算 cov 用 region 列（covered/total），comp 沿登记口径。DRY 基线口径失传的 A/B 恒等判法：历史「N 文件 M clones」文件集未随归档留存时，穷举重构不可靠 → 改扫全生产源码并做工作区 vs git archive HEAD 双扫描，clone 集逐位置 diff=0 即证本轮改动不增不减（无恶化无需复现历史口径），新口径数字与口径差异记 handoff。
+
+复验轮（2026-11-06，操作者指令「遗留受限项再验证，有问题则修复，没问题则移除」）：
+
+## 测试 stub 不读请求先写响应 = 「unexpected message」假 FAIL 家族真根因
+- **现象**：hardening_g_v147 quota 双用例间歇 left:0（连接视图全程 0 行、烧满 deadline）；
+  此前历轮按「2 核调度压力敏感」登记沿例，复跑判据三证齐。
+- **定位**：采样循环临时探针（打印全部 Evt）——失败运行全程**仅一个 Evt::Failed**
+  （`received unexpected message from connection`）随后死寂：探测秒败 → Transient →
+  无 worker 行。stub_206_trickle / stub_200_norange_slow（同文件 8 stub 中仅此 2 个）
+  accept 后**不读请求头立即写响应**；loopback 通常侥幸，调度抖动时 hyper 在请求发送
+  中途收到响应即协议态错乱。负载越重抖动越大——「压力敏感」只是表层。
+- **处置**：两 stub 补 BufReader 读头循环（同文件 stub_nocl_trickle/range_recorder 本就
+  正确——同批手笔漏网两处）；quota 采样窗加宽（起步 150→300ms、单事件 400→800ms）。
+  修复前定向压测 ~1/6 失败率（复现 3 次全抓到 Failed 实证）→ 修复后 15 连绿 +
+  全套件 709P ×2。
+- **教训**：write-before-read 是 HTTP fixture 的协议级违约，任何手写 stub 必须先读完
+  请求头再响应；「间歇性环境 FAIL」家族在归因环境前值得先用事件探针抓全程事件流，
+  单事件 + 死寂形态直指任务早夭而非调度延迟。
+
+## 定宽单读断言改轮询判据（sidecar 中途落盘）
+- periodic_flush_writes_sidecar_mid_download 固定 4.6s 睡眠后单读 sidecar：滴流节奏 ×
+  2 核负载下首次 flush 可晚至 10s+（复验实测 10.4s 样本——旧口径必挂）。
+- 改最长 20s 轮询（flush 周期 2s，≈10 倍余量），判据语义不变（中途落盘本身即判据），
+  flush_sidecar→() 突变体仍被超时杀伤；3 连绿。
+
+## 同路径多实例任务必须 cd= 专名隔离（FR-01-26 接续臂边界）
+- QA-RS-06 三重根因实锤（屏面转储定位）：①5 个占槽任务同 URL 路径仅查询参数互异 →
+  前一任务周期 sidecar（2s）落盘后，后续添加命中 dialogs.rs:244 接续臂
+  （Sidecar::load(dir/推导名) 按路径基、无「活任务占用」守卫）复用同名 → 两活任务
+  共享 dl 文件互踩 → 一方 fatal「不自动重试 · 0 B」→ 槽位释放 → 排队前进 →
+  「排队第」判据失真；②3MB@100KB/s=30s < 降速沙箱 6 次对话框添加的 setup 窗口 →
+  持有者提前完成、槽位全空、第 6 任务直接下载无排队（屏面实证「已完成 (7)」）；
+  ③恢复初期 End 注入吞键（QA-SQ-13 同源）。
+- **处置**：①持有者 `cd=rs06-h{i}.bin`（derive_name 优先级 1 = Content-Disposition）
+  专名隔离，彻底绕开接续边界——产品侧缺口（FR-01-22 兜底不覆盖并发写 sidecar）移交
+  specifier，不越权热修（FR-01-26 v1.28 明文「不按 FR-01-02 追加序号」）；②体量改
+  5MB@60KB/s ≈ 83s 覆盖 setup 窗口（kill9 即止无收尾成本）；③End settle + 有界重注。
+  修复前 ~1/3 失败率 → 修复后 5 连绿且耗时稳定 20.7s。
+- **教训**：e2e 多任务编排的夹具体量/速度必须按「降速沙箱 setup 耗时」预算，不是按
+  正常机速；同路径多实例是 FR-01-26 接续臂的显式危险区，runner 一律 cd= 专名。
+
+## 断言锚从瞬时中间态迁到长驻可观察物（SQ-13 复验落地）
+- QA-SQ-13 原断言 `wait_for("等待中") or wait_for("下载中")`——「等待中」窗口可 <100ms
+  （授槽 tick 对齐），天然竞态。改锚 requeue_failed 专有 toast「↻ 手动重试（等待中）」
+  （≈4s 长驻）+ 再探回「已失败」（全链走通证据）；3×15P/0F。
+
+## 工具链补记（复验轮）
+- rustup 分发镜像与 crates 下载镜像**分开选型**：rustup 走 TUNA（manifest 实测
+  3.08MB/s 最快），cargo registry 走 rsproxy sparse——TUNA sparse index 的 config.json
+  `dl` 仍指向官方 static.crates.io（慢且可停滞，195/285 crate 后零进展）；rsproxy
+  index+dl 一体，285 crate 2min 拉齐。
+- 沙箱后台进程随 Bash 调用结束被回收（setsid/nohup 皆不保）：cargo 构建一律前台
+  timeout 分块 + 增量缓存续跑；clippy `--force-warn` 不是 cargo 侧参数，crate 级 allow
+  需 `RUSTFLAGS="--force-warn clippy::cognitive_complexity"` 压制。

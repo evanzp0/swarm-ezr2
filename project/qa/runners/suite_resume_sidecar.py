@@ -361,11 +361,22 @@ class ResumeSidecarSuite(Suite):
             app.pump(1.0)
             app.send("space")
             assert app.wait_for("已暂停", 5)
-            # ④⑤ 下载中 ×5 占满 5 槽 + 第 6 个排队等待（聚合 400KB/s →
-            #     每个 ≈20s，保证第 6 个加入时槽位仍全满）
+            # ④⑤ 下载中 ×5 占满 5 槽 + 第 6 个排队等待。
+            #     体量/速度：5MB@60KB/s ≈ 83s —— 覆盖降速沙箱下 6 次对话框
+            #     添加的 setup 窗口（曾观测 3MB@100KB/s=30s 在慢机上被 setup
+            #     超时 → 持有者提前完成 → 槽位空闲 → 第 6 任务直接下载无排队）；
+            #     kill9 即止，无收尾成本。
+            #     每任务用 cd= 指定专名：derive_name 优先级 1 = Content-Disposition，
+            #     五个持有者推导名互异，彻底绕开 FR-01-26 v1.28「异 URL 同推导名
+            #     按路径基接续」边界（同路径多实例时，前一任务的周期 sidecar 一旦
+            #     落盘（2s），后续添加会命中接续臂复用同名 → 两活任务共享 dl 文件
+            #     互踩 → 提前 fatal → 槽位释放 → 排队前进 → 本用例判据失真。
+            #     这是规格缺口（FR-01-22 兑底不覆盖并发写 sidecar），已移交
+            #     specifier 修订；runner 侧以专名隔离不越权。
             for i in range(5):
                 add(app, env,
-                    env.fixture.url(f"three-m.bin?swapsize={3000000 + i}&speed=100000"))
+                    env.fixture.url(
+                        f"five-m.bin?cd=rs06-h{i}.bin&swapsize={5000000 + i}&speed=60000"))
             add(app, env, env.fixture.url("two-m.bin?speed=100000"))
             assert app.wait_for("排队第", 15), "第 6 个下载任务应排队等待"
             app.kill9()
@@ -380,9 +391,16 @@ class ResumeSidecarSuite(Suite):
                 assert_in("已失败", text, "失败状态应保持")
                 assert_in("已暂停", text, "暂停状态应保持")
                 assert_in("已完成 (1)", text, "完成任务计数应保持")
-                # 排队任务（two-m）位于列表末行可能被视口裁剪：End 滚动到底
+                # 排队任务（two-m）位于列表末行可能被视口裁剪：End 滚动到底。
+                # 恢复初期事件循环在状态转场批次内可能吞键（testing.md 假 FAIL
+                # 家族，QA-SQ-13 同源根因）：先 settle 再注入，未命中则有界重注
+                # 一次（End 幂等，重注不改变语义）。
+                app.pump(0.5)
                 app.send("end")
-                assert app.wait_for("排队第", 10), "等待队列应恢复排队位次"
+                if not app.wait_for("排队第", 6):
+                    app.pump(0.5)
+                    app.send("end")
+                    assert app.wait_for("排队第", 8), "等待队列应恢复排队位次"
             finally:
                 app.graceful_quit()
 

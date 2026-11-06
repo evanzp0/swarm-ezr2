@@ -752,9 +752,9 @@ def add_task_via_dialog(app: "EzrApp", env: "Env", url: str, conns: str = "",
         # 先退格清空回填值（≤2 位）再输入目标并发，防 "4"+"3"→"43" 拼接
         app.send("bs", "bs")
         app.type_text(conns)
-        tabs_to_ck = 2  # 当前在并发：校验、校验码
+        tabs_to_ck = 3  # 当前在并发：下载限速、校验、校验码（v1.38 限速字段插入）
     else:
-        tabs_to_ck = 3  # 当前在保存到：并发、校验、校验码
+        tabs_to_ck = 4  # 当前在保存到：并发、下载限速、校验、校验码（v1.38）
     if ck_value:
         # v1.32/FR-01-01：校验下拉默认 NONE，NONE 选中时校验码实时清空且
         # 不可输入（逐键/粘贴同拦截）——先在校验字段展开下拉选 SHA-256
@@ -896,8 +896,14 @@ def assert_not_in(needle: str, hay: str, what: str = "") -> None:
 
 
 def parse_speed(bps_text: str) -> float:
-    """「1.02 MB/s」/「860 KB/s」→ 字节/秒。"""
+    """「1.02 MiB/s」/「860 KiB/s」/「1.02 MB/s」→ 字节/秒（二进制族 1024 进位）。"""
     t = bps_text.strip()
+    if t.endswith("GiB/s"):
+        return float(t[:-5]) * 1024.0 ** 3
+    if t.endswith("MiB/s"):
+        return float(t[:-5]) * 1024.0 ** 2
+    if t.endswith("KiB/s"):
+        return float(t[:-5]) * 1024.0
     if t.endswith("MB/s"):
         return float(t[:-4]) * MB
     if t.endswith("KB/s"):
