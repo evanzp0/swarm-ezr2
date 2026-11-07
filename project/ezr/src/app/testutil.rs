@@ -61,6 +61,10 @@ pub(crate) fn dialog(kind: DialogKind, focus: usize) -> Dialog {
 }
 
 pub(crate) fn preset_resume_sidecar(dir: &std::path::Path) {
+    preset_sidecar_named(dir, "r.bin");
+}
+
+pub(crate) fn preset_sidecar_named(dir: &std::path::Path, name: &str) {
     let sc = crate::model::sidecar::Sidecar::build(
         &crate::model::consistency::ServerStamp {
             etag: None,
@@ -80,7 +84,9 @@ pub(crate) fn preset_resume_sidecar(dir: &std::path::Path) {
             protocol: crate::model::Protocol::Http,
         },
     );
-    sc.save(&dir.join("r.bin.ezr").to_string_lossy()).ok();
+    let ext = crate::model::namegen::SIDECAR_EXT;
+    sc.save(&dir.join(format!("{name}{ext}")).to_string_lossy())
+        .ok();
 }
 
 pub(crate) fn task_with_conns(

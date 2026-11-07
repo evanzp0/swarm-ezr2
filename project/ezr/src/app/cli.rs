@@ -1,5 +1,4 @@
 use super::App;
-use crate::model::namegen::SIDECAR_EXT;
 use crate::model::{protocol_of_url, unix_now, Checksum, Task};
 
 impl App {
@@ -15,7 +14,7 @@ impl App {
             return;
         }
         // bug27：任务按 URL 唯一——同 URL 已存在（无论保存目录异同）拒绝重复添加。
-        if self.tasks.iter().any(|t| t.url == url) {
+        if self.url_task_exists(&url) {
             self.set_toast("⚠ 该链接的任务已存在");
             return;
         }
@@ -23,24 +22,7 @@ impl App {
             .or_else(|| self.cfg.download_dir.clone())
             .unwrap_or_else(crate::model::config::default_download_dir);
         let dir = crate::model::config::normalize_save_dir(&dir);
-        let base_name = crate::model::namegen::derive_name(None, None, &url);
-        let occupied = self.tasks.iter().any(|t| {
-            t.save_dir == dir
-                && t.name == base_name
-                && t.state != crate::model::TaskState::Completed
-        });
-        let resumed = !occupied
-            && crate::model::sidecar::Sidecar::load(&format!("{dir}/{base_name}{SIDECAR_EXT}"))
-                .is_some();
-        let name = if resumed {
-            base_name.clone()
-        } else {
-            let tasks = &self.tasks;
-            crate::model::namegen::dedupe(&base_name, |n| {
-                tasks.iter().any(|t| t.name == n && t.save_dir == dir)
-                    || crate::model::namegen::exists_on_disk(&dir, n)
-            })
-        };
+        let (name, resumed) = self.derive_add_task_name(&url, &dir);
         let protocol = protocol_of_url(&url);
         let ts = unix_now();
         let id = self.alloc_task_id();

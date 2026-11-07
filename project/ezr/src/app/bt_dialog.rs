@@ -404,7 +404,7 @@ impl App {
 
         let dir = self.resolve_confirm_dir(&dir_raw);
 
-        if self.tasks.iter().any(|t| t.url == source) {
+        if self.url_task_exists(&source) {
             self.open_error_window("该链接的任务已存在");
             return;
         }
@@ -486,14 +486,7 @@ impl App {
         }
         t.max_download_speed = max_down;
         t.max_upload_speed = max_up;
-        self.tasks.push(t);
-        self.dialog = None;
-
-        self.filter = 0;
-        let flen = self.filtered().len();
-        if flen > 0 {
-            self.selected = flen - 1;
-        }
+        self.register_new_task(t);
 
         if paused {
             self.set_toast(format!(
@@ -1692,5 +1685,107 @@ mod tests {
         app.dlg_activate_modify_bt(7);
         assert!(app.dialog.is_none(), "修改对话框取消按钮关闭");
         app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn confirm_add_rejects_corrupt_torrent_file() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-garbage");
+        let path = write_multi_torrent(&dir, "ok.torrent");
+        let meta = parse_at(&path);
+        let garbage = dir.join("garbage.torrent");
+        std::fs::write(&garbage, b"not-a-bencoded-torrent").unwrap();
+        let mut app = make_app("garbage");
+        app.open_add_bt_dialog_with(&path, &meta);
+        if let Some(d) = app.dialog.as_mut() {
+            d.torrent.set(garbage.to_string_lossy().as_ref());
+        }
+        app.dlg_confirm_add_bt(false);
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|t| t.contains("无法读取种子文件")),
+            "可读但非 bencode 文件 → 解析失败 toast: {:?}",
+            app.toast
+        );
+        assert!(app.dialog.is_some(), "解析失败保持对话框");
+        assert!(app.tasks.is_empty(), "解析失败不建任务");
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn confirm_add_rejects_unsupported_tracker_protocol() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-badtr");
+        let path = write_multi_torrent(&dir, "a.torrent");
+        let meta = parse_at(&path);
+        let mut app = make_app("badtr");
+        app.open_add_bt_dialog_with(&path, &meta);
+        if let Some(d) = app.dialog.as_mut() {
+            d.trackers.set_text("ftp://tracker.example/ann");
+        }
+        app.dlg_confirm_add_bt(false);
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|t| t.contains("不支持的 tracker 协议")),
+            "非法协议 tracker → 拒绝 toast: {:?}",
+            app.toast
+        );
+        assert!(app.dialog.is_some(), "拒绝保持对话框");
+        assert!(app.tasks.is_empty(), "拒绝不建任务");
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn confirm_add_bt_paused_announces_paused_toast() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-paused");
+        let path = write_multi_torrent(&dir, "a.torrent");
+        let meta = parse_at(&path);
+        let mut app = make_app("paused");
+        app.dlg_confirm_add_bt(false);
+        assert!(app.dialog.is_none(), "无对话框时确认是空操作");
+        assert!(app.tasks.is_empty(), "无对话框时确认不建任务");
+        app.open_add_bt_dialog_with(&path, &meta);
+        app.dlg_confirm_add_bt(true);
+        assert_eq!(app.tasks.len(), 1, "暂停添加仍建任务");
+        assert_eq!(
+            app.tasks[0].state,
+            crate::model::TaskState::Paused,
+            "BT 暂停添加落暂停态"
+        );
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|t| t.contains("已暂停，按空格开始")),
+            "BT 暂停 toast: {:?}",
+            app.toast
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn confirm_add_bt_empty_selection_rejected() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-empty");
+        let path = write_multi_torrent(&dir, "a.torrent");
+        let meta = parse_at(&path);
+        let mut app = make_app("empty");
+        app.open_add_bt_dialog_with(&path, &meta);
+        if let Some(d) = app.dialog.as_mut() {
+            d.bt_tree = vec![bt_node("f1", 10, false)];
+        }
+        app.dlg_confirm_add_bt(false);
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|t| t.contains("请至少选择一个要下载的文件")),
+            "空选守卫 toast: {:?}",
+            app.toast
+        );
+        assert!(app.dialog.is_some(), "空选守卫保持对话框");
+        assert!(app.tasks.is_empty(), "空选不建任务");
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

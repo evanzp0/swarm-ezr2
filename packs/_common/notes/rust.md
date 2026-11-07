@@ -243,3 +243,18 @@ group_imports = "StdExternalCrate"
   a total order」（小输入可能侥幸不炸，规模相关）。需要随机化时把种子在排序入口取一次
   再传入纯函数键；浮点排序用 `total_cmp`，不要 `partial_cmp().unwrap_or(Equal)`
   （NaN 传递性破坏同样不是全序）。
+
+- **Rust 的 DRY 扫描器用 PMD CPD `-l rust`，jscpd 的 npm 发行版不可用于 Rust**：
+  jscpd 5.4.x（npm `jscpd` 包）自带的 rust tokenizer 缺失/失效——同内容双 .rs 文件阳性对照
+  0 命中（同内容 .py 可命中 1），凡"零发现"结论先做此阳性对照（engineering.md「静默空输出」
+  在 DRY 工具维度的实例）。PMD 7.x 的 `pmd cpd --dir <src> --language rust --minimum-tokens N`
+  对同阳性对照正常命中，为当前 Rust 生态可用的标准 CPD 工具（需 java 运行时；
+  `--minimum-tokens 70` 起步可滤掉结构体字段表类小克隆）。
+- **llvm-cov lcov 输出的 if-let 收尾 `}` 行是幻影未覆盖行**：if-let 臂体为单条表达式/语句时，
+  LLVM 区域计数器终止于臂体行，臂的收尾花括号行 DA 恒 0——臂实际执行（断言可证）但该行
+  永报未覆盖。行覆盖率与 CRAP 受限近似里这类行不可归零：判据为「`}` 行 + 所在 if-let 臂体行
+  已覆盖」即幻影，不计入真实缺口，不为凑 cov=1.0 硬造测试（rust.md「受限近似」条款的
+  llvm-cov 维度延伸）。
+- **rustup-init 二进制落盘名必须恰为 `rustup-init`**：rustup-init 按自身程序名推断要创建的
+  proxy 名（cargo/rustc/rustfmt…），文件名带前缀/点号（如 `.work-rustup-init`）会报
+  `unknown proxy name: '…'` 直接拒绝运行——直链下载后重命名为标准名再执行。

@@ -8,6 +8,23 @@ use crate::model::{
 };
 use crate::textfield::TextInput;
 
+fn validate_add_url(url: &str) -> Result<(), String> {
+    if url.is_empty() {
+        return Err("⚠ 请输入下载 URL".to_string());
+    }
+    if !is_http_url(url) {
+        return Err("⚠ 仅支持 http:// 或 https:// 链接".to_string());
+    }
+    Ok(())
+}
+
+fn conns_from_input(raw: &str, fallback: usize) -> usize {
+    match raw.parse::<usize>() {
+        Ok(v) if (1..=64).contains(&v) => v,
+        _ => fallback,
+    }
+}
+
 #[must_use]
 pub(super) fn parse_speed_limit(raw: &str) -> Option<u64> {
     let s = raw.trim();
@@ -72,6 +89,59 @@ impl App {
             dir_raw.to_string()
         };
         crate::model::config::normalize_save_dir(&dir)
+    }
+
+    pub(super) fn url_task_exists(&self, url: &str) -> bool {
+        self.tasks.iter().any(|t| t.url == url)
+    }
+    pub(super) fn derive_add_task_name(&self, url: &str, dir: &str) -> (String, bool) {
+        let base_name = namegen::derive_name(None, None, url);
+        let occupied = self
+            .tasks
+            .iter()
+            .any(|t| t.save_dir == dir && t.name == base_name && t.state != TaskState::Completed);
+        let resumed =
+            !occupied && Sidecar::load(&format!("{dir}/{base_name}{SIDECAR_EXT}")).is_some();
+        let name = if resumed {
+            base_name.clone()
+        } else {
+            let tasks = &self.tasks;
+            namegen::dedupe(&base_name, |n| {
+                tasks.iter().any(|t| t.name == n && t.save_dir == dir)
+                    || namegen::exists_on_disk(dir, n)
+            })
+        };
+        (name, resumed)
+    }
+
+    pub(super) fn register_new_task(&mut self, t: Task) {
+        self.tasks.push(t);
+        self.dialog = None;
+        self.filter = 0;
+        let flen = self.filtered().len();
+        if flen > 0 {
+            self.selected = flen - 1;
+        }
+    }
+
+    fn announce_add_task(&mut self, paused: bool, resumed: bool, id: u32, name: &str) {
+        if paused {
+            if resumed {
+                self.set_toast(format!(
+                    "⏸ 已添加任务 #{id}: {name}（发现有效断点，已暂停，按空格继续）"
+                ));
+            } else {
+                self.set_toast(format!(
+                    "⏸ 已添加任务 #{id}: {name}（已暂停，按空格开始下载）"
+                ));
+            }
+        } else if resumed {
+            self.set_toast(format!(
+                "✓ 已添加任务 #{id}: {name}（发现有效断点，将自动接续）"
+            ));
+        } else {
+            self.set_toast(format!("✓ 已添加任务 #{id}: {name}"));
+        }
     }
 
     fn checksum_from_input(
@@ -213,12 +283,8 @@ impl App {
             return;
         };
         let url = d.url.value.trim().to_string();
-        if url.is_empty() {
-            self.set_toast("⚠ 请输入下载 URL");
-            return;
-        }
-        if !is_http_url(&url) {
-            self.set_toast("⚠ 仅支持 http:// 或 https:// 链接");
+        if let Err(msg) = validate_add_url(&url) {
+            self.set_toast(msg);
             return;
         }
         let dir_raw = d.dir.value.trim().to_string();
@@ -235,31 +301,13 @@ impl App {
 
         let protocol = protocol_of_url(&url);
         let dir = self.resolve_confirm_dir(&dir_raw);
-        if self.tasks.iter().any(|t| t.url == url) {
+        if self.url_task_exists(&url) {
             self.open_error_window("该链接的任务已存在");
             return;
         }
-        let base_name = namegen::derive_name(None, None, &url);
         let id = self.alloc_task_id();
-        let occupied = self
-            .tasks
-            .iter()
-            .any(|t| t.save_dir == dir && t.name == base_name && t.state != TaskState::Completed);
-        let resumed =
-            !occupied && Sidecar::load(&format!("{dir}/{base_name}{SIDECAR_EXT}")).is_some();
-        let name = if resumed {
-            base_name.clone()
-        } else {
-            let tasks = &self.tasks;
-            namegen::dedupe(&base_name, |n| {
-                tasks.iter().any(|t| t.name == n && t.save_dir == dir)
-                    || namegen::exists_on_disk(&dir, n)
-            })
-        };
-        let conns = match conns_raw.parse::<usize>() {
-            Ok(v) if (1..=64).contains(&v) => v,
-            _ => self.cfg.http_concurrency,
-        };
+        let (name, resumed) = self.derive_add_task_name(&url, &dir);
+        let conns = conns_from_input(&conns_raw, self.cfg.http_concurrency);
         let down_limit = parse_speed_limit(&down_raw).unwrap_or(down_prefill);
         let checksum = Self::resolve_checksum(&dir, &name, checksum);
         let ts = unix_now();
@@ -284,30 +332,8 @@ impl App {
             t.resume_orphan = true;
         }
         t.max_download_speed = down_limit;
-        self.tasks.push(t);
-        self.dialog = None;
-        self.filter = 0;
-        let flen = self.filtered().len();
-        if flen > 0 {
-            self.selected = flen - 1;
-        }
-        if paused {
-            if resumed {
-                self.set_toast(format!(
-                    "⏸ 已添加任务 #{id}: {name}（发现有效断点，已暂停，按空格继续）"
-                ));
-            } else {
-                self.set_toast(format!(
-                    "⏸ 已添加任务 #{id}: {name}（已暂停，按空格开始下载）"
-                ));
-            }
-        } else if resumed {
-            self.set_toast(format!(
-                "✓ 已添加任务 #{id}: {name}（发现有效断点，将自动接续）"
-            ));
-        } else {
-            self.set_toast(format!("✓ 已添加任务 #{id}: {name}"));
-        }
+        self.register_new_task(t);
+        self.announce_add_task(paused, resumed, id, &name);
         self.save_registry();
     }
 
@@ -761,30 +787,6 @@ mod add_dialog_flow_tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    fn preset_orphan_sidecar(dir: &std::path::Path, name: &str) {
-        let sc = crate::model::sidecar::Sidecar::build(
-            &crate::model::consistency::ServerStamp {
-                etag: None,
-                last_modified: None,
-                size: Some(1000),
-            },
-            1000,
-            1024 * 1024,
-            &[0],
-            false,
-            None,
-            crate::model::sidecar::SidecarTask {
-                id: 99,
-                added_at: 0,
-                save_dir: dir.to_string_lossy().into_owned(),
-                concurrency: 4,
-                protocol: crate::model::Protocol::Http,
-            },
-        );
-        sc.save(&dir.join(format!("{name}.ezr")).to_string_lossy())
-            .ok();
-    }
-
     #[tokio::test]
     async fn guard_blocks_resume_when_incomplete_task_occupies_path() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-guard");
@@ -800,7 +802,7 @@ mod add_dialog_flow_tests {
         occupied.state = TaskState::Downloading;
         occupied.downloaded = 123;
         app.tasks.push(occupied);
-        preset_orphan_sidecar(&dir, "alias.bin");
+        crate::app::testutil::preset_sidecar_named(&dir, "alias.bin");
         app.dialog = Some(Dialog {
             kind: DialogKind::Add,
             url: TextInput::with_value("http://example.com/alias.bin"),
@@ -863,7 +865,7 @@ mod add_dialog_flow_tests {
         done.url = "http://other.example/alias.bin".to_string();
         done.state = TaskState::Completed;
         app.tasks.push(done);
-        preset_orphan_sidecar(&dir, "alias.bin");
+        crate::app::testutil::preset_sidecar_named(&dir, "alias.bin");
         app.dialog = Some(Dialog {
             kind: DialogKind::Add,
             url: TextInput::with_value("http://example.com/alias.bin"),

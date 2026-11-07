@@ -629,3 +629,18 @@ architect 轮（2026-11-06）：arch_check.sh 规则 14 白名单漂移是「响
 - **bug26 轮**：任务创建默认值的接线不变式——「config 键 = 新建任务默认值」类需求必须覆盖**全部**任务创建路径（HTTP 添加对话框 / BT 添加对话框 / CLI add_cli_task / 命令窗口分流），任一路径漏接 = 该入口下功能整体失效且对话框路径测试全绿掩盖（本轮 CLI 路径漏接任务级限速默认，致 CLI 添加的 HTTP 任务恒不限速）。限速生效链复查基线：引擎双桶（全局+任务）串联取币、Reconfigure 热调、注册表往返四条链路均有测试锚点后，新入口只需验证「值落位」。
 
 **bug27 轮（2026-11-07，coder）**：任务唯一性判重谓词单点语义——「同 URL 即任务身份」（操作者钦定），与保存目录解耦；旧口径「URL+保存目录」源自 bug13 轮归一判重的措辞惯性，属口径漂移而非实现缺陷（三入口 HTTP 对话框/BT 对话框/CLI 的判重状态：前两者谓词多了一个 save_dir 条件、CLI 根本无判重）。修复不变式：判重谓词改动必须 rg 全部任务创建入口（dlg_finish_add / dlg_confirm_add_bt / add_cli_task）同步落地，CLI 入口无对话框载体、提示走 toast（⚠ 前缀）——载体差异不构成豁免判重的理由。判重与 FR-01-26 接续守卫是两层独立拦截（判重按 URL 先行、守卫按目标路径后置）：同 URL 异目录在判重层即被拒，不会流到接续链；异 URL 同名才进守卫/序号臂——两层谓词不同维度，合并不得混淆。残留影响面核查：判重收紧只减不加（更多输入被拒），-name dedupe（异 URL 同推导名 .1 递增）与断点接续（注册表无同 URL 时 sidecar 路径基匹配）链路不受影响，restore/孤儿接续场景实测全绿。
+
+## bug27 清理轮：添加确认链三单点化（判重谓词 / 任务名推导 / 任务注册尾部）
+- cleaner 轮把 bug27 引入的三入口判重谓词复制（HTTP/BT/CLI 各一份 `tasks.iter().any(t.url == url)`）
+  收敛为 `App::url_task_exists`（dialogs.rs，与 resolve_confirm_dir 同族同位）；dialogs/cli 的
+  occupied→sidecar→dedupe 15 行名推导双胞胎收敛为 `App::derive_add_task_name(&url, &dir) -> (String, bool)`；
+  HTTP 注册尾部（push+关窗+filter 归零+选中末行）提取 `App::register_new_task` 后 BT 入口第三处
+  手写尾部一并复用。延续 resolve_confirm_dir 的「口径单点化」先例：唯一性判重的语义演进点
+  （bug27 同 URL 即身份）从此只有一处实现面。
+- **BT 入口内联序号循环不并入 namegen::dedupe**（裁决保留）：内联 while 无 dedupe 的 >10_000
+  时间戳回退臂，病态边界行为严格不同——保持行为纪律下不并网；如未来统一需先改 dedupe 回退
+  语义或内联臂补回退（属行为变更，移交裁决）。
+- 对话框入口链现状：validate_add_url（空/协议守卫）→ resolve_confirm_dir（目录口径）→
+  url_task_exists（唯一性）→ derive_add_task_name（占用/接续/去重）→ conns_from_input（并发钳制，
+  HTTP 拒绝式与 BT 钳制式语义不同各自保留）→ Task 构造 → register_new_task（注册尾部）→
+  announce_*（载体分众 toast/错误窗口留在入口）。

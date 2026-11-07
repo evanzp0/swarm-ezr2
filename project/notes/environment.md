@@ -315,3 +315,23 @@ QA 轮（2026-11-06）补记：接手被中断会话先清残留进程——上�
 - dist 清单（架构无关路径 dist/channel-rust-nightly.toml）：TUNA 200/date 2026-11-03、rsproxy 200/11-06、USTC 200/11-06、aliyun 200 但快照停 2026-05-29（新鲜度判据排除）。
 - dist 组件（清单内 rustc tar.xz 剥上游前缀按镜像布局重拼）16MB range 探针：TUNA 56.8MB/s、rsproxy 5.4MB/s、USTC 403——**本轮终选 TUNA 双变量（DIST_SERVER/UPDATE_ROOT 均 = https://mirrors.tuna.tsinghua.edu.cn/rustup，init 双层路径 /rustup/rustup/dist/<arch>/）直链 + 前台 -y --profile minimal --default-toolchain nightly -c rustfmt -c clippy --no-modify-path 一次装齐**（rustup nightly 1.101.0 与历轮版本带一致，EXIT=0）。
 - cargo registry 按 cleaner 轮口径直接写 rsproxy sparse（~/.cargo/config.toml）；bb v1.13.229 + APS 经 gh-proxy.com 前缀重装秒级；gherkin-parser 15 场景 exit 0 + dry-checker exit 0（108 findings 与规格轮复核记录同集）。
+
+## bug27 清理轮镜像复测（2026-11-07）：rsproxy 官方双变量整链路最快 + 度量工具三件套装机
+- 全新沙箱。8MB 探针：rsproxy `/rustup/dist/<arch>/rustup-init` 9.2MB/s（可用）、USTC 2.5MB/s、
+  TUNA/aliyun/官方单路径 404。清单按镜像自身布局验证：rsproxy DIST_SERVER=裸根 `/dist/` TOML 有效
+  （date 2026-11-07）、USTC `/rust-static/dist/` 200、rsproxy `/rustup/dist/` 清单 404（双层陷阱第 N 次）。
+  **终选 rsproxy 官方双变量（DIST_SERVER=https://rsproxy.cn + UPDATE_ROOT=https://rsproxy.cn/rustup）**
+  直链 rustup-init 二进制（改名陷阱：rustup-init 按程序名推断 proxy 名，文件名带 `.`/前缀会报
+  `unknown proxy name`——落盘名必须恰为 rustup-init）+ 前台 `-y --profile minimal --default-toolchain
+  nightly -c rustfmt -c clippy --no-modify-path` 一次装齐 nightly 1.101.0（与历轮版本带一致）。
+  镜像变量必须写入每个新 shell（rustup component add 等后续命令同样走 dist server）。
+- **度量工具三件套装机（cleaner 口径）**：cargo-llvm-cov 0.9.1 与 cargo-mutants 27.1.0 用预编译
+  二进制（api.github.com 直连查资产清单 → gh-proxy.com 前缀下载 release tar.gz → 解包入
+  ~/.local/bin，比 cargo install 编译快一个量级）；llvm-tools-preview 组件随 rustup 装（避开
+  llvm-cov 首跑交互安装挂死陷阱）。**DRY 工具 = PMD CPD 7.29.0 `-l rust`**（pmd-dist bin.zip
+  134MB 经 gh-proxy 取，装 ~/.tools-pmd；需 java 在位）：jscpd 5.4.2 的 npm 发行版 **rust
+  tokenizer 缺失**——阳性对照（除函数名外逐字节相同的双 .rs 文件）rust 格式 0 命中、同内容
+  .py 命中 1，判 tokenizer 缺失不可用；PMD CPD 同对照命中 5 行/46 token 克隆，为 Rust 项目
+  可用 DRY 扫描器（`pmd cpd --dir src --language rust --minimum-tokens 70`；EXIT=4=有克隆属正常）。
+- 清理轮全流程磁盘账：镜像装机+全量基线（bin+12 套件逐目标）+llvm-cov ×3 + 全量复验 ×2 后
+  盘余 2.7G（72%）——llvm-cov 每轮 ~0.4G 插桩工件是增量大头；未到清理线（complete 自动清 target/）。

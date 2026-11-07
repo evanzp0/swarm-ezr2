@@ -1,76 +1,69 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/coder（bug27 任务URL唯一性轮，本轮已完成）
+> 流程：six-pack　当前节点：six-pack/cleaner（bug27 URL 唯一性轮之后的清理轮，本轮已完成）
 > 路径：specifier → coder → cleaner → architect → hardender（操作者指示跳过并关闭）→ QA → Done
 > 　　→ 复验轮（2026-11-06）→ specifier 规格修订轮（v1.45 守卫）→ specifier 审批改判轮（v1.46）
-> 　　→ coder 实现轮（v1.45+v1.46，2026-11-07）→ coder bug26 限速修复轮（2026-11-07）→ **coder bug27 修复轮（本轮，2026-11-07）**
-> 会话：ezr-coder-bug27-url-unique（2026-11-07，操作者报告「同一个url 生成的下载任务（bt/http），第一次添加的保存路径和后续添加的保存路径不同会被当作两个任务都能生成并下载；任务是通过 url 来确定唯一性的，URL 相同应提示任务已存在」，
-> 测试定位并修复；上游交接 = project/handoff.md（bug26 轮）+ 操作者 chat 指令）
-> 环境注记：工具链沿上轮（rustup nightly 1.101.0，PATH=~/.cargo/bin；rsproxy sparse；bb+APS 在 `.tools/`）。
-> pyte/torf/libtorrent 已装（阿里云镜像），真机 pty e2e 夹具可用（harness tracker 17901/seeder 17903，
-> 会话级临时进程，每轮手测前重启，见 notes/environment.md）。
+> 　　→ coder 实现轮（v1.45+v1.46）→ coder bug26 限速修复轮 → coder bug27 修复轮（2026-11-07）
+> 　　→ **cleaner 清理轮（本轮，2026-11-07）**
+> 会话：ezr-cleaner-bug27-cleanup（2026-11-07，任务 = 对 coder bug27 轮产出做保持行为清理 + 覆盖率/CRAP/DRY/变异点扫描四件度量；上游交接 = project/handoff.md（coder bug27 轮））
+> 环境注记：工具链沿历轮版本带（rustup nightly 1.101.0，PATH=~/.cargo/bin；cargo registry rsproxy sparse；
+> rustup dist rsproxy 官方双变量，本轮前台装齐）。度量工具本轮新装：cargo-llvm-cov 0.9.1 / cargo-mutants 27.1.0
+> （~/.local/bin 预编译）、PMD CPD 7.29.0（~/.tools-pmd，DRY 用）。**pyte/torf/libtorrent 与 harness 夹具本轮沙箱未装**（cleaner 不跑 e2e；QA 轮接手时按 notes/environment.md 重装）。
 
-## 一、本轮结论（bug27 任务 URL 唯一性）
+## 一、产物历史完成情况
 
-### 根因判定（实测证据链）
-1. **判重口径缺陷（已修复）**：现行规格 FR-02-02 ③臂 / FR-01-01 v1.44（01-add-task-16）判重谓词
-   =「同 URL/同来源 + 同保存目录」——同 URL 不同保存路径不判重，直接生成第二个任务并行下载；
-   **CLI 添加路径（`add_cli_task`）则完全没有 URL 判重**（只有同名 resume/dedupe 逻辑），同 URL
-   二次 `ezr download <url>` 恒新建任务。这就是操作者报告的两个症状。
-2. **操作者裁决（规格改判）**：任务唯一性 = **URL**（与保存目录无关）；同 URL 添加 → 提示
-   「该链接的任务已存在」。沿 bug13–25 轮先例，操作者 chat 指令即修订裁决（Inversion 不适用）。
-3. **修复（三入口同口径落地）**：
-   - HTTP 添加对话框（`app/dialogs.rs::dlg_finish_add`）：判重谓词 `t.url == url && t.save_dir == dir`
-     → `t.url == url`；命中载体不变 = 错误窗口（D56）`该链接的任务已存在`。
-   - BT 添加对话框（`app/bt_dialog.rs::dlg_confirm_add_bt`）：同上，谓词去 `&& t.save_dir == dir`。
-   - CLI（`app/cli.rs::add_cli_task`）：URL 校验后新增 URL 判重，命中 = toast `⚠ 该链接的任务已存在`
-     （CLI 无对话框/错误窗口载体，沿 FR-01-80 ⚠ 前缀 toast 语义），不创建任务。
-4. **两层拦截不变式（行为面核查）**：判重（URL 维度，先行）与 FR-01-26 接续守卫（目标路径维度，
-   后置）为独立两层——同 URL 异目录在判重层即被拒、不流到接续链；异 URL 同推导名才进守卫/序号臂。
-   判重收紧只减不加：name-dedupe（异 URL 同名 `.1` 递增）、断点接续（注册表无同 URL 时 sidecar
-   路径基匹配）、v1.45 占用守卫、v1.46 孤儿改道臂全部不受影响（restore 等相关套件实测全绿）。
+### 项目与需求
+- ezr：Rust TUI 下载器（HTTP + BT 双协议，ratatui 交互层 + tokio 引擎）。需求权威来源 = `mission.md`（分期模式）+ `mission/` 4 份 phase 详述（phase-01 v1.47 / phase-02 v1.14，bug27 轮裁决存档于头注）。
 
-### 测试与验证账
-| 验证项 | 结果 | 命令 |
+### 产物总账
+| 节点 | 产物 | 完成情况 | 验证状态 |
+|---|---|---|---|
+| specifier | features/ 全套 Gherkin 规格 + qa/ 全套 QA 套件；phase-01 v1.47 / phase-02 v1.14 | 已交付（bug27 轮含 v1.45 守卫 / v1.46 审批改判 / bug27 判重改判三轮修订） | 见 coder 各轮对账 |
+| coder 历轮 | ezr 产品实现 + 12 集成测试目标 + bin 单测；bug6–bug27 修复 | 已交付（最后节点 = bug27 任务 URL 唯一性：三入口判重同口径、CLI 新增 URL 判重） | bug27 交接基线：bin 945P/0F、集成 6329P/0F、clippy 0 警告、fmt 干净 |
+| cleaner 历轮 | 多轮保持行为清理（工具链 nightly 钉版、resolve_confirm_dir 单点化等） | 已交付 | 各轮全绿对账 |
+| architect（2026-11-06） | 架构评审：规则 14 白名单、engine↔bt 枢纽、PieceMap 不变量 | 已交付 | 建议项归档 notes |
+| hardender | —（操作者指示跳过并关闭，链路径改道） | 不适用 | — |
+| QA（2026-11-06） | 对话框焦点几何、fixture cd=、套件过滤机制 | 已交付 | e2e 套件实跑 |
+| 复验轮（2026-11-06） | KeepAlive 90s 一处产品变更；受限项 15→2 | 已交付 | 集成 6201P/0F 精确对账 |
+| cleaner 本轮 | bug27 批次保持行为清理 + 四件度量（详见第二节） | 已交付 | bin 949P/0F、集成 6357P/0F、clippy 0、fmt 干净 |
+
+### 遗留受限项（当前有效）
+- **leech 判据无 e2e 自动化**（six-pack 链唯一长期有效受限项，历轮维持）。
+- **变异实跑未执行**：cleaner 只做 scan/count（纪律边界：不跑变异测试）；hardender 路径已被操作者关闭，变异加固收益按 `--file` 分块口径登记待裁决。
+- **e2e QA 依赖本轮沙箱未安装**：pyte/torf/libtorrent 未装、tracker/seeder 夹具未启动——QA 轮接手需先按 notes/environment.md（阿里云镜像 + harness README）重建，否则 e2e 套件不可跑。
+
+## 二、当前产出情况
+
+### 本会话产物清单（净行为变更 = 0）
+- `project/ezr/src/app/dialogs.rs`：**三单点化 + 拆分**——`url_task_exists`（bug27 判重谓词三入口收敛，dialogs.rs 唯一实现面）、`derive_add_task_name`（occupied→sidecar→dedupe 15 行名推导，dialogs/cli 双胞胎收敛）、`register_new_task`（push+关窗+filter 归零+选中末行注册尾部）+ `announce_add_task`（paused×resumed 四臂 toast 矩阵）；自由函数 `validate_add_url`（空/协议守卫）、`conns_from_input`（并发钳制）；`dlg_finish_add` 拆分后 comp 12→5；测试 `preset_orphan_sidecar` 局部复制退役（委托 testutil）。
+- `project/ezr/src/app/bt_dialog.rs`：判重谓词接入 `url_task_exists`；注册尾部复用 `register_new_task`（第三处手写复制消除）；新增 4 测（解析失败臂 / 非法协议 tracker 臂 / 暂停添加臂+无对话框空操作 / 空选守卫臂）。
+- `project/ezr/src/app/cli.rs`：谓词与名推导接入单点助手；`SIDECAR_EXT` 失效导入删除。
+- `project/ezr/src/app/testutil.rs`：`preset_sidecar_named(dir, name)` 提取（`preset_resume_sidecar` 委托之）。
+- `project/notes/`：environment.md（镜像复测 + 度量三件套装机）、testing.md（llvm-cov 幻影行判据 + CRAP 受限近似口径 + 4 测追加对账）、architecture.md（确认链三单点化 + BT 序号循环不并网裁决）各追加本轮条目，INDEX.md 同步。
+- `packs/_common/notes/rust.md`：+3 条跨项目经验（PMD CPD `-l rust` 为 Rust 可用 DRY 扫描器且 jscpd npm 版 rust tokenizer 缺失的阳性对照判法；llvm-cov if-let 收尾 `}` 幻影未覆盖行；rustup-init 落盘名陷阱）。
+- `project/mission.md` / `mission/`：只读未动（cleaner 职责边界）。
+
+### 验证证据
+| 验证项 | 结果 | 命令（cd project/ezr，CARGO_INCREMENTAL=0） |
 |---|---|---|
-| bin 全量（含本轮净增 2 测） | **945P / 0F**（历轮 943 + 2） | `cd project/ezr && CARGO_INCREMENTAL=0 cargo test --bin ezr` |
-| 集成 12 目标 | **6329P / 0F**（supervisor 712 + engine 739 + appcore 743 + throttle_err 458 + v147 726 + hardening 142 + engine_backfill 845 + slots 203 + main 2 + proxy 16 + ui_backfill 875 + v115 868） | `cargo test --tests`（逐目标 --no-run + 单跑，盘见 notes/environment.md） |
-| clippy | 0 warning / 0 error | `cargo clippy --bins --tests` |
+| bin 单测（含本轮净增 4 测） | **949P / 0F** | `cargo test --bin ezr` |
+| 集成 12 目标（本轮净增 28） | **6357P / 0F** | supervisor 716 + engine 743 + appcore 747 + throttle_err 458 + v147 730 + hardening 142 + engine_backfill 849 + slots 203 + main 2 + proxy 16 + ui_backfill 879 + v115 872，逐目标单跑 |
+| clippy | 0 警告 / 0 错误 | `cargo clippy --bins --tests` |
 | rustfmt | 全仓干净 | `cargo fmt --check` |
+| 覆盖率（llvm-cov 0.9.1，bin 套件口径） | bug27 触及区域 + 新助手 100%；批次文件行覆盖 cli 100% / dialogs ~97% / mod ~95% / bt_dialog ~95% | `cargo llvm-cov --bin ezr --lcov` |
+| CRAP（受限近似：行覆盖+语法决策点代公式） | 批次函数全部 comp≤6：dlg_finish_add 12→5、dlg_confirm_add_bt cov 0.87→0.95（CRAP≈6.005，残余=3 行幻影花括号）、add_cli_task 4、新助手 1–5 | notes/testing.md 口径 |
+| DRY（PMD CPD 7.29.0 `-l rust`，≥70tok） | 全仓 200 克隆（本轮 -1：fixture 双胞胎消除；目标三克隆全收口）；bug27 测试对等 5 项裁决保留（理由登记 notes） | `pmd cpd --dir src --language rust --minimum-tokens 70` |
+| 变异点扫描（cargo-mutants 27.1.0 `--list`，未跑变异） | dialogs 101 / bt_dialog 100 / cli 2 / mod 142 | `cargo mutants --list --file src/app/dialogs.rs …` |
 
-### TDD 红绿账（复现测试先失败后过）
-- 复现红灯（3）：`finish_add_different_dir_is_duplicate`（HTTP 同 URL 异目录→错误窗口，旧代码 err=""+
-  且新建任务）、`confirm_add_duplicate_different_dir_rejected`（BT 同来源异目录→错误窗口）、
-  `cli_add_same_url_rejected_as_duplicate`（CLI 同 URL 二次添加→toast 拒绝，旧代码直接 ✓ 创建）。
-- 翻转/改数据（2）：`finish_add_different_dir_is_not_duplicate` → `_is_duplicate`（旧口径测试按名
-  翻转保边界覆盖连续性）；`cli_add_dedupes_duplicate_names` 同 URL 两连加 → **异 URL 同推导名**
-  两连加（不变式「名字去重 .1 递增」仍成立，换数据保语义），另立同 URL 拒绝测试。
-- blast radius 机械盘点：rg `add_cli_task` 30+ 调用点按所属测试函数聚合 → 仅 1 个多调用函数
-  （restore_keeps_tasks_and_ids，异 URL）→ 集成测试零翻转，实测证实。
+### 对账口径
+- 基线（bug27 轮交接）：bin 945 + 集成 6329。本轮纯追加 4 测，挂载收编：bin +4 → 949；7 个挂载 app 子树的套件各 +4（845→849、743→747、739→743、712→716、726→730、875→879、868→872）；5 个未挂载套件计数不变（458/142/203/2/16）。分项复算：6329 + 28 = 6357 ✓ 自洽。
+- 变更面与 bt::engine 零接触；ui_backfill 全量中 `graceful_close_sends_fin` 单例 FAIL 经三证（单测复跑绿 + 全套件单跑 879P/0F 绿 + 仅此一例）判时序 flake，非回归（第 4 例沿例）。
 
-## 二、产物清单（本轮增量）
-- `project/ezr/src/app/dialogs.rs`：HTTP 判重谓词去 save_dir 条件 + 注释口径更新（一行谓词改动）。
-- `project/ezr/src/app/bt_dialog.rs`：BT 判重谓词同上 + 新测试 1。
-- `project/ezr/src/app/cli.rs`：add_cli_task 新增 URL 判重（toast 载体）+ 测试翻转 1 / 新增 1。
-- `project/ezr/src/app/mod.rs`：HTTP 旧口径测试翻转 1。
-- 规格：`mission/phase-02.md` 头注 **v1.14**（操作者 bug27 轮指令全文存档 + FR-02-02 ③臂改判）；
-  `mission/phase-01.md` 头注 **v1.47**（FR-01-01 v1.47 注记 + 01-add-task-16a 新增 + FR-01-26 引用句同步）；
-  `features/01-add-task.feature` **v1.43**（场景 16 改判 + **16a 新增**[CLI 判重] + Examples 异目录行）；
-  `features/07-add-bt.feature` **v1.42**（04/09 判据改判）。
-- QA：`qa/01-add-task-qa.md`（QA-01-16 修订 + **QA-01-16a 新增**）；`qa/07-add-bt-qa.md`
-  （QA-AB-04 ③臂修订 + QA-AB-09 旧 toast 残留修正[bug25 漏改]）。
-- notes：`architecture.md` + `testing.md` + `INDEX.md` bug27 经验条目。
-- 产品行为变更净额：判重谓词两行收紧 + CLI 判重四行新增；无几何/文案/引擎改动。
-
-### 遗留受限项
-- 沿袭不变：leech 判据无 e2e 自动化（six-pack 链唯一有效受限项）。本轮无新增。
-- 已知边界（规格已登记，非缺陷）：BT 唯一性按种子文件归一路径比对（FR-02-09③：URL = 归一后绝对
-  路径）；同内容异种子文件（同 infohash 不同路径）不判重——属 phase-03 infohash 身份范畴。
+### 待办与待批
+- **architect 轮裁决对象（登记移交，cleaner 不越权）**：① 变异点 >100 的三个交互层文件（dialogs 101 / bt_dialog 100 / mod 142）是否按模块边界拆分——点数与行数近似线性（~0.06–0.08 点/行）属交互层常态，拆分收益在 hardender `--file` 分块兑现，但 hardender 路径已关闭，请操作者裁决；② 前置高 comp 函数（add_bt_dialog_char 13 / dlg_confirm_modify_bt 11 / modify_bt_dialog_char 10 / parse_speed_limit 9 / overlay_open 8 / merge_trackers 7 / restore 7）均非 bug27 批次，未清理；③ dialogs.rs 测试的 Dialog 字面量构造克隆家族（179/165/142tok）——收敛需 Dialog 构造器/(builder)，属类型面设计，architect 裁决。
+- **CLI `--dir ""` 边界差异登记**：CLI 路径空串目录 normalize 后落 cwd，对话框路径空串走 resolve_confirm_dir 回退 config/默认——两者语义不同，本轮按保持行为纪律未统一（无测试钉此边界）；如需统一属行为变更，移交裁决。
+- **判重错误窗口测试对（mod.rs 同目录/异目录两测）裁决保留**：2 次出现、断言意图（同目录命中 vs 异目录也命中）不同，提取共享 setup 会模糊边界文档化；如 architect 认为应提取，属测试基建微调。
 
 ### 移交建议
-- 下一步运行 `six-pack/cleaner`（six-pack 链顺序）；或操作者直接复测（release 二进制
-  `project/ezr/target/release/ezr`——注意本轮仅测过 debug 测试面，复测前 `cargo build --release`）：
-  ① 同 URL（bt/http）第一次添加后，改保存目录再添加 → 应弹「错误」窗口 `该链接的任务已存在`；
-  ② CLI `ezr download <同URL>` 二次 → toast `⚠ 该链接的任务已存在`；③ 异 URL 同名 → 照旧 `.1`
-  递增；④ 删除任务后重新添加同 URL → 正常创建并按 FR-01-26 接续/改道。
-- 工具链交接沿上轮；小盘跑集成测试沿本轮笔记（--no-run 逐目标 + touch 强制重链 + 日志落 /tmp）。
+- 下一步运行 `six-pack/architect`（six-pack 链顺序）：消化上表三项裁决对象 + 常规架构评审；hardender 已关闭，architect 之后按链进 QA（QA 轮接手前先重建 e2e 依赖，见遗留受限项）。
+- 操作者直接复测（release 二进制需 `cargo build --release`——本轮仅 debug 测试面）：同 URL（bt/http）异目录添加 → 错误窗口 `该链接的任务已存在`；CLI 同 URL 二次 → toast `⚠ 该链接的任务已存在`；异 URL 同名 → `.1` 递增照旧——行为与 bug27 轮交接完全一致（本轮零行为变更）。

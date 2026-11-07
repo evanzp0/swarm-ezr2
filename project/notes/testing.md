@@ -520,3 +520,23 @@ QA 轮（2026-11-06）：对话框焦点几何漂移的探针实证法——添�
 - **bug26 轮根因与修复**：任务级限速"不起作用"的实锚 = CLI 添加路径漏接 config 任务级默认（add_cli_task 不设 t.max_download_speed → 0=不限）——「新建任务的默认值」类规格（FR-02-29）的接线核对法 = rg 全部任务创建路径（dlg_finish_add/dlg_confirm_add_bt/add_cli_task）逐个验证默认值落位，对话框路径全对 ≠ 全路径对。附带 harness 修复：bench_multipeer.py config 模板 `ttp]` 缺 `[`（TOML 语法损坏，try_load 报错退出——上一轮终端伪影经验此处真损坏，boolean 探针判别法再次必要）。
 
 **bug27 轮（2026-11-07，coder）**：判重口径翻转的测试翻转面三件——①旧口径测试按名翻转而非删除（finish_add_different_dir_is_not_duplicate → _is_duplicate，断言整体反向 + 消息注明新规格依据），保留同 URL 异目录这条边界线的测试覆盖连续性；②同 URL 二次添加类测试（cli_add_dedupes_duplicate_names 同 URL 两连加）在新口径下语义变化，改异 URL 同推导名保全「名字去重」语义、另立同 URL 拒绝测试——翻转时先问「这条测试原本守的是哪个不变式」，不变式仍成立的换数据、不成立的才翻转断言；③盘点 blast radius 的机械法：rg add_cli_task 调用点 → 按所属测试函数聚合 → 只有多次调用同测试的才可能受判重收紧影响（本轮 30+ 调用点仅 1 个多调用函数且异 URL，零集成翻转）。小盘跑法复用：逐目标 --no-run + touch 强制重链（cargo 判 fresh 不重建被手删的二进制）+ 测试输出落 /tmp 日志文件再 rg（管道 tail 在 timeout 截断下丢输出的假象坑）+ 磁盘 99% 链接 Bus error 先删 target/debug/incremental（2.6G，CARGO_INCREMENTAL=0 下纯死重）。
+
+## bug27 清理轮（2026-11-07）：llvm-cov 收尾花括号幻影行与判重错误臂补测
+- **llvm-cov lcov 的 if-let 收尾 `}` 行是幻影未覆盖行**：if-let 臂体为单条赋值/表达式时，
+  LLVM 区域计数器终止于臂体行，臂的收尾 `}` 行 DA=0——臂实测已执行（toast 断言通过）但该行
+  恒报未覆盖。判据：`}` 行且其所在 if-let 的臂体行已覆盖 → 幻影，不计入真实缺口；覆盖率
+  口径里这类行不可归零，CRAP 受限近似按「可达臂全绿 + 幻影行登记」收口，不为凑 cov=1.0
+  硬造测试。
+- **CRAP 受限近似口径（bin 套件 llvm-cov + 语法决策点代 comp）**：comp=if/loop/match/&&/||/? 计数+1，
+  cov=函数行覆盖；comp≤6 是拆分门槛（comp≥7 覆盖率再高也过不了 6）。函数级归属沿 rust.md
+  闭包共享行区间取极值纪律。本轮批次函数实测：dlg_finish_add 拆分后 comp 12→5、
+  dlg_confirm_add_bt comp=6 cov=0.947（残余 = 3 行幻影 `}`）→ CRAP≈6.005 属幻影噪音级，
+  登记不硬凑。
+- **纯追加 4 测（bug27 判重错误臂与 BT 边界）**：confirm_add_rejects_corrupt_torrent_file
+  （可读非 bencode → 解析失败 toast 臂）、confirm_add_rejects_unsupported_tracker_protocol
+  （ftp:// tracker 拒绝臂）、confirm_add_bt_paused_announces_paused_toast（BT 暂停添加 toast 臂 +
+  无对话框确认空操作）、confirm_add_bt_empty_selection_rejected（空选守卫臂）。挂载对账：
+  bin 945→949、7 挂载套件各 +4（845→849 等），差值即对账信号。
+- ui_backfill `graceful_close_sends_fin_then_force_closes_after_grace` 全量中 FAIL、单测复跑
+  0.20s 绿、全套件单跑 879P/0F 绿——三证齐判时序 flake（第 4 例，同族判据沿用）；本轮改动
+  面与 bt::engine 零接触佐证非回归。
