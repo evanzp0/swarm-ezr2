@@ -540,3 +540,24 @@ QA 轮（2026-11-06）：对话框焦点几何漂移的探针实证法——添�
 - ui_backfill `graceful_close_sends_fin_then_force_closes_after_grace` 全量中 FAIL、单测复跑
   0.20s 绿、全套件单跑 879P/0F 绿——三证齐判时序 flake（第 4 例，同族判据沿用）；本轮改动
   面与 bt::engine 零接触佐证非回归。
+
+## architect 轮（2026-11-07）：Dialog 字面量收编等价口径与限速往返属性的 2^53 域
+- **Dialog 测试字面量 → testutil::dialog 收编的逐字段等价口径**：`TextInput::set(x)` ≡
+  `with_value(x)`（value + cursor_end 同语义）；工厂默认 `ck_type/ck_sel = 4` 与测试口径
+  `CK_NONE = 0` 不同，收编时**必须显式覆写这两个字段**；bt_follow/conns_edited 等其余默认
+  与字面量逐字段核对一致。收编形态：本地 `add_dlg(url, dir)` 助手（差分点参数化）+
+  `d.url.set(...)`，8 处字面量全收编（判据：字面量与工厂差集 ≤ 2 个语义字段即值得收编，
+  差集更大时字面量自文档更优）。
+- **fmt→parse 往返属性的域必须限 f64 整数精确带（2^53）**：`parse_speed_limit(fmt_speed_limit(v))
+  == Some(v)` 对全域 u64 不成立——fmt 走十进制裸整数（B/s 臂）、parse 走 f64，v ≥ 2^53 时
+  f64 舍入可把 parse 顶到 u64::MAX clamp 臂（实测 u64::MAX−1 → Some(u64::MAX)）；全域属性
+  断言必假红。属性域限 `0..(1<<53)`；固定值单测（含 u64::MAX clamp 边界值，恰好自洽）探不出
+  舍入带——**固定值单测绿 ≠ 全域属性成立，属性域约束不可省**。
+- 属性缺口定位法：`grep` 属性清单中被测函数名——单测有固定值往返（fmt_speed_limit_round_trips_
+  through_parse 10 值）≠ 属性覆盖存在；本轮补 2 条（fmt→parse 往返 + 单位全别名二进制乘表
+  域表征 `n × mult` 对 select 全别名 × 空格 × /s 全组合），proptest 23→25，独立命令
+  `cargo test property_tests::` 76P/0F；bin 949→951、7 挂载套件 +2 各计（对账隔离：集成
+  6357 不变，属性增量单独报数）。
+- 限速解析双口径在案再确认：config 侧 `parse_speed` 旧写法 KB/MB/GB 拒识（v1.40 废弃）、
+  对话框侧 `parse_speed_limit` 全别名（含 KB/MB/GB）按二进制乘表（bug21 口径）——两口径
+  各有属性/单测，混同即假绿。

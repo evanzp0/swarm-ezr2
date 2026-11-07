@@ -217,20 +217,36 @@ else
   echo "[ OK ] supervisor 实现子模块私有（内部仅 pub(super) 暴露）"
 fi
 
-# 规则 16【机制层纯度】engine/model 禁入渲染框架导入（architect v151：
-# engine 是贴近 IO 的机制层（网络/文件），model 是最内层纯同步逻辑——
-# 二者均无渲染职责；本轮评审实测零命中，规则化固化防漂移（engine 一旦
-# 引入 ratatui/crossterm 即跨入展示职责，分层基线 main→app→engine→model
-# 的「机制无 UI」前提失效）。扫描域 = 导入语句且只盯 ratatui/crossterm
-# 两渲染框架；tokio/reqwest 为 engine 合法 IO 依赖（规则 11 只约束 model）
-# 不在扫描域。依据条款：SKILL「把高层模块视为远离 IO 的部分」+
-# engineering.md「grep 级检查扫描域与判例对齐」）
-hit=$(grep -rnE '^[[:space:]]*use[[:space:]]+(ratatui|crossterm)' src/engine/ src/model/ \
+# 规则 16【机制层纯度】engine/model/bt 禁入渲染框架导入（architect v151：
+# engine 是贴近 IO 的机制层（网络/文件），model 是最内层纯同步逻辑，
+# bt 是协议机制层（BT 引擎/peer/tracker）——三者均无渲染职责；本轮评审
+# 实测零命中，规则化固化防漂移（机制层一旦引入 ratatui/crossterm 即跨入
+# 展示职责，分层基线 main→app→engine→model 的「机制无 UI」前提失效）。
+# 扫描域 = 导入语句且只盯 ratatui/crossterm 两渲染框架；tokio/reqwest 为
+# 机制层合法 IO 依赖（规则 11 只约束 model）不在扫描域。依据条款：SKILL
+# 「把高层模块视为远离 IO 的部分」+ engineering.md「grep 级检查扫描域与
+# 判例对齐」。architect 本轮（2026-11-07）扫描域扩至 src/bt：评审实测
+# bt 层零渲染导入，但原扫描域漏盖 bt 层，规则化收口防漂移）
+hit=$(grep -rnE '^[[:space:]]*use[[:space:]]+(ratatui|crossterm)' src/engine/ src/model/ src/bt/ \
       --include='*.rs' || true)
 if [ -n "$hit" ]; then
-  echo "[FAIL] engine/model 层引入渲染框架导入（机制层无渲染职责）:"; echo "$hit"; fails=$((fails+1))
+  echo "[FAIL] engine/model/bt 层引入渲染框架导入（机制层无渲染职责）:"; echo "$hit"; fails=$((fails+1))
 else
-  echo "[ OK ] engine/model 层零渲染框架导入（机制层纯度）"
+  echo "[ OK ] engine/model/bt 层零渲染框架导入（机制层纯度）"
+fi
+
+# 规则 17【依赖方向】bt 层禁入 app/ui 导入（architect 本轮 2026-11-07：
+# bt 是被 engine 调度、被 app 消费的协议机制层——分层箭头只允许
+# app→bt（消费 TorrentMeta 纯解析）与 engine↔bt（协调枢纽，
+# notes/architecture.md 在案裁决）；bt→app/ui 即机制层反向依赖展示/策略
+# 层，分层倒置。评审实测 bt→model+engine、零 app/ui 导入，规则化固化。
+# 扫描域 = use 语句（与既有规则的判例对齐））
+hit=$(grep -rnE '^[[:space:]]*use[[:space:]]+crate::(app|ui)' src/bt/ \
+      --include='*.rs' || true)
+if [ -n "$hit" ]; then
+  echo "[FAIL] bt 层出现对 app/ui 的依赖（机制层不得反向依赖展示/策略层）:"; echo "$hit"; fails=$((fails+1))
+else
+  echo "[ OK ] bt 层零 app/ui 依赖（机制层方向纯净）"
 fi
 
 if [ "$fails" -gt 0 ]; then
@@ -272,3 +288,9 @@ echo "arch_check: 全部边界规则通过"
 #   ② 17 行渲染回填存量（_pos/_scrollbar/max_hscroll/max_scroll/follow/
 #      help_scroll/pieces_scroll）扩展后全部收口，规则全绿；
 #   对照后均已移除。
+# architect 本轮（2026-11-07）规则 16 扩域 + 规则 17 阳性对照（本轮会话实测）：
+#   ① 向 src/bt/mod.rs 末尾临时追加真实 use 语句 `use crate::app;`
+#      → 规则 17 命中并非零退出（bt 层 app/ui 禁令生效）；
+#   ② 向 src/bt/mod.rs 末尾临时追加真实 use 语句 `use ratatui::layout::Rect;`
+#      → 规则 16 扩域后命中并非零退出（bt 层渲染框架禁令生效）；
+#   对照后均已移除，复跑全绿。

@@ -26,7 +26,7 @@ fn conns_from_input(raw: &str, fallback: usize) -> usize {
 }
 
 #[must_use]
-pub(super) fn parse_speed_limit(raw: &str) -> Option<u64> {
+pub fn parse_speed_limit(raw: &str) -> Option<u64> {
     let s = raw.trim();
     if s.is_empty() {
         return None;
@@ -53,7 +53,7 @@ pub(super) fn parse_speed_limit(raw: &str) -> Option<u64> {
     Some(v.round() as u64)
 }
 
-pub(super) fn fmt_speed_limit(v: u64) -> String {
+pub fn fmt_speed_limit(v: u64) -> String {
     if v == 0 {
         return "0".to_string();
     }
@@ -573,6 +573,15 @@ mod add_dialog_flow_tests {
     use crate::model::config::Config;
     use crate::model::Protocol;
 
+    fn add_dlg(url: impl Into<String>, dir: impl Into<String>) -> Dialog {
+        let mut d = crate::app::testutil::dialog(DialogKind::Add, 7);
+        d.url.set(url);
+        d.dir.set(dir);
+        d.ck_type = CK_NONE;
+        d.ck_sel = CK_NONE;
+        d
+    }
+
     #[tokio::test]
     async fn add_dialog_confirm_creates_task_with_normalized_dir() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-app-dlg");
@@ -613,32 +622,10 @@ mod add_dialog_flow_tests {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-addonly");
         let reg = dir.join("registry.json").to_string_lossy().to_string();
         let mut app = App::new(Config::default(), reg);
-        app.dialog = Some(Dialog {
-            kind: DialogKind::Add,
-            url: TextInput::with_value("http://example.com/paused.bin"),
-            dir: TextInput::with_value(dir.to_string_lossy().to_string()),
-            conns: TextInput::new(),
-            conns_edited: false,
-            down_limit: TextInput::new(),
-            up_limit: TextInput::new(),
-            down_prefill: 0,
-            up_prefill: 0,
-            ck_type: CK_NONE,
-            ck_value: TextInput::new(),
-            ck_open: false,
-            ck_sel: CK_NONE,
-            proxy_sel: 0,
-            proxy_open: false,
-            focus: 7,
-            task_name: String::new(),
-            task_id: None,
-            torrent: TextInput::new(),
-            bt_tree: Vec::new(),
-            bt_cursor: 0,
-            bt_scroll: 0,
-            bt_follow: true,
-            trackers: crate::multiline::MultiLineBuf::new(),
-        });
+        app.dialog = Some(add_dlg(
+            "http://example.com/paused.bin",
+            dir.to_string_lossy().into_owned(),
+        ));
         app.dlg_activate_add(8);
         assert!(app.dialog.is_none(), "仅添加后关闭对话框");
         assert_eq!(app.tasks.len(), 1);
@@ -671,32 +658,10 @@ mod add_dialog_flow_tests {
             Config::default(),
             dir.join("registry.json").to_string_lossy().into_owned(),
         );
-        app.dialog = Some(Dialog {
-            kind: DialogKind::Add,
-            url: TextInput::with_value("http://example.com/r.bin"),
-            dir: TextInput::with_value(dir.to_string_lossy().into_owned()),
-            conns: TextInput::new(),
-            conns_edited: false,
-            down_limit: TextInput::new(),
-            up_limit: TextInput::new(),
-            down_prefill: 0,
-            up_prefill: 0,
-            ck_type: CK_NONE,
-            ck_value: TextInput::new(),
-            ck_open: false,
-            ck_sel: CK_NONE,
-            proxy_sel: 0,
-            proxy_open: false,
-            focus: 7,
-            task_name: String::new(),
-            task_id: None,
-            torrent: TextInput::new(),
-            bt_tree: Vec::new(),
-            bt_cursor: 0,
-            bt_scroll: 0,
-            bt_follow: true,
-            trackers: crate::multiline::MultiLineBuf::new(),
-        });
+        app.dialog = Some(add_dlg(
+            "http://example.com/r.bin",
+            dir.to_string_lossy().into_owned(),
+        ));
         crate::app::testutil::preset_resume_sidecar(&dir);
         app.dlg_activate_add(8);
         assert!(app.dialog.is_none(), "仅添加后关闭");
@@ -724,32 +689,10 @@ mod add_dialog_flow_tests {
             Config::default(),
             dir.join("registry.json").to_string_lossy().into_owned(),
         );
-        app.dialog = Some(Dialog {
-            kind: DialogKind::Add,
-            url: TextInput::with_value("http://example.com/alias.bin"),
-            dir: TextInput::with_value(dir.to_string_lossy().into_owned()),
-            conns: TextInput::new(),
-            conns_edited: false,
-            down_limit: TextInput::new(),
-            up_limit: TextInput::new(),
-            down_prefill: 0,
-            up_prefill: 0,
-            ck_type: CK_NONE,
-            ck_value: TextInput::new(),
-            ck_open: false,
-            ck_sel: CK_NONE,
-            proxy_sel: 0,
-            proxy_open: false,
-            focus: 7,
-            task_name: String::new(),
-            task_id: None,
-            torrent: TextInput::new(),
-            bt_tree: Vec::new(),
-            bt_cursor: 0,
-            bt_scroll: 0,
-            bt_follow: true,
-            trackers: crate::multiline::MultiLineBuf::new(),
-        });
+        app.dialog = Some(add_dlg(
+            "http://example.com/alias.bin",
+            dir.to_string_lossy().into_owned(),
+        ));
         let legacy = serde_json::json!({
             "version": 1,
             "url": "http://other.example/alias.bin",
@@ -803,32 +746,10 @@ mod add_dialog_flow_tests {
         occupied.downloaded = 123;
         app.tasks.push(occupied);
         crate::app::testutil::preset_sidecar_named(&dir, "alias.bin");
-        app.dialog = Some(Dialog {
-            kind: DialogKind::Add,
-            url: TextInput::with_value("http://example.com/alias.bin"),
-            dir: TextInput::with_value(dir.to_string_lossy().into_owned()),
-            conns: TextInput::new(),
-            conns_edited: false,
-            down_limit: TextInput::new(),
-            up_limit: TextInput::new(),
-            down_prefill: 0,
-            up_prefill: 0,
-            ck_type: CK_NONE,
-            ck_value: TextInput::new(),
-            ck_open: false,
-            ck_sel: CK_NONE,
-            proxy_sel: 0,
-            proxy_open: false,
-            focus: 7,
-            task_name: String::new(),
-            task_id: None,
-            torrent: TextInput::new(),
-            bt_tree: Vec::new(),
-            bt_cursor: 0,
-            bt_scroll: 0,
-            bt_follow: true,
-            trackers: crate::multiline::MultiLineBuf::new(),
-        });
+        app.dialog = Some(add_dlg(
+            "http://example.com/alias.bin",
+            dir.to_string_lossy().into_owned(),
+        ));
         app.dlg_confirm_add();
         assert!(app.dialog.is_none(), "确认后关闭");
         assert_eq!(app.tasks.len(), 2);
@@ -866,32 +787,10 @@ mod add_dialog_flow_tests {
         done.state = TaskState::Completed;
         app.tasks.push(done);
         crate::app::testutil::preset_sidecar_named(&dir, "alias.bin");
-        app.dialog = Some(Dialog {
-            kind: DialogKind::Add,
-            url: TextInput::with_value("http://example.com/alias.bin"),
-            dir: TextInput::with_value(dir.to_string_lossy().into_owned()),
-            conns: TextInput::new(),
-            conns_edited: false,
-            down_limit: TextInput::new(),
-            up_limit: TextInput::new(),
-            down_prefill: 0,
-            up_prefill: 0,
-            ck_type: CK_NONE,
-            ck_value: TextInput::new(),
-            ck_open: false,
-            ck_sel: CK_NONE,
-            proxy_sel: 0,
-            proxy_open: false,
-            focus: 7,
-            task_name: String::new(),
-            task_id: None,
-            torrent: TextInput::new(),
-            bt_tree: Vec::new(),
-            bt_cursor: 0,
-            bt_scroll: 0,
-            bt_follow: true,
-            trackers: crate::multiline::MultiLineBuf::new(),
-        });
+        app.dialog = Some(add_dlg(
+            "http://example.com/alias.bin",
+            dir.to_string_lossy().into_owned(),
+        ));
         app.dlg_confirm_add();
         assert_eq!(
             app.tasks[1].name, "alias.bin",
@@ -913,32 +812,7 @@ mod add_dialog_flow_tests {
             Config::default(),
             dir.join("registry.json").to_string_lossy().into_owned(),
         );
-        app.dialog = Some(Dialog {
-            kind: DialogKind::Add,
-            url: TextInput::with_value("ftp://x/f.bin"),
-            dir: TextInput::new(),
-            conns: TextInput::new(),
-            conns_edited: false,
-            down_limit: TextInput::new(),
-            up_limit: TextInput::new(),
-            down_prefill: 0,
-            up_prefill: 0,
-            ck_type: CK_NONE,
-            ck_value: TextInput::new(),
-            ck_open: false,
-            ck_sel: CK_NONE,
-            proxy_sel: 0,
-            proxy_open: false,
-            focus: 7,
-            task_name: String::new(),
-            task_id: None,
-            torrent: TextInput::new(),
-            bt_tree: Vec::new(),
-            bt_cursor: 0,
-            bt_scroll: 0,
-            bt_follow: true,
-            trackers: crate::multiline::MultiLineBuf::new(),
-        });
+        app.dialog = Some(add_dlg("ftp://x/f.bin", ""));
         app.dlg_activate_add(8);
         assert!(app.dialog.is_some(), "非法 URL 拒绝，对话框保持");
         assert!(app.tasks.is_empty(), "无任务创建");
@@ -1239,32 +1113,7 @@ mod add_dialog_flow_tests {
             dir.join("registry.json").to_string_lossy().into_owned(),
         );
         let target = format!("{}-{}", "ezr-tilde-docs", std::process::id());
-        app.dialog = Some(Dialog {
-            kind: DialogKind::Add,
-            url: TextInput::with_value("http://example.com/t.bin"),
-            dir: TextInput::with_value(format!("~/{target}")),
-            conns: TextInput::new(),
-            conns_edited: false,
-            down_limit: TextInput::new(),
-            up_limit: TextInput::new(),
-            down_prefill: 0,
-            up_prefill: 0,
-            ck_type: CK_NONE,
-            ck_value: TextInput::new(),
-            ck_open: false,
-            ck_sel: CK_NONE,
-            proxy_sel: 0,
-            proxy_open: false,
-            focus: 7,
-            task_name: String::new(),
-            task_id: None,
-            torrent: TextInput::new(),
-            bt_tree: Vec::new(),
-            bt_cursor: 0,
-            bt_scroll: 0,
-            bt_follow: true,
-            trackers: crate::multiline::MultiLineBuf::new(),
-        });
+        app.dialog = Some(add_dlg("http://example.com/t.bin", format!("~/{target}")));
         app.dlg_confirm_add();
         assert_eq!(app.tasks.len(), 1, "任务创建");
         assert_eq!(
@@ -1284,32 +1133,7 @@ mod add_dialog_flow_tests {
             Config::default(),
             dir.join("registry.json").to_string_lossy().into_owned(),
         );
-        app.dialog = Some(Dialog {
-            kind: DialogKind::Add,
-            url: TextInput::with_value("http://example.com/r.bin"),
-            dir: TextInput::with_value("ezr-relsub-test/sub"),
-            conns: TextInput::new(),
-            conns_edited: false,
-            down_limit: TextInput::new(),
-            up_limit: TextInput::new(),
-            down_prefill: 0,
-            up_prefill: 0,
-            ck_type: CK_NONE,
-            ck_value: TextInput::new(),
-            ck_open: false,
-            ck_sel: CK_NONE,
-            proxy_sel: 0,
-            proxy_open: false,
-            focus: 7,
-            task_name: String::new(),
-            task_id: None,
-            torrent: TextInput::new(),
-            bt_tree: Vec::new(),
-            bt_cursor: 0,
-            bt_scroll: 0,
-            bt_follow: true,
-            trackers: crate::multiline::MultiLineBuf::new(),
-        });
+        app.dialog = Some(add_dlg("http://example.com/r.bin", "ezr-relsub-test/sub"));
         app.dlg_confirm_add();
         assert_eq!(app.tasks.len(), 1, "任务创建");
         assert_eq!(

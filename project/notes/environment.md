@@ -335,3 +335,18 @@ QA 轮（2026-11-06）补记：接手被中断会话先清残留进程——上�
   可用 DRY 扫描器（`pmd cpd --dir src --language rust --minimum-tokens 70`；EXIT=4=有克隆属正常）。
 - 清理轮全流程磁盘账：镜像装机+全量基线（bin+12 套件逐目标）+llvm-cov ×3 + 全量复验 ×2 后
   盘余 2.7G（72%）——llvm-cov 每轮 ~0.4G 插桩工件是增量大头；未到清理线（complete 自动清 target/）。
+
+## architect 轮（2026-11-07）镜像复测与 PMD 装机
+- rustup 镜像复测（装前 curl 清单纪律再证）：清单探针 aliyun 8.8MB/s 最快但快照停
+  2026-05-29（新鲜度排除）、rsproxy 3.5MB/s date=2026-11-07 新鲜、TUNA 3.2MB/s（init 路径
+  本轮 404，翻转史再 +1）、USTC rustup-static 404、SJTU 404；大样本 rustup-init（21MB）
+  复测 rsproxy **18.9MB/s** 且双层路径（/rustup/dist/<arch>/rustup-init + /dist/ 清单）全通
+  → rsproxy 双变量（DIST_SERVER=https://rsproxy.cn 裸根、UPDATE_ROOT=…/rustup）**前台**装齐
+  nightly 1.101.0（minimal+rustfmt+clippy，--no-modify-path + 每调用显式 export PATH）。
+- 大文件 release 资产装机三件：`curl -C -` 断点续传（gh-proxy 本轮降至 ~0.3MB/s，134MB 分
+  两段补完——历轮秒级与本轮慢速漂移再证，镜像快 ≠ 稳定快）；`zipfile.testzip()` 完整性
+  探针（超时截断的 zip 解压前必验，防半包静默坏档）；解压后 `chmod +x`（zip 不保执行位，
+  直跑报 Permission denied 勿误判包坏）。PMD 7.29.0 落位 `swarm/.tools/pmd`（宪法工具缓存
+  位，跨会话复用、不进归档）。
+- 本轮全流程磁盘账：工具链装机 + 基线（bin+12 套件）+ 改进后全量复验（bin+12 套件）+
+  CPD 扫描后盘余 6.0G——无 llvm-cov 插桩轮磁盘压力显著小于 cleaner 轮（该轮 2.7G 余量）。

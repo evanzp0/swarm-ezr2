@@ -644,3 +644,27 @@ architect 轮（2026-11-06）：arch_check.sh 规则 14 白名单漂移是「响
   url_task_exists（唯一性）→ derive_add_task_name（占用/接续/去重）→ conns_from_input（并发钳制，
   HTTP 拒绝式与 BT 钳制式语义不同各自保留）→ Task 构造 → register_new_task（注册尾部）→
   announce_*（载体分众 toast/错误窗口留在入口）。
+
+## architect 轮（2026-11-07）：交互层分派复杂度定性、bt 层护栏收口与神结构拆分裁决
+- 四阶段评审零违规：分层基线实测合规（main→app→engine→model；ui→app/model；app→bt 仅
+  TorrentMeta 纯解析消费；engine↔bt 协调枢纽沿 2026-11-06 裁决）；app 层 ratatui 触面仅
+  `layout::Rect` 几何类型（ui 回填既定架构，规则 14 白名单守写侧）；核心无 UI/IO 可测性有
+  appcore 747 / engine 743 双套件实证。
+- **高 comp 函数定性法：先辨「本质路由复杂度」再决定拆不拆**。焦点路由分派
+  （add_bt_dialog_char 13 臂 / modify_bt_dialog_char 10）与多臂守卫链（parse_speed_limit 9、
+  overlay_open 8 臂 || 链）的 comp 来自路由决策本身，各臂已委托单一职责助手
+  （insert_conns_digit/insert_limit/bt_list_char/dlg_activate_*）——再拆即「长分派拆分
+  （参数列表膨胀、状态跨模块漂移）」的不安全类；共享 &mut App 的工作树 + hardender 关闭期
+  裁决**不拆**，移交登记。判据：把函数改成 match 后臂数不变 ≈ 本质复杂度；臂体超过一屏
+  或混杂无关行为才属可拆。
+- **App 神结构（~140 字段）拆分裁决：不拆**。>100 变异点三文件（app/mod 142 / dialogs 101 /
+  bt_dialog 100）点数与行数 ≈0.06–0.08 点/行属交互层常态；拆分收益（hardender `--file`
+  分块跑变异）无消费方；字段聚类（几何回填/滚动/弹窗开关/连接统计/引擎通道）清晰且模块
+  边界由规则 12/13/14 守护——拆子结构触及全模块签名，风险高于收益。
+- arch_check.sh 16→17 规则：规则 16（机制层禁渲染框架）扫描域扩至 src/bt（原扫描域漏盖
+  bt 层——评审实测 bt 零渲染导入但无规则固化）；新增规则 17（bt 层禁 app/ui use）——
+  bt 分层箭头白名单 = bt→model/engine、app→bt 纯解析、engine↔bt 枢纽。两条阳性对照实测
+  变红后移除复绿（尾注登记）。
+- Dialog 测试字面量克隆家族（179/165/142tok ×8 处）收编 `testutil::dialog` 工厂（测试基建
+  微调，零行为变更）；判重错误窗口测试对提取 `dup_hit_app` 共享 setup（差分点=对话框目录
+  参数化，两测断言意图文案保留）。PMD CPD 全仓 200→181。

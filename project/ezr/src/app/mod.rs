@@ -38,6 +38,8 @@ pub(crate) use dialog_keys::{
     dropdown_open_key, proxy_dropdown_open_key, push_hex_capped, text_backspace, text_char,
     TextField,
 };
+#[cfg(test)]
+pub(crate) use dialogs::{fmt_speed_limit, parse_speed_limit};
 
 pub const ITEM_HEIGHT: u16 = 4;
 
@@ -1054,18 +1056,25 @@ mod interaction_tests {
 
     // ---- 判重错误窗口（bug25 轮 cleaner 补测，纯追加）----
 
-    #[tokio::test]
-    async fn finish_add_duplicate_opens_error_window() {
-        let mut app = make_app("dup-err");
+    /// 判重命中场景的共享 setup：既有任务 URL 与对话框 URL 同为 a.bin，
+    /// 既有任务目录固定，对话框目录为参数（同目录/异目录两臂的差分点）。
+    fn dup_hit_app(tag: &str, dialog_dir: &str) -> App {
+        let mut app = make_app(tag);
         let mut t = crate::app::testutil::dl_task(1, "a.bin");
         t.url = "http://example.com/a.bin".to_string();
         t.save_dir = crate::model::config::normalize_save_dir("ezr-dup-err-dir");
         app.tasks.push(t);
         let mut d = crate::app::testutil::dialog(crate::app::DialogKind::Add, 0);
         d.url.set("http://example.com/a.bin");
-        d.dir.set("ezr-dup-err-dir");
+        d.dir.set(dialog_dir);
         d.ck_type = crate::model::checksum::CK_NONE;
         app.dialog = Some(d);
+        app
+    }
+
+    #[tokio::test]
+    async fn finish_add_duplicate_opens_error_window() {
+        let mut app = dup_hit_app("dup-err", "ezr-dup-err-dir");
         app.dlg_confirm_add();
         assert!(
             app.err_open && app.err_msg == "该链接的任务已存在",
@@ -1079,16 +1088,7 @@ mod interaction_tests {
 
     #[tokio::test]
     async fn finish_add_different_dir_is_duplicate() {
-        let mut app = make_app("dup-dir");
-        let mut t = crate::app::testutil::dl_task(1, "a.bin");
-        t.url = "http://example.com/a.bin".to_string();
-        t.save_dir = crate::model::config::normalize_save_dir("ezr-dup-err-dir");
-        app.tasks.push(t);
-        let mut d = crate::app::testutil::dialog(crate::app::DialogKind::Add, 0);
-        d.url.set("http://example.com/a.bin");
-        d.dir.set("ezr-dup-err-dir-other");
-        d.ck_type = crate::model::checksum::CK_NONE;
-        app.dialog = Some(d);
+        let mut app = dup_hit_app("dup-dir", "ezr-dup-err-dir-other");
         app.dlg_confirm_add();
         assert!(
             app.err_open && app.err_msg == "该链接的任务已存在",

@@ -2123,3 +2123,74 @@ proptest! {
         }
     }
 }
+
+proptest! {
+    #[test]
+    fn prop_speed_limit_fmt_parse_round_trip(v in 0u64..(1u64 << 53)) {
+        let text = crate::app::fmt_speed_limit(v);
+        if v == 0 {
+            prop_assert_eq!(text.as_str(), "0", "0 = 不限速原样");
+        } else {
+            let expected_unit = if v % 1_073_741_824 == 0 {
+                " GiB/s"
+            } else if v % 1_048_576 == 0 {
+                " MiB/s"
+            } else if v % 1024 == 0 {
+                " KiB/s"
+            } else {
+                " B/s"
+            };
+            prop_assert!(
+                text.ends_with(expected_unit),
+                "单位选择按 GiB→MiB→KiB→B 精确整倍数优先: v={} text={}",
+                v,
+                text
+            );
+        }
+        prop_assert_eq!(
+            crate::app::parse_speed_limit(&text),
+            Some(v),
+            "fmt→parse 恒等（v1.40 预填/回显口径，2^53 内 f64 整数精确带）: v={} text={}",
+            v,
+            text
+        );
+    }
+}
+
+proptest! {
+    #[test]
+    fn prop_speed_limit_parse_domain(
+        n in 0u64..(1u64 << 40),
+        unit in prop::sample::select(&[
+            "", "B/s", "b", "bps", "K", "KB", "KiB", "kbps", "m", "MB", "MiB", "g", "GB", "GiB",
+        ]),
+        spaced in prop::bool::ANY,
+        slash in prop::bool::ANY,
+    ) {
+        let mult: u64 = match unit {
+            "" | "B/s" | "b" | "bps" => 1,
+            "K" | "KB" | "KiB" | "kbps" => 1024,
+            "m" | "MB" | "MiB" => 1_048_576,
+            "g" | "GB" | "GiB" => 1_073_741_824,
+            _ => unreachable!("select 域内单位"),
+        };
+        let body = if spaced {
+            format!("{n} {unit}")
+        } else {
+            format!("{n}{unit}")
+        };
+        let raw = if slash { format!("{body}/s") } else { body };
+        prop_assert_eq!(
+            crate::app::parse_speed_limit(&raw),
+            Some(n.saturating_mul(mult)),
+            "对话框侧限速解析全别名二进制乘表（bug21 口径，KB/MB/GB 同 MiB 二进制）: raw={}",
+            raw
+        );
+        prop_assert_eq!(
+            crate::app::parse_speed_limit(&format!("{n} x")),
+            None,
+            "未收单位拒绝: n={}",
+            n
+        );
+    }
+}

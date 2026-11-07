@@ -258,3 +258,10 @@ group_imports = "StdExternalCrate"
 - **rustup-init 二进制落盘名必须恰为 `rustup-init`**：rustup-init 按自身程序名推断要创建的
   proxy 名（cargo/rustc/rustfmt…），文件名带前缀/点号（如 `.work-rustup-init`）会报
   `unknown proxy name: '…'` 直接拒绝运行——直链下载后重命名为标准名再执行。
+
+- **u64 值域 fmt/parse 往返属性的域必须限 f64 整数精确带（2^53）**：fmt 侧输出十进制整数
+  字符串、parse 侧经 f64 解析的往返对（限速/尺寸类 fmt↔parse 同族），`parse(fmt(v)) == v`
+  对全域 u64 不成立——v ≥ 2^53 时 f64 舍入使 parse 偏离 v 或被上界 clamp 吞掉
+  （如 u64::MAX−1 → Some(u64::MAX)），全域属性断言必假红。属性域限 `0..(1<<53)`，或断言
+  放宽为「Some 且 clamp 单调」。固定值单测（含恰好自洽的 clamp 边界值）探不出舍入带，
+  **单测绿 ≠ 全域属性成立**——属性域约束不可省。
