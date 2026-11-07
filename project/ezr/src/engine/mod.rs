@@ -115,6 +115,9 @@ pub enum Evt {
     Invalidated {
         id: u32,
     },
+    OrphanRedirect {
+        id: u32,
+    },
     DownloadDone {
         id: u32,
         total: u64,
@@ -815,6 +818,7 @@ mod main_loop_tests {
             sidecar: None,
             sidecar_path: None,
             keep_name: false,
+            resume_orphan: false,
             added_at: 0,
             proxy_endpoint: None,
             progress_tick_ms: 100,

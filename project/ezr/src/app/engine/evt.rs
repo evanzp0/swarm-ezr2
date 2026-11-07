@@ -35,6 +35,7 @@ impl App {
                         t.name = nn;
                     }
                     t.name_locked = true;
+                    t.resume_orphan = false;
                     t.total = total;
                     t.resumable = resumable;
                     t.probed = true;
@@ -149,6 +150,36 @@ impl App {
                         "⚠ 服务器内容已更新，断点已作废，从头重新下载: {name}"
                     ));
                 }
+                self.clear_conn_stats(id);
+            }
+            Evt::OrphanRedirect { id } => {
+                let new_name = {
+                    let Some(cur) = self.tasks.iter().find(|t| t.id == id) else {
+                        return;
+                    };
+                    let dir = cur.save_dir.clone();
+                    let base = cur.name.clone();
+                    let taken = |n: &str| {
+                        self.tasks.iter().any(|x| x.name == n && x.save_dir == dir)
+                            || namegen::exists_on_disk(&dir, n)
+                    };
+                    namegen::dedupe(&base, taken)
+                };
+                let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else {
+                    return;
+                };
+                t.name = new_name;
+                t.resume_orphan = false;
+                t.downloaded = 0;
+                t.chunk_done = 0;
+                t.done_blocks.clear();
+                t.partial_blocks.clear();
+                t.connections.clear();
+                t.speed = 0.0;
+                t.state = TaskState::Queued;
+                t.probed = false;
+                t.has_slot = false;
+                self.session_seen.insert(id, 0);
                 self.clear_conn_stats(id);
             }
             Evt::DownloadDone { id, total } => {

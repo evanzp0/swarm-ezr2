@@ -61,7 +61,7 @@ impl App {
     }
 
     /// 添加确认链的保存目录解析：空输入回退配置/默认目录，再归一化。
-    /// HTTP/BT 判重（t.save_dir == dir）与任务构造共用本口径。
+    /// 判重（bug27：任务按 URL 唯一，与保存目录无关）与任务构造共用本口径。
     pub(super) fn resolve_confirm_dir(&self, dir_raw: &str) -> String {
         let dir = if dir_raw.is_empty() {
             self.cfg
@@ -235,19 +235,18 @@ impl App {
 
         let protocol = protocol_of_url(&url);
         let dir = self.resolve_confirm_dir(&dir_raw);
-        if self.tasks.iter().any(|t| t.url == url && t.save_dir == dir) {
+        if self.tasks.iter().any(|t| t.url == url) {
             self.open_error_window("该链接的任务已存在");
             return;
         }
         let base_name = namegen::derive_name(None, None, &url);
         let id = self.alloc_task_id();
-        let resumed = Sidecar::load(&format!("{dir}/{base_name}{SIDECAR_EXT}")).is_some()
-            || self.tasks.iter().any(|t| {
-                t.url == url
-                    && t.save_dir == dir
-                    && t.name == base_name
-                    && t.state != TaskState::Completed
-            });
+        let occupied = self
+            .tasks
+            .iter()
+            .any(|t| t.save_dir == dir && t.name == base_name && t.state != TaskState::Completed);
+        let resumed =
+            !occupied && Sidecar::load(&format!("{dir}/{base_name}{SIDECAR_EXT}")).is_some();
         let name = if resumed {
             base_name.clone()
         } else {
@@ -282,6 +281,7 @@ impl App {
         }
         if resumed {
             t.name_locked = true;
+            t.resume_orphan = true;
         }
         t.max_download_speed = down_limit;
         self.tasks.push(t);
@@ -756,6 +756,149 @@ mod add_dialog_flow_tests {
         assert!(
             app.tasks[0].name_locked,
             "接续任务名随接续定稿（首探前失效重下不得去重漂移，QA-RS-14）"
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn preset_orphan_sidecar(dir: &std::path::Path, name: &str) {
+        let sc = crate::model::sidecar::Sidecar::build(
+            &crate::model::consistency::ServerStamp {
+                etag: None,
+                last_modified: None,
+                size: Some(1000),
+            },
+            1000,
+            1024 * 1024,
+            &[0],
+            false,
+            None,
+            crate::model::sidecar::SidecarTask {
+                id: 99,
+                added_at: 0,
+                save_dir: dir.to_string_lossy().into_owned(),
+                concurrency: 4,
+                protocol: crate::model::Protocol::Http,
+            },
+        );
+        sc.save(&dir.join(format!("{name}.ezr")).to_string_lossy())
+            .ok();
+    }
+
+    #[tokio::test]
+    async fn guard_blocks_resume_when_incomplete_task_occupies_path() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-guard");
+        let mut app = App::new(
+            Config::default(),
+            dir.join("registry.json").to_string_lossy().into_owned(),
+        );
+        let mut occupied = crate::model::sample_task();
+        occupied.id = 9;
+        occupied.name = "alias.bin".to_string();
+        occupied.save_dir = dir.to_string_lossy().into_owned();
+        occupied.url = "http://other.example/alias.bin".to_string();
+        occupied.state = TaskState::Downloading;
+        occupied.downloaded = 123;
+        app.tasks.push(occupied);
+        preset_orphan_sidecar(&dir, "alias.bin");
+        app.dialog = Some(Dialog {
+            kind: DialogKind::Add,
+            url: TextInput::with_value("http://example.com/alias.bin"),
+            dir: TextInput::with_value(dir.to_string_lossy().into_owned()),
+            conns: TextInput::new(),
+            conns_edited: false,
+            down_limit: TextInput::new(),
+            up_limit: TextInput::new(),
+            down_prefill: 0,
+            up_prefill: 0,
+            ck_type: CK_NONE,
+            ck_value: TextInput::new(),
+            ck_open: false,
+            ck_sel: CK_NONE,
+            proxy_sel: 0,
+            proxy_open: false,
+            focus: 7,
+            task_name: String::new(),
+            task_id: None,
+            torrent: TextInput::new(),
+            bt_tree: Vec::new(),
+            bt_cursor: 0,
+            bt_scroll: 0,
+            bt_follow: true,
+            trackers: crate::multiline::MultiLineBuf::new(),
+        });
+        app.dlg_confirm_add();
+        assert!(app.dialog.is_none(), "确认后关闭");
+        assert_eq!(app.tasks.len(), 2);
+        assert_eq!(app.tasks[0].name, "alias.bin", "既有任务零影响");
+        assert_eq!(app.tasks[0].downloaded, 123, "既有任务进度零影响");
+        assert_eq!(
+            app.tasks[1].name, "alias.bin.1",
+            "v1.45 守卫臂：未完成任务占用同路径 → 序号改道（01-resume-sidecar-15）"
+        );
+        assert!(
+            !app.tasks[1].resume_orphan,
+            "守卫臂不接续 sidecar（占用态 sidecar 属存活任务）"
+        );
+        assert!(
+            !app.toast.as_deref().unwrap_or_default().contains("断点"),
+            "守卫臂静默（01-add-task-10 同口径）: {:?}",
+            app.toast
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn completed_task_does_not_occupy_resume_path() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dlg-guard-done");
+        let mut app = App::new(
+            Config::default(),
+            dir.join("registry.json").to_string_lossy().into_owned(),
+        );
+        let mut done = crate::model::sample_task();
+        done.id = 9;
+        done.name = "alias.bin".to_string();
+        done.save_dir = dir.to_string_lossy().into_owned();
+        done.url = "http://other.example/alias.bin".to_string();
+        done.state = TaskState::Completed;
+        app.tasks.push(done);
+        preset_orphan_sidecar(&dir, "alias.bin");
+        app.dialog = Some(Dialog {
+            kind: DialogKind::Add,
+            url: TextInput::with_value("http://example.com/alias.bin"),
+            dir: TextInput::with_value(dir.to_string_lossy().into_owned()),
+            conns: TextInput::new(),
+            conns_edited: false,
+            down_limit: TextInput::new(),
+            up_limit: TextInput::new(),
+            down_prefill: 0,
+            up_prefill: 0,
+            ck_type: CK_NONE,
+            ck_value: TextInput::new(),
+            ck_open: false,
+            ck_sel: CK_NONE,
+            proxy_sel: 0,
+            proxy_open: false,
+            focus: 7,
+            task_name: String::new(),
+            task_id: None,
+            torrent: TextInput::new(),
+            bt_tree: Vec::new(),
+            bt_cursor: 0,
+            bt_scroll: 0,
+            bt_follow: true,
+            trackers: crate::multiline::MultiLineBuf::new(),
+        });
+        app.dlg_confirm_add();
+        assert_eq!(
+            app.tasks[1].name, "alias.bin",
+            "已完成不构成占用（v1.45 占用判定 1A）"
+        );
+        assert!(app.tasks[1].name_locked, "接续候选名钉住");
+        assert!(
+            app.tasks[1].resume_orphan,
+            "孤儿 sidecar 候选待探测三要素裁决（v1.46）"
         );
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();

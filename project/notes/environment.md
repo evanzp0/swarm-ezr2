@@ -309,3 +309,9 @@ QA 轮（2026-11-06）补记：接手被中断会话先清残留进程——上�
 - 审批改判流程先例：操作者 chat 审批即修订裁决（Inversion 不适用，沿 bug25 轮先例）；审批只给
   行为面时，机制面判别载体（本轮 = FR-01-22 三要素探测判同/异文件）由 specifier 合成裁决并随
   phase-01 v1.46 注记登记供否决——透明登记先于自行扩权。
+
+## coder v1.46 轮镜像复测（2026-11-07）：TUNA 双层均最快整链路装齐
+- 全新沙箱（~/.cargo、~/.rustup 全空）。rustup-init 直链探针：TUNA 双层路径 44.0MB/s > rsproxy 17.6 > USTC 10.4 > aliyun 8.9 > NJU 404。
+- dist 清单（架构无关路径 dist/channel-rust-nightly.toml）：TUNA 200/date 2026-11-03、rsproxy 200/11-06、USTC 200/11-06、aliyun 200 但快照停 2026-05-29（新鲜度判据排除）。
+- dist 组件（清单内 rustc tar.xz 剥上游前缀按镜像布局重拼）16MB range 探针：TUNA 56.8MB/s、rsproxy 5.4MB/s、USTC 403——**本轮终选 TUNA 双变量（DIST_SERVER/UPDATE_ROOT 均 = https://mirrors.tuna.tsinghua.edu.cn/rustup，init 双层路径 /rustup/rustup/dist/<arch>/）直链 + 前台 -y --profile minimal --default-toolchain nightly -c rustfmt -c clippy --no-modify-path 一次装齐**（rustup nightly 1.101.0 与历轮版本带一致，EXIT=0）。
+- cargo registry 按 cleaner 轮口径直接写 rsproxy sparse（~/.cargo/config.toml）；bb v1.13.229 + APS 经 gh-proxy.com 前缀重装秒级；gherkin-parser 15 场景 exit 0 + dry-checker exit 0（108 findings 与规格轮复核记录同集）。

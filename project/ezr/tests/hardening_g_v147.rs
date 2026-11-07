@@ -596,7 +596,7 @@ async fn wait_until(a: &mut App, secs: u64, mut pred: impl FnMut(&App) -> bool) 
 }
 
 #[tokio::test]
-async fn unknown_size_resume_invalidates_not_transient_fail() {
+async fn unknown_size_orphan_redirects_not_transient_fail() {
     let addr = stub_nocl_trickle();
     let (dir, reg) = workspace("u0");
     let sc = model::sidecar::Sidecar {
@@ -630,15 +630,18 @@ async fn unknown_size_resume_invalidates_not_transient_fail() {
         Some(1),
         None,
     );
-    let _ = wait_until(&mut a, 12, |a| a.tasks[0].invalidation_streak >= 1).await;
-    assert!(
-        a.tasks[0].invalidation_streak >= 1,
-        "未知大小台账 + 无 CL 探测必须走一致性失效重下（Invalidated）；\
-         117:44 突变体（> → >=）把 size=0 台账误判「已知大小」→ 提前暂态失败；\
-         实际 streak={} state={:?} err={:?}",
-        a.tasks[0].invalidation_streak,
+    let _ = wait_until(&mut a, 12, |a| a.tasks[0].name == "f.bin.1").await;
+    assert_eq!(
+        a.tasks[0].name, "f.bin.1",
+        "未知大小台账 + 无 CL 探测必须走一致性裁决（孤儿臂 → 序号改道 <名>.1）；\
+         117:44 突变体（> → >=）把 size=0 台账误判「已知大小」→ 提前暂态失败不致改道；\
+         实际 name={} state={:?} err={:?}",
+        a.tasks[0].name, a.tasks[0].state, a.tasks[0].error
+    );
+    assert_ne!(
         a.tasks[0].state,
-        a.tasks[0].error
+        TaskState::Failed,
+        "孤儿候选不得暂态失败（探测路径走一致性裁决）"
     );
     a.shutdown().await;
     cleanup(&dir, &reg);
@@ -708,7 +711,7 @@ async fn matching_sidecar_resumes_with_nonzero_range() {
 }
 
 #[tokio::test]
-async fn inconsistent_block_count_invalidates_even_when_size_matches() {
+async fn inconsistent_block_count_orphan_redirects_even_when_size_matches() {
     let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let addr = stub_range_recorder(log.clone());
     let (dir, reg) = workspace("bc");
@@ -743,14 +746,18 @@ async fn inconsistent_block_count_invalidates_even_when_size_matches() {
         Some(1),
         None,
     );
-    let _ = wait_until(&mut a, 12, |a| a.tasks[0].invalidation_streak >= 1).await;
-    assert!(
-        a.tasks[0].invalidation_streak >= 1,
-        "块数不自洽（size 一致）必须失效重下；129:59 突变体（&&→||）被 \
-         size 恒等单条件放行 → 误接续；实际 streak={} state={:?} err={:?}",
-        a.tasks[0].invalidation_streak,
+    let _ = wait_until(&mut a, 12, |a| a.tasks[0].name == "f.bin.1").await;
+    assert_eq!(
+        a.tasks[0].name, "f.bin.1",
+        "块数不自洽（size 一致）孤儿臂必须改道；\
+         129:59 突变体（&&→||）被 size 恒等单条件放行 → 误接续不致改道；\
+         实际 name={} state={:?} err={:?}",
+        a.tasks[0].name, a.tasks[0].state, a.tasks[0].error
+    );
+    assert_ne!(
         a.tasks[0].state,
-        a.tasks[0].error
+        TaskState::Failed,
+        "孤儿候选不得失败（台账不自洽走改道）"
     );
     a.shutdown().await;
     cleanup(&dir, &reg);
@@ -1039,6 +1046,7 @@ async fn engine_progress_freezes_after_failure_event() {
         sidecar: None,
         sidecar_path: None,
         keep_name: false,
+        resume_orphan: false,
         added_at: 0,
         proxy_endpoint: None,
         progress_tick_ms: 100,
@@ -1094,6 +1102,7 @@ async fn engine_conns_quota_exact_and_unique_ids() {
         sidecar: None,
         sidecar_path: None,
         keep_name: false,
+        resume_orphan: false,
         added_at: 0,
         proxy_endpoint: None,
         progress_tick_ms: 100,

@@ -58,7 +58,11 @@ pub(super) async fn single_stream(
             )
             .await;
         }
-        return Flow::Invalidated;
+        return if spec.resume_orphan {
+            Flow::OrphanRedirect
+        } else {
+            Flow::Invalidated
+        };
     }
 
     if !multi_ok {

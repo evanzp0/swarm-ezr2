@@ -411,6 +411,44 @@ mod dialog_key_tests {
     }
 
     #[test]
+    fn typing_full_canonical_form_with_leading_zero_prefill_stays_parseable() {
+        use super::super::dialog_keys::insert_limit;
+        let mut d = add_dlg();
+        d.down_limit.set("0");
+        d.down_limit.backspace();
+        for c in "256 KiB/s".chars() {
+            insert_limit(&mut d.down_limit, c);
+            eprintln!("after {c:?}: {:?}", d.down_limit.value);
+        }
+        let v = d.down_limit.value.clone();
+        assert!(
+            super::super::dialogs::parse_speed_limit(&v).is_some(),
+            "退格清零后键入『256 KiB/s』应可解析，实际 = {v:?}"
+        );
+        assert_eq!(v, "256 KiB/s");
+        d.down_limit.clear();
+        for c in "512 KiB/s".chars() {
+            insert_limit(&mut d.down_limit, c);
+        }
+        let v = d.down_limit.value.clone();
+        assert!(
+            super::super::dialogs::parse_speed_limit(&v).is_some(),
+            "空字段键入『512 KiB/s』应可解析，实际 = {v:?}"
+        );
+        assert_eq!(v, "512 KiB/s");
+        d.up_limit.set("0");
+        d.up_limit.backspace();
+        for c in "2 MiB/s".chars() {
+            insert_limit(&mut d.up_limit, c);
+        }
+        let v = d.up_limit.value.clone();
+        assert!(
+            super::super::dialogs::parse_speed_limit(&v).is_some(),
+            "键入『2 MiB/s』应可解析，实际 = {v:?}"
+        );
+    }
+
+    #[test]
     fn insert_limit_canonicalizes_binary_units() {
         use super::super::dialog_keys::insert_limit;
         let mut d = add_dlg();

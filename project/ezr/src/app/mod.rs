@@ -1078,7 +1078,7 @@ mod interaction_tests {
     }
 
     #[tokio::test]
-    async fn finish_add_different_dir_is_not_duplicate() {
+    async fn finish_add_different_dir_is_duplicate() {
         let mut app = make_app("dup-dir");
         let mut t = crate::app::testutil::dl_task(1, "a.bin");
         t.url = "http://example.com/a.bin".to_string();
@@ -1090,9 +1090,13 @@ mod interaction_tests {
         d.ck_type = crate::model::checksum::CK_NONE;
         app.dialog = Some(d);
         app.dlg_confirm_add();
-        assert!(!app.err_open, "同 URL 不同目录不判重");
-        assert_eq!(app.tasks.len(), 2, "不同目录允许再次添加（同步入列）");
-        assert!(app.dialog.is_none(), "添加成功关闭对话框");
+        assert!(
+            app.err_open && app.err_msg == "该链接的任务已存在",
+            "同 URL 异目录也判重（bug27：任务按 URL 唯一，与保存目录无关），err={:?}",
+            app.err_msg
+        );
+        assert_eq!(app.tasks.len(), 1, "判重命中不新增任务");
+        assert!(app.dialog.is_some(), "对话框保持打开（规格口径）");
         app.shutdown().await;
     }
 }

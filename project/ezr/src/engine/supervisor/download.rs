@@ -91,12 +91,18 @@ pub(super) async fn download(
                         piece: sidecar.block_size,
                         written: sidecar.blocks.clone(),
                     }
+                } else if spec.resume_orphan {
+                    return Flow::OrphanRedirect;
                 } else {
                     return Flow::Invalidated;
                 }
             }
             Consistency::Invalidated | Consistency::MissingStamp => {
-                return Flow::Invalidated;
+                return if spec.resume_orphan {
+                    Flow::OrphanRedirect
+                } else {
+                    Flow::Invalidated
+                };
             }
         }
     } else {

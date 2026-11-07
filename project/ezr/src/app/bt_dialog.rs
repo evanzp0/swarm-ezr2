@@ -404,11 +404,7 @@ impl App {
 
         let dir = self.resolve_confirm_dir(&dir_raw);
 
-        if self
-            .tasks
-            .iter()
-            .any(|t| t.url == source && t.save_dir == dir)
-        {
+        if self.tasks.iter().any(|t| t.url == source) {
             self.open_error_window("该链接的任务已存在");
             return;
         }
@@ -1046,6 +1042,30 @@ mod tests {
             "toast 承载退役（成功 toast 不受影响）"
         );
         assert_eq!(app.tasks.len(), 1);
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn confirm_add_duplicate_different_dir_rejected() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-dup2");
+        let path = write_multi_torrent(&dir, "a.torrent");
+        let meta = parse_at(&path);
+        let mut app = make_app("dup2");
+        app.open_add_bt_dialog_with(&path, &meta);
+        app.dlg_confirm_add_bt(false);
+        assert_eq!(app.tasks.len(), 1);
+        let other = crate::model::config::normalize_save_dir("ezr-btdlg-dup2-other");
+        app.open_add_bt_dialog_with(&path, &meta);
+        app.dialog.as_mut().unwrap().dir.value = other;
+        app.dlg_confirm_add_bt(false);
+        assert!(
+            app.err_open && app.err_msg == "该链接的任务已存在",
+            "同来源异目录也判重（bug27：任务按 URL 唯一，与保存目录无关），err={:?}",
+            app.err_msg
+        );
+        assert!(app.dialog.is_some(), "重复任务拒绝保持对话框");
+        assert_eq!(app.tasks.len(), 1, "判重命中不新增任务");
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }

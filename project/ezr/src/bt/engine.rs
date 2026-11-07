@@ -3130,6 +3130,83 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn engine_task_speed_limit_throttles_download() {
+        let piece_len = 16 * 1024;
+        let data: Vec<u8> = (0..512 * 1024usize).map(|i| (i % 251) as u8).collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bteng-tlimit");
+        let save_dir = dir.to_string_lossy().into_owned();
+
+        let tmp_meta = make_meta(&data, piece_len, "udp://127.0.0.1:1/announce");
+        let seeder_port = fake_seeder(data.clone(), piece_len, tmp_meta.infohash).await;
+        let tracker_port = fake_udp_tracker(seeder_port).await;
+        let meta = make_meta(
+            &data,
+            piece_len,
+            &format!("udp://127.0.0.1:{tracker_port}/announce"),
+        );
+        assert_eq!(meta.infohash, tmp_meta.infohash, "两次构造 infohash 一致");
+
+        let spec = crate::engine::BtSpec {
+            id: 79,
+            source: "/tmp/e2e-tlimit.torrent".into(),
+            meta: meta.clone(),
+            save_dir: save_dir.clone(),
+            name: "e2e.bin".into(),
+            files: vec![BtFile {
+                path: "e2e.bin".into(),
+                size: data.len() as u64,
+                selected: true,
+            }],
+            trackers: vec![format!("udp://127.0.0.1:{tracker_port}/announce")],
+            concurrency: 4,
+            proxy_endpoint: None,
+            seeding: false,
+            max_download_speed: 100_000,
+            max_upload_speed: 0,
+            tunables: Default::default(),
+        };
+        let (evt_tx, mut evt_rx) = mpsc::channel(256);
+        let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
+        let shared = crate::engine::shared_for_tests();
+        let engine_handle = tokio::spawn(run(spec, shared, cmd_rx, evt_tx));
+
+        let start = std::time::Instant::now();
+        let mut done_seen = false;
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let remain = deadline.saturating_duration_since(std::time::Instant::now());
+            let Some(evt) = tokio::time::timeout(remain, evt_rx.recv())
+                .await
+                .ok()
+                .flatten()
+            else {
+                panic!("限速下载超时（已等 {:.1}s）", start.elapsed().as_secs_f64());
+            };
+            match evt {
+                Evt::BtDone { id, total } => {
+                    assert_eq!(id, 79);
+                    assert_eq!(total, data.len() as u64);
+                    done_seen = true;
+                }
+                Evt::BtFailed { reason, .. } => panic!("意外失败：{reason}"),
+                _ => {}
+            }
+            if done_seen {
+                break;
+            }
+        }
+        let took = start.elapsed().as_secs_f64();
+        assert!(
+            took >= 4.5,
+            "BT 任务级限速 100KB/s 下载 512KiB 应 ≥4.5s，实际 {took:.2}s"
+        );
+        let out = std::fs::read(format!("{save_dir}/e2e.bin")).unwrap();
+        assert_eq!(out, data, "产物与 seeder 数据逐字节一致");
+        engine_handle.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn engine_downloads_multi_block_pieces() {
         let piece_len = 64 * 1024;
         let data: Vec<u8> = (0..160_000usize).map(|i| (i % 253) as u8).collect();

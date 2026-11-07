@@ -93,6 +93,7 @@ impl App {
             sidecar,
             sidecar_path: sc_path,
             keep_name: t.name_locked,
+            resume_orphan: t.resume_orphan,
             added_at: t.added_at,
             proxy_endpoint,
             progress_tick_ms: self.cfg.progress_tick_ms,
@@ -791,6 +792,80 @@ mod evt_tests {
         let t = &app.tasks[0];
         assert!(t.probed);
         assert_eq!(t.state, TaskState::Paused, "非等待中状态不被探测改写");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn orphan_redirect_renames_to_next_seq_and_requeues_silently() {
+        let mut app = make_app("orphan-redirect");
+        let mut t = seed_task(5, "alias.bin");
+        t.save_dir = "/dl".to_string();
+        t.resume_orphan = true;
+        t.name_locked = true;
+        t.state = TaskState::Downloading;
+        t.total = 1000;
+        t.downloaded = 300;
+        t.probed = true;
+        t.has_slot = true;
+        app.tasks.push(t);
+        let toast_before = app.toast.clone();
+        app.on_evt(Evt::OrphanRedirect { id: 5 }).await;
+        let t = &app.tasks[0];
+        assert_eq!(
+            t.name, "alias.bin.1",
+            "v1.46 改道：探测不符 → FR-01-02 序号链 <名>.1"
+        );
+        assert!(t.name_locked, "改道名即终名（后续探测不得去重漂移）");
+        assert!(!t.resume_orphan, "改道即消费孤儿候选标记");
+        assert_eq!(t.state, TaskState::Queued, "改道后重新排队等槽位");
+        assert_eq!(t.downloaded, 0, "改道从头全新下载");
+        assert!(!t.probed);
+        assert!(!t.has_slot);
+        assert_eq!(
+            app.toast, toast_before,
+            "改道静默无额外提示（01-resume-sidecar-14）: {:?}",
+            app.toast
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn orphan_redirect_dedupe_skips_taken_seq() {
+        let mut app = make_app("orphan-redirect-dedupe");
+        let mut t = seed_task(5, "alias.bin");
+        t.save_dir = "/dl".to_string();
+        t.resume_orphan = true;
+        let mut t2 = seed_task(6, "alias.bin.1");
+        t2.save_dir = "/dl".to_string();
+        app.tasks.push(t);
+        app.tasks.push(t2);
+        app.on_evt(Evt::OrphanRedirect { id: 5 }).await;
+        assert_eq!(
+            app.tasks[0].name, "alias.bin.2",
+            "序号链跳过已占用后缀（FR-01-02 不覆盖既有）"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn probed_clears_resume_orphan_flag() {
+        let mut app = make_app("orphan-adopt-confirm");
+        let mut t = seed_task(5, "alias.bin");
+        t.resume_orphan = true;
+        app.tasks.push(t);
+        app.on_evt(Evt::Probed {
+            id: 5,
+            name: "alias.bin".to_string(),
+            total: 10,
+            resumable: true,
+            etag: None,
+            last_modified: None,
+        })
+        .await;
+        assert!(
+            !app.tasks[0].resume_orphan,
+            "探测相符即收编（此后失效按自有臂 07 口径）"
+        );
         app.shutdown().await;
     }
 

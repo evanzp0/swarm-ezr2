@@ -175,6 +175,7 @@ pub(crate) fn sample_task() -> Task {
         seeders: 0,
         peers: 0,
         seed_left: 0.0,
+        resume_orphan: false,
         created: "2026-02-10 10:00".to_string(),
         added_at: 0,
         bt: None,

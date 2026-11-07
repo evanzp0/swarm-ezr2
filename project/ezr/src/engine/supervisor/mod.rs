@@ -39,6 +39,7 @@ pub struct TaskSpec {
     pub sidecar: Option<Sidecar>,
     pub sidecar_path: Option<String>,
     pub keep_name: bool,
+    pub resume_orphan: bool,
     pub added_at: u64,
     pub proxy_endpoint: Option<ProxyEndpoint>,
     pub progress_tick_ms: u64,
@@ -169,6 +170,9 @@ pub(crate) async fn run(
             }
             let _ = evt_tx.send(Evt::Invalidated { id: spec.id }).await;
         }
+        Flow::OrphanRedirect => {
+            let _ = evt_tx.send(Evt::OrphanRedirect { id: spec.id }).await;
+        }
     }
 }
 
@@ -201,6 +205,7 @@ enum Flow {
     Cancelled,
     Failed(EngineFailure, bool, Option<(Sidecar, String)>),
     Invalidated,
+    OrphanRedirect,
 }
 
 struct PausedState {
@@ -421,6 +426,7 @@ mod tests {
             sidecar: None,
             sidecar_path: None,
             keep_name: false,
+            resume_orphan: false,
             added_at: 0,
             proxy_endpoint: None,
             progress_tick_ms: 100,
@@ -544,6 +550,118 @@ mod tests {
         let f = dir.join("f.bin");
         let meta = std::fs::metadata(&f).expect("目标文件在位");
         assert_eq!(meta.len(), total);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn launch_spec_with(
+        spec: TaskSpec,
+        shared: Arc<super::super::EngineShared>,
+        deadline_secs: u64,
+    ) -> (
+        mpsc::Sender<TaskCmd>,
+        mpsc::Receiver<Evt>,
+        std::time::Instant,
+    ) {
+        let (tx, rx) = mpsc::channel::<Evt>(64);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<TaskCmd>(4);
+        tokio::spawn(run(spec, shared, cmd_rx, tx));
+        (
+            cmd_tx,
+            rx,
+            std::time::Instant::now() + std::time::Duration::from_secs(deadline_secs),
+        )
+    }
+
+    fn throttle_global_dl(rate: u64) -> Arc<super::super::EngineShared> {
+        Arc::new(super::super::EngineShared {
+            client: reqwest::Client::builder().no_proxy().build().unwrap(),
+            clients: std::sync::Mutex::new(std::collections::HashMap::new()),
+            throttle_dl: Arc::new(super::super::throttle::Throttle::with_params(
+                rate,
+                crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
+                crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
+            )),
+            throttle_ul: Arc::new(super::super::throttle::Throttle::with_params(
+                0,
+                crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
+                crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
+            )),
+            throttle_burst_secs: crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
+            throttle_sleep_ms: crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
+            blacklist: std::sync::Mutex::new(std::collections::HashSet::new()),
+            blacklist_file: None,
+            grace: std::time::Duration::from_millis(
+                crate::model::config::DEFAULT_DNS_RACE_GRACE_MS,
+            ),
+            upload_read_permits: Arc::new(tokio::sync::Semaphore::new(
+                crate::model::config::DEFAULT_UPLOAD_READ_CONCURRENCY,
+            )),
+            bt_listener_std: std::net::TcpListener::bind("127.0.0.1:0").unwrap(),
+            bt_listener: std::sync::OnceLock::new(),
+        })
+    }
+
+    async fn timed_download(rx: &mut mpsc::Receiver<Evt>, deadline: std::time::Instant) -> f64 {
+        let start = std::time::Instant::now();
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_secs(30), rx.recv()).await {
+                Ok(Some(Evt::DownloadDone { .. })) => return start.elapsed().as_secs_f64(),
+                Ok(Some(Evt::Invalidated { .. })) => panic!("限速链路不应失效"),
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("限速链路不应失败: {reason}"),
+                Ok(None) => panic!("限速下载链路中断"),
+                Err(_) => panic!("限速下载超时（已等 {:.1}s）", start.elapsed().as_secs_f64()),
+                _ => {}
+            }
+        }
+        panic!("限速下载超时");
+    }
+
+    #[tokio::test]
+    async fn task_speed_limit_throttles_single_conn() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-tl1");
+        let total: u64 = 512 * 1024;
+        let url = mock_server(total, vec![]);
+        let mut spec = spec_for(1, &url, dir.to_str().unwrap(), 8192, 1, None);
+        spec.task_max_download_speed = 100_000;
+        let (_cmd_tx, mut rx, deadline) = launch_spec_with(spec, throttle_free(), 30);
+        let took = timed_download(&mut rx, deadline).await;
+        assert!(
+            took >= 4.5,
+            "任务级限速 100KB/s 下载 512KiB 应 ≥4.5s，实际 {took:.2}s"
+        );
+        assert_eq!(std::fs::metadata(dir.join("f.bin")).unwrap().len(), total);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn task_speed_limit_throttles_multi_conn_aggregate() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-tl4");
+        let total: u64 = 512 * 1024;
+        let url = mock_server(total, vec![]);
+        let mut spec = spec_for(1, &url, dir.to_str().unwrap(), 8192, 4, None);
+        spec.task_max_download_speed = 100_000;
+        let (_cmd_tx, mut rx, deadline) = launch_spec_with(spec, throttle_free(), 30);
+        let took = timed_download(&mut rx, deadline).await;
+        assert!(
+            took >= 4.5,
+            "4 连接聚合仍受任务级限速 100KB/s 约束，应 ≥4.5s，实际 {took:.2}s"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn global_speed_limit_throttles_download() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-gtl");
+        let total: u64 = 512 * 1024;
+        let url = mock_server(total, vec![]);
+        let spec = spec_for(1, &url, dir.to_str().unwrap(), 8192, 4, None);
+        let (_cmd_tx, mut rx, deadline) = launch_spec_with(spec, throttle_global_dl(100_000), 30);
+        let took = timed_download(&mut rx, deadline).await;
+        assert!(
+            took >= 4.5,
+            "全局限速 100KB/s（任务级 0）下载 512KiB 应 ≥4.5s，实际 {took:.2}s"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1068,6 +1186,122 @@ mod tests {
             }
         }
         panic!("应回报一致性失效");
+    }
+
+    #[tokio::test]
+    async fn orphan_sidecar_mismatch_redirects_and_preserves_orphan() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-orphan-redirect");
+        let total: u64 = 2 * 4096;
+        let url = mock_server(total, vec![]);
+        let stamp = ServerStamp {
+            etag: Some("\"stale\"".to_string()),
+            last_modified: None,
+            size: Some(total),
+        };
+        let sc = Sidecar::build(
+            &stamp,
+            total,
+            4096,
+            &[4096, 0],
+            false,
+            None,
+            SidecarTask {
+                id: 99,
+                added_at: 0,
+                save_dir: dir.to_str().unwrap().to_string(),
+                concurrency: 1,
+                protocol: Protocol::Http,
+            },
+        );
+        sc.save(dir.join("f.bin.ezr").to_str().unwrap()).unwrap();
+        let mut spec = sidecar_spec(7, &url, &dir, 1);
+        spec.resume_orphan = true;
+        let (_cmd_tx, mut rx, deadline) = launch_spec(spec);
+        let mut redirected = false;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::OrphanRedirect { .. })) => {
+                    redirected = true;
+                    break;
+                }
+                Ok(Some(Evt::Invalidated { .. })) => {
+                    panic!("孤儿臂探测不符必须改道而非原地作废（v1.46）")
+                }
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("不应失败: {reason}"),
+                _ => {}
+            }
+        }
+        assert!(redirected, "应回报孤儿改道");
+        assert!(
+            dir.join("f.bin.ezr").exists(),
+            "孤儿 sidecar 原样保留、系统不自动删除（v1.46 操作者裁定）"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn orphan_sidecar_match_resumes_and_adopts() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-orphan-adopt");
+        let total: u64 = 4 * 4096;
+        let url = mock_server(total, vec![]);
+        let mut content = vec![0u8; total as usize];
+        fill(&mut content, 0);
+        std::fs::write(dir.join("f.bin.downloading"), &content).unwrap();
+        let stamp = ServerStamp {
+            etag: Some(format!("\"mock-{total}\"")),
+            last_modified: Some("Mon, 09 Feb 2026 08:00:00 GMT".to_string()),
+            size: Some(total),
+        };
+        let sc = Sidecar::build(
+            &stamp,
+            total,
+            4096,
+            &[4096, 1904, 0, 0],
+            false,
+            None,
+            SidecarTask {
+                id: 99,
+                added_at: 0,
+                save_dir: dir.to_str().unwrap().to_string(),
+                concurrency: 2,
+                protocol: Protocol::Http,
+            },
+        );
+        sc.save(dir.join("f.bin.ezr").to_str().unwrap()).unwrap();
+        let mut spec = sidecar_spec(7, &url, &dir, 2);
+        spec.resume_orphan = true;
+        let (_cmd_tx, mut rx, deadline) = launch_spec(spec);
+        let mut resumed_progress = None;
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::OrphanRedirect { .. })) => {
+                    panic!("探测相符不得改道（01-resume-sidecar-13 口径）")
+                }
+                Ok(Some(Evt::Invalidated { .. })) => panic!("一致快照不应失效"),
+                Ok(Some(Evt::Progress { downloaded, .. })) => {
+                    resumed_progress.get_or_insert(downloaded);
+                }
+                Ok(Some(Evt::DownloadDone { total: t, .. })) => {
+                    assert_eq!(t, total);
+                    break;
+                }
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("下载失败: {reason}"),
+                Err(_) => {}
+                _ => {}
+            }
+            if std::time::Instant::now() > deadline {
+                panic!("超时");
+            }
+        }
+        assert!(
+            resumed_progress.unwrap_or(0) >= 6000,
+            "孤儿相符应从断点原地接续: {resumed_progress:?}"
+        );
+        let data = std::fs::read(dir.join("f.bin")).unwrap();
+        let mut expect = vec![0u8; total as usize];
+        fill(&mut expect, 0);
+        assert_eq!(data, expect);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]

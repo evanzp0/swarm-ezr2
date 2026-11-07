@@ -560,6 +560,7 @@ async fn invalidated_resets_and_toasts() {
         None,
     );
     a.tasks[0].downloaded = 500;
+    a.tasks[0].resume_orphan = false;
     pump(&mut a, 20, |x| {
         x.toast
             .as_deref()
@@ -570,7 +571,69 @@ async fn invalidated_resets_and_toasts() {
         a.toast
             .as_deref()
             .is_some_and(|t| t.contains("作废") || t.contains("从头")),
-        "一致性失效必须提示（find `==→!=` 变异体静默跳过）"
+        "自有臂一致性失效必须提示（find `==→!=` 变异体静默跳过）"
+    );
+    a.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn orphan_adopt_mismatch_redirects_silently_and_preserves_sidecar() {
+    let addr = stub_with("", 2000, false);
+    let mut a = mkapp("orphan-adopt-redirect");
+    let dir = std::env::temp_dir().join(format!("ezr-hard-orph-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    Sidecar {
+        version: SIDECAR_VERSION,
+        size: 1000,
+        etag: None,
+        last_modified: None,
+        block_size: 512,
+        block_count: 2,
+        blocks: vec![512, 488],
+        downloaded: 100,
+        non_resumable: false,
+        expected: None,
+        task: SidecarTask {
+            id: 99,
+            added_at: 0,
+            save_dir: dir.to_string_lossy().into_owned(),
+            concurrency: 2,
+            protocol: Protocol::Http,
+        },
+    }
+    .save(&dir.join("f.bin.ezr").to_string_lossy())
+    .unwrap();
+    a.add_cli_task(
+        format!("http://{addr}/f.bin"),
+        Some(dir.to_string_lossy().into_owned()),
+        Some(2),
+        None,
+    );
+    assert!(
+        a.tasks[0].resume_orphan,
+        "添加时路径基匹配孤儿 sidecar → 候选标记置位（v1.46）"
+    );
+    a.tasks[0].downloaded = 500;
+    pump(&mut a, 20, |x| x.tasks[0].name == "f.bin.1").await;
+    assert_eq!(
+        a.tasks[0].name, "f.bin.1",
+        "探测不符 → 序号改道 <名>.1（v1.46 场景 14）"
+    );
+    assert_eq!(a.tasks[0].state, model::TaskState::Queued, "改道后重新排队");
+    assert!(!a.tasks[0].resume_orphan, "改道即消费候选标记");
+    assert!(
+        a.toast.is_none()
+            || !a
+                .toast
+                .as_deref()
+                .is_some_and(|t| t.contains("作废") || t.contains("从头")),
+        "改道静默无作废提示: {:?}",
+        a.toast
+    );
+    assert!(
+        dir.join("f.bin.ezr").exists(),
+        "孤儿 sidecar 原样保留（v1.46 操作者裁定）"
     );
     a.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);

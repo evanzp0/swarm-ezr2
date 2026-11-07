@@ -14,7 +14,7 @@
 #   01-add-task-13 CLI -x 非法（缺前缀/算法无法识别/位数不符）启动报错退出
 #   01-add-task-14 CLI -c 非法值启动报错退出
 #   01-add-task-15 CLI 多 URL 部分非法全部拒绝
-#   01-add-task-16 重复任务拒绝并提示（v1.42 修订：toast 「⚠ 任务已存在」退役 → 弹出「错误」窗口（D56）消息「该链接的任务已存在」，bug25 轮）
+#   01-add-task-16 重复任务拒绝并提示（v1.43 修订：判重谓词改「同 URL」——与保存目录无关，bug27 轮；v1.42 修订：toast 「⚠ 任务已存在」退役 → 弹出「错误」窗口（D56）消息「该链接的任务已存在」，bug25 轮）
 #   01-add-task-17 对话框支持粘贴长文本
 #   01-add-task-18 仅添加按钮：只添加任务不下载（v1.30 修订：对话框无提示行，P3/FR-01-107）
 #   01-add-task-19 URL 输入自动回填默认并发与 Esc 取消（v1.30 新增，对齐 ezr-demo 重构版 §6.1）
@@ -261,17 +261,27 @@ Feature: 01-add-task 任务添加（对话框与 CLI）
       | http://fixture.local/files/a.bin | ftp://fixture.local/file   |
       | http://fixture.local/files/a.bin | not-a-url                  |
 
-  Scenario: 01-add-task-16 重复任务拒绝并提示（v1.42：错误窗口「该链接的任务已存在」，bug25）
-    Given 任务列表已存在 URL "<url>" 且保存目录 "<dir>" 的任务
-    When 按对话框再次添加相同 URL 与相同保存目录并确认
-    Then 弹出「错误」窗口（D56 几何/交互口径：66×7 圆角模态居中可拖拽，标题 ` 错误 `，红色消息行 + [ 确定 ] 按钮）且消息为 **"该链接的任务已存在"**（v1.42/bug25：原「⚠ 任务已存在」toast 承载退役；消息文案不含 ⚠ 前缀，与 D56 错误窗口既有消息臂同形态）
+  Scenario: 01-add-task-16 重复任务拒绝并提示（v1.43：判重 = 同 URL（与保存目录无关），bug27；v1.42：错误窗口「该链接的任务已存在」，bug25）
+    Given 任务列表已存在 URL "<url>" 的任务（保存目录任意——同目录或异目录均命中）
+    When 按对话框再次添加相同 URL（保存目录同或异）并确认
+    Then 弹出「错误」窗口（D56 几何/交互口径：66×7 圆角模态居中可拖拽，标题 ` 错误 `，红色消息行 + [ 确定 ] 按钮）且消息为 **"该链接的任务已存在"**（v1.42/bug25：原「⚠ 任务已存在」toast 承载退役；v1.43/bug27：判重谓词由「同 URL + 同保存目录」改判「同 URL」——任务按 URL 唯一，与保存目录无关）
     And 添加对话框保持打开（错误窗口 z 序在对话框之上；关闭错误窗口——确定/Esc/q/Q/[✗]——后回到添加对话框，可修正 URL/目录或取消）
     And 错误窗口关闭前任务列表数量不变且未创建新任务
     And 该场景不出现 "暂不支持该类型的链接" 文案（D53 文案仅属命令窗口分流臂③非 http(s) 且非 .torrent 路径输入，与重复任务判定互斥）
 
     Examples:
-      | url                              | dir       |
-      | http://fixture.local/files/a.bin | /tmp/qadl |
+      | url                              | dir           |
+      | http://fixture.local/files/a.bin | /tmp/qadl     |
+      | http://fixture.local/files/a.bin | /tmp/qadl-alt |
+
+  Scenario: 01-add-task-16a CLI 添加同 URL 拒绝（v1.43 新增，bug27）
+    Given 任务列表已存在 URL "<url>" 的任务
+    When 以命令行再次添加相同 URL（-d 目录同或异）
+    Then toast 显示 "⚠ 该链接的任务已存在"（CLI 无对话框/错误窗口载体，toast 语义沿 FR-01-80 ⚠ 前缀）且不创建新任务（列表数量不变）
+
+    Examples:
+      | url                              |
+      | http://fixture.local/files/a.bin |
 
   Scenario: 01-add-task-17 对话框支持粘贴长文本
     When 按 A 打开「添加任务：HTTP(S)」对话框

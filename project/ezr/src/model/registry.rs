@@ -79,6 +79,8 @@ pub struct TaskSnapshot {
     #[serde(default)]
     pub max_upload_speed: u64,
     #[serde(default)]
+    pub resume_orphan: bool,
+    #[serde(default)]
     pub bt: Option<super::bt::BtTaskData>,
 }
 
@@ -113,6 +115,7 @@ impl From<&Task> for TaskSnapshot {
             seed_left: t.seed_left,
             max_download_speed: t.max_download_speed,
             max_upload_speed: t.max_upload_speed,
+            resume_orphan: t.resume_orphan,
             bt: t.bt.clone(),
         }
     }
@@ -163,6 +166,7 @@ impl From<&TaskSnapshot> for Task {
             seed_left: s.seed_left,
             max_download_speed: s.max_download_speed,
             max_upload_speed: s.max_upload_speed,
+            resume_orphan: s.resume_orphan,
             created: s.created.clone(),
             added_at: s.added_at,
             bt: s.bt.clone(),
@@ -247,6 +251,41 @@ mod tests {
         std::fs::write(&p, legacy).unwrap();
         let loaded = Registry::load(p.to_str().unwrap()).expect("旧注册表应兼容加载");
         assert_eq!(loaded.tasks[0].id, 5, "任务 ID 随快照保留");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resume_orphan_flag_roundtrip_and_legacy_default() {
+        let mut t = sample_task();
+        t.id = 5;
+        t.resume_orphan = true;
+        let reg = Registry::from_tasks(&[t.clone()]);
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reg-orphan");
+        let p = dir.join("registry.json");
+        reg.save(p.to_str().unwrap()).unwrap();
+        let loaded = Registry::load(p.to_str().unwrap()).unwrap();
+        assert!(
+            loaded.tasks[0].resume_orphan,
+            "孤儿候选标记随注册表往返保留（探测前崩溃可续裁）"
+        );
+        let raw = std::fs::read_to_string(&p).unwrap();
+        let legacy: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let legacy_tasks = legacy["tasks"].as_array().unwrap().clone();
+        for task in &legacy_tasks {
+            let mut obj = task.clone();
+            obj.as_object_mut().unwrap().remove("resume_orphan");
+            let mut arr = legacy_tasks.clone();
+            let idx = arr.iter().position(|x| x["id"] == task["id"]).unwrap();
+            arr[idx] = obj;
+            let mut stripped = legacy.clone();
+            stripped["tasks"] = serde_json::Value::Array(arr);
+            std::fs::write(&p, stripped.to_string()).unwrap();
+            let old = Registry::load(p.to_str().unwrap()).unwrap();
+            assert!(
+                !old.tasks[0].resume_orphan,
+                "旧注册表无该字段按 false 加载（serde default）"
+            );
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
