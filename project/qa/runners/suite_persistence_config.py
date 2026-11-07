@@ -179,7 +179,7 @@ class PersistenceConfigSuite(Suite):
             app = EzrApp(env.home, save_dir=None)  # 保存目录留空 → 走默认下载目录
             try:
                 # 对话框目录字段留空（save_dir=""）→ 默认 download_dir
-                add_task_via_dialog(app, env, env.fixture.url("five-m.bin?speed=900000"),
+                add_task_via_dialog(app, env, env.fixture.url(f"five-m.bin?speed=900000"),
                                     save_dir="")
                 assert app.wait_for("下载中", 8)
                 d = detail_text(app)
@@ -202,7 +202,8 @@ class PersistenceConfigSuite(Suite):
         def go(env: Env):
             # ① v1.19/D63① 分层：block_size_http = "abc"（字符串进数字键）= TOML
             #    反序列化错误 = 解析失败 → 拒绝启动直接报错（01-config-template-03 口径）
-            env.write_config('ttp]\nblock_size_http = "abc"\n')
+            # （本行曾为 chat 通道写入侧真实损坏 [http] —— bug18 判别法定位，恢复 [h[http]）
+            env.write_config('[http]\nblock_size_http = "abc"\n')
             app = EzrApp(env.home, save_dir=env.save_dir)
             deadline = time.time() + 8
             while app.exit_code is None and time.time() < deadline:
@@ -291,7 +292,8 @@ class PersistenceConfigSuite(Suite):
         """
         @self.case("QA-PC-05")
         def go(env: Env):
-            # 每轮独立子目录：第二轮同 URL+同目录会被重复守卫拦截（QA-01-16）
+            # 每轮独立子目录 + 查询参数差异化 URL：v1.46 判重同 URL 即任务身份、
+            # 与目录解耦（bug27 轮），独立子目录不再避开守卫；fixture 忽略未知键
             for seq, (bs, expect, disp) in enumerate(
                     ((4_194_304, "2", "4 MB/块"), (2_097_152, "3", "2 MB/块"))):
                 sub = os.path.join(env.save_dir, f"bs{seq}")
@@ -299,7 +301,7 @@ class PersistenceConfigSuite(Suite):
                 app = EzrApp(env.home, save_dir=env.save_dir)
                 try:
                     add_task_via_dialog(
-                        app, env, env.fixture.url("five-m.bin?speed=900000"),
+                        app, env, env.fixture.url(f"five-m.bin?speed=900000&r={seq}"),
                         save_dir=sub)
                     assert app.wait_for("下载中", 8)
                     m = re.search(r"分块\s+\d+/(\d+) ·", detail_text(app))
@@ -397,13 +399,14 @@ class PersistenceConfigSuite(Suite):
         """
         @self.case("QA-PC-09")
         def go(env: Env):
-            # 每轮独立子目录：第二轮同 URL+同目录会被重复守卫拦截（QA-01-16）；
+            # 每轮独立子目录 + 查询参数差异化 URL：v1.46 判重同 URL 即任务身份、
+            # 与目录解耦（bug27 轮），独立子目录不再避开守卫；fixture 忽略未知键；
             # 引擎侧限速保证续传窗口（同 PC-08 口径）
             for seq, key in enumerate(("esc", "ctrl_c")):
                 sub = os.path.join(env.save_dir, f"k{seq}")
                 env.write_config('[common]\nglobal_max_download_speed = "1 MiB/s"\n')
                 app = EzrApp(env.home, save_dir=env.save_dir)
-                add_task_via_dialog(app, env, env.fixture.url("five-m.bin"),
+                add_task_via_dialog(app, env, env.fixture.url(f"five-m.bin?r={seq}"),
                                     save_dir=sub)
                 self._pause_at_progress(app, min_pct=20.0)
                 app.send("space")

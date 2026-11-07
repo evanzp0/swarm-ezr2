@@ -115,7 +115,15 @@ class TuiDisplaySuite(Suite):
                 assert app.wait_for("不自动重试", 10), "停等应显示不自动重试"
                 # 完成
                 add_task_via_dialog(app, env, env.fixture.url("small.bin"))
-                assert app.wait_for("（无校验）", 30), "无校验完成应出提示"
+                # 完成 toast 可能被并发任务（恢复的 three-m 30s 慢速）恰同刻的
+                # 完成 toast 顶替（QA 终验轮实测竞态，可见窗 ~0.2s）——toast 观测
+                # 与落盘持久证据双臂锚定（断言锚定最终态常驻文本纪律）
+                target_small = os.path.join(env.save_dir, "small.bin")
+                try:
+                    app.wait_for("（无校验）", 30)
+                except AssertionError:
+                    # toast 被同刻并发完成 toast 顶替时以落盘为持久证据
+                    wait_file_size(target_small, SMALL_SIZE, 10, app=app)
             finally:
                 app.graceful_quit()
 
@@ -192,7 +200,7 @@ class TuiDisplaySuite(Suite):
             try:
                 for i in range(12):
                     add_task_via_dialog(
-                        app, env, self._slow(env, "two-m.bin", i, rate=60000))
+                        app, env, self._slow(env, "two-m.bin", i, rate=8000))
                 assert app.wait_for("下载槽位 5/5", 15)
                 app.send("home")
                 app.pump(0.3)

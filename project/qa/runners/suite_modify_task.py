@@ -227,7 +227,7 @@ class ModifyTaskSuite(Suite):
             self._cur_app = app
             try:
                 add_task_via_dialog(
-                    app, env, env.fixture.url("twelve-m.bin?speed=400000"),
+                    app, env, env.fixture.url("twelve-m.bin?speed=400000&r=2"),
                     conns="4", save_dir=os.path.join(env.save_dir, "b"))
                 assert app.wait_for("下载中", 8)
                 app.pump(1.5)
@@ -375,7 +375,7 @@ class ModifyTaskSuite(Suite):
             self._cur_app = app
             try:
                 add_task_via_dialog(
-                    app, env, env.fixture.url("twelve-m.bin?speed=300000"),
+                    app, env, env.fixture.url("twelve-m.bin?speed=300000&r=2"),
                     save_dir=os.path.join(env.save_dir, "b"))
                 assert app.wait_for("下载中", 8)
                 _open_modify(app)
@@ -576,19 +576,29 @@ class ModifyTaskSuite(Suite):
             self._cur_app = app
             try:
                 add_task_via_dialog(
-                    app, env, env.fixture.url("five-m.bin?speed=300000"),
+                    app, env, env.fixture.url("five-m.bin?speed=150000"),
                     conns="3")
                 assert app.wait_for("下载中", 8)
                 # ② 并发字段（焦点 0）粘贴混合数字字母：仅数字 ≤2 位
                 _open_modify(app)
-                os.write(app.fd, b"\x1b[200~" + b"4a9b2c" + b"\x1b[201~")
+                os.write(app.fd, b"\x1b[200~")
+                app.pump(0.02)
+                os.write(app.fd, b"4a9b2c")
+                app.pump(0.02)
+                os.write(app.fd, b"\x1b[201~")
+                app.pump(0.3)
                 app.pump(0.4)
                 text = app.text()
                 assert re.search(r"并发\s*>\s*34\b", text), \
                     f"并发粘贴应仅接收数字（3+4 → 34）: {text[:200]!r}"
                 # v1.40 粘贴满容量 = 重启录入口径（QA-01-21 同源）：再粘
                 # xyz12 → 过滤数字 12 → 清空重输显示 12（2 位封顶）
-                os.write(app.fd, b"\x1b[200~" + b"xyz12" + b"\x1b[201~")
+                os.write(app.fd, b"\x1b[200~")
+                app.pump(0.02)
+                os.write(app.fd, b"xyz12")
+                app.pump(0.02)
+                os.write(app.fd, b"\x1b[201~")
+                app.pump(0.3)
                 app.pump(0.4)
                 text = app.text()
                 assert re.search(r"并发\s*>\s*12\b", text), \
@@ -597,7 +607,12 @@ class ModifyTaskSuite(Suite):
                 #    （v1.32：NONE 选中时校验码禁输入，粘贴同拦截）再粘贴
                 self._edit_ck_value(app, "")
                 junk = ("中\t文\n" + "zz" + "a1B2c3D4" * 20)  # 控制字符+非hex+hex 160 位
-                os.write(app.fd, b"\x1b[200~" + junk.encode() + b"\x1b[201~")
+                os.write(app.fd, b"\x1b[200~")
+                app.pump(0.02)
+                os.write(app.fd, junk.encode())
+                app.pump(0.02)
+                os.write(app.fd, b"\x1b[201~")
+                app.pump(0.3)
                 app.pump(0.5)
                 # 净化+过滤+钳制：控制字符剔除、非 hex 剔除、hex 前 128 位
                 hex_only = "".join(c for c in junk if c.isascii()
@@ -617,7 +632,12 @@ class ModifyTaskSuite(Suite):
                 app.pump(0.2)
                 app.send("enter")  # 展开校验下拉
                 assert app.wait_for("SHA-512", 3), "校验下拉应展开"
-                os.write(app.fd, b"\x1b[200~" + b"deadbeef9999" + b"\x1b[201~")
+                os.write(app.fd, b"\x1b[200~")
+                app.pump(0.02)
+                os.write(app.fd, b"deadbeef9999")
+                app.pump(0.02)
+                os.write(app.fd, b"\x1b[201~")
+                app.pump(0.3)
                 app.pump(0.4)
                 after = app.text()
                 assert_in("SHA-512", after, "粘贴后下拉应仍展开（忽略粘贴）")
@@ -628,7 +648,12 @@ class ModifyTaskSuite(Suite):
                 #    粘贴不得触发按钮；随后 Esc 关闭（不生效改动，任务参数不变）
                 app.send(*(["tab"] * 3))  # 校验2 → 校验码3 → 代理4 → 确认5
                 app.pump(0.2)
-                os.write(app.fd, b"\x1b[200~" + b"9999ff" + b"\x1b[201~")
+                os.write(app.fd, b"\x1b[200~")
+                app.pump(0.02)
+                os.write(app.fd, b"9999ff")
+                app.pump(0.02)
+                os.write(app.fd, b"\x1b[201~")
+                app.pump(0.3)
                 app.pump(0.4)
                 after = app.text()
                 assert_in("修改任务", after, "粘贴不得触发确认（对话框仍开）")

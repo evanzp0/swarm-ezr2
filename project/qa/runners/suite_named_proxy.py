@@ -183,7 +183,7 @@ class NamedProxySuite(Suite):
                         # 每相位独立子目录（同 URL 同目录被重复守卫拦截，QA-01-16）
                         sub = os.path.join(env.save_dir, f"ph-{phase}")
                         self._add_via_proxy(
-                            app, env, env.fixture.url(f"one-m.bin{SLOW}"), 1,
+                            app, env, env.fixture.url(f"one-m.bin{SLOW}&ph={phase}"), 1,
                             save_dir=sub)
                         assert app.wait_for("（无校验）", 45), \
                             f"[{phase}] 合法条目下载成功"
@@ -289,7 +289,7 @@ class NamedProxySuite(Suite):
                     assert text.count("dup（http）") == 1, "重复副本不应再次出现"
                     # 选项序：直连(0) + dup(1) + ok1(2) —— 经 ok1 下载
                     self._add_via_proxy(
-                        app, env, env.fixture.url(f"one-m.bin{SLOW}"), 2)
+                        app, env, env.fixture.url(f"one-m.bin{SLOW}&ph=c292"), 2)
                     assert app.wait_for("（无校验）", 45), "合法条目下载完成"
                 finally:
                     app.graceful_quit()
@@ -460,15 +460,19 @@ class NamedProxySuite(Suite):
                     assert any("one-m" in r["target"] for r in proxy_reqs(pa)), \
                         "http 相位：代理日志在案"
                     # https 相位：代理自身 TLS 监听，TLS 会话内 http 代理形态
+                    # （v1.47 判重同 URL 即任务身份：跨相位复用同 URL 会被拦截，
+                    #   各相位以查询参数差异化 URL，fixture 忽略未知键）
+                    phn = 2
                     sub = os.path.join(env.save_dir, "ph-https")
-                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}"),
+                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}&ph={phn}"),
                                         2, save_dir=sub)
                     assert app.wait_for("（无校验）", 45), "https 相位下载成功"
                     assert any(r["kind"] == "http" and "one-m" in r["target"]
                                for r in proxy_reqs(ph)), "https 相位：TLS 内 http 在案"
                     # socks5 相位：RFC 1929 认证 + 隧道（reqwest socks）
+                    phn = 3
                     sub = os.path.join(env.save_dir, "ph-socks5")
-                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}"),
+                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}&ph={phn}"),
                                         3, save_dir=sub)
                     assert app.wait_for("（无校验）", 45), "socks5 相位下载成功"
                     preqs = proxy_reqs(ps)
@@ -519,7 +523,7 @@ class NamedProxySuite(Suite):
                     assert_not_in("no-user（socks5）", text, "作废条目不在下拉")
                     assert_in("ok11（http）", text, "合法条目在位")
                     assert_not_in("hidden-pw", text, "警告文案不含凭证值")
-                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}"), 1)
+                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}&ph=c526"), 1)
                     assert app.wait_for("（无校验）", 45), "合法条目下载成功"
                 finally:
                     app.graceful_quit()
@@ -544,7 +548,7 @@ class NamedProxySuite(Suite):
                     text = self._dropdown_options(app)
                     assert_not_in("no-pass（socks5）", text, "作废条目不在下拉")
                     assert_in("ok12（http）", text, "合法条目在位")
-                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}"), 1)
+                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}&ph=c551"), 1)
                     assert app.wait_for("（无校验）", 45), "合法条目下载成功"
                 finally:
                     app.graceful_quit()
@@ -572,7 +576,7 @@ class NamedProxySuite(Suite):
                     assert app.wait_for("（无校验）", 30), "匿名 http 代理下载成功"
                     # https 匿名相位（TLS 会话内匿名）
                     sub = os.path.join(env.save_dir, "ph-https")
-                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}"),
+                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}&ph=c579"),
                                         2, save_dir=sub)
                     assert app.wait_for("（无校验）", 45), "匿名 https 代理下载成功"
                 finally:
@@ -614,7 +618,7 @@ class NamedProxySuite(Suite):
                         assert_in("ok14（http）", text, "合法条目在位")
                         sub = os.path.join(env.save_dir, f"ph-{e['name']}")
                         self._add_via_proxy(
-                            app, env, env.fixture.url(f"one-m.bin{SLOW}"), 1,
+                            app, env, env.fixture.url(f"one-m.bin{SLOW}&ph={e['name']}"), 1,
                             save_dir=sub)
                         assert app.wait_for("（无校验）", 45), \
                             f"[{e['name']}] 合法条目下载成功"
@@ -650,7 +654,7 @@ class NamedProxySuite(Suite):
                     assert app.wait_for("（无校验）", 30), "socks5 认证代理下载成功"
                     # https + TLS 会话内 basic auth 相位
                     sub = os.path.join(env.save_dir, "ph-tls")
-                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}"),
+                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}&ph=c657"),
                                         2, save_dir=sub)
                     assert app.wait_for("（无校验）", 45), "https 认证代理下载成功"
                 finally:
@@ -726,7 +730,7 @@ class NamedProxySuite(Suite):
                     assert_in("s6-proxy（http）", text, "条目正常加载（下拉标注）")
                     assert_not_in("异常", text, "无因 ip 含冒号的异常文案")
                     # 下载相位：经 ::1 代理（v140 桩支持 IPv6 绑定后实跑）
-                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}"), 1)
+                    self._add_via_proxy(app, env, env.fixture.url(f"one-m.bin{SLOW}&ph=c733"), 1)
                     assert app.wait_for("（无校验）", 45), "经 IPv6 代理下载成功"
                     assert any("one-m" in r["target"] for r in proxy_reqs(p6)), \
                         "IPv6 相位：代理日志在案"

@@ -350,3 +350,20 @@ QA 轮（2026-11-06）补记：接手被中断会话先清残留进程——上�
   位，跨会话复用、不进归档）。
 - 本轮全流程磁盘账：工具链装机 + 基线（bin+12 套件）+ 改进后全量复验（bin+12 套件）+
   CPD 扫描后盘余 6.0G——无 llvm-cov 插桩轮磁盘压力显著小于 cleaner 轮（该轮 2.7G 余量）。
+
+## QA 终验轮（2026-11-07）：镜像复测与 PTY/键位三新陷阱
+- **rustup 镜像复测**：TUNA 双层 init 直链 36.0MB/s 最快且清单新鲜（date=同日 2026-11-07），
+  rsproxy 20.4 / USTC 12.0 / NJU init 404；TUNA 双变量前台一次装齐 nightly 1.101.0
+  （minimal+rustfmt+clippy，EXIT=0）。cargo registry 沿 rsproxy sparse（fetch 一次过零 404）。
+- **PMD release tag 形态 = `pmd_releases/<ver>`**：`v<ver>` 前缀 404（「清单先查」条款的
+  tag 形态实例）；134MB 经 gh-proxy 0.49MB/s 慢速漂移可容忍，zipfile.testzip 完整性探针照旧。
+- **PTY 对 ESC 序列连发也丢字节（bug19 家族扩展）**：bracketed paste
+  `ESC[200~789ESC[201~` 19B 单发整段无效（字段值不变）；三段分片（起标/载荷/止标各一写
+  +pump）100% 达；**逐字节写会破坏 crossterm 解析**（paste 事件不成形）。runner 粘贴统一
+  三段分片（本轮改 7 处）。
+- **对话框文本字段无 End/Home 键处理**（产品 KeyCode::End/Home 仅 trackers 列表
+  to_first/to_last）——runner 光标归位一律用 Right/Left 逐格；「end 后粘贴」类序列在
+  End 不生效时粘贴 cur_end 判定恒假被忽略（QA-01-21 实录）。
+- **git clone HTTP2 framing layer 报错**：`git -c http.version=HTTP/1.1 clone` 一次过。
+- **api.github.com releases 清单本轮不可用**（解析 tag=None）——按历轮登记资产名直接
+  gh-proxy 下载可行，资产名漂移时再走清单页。

@@ -78,28 +78,35 @@ class IntegrityCheckSuite(Suite):
         return self.results
 
     def _case_01(self):
-        """QA-IC-01 CLI -x 七算法前缀码：详情算法依次 Adler-32…SHA-512。"""
+        """QA-IC-01 CLI -x 七算法前缀码：详情算法依次 Adler-32…SHA-512。
+
+        v1.46 判重口径适配：七算法各用独立文件/URL（ic01-<前缀>.bin）——
+        同 URL 即任务身份，二次添加被「该链接的任务已存在」拒绝（bug27 轮
+        落地），同一文件循环自第二算法起恒假红；规程表格只钉「分别给
+        前缀码」，未钉死同一文件，异文件不损不变式。
+        """
         @self.case("QA-IC-01")
         def go(env: Env):
-            data = self._make_file(env, "ic01.bin", 1_000_000)
             cases = [
-                (f"adler32={ALGOS[6][2](data)}", "Adler-32"),
-                (f"md5={ALGOS[0][2](data)}", "MD5"),
-                (f"sha1={ALGOS[1][2](data)}", "SHA-1"),
-                (f"sha224={ALGOS[2][2](data)}", "SHA-224"),
-                (f"sha256={ALGOS[3][2](data)}", "SHA-256"),
-                (f"sha384={ALGOS[4][2](data)}", "SHA-384"),
-                (f"sha512={ALGOS[5][2](data)}", "SHA-512"),
+                ("adler32", "Adler-32", ALGOS[6][2]),
+                ("md5", "MD5", ALGOS[0][2]),
+                ("sha1", "SHA-1", ALGOS[1][2]),
+                ("sha224", "SHA-224", ALGOS[2][2]),
+                ("sha256", "SHA-256", ALGOS[3][2]),
+                ("sha384", "SHA-384", ALGOS[4][2]),
+                ("sha512", "SHA-512", ALGOS[5][2]),
             ]
-            for xarg, algo in cases:
+            for prefix, algo, calc in cases:
+                fname = f"ic01-{prefix}.bin"
+                data = self._make_file(env, fname, 1_000_000)
                 app = EzrApp(env.home, save_dir=env.save_dir,
-                             args=[env.fixture.url("ic01.bin?speed=400000"),
-                                   "-d", env.save_dir, "-x", xarg])
+                             args=[env.fixture.url(f"{fname}?speed=400000"),
+                                   "-d", env.save_dir, "-x", f"{prefix}={calc(data)}"])
                 try:
                     # 快文件的「已添加」toast 会被完成 toast 覆盖：以
                     # 「{算法} 校验通过」完成 toast 为锚（算法名随文案校验）
                     assert app.wait_for(f"{algo} 校验通过", 60), \
-                        f"{xarg.split('=')[0]} 应完成并 {algo} 校验通过"
+                        f"{prefix} 应完成并 {algo} 校验通过"
                     app.graceful_quit()
                 except Exception:
                     app.graceful_quit()

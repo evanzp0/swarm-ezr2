@@ -512,13 +512,22 @@ class SlotsQueueSuite(Suite):
                 assert app.wait_for("已失败", 10)
                 assert_in("不自动重试", app.text(), "404 应不自动重试")
                 app.pump(0.5)  # 失败切换窗 settle：转场瞬间注入按键会被事件循环吞键
+                reqs_before = len(env.fixture.requests())
                 app.send("r")
-                # 断言落在长驻可观察物：R toast（≈4s，requeue_failed 专有文案）。
-                # 「等待中」中间态窗口可 <100ms（授槽 tick 对齐时），瞬时态断言
-                # 天然竞态（testing.md 假 FAIL 口径）——重排队→授槽→404 再探全链
-                # <1.5s，以 toast 为重排队证据，再探回「已失败」为续传证据。
-                assert app.wait_for("手动重试（等待中）", 8), \
-                    "不自动重试任务 R 后应弹手动重试 toast（重新排队）"
+                # 重排队证据改锚持久物（QA 终验轮实测裁决）：R 的重排队 toast
+                # （≈4s 名义寿命）会被「重排队→授槽→404 再探」链的失败 toast
+                # 立即顶替——本沙箱回环全链 87ms 完成、toast 可见窗 ~65ms，
+                # wait_for 轮询粒度（~0.1s）必然错过（复跑 ×3 稳定假红；
+                # 20ms 细粒度连拍取证 22ms 见 toast、87ms 被顶替）。改锚
+                # fixture 访问日志：R 后必出现新请求（磁盘持久证据、无竞态），
+                # 再探回「已失败」为续传证据（testing.md「断言锚定最终态
+                # 常驻文本，不锚定瞬时 toast」纪律）。
+                deadline = time.time() + 10
+                while time.time() < deadline and \
+                        len(env.fixture.requests()) <= reqs_before:
+                    time.sleep(0.05)
+                assert len(env.fixture.requests()) > reqs_before, \
+                    "R 后 fixture 应出现新请求（重排队→授槽→再探链路走通）"
                 assert app.wait_for("已失败", 15), \
                     "404 再探应回已失败（重排队→授槽→探测全链走通）"
                 assert_in("不自动重试", app.text(), "404 应不自动重试")

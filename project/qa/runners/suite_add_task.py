@@ -425,9 +425,13 @@ class AddTaskSuite(Suite):
             env.write_config(f'[common]\ndownload_dir = "{cfg_dir}"\n')
             app = EzrApp(env.home, save_dir=None)
             try:
-                open_add_dialog_via_cmd(app, env.fixture.url("small.bin"))
+                open_add_dialog_via_cmd(app, env.fixture.url("small.bin?r=1"))
                 app.send("tab")
-                assert_in(cfg_dir, app.text(),
+                # 预填断言锚可见尾部：字段宽对超长路径做「…头截断」渲染
+                # （pyte display），全路径包含断言在深工作区下必败；尾部两段
+                # （<home basename>/cfgdl）恒在截断尾内且足以锁定配置链预填
+                assert_in(os.path.join(os.path.basename(env.home), "cfgdl"),
+                          app.text(),
                           "保存目录字段应预填配置 download_dir（v1.38/D62②）")
                 app.send("enter")
                 assert app.wait_for("（无校验）", 30)
@@ -440,7 +444,7 @@ class AddTaskSuite(Suite):
             # ① 输入目录优先 + ④ 目录不存在自动创建
             app = EzrApp(env.home, save_dir=None)
             try:
-                manual_add(env.fixture.url("small.bin"),
+                manual_add(env.fixture.url("small.bin?r=2"),
                            os.path.join(input_dir, "sub", "created"))
                 assert app.wait_for("（无校验）", 30)
                 assert file_bytes(
@@ -453,7 +457,7 @@ class AddTaskSuite(Suite):
             # ④ ~ 前缀展开主目录（D62 归一；pty 子进程 HOME=env.home）
             app = EzrApp(env.home, save_dir=None)
             try:
-                manual_add(env.fixture.url("small.bin"), "~/qadl-docs")
+                manual_add(env.fixture.url("small.bin?r=3"), "~/qadl-docs")
                 assert app.wait_for("（无校验）", 30)
                 assert file_bytes(os.path.join(tilde_dir, "small.bin")) is not None, \
                     "~/ 输入应展开为 <主目录>/qadl-docs（字面 ~ 目录不得出现）"
@@ -467,7 +471,7 @@ class AddTaskSuite(Suite):
             # ⑤ 相对路径按创建时工作目录转绝对（pty 子进程 cwd = 隔离 HOME）
             app = EzrApp(env.home, save_dir=None)
             try:
-                manual_add(env.fixture.url("small.bin"), "qadl-rel/sub")
+                manual_add(env.fixture.url("small.bin?r=4"), "qadl-rel/sub")
                 assert app.wait_for("（无校验）", 30)
                 assert file_bytes(os.path.join(rel_dir, "small.bin")) is not None, \
                     "相对输入应按启动 cwd（隔离 HOME）转绝对落盘"
@@ -480,11 +484,12 @@ class AddTaskSuite(Suite):
         """QA-01-12 CLI 创建任务：-x 算法=码 依次 SHA-256/MD5/Adler-32（大小写不敏感）。"""
         @self.case("QA-01-12")
         def go(env: Env):
-            for xarg, algo in (("sha256=" + "a" * 64, "SHA-256"),
-                               ("MD5=" + "b" * 32, "MD5"),
-                               ("ADLER32=" + "00112233", "Adler-32")):
+            for i, (xarg, algo) in enumerate(
+                (("sha256=" + "a" * 64, "SHA-256"),
+                 ("MD5=" + "b" * 32, "MD5"),
+                 ("ADLER32=" + "00112233", "Adler-32"))):
                 app = EzrApp(env.home, save_dir=env.save_dir,
-                             args=[env.fixture.url("small.bin"),
+                             args=[env.fixture.url(f"small.bin?algo={i}"),
                                    "-d", env.save_dir, "-x", xarg])
                 try:
                     # 小文件瞬时完成，「已添加」toast 会被校验结果覆盖：
@@ -577,7 +582,12 @@ class AddTaskSuite(Suite):
             try:
                 open_add_dialog_via_cmd(app, DUMMY_URL)
                 clear_url_prefill(app)
-                os.write(app.fd, b"\x1b[200~" + url.encode() + b"\x1b[201~")
+                os.write(app.fd, b"\x1b[200~")
+                app.pump(0.02)
+                os.write(app.fd, url.encode())
+                app.pump(0.02)
+                os.write(app.fd, b"\x1b[201~")
+                app.pump(0.3)
                 app.pump(0.6)
                 assert_in(url[-40:], app.text(), "字段应完整显示粘贴内容（尾部可见）")
                 app.send("tab")
@@ -776,6 +786,7 @@ class AddTaskSuite(Suite):
             try:
                 open_add_dialog_via_cmd(app, env.fixture.url("three-m.bin?speed=400000"))
                 app.send("tab", "tab")  # URL0 → 保存到1 → 并发2
+                app.send("bs", "bs")
                 app.type_text("64")
                 app.pump(0.2)
                 assert re.search(r"并发\s*>\s*64\b", app.text()), "应输入 64"
@@ -785,15 +796,28 @@ class AddTaskSuite(Suite):
                 assert re.search(r"并发\s*>\s*8\b", app.text()), \
                     "末尾满容量键入应清空重输（显示 8）"
                 assert_not_in("并发 > 64", app.text(), "清空重输后不应残留 64")
-                # 中位键入被忽略：光标移至行首（字段单字符，任意非行尾位）
+                # 中位键入被忽略的 Gherkin 前提 = 字段已满 2 位（feature
+                # 01-add-task-21 When「且字段已满 2 位」；产品单测锚
+                # 「满容量非行尾不重启不插入」）——先补一位回到满容量再验
+                app.type_text("6")
+                app.pump(0.2)
                 app.send("left")
                 app.type_text("5")
                 app.pump(0.2)
-                assert re.search(r"并发\s*>\s*8\b", app.text()), \
-                    "中位键入应被忽略（不插不动）"
-                # 光标归行尾后粘贴 789：清空重输 + 2 位封顶 = 78
-                app.send("end")
-                os.write(app.fd, b"\x1b[200~" + b"789" + b"\x1b[201~")
+                assert re.search(r"并发\s*>\s*86\b", app.text()), \
+                    "中位键入应被忽略（满容量中位不动不插）"
+                # 光标归行尾后粘贴 789：清空重输 + 2 位封顶 = 78。
+                # 对话框文本字段无 End 键处理（产品 KeyCode::End 仅 trackers
+                # 列表，QA 终验轮实测归位无效 → 粘贴 cur_end 判定恒假被忽略），
+                # 用 Right 逐格归位（文本字段支持的光标键）
+                for _ in range(2):
+                    app.send("right")
+                os.write(app.fd, b"\x1b[200~")
+                app.pump(0.02)
+                os.write(app.fd, b"789")
+                app.pump(0.02)
+                os.write(app.fd, b"\x1b[201~")
+                app.pump(0.3)
                 app.pump(0.4)
                 text = app.text()
                 assert re.search(r"并发\s*>\s*78\b", text), \

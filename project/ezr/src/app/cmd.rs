@@ -487,4 +487,71 @@ mod cmd_confirm_tests {
     fn parse_rejects_garbage_meta_path() {
         assert!(TorrentMeta::parse(b"garbage").is_err());
     }
+
+    // ---- cmd_complete_path 补全覆盖（QA 终验轮：comp 24 × bin 套件 0 覆盖，
+    //      CRAP 600 全仓最差；补测不涉行为变更）----
+
+    #[tokio::test]
+    async fn complete_unique_dir_appends_slash_and_toasts() {
+        let mut app = make_app("complete-dir");
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-cmpl-dir");
+        std::fs::create_dir_all(dir.join("alphadir")).unwrap();
+        let token = format!("{}/alphadir", dir.to_string_lossy());
+        app.open_cmd_window();
+        app.cmd.set_text(&token);
+        app.cmd_complete_path();
+        assert_eq!(
+            app.cmd.line().value,
+            format!("{token}/"),
+            "唯一目录候选应补全为目录并追加 /"
+        );
+        assert_eq!(
+            app.toast.as_deref(),
+            Some(format!("补全目录：{token}/").as_str()),
+            "唯一目录补全应报补全目录 toast"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn complete_multi_candidate_extends_lcp_and_lists() {
+        let mut app = make_app("complete-multi");
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-cmpl-multi");
+        std::fs::write(dir.join("alpha.txt"), b"x").unwrap();
+        std::fs::write(dir.join("alpha2.txt"), b"x").unwrap();
+        std::fs::create_dir_all(dir.join("alphadir")).unwrap();
+        let token = format!("{}/alpha", dir.to_string_lossy());
+        app.open_cmd_window();
+        app.cmd.set_text(&token);
+        app.cmd_complete_path();
+        assert!(
+            app.cmd.line().value.ends_with("/alpha"),
+            "多候选应补全到公共前缀 lcp：{:?}",
+            app.cmd.line().value
+        );
+        let toast = app.toast.as_deref().unwrap_or("");
+        assert!(
+            toast.contains("alpha.txt"),
+            "候选列表应含 alpha.txt: {toast}"
+        );
+        assert!(toast.contains("alphadir"), "候选列表应含 alphadir: {toast}");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn complete_no_match_toasts_without_change() {
+        let mut app = make_app("complete-none");
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-cmpl-none");
+        let token = format!("{}/zzz", dir.to_string_lossy());
+        app.open_cmd_window();
+        app.cmd.set_text(&token);
+        app.cmd_complete_path();
+        assert_eq!(app.cmd.line().value, token, "无匹配不应改动输入行");
+        assert!(
+            app.toast.as_deref().unwrap_or("").starts_with("无匹配："),
+            "无匹配应报无匹配 toast：{:?}",
+            app.toast
+        );
+        app.shutdown().await;
+    }
 }

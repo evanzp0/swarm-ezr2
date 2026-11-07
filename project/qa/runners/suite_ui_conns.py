@@ -946,7 +946,7 @@ class UiConnsSuite(Suite):
                 # 100MB 稀疏文件 → 100 块 ≥16 连接；明细行数超面板高
                 # （不 swapsize：_slow 会把文件物化改小，16 连接秒完）
                 add_task_via_dialog(
-                    app, env, env.fixture.url("big-100m.bin?speed=150000"))
+                    app, env, env.fixture.url("big-100m.bin?speed=40000"))
                 assert app.wait_for("下载中", 10)
                 # 9 个等待任务（slots=1 全部排队；同门控口径：暂停释放的槽位
                 # 会递补等待任务，不限速则回环全速秒完、列表塌缩）

@@ -713,21 +713,54 @@ def open_add_dialog_via_cmd(app: "EzrApp", url: str) -> None:
     assert app.wait_for("添加任务：HTTP(S)", 3), "添加对话框未打开"
 
 
+def _field_visually_empty(app: "EzrApp", marker: str, placeholder: str = "") -> bool:
+    """读屏判定 marker 字段行（「label > 内容」形态）右侧是否已无可见内容。
+
+    pyte display 对超长字段内容做「…头截断」渲染——截断形态本身即「非空」
+    证据；空字段行右侧只剩空白与边框；占位符形态（如保存到字段的
+    "/srv/downloads"，dialog.rs 逐字段定义）渲染为可见字形但不入值——
+    与 placeholder 相等即视为已空。字段行不存在（对话框已关）按空处理。
+    """
+    for row in app.display_rows():
+        if marker in row and "> " in row:
+            seg = row.partition("> ")[2].replace("│", " ").rstrip()
+            return seg.strip() in ("", placeholder)
+    return True
+
+
+def _clear_field_prefill(app: "EzrApp", marker: str, placeholder: str = "") -> None:
+    """自适应清空对话框字段预填（marker = 字段行标签，如「保存到」/「URL」）。
+
+    预填长度不可假设：v1.38/D62 字段打开即预填配置链值（HOME/Downloads），
+    其长度随工作区路径深度变化——QA 终验轮实测 /home/z/my-project/swarm-ezr2
+    下预填 75 字符 > 旧固定 64 退格 → 残 11 字符与键入路径拼接成畸变目录
+    （registry save_dir = "/home/z/my" + 全路径），伴随校验用例全家假红。
+    退格必须逐键单发：本沙箱 PTY 对 \\x7f 连发有投递上限
+    （notes/environment.md bug19 口径 ≈2字节/批，64 连发仅 ~18 达）。
+    实现 = 「单字节写入 × 16 → 读屏判空（含占位符形态）→ 未空再来一轮」
+    （40 轮 × 16 = 640 > 字段上限 300，富余充足）。"""
+    for _ in range(40):
+        if _field_visually_empty(app, marker, placeholder):
+            app._pump(0.02)
+            return
+        for _ in range(16):
+            os.write(app.fd, key_bytes("bs"))
+        app._pump(0.05)
+    app._pump(0.06)
+
+
 def clear_dir_prefill(app: "EzrApp") -> None:
     """清空保存目录字段预填（v1.38/D62：对话框打开即预填配置链值）。
 
-    64 次 bs 覆盖一切现实预填长度（字段上限 300；空字段/光标起点处的 bs
-    为无害 no-op）；清空后输入 = 显式目录，不清 = 留空确认走预填（恰为
-    原「留空走默认 download_dir」语义）。
+    清空后输入 = 显式目录，不清 = 留空确认走预填（恰为
+    原「留空走默认 download_dir」语义）；空态占位符 = /srv/downloads。
     """
-    os.write(app.fd, key_bytes("bs") * 64)
-    app._pump(0.06)
+    _clear_field_prefill(app, "保存到", "/srv/downloads")
 
 
 def clear_url_prefill(app: "EzrApp") -> None:
     """清空 URL 字段预填（同 clear_dir_prefill 口径；对话框 URL 字段打开即预填）。"""
-    os.write(app.fd, key_bytes("bs") * 64)
-    app._pump(0.06)
+    _clear_field_prefill(app, "URL")
 
 
 def add_task_via_dialog(app: "EzrApp", env: "Env", url: str, conns: str = "",

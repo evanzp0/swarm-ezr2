@@ -291,7 +291,7 @@ class ThrottleProxySuite(Suite):
                     f'[common]\nglobal_max_download_speed = "{spec}"\n')
                 app = EzrApp(env.home, save_dir=env.save_dir)
                 try:
-                    add_task_via_dialog(app, env, env.fixture.url("ten-m.bin"),
+                    add_task_via_dialog(app, env, env.fixture.url(f"ten-m.bin?r={seq}"),
                                         save_dir=sub)
                     # 回退 0 档（旧写法废弃）不限速亚秒完成——「下载中」为瞬时态
                     # 不可稳定观察（engineering.md 锚定持久终态），只对限速档断言
@@ -323,7 +323,7 @@ class ThrottleProxySuite(Suite):
             sub = os.path.join(env.save_dir, "rfree")
             app = EzrApp(env.home, save_dir=env.save_dir)
             try:
-                add_task_via_dialog(app, env, env.fixture.url("ten-m.bin"),
+                add_task_via_dialog(app, env, env.fixture.url(f"ten-m.bin?r=free"),
                                     save_dir=sub)
                 t0 = time.time()
                 bare = os.path.join(sub, "ten-m.bin")

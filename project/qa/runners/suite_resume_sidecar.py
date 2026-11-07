@@ -669,12 +669,17 @@ class ResumeSidecarSuite(Suite):
                 app.graceful_quit()
 
     def _case_14(self):
-        """QA-RS-14 仅删任务后重加同推导名异 URL+目录：路径基接续、一致性兜底。
+        """QA-RS-14 仅删任务后重加同推导名异 URL+目录：探测不符序号改道静默 + 孤儿保留。
 
-        v1.28/FR-01-26：断点接续匹配为「保存目录 + 推导同名 sidecar」路径基
-        （无同 URL 校验门）；异 URL 探测后一致性失效（ETag/LM/大小不符）→
-        「服务器内容已更新」toast → sidecar 作废从头重下、不计失败（FR-01-22
-        兜底臂）。异路径同推导名文件由用例自足写入 fixture 根（规程环境前置
+        v1.46 改判同步（features/01-resume-sidecar v1.46 场景 14；规程 QA-RS-14
+        同行已改）：原 v1.28 口径（沿用原名原地作废从头 + 「服务器内容已更新」
+        toast）已退役——路径基孤儿匹配候选后，探测三要素（ETag/LM/大小）不符 →
+        新任务按 FR-01-02 序号链改判 `<名>.1` 从头全新下载且静默（无额外提示，
+        套用场景 15 处理）；孤儿 sidecar 与部分文件原样保留、系统不自动清理
+        （操作者裁定由用户手工删除）。改道静默性以持久物断言（瞬时 toast 不锚，
+        QA 终验轮实测改道臂无「服务器内容已更新」）：任务行落 `<名>.1`、孤儿
+        原样、`.1` 独立 sidecar 随下载生成并随完成删除。
+        异路径同推导名文件由用例自足写入 fixture 根（规程环境前置
         「异路径同推导名文件」能力；内容模式与 ezr-fixture gen 同一 i%251
         口径，仅大小不同）。
         """
@@ -691,7 +696,7 @@ class ResumeSidecarSuite(Suite):
             with open(new_p, "wb") as f:
                 f.write(expected_content(new_size))
             name = "alias.bin"
-            target = os.path.join(env.save_dir, name)
+            target1 = os.path.join(env.save_dir, f"{name}.1")
             app = EzrApp(env.home, save_dir=env.save_dir)
             add_task_via_dialog(app, env, env.fixture.url(f"{old_rel}?speed=800000"))
             self._pause_at_progress(app, min_pct=30.0)
@@ -699,28 +704,33 @@ class ResumeSidecarSuite(Suite):
             assert app.wait_for("删除任务", 3)
             app.send("enter")  # 仅删除任务
             assert app.wait_for("已删除任务（保留文件）", 6)
-            self._wait_sidecar(env, name, timeout=5)  # 超时即断言失败：sidecar 应保留
-            # 重加同推导名异 URL + 相同保存目录
-            open_add_dialog_via_cmd(app, env.fixture.url(f"{new_rel}?speed=800000"))
+            self._wait_sidecar(env, name, timeout=5)  # 超时即断言失败：孤儿 sidecar 应保留
+            # 重加同推导名异 URL + 相同保存目录（v1.46：探测不符 → 序号改道静默）
+            # 新任务限速 400KB/s：2MB ≈ 5s > sidecar 首刷 2s tick，使「独立
+            # sidecar 生成」可稳定观察（快路径下首刷前即完成属已知不可观察形态）
+            open_add_dialog_via_cmd(app, env.fixture.url(f"{new_rel}?speed=400000"))
             app.send("tab")
             clear_dir_prefill(app)
             app.type_text(env.save_dir)
             app.send("enter")
             app.pump(0.5)
             try:
-                # 接续 toast（「发现有效断点」）为单槽位瞬时提示且被后续失效 toast
-                # 后发覆盖（本地探测毫秒级完成，同刻双 toast 仅最后一次可见），
-                # 不可稳定观察 → 改锚失效 toast：它能出现本身就证明重加任务
-                # 按路径基拾取了既有 sidecar（无同 URL 校验门，v1.28/FR-01-26）
-                assert file_bytes(os.path.join(env.save_dir, f"{name}.1")) is None, \
-                    "应沿用原名，不追加 .1 序号"
-                # 探测后一致性失效（新文件 ETag/LM/大小全不符）→ 从头重下不计失败
-                assert app.wait_for("服务器内容已更新", 8), \
-                    "异 URL 探测后应 toast 服务器内容已更新（路径基拾取 sidecar 的证据）"
-                assert app.wait_for("下载中", 20), \
-                    "sidecar 作废后应从头重新下载（不计失败）"
-                wait_file_size(target, new_size, 120, app=app)
-                assert_file_content(target, new_size)
+                # 改道名锚定：任务行落 <名>.1（v1.46 改判臂）——原名不复活
+                assert app.wait_for(f"{name}.1 [HTTP]", 8), \
+                    "新任务应按 FR-01-02 序号链改判 <名>.1（v1.46 改判）"
+                # 孤儿原样保留：sidecar + 部分文件（.downloading 生灭口径 RS-11）
+                assert file_bytes(os.path.join(env.save_dir, f"{name}.ezr")) is not None, \
+                    "孤儿 sidecar 应原样保留（v1.46：不自动清理，由用户手工删除）"
+                assert file_bytes(os.path.join(env.save_dir, f"{name}.downloading")) \
+                    is not None, "孤儿部分文件应原样保留（v1.46：不自动清理）"
+                # .1 独立 sidecar 随下载生成（2s 周期落盘，用有界等待防首刷前假红）
+                self._wait_sidecar(env, f"{name}.1", timeout=8, app=app)
+                # .1 从头全新下载至完成（新文件大小）
+                wait_file_size(target1, new_size, 120, app=app)
+                assert_file_content(target1, new_size)
+                # 完成后 .1 sidecar 随完成删除（sidecar 生命周期 RS-01 口径）
+                assert file_bytes(os.path.join(env.save_dir, f"{name}.1.ezr")) is None, \
+                    "完成后 <名>.1.ezr 应随完成删除"
             finally:
                 app.graceful_quit()
 
