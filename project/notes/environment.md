@@ -268,3 +268,44 @@
 
 architect 轮环境重建实录（2026-11-06，全新沙箱零工具链）：rustup 镜像测速（清单文件 channel-rust-nightly.toml 计速）TUNA 最快 7MB/s 且 200（rsproxy/USTC/SJTU 该路径 404）——**ghfast.top 取官方 rustup-init.sh + RUSTUP_DIST_SERVER/UPDATE_ROOT 双变量指 TUNA 前台装齐** nightly 1.101.0（minimal profile + rustfmt + clippy 组件），与 bug25 轮记录的 1.101 工具链版本带对齐；cargo registry 按 cleaner 轮口径直接写 rsproxy sparse（cargo fetch 一次过零 404，rsproxy dist 清单缺键问题未复现第 7 次）；本项目无 .cargo/config.toml 链接器配置，无 lld 桥接需求。沙箱 Write 工具限主目录 → swarm 工作区 /tmp 迁 /home/z/swarm-ezr2（bin/swarm 按 BASH_SOURCE 自定位解析路径，begin 后迁移会话无损，status 复核即可）。夜间默认 DEV/TEST DEBUG=0 + CARGO_INCREMENTAL=0 全程压盘，全量 bins+12 套件+clippy 后盘余 4.4G 无清理需求。
 QA 轮（2026-11-06）补记：接手被中断会话先清残留进程——上一会话 `timeout 560 python3 suite_*.py` 形态的套件进程可与会话解耦存活（ps 复核 + kill；残留套件与新生 foreground 批并行会争 CPU/fixture 扭曲限速测速）；.work/tmp/qa-run/qa-dl-* qa-fix-* 每用例临时目录随用例结束可清（证据在 screen dump 与日志，不在临时 HOME），700MB 级可回收。TP 套件前台分批节奏实测：QA_TP_ONLY=1,2 ≈5.1min / =3,6 ≈5.1min / =4,5,7,8,9,10 ≈1min，各批独立 timeout 560 内安全；速度断言批必须串行跑（并行限速测量互相干扰）。磁盘：target/debug/build 可膨胀至 4.5G（deps+incremental 才 ~1.1G）、llvm-cov 目标目录另计 ~1.1G、coverage 手工管线需 ~2G 余量——coverage/DRY 步骤前 du 分层清理（demo target 683M / debug/build 4.5G 可安全删，binaries 是独立文件不受 deps 硬链删除影响——同 inode 硬链注意：deps 内同名测试二进制删除会连带顶层 binary 丢失，需要时 cargo build --bins 重建）。
+
+## specifier 守卫轮复测（2026-11-06）：rustup 镜像整链路与 gh-proxy bb/APS 装机
+- 全新沙箱工具链重建。镜像测速用**真实要下载的文件**做样本（rustup-init）且先探明各镜像布局：
+  TUNA 16MB 样本 37.29MB/s（4MB 样本 19.54；同镜像大小样本差异可达 2 倍，选型以大样本为准）、
+  rsproxy 22.53、ALIYUN 4.52、USTC 3.10、NJU/SJTU 不可用、官方 0.20。TUNA 整链路（init 双层
+  路径 `/rustup/rustup/dist/…` + dist `/rustup/dist/` 清单 200 + 组件）直链 rustup-init + 双变量
+  前台一次装齐 rustup 1.29.3 + nightly 1.101.0 minimal + rustfmt/clippy（与历轮版本带一致）。
+- **布局陷阱反向形态（新）**：把 TUNA 的 `$server/rustup/dist/` 清单布局套到 rsproxy 上会误判
+  「rsproxy 工具链分发路径不全」——rsproxy 的正确 DIST_SERVER = **裸根** `https://rsproxy.cn`
+  （清单在 `/dist/channel-rust-nightly.toml`，本轮验证 200 且 TOML 新鲜 date 2026-11-06）。
+  各镜像 DIST_SERVER 布局不同，验证清单前先按该镜像自己的口径定位根，勿跨镜像套布局
+  （与「UPDATE_ROOT 双层路径 404」陷阱同族、方向相反）。
+- GitHub release 资产直连 0.04MB/s（bb 静态包量级不可行）；NJU github-release 镜像无 babashka
+  （404）；**gh-proxy.com 前缀依旧可用**（bb v1.13.229 静态包 25.3MB/54s + APS 仓库 clone 均成）；
+  bb 装 `.tools/bin/bb`、APS 装 `.tools/Acceptance-Pipeline-Specification`，gherkin-parser/
+  ir-dry-checker 对修订后 feature 跑通（parser 15 场景；dry-check 101 findings 全为中文分词
+  假阳性——涉新场景的 33 条互为镜像臂/反义断言，按 advisory 人工复核裁决不改文本）。
+- 本轮通道（zai-web IM）无 chat 选择题面板组件：Inversion 直接按受限退化执行（编号清单 +
+  操作者单条消息回复 `1A 2A 3A 4A`），一轮收齐；bug23/24 轮「先试面板」口径适用于有面板
+  组件的通道，无面板通道直接退化不属违规，受限项照常落盘 handoff。
+
+## specifier 审批改判轮复测（2026-11-06，v1.46）
+- 沙箱重置二度发生（会话开局工作区与 `~/.cargo`、`~/.rustup` 全空）：从 my-project 归档
+  `tar -xzf` 原样重建工作区一次成功（project/ 267 文件 + bin/packs 全量，`bin/swarm status`
+  正常）——bug17「每轮 complete 后归档即时复制 my-project」纪律的直接收益：**归档即备份**。
+- 归档不含 `.tools/`（.gitignore 排除）：bb v1.13.229 + APS（github.com/unclebob/Acceptance-
+  Pipeline-Specification）按 gh-proxy.com 前缀法重装秒级完成；gherkin-parser/dry-checker 复跑通过。
+- **rustup dist 清单路径是架构无关的** `dist/channel-rust-nightly.toml`（架构信息在清单内条目、
+  不在路径上）——探针路径带 $ARCH 时 8 镜像全 404 系自伤误判；修正后格局：TUNA 200/date 11-03、
+  rsproxy 200/11-06、NJU 200/11-06、USTC/BFSU 404、SJTU 超时、Aliyun 200 但快照停 2026-05-29
+  （新鲜度判据排除）。
+- **清单内组件 URL 为上游绝对 URL**（`https://static.rust-lang.org/dist/<日期>/…`）——rustup
+  安装时自动重写到 DIST_SERVER 前缀；手工 curl 测速须剥上游前缀按镜像布局重拼（不剥则 rsproxy
+  422/404 假象）。
+- **TUNA dist 组件单次 404 属瞬态**（同 URL 复验两次均 206、速度 37.76/27.49 MB/s）——「测速快
+  ≠ 能装」的补充判据：**单次 404 先复验再弃选**；rsproxy dist 307 → CDN（lf3/lf9-static.rsproxy.cn）
+  跟跳后 11.45 MB/s（rustup 原生跟跳不受影响）；NJU 8.53。终选 TUNA（init 36.00 MB/s + dist 大样本
+  两连 27+ MB/s）前台装齐 nightly 1.101.0（与上轮版本带一致）。
+- 审批改判流程先例：操作者 chat 审批即修订裁决（Inversion 不适用，沿 bug25 轮先例）；审批只给
+  行为面时，机制面判别载体（本轮 = FR-01-22 三要素探测判同/异文件）由 specifier 合成裁决并随
+  phase-01 v1.46 注记登记供否决——透明登记先于自行扩权。

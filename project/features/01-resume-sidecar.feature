@@ -12,13 +12,31 @@
 #   01-resume-sidecar-11 仅删除任务保留文件与 sidecar
 #   01-resume-sidecar-12 删除任务和文件全部删除
 #   01-resume-sidecar-13 重加同 URL 同路径任务自动接续断点
-#   01-resume-sidecar-14 重加同路径异 URL 任务由一致性检查兜底
+#   01-resume-sidecar-14 重加同路径异 URL 任务一致性不符改序号新下且孤儿保留（v1.46 改判）
+#   01-resume-sidecar-15 重加同路径异 URL 任务且原任务存活由守卫臂改序号新下（v1.45）
+# v1.45 修订注（操作者 QA-RS-06 复验轮规格缺口裁决，FR-01-26 接续臂「无活任务占用」守卫；
+# Inversion 阶段 1 答案 = 受限退化 chat 输入选择题 1A/2A/3A/4A）：场景 15 新增——重加同路径
+# 异 URL 任务且原任务存活（未被删除）时接续臂不生效（占用判定 = 任务列表内任何未完成任务
+# 目标路径相同即算，「已完成」不算），新任务按 FR-01-02 追加序号（<推导名>.1）全新下载且
+# 静默无额外提示，既有任务的目标文件、sidecar 与断点零影响；对话框与 CLI 添加同口径。
+# 场景 14 口径不变（原任务已被删除的无占用接续 + FR-01-22 兜底）。
+# v1.46 修订注（操作者审批改判「场景 14 的情形套用场景 15 的处理，遗留的 sidecar 由用户手工
+# 删除」）：场景 14 改判——异 URL 同推导名且原任务已被删除时，路径基孤儿匹配 + 探测一致性
+# 三要素不符 → 新任务不原地作废重下，改按 FR-01-02 序号链落 <推导名>.1 从头全新下载且静默
+# （套用场景 15 处理）；孤儿 sidecar 与部分文件原样保留、系统不自动清理（由用户手工删除）。
+# 探测相符（实为同一文件）→ 原地接续，场景 13 口径不变（补判别前提注）。判别载体 =
+# FR-01-22 三要素探测（sidecar 无 URL、已删任务不在注册表，同/异 URL 无元数据可判，
+# 合成裁决随 phase-01 v1.46 注记登记）。
 Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
 
   期号 01。依据 project/mission/phase-01.md FR-01-20~26 与 D10/D11 定案。sidecar 文件为
   伴随目标文件的 <目标文件>.ezr，原子写；续传一致性以 ETag/Last-Modified/大小为准
   （v1.28 修订：原「最终 URL/ETag/Last-Modified/大小」四要素随 sidecar 去 URL 收敛为三要素，
   FR-01-20/22/26 v1.28；sidecar 不存任何 URL，断点接续匹配改路径基）。
+  v1.45 修订：断点接续臂加「无活任务占用」守卫（FR-01-26 v1.45）——存在占用时新任务按
+  FR-01-02 追加序号全新下载且静默（场景 15）。
+  v1.46 修订：异 URL 死任务孤儿接续改判——探测不符 → 序号改道 <推导名>.1 全新下载且静默、
+  孤儿 sidecar 与部分文件由用户手工删除（场景 14，FR-01-22 双臂分叉）。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
@@ -156,6 +174,7 @@ Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
   Scenario: 01-resume-sidecar-13 重加同 URL 同路径任务自动接续断点
     Given 已存在 URL "<url>"、保存目录 "<dir>" 的任务且已下载至进度 ≥ <progress>
     And 该任务已被「仅删除任务」移除（文件与 sidecar 保留）
+    And fixture 未变更 "<url>" 的内容（探测 ETag/Last-Modified/大小与 sidecar 记录相符，v1.46 判别前提）
     When 按对话框重新添加相同 URL 与相同保存目录
     Then 出现断点接续的 toast 提示
     And 任务沿用既有目标文件与 sidecar（文件名不追加序号）且进度从断点合并显示
@@ -165,13 +184,26 @@ Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
       | url                                | dir       | progress |
       | http://fixture.local/files/resume.bin | /tmp/qadl | 30%      |
 
-  Scenario: 01-resume-sidecar-14 重加同路径异 URL 任务由一致性检查兜底
-    Given 保存目录已存在 URL "<old_url>" 任务的推导同名 sidecar（已下载至进度 ≥ <progress>）且任务已被「仅删除任务」移除
+  Scenario: 01-resume-sidecar-14 重加同路径异 URL 任务一致性不符改序号新下且孤儿保留（v1.46 改判）
+    Given 保存目录已存在 URL "<old_url>" 任务的推导同名 sidecar "<derived_name>.ezr"（已下载至进度 ≥ <progress>）且任务已被「仅删除任务」移除（孤儿 sidecar 与部分文件 "<derived_name>" 保留）
     When 按对话框重新添加推导名相同但内容不同的异 URL "<new_url>" 与相同保存目录
-    Then 任务按路径基接续沿用既有名与 sidecar（无「同 URL」校验门，v1.28/FR-01-26）
-    And 探测后一致性检查发现 ETag/Last-Modified/大小不符 → 出现「服务器内容已更新，已从头重新下载」toast
-    And 原 sidecar 作废且任务从头重新下载（不计失败、不占重试计数，FR-01-22 兜底臂）
+    Then 任务先按路径基匹配候选孤儿 sidecar（无「同 URL」校验门，v1.28/FR-01-26）
+    And 探测后一致性检查发现 ETag/Last-Modified/大小不符（异文件）→ 新任务不沿用既有名与 sidecar、不原地作废从头（v1.46 改判：原地作废重下臂退役）
+    And 新任务目标名改判为 "<derived_name>.1"（按 FR-01-02 序号链）从头全新下载且静默无额外提示（套用场景 15 处理，操作者审批）
+    And 孤儿 sidecar "<derived_name>.ezr" 与部分文件 "<derived_name>" 原样保留、系统不自动删除（由用户手工删除，操作者裁定）
+    And 新任务以 "<derived_name>.1" 全新下载并生成独立 sidecar（"<derived_name>.1.ezr"）
 
     Examples:
-      | old_url                                 | new_url                                 | progress |
-      | http://fixture.local/files/alias.bin    | http://fixture.local/other/alias.bin    | 30%      |
+      | old_url                               | new_url                               | progress | derived_name |
+      | http://fixture.local/files/alias.bin  | http://fixture.local/other/alias.bin  | 30%      | alias.bin    |
+
+  Scenario: 01-resume-sidecar-15 重加同路径异 URL 任务且原任务存活由守卫臂改序号新下
+    Given 保存目录已存在 URL "<old_url>" 的未完成任务且其目标名为 "<derived_name>"（已下载至进度 ≥ <progress>，任务未被删除，v1.45 守卫臂的占用态）
+    When 按对话框重新添加推导名相同但内容不同的异 URL "<new_url>" 与相同保存目录
+    Then 新任务不接续既有 sidecar 且目标文件名为 "<derived_name>.1"（按 FR-01-02 追加序号，v1.45/FR-01-26 守卫触发臂）且静默无额外提示
+    And 既有任务的目标文件、sidecar（"<derived_name>.ezr"）与断点进度保持原样且继续其原下载
+    And 新任务以 "<derived_name>.1" 全新下载并生成独立 sidecar（"<derived_name>.1.ezr"）
+
+    Examples:
+      | old_url                               | new_url                               | progress | derived_name |
+      | http://fixture.local/files/guard.bin  | http://fixture.local/other/guard.bin  | 30%      | guard.bin    |
