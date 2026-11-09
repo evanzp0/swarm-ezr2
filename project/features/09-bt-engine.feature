@@ -66,6 +66,19 @@
 # 再次暂停丢弃上一轮 partial（该部分重下，操作者批准登记）。修复前缺陷 = Pause 终结引擎
 # 丢 partial → 恢复后向同一 peer 重发同区间请求（BitComet 反吸血触发源，操作者 bug23 报告）。
 # QA 严格检查 = QA-BE-17。
+# v1.42 修订（操作者 bug28 轮指令 20261109「多文件 b/b 双层 / 多文件删除目录树 / WebRTC 地址列 /
+# 扩容重连调优」；chat 指令文本即答案，受限退化沿 bug13–25 轮先例；D72 登记 handoff）：
+# ①落盘布局钦定——多文件 torrent 落盘 = save_dir/<info.name>/…（torrent 内相对路径，首段即
+# info.name），单文件 = save_dir/<info.name> 文件；任务详情保存路径展示（target_path =
+# save_dir/name）与之一致；修复前缺陷 = 多段 rel 再叠任务名（save_dir/name/name/… 双层，bug28①）。
+# ②「删除任务和文件」语义澄清（01-resume-sidecar-12 v1.47 注）：多文件 BT 任务「目标文件」=
+# save_dir/name/ 目录树整删（原 remove_file 对目录无效且静默失败，bug28②）。
+# ③并发面板 WebRTC 连接地址列 = 对端 peer_id 前 5 字节 hex 裸值（D71⑤ 改判：协议列已显
+# WebRTC，"WebRTC:" 前缀退役）。
+# ④扩容重连调优（bug28③）：修改任务并发扩容/仍有缺口时全 tracker 提前 re-announce（ws 持久
+# 会话立即携新 offers 重连 shed 的 peer；http/udp 刷新候选池；尊重 tracker min_interval）+
+# 本端主动收口（缩容 shed/空闲置换）的 WebRTC peer 不记失败冷却（mark_peer_idle，区别于异常
+# 断开的惩罚性退避）——peer 重连不再等 tracker interval 周期。QA 严格检查 = QA-BE-19（观察面注记）。
 Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文件选择）
 
   期号 02。真实 BT 链路：.torrent 解析 → tracker announce（HTTP/UDP、紧凑 peer、

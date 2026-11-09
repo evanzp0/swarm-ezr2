@@ -1889,6 +1889,7 @@ mod bt_mouse_tests {
                 BtConnRow {
                     id: 1,
                     addr: "1.2.3.4:51400".to_string(),
+                    protocol: "TCP".into(),
                     down_speed: 0.0,
                     cum_down: 0,
                     up_speed: 0.0,
@@ -1900,6 +1901,7 @@ mod bt_mouse_tests {
                 BtConnRow {
                     id: 2,
                     addr: "5.6.7.8:51401".to_string(),
+                    protocol: "TCP".into(),
                     down_speed: 0.0,
                     cum_down: 0,
                     up_speed: 0.0,

@@ -302,130 +302,135 @@ proptest! {
 }
 
 proptest! {
-    #[test]
-    fn prop_parse_speed_suffix_and_units(
-        n in 0u64..1_000_000,
-        unit in prop::sample::select(&["", " b", " KiB", " MiB", " GiB"]),
-        space in prop::sample::select(&["", " ", "  "]),
-    ) {
-        let s = format!("{space}{n}{unit}");
-        prop_assert_eq!(
-            crate::model::config::parse_speed(&s),
-            crate::model::config::parse_speed(&format!("{s}/s")),
-            "『/s』后缀不影响解析结果"
-        );
-        prop_assert_eq!(
-            crate::model::config::parse_speed(&format!("{n} KB")),
-            0,
-            "旧写法 KB 十进制废弃归零（FR-02-28 v1.11）"
-        );
-        prop_assert_eq!(
-            crate::model::config::parse_speed(&format!("{n} MB")),
-            0,
-            "旧写法 MB 十进制废弃归零"
-        );
-        prop_assert_eq!(
-            crate::model::config::parse_speed(&format!("{n} KiB")),
-            n * 1_024,
-            "二进制口径 KiB"
-        );
-        prop_assert_eq!(
-            crate::model::config::parse_speed(&format!("{n} MiB")),
-            n * 1_048_576,
-            "二进制口径 MiB"
-        );
-        prop_assert_eq!(
-            crate::model::config::parse_speed(&format!("{n} GiB")),
-            n * 1_073_741_824,
-            "二进制口径 GiB"
-        );
-    }
-
-    #[test]
-    fn prop_parse_speed_normalization_and_zero(
-        n in 1u64..1_000_000,
-        upper in prop::bool::ANY,
-        garbage in "[a-hj-z]{1,6}",
-    ) {
-        let s = format!("{n} MiB");
-        let variant = if upper { s.to_uppercase() } else { s.to_lowercase() };
-        prop_assert_eq!(
-            crate::model::config::parse_speed(&variant),
-            n * 1_048_576,
-            "大小写归一（二进制口径）"
-        );
-        prop_assert_eq!(
-            crate::model::config::parse_speed(&format!("{n}kib")),
-            n * 1_024,
-            "无空格后缀"
-        );
-        prop_assert_eq!(
-            crate::model::config::parse_speed(&format!("{n}kb")),
-            0,
-            "旧写法 kb 十进制废弃归零（无空格后缀同废弃）"
-        );
-        prop_assert_eq!(crate::model::config::parse_speed(garbage.as_str()), 0, "非数字归零（不限速）");
-        prop_assert!(
-            crate::model::config::parse_speed("1 MiB")
-                > crate::model::config::parse_speed("1 KiB")
-                && crate::model::config::parse_speed("1 KiB") > crate::model::config::parse_speed("1 b"),
-            "单位乘数单调 MiB > KiB > b"
-        );
-    }
-
-    #[test]
-    fn prop_config_from_toml_domain_invariants(
-        key in prop::sample::select(&["block_size_http", "download_slots", "http_concurrency", "max_retries"]),
-        v in 0u64..(1u64 << 32),
-        garbage in prop::bool::ANY,
-    ) {
-        use crate::model::config::Config;
-        let text = if garbage {
-            "not [valid toml ===".to_string()
-        } else {
-            let table = match key {
-                "download_slots" => "common",
-                _ => "http",
-            };
-            format!("[{table}]\n{key} = {v}")
-        };
-        let c = Config::from_toml(&text);
-        prop_assert!(c.block_size_http > 0, "块大小恒正");
-        prop_assert!(c.download_slots > 0, "槽位恒正");
-        prop_assert!((1..=64).contains(&c.http_concurrency), "并发钳制 [1,64]");
-        prop_assert!(c.max_retries >= 1, "重试上限恒 ≥ 1");
-        if garbage {
-            prop_assert_eq!(c, Config::default(), "垃圾 TOML 全默认");
-            return Ok(());
-        }
-        match key {
-            "block_size_http" => {
-                let expect = if v == 0 {
-                    Config::default().block_size_http
-                } else {
-                    v.max(crate::model::chunk::MIN_HTTP_BLOCK_SIZE)
-                };
-                prop_assert_eq!(c.block_size_http, expect, "正值钳下限透传/0 回退");
-            }
-            "download_slots" => {
-                let expect = if v == 0 { Config::default().download_slots } else { v as usize };
-                prop_assert_eq!(c.download_slots, expect, "正值透传/0 回退");
-            }
-            "max_retries" => {
-                let expect = if v == 0 { Config::default().max_retries } else { u32::try_from(v).unwrap_or(1) };
-                prop_assert_eq!(c.max_retries, expect, "正值透传/0 回退");
-            }
-            _ => {
-                let clamped = if v == 0 {
-                    Config::default().http_concurrency
-                } else {
-                    (v as usize).clamp(1, 64)
-                };
-                prop_assert_eq!(c.http_concurrency, clamped, "并发 0 回退默认/正值 clamp 语义");
-            }
-        }
-    }
+#[test]
+fn prop_parse_speed_suffix_and_units(
+    n in 0u64..1_000_000,
+    unit in prop::sample::select(&["", " b", " KiB", " MiB", " GiB"]),
+    space in prop::sample::select(&["", " ", "  "]),
+) {
+    let s = format!("{space}{n}{unit}");
+    prop_assert_eq!(
+        crate::model::config::parse_speed(&s),
+        crate::model::config::parse_speed(&format!("{s}/s")),
+        "『/s』后缀不影响解析结果"
+    );
+    prop_assert_eq!(
+        crate::model::config::parse_speed(&format!("{n} KB")),
+        0,
+        "旧写法 KB 十进制废弃归零（FR-02-28 v1.11）"
+    );
+    prop_assert_eq!(
+        crate::model::config::parse_speed(&format!("{n} MB")),
+        0,
+        "旧写法 MB 十进制废弃归零"
+    );
+    prop_assert_eq!(
+        crate::model::config::parse_speed(&format!("{n} KiB")),
+        n * 1_024,
+        "二进制口径 KiB"
+    );
+    prop_assert_eq!(
+        crate::model::config::parse_speed(&format!("{n} MiB")),
+        n * 1_048_576,
+        "二进制口径 MiB"
+    );
+    prop_assert_eq!(
+        crate::model::config::parse_speed(&format!("{n} GiB")),
+        n * 1_073_741_824,
+        "二进制口径 GiB"
+    );
 }
+
+#[test]
+fn prop_parse_speed_normalization_and_zero(
+    n in 1u64..1_000_000,
+    upper in prop::bool::ANY,
+    garbage in "[a-hj-z]{1,6}",
+) {
+    let s = format!("{n} MiB");
+    let variant = if upper { s.to_uppercase() } else { s.to_lowercase() };
+    prop_assert_eq!(
+        crate::model::config::parse_speed(&variant),
+        n * 1_048_576,
+        "大小写归一（二进制口径）"
+    );
+    prop_assert_eq!(
+        crate::model::config::parse_speed(&format!("{n}kib")),
+        n * 1_024,
+        "无空格后缀"
+    );
+    prop_assert_eq!(
+        crate::model::config::parse_speed(&format!("{n}kb")),
+        0,
+        "旧写法 kb 十进制废弃归零（无空格后缀同废弃）"
+    );
+    prop_assert_eq!(crate::model::config::parse_speed(garbage.as_str()), 0, "非数字归零（不限速）");
+    prop_assert!(
+        crate::model::config::parse_speed("1 MiB")
+            > crate::model::config::parse_speed("1 KiB")
+            && crate::model::config::parse_speed("1 KiB") > crate::model::config::parse_speed("1 b"),
+        "单位乘数单调 MiB > KiB > b"
+    );
+}
+
+#[test]
+fn prop_config_from_toml_domain_invariants(
+    key in prop::sample::select(&["block_size_http", "download_slots", "http_concurrency", "max_retries"]),
+    v in 0u64..(1u64 << 32),
+    garbage in prop::bool::ANY,
+) {
+    use crate::model::config::Config;
+    let text = if garbage {
+        "not [valid toml ===".to_string()
+    } else {
+        let table = match key {
+            "download_slots" => "common",
+            _ => "http",
+        };
+        format!("[{table}]\n{key} = {v}")
+    };
+    if garbage {
+        let c = Config::from_toml(&text);
+        prop_assert_eq!(c, Config::default(), "垃圾 TOML 全默认");
+        return Ok(());
+    }
+    let parsed = Config::try_from_toml(&text);
+    match key {
+        "block_size_http" => {
+            if v == 0 {
+                prop_assert!(parsed.is_err(), "FR-02-35：0 拒绝启动");
+            } else {
+                let c = parsed.expect("正值合法");
+                let expect = v.max(crate::model::chunk::MIN_HTTP_BLOCK_SIZE);
+                prop_assert_eq!(c.block_size_http, expect, "正值下限钳制透传");
+            }
+        }
+        "download_slots" => {
+            if v == 0 {
+                prop_assert!(parsed.is_err(), "FR-02-35：0 拒绝启动");
+            } else {
+                let c = parsed.expect("正值合法");
+                prop_assert_eq!(c.download_slots, v as usize, "正值透传");
+            }
+        }
+        "max_retries" => {
+            if v == 0 {
+                prop_assert!(parsed.is_err(), "FR-02-35：0 拒绝启动");
+            } else {
+                let c = parsed.expect("正值合法");
+                prop_assert_eq!(c.max_retries, v as u32, "正值透传");
+            }
+        }
+        _ => {
+            if v == 0 || v > 64 {
+                prop_assert!(parsed.is_err(), "FR-02-35：越界拒绝启动");
+            } else {
+                let c = parsed.expect("范围内合法");
+                prop_assert_eq!(c.http_concurrency, v as usize, "范围内透传");
+            }
+        }
+    }
+}}
 
 fn slot_task(
     id: u32,

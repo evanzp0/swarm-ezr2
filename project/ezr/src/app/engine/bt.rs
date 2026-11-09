@@ -347,6 +347,7 @@ mod bt_progress_speed_tests {
         crate::engine::BtConnView {
             id,
             addr: format!("10.0.0.{id}:6881"),
+            protocol: "TCP".into(),
             down_speed: 0.0,
             cum_down: cum,
             up_speed: 0.0,

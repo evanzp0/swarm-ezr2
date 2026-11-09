@@ -17,6 +17,7 @@ v1.15 同步（QA v138 会话）：新增 QA-01-18（仅添加按钮，FR-01-103
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import time
 
@@ -392,28 +393,40 @@ class AddTaskSuite(Suite):
                 app.graceful_quit()
 
     def _case_11(self):
-        """QA-01-11（v1.35 重写）打开预填 + 解析顺序 + 归一：~ 展开 / 相对→绝对。"""
+        """QA-01-11（v1.35 重写；20261109 裁决：预填断言双锚口径）预填 + 解析顺序 + 归一。"""
         @self.case("QA-01-11")
         def go(env: Env):
             cfg_dir = os.path.join(env.home, "cfgdl")
             input_dir = os.path.join(env.home, "inputdl")
             tilde_dir = os.path.join(env.home, "qadl-docs")
             rel_dir = os.path.join(env.home, "qadl-rel", "sub")
+            # 预填断言双锚口径（操作者 20261109 chat 裁决「应使用能保证产品准确性
+            # 和正确性的做法」）：①全路径锚——短绝对路径在字段可视宽内整值渲染，
+            # 屏幕文本逐字符断言预填值（准确性）；②截断渲染锚——深路径（env.home
+            # 派生）屏幕呈「…头截断」窗口，锚可见尾部两段（显示行为不失真）+
+            # 落盘证据锁确认链（正确性）。单锚不覆盖另一面，双锚并用。
+            short_dir = "/tmp/ezr-qa11-cfgdl"
 
-            def manual_add(url: str, dir_text: str) -> None:
+            def manual_add(url: str, dir_text: str, before_confirm=None) -> None:
                 open_add_dialog_via_cmd(app, url)
                 app.send("tab")
                 if dir_text:
                     # v1.38/D62：字段打开即预填配置链值——显式输入前先清空
                     clear_dir_prefill(app)
                     app.type_text(dir_text)
+                if before_confirm is not None:
+                    before_confirm()
                 app.send("enter")
                 app.pump(0.5)
 
             # ③ 无输入无配置 → 预填 ~/Downloads，留空确认落同（目录留空语义）
             app = EzrApp(env.home, save_dir=None)
             try:
-                manual_add(env.fixture.url("small.bin"), "")
+                manual_add(env.fixture.url("small.bin"), "",
+                           before_confirm=lambda: assert_in(
+                               os.path.join(os.path.basename(env.home), "Downloads"),
+                               app.text(),
+                               "保存目录字段应预填默认下载目录（尾部两段锚：深路径截断渲染下默认链可见）"))
                 assert app.wait_for("（无校验）", 30), "应无校验完成"
                 assert file_bytes(os.path.join(env.home, "Downloads", "small.bin")) \
                     is not None, "无输入无配置应落 ~/Downloads"
@@ -427,9 +440,9 @@ class AddTaskSuite(Suite):
             try:
                 open_add_dialog_via_cmd(app, env.fixture.url("small.bin?r=1"))
                 app.send("tab")
-                # 预填断言锚可见尾部：字段宽对超长路径做「…头截断」渲染
-                # （pyte display），全路径包含断言在深工作区下必败；尾部两段
-                # （<home basename>/cfgdl）恒在截断尾内且足以锁定配置链预填
+                # 截断渲染行为锚（20261109 裁决后保留为有意深路径用例）：
+                # 字段对超长路径做「…头截断」，尾部两段（<home basename>/cfgdl）
+                # 恒在可见窗内且足以锁定配置链预填；确认链正确性由落盘证据锚定
                 assert_in(os.path.join(os.path.basename(env.home), "cfgdl"),
                           app.text(),
                           "保存目录字段应预填配置 download_dir（v1.38/D62②）")
@@ -441,6 +454,24 @@ class AddTaskSuite(Suite):
             except Exception:
                 app.graceful_quit()
                 raise
+            # ②全 短绝对路径配置 → 预填完整值逐字符可见（20261109 裁决恢复的全路径断言）
+            shutil.rmtree(short_dir, ignore_errors=True)
+            env.write_config(f'[common]\ndownload_dir = "{short_dir}"\n')
+            app = EzrApp(env.home, save_dir=None)
+            try:
+                manual_add(env.fixture.url("small.bin?r=5"), "",
+                           before_confirm=lambda: assert_in(
+                               short_dir, app.text(),
+                               "保存目录字段应完整预填配置 download_dir 全路径（短路径整值可视）"))
+                assert app.wait_for("（无校验）", 30)
+                assert file_bytes(os.path.join(short_dir, "small.bin")) is not None, \
+                    "短路径配置 download_dir 应生效（自动创建）"
+                app.graceful_quit()
+            except Exception:
+                app.graceful_quit()
+                raise
+            finally:
+                shutil.rmtree(short_dir, ignore_errors=True)
             # ① 输入目录优先 + ④ 目录不存在自动创建
             app = EzrApp(env.home, save_dir=None)
             try:

@@ -17,6 +17,8 @@
 #![allow(clippy::duplicate_mod)]
 #![allow(unused_imports)]
 
+#[path = "hardening/bt.rs"]
+mod bt;
 #[path = "../src/model/mod.rs"]
 mod model;
 

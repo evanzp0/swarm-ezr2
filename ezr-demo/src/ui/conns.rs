@@ -90,7 +90,7 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let mut colw: Vec<usize> = if is_bt {
-        vec![18, 4, 12, 12, 10, 10, 34, 4]
+        vec![18, 4, 12, 12, 10, 10, 34, 8]
     } else {
         vec![4, 12, 10]
     };
@@ -98,7 +98,7 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         let vw = view.width as usize;
         let base = colw.iter().sum::<usize>() + colw.len().saturating_sub(1);
         if base > vw {
-            colw[6] = vw.saturating_sub(77).max(26);
+            colw[6] = vw.saturating_sub(81).max(26);
         }
     }
     let content_w = colw.iter().sum::<usize>() + colw.len().saturating_sub(1);
@@ -122,7 +122,7 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
             Span::raw(" "),
             head_cell("客户端", colw[6]),
             Span::raw(" "),
-            head_cell("协议", 4),
+            head_cell("协议", 8),
         ]
     } else {
         vec![
@@ -192,7 +192,10 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().fg(DIM).bg(bg),
                 ),
                 Span::styled(" ", Style::default().bg(bg)),
-                cell(c.transport.label().to_string(), 4, DIM),
+                Span::styled(
+                    pad_right(c.transport.label(), 8),
+                    Style::default().fg(DIM).bg(bg),
+                ),
             ]
         } else {
             vec![

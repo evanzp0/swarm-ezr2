@@ -1,7 +1,11 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use futures::{SinkExt, StreamExt};
 use tokio::net::UdpSocket;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::Message;
 
 use super::bencode::{self, BValue};
 use super::BtError;
@@ -9,6 +13,7 @@ use super::BtError;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TrackerUrl {
     Http(String),
+    Ws(String),
     Udp(String),
 }
 
@@ -19,6 +24,8 @@ impl TrackerUrl {
         let rest = lower
             .strip_prefix("https://")
             .or_else(|| lower.strip_prefix("http://"))
+            .or_else(|| lower.strip_prefix("wss://"))
+            .or_else(|| lower.strip_prefix("ws://"))
             .or_else(|| lower.strip_prefix("udp://"))?;
         if rest.is_empty() {
             return None;
@@ -26,10 +33,86 @@ impl TrackerUrl {
         if lower.starts_with("udp://") {
             udp_host_port(s)?;
             Some(TrackerUrl::Udp(s.to_string()))
+        } else if lower.starts_with("ws://") || lower.starts_with("wss://") {
+            Some(TrackerUrl::Ws(s.to_string()))
         } else {
             Some(TrackerUrl::Http(s.to_string()))
         }
     }
+}
+
+#[must_use]
+pub fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX[usize::from(b >> 4)] as char);
+        out.push(HEX[usize::from(b & 0x0F)] as char);
+    }
+    out
+}
+
+/// 字节序列 → latin-1 二进制字符串：每字节映射为同码点 char。这是真实
+/// WebTorrent ws tracker 协议的 id 编码（JSON 序列化时控制字符转义、
+/// ≥0x80 以 UTF-8 多字节落地；服务端 JSON.parse 后按 bin2hex 还原字节）。
+#[must_use]
+pub fn bin_string(bytes: &[u8]) -> String {
+    bytes.iter().map(|&b| b as char).collect()
+}
+
+/// 20 字节 id 解析，兼容两种线上形态：20 字符二进制串（真实 WebTorrent）与
+/// 40 字符小写 hex（mini tracker/harness 契约）。
+#[must_use]
+pub fn id20(s: &str) -> Option<[u8; 20]> {
+    let chars: Vec<char> = s.chars().collect();
+    match chars.len() {
+        20 => {
+            let mut out = [0u8; 20];
+            for (i, c) in chars.iter().enumerate() {
+                let v = u32::from(*c);
+                if v > u32::from(u8::MAX) {
+                    return None;
+                }
+                out[i] = v as u8;
+            }
+            Some(out)
+        }
+        40 => hex20(s),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WsOffer {
+    pub offer_id: String,
+    pub sdp: String,
+    pub to_peer_id: [u8; 20],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WsAnswer {
+    pub offer_id: String,
+    pub sdp: String,
+    pub to_peer_id: [u8; 20],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WsSignal {
+    pub offer_id: String,
+    pub sdp: String,
+    pub peer_id: [u8; 20],
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct WsAnnounceResponse {
+    pub interval: u32,
+    pub min_interval: Option<u32>,
+    pub complete: u32,
+    pub incomplete: u32,
+    pub peers: Vec<PeerAddr>,
+    pub peer_ids: Vec<[u8; 20]>,
+    pub offers_to_answer: Vec<WsSignal>,
+    pub answers: Vec<WsSignal>,
 }
 
 #[must_use]
@@ -173,6 +256,416 @@ pub async fn announce_http(
         )));
     }
     parse_http_response(&body)
+}
+
+fn ws_json_field_str(v: &serde_json::Value, key: &str) -> Option<String> {
+    v.get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+fn ws_json_field_u64(v: &serde_json::Value, key: &str) -> Option<u64> {
+    v.get(key).and_then(serde_json::Value::as_u64)
+}
+
+fn hex20(s: &str) -> Option<[u8; 20]> {
+    let b = s.as_bytes();
+    if b.len() != 40 {
+        return None;
+    }
+    let mut out = [0u8; 20];
+    for (i, slot) in out.iter_mut().enumerate() {
+        let hi = (b[i * 2] as char).to_digit(16)?;
+        let lo = (b[i * 2 + 1] as char).to_digit(16)?;
+        *slot = ((hi << 4) | lo) as u8;
+    }
+    Some(out)
+}
+
+fn parse_ws_signal(v: &serde_json::Value) -> Option<WsSignal> {
+    let offer_id = ws_json_field_str(v, "offer_id")?;
+    let sdp = v
+        .get("offer")
+        .and_then(|o| ws_json_field_str(o, "sdp"))
+        .or_else(|| v.get("answer").and_then(|a| ws_json_field_str(a, "sdp")))
+        .or_else(|| ws_json_field_str(v, "sdp"))?;
+    let peer_id = id20(&ws_json_field_str(v, "peer_id")?)?;
+    Some(WsSignal {
+        offer_id,
+        sdp,
+        peer_id,
+    })
+}
+
+fn parse_ws_announce_value(root: &serde_json::Value) -> Result<WsAnnounceResponse, BtError> {
+    if let Some(reason) = root
+        .get("failure reason")
+        .and_then(serde_json::Value::as_str)
+    {
+        return Err(BtError::Tracker(format!("tracker 拒绝：{reason}")));
+    }
+    let interval = ws_json_field_u64(root, "interval")
+        .filter(|v| *v > 0)
+        .map_or(60, |v| v.min(u64::from(u32::MAX)) as u32);
+    let complete = ws_json_field_u64(root, "complete")
+        .unwrap_or(0)
+        .min(u64::from(u32::MAX)) as u32;
+    let incomplete = ws_json_field_u64(root, "incomplete")
+        .unwrap_or(0)
+        .min(u64::from(u32::MAX)) as u32;
+    let mut resp = WsAnnounceResponse {
+        interval,
+        min_interval: ws_json_field_u64(root, "min interval")
+            .map(|v| v.min(u64::from(u32::MAX)) as u32),
+        complete,
+        incomplete,
+        ..Default::default()
+    };
+    if let Some(list) = root.get("peers").and_then(serde_json::Value::as_array) {
+        for p in list {
+            // peer_id 不再依赖 ip 存在：真实 ws swarm 的 peers 只有 peer_id，
+            // 连接完全靠 offer 中继。
+            if let Some(pid) = ws_json_field_str(p, "peer_id").and_then(|s| id20(&s)) {
+                resp.peer_ids.push(pid);
+            }
+            let ip = ws_json_field_str(p, "ip");
+            let port = ws_json_field_u64(p, "port");
+            if let (Some(ip), Some(port)) = (ip, port) {
+                let Ok(port) = u16::try_from(port) else {
+                    continue;
+                };
+                if let Ok(ip) = ip.parse::<IpAddr>() {
+                    resp.peers.push(PeerAddr { ip, port });
+                }
+            }
+        }
+    }
+    if let Some(list) = root
+        .get("offers_to_answer")
+        .and_then(serde_json::Value::as_array)
+    {
+        for p in list {
+            if let Some(sig) = parse_ws_signal(p) {
+                resp.offers_to_answer.push(sig);
+            }
+        }
+    }
+    if let Some(list) = root.get("answers").and_then(serde_json::Value::as_array) {
+        for p in list {
+            if let Some(sig) = parse_ws_signal(p) {
+                resp.answers.push(sig);
+            }
+        }
+    }
+    // 真实 tracker 的顶层单条推送：offer/answer 中继为独立消息，
+    // {action, info_hash, offer|answer:{type,sdp}, offer_id, peer_id(二进制串)}。
+    let has_offer = root.get("offer").is_some_and(serde_json::Value::is_object);
+    let has_answer = root.get("answer").is_some_and(serde_json::Value::is_object);
+    if has_offer || has_answer {
+        if let Some(sig) = parse_ws_signal(root) {
+            if has_offer {
+                resp.offers_to_answer.push(sig);
+            } else {
+                resp.answers.push(sig);
+            }
+        }
+    }
+    Ok(resp)
+}
+
+/// str 入口（测试/调试用；运行时路径经 classify_ws_message → parse_ws_announce_value）。
+#[allow(dead_code)]
+pub fn parse_ws_announce_response(text: &str) -> Result<WsAnnounceResponse, BtError> {
+    let root: serde_json::Value = serde_json::from_str(text)
+        .map_err(|e| BtError::Tracker(format!("ws announce 响应非 JSON：{e}")))?;
+    parse_ws_announce_value(&root)
+}
+
+async fn ws_connect(
+    url: &str,
+) -> Result<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    BtError,
+> {
+    let request = url
+        .into_client_request()
+        .map_err(|e| BtError::Tracker(format!("ws tracker 请求构造失败：{e}")))?;
+    if url.to_ascii_lowercase().starts_with("wss://") {
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let cfg = Arc::new(
+            rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(WsAcceptAnyVerifier { provider }))
+                .with_no_client_auth(),
+        );
+        let (ws, _resp) = tokio_tungstenite::connect_async_tls_with_config(
+            request,
+            None,
+            false,
+            Some(tokio_tungstenite::Connector::Rustls(cfg)),
+        )
+        .await
+        .map_err(|e| BtError::Tracker(format!("ws tracker 连接失败：{e}")))?;
+        return Ok(ws);
+    }
+    let (ws, _resp) = tokio_tungstenite::connect_async(request)
+        .await
+        .map_err(|e| BtError::Tracker(format!("ws tracker 连接失败：{e}")))?;
+    Ok(ws)
+}
+
+#[derive(Debug)]
+struct WsAcceptAnyVerifier {
+    provider: Arc<rustls::crypto::CryptoProvider>,
+}
+
+impl rustls::client::danger::ServerCertVerifier for WsAcceptAnyVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
+/// 组装 ws announce 请求（真实 WebTorrent 线上协议）：
+/// - info_hash/peer_id 为 20 字节二进制串（latin-1 字符，非 hex）；
+/// - offers 元素为 `{offer_id, offer:{type,sdp}}` 对象，定向场景附 `to_peer_id`
+///   （真实服务器忽略该字段，offer 由 tracker 抽样转发；harness 靠它做定向中继）；
+/// - answer 为顶层 `answer:{type,sdp}` + 顶层 `offer_id` + 顶层 `to_peer_id`
+///   （v11 bittorrent-tracker 服务端解析口径）。
+#[must_use]
+pub fn build_announce_json(
+    p: &AnnounceParams,
+    offers: &[WsOffer],
+    answer: Option<&WsAnswer>,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "action": "announce",
+        "info_hash": bin_string(&p.infohash),
+        "peer_id": bin_string(&p.peer_id),
+        "port": p.port,
+        "uploaded": p.uploaded,
+        "downloaded": p.downloaded,
+        "left": p.left,
+        "numwant": p.numwant,
+    });
+    if let Some(ev) = event_param(p.event) {
+        body["event"] = serde_json::Value::String(ev.to_string());
+    }
+    if !offers.is_empty() {
+        let list: Vec<serde_json::Value> = offers
+            .iter()
+            .map(|o| {
+                let mut e = serde_json::json!({
+                    "offer_id": o.offer_id,
+                    "offer": {"type": "offer", "sdp": o.sdp},
+                });
+                if o.to_peer_id != [0u8; 20] {
+                    e["to_peer_id"] = serde_json::Value::String(bin_string(&o.to_peer_id));
+                }
+                e
+            })
+            .collect();
+        body["offers"] = serde_json::Value::Array(list);
+    }
+    if let Some(a) = answer {
+        body["answer"] = serde_json::json!({"type": "answer", "sdp": a.sdp});
+        body["offer_id"] = serde_json::Value::String(a.offer_id.clone());
+        body["to_peer_id"] = serde_json::Value::String(bin_string(&a.to_peer_id));
+    }
+    body
+}
+
+/// answer 独立 announce（真实协议：answer 必须顶层携带 to_peer_id/offer_id，
+/// 服务器对 answer 类 announce 不回响应——故不能等待响应）。
+#[must_use]
+pub fn build_answer_announce_json(
+    infohash: &[u8; 20],
+    peer_id: &[u8; 20],
+    a: &WsAnswer,
+) -> serde_json::Value {
+    serde_json::json!({
+        "action": "announce",
+        "info_hash": bin_string(infohash),
+        "peer_id": bin_string(peer_id),
+        "to_peer_id": bin_string(&a.to_peer_id),
+        "answer": {"type": "answer", "sdp": a.sdp},
+        "offer_id": a.offer_id,
+    })
+}
+
+/// ws 入站消息分类：真实 tracker 的 announce 响应（含 interval/complete）与
+/// offer/answer 顶层推送走不同分支；harness 捎带数组由 Response 解析承载。
+pub enum WsInbound {
+    Response(WsAnnounceResponse),
+    Failure(String),
+    Offer(WsSignal),
+    Answer(WsSignal),
+    Other,
+}
+
+#[must_use]
+pub fn classify_ws_message(v: &serde_json::Value) -> WsInbound {
+    if let Some(reason) = v.get("failure reason").and_then(serde_json::Value::as_str) {
+        return WsInbound::Failure(reason.to_string());
+    }
+    let has_offer = v.get("offer").is_some_and(serde_json::Value::is_object);
+    let has_answer = v.get("answer").is_some_and(serde_json::Value::is_object);
+    if has_offer || has_answer {
+        if let Some(sig) = parse_ws_signal(v) {
+            return if has_offer {
+                WsInbound::Offer(sig)
+            } else {
+                WsInbound::Answer(sig)
+            };
+        }
+    }
+    if v.get("interval").is_some() || v.get("complete").is_some() || v.get("incomplete").is_some() {
+        if let Ok(r) = parse_ws_announce_value(v) {
+            return WsInbound::Response(r);
+        }
+    }
+    WsInbound::Other
+}
+
+type WsIo =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// 与 ws tracker 的持久会话（真实 WebTorrent 语义）：连接保持打开，
+/// offer/answer 由服务器随时推送，announce 沿同一 socket 周期重发。
+pub struct WsSession {
+    sink: futures::stream::SplitSink<WsIo, Message>,
+    stream: futures::stream::SplitStream<WsIo>,
+}
+
+impl WsSession {
+    pub async fn connect(url: &str) -> Result<WsSession, BtError> {
+        let ws = ws_connect(url).await?;
+        let (sink, stream) = ws.split();
+        Ok(WsSession { sink, stream })
+    }
+
+    pub async fn send_json(&mut self, v: &serde_json::Value) -> Result<(), BtError> {
+        let text = serde_json::to_string(v)
+            .map_err(|e| BtError::Tracker(format!("ws announce 序列化失败：{e}")))?;
+        self.sink
+            .send(Message::Text(text))
+            .await
+            .map_err(|e| BtError::Tracker(format!("ws announce 发送失败：{e}")))
+    }
+
+    /// 收一条消息；`wait` 内无消息返回 `Ok(None)`；连接断开返回 Err。
+    pub async fn recv_json(
+        &mut self,
+        wait: Duration,
+    ) -> Result<Option<serde_json::Value>, BtError> {
+        let deadline = Instant::now() + wait;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(None);
+            }
+            match tokio::time::timeout(remaining, self.stream.next()).await {
+                Ok(Some(Ok(Message::Text(t)))) => {
+                    if let Ok(v) = serde_json::from_str(&t) {
+                        return Ok(Some(v));
+                    }
+                }
+                Ok(Some(Ok(Message::Binary(b)))) => {
+                    if let Ok(s) = String::from_utf8(b) {
+                        if let Ok(v) = serde_json::from_str(&s) {
+                            return Ok(Some(v));
+                        }
+                    }
+                }
+                Ok(Some(Ok(_))) => {}
+                Ok(Some(Err(e))) => {
+                    return Err(BtError::Tracker(format!("ws tracker 连接读取失败：{e}")));
+                }
+                Ok(None) => return Err(BtError::Tracker("ws tracker 连接已关闭".into())),
+                Err(_) => return Ok(None),
+            }
+        }
+    }
+
+    pub async fn close(&mut self) {
+        let _ = self.sink.close().await;
+    }
+}
+
+pub const WS_CONNECT_TIMEOUT_SECS: u64 = 10;
+pub const WS_RESPONSE_TIMEOUT_SECS: u64 = 15;
+
+/// 一次性 announce（连接-发送-收一条响应-关闭）：用于 stopped 等无信令诉求的
+/// 场景；常规数据面走 `WsSession` 持久会话。响应前的他人推送在此丢弃。
+pub async fn announce_ws(
+    url: &str,
+    p: &AnnounceParams,
+    offers: &[WsOffer],
+    answer: Option<&WsAnswer>,
+) -> Result<WsAnnounceResponse, BtError> {
+    let mut sess = tokio::time::timeout(
+        Duration::from_secs(WS_CONNECT_TIMEOUT_SECS),
+        WsSession::connect(url),
+    )
+    .await
+    .map_err(|_| BtError::Tracker("ws tracker 连接超时".to_string()))??;
+    let body = build_announce_json(p, offers, answer);
+    sess.send_json(&body).await?;
+    let deadline = Instant::now() + Duration::from_secs(WS_RESPONSE_TIMEOUT_SECS);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(BtError::Tracker("ws announce 无响应".into()));
+        }
+        match sess.recv_json(remaining).await {
+            Ok(Some(v)) => match classify_ws_message(&v) {
+                WsInbound::Failure(fr) => {
+                    sess.close().await;
+                    return Err(BtError::Tracker(format!("tracker 拒绝：{fr}")));
+                }
+                WsInbound::Response(r) => {
+                    sess.close().await;
+                    return Ok(r);
+                }
+                _ => continue,
+            },
+            Ok(None) => {
+                sess.close().await;
+                return Err(BtError::Tracker("ws announce 无响应".into()));
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 fn parse_http_response(body: &[u8]) -> Result<TrackerResponse, BtError> {
@@ -448,6 +941,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
+    use crate::model::config::{DEFAULT_UDP_BASE_TIMEOUT_SECS, DEFAULT_UDP_RETRIES};
 
     fn dict(pairs: &[(&str, BValue)]) -> BValue {
         let m: BTreeMap<Vec<u8>, BValue> = pairs
@@ -525,6 +1019,298 @@ mod tests {
         assert_eq!(TrackerUrl::parse("udp://"), None);
         assert_eq!(TrackerUrl::parse("udp://noport.example/announce"), None);
         assert_eq!(TrackerUrl::parse("udp://h:99999"), None);
+    }
+
+    #[test]
+    fn tracker_url_parse_ws_family() {
+        assert_eq!(
+            TrackerUrl::parse("ws://127.0.0.1:17905/announce"),
+            Some(TrackerUrl::Ws("ws://127.0.0.1:17905/announce".into()))
+        );
+        assert_eq!(
+            TrackerUrl::parse("wss://tracker.fixture.local/ws"),
+            Some(TrackerUrl::Ws("wss://tracker.fixture.local/ws".into()))
+        );
+        assert!(matches!(
+            TrackerUrl::parse("WS://h/ann"),
+            Some(TrackerUrl::Ws(_))
+        ));
+        assert!(matches!(
+            TrackerUrl::parse("WSS://h:443/ws"),
+            Some(TrackerUrl::Ws(_))
+        ));
+        assert_eq!(TrackerUrl::parse("ws://"), None);
+        assert_eq!(TrackerUrl::parse("wss://"), None);
+        assert_eq!(
+            TrackerUrl::parse("ws://x?q=1"),
+            Some(TrackerUrl::Ws("ws://x?q=1".into()))
+        );
+    }
+
+    #[test]
+    fn ws_announce_response_json_contract() {
+        let text = serde_json::json!({
+            "interval": 30,
+            "complete": 5,
+            "incomplete": 2,
+            "peers": [
+                {"ip": "9.9.9.9", "port": 7000, "peer_id": hex_lower(&[7u8; 20])},
+                {"ip": "not-an-ip", "port": 1, "peer_id": "zz"},
+                {"port": 8},
+                {"ip": "2001:db8::1", "port": 6883}
+            ],
+            "offers_to_answer": [
+                {"offer_id": "abc", "sdp": "v=0...", "peer_id": hex_lower(&[1u8; 20])},
+                {"offer_id": "bad", "sdp": "v=0..."}
+            ]
+        })
+        .to_string();
+        let r = parse_ws_announce_response(&text).unwrap();
+        assert_eq!(r.interval, 30);
+        assert_eq!(r.complete, 5);
+        assert_eq!(r.incomplete, 2);
+        assert_eq!(r.peers.len(), 2);
+        assert_eq!(r.peers[0].port, 7000);
+        assert_eq!(r.peers[1].ip, "2001:db8::1".parse::<IpAddr>().unwrap());
+        assert_eq!(r.peer_ids, vec![[7u8; 20]]);
+        assert_eq!(r.offers_to_answer.len(), 1);
+        assert_eq!(r.offers_to_answer[0].offer_id, "abc");
+        assert_eq!(r.offers_to_answer[0].peer_id, [1u8; 20]);
+        assert!(r.answers.is_empty());
+    }
+
+    #[test]
+    fn ws_announce_response_defaults_and_rejects_non_json() {
+        let r = parse_ws_announce_response("{}").unwrap();
+        assert_eq!(r.interval, 60);
+        assert_eq!(r.complete, 0);
+        assert!(r.peers.is_empty());
+        assert!(parse_ws_announce_response("not json").is_err());
+    }
+
+    #[test]
+    fn ws_failure_reason_is_error() {
+        let text = serde_json::json!({
+            "action": "announce",
+            "failure reason": "info_hash field is missing or wrong",
+        })
+        .to_string();
+        let err = parse_ws_announce_response(&text).unwrap_err();
+        assert!(err.to_string().contains("info_hash"));
+    }
+
+    #[test]
+    fn ws_push_single_offer_and_answer_classify() {
+        // 真实 tracker 推送：顶层 offer 对象 + 二进制 id
+        let offer_msg = serde_json::json!({
+            "action": "announce",
+            "info_hash": bin_string(&[3u8; 20]),
+            "offer": {"type": "offer", "sdp": "v=0 push"},
+            "offer_id": bin_string(&[4u8; 20]),
+            "peer_id": bin_string(&[5u8; 20]),
+        });
+        match classify_ws_message(&offer_msg) {
+            WsInbound::Offer(sig) => {
+                assert_eq!(sig.sdp, "v=0 push");
+                assert_eq!(sig.peer_id, [5u8; 20]);
+                assert_eq!(sig.offer_id, bin_string(&[4u8; 20]));
+            }
+            _ => panic!("应分类为 Offer"),
+        }
+        // answer 推送（hex id 兼容 harness 契约）
+        let answer_msg = serde_json::json!({
+            "action": "announce",
+            "answer": {"type": "answer", "sdp": "v=0 ans"},
+            "offer_id": "abcd-0001",
+            "peer_id": hex_lower(&[6u8; 20]),
+        });
+        match classify_ws_message(&answer_msg) {
+            WsInbound::Answer(sig) => {
+                assert_eq!(sig.sdp, "v=0 ans");
+                assert_eq!(sig.peer_id, [6u8; 20]);
+            }
+            _ => panic!("应分类为 Answer"),
+        }
+    }
+
+    #[test]
+    fn ws_announce_response_peer_ids_without_ip() {
+        // 真实 ws swarm 的 peers 只有 peer_id（无 ip/port）→ 应进入 peer_ids
+        let text = serde_json::json!({
+            "interval": 111,
+            "complete": 38,
+            "incomplete": 7,
+            "peers": [
+                {"peer_id": bin_string(&[1u8; 20])},
+                {"peer_id": hex_lower(&[2u8; 20])},
+                {"ip": "9.9.9.9", "port": 7000, "peer_id": hex_lower(&[3u8; 20])},
+            ],
+        })
+        .to_string();
+        let r = parse_ws_announce_response(&text).unwrap();
+        assert_eq!(r.interval, 111);
+        assert_eq!(r.complete, 38);
+        assert_eq!(r.incomplete, 7);
+        assert_eq!(r.peer_ids.len(), 3);
+        assert_eq!(r.peer_ids[0], [1u8; 20]);
+        assert_eq!(r.peer_ids[1], [2u8; 20]);
+        assert_eq!(r.peers.len(), 1);
+        assert_eq!(r.peers[0].port, 7000);
+    }
+
+    #[test]
+    fn id20_accepts_binary_and_hex() {
+        assert_eq!(id20(&bin_string(&[0xABu8; 20])), Some([0xABu8; 20]));
+        assert_eq!(id20(&hex_lower(&[0xABu8; 20])), Some([0xABu8; 20]));
+        assert_eq!(id20("short"), None);
+        assert_eq!(id20(""), None);
+    }
+
+    #[test]
+    fn bin_string_latin1_round_trip() {
+        let raw: Vec<u8> = (0u8..=255).collect();
+        let s = bin_string(&raw);
+        let chars: Vec<char> = s.chars().collect();
+        assert_eq!(chars.len(), 256);
+        for (i, c) in chars.iter().enumerate() {
+            assert_eq!(u32::from(*c) as u8, raw[i]);
+        }
+    }
+
+    #[test]
+    fn build_announce_json_real_wire_shape() {
+        let p = AnnounceParams {
+            infohash: [7u8; 20],
+            peer_id: [8u8; 20],
+            port: 6881,
+            uploaded: 0,
+            downloaded: 0,
+            left: 30,
+            event: Some(TrackerEvent::Started),
+            numwant: 50,
+        };
+        let offers = vec![
+            WsOffer {
+                offer_id: "blind-1".into(),
+                sdp: "v=0 blind".into(),
+                to_peer_id: [0u8; 20],
+            },
+            WsOffer {
+                offer_id: "aimed-1".into(),
+                sdp: "v=0 aimed".into(),
+                to_peer_id: [9u8; 20],
+            },
+        ];
+        let v = build_announce_json(&p, &offers, None);
+        assert_eq!(v["info_hash"], bin_string(&[7u8; 20]));
+        assert_eq!(v["peer_id"], bin_string(&[8u8; 20]));
+        let list = v["offers"].as_array().unwrap();
+        assert_eq!(list.len(), 2);
+        assert!(
+            list[0].get("to_peer_id").is_none(),
+            "盲 offer 不带 to_peer_id"
+        );
+        assert_eq!(list[0]["offer"]["sdp"], "v=0 blind");
+        assert_eq!(list[1]["to_peer_id"], bin_string(&[9u8; 20]));
+        // answer 顶层化
+        let ans = WsAnswer {
+            offer_id: "abcd-0001".into(),
+            sdp: "v=0 ans".into(),
+            to_peer_id: [9u8; 20],
+        };
+        let v2 = build_answer_announce_json(&[7u8; 20], &[8u8; 20], &ans);
+        assert_eq!(v2["answer"]["type"], "answer");
+        assert_eq!(v2["to_peer_id"], bin_string(&[9u8; 20]));
+        assert_eq!(v2["offer_id"], "abcd-0001");
+        assert!(v2.get("offers").is_none());
+    }
+
+    #[tokio::test]
+    async fn ws_announce_round_trip_with_local_server() {
+        use futures::{SinkExt, StreamExt};
+        use tokio_tungstenite::accept_async;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(sock).await.unwrap();
+            let msg = ws.next().await.unwrap().unwrap();
+            let Message::Text(t) = msg else {
+                panic!("应为文本帧");
+            };
+            let req: serde_json::Value = serde_json::from_str(&t).unwrap();
+            assert_eq!(req["action"], "announce");
+            assert_eq!(req["info_hash"], bin_string(&[7u8; 20]));
+            assert_eq!(req["peer_id"], bin_string(&[8u8; 20]));
+            assert_eq!(req["port"], 6881);
+            assert_eq!(req["uploaded"], 10);
+            assert_eq!(req["downloaded"], 20);
+            assert_eq!(req["left"], 30);
+            assert_eq!(req["event"], "started");
+            assert_eq!(req["numwant"], 50);
+            let offers = req["offers"].as_array().unwrap();
+            assert_eq!(offers.len(), 1);
+            assert_eq!(offers[0]["offer_id"], "offer-1");
+            assert_eq!(offers[0]["offer"]["type"], "offer");
+            assert_eq!(offers[0]["offer"]["sdp"], "v=0 offer");
+            assert_eq!(offers[0]["to_peer_id"], bin_string(&[9u8; 20]));
+            let resp = serde_json::json!({
+                "interval": 25,
+                "complete": 3,
+                "incomplete": 1,
+                "peers": [{"ip": "9.9.9.9", "port": 7000, "peer_id": hex_lower(&[9u8; 20])}],
+                "offers_to_answer": [
+                    {"offer_id": "in-offer", "sdp": "v=0 offer2", "peer_id": hex_lower(&[10u8; 20])}
+                ],
+                "answers": [
+                    {"offer_id": "offer-1", "sdp": "v=0 answer", "peer_id": hex_lower(&[9u8; 20])}
+                ]
+            });
+            ws.send(Message::Text(resp.to_string())).await.unwrap();
+            let _ = ws.close(None).await;
+        });
+        let p = AnnounceParams {
+            infohash: [7u8; 20],
+            peer_id: [8u8; 20],
+            port: 6881,
+            uploaded: 10,
+            downloaded: 20,
+            left: 30,
+            event: Some(TrackerEvent::Started),
+            numwant: 50,
+        };
+        let offers = vec![WsOffer {
+            offer_id: "offer-1".into(),
+            sdp: "v=0 offer".into(),
+            to_peer_id: [9u8; 20],
+        }];
+        let r = announce_ws(&format!("ws://{addr}/announce"), &p, &offers, None)
+            .await
+            .unwrap();
+        assert_eq!(r.interval, 25);
+        assert_eq!(r.complete, 3);
+        assert_eq!(r.incomplete, 1);
+        assert_eq!(r.peers.len(), 1);
+        assert_eq!(r.peers[0].ip, IpAddr::V4(Ipv4Addr::new(9, 9, 9, 9)));
+        assert_eq!(r.peer_ids, vec![[9u8; 20]]);
+        assert_eq!(r.offers_to_answer.len(), 1);
+        assert_eq!(r.offers_to_answer[0].sdp, "v=0 offer2");
+        assert_eq!(r.answers.len(), 1);
+        assert_eq!(r.answers[0].offer_id, "offer-1");
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn hex_lower_round_trip() {
+        let raw: Vec<u8> = (0u8..=255).collect();
+        let hx = hex_lower(&raw);
+        assert_eq!(hx.len(), 512);
+        for (i, chunk) in hx.as_bytes().chunks(2).enumerate() {
+            let hi = (chunk[0] as char).to_digit(16).unwrap();
+            let lo = (chunk[1] as char).to_digit(16).unwrap();
+            assert_eq!(((hi << 4) | lo) as u8, raw[i]);
+        }
     }
 
     #[test]
@@ -776,8 +1562,8 @@ mod tests {
                 "127.0.0.1",
                 tport,
                 &p,
-                crate::model::config::DEFAULT_UDP_BASE_TIMEOUT_SECS,
-                crate::model::config::DEFAULT_UDP_RETRIES,
+                DEFAULT_UDP_BASE_TIMEOUT_SECS,
+                DEFAULT_UDP_RETRIES,
             )
             .await
         });
@@ -870,8 +1656,8 @@ mod tests {
             "127.0.0.1",
             port,
             &p,
-            crate::model::config::DEFAULT_UDP_BASE_TIMEOUT_SECS,
-            crate::model::config::DEFAULT_UDP_RETRIES,
+            DEFAULT_UDP_BASE_TIMEOUT_SECS,
+            DEFAULT_UDP_RETRIES,
         )
         .await;
         let err = res.expect_err("静默 tracker 应在重试耗尽后判失败");

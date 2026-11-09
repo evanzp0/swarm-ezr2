@@ -21,3 +21,6 @@ impl Connection {
 }
 
 pub mod chunk;
+
+#[path = "../../../src/model/config.rs"]
+pub mod config;

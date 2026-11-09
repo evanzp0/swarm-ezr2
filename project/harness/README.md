@@ -18,7 +18,7 @@ harness/
     mini_http_tracker.py   自研极简 BEP 3 HTTP tracker（stdlib-only，JSONL announce 日志；
                            --static-peer IP:PORT 注入静态 peer、--only-static-peers 只回静态
                            peer（延迟代理基准用，见 notes/architecture.md 代理观测法））
-    mini_ws_tracker.py     [v1.41 规格登记，coder/QA 轮实现] 自研极简 ws(s) WebSocket tracker
+    mini_ws_tracker.py     [v1.41 已实现，coder 轮 2026-11-09；冒烟：注册/互换 peers/complete-incomplete 计数/offers·answers 定向中继/wss 自签 TLS 全过] 自研极简 ws(s) WebSocket tracker
                            （stdlib + 标准库 asyncio WebSocket 或仅依赖 websockets 单包；
                            ws://0.0.0.0:17905/announce 与 wss://0.0.0.0:17906/announce 双监听，
                            wss 用自签证书；文本帧 JSON 消息——announce 请求

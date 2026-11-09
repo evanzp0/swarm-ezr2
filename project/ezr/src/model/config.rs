@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -31,6 +32,7 @@ pub const DEFAULT_TRACKER_BACKOFF_CAP_SECS: u64 = 60;
 pub const DEFAULT_UDP_BASE_TIMEOUT_SECS: u64 = 15;
 pub const DEFAULT_UDP_RETRIES: u32 = 3;
 pub const DEFAULT_SEED_DURATION_SECS: f64 = 1800.0;
+pub const DEFAULT_PEER_CONNECTION_PROTOCOL: [&str; 2] = ["tcp", "webrtc"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProxyKind {
@@ -121,8 +123,8 @@ pub struct Config {
     pub throttle_burst_secs: f64,
     pub throttle_sleep_ms: u64,
     pub dns_race_grace_ms: u64,
-    pub http_trackers: Vec<String>,
-    pub udp_trackers: Vec<String>,
+    pub trackers: Vec<String>,
+    pub peer_connection_protocol: Vec<String>,
     pub bt_concurrency: usize,
     pub peer_pipeline: usize,
     pub upload_slots: usize,
@@ -168,8 +170,11 @@ impl Default for Config {
             throttle_burst_secs: DEFAULT_THROTTLE_BURST_SECS,
             throttle_sleep_ms: DEFAULT_THROTTLE_SLEEP_MS,
             dns_race_grace_ms: DEFAULT_DNS_RACE_GRACE_MS,
-            http_trackers: Vec::new(),
-            udp_trackers: Vec::new(),
+            trackers: Vec::new(),
+            peer_connection_protocol: DEFAULT_PEER_CONNECTION_PROTOCOL
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
             bt_concurrency: DEFAULT_BT_CONCURRENCY,
             peer_pipeline: DEFAULT_PEER_PIPELINE,
             upload_slots: DEFAULT_UPLOAD_SLOTS,
@@ -210,7 +215,7 @@ struct ProxyRaw {
 #[derive(Clone, Debug, Default, Deserialize)]
 struct CommonRaw {
     download_dir: Option<String>,
-    download_slots: Option<i64>,
+    download_slots: Option<toml::Value>,
     global_max_download_speed: Option<toml::Value>,
     global_max_upload_speed: Option<toml::Value>,
     task_max_download_speed: Option<toml::Value>,
@@ -220,42 +225,42 @@ struct CommonRaw {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 struct HttpRaw {
-    block_size_http: Option<i64>,
-    http_concurrency: Option<i64>,
-    max_retries: Option<i64>,
-    auto_retry: Option<bool>,
+    block_size_http: Option<toml::Value>,
+    http_concurrency: Option<toml::Value>,
+    max_retries: Option<toml::Value>,
+    auto_retry: Option<toml::Value>,
     backoff_initial: Option<toml::Value>,
     backoff_cap: Option<toml::Value>,
-    progress_tick_ms: Option<i64>,
-    sidecar_flush_secs: Option<i64>,
+    progress_tick_ms: Option<toml::Value>,
+    sidecar_flush_secs: Option<toml::Value>,
     throttle_burst_secs: Option<toml::Value>,
-    throttle_sleep_ms: Option<i64>,
-    dns_race_grace_ms: Option<i64>,
+    throttle_sleep_ms: Option<toml::Value>,
+    dns_race_grace_ms: Option<toml::Value>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 struct BtRaw {
-    http_trackers: Option<Vec<String>>,
-    udp_trackers: Option<Vec<String>>,
-    bt_concurrency: Option<i64>,
-    peer_pipeline: Option<i64>,
-    upload_slots: Option<i64>,
-    upload_read_concurrency: Option<i64>,
-    idle_eviction_secs: Option<i64>,
-    connect_timeout_secs: Option<i64>,
-    handshake_timeout_secs: Option<i64>,
-    request_timeout_secs: Option<i64>,
-    requests_per_piece: Option<i64>,
-    rechoke_interval_secs: Option<i64>,
-    optimistic_interval_secs: Option<i64>,
-    progress_emit_min_interval_ms: Option<i64>,
-    tracker_numwant: Option<i64>,
-    peer_retry_base_secs: Option<i64>,
-    peer_retry_cap_secs: Option<i64>,
-    tracker_backoff_start_secs: Option<i64>,
-    tracker_backoff_cap_secs: Option<i64>,
-    udp_base_timeout_secs: Option<i64>,
-    udp_retries: Option<i64>,
+    trackers: Option<toml::Value>,
+    peer_connection_protocol: Option<toml::Value>,
+    bt_concurrency: Option<toml::Value>,
+    peer_pipeline: Option<toml::Value>,
+    upload_slots: Option<toml::Value>,
+    upload_read_concurrency: Option<toml::Value>,
+    idle_eviction_secs: Option<toml::Value>,
+    connect_timeout_secs: Option<toml::Value>,
+    handshake_timeout_secs: Option<toml::Value>,
+    request_timeout_secs: Option<toml::Value>,
+    requests_per_piece: Option<toml::Value>,
+    rechoke_interval_secs: Option<toml::Value>,
+    optimistic_interval_secs: Option<toml::Value>,
+    progress_emit_min_interval_ms: Option<toml::Value>,
+    tracker_numwant: Option<toml::Value>,
+    peer_retry_base_secs: Option<toml::Value>,
+    peer_retry_cap_secs: Option<toml::Value>,
+    tracker_backoff_start_secs: Option<toml::Value>,
+    tracker_backoff_cap_secs: Option<toml::Value>,
+    udp_base_timeout_secs: Option<toml::Value>,
+    udp_retries: Option<toml::Value>,
     seed_duration_secs: Option<toml::Value>,
     listen_port: Option<toml::Value>,
 }
@@ -267,56 +272,175 @@ struct ConfigRaw {
     bt: Option<BtRaw>,
 }
 
-fn min1_u64(v: Option<i64>, d: u64) -> u64 {
-    v.and_then(|v| u64::try_from(v).ok())
-        .filter(|v| *v >= 1)
-        .unwrap_or(d)
+fn int_of(raw: Option<&toml::Value>) -> Result<Option<i64>, String> {
+    match raw {
+        None => Ok(None),
+        Some(toml::Value::Integer(i)) => Ok(Some(*i)),
+        Some(v) => Err(format!("应为整数，实际 {v}")),
+    }
 }
 
-fn min1_usize(v: Option<i64>, d: usize) -> usize {
-    v.filter(|v| *v >= 1)
-        .and_then(|v| usize::try_from(v).ok())
-        .unwrap_or(d)
+fn min1_val(raw: Option<&toml::Value>, key: &str, default: u64) -> Result<u64, String> {
+    let v = int_of(raw).map_err(|e| format!("键 {key}：{e}（拒绝启动）"))?;
+    match v {
+        None => Ok(default),
+        Some(i) if i >= 1 => Ok(i as u64),
+        Some(i) => Err(format!("键 {key}：{i}（应为 ≥1 的整数，拒绝启动）")),
+    }
 }
 
-fn min1_u32(v: Option<i64>, d: u32) -> u32 {
-    v.filter(|v| *v >= 1)
-        .and_then(|v| u32::try_from(v).ok())
-        .unwrap_or(d)
+fn min1_usize_val(raw: Option<&toml::Value>, key: &str, default: usize) -> Result<usize, String> {
+    min1_val(raw, key, default as u64).map(|v| v as usize)
 }
 
-fn clamp_u(v: Option<i64>, d: usize) -> usize {
-    v.filter(|v| *v >= 1)
-        .map(|v| v.clamp(1, 64) as usize)
-        .unwrap_or(d)
+fn min1_u32_val(raw: Option<&toml::Value>, key: &str, default: u32) -> Result<u32, String> {
+    let v = int_of(raw).map_err(|e| format!("键 {key}：{e}（拒绝启动）"))?;
+    match v {
+        None => Ok(default),
+        Some(i) if i >= 1 && i <= i64::from(u32::MAX) => Ok(i as u32),
+        Some(i) => Err(format!(
+            "键 {key}：{i}（应为 ≥1 且 ≤ {} 的整数，拒绝启动）",
+            u32::MAX
+        )),
+    }
 }
 
-fn num_f64(v: Option<toml::Value>, d: f64) -> f64 {
-    let x = match v {
-        Some(toml::Value::Float(f)) => f,
-        Some(toml::Value::Integer(i)) => i as f64,
-        _ => return d,
+fn range1_64_val(raw: Option<&toml::Value>, key: &str, default: usize) -> Result<usize, String> {
+    let v = int_of(raw).map_err(|e| format!("键 {key}：{e}（拒绝启动）"))?;
+    match v {
+        None => Ok(default),
+        Some(i) if (1..=64).contains(&i) => Ok(i as usize),
+        Some(i) => Err(format!("键 {key}：{i}（应为 1–64 的整数，拒绝启动）")),
+    }
+}
+
+fn pos_f64_val(raw: Option<&toml::Value>, key: &str, default: f64) -> Result<f64, String> {
+    match raw {
+        None => Ok(default),
+        Some(toml::Value::Float(f)) if *f > 0.0 && f.is_finite() => Ok(*f),
+        Some(toml::Value::Integer(i)) if *i > 0 => Ok(*i as f64),
+        Some(v) => Err(format!("键 {key}：{v}（应为 >0 的有限数，拒绝启动）")),
+    }
+}
+
+fn speed_val(raw: Option<&toml::Value>, key: &str) -> Result<u64, String> {
+    match raw {
+        None => Ok(0),
+        Some(toml::Value::Integer(i)) if *i >= 0 => Ok(*i as u64),
+        Some(toml::Value::Integer(i)) => {
+            Err(format!("键 {key}：{i}（应为 ≥0 的限速值，拒绝启动）"))
+        }
+        Some(toml::Value::String(s)) => parse_speed_strict(s).ok_or_else(|| {
+            format!(
+                "键 {key}：{s:?}（无法识别的限速写法，应为 KiB/MiB/GiB 二进制或整数 B/s，拒绝启动）"
+            )
+        }),
+        Some(v) => Err(format!(
+            "键 {key}：{v}（无法识别的限速写法，应为 KiB/MiB/GiB 二进制或整数 B/s，拒绝启动）"
+        )),
+    }
+}
+
+fn bool_val(raw: Option<&toml::Value>, key: &str, default: bool) -> Result<bool, String> {
+    match raw {
+        None => Ok(default),
+        Some(toml::Value::Boolean(b)) => Ok(*b),
+        Some(v) => Err(format!("键 {key}：{v}（应为 true / false，拒绝启动）")),
+    }
+}
+
+fn listen_port_val(raw: Option<&toml::Value>) -> u16 {
+    match raw {
+        Some(toml::Value::Integer(n)) => u16::try_from(*n).ok().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+fn str_list_val(raw: Option<&toml::Value>, key: &str) -> Result<Option<Vec<String>>, String> {
+    match raw {
+        None => Ok(None),
+        Some(toml::Value::Array(a)) => {
+            let mut out = Vec::with_capacity(a.len());
+            for (i, v) in a.iter().enumerate() {
+                match v.as_str() {
+                    Some(s) => out.push(s.to_string()),
+                    None => {
+                        return Err(format!(
+                            "键 {key}：第 {} 项 {v}（应为字符串，拒绝启动）",
+                            i + 1
+                        ))
+                    }
+                }
+            }
+            Ok(Some(out))
+        }
+        Some(v) => Err(format!("键 {key}：{v}（应为字符串数组，拒绝启动）")),
+    }
+}
+
+fn normalize_tracker_for_dedup(s: &str) -> String {
+    match s.find("://") {
+        Some(i) => s[..i].to_ascii_lowercase() + &s[i..],
+        None => s.to_string(),
+    }
+}
+
+fn trackers_val(raw: Option<&toml::Value>, key: &str) -> Result<Vec<String>, String> {
+    let Some(entries) = str_list_val(raw, key)? else {
+        return Ok(Vec::new());
     };
-    pos_f64(Some(x), d)
-}
-
-fn pos_f64(v: Option<f64>, d: f64) -> f64 {
-    v.filter(|v| *v > 0.0 && v.is_finite()).unwrap_or(d)
-}
-
-fn speed_limit_of(v: Option<toml::Value>) -> u64 {
-    match v {
-        Some(toml::Value::String(s)) => parse_speed(&s),
-        Some(toml::Value::Integer(n)) => parse_speed(&n.to_string()),
-        _ => 0,
+    let mut out: Vec<String> = Vec::with_capacity(entries.len());
+    let mut seen: HashSet<String> = HashSet::new();
+    for e in entries {
+        let t = e.trim();
+        if crate::bt::tracker::TrackerUrl::parse(t).is_none() {
+            return Err(format!(
+                "键 {key}：{t:?}（未知 tracker scheme，应为 http(s)://、ws(s):// 或 udp://，拒绝启动）"
+            ));
+        }
+        let norm = normalize_tracker_for_dedup(t);
+        if !seen.insert(norm) {
+            return Err(format!("键 {key}：{t:?}（重复项，拒绝启动）"));
+        }
+        out.push(t.to_string());
     }
+    Ok(out)
 }
 
-fn listen_port_of(v: Option<toml::Value>) -> u16 {
-    match v {
-        Some(toml::Value::Integer(n)) => u16::try_from(n).ok().unwrap_or(0),
-        _ => 0,
+fn peer_connection_protocol_val(
+    raw: Option<&toml::Value>,
+    key: &str,
+) -> Result<Vec<String>, String> {
+    let Some(entries) = str_list_val(raw, key)? else {
+        return Ok(DEFAULT_PEER_CONNECTION_PROTOCOL
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect());
+    };
+    let mut out: Vec<String> = Vec::with_capacity(entries.len());
+    let mut seen: HashSet<String> = HashSet::new();
+    for e in &entries {
+        let t = e.trim();
+        let Some(norm) = crate::bt::webrtc::PeerTransport::parse(t) else {
+            return Err(format!(
+                "键 {key}：{t:?}（未知值，应为 tcp / webrtc，拒绝启动）"
+            ));
+        };
+        let norm = match norm {
+            crate::bt::webrtc::PeerTransport::Tcp => "tcp".to_string(),
+            crate::bt::webrtc::PeerTransport::WebRtc => "webrtc".to_string(),
+        };
+        if !seen.insert(norm.clone()) {
+            return Err(format!("键 {key}：{t:?}（重复项，拒绝启动）"));
+        }
+        out.push(norm);
     }
+    if out.is_empty() {
+        return Err(format!(
+            "键 {key}：[]（应为去重后 1–2 项的 tcp / webrtc，拒绝启动）"
+        ));
+    }
+    Ok(out)
 }
 
 impl Config {
@@ -325,7 +449,13 @@ impl Config {
             Ok(t) => t,
             Err(_) => return Ok(Config::default()),
         };
-        Self::try_from_toml(&text).map_err(|e| format!("配置文件解析失败：{}\n{e}", path.display()))
+        match Self::try_from_toml(&text) {
+            Ok(c) => Ok(c),
+            Err(e) if e.starts_with("解析失败") => {
+                Err(format!("配置文件解析失败：{}\n{e}", path.display()))
+            }
+            Err(e) => Err(format!("配置文件 {} 非法：{e}", path.display())),
+        }
     }
 
     #[cfg(test)]
@@ -334,7 +464,7 @@ impl Config {
     }
 
     pub fn try_from_toml(text: &str) -> Result<Self, String> {
-        let raw: ConfigRaw = toml::from_str(text).map_err(|e| e.to_string())?;
+        let raw: ConfigRaw = toml::from_str(text).map_err(|e| format!("解析失败：{e}"))?;
         let d = Config::default();
         let mut warnings = Vec::new();
         let mut proxies = Vec::new();
@@ -418,78 +548,214 @@ impl Config {
         let common = raw.common.unwrap_or_default();
         let http = raw.http.unwrap_or_default();
         let bt = raw.bt.unwrap_or_default();
+        let download_slots = min1_usize_val(
+            common.download_slots.as_ref(),
+            "common.download_slots",
+            d.download_slots,
+        )?;
+        let global_max_download_speed = speed_val(
+            common.global_max_download_speed.as_ref(),
+            "common.global_max_download_speed",
+        )?;
+        let global_max_upload_speed = speed_val(
+            common.global_max_upload_speed.as_ref(),
+            "common.global_max_upload_speed",
+        )?;
+        let task_max_download_speed = speed_val(
+            common.task_max_download_speed.as_ref(),
+            "common.task_max_download_speed",
+        )?;
+        let task_max_upload_speed = speed_val(
+            common.task_max_upload_speed.as_ref(),
+            "common.task_max_upload_speed",
+        )?;
+        let block_size_http = min1_val(
+            http.block_size_http.as_ref(),
+            "http.block_size_http",
+            d.block_size_http,
+        )?
+        .max(super::chunk::MIN_HTTP_BLOCK_SIZE);
+        let http_concurrency = range1_64_val(
+            http.http_concurrency.as_ref(),
+            "http.http_concurrency",
+            d.http_concurrency,
+        )?;
+        let max_retries =
+            min1_u32_val(http.max_retries.as_ref(), "http.max_retries", d.max_retries)?;
+        let auto_retry = bool_val(http.auto_retry.as_ref(), "http.auto_retry", d.auto_retry)?;
+        let backoff_initial = pos_f64_val(
+            http.backoff_initial.as_ref(),
+            "http.backoff_initial",
+            d.backoff_initial,
+        )?;
+        let backoff_cap =
+            pos_f64_val(http.backoff_cap.as_ref(), "http.backoff_cap", d.backoff_cap)?;
+        let progress_tick_ms = min1_val(
+            http.progress_tick_ms.as_ref(),
+            "http.progress_tick_ms",
+            d.progress_tick_ms,
+        )?;
+        let sidecar_flush_secs = min1_val(
+            http.sidecar_flush_secs.as_ref(),
+            "http.sidecar_flush_secs",
+            d.sidecar_flush_secs,
+        )?;
+        let throttle_burst_secs = pos_f64_val(
+            http.throttle_burst_secs.as_ref(),
+            "http.throttle_burst_secs",
+            d.throttle_burst_secs,
+        )?;
+        let throttle_sleep_ms = min1_val(
+            http.throttle_sleep_ms.as_ref(),
+            "http.throttle_sleep_ms",
+            d.throttle_sleep_ms,
+        )?;
+        let dns_race_grace_ms = min1_val(
+            http.dns_race_grace_ms.as_ref(),
+            "http.dns_race_grace_ms",
+            d.dns_race_grace_ms,
+        )?;
+        let trackers = trackers_val(bt.trackers.as_ref(), "bt.trackers")?;
+        let peer_connection_protocol = peer_connection_protocol_val(
+            bt.peer_connection_protocol.as_ref(),
+            "bt.peer_connection_protocol",
+        )?;
+        let bt_concurrency = range1_64_val(
+            bt.bt_concurrency.as_ref(),
+            "bt.bt_concurrency",
+            d.bt_concurrency,
+        )?;
+        let peer_pipeline = min1_usize_val(
+            bt.peer_pipeline.as_ref(),
+            "bt.peer_pipeline",
+            d.peer_pipeline,
+        )?;
+        let upload_slots =
+            min1_usize_val(bt.upload_slots.as_ref(), "bt.upload_slots", d.upload_slots)?;
+        let upload_read_concurrency = min1_usize_val(
+            bt.upload_read_concurrency.as_ref(),
+            "bt.upload_read_concurrency",
+            d.upload_read_concurrency,
+        )?;
+        let idle_eviction_secs = min1_val(
+            bt.idle_eviction_secs.as_ref(),
+            "bt.idle_eviction_secs",
+            d.idle_eviction_secs,
+        )?;
+        let connect_timeout_secs = min1_val(
+            bt.connect_timeout_secs.as_ref(),
+            "bt.connect_timeout_secs",
+            d.connect_timeout_secs,
+        )?;
+        let handshake_timeout_secs = min1_val(
+            bt.handshake_timeout_secs.as_ref(),
+            "bt.handshake_timeout_secs",
+            d.handshake_timeout_secs,
+        )?;
+        let request_timeout_secs = min1_val(
+            bt.request_timeout_secs.as_ref(),
+            "bt.request_timeout_secs",
+            d.request_timeout_secs,
+        )?;
+        let requests_per_piece = min1_usize_val(
+            bt.requests_per_piece.as_ref(),
+            "bt.requests_per_piece",
+            d.requests_per_piece,
+        )?;
+        let rechoke_interval_secs = min1_val(
+            bt.rechoke_interval_secs.as_ref(),
+            "bt.rechoke_interval_secs",
+            d.rechoke_interval_secs,
+        )?;
+        let optimistic_interval_secs = min1_val(
+            bt.optimistic_interval_secs.as_ref(),
+            "bt.optimistic_interval_secs",
+            d.optimistic_interval_secs,
+        )?;
+        let progress_emit_min_interval_ms = min1_val(
+            bt.progress_emit_min_interval_ms.as_ref(),
+            "bt.progress_emit_min_interval_ms",
+            d.progress_emit_min_interval_ms,
+        )?;
+        let tracker_numwant = min1_u32_val(
+            bt.tracker_numwant.as_ref(),
+            "bt.tracker_numwant",
+            d.tracker_numwant,
+        )?;
+        let peer_retry_base_secs = min1_val(
+            bt.peer_retry_base_secs.as_ref(),
+            "bt.peer_retry_base_secs",
+            d.peer_retry_base_secs,
+        )?;
+        let peer_retry_cap_secs = min1_val(
+            bt.peer_retry_cap_secs.as_ref(),
+            "bt.peer_retry_cap_secs",
+            d.peer_retry_cap_secs,
+        )?;
+        let tracker_backoff_start_secs = min1_val(
+            bt.tracker_backoff_start_secs.as_ref(),
+            "bt.tracker_backoff_start_secs",
+            d.tracker_backoff_start_secs,
+        )?;
+        let tracker_backoff_cap_secs = min1_val(
+            bt.tracker_backoff_cap_secs.as_ref(),
+            "bt.tracker_backoff_cap_secs",
+            d.tracker_backoff_cap_secs,
+        )?;
+        let udp_base_timeout_secs = min1_val(
+            bt.udp_base_timeout_secs.as_ref(),
+            "bt.udp_base_timeout_secs",
+            d.udp_base_timeout_secs,
+        )?;
+        let udp_retries = min1_u32_val(bt.udp_retries.as_ref(), "bt.udp_retries", d.udp_retries)?;
+        let seed_duration_secs = pos_f64_val(
+            bt.seed_duration_secs.as_ref(),
+            "bt.seed_duration_secs",
+            d.seed_duration_secs,
+        )?;
+        let bt_listen_port = listen_port_val(bt.listen_port.as_ref());
         Ok(Config {
             download_dir: common.download_dir.filter(|s| !s.trim().is_empty()),
-            download_slots: min1_usize(common.download_slots, d.download_slots),
-            global_max_download_speed: speed_limit_of(common.global_max_download_speed),
-            global_max_upload_speed: speed_limit_of(common.global_max_upload_speed),
-            task_max_download_speed: speed_limit_of(common.task_max_download_speed),
-            task_max_upload_speed: speed_limit_of(common.task_max_upload_speed),
+            download_slots,
+            global_max_download_speed,
+            global_max_upload_speed,
+            task_max_download_speed,
+            task_max_upload_speed,
             proxies,
-            block_size_http: http
-                .block_size_http
-                .and_then(|v| u64::try_from(v).ok())
-                .filter(|v| *v > 0)
-                .map(|v| v.max(super::chunk::MIN_HTTP_BLOCK_SIZE))
-                .unwrap_or(d.block_size_http),
-            http_concurrency: clamp_u(http.http_concurrency, d.http_concurrency),
-            max_retries: min1_u32(http.max_retries, d.max_retries),
-            auto_retry: http.auto_retry.unwrap_or(d.auto_retry),
-            backoff_initial: num_f64(http.backoff_initial, d.backoff_initial),
-            backoff_cap: num_f64(http.backoff_cap, d.backoff_cap),
-            progress_tick_ms: min1_u64(http.progress_tick_ms, d.progress_tick_ms),
-            sidecar_flush_secs: min1_u64(http.sidecar_flush_secs, d.sidecar_flush_secs),
-            throttle_burst_secs: num_f64(http.throttle_burst_secs, d.throttle_burst_secs),
-            throttle_sleep_ms: min1_u64(http.throttle_sleep_ms, d.throttle_sleep_ms),
-            dns_race_grace_ms: min1_u64(http.dns_race_grace_ms, d.dns_race_grace_ms),
-            http_trackers: sanitize_trackers(
-                bt.http_trackers.unwrap_or_default(),
-                &["http://", "https://"],
-                "http_trackers",
-                &mut warnings,
-            ),
-            udp_trackers: sanitize_trackers(
-                bt.udp_trackers.unwrap_or_default(),
-                &["udp://"],
-                "udp_trackers",
-                &mut warnings,
-            ),
-            bt_concurrency: clamp_u(bt.bt_concurrency, d.bt_concurrency),
-            peer_pipeline: min1_usize(bt.peer_pipeline, d.peer_pipeline),
-            upload_slots: min1_usize(bt.upload_slots, d.upload_slots),
-            upload_read_concurrency: min1_usize(
-                bt.upload_read_concurrency,
-                d.upload_read_concurrency,
-            ),
-            idle_eviction_secs: min1_u64(bt.idle_eviction_secs, d.idle_eviction_secs),
-            connect_timeout_secs: min1_u64(bt.connect_timeout_secs, d.connect_timeout_secs),
-            handshake_timeout_secs: min1_u64(bt.handshake_timeout_secs, d.handshake_timeout_secs),
-            request_timeout_secs: min1_u64(bt.request_timeout_secs, d.request_timeout_secs),
-            requests_per_piece: min1_usize(bt.requests_per_piece, d.requests_per_piece),
-            rechoke_interval_secs: min1_u64(bt.rechoke_interval_secs, d.rechoke_interval_secs),
-            optimistic_interval_secs: min1_u64(
-                bt.optimistic_interval_secs,
-                d.optimistic_interval_secs,
-            ),
-            progress_emit_min_interval_ms: min1_u64(
-                bt.progress_emit_min_interval_ms,
-                d.progress_emit_min_interval_ms,
-            ),
-            tracker_numwant: min1_u32(bt.tracker_numwant, d.tracker_numwant),
-            peer_retry_base_secs: min1_u64(bt.peer_retry_base_secs, d.peer_retry_base_secs),
-            peer_retry_cap_secs: min1_u64(bt.peer_retry_cap_secs, d.peer_retry_cap_secs),
-            tracker_backoff_start_secs: min1_u64(
-                bt.tracker_backoff_start_secs,
-                d.tracker_backoff_start_secs,
-            ),
-            tracker_backoff_cap_secs: min1_u64(
-                bt.tracker_backoff_cap_secs,
-                d.tracker_backoff_cap_secs,
-            ),
-            udp_base_timeout_secs: min1_u64(bt.udp_base_timeout_secs, d.udp_base_timeout_secs),
-            udp_retries: min1_u32(bt.udp_retries, d.udp_retries),
-            seed_duration_secs: num_f64(bt.seed_duration_secs, d.seed_duration_secs),
-            bt_listen_port: listen_port_of(bt.listen_port),
+            block_size_http,
+            http_concurrency,
+            max_retries,
+            auto_retry,
+            backoff_initial,
+            backoff_cap,
+            progress_tick_ms,
+            sidecar_flush_secs,
+            throttle_burst_secs,
+            throttle_sleep_ms,
+            dns_race_grace_ms,
+            trackers,
+            peer_connection_protocol,
+            bt_concurrency,
+            peer_pipeline,
+            upload_slots,
+            upload_read_concurrency,
+            idle_eviction_secs,
+            connect_timeout_secs,
+            handshake_timeout_secs,
+            request_timeout_secs,
+            requests_per_piece,
+            rechoke_interval_secs,
+            optimistic_interval_secs,
+            progress_emit_min_interval_ms,
+            tracker_numwant,
+            peer_retry_base_secs,
+            peer_retry_cap_secs,
+            tracker_backoff_start_secs,
+            tracker_backoff_cap_secs,
+            udp_base_timeout_secs,
+            udp_retries,
+            seed_duration_secs,
+            bt_listen_port,
             warnings,
         })
     }
@@ -521,25 +787,24 @@ const SPEED_UNITS: [(&str, f64); 4] = [
     ("b", 1.0),
 ];
 
-fn sanitize_trackers(
-    entries: Vec<String>,
-    schemes: &[&str],
-    key: &str,
-    warnings: &mut Vec<String>,
-) -> Vec<String> {
-    let mut out = Vec::new();
-    for e in entries {
-        let t = e.trim();
-        if t.is_empty() {
-            continue;
-        }
-        if schemes.iter().any(|p| t.starts_with(p)) {
-            out.push(t.to_string());
-        } else {
-            warnings.push(format!("已忽略无效 tracker 条目（{key}）：{t}"));
-        }
+#[must_use]
+pub fn parse_speed_strict(s: &str) -> Option<u64> {
+    let t = s.trim().to_lowercase();
+    let t = t.strip_suffix("/s").unwrap_or(&t).trim();
+    if let Ok(v) = t.parse::<u64>() {
+        return Some(v);
     }
-    out
+    let (num_part, mult) = SPEED_UNITS
+        .iter()
+        .find_map(|(suffix, m)| t.strip_suffix(suffix).map(|n| (n.trim(), *m)))?;
+    if num_part.is_empty() {
+        return None;
+    }
+    let v = num_part.parse::<f64>().ok()?;
+    if v < 0.0 || !v.is_finite() {
+        return None;
+    }
+    Some((v * mult) as u64)
 }
 
 #[must_use]
@@ -678,7 +943,7 @@ const AUTHORIZED_TEMPLATE: &str = r#"# EZR Downloader 配置模板
 download_dir = ""
 
 # 全局下载槽位数（同时下载的任务数上限）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 download_slots = 5
 
 # 全局下载限速（全部任务合计；0 = 不限）
@@ -719,15 +984,15 @@ task_max_upload_speed = 0
 [http]
 
 # HTTP 分块块大小（字节）
-# 取值范围：正整数（≥1）；0 或非法值回退默认（1 MB）
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动（1 MB）
 block_size_http = 1048576
 
 # 默认并发数
-# 取值范围：1–64 的整数；越界钳制到边界
+# 取值范围：1–64 的整数；0 或越界拒绝启动
 http_concurrency = 4
 
 # 自动重试上限次数（达上限转停等，可按 R 手动重试）
-# 取值范围：≥1 的整数；0 或非法值回退默认
+# 取值范围：≥1 的整数；0 或非法值拒绝启动
 max_retries = 5
 
 # 失败后是否自动重试
@@ -735,123 +1000,123 @@ max_retries = 5
 auto_retry = true
 
 # 自动重试退避初始秒（指数退避序列起点）
-# 取值范围：>0 的有限数；非法值回退默认
+# 取值范围：>0 的有限数；非法值拒绝启动
 backoff_initial = 8.0
 
 # 自动重试退避封顶秒
-# 取值范围：>0 的有限数；非法值回退默认
+# 取值范围：>0 的有限数；非法值拒绝启动
 backoff_cap = 60.0
 
 # HTTP 下载进度事件节拍（毫秒）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 progress_tick_ms = 100
 
 # 断点 sidecar 落盘间隔（秒）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 sidecar_flush_secs = 2
 
 # 限速令牌桶突发窗（秒）
-# 取值范围：>0 的有限数；非法值回退默认
+# 取值范围：>0 的有限数；非法值拒绝启动
 throttle_burst_secs = 0.5
 
 # 限速循环步进睡眠（毫秒）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 throttle_sleep_ms = 20
 
 # DNS 双腿竞速宽限（毫秒，双栈并行解析）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 dns_race_grace_ms = 1000
 
 # ===== BT 引擎配置 =====
 
 [bt]
 
-# HTTP(S) tracker 列表（BT 任务默认 tracker 池来源之一）
-# 取值范围：字符串数组，每项为 http:// 或 https:// 开头的 tracker announce URL；非法 URL 行启动时忽略并警告
-http_trackers = []
+# tracker 列表（BT 任务默认 tracker 池来源之一，三来源合并入池）
+# 取值范围：字符串数组，每项为 http(s)://、ws(s):// 或 udp:// 开头的 tracker announce URL（scheme 大小写不敏感）；未知 scheme 或重复项拒绝启动
+trackers = []
 
-# UDP tracker 列表（BT 任务默认 tracker 池来源之一）
-# 取值范围：字符串数组，每项为 udp:// 开头的 tracker announce URL（含端口）；非法 URL 行启动时忽略并警告
-udp_trackers = []
+# BT peer 连接与数据传输的传输协议全局开关（无序数组；无跨协议回退）
+# 取值范围：无序字符串数组，元素限 tcp / webrtc（大小写不敏感、去重）；未知值或重复项拒绝启动
+peer_connection_protocol = ["tcp", "webrtc"]
 
 # BT 任务默认并发数（新任务预填）
-# 取值范围：1–64 的整数；越界钳制到边界
+# 取值范围：1–64 的整数；0 或越界拒绝启动
 bt_concurrency = 20
 
 # 单 peer 在飞请求块数上限（×16 KiB = 在飞窗口）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 peer_pipeline = 64
 
 # 同时获得上传槽位的 peer 数（choker 周期分配）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 upload_slots = 4
 
 # 上传读盘并发上限（进程级）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 upload_read_concurrency = 128
 
 # 空闲连接置换阈值（秒，无新增进账超时即断开重拨）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 idle_eviction_secs = 60
 
 # 出连 TCP 拨号超时（秒）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 connect_timeout_secs = 3
 
 # peer 握手超时（秒）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 handshake_timeout_secs = 10
 
 # 在飞块请求超时（秒）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 request_timeout_secs = 20
 
 # 单 piece 请求块粒度（piece 细分为 n 块请求）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 requests_per_piece = 4
 
 # 上传 choker 重排周期（秒）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 rechoke_interval_secs = 10
 
 # 乐观 unchoke 轮换周期（秒）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 optimistic_interval_secs = 30
 
 # 进度事件最小发送间隔（毫秒，节流）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 progress_emit_min_interval_ms = 250
 
 # announce 请求的 peer 数上限
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 tracker_numwant = 200
 
 # peer 连接失败重试退避起始（秒，倍增）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 peer_retry_base_secs = 5
 
 # peer 连接失败重试退避封顶（秒）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 peer_retry_cap_secs = 120
 
 # tracker 失败退避起始（秒，倍增）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 tracker_backoff_start_secs = 8
 
 # tracker 失败退避封顶（秒）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 tracker_backoff_cap_secs = 60
 
 # UDP tracker 单轮超时起始（秒，倍增重试）
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 udp_base_timeout_secs = 15
 
 # UDP tracker 超时重试次数
-# 取值范围：正整数（≥1）；0 或非法值回退默认
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
 udp_retries = 3
 
 # 做种时长默认值（秒，任务做种倒计时起点）
-# 取值范围：>0 的数；0 或非法值回退默认
+# 取值范围：>0 的数；0 或非法值拒绝启动
 seed_duration_secs = 1800
 
 # BT 监听端口（0 = 随机绑定）
@@ -907,14 +1172,19 @@ mod tests {
     }
 
     #[test]
-    fn invalid_values_fall_back() {
-        let c = Config::from_toml(
-            "[http]\nblock_size_http = 0\nmax_retries = 0\nhttp_concurrency = 999\n[common]\ndownload_slots = 0\n",
-        );
-        assert_eq!(c.block_size_http, DEFAULT_BLOCK_SIZE_HTTP);
-        assert_eq!(c.download_slots, 5);
-        assert_eq!(c.max_retries, 5);
-        assert_eq!(c.http_concurrency, 64);
+    fn invalid_values_fail_fast_with_key_path() {
+        let cases = [
+            ("[http]\nblock_size_http = 0\n", "http.block_size_http"),
+            ("[http]\nmax_retries = 0\n", "http.max_retries"),
+            ("[http]\nhttp_concurrency = 999\n", "http.http_concurrency"),
+            ("[common]\ndownload_slots = 0\n", "common.download_slots"),
+            ("[bt]\nbt_concurrency = 0\n", "bt.bt_concurrency"),
+        ];
+        for (text, key) in cases {
+            let err = Config::try_from_toml(text).expect_err(&format!("{key} 应拒绝启动"));
+            assert!(err.contains(key), "错误含键点路径 {key}：{err}");
+            assert!(err.contains("拒绝启动"), "错误含拒绝启动语义：{err}");
+        }
     }
 
     #[test]
@@ -928,6 +1198,14 @@ mod tests {
         );
         assert_eq!(mk("1048576").block_size_http, 1_048_576, "恰在下限 = 原值");
         assert_eq!(mk("2097152").block_size_http, 2_097_152, "大于下限原值生效");
+        let err0 = Config::try_from_toml("[http]\nblock_size_http = 0\n").expect_err("0 拒绝启动");
+        assert!(err0.contains("http.block_size_http"));
+        let errneg =
+            Config::try_from_toml("[http]\nblock_size_http = -4\n").expect_err("负值拒绝启动");
+        assert!(errneg.contains("http.block_size_http"));
+        let errstr = Config::try_from_toml("[http]\nblock_size_http = \"256 KB\"\n")
+            .expect_err("非法类型拒绝启动");
+        assert!(errstr.contains("http.block_size_http"), "{errstr}");
     }
 
     #[test]
@@ -991,7 +1269,7 @@ mod tests {
     }
 
     #[test]
-    fn template_v13_parses_to_defaults() {
+    fn template_v16_parses_to_defaults() {
         let c = Config::try_from_toml(&Config::default_template())
             .expect("v1.13 活跃模板必须可解析（整数/浮点键均合法）");
         assert_eq!(
@@ -1001,6 +1279,33 @@ mod tests {
         );
         assert!(c.warnings.is_empty(), "活跃模板零警告");
         assert!(c.proxies.is_empty(), "proxy 示例块保持注释，未激活");
+        assert_eq!(c.peer_connection_protocol, vec!["tcp", "webrtc"]);
+        assert!(c.trackers.is_empty());
+    }
+
+    #[test]
+    fn template_v16_range_comments_flipped_and_tracker_rows() {
+        let t = Config::default_template();
+        assert!(t.contains("# tracker 列表（BT 任务默认 tracker 池来源之一，三来源合并入池）"));
+        assert!(t.contains("# 取值范围：字符串数组，每项为 http(s)://、ws(s):// 或 udp:// 开头的 tracker announce URL（scheme 大小写不敏感）；未知 scheme 或重复项拒绝启动"));
+        assert!(t.contains("# BT peer 连接与数据传输的传输协议全局开关（无序数组；无跨协议回退）"));
+        assert!(t.contains("# 取值范围：无序字符串数组，元素限 tcp / webrtc（大小写不敏感、去重）；未知值或重复项拒绝启动"));
+        assert_eq!(t.matches("peer_connection_protocol").count(), 1);
+        assert!(!t.contains("http_trackers"));
+        assert!(!t.contains("udp_trackers"));
+        assert!(
+            !t.contains("回退默认"),
+            "FR-02-35：取值范围注释全量翻转，无回退字样"
+        );
+        assert_eq!(
+            t.matches("拒绝启动").count(),
+            33,
+            "翻转后的拒绝启动注释计数"
+        );
+        assert!(
+            t.contains("占用时回退随机 + 启动警告"),
+            "listen_port 保留回退语义"
+        );
     }
 
     #[test]
@@ -1008,11 +1313,12 @@ mod tests {
         let c = Config::from_toml(
             "[http]\nthrottle_burst_secs = 1\nbackoff_initial = 2\n[bt]\nseed_duration_secs = 1800\n",
         );
-        assert_eq!(c.throttle_burst_secs, 1.0, "整数写法逐键生效（不致命）");
+        assert_eq!(c.throttle_burst_secs, 1.0, "整数写法逐键生效");
         assert_eq!(c.seed_duration_secs, 1800.0);
         assert_eq!(c.backoff_initial, 2.0);
-        let c2 = Config::from_toml("[http]\nthrottle_burst_secs = 0\n");
-        assert_eq!(c2.throttle_burst_secs, 0.5, "0 仍回退默认（逐键口径）");
+        let err = Config::try_from_toml("[http]\nthrottle_burst_secs = 0\n")
+            .expect_err("FR-02-35：0 不再回退默认，拒绝启动");
+        assert!(err.contains("http.throttle_burst_secs"), "{err}");
     }
 
     #[test]
@@ -1068,21 +1374,24 @@ mod tests {
         );
         let c3 = Config::from_toml("[common]\ntask_max_download_speed = \"500 KiB/s\"\n");
         assert_eq!(c3.task_max_download_speed, 512_000);
-        let c4 = Config::from_toml("[common]\ntask_max_upload_speed = \"xyz\"\n");
-        assert_eq!(c4.task_max_upload_speed, 0, "不可解析限速弃用");
+        let err = Config::try_from_toml("[common]\ntask_max_upload_speed = \"xyz\"\n")
+            .expect_err("FR-02-35：不可解析限速拒绝启动");
+        assert!(err.contains("common.task_max_upload_speed"), "{err}");
     }
 
     #[test]
-    fn speed_limit_keys_decimal_old_style_fall_back_zero() {
-        let c = Config::from_toml("[common]\nglobal_max_download_speed = \"2 MB/s\"\n");
-        assert_eq!(
-            c.global_max_download_speed, 0,
-            "旧写法废弃 → 非法回退默认 0（FR-02-28 v1.11）"
-        );
-        let c3 = Config::from_toml("[common]\ntask_max_download_speed = \"500 KB/s\"\n");
-        assert_eq!(c3.task_max_download_speed, 0, "旧写法废弃回退 0");
-        let c5 = Config::from_toml("[common]\nglobal_max_upload_speed = \"2 GB\"\n");
-        assert_eq!(c5.global_max_upload_speed, 0);
+    fn speed_limit_keys_decimal_old_style_fail_fast() {
+        for (v, note) in [
+            ("2 MB/s", "旧写法 MB/s"),
+            ("500 KB/s", "旧写法 KB/s"),
+            ("2 GB", "旧写法 GB"),
+        ] {
+            let err =
+                Config::try_from_toml(&format!("[common]\nglobal_max_download_speed = \"{v}\"\n"))
+                    .expect_err(&format!("{note}：FR-02-35 拒绝启动"));
+            assert!(err.contains("common.global_max_download_speed"), "{err}");
+            assert!(err.contains("拒绝启动"), "{err}");
+        }
     }
 
     #[test]
@@ -1110,26 +1419,25 @@ mod tests {
     }
 
     #[test]
-    fn empty_dir_and_invalid_numbers_fall_back() {
-        let c = Config::from_toml(
-            "[common]\ndownload_dir = \"   \"\n[http]\nbackoff_initial = -1.0\nbackoff_cap = 0.0\n",
-        );
-        assert!(c.download_dir.is_none(), "空白目录弃用");
-        assert_eq!(c.backoff_initial, Config::default().backoff_initial);
-        assert_eq!(c.backoff_cap, Config::default().backoff_cap);
+    fn listen_port_negative_and_out_of_range_still_fallback_not_fail_fast() {
+        let cn = Config::try_from_toml("[bt]\nlisten_port = -5\n")
+            .expect("listen_port 不在 FR-02-35 翻转面");
+        assert_eq!(cn.bt_listen_port, 0);
     }
 
     #[test]
-    fn http_tunables_fallback_and_effective() {
-        let d = Config::default();
-        let bad = Config::from_toml(
-            "[http]\nprogress_tick_ms = 0\nsidecar_flush_secs = -1\nthrottle_burst_secs = 0.0\nthrottle_sleep_ms = 0\ndns_race_grace_ms = 0\n",
-        );
-        assert_eq!(bad.progress_tick_ms, d.progress_tick_ms);
-        assert_eq!(bad.sidecar_flush_secs, d.sidecar_flush_secs);
-        assert_eq!(bad.throttle_burst_secs, d.throttle_burst_secs);
-        assert_eq!(bad.throttle_sleep_ms, d.throttle_sleep_ms);
-        assert_eq!(bad.dns_race_grace_ms, d.dns_race_grace_ms);
+    fn empty_dir_and_invalid_numbers_fail_fast() {
+        let c = Config::from_toml("[common]\ndownload_dir = \"   \"\n");
+        assert!(c.download_dir.is_none(), "空白目录弃用");
+        let e1 =
+            Config::try_from_toml("[http]\nbackoff_initial = -1.0\n").expect_err("负退避拒绝启动");
+        assert!(e1.contains("http.backoff_initial"), "{e1}");
+        let e2 = Config::try_from_toml("[http]\nbackoff_cap = 0.0\n").expect_err("0 封顶拒绝启动");
+        assert!(e2.contains("http.backoff_cap"), "{e2}");
+    }
+
+    #[test]
+    fn http_tunables_effective_and_invalid_fail_fast() {
         let ok = Config::from_toml(
             "[http]\nprogress_tick_ms = 250\nsidecar_flush_secs = 5\nthrottle_burst_secs = 1.5\nthrottle_sleep_ms = 40\ndns_race_grace_ms = 2000\n",
         );
@@ -1138,37 +1446,25 @@ mod tests {
         assert_eq!(ok.throttle_burst_secs, 1.5);
         assert_eq!(ok.throttle_sleep_ms, 40);
         assert_eq!(ok.dns_race_grace_ms, 2000);
+        for (text, key) in [
+            ("[http]\nprogress_tick_ms = 0\n", "http.progress_tick_ms"),
+            (
+                "[http]\nsidecar_flush_secs = -1\n",
+                "http.sidecar_flush_secs",
+            ),
+            (
+                "[http]\nthrottle_burst_secs = 0.0\n",
+                "http.throttle_burst_secs",
+            ),
+            ("[http]\nthrottle_sleep_ms = 0\n", "http.throttle_sleep_ms"),
+            ("[http]\ndns_race_grace_ms = 0\n", "http.dns_race_grace_ms"),
+        ] {
+            let err = Config::try_from_toml(text).expect_err(&format!("{key} 拒绝启动"));
+            assert!(err.contains(key), "{err}");
+        }
     }
-
     #[test]
-    fn bt_tunables_fallback_and_effective() {
-        let d = Config::default();
-        let bad = Config::from_toml(
-            "[bt]\nbt_concurrency = 0\npeer_pipeline = 0\nupload_slots = -1\nupload_read_concurrency = 0\nidle_eviction_secs = 0\nconnect_timeout_secs = 0\nhandshake_timeout_secs = 0\nrequest_timeout_secs = 0\nrequests_per_piece = 0\nrechoke_interval_secs = 0\noptimistic_interval_secs = 0\nprogress_emit_min_interval_ms = 0\ntracker_numwant = 0\npeer_retry_base_secs = 0\npeer_retry_cap_secs = 0\ntracker_backoff_start_secs = 0\ntracker_backoff_cap_secs = 0\nudp_base_timeout_secs = 0\nudp_retries = 0\nseed_duration_secs = 0.0\n",
-        );
-        assert_eq!(bad.bt_concurrency, d.bt_concurrency);
-        assert_eq!(bad.peer_pipeline, d.peer_pipeline);
-        assert_eq!(bad.upload_slots, d.upload_slots);
-        assert_eq!(bad.upload_read_concurrency, d.upload_read_concurrency);
-        assert_eq!(bad.idle_eviction_secs, d.idle_eviction_secs);
-        assert_eq!(bad.connect_timeout_secs, d.connect_timeout_secs);
-        assert_eq!(bad.handshake_timeout_secs, d.handshake_timeout_secs);
-        assert_eq!(bad.request_timeout_secs, d.request_timeout_secs);
-        assert_eq!(bad.requests_per_piece, d.requests_per_piece);
-        assert_eq!(bad.rechoke_interval_secs, d.rechoke_interval_secs);
-        assert_eq!(bad.optimistic_interval_secs, d.optimistic_interval_secs);
-        assert_eq!(
-            bad.progress_emit_min_interval_ms,
-            d.progress_emit_min_interval_ms
-        );
-        assert_eq!(bad.tracker_numwant, d.tracker_numwant);
-        assert_eq!(bad.peer_retry_base_secs, d.peer_retry_base_secs);
-        assert_eq!(bad.peer_retry_cap_secs, d.peer_retry_cap_secs);
-        assert_eq!(bad.tracker_backoff_start_secs, d.tracker_backoff_start_secs);
-        assert_eq!(bad.tracker_backoff_cap_secs, d.tracker_backoff_cap_secs);
-        assert_eq!(bad.udp_base_timeout_secs, d.udp_base_timeout_secs);
-        assert_eq!(bad.udp_retries, d.udp_retries);
-        assert_eq!(bad.seed_duration_secs, d.seed_duration_secs);
+    fn bt_tunables_effective_and_invalid_fail_fast() {
         let ok = Config::from_toml(
             "[bt]\nbt_concurrency = 8\npeer_pipeline = 32\nupload_slots = 2\nupload_read_concurrency = 64\nidle_eviction_secs = 30\nseed_duration_secs = 60\n",
         );
@@ -1178,8 +1474,245 @@ mod tests {
         assert_eq!(ok.upload_read_concurrency, 64);
         assert_eq!(ok.idle_eviction_secs, 30);
         assert_eq!(ok.seed_duration_secs, 60.0);
-        let clamped = Config::from_toml("[bt]\nbt_concurrency = 99\n");
-        assert_eq!(clamped.bt_concurrency, 64, "越界钳制 1–64");
+        for (text, key) in [
+            ("[bt]\nbt_concurrency = 0\n", "bt.bt_concurrency"),
+            ("[bt]\nbt_concurrency = 99\n", "bt.bt_concurrency"),
+            ("[bt]\npeer_pipeline = 0\n", "bt.peer_pipeline"),
+            ("[bt]\nupload_slots = -1\n", "bt.upload_slots"),
+            (
+                "[bt]\nupload_read_concurrency = 0\n",
+                "bt.upload_read_concurrency",
+            ),
+            ("[bt]\nidle_eviction_secs = 0\n", "bt.idle_eviction_secs"),
+            (
+                "[bt]\nconnect_timeout_secs = 0\n",
+                "bt.connect_timeout_secs",
+            ),
+            (
+                "[bt]\nhandshake_timeout_secs = 0\n",
+                "bt.handshake_timeout_secs",
+            ),
+            (
+                "[bt]\nrequest_timeout_secs = 0\n",
+                "bt.request_timeout_secs",
+            ),
+            ("[bt]\nrequests_per_piece = 0\n", "bt.requests_per_piece"),
+            (
+                "[bt]\nrechoke_interval_secs = 0\n",
+                "bt.rechoke_interval_secs",
+            ),
+            (
+                "[bt]\noptimistic_interval_secs = 0\n",
+                "bt.optimistic_interval_secs",
+            ),
+            (
+                "[bt]\nprogress_emit_min_interval_ms = 0\n",
+                "bt.progress_emit_min_interval_ms",
+            ),
+            ("[bt]\ntracker_numwant = 0\n", "bt.tracker_numwant"),
+            (
+                "[bt]\npeer_retry_base_secs = 0\n",
+                "bt.peer_retry_base_secs",
+            ),
+            ("[bt]\npeer_retry_cap_secs = 0\n", "bt.peer_retry_cap_secs"),
+            (
+                "[bt]\ntracker_backoff_start_secs = 0\n",
+                "bt.tracker_backoff_start_secs",
+            ),
+            (
+                "[bt]\ntracker_backoff_cap_secs = 0\n",
+                "bt.tracker_backoff_cap_secs",
+            ),
+            (
+                "[bt]\nudp_base_timeout_secs = 0\n",
+                "bt.udp_base_timeout_secs",
+            ),
+            ("[bt]\nudp_retries = 0\n", "bt.udp_retries"),
+            ("[bt]\nseed_duration_secs = 0.0\n", "bt.seed_duration_secs"),
+        ] {
+            let err = Config::try_from_toml(text).expect_err(&format!("{key} 拒绝启动"));
+            assert!(err.contains(key), "{err}");
+            assert!(err.contains("拒绝启动"), "{err}");
+        }
+    }
+
+    #[test]
+    fn trackers_key_accepts_mixed_families_case_insensitive() {
+        let c = Config::from_toml(
+            "[bt]\ntrackers = [\"https://t1/ann\", \"ws://t2:8080/announce\", \"UDP://t3:6969/announce\", \"WS://t4/ws\"]\n",
+        );
+        assert_eq!(
+            c.trackers,
+            vec![
+                "https://t1/ann",
+                "ws://t2:8080/announce",
+                "UDP://t3:6969/announce",
+                "WS://t4/ws"
+            ]
+        );
+        let c2 = Config::from_toml("[bt]\ntrackers = []\n");
+        assert!(c2.trackers.is_empty());
+        let c3 = Config::from_toml("[bt]\nlisten_port = 0\n");
+        assert!(c3.trackers.is_empty(), "缺键 = 空");
+    }
+
+    #[test]
+    fn trackers_key_fail_fast_unknown_scheme_and_duplicates() {
+        let e1 = Config::try_from_toml("[bt]\ntrackers = [\"ftp://x/ann\"]\n")
+            .expect_err("白名单外 scheme 拒绝启动");
+        assert!(e1.contains("bt.trackers"), "{e1}");
+        assert!(e1.contains("未知 tracker scheme"), "{e1}");
+        let e2 = Config::try_from_toml("[bt]\ntrackers = [\"ws://t/ann\", \"ws://t/ann\"]\n")
+            .expect_err("重复项拒绝启动");
+        assert!(e2.contains("重复项"), "{e2}");
+        let e3 = Config::try_from_toml("[bt]\ntrackers = [\"WS://t/ann\", \"ws://t/ann\"]\n")
+            .expect_err("scheme 大小写不敏感判重");
+        assert!(e3.contains("重复项"), "{e3}");
+        let e4 = Config::try_from_toml("[bt]\ntrackers = [\"udp://noport\"]\n")
+            .expect_err("udp 缺端口拒绝启动");
+        assert!(e4.contains("bt.trackers"), "{e4}");
+        let e5 =
+            Config::try_from_toml("[bt]\ntrackers = \"not-a-list\"\n").expect_err("非数组拒绝启动");
+        assert!(e5.contains("bt.trackers"), "{e5}");
+    }
+
+    #[test]
+    fn peer_connection_protocol_validation() {
+        let d = Config::from_toml("[bt]\nlisten_port = 0\n");
+        assert_eq!(
+            d.peer_connection_protocol,
+            vec!["tcp", "webrtc"],
+            "缺键 = 默认双栈"
+        );
+        let c = Config::from_toml("[bt]\npeer_connection_protocol = [\"WEBRTC\", \"Tcp\"]\n");
+        assert_eq!(
+            c.peer_connection_protocol,
+            vec!["webrtc", "tcp"],
+            "大小写不敏感归一小写"
+        );
+        let only = Config::from_toml("[bt]\npeer_connection_protocol = [\"webrtc\"]\n");
+        assert_eq!(only.peer_connection_protocol, vec!["webrtc"]);
+        let e1 = Config::try_from_toml("[bt]\npeer_connection_protocol = [\"quic\"]\n")
+            .expect_err("未知值拒绝启动");
+        assert!(e1.contains("bt.peer_connection_protocol"), "{e1}");
+        assert!(e1.contains("未知值"), "{e1}");
+        let e2 = Config::try_from_toml("[bt]\npeer_connection_protocol = [\"tcp\", \"tcp\"]\n")
+            .expect_err("重复项拒绝启动");
+        assert!(e2.contains("重复项"), "{e2}");
+        let e3 = Config::try_from_toml("[bt]\npeer_connection_protocol = [\"TCP\", \"tcp\"]\n")
+            .expect_err("大小写重复拒绝启动");
+        assert!(e3.contains("重复项"), "{e3}");
+        let e4 = Config::try_from_toml("[bt]\npeer_connection_protocol = []\n")
+            .expect_err("空数组拒绝启动");
+        assert!(e4.contains("bt.peer_connection_protocol"), "{e4}");
+    }
+
+    #[test]
+    fn try_load_semantic_error_includes_path_key_and_reason() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-cfg-semantic");
+        let p = dir.join("config.toml");
+        std::fs::write(&p, "[bt]\npeer_connection_protocol = [\"tcp\", \"tcp\"]\n").unwrap();
+        let err = Config::try_load(&p).expect_err("语义非法必须报错");
+        assert!(err.contains(p.to_string_lossy().as_ref()), "含路径：{err}");
+        assert!(
+            err.contains("bt.peer_connection_protocol"),
+            "含键点路径：{err}"
+        );
+        assert!(err.contains("重复项"), "含原因：{err}");
+        assert!(err.contains("拒绝启动"), "含拒绝启动语义：{err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fr_02_35_persistence_examples_all_fail_fast() {
+        let rows = [
+            (
+                "[http]\nblock_size_http = \"256 KB\"\n",
+                "http.block_size_http",
+            ),
+            ("[common]\ndownload_slots = 0\n", "common.download_slots"),
+            ("[http]\nmax_retries = -1\n", "http.max_retries"),
+            ("[http]\nhttp_concurrency = 99\n", "http.http_concurrency"),
+            (
+                "[common]\nglobal_max_download_speed = \"xyz\"\n",
+                "common.global_max_download_speed",
+            ),
+            ("[http]\nprogress_tick_ms = 0\n", "http.progress_tick_ms"),
+            (
+                "[http]\nsidecar_flush_secs = 0\n",
+                "http.sidecar_flush_secs",
+            ),
+            (
+                "[http]\nthrottle_burst_secs = 0\n",
+                "http.throttle_burst_secs",
+            ),
+            ("[http]\nthrottle_sleep_ms = 0\n", "http.throttle_sleep_ms"),
+            ("[http]\ndns_race_grace_ms = 0\n", "http.dns_race_grace_ms"),
+            ("[bt]\nbt_concurrency = 0\n", "bt.bt_concurrency"),
+            ("[bt]\nbt_concurrency = 99\n", "bt.bt_concurrency"),
+            ("[bt]\npeer_pipeline = 0\n", "bt.peer_pipeline"),
+            ("[bt]\nupload_slots = 0\n", "bt.upload_slots"),
+            (
+                "[bt]\nupload_read_concurrency = 0\n",
+                "bt.upload_read_concurrency",
+            ),
+            ("[bt]\nidle_eviction_secs = -1\n", "bt.idle_eviction_secs"),
+            (
+                "[bt]\nconnect_timeout_secs = 0\n",
+                "bt.connect_timeout_secs",
+            ),
+            (
+                "[bt]\nhandshake_timeout_secs = 0\n",
+                "bt.handshake_timeout_secs",
+            ),
+            (
+                "[bt]\nrequest_timeout_secs = 0\n",
+                "bt.request_timeout_secs",
+            ),
+            ("[bt]\nrequests_per_piece = 0\n", "bt.requests_per_piece"),
+            (
+                "[bt]\nrechoke_interval_secs = 0\n",
+                "bt.rechoke_interval_secs",
+            ),
+            (
+                "[bt]\noptimistic_interval_secs = 0\n",
+                "bt.optimistic_interval_secs",
+            ),
+            (
+                "[bt]\nprogress_emit_min_interval_ms = 0\n",
+                "bt.progress_emit_min_interval_ms",
+            ),
+            ("[bt]\ntracker_numwant = 0\n", "bt.tracker_numwant"),
+            (
+                "[bt]\npeer_retry_base_secs = 0\n",
+                "bt.peer_retry_base_secs",
+            ),
+            ("[bt]\npeer_retry_cap_secs = 0\n", "bt.peer_retry_cap_secs"),
+            (
+                "[bt]\ntracker_backoff_start_secs = 0\n",
+                "bt.tracker_backoff_start_secs",
+            ),
+            (
+                "[bt]\ntracker_backoff_cap_secs = 0\n",
+                "bt.tracker_backoff_cap_secs",
+            ),
+            (
+                "[bt]\nudp_base_timeout_secs = 0\n",
+                "bt.udp_base_timeout_secs",
+            ),
+            ("[bt]\nudp_retries = 0\n", "bt.udp_retries"),
+            ("[bt]\nseed_duration_secs = 0\n", "bt.seed_duration_secs"),
+            ("[bt]\ntrackers = [\"ftp://x/ann\"]\n", "bt.trackers"),
+            (
+                "[bt]\npeer_connection_protocol = [\"tcp\", \"tcp\"]\n",
+                "bt.peer_connection_protocol",
+            ),
+        ];
+        for (text, key) in rows {
+            let err = Config::try_from_toml(text)
+                .expect_err(&format!("FR-02-35：{key} 语义非法拒绝启动"));
+            assert!(err.contains(key), "键点路径 {key} 未出现在：{err}");
+        }
     }
 
     #[test]
@@ -1433,8 +1966,8 @@ mod tests {
             "throttle_burst_secs",
             "throttle_sleep_ms",
             "dns_race_grace_ms",
-            "http_trackers",
-            "udp_trackers",
+            "trackers",
+            "peer_connection_protocol",
             "bt_concurrency",
             "peer_pipeline",
             "upload_slots",
@@ -1511,8 +2044,8 @@ mod tests {
             "throttle_burst_secs = 0.5",
             "throttle_sleep_ms = 20",
             "dns_race_grace_ms = 1000",
-            "http_trackers = []",
-            "udp_trackers = []",
+            "trackers = []",
+            "peer_connection_protocol = [\"tcp\", \"webrtc\"]",
             "bt_concurrency = 20",
             "peer_pipeline = 64",
             "upload_slots = 4",

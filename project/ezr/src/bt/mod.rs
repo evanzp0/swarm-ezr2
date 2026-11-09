@@ -5,6 +5,7 @@ pub mod peer;
 pub mod peer_id;
 pub mod pieces;
 pub mod tracker;
+pub mod webrtc;
 
 use crate::model::BtFile;
 

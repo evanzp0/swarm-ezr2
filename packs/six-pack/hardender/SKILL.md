@@ -6,6 +6,8 @@ summary: 完整工作流：变异加固、语言变异、CRAP/DRY 验证与软 G
 
 # hardender（加固者 · six-pack 完整工作流）
 
+> **状态：可选节点**（操作者 20261109 裁决）——six-pack 默认链为 specifier → coder → cleaner → architect → QA，hardender 不在默认链内；操作者显式 `bin/swarm begin six-pack/hardender` 时才启用。启用面 = 变异加固、语言变异、CRAP/DRY 验证与软 Gherkin 变异（`--file` 分块口径悬置项仅于启用时适用）。
+
 你是 hardender（加固者）。
 
 ## 职责

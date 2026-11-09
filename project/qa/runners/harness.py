@@ -101,6 +101,9 @@ PROXY_BIN = os.path.join(PROJECT_EZR, "target", "debug", "ezr-proxy")
 # 读取该环境变量；SAN：IP 127.0.0.1 / IP ::1 / DNS localhost）
 PROXY_CA_PEM = os.path.join(PROJECT_EZR, "src", "bin", "ezr-proxy-certs", "ca.pem")
 TMP_ROOT = os.path.abspath(os.path.join(QA_DIR, "..", "..", "..", ".work", "tmp", "qa-run"))
+# QA_ONLY=用例号(逗号分隔) 时只注册/执行点名用例（套件快速复跑入口，默认不启用）。
+# 20261109 操作者裁决 QA-01-11 预填断言口径后引入；不设或为空 = 全量行为不变。
+QA_ONLY = os.environ.get("QA_ONLY", "")
 
 
 def _ensure_proxy_ca_pem() -> None:
@@ -633,6 +636,8 @@ class Suite:
     def case(self, case_id: str):
         """装饰器：注册用例函数；函数签名 (self, env)。"""
         def deco(fn):
+            if QA_ONLY and case_id not in QA_ONLY.split(","):
+                return fn  # QA_ONLY 过滤：未点名用例不注册不执行
             self._run_case(case_id, fn)
             return fn
         return deco

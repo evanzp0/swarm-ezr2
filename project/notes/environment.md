@@ -378,4 +378,6 @@ QA 轮（2026-11-06）补记：接手被中断会话先清残留进程——上�
   `.tools/Acceptance-Pipeline-Specification`，`GOPROXY=https://goproxy.cn,direct go build -o
   .work/tmp/gherkin-<名> ./cmd/<名>` 秒级出静态二进制。bb.edn 三任务与 cmd/ 三件等价，
   调用口径同（parser `<feature> <out>.json`、dry-checker `<ir> <out>.dry.json`、中间产物
-  落 `.work/tmp/`），findings 仍按 aps.md 中文分词假阳性口径读。
+  落 `.work/tmp/`），findings 仍按 aps.md 中文分词假阳性口径读。;
+
+ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单点测速 TUNA 0.38s 最快（USTC 1.16/rsproxy 1.75/官方 1.48）+ rustup-init 直链 TUNA + default profile 前台一次装齐 nightly 1.101（--component 参数不接受，default profile 自带 clippy/rustfmt）+ registry 仍 rsproxy sparse + 10G 盘纪律升级：webrtc 依赖树使 target/ 单次全量 ~7G——必须 CARGO_PROFILE_DEV_DEBUG=0 + CARGO_PROFILE_TEST_DEBUG=0 + CARGO_INCREMENTAL=0 三件套且 cargo clean 后分批构建，不同 profile 环境混用即双倍占用 + python websockets 16.0/cryptography 本轮预装可用（mini_ws_tracker 依赖面零安装）

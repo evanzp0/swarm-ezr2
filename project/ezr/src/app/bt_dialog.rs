@@ -16,9 +16,9 @@ impl App {
                 selected: true,
             })
             .collect();
-        let trackers_prefill =
-            Self::merge_trackers(&self.cfg.http_trackers, &self.cfg.udp_trackers, meta, &[])
-                .join("\n");
+        let trackers_prefill = Self::merge_trackers(&self.cfg.trackers, meta, &[])
+            .0
+            .join("\n");
         self.set_dialog(Dialog {
             kind: DialogKind::AddBt,
             url: TextInput::new(),
@@ -164,6 +164,20 @@ impl App {
                 tracker_backoff_cap_secs: self.cfg.tracker_backoff_cap_secs,
                 udp_base_timeout_secs: self.cfg.udp_base_timeout_secs,
                 udp_retries: self.cfg.udp_retries,
+                transports: {
+                    use crate::bt::webrtc::PeerTransport;
+                    let tcp = self
+                        .cfg
+                        .peer_connection_protocol
+                        .iter()
+                        .any(|s| PeerTransport::parse(s) == Some(PeerTransport::Tcp));
+                    let webrtc = self
+                        .cfg
+                        .peer_connection_protocol
+                        .iter()
+                        .any(|s| PeerTransport::parse(s) == Some(PeerTransport::WebRtc));
+                    crate::bt::webrtc::PeerTransports { tcp, webrtc }
+                },
             },
         }
     }
@@ -315,31 +329,41 @@ impl App {
 
 impl App {
     fn merge_trackers(
-        cfg_http: &[String],
-        cfg_udp: &[String],
+        cfg: &[String],
         meta: &TorrentMeta,
         manual: &[String],
-    ) -> Vec<String> {
+    ) -> (Vec<String>, Vec<String>) {
         let mut out: Vec<String> = Vec::new();
-        let mut push = |raw: &str| {
-            let s = raw.trim().to_string();
-            if !s.is_empty() && !out.contains(&s) {
-                out.push(s);
-            }
-        };
-        for u in cfg_http.iter().chain(cfg_udp.iter()) {
-            push(u);
+        let mut ignored: Vec<String> = Vec::new();
+        for u in cfg {
+            Self::merge_push(u, &mut out, &mut ignored);
         }
         if let Some(a) = meta.announce.as_ref() {
-            push(a);
+            Self::merge_push(a, &mut out, &mut ignored);
         }
         for u in &meta.announce_list {
-            push(u);
+            Self::merge_push(u, &mut out, &mut ignored);
         }
         for u in manual {
-            push(u);
+            Self::merge_push(u, &mut out, &mut ignored);
         }
-        out
+        (out, ignored)
+    }
+
+    fn merge_push(raw: &str, out: &mut Vec<String>, ignored: &mut Vec<String>) {
+        let s = raw.trim().to_string();
+        if s.is_empty() {
+            return;
+        }
+        if !Self::tracker_scheme_allowed(&s) {
+            if !ignored.contains(&s) {
+                ignored.push(s);
+            }
+            return;
+        }
+        if !out.contains(&s) {
+            out.push(s);
+        }
     }
 
     fn dedup_keep_order(items: Vec<String>) -> Vec<String> {
@@ -352,13 +376,19 @@ impl App {
         out
     }
 
+    fn tracker_scheme_allowed(line: &str) -> bool {
+        let s = line.trim().to_lowercase();
+        s.starts_with("http://")
+            || s.starts_with("https://")
+            || s.starts_with("ws://")
+            || s.starts_with("wss://")
+            || s.starts_with("udp://")
+    }
+
     fn tracker_reject(lines: &[String]) -> Option<String> {
         lines
             .iter()
-            .find(|l| {
-                let s = l.to_lowercase();
-                !(s.starts_with("http://") || s.starts_with("https://") || s.starts_with("udp://"))
-            })
+            .find(|l| !Self::tracker_scheme_allowed(l))
             .cloned()
     }
 
@@ -366,9 +396,9 @@ impl App {
         let Some(bad) = Self::tracker_reject(trackers) else {
             return true;
         };
-        let short: String = bad.chars().take(44).collect();
+        let short: String = bad.trim().chars().take(44).collect();
         self.set_toast(format!(
-            "⚠ 不支持的 tracker 协议（仅 http/https/udp）：{short}"
+            "⚠ 不支持的 tracker 协议（仅 http(s)/ws(s)/udp）：{short}"
         ));
         if let Some(d) = self.dialog.as_mut() {
             d.focus_field(focus);
@@ -445,7 +475,14 @@ impl App {
         let max_down = super::dialogs::parse_speed_limit(&down_raw).unwrap_or(down_prefill);
         let max_up = super::dialogs::parse_speed_limit(&up_raw).unwrap_or(up_prefill);
         let trackers = if edited.is_empty() {
-            Self::merge_trackers(&self.cfg.http_trackers, &self.cfg.udp_trackers, &meta, &[])
+            let (merged, ignored) = Self::merge_trackers(&self.cfg.trackers, &meta, &[]);
+            if let Some(bad) = ignored.first() {
+                let short: String = bad.chars().take(44).collect();
+                self.set_toast(format!(
+                    "⚠ 已忽略无效 tracker 条目（announce-list）：{short}"
+                ));
+            }
+            merged
         } else {
             edited
         };
@@ -702,23 +739,23 @@ mod tests {
             let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-mt");
             write_multi_torrent(&dir, "m.torrent")
         });
-        let merged = App::merge_trackers(
+        let (merged, ignored) = App::merge_trackers(
             &[
                 "udp://cfg1/ann".into(),
                 "udp://seed/ann".into(),
                 "  ".into(),
             ],
-            &["http://cfg2/ann".into()],
             &meta,
             &["http://cfg2/ann".into(), "udp://manual/ann".into()],
         );
+        assert_eq!(ignored, Vec::<String>::new(), "白名单内来源零忽略");
         assert_eq!(
             merged,
             vec![
                 "udp://cfg1/ann",
                 "udp://seed/ann",
-                "http://cfg2/ann",
                 "udp://l1/ann",
+                "http://cfg2/ann",
                 "udp://manual/ann",
             ],
             "三来源合并：config → torrent(announce → announce-list) → 手输，精确去重保序"
@@ -849,8 +886,7 @@ mod tests {
         let path = write_multi_torrent(&dir, "a.torrent");
         let meta = parse_at(&path);
         let mut app = make_app("prefill");
-        app.cfg.http_trackers = vec!["http://cfg-h/ann".into()];
-        app.cfg.udp_trackers = vec!["udp://cfg1/ann".into()];
+        app.cfg.trackers = vec!["http://cfg-h/ann".into(), "udp://cfg1/ann".into()];
         app.open_add_bt_dialog_with(&path, &meta);
         let d = app.dialog.as_ref().unwrap();
         assert_eq!(
@@ -873,7 +909,7 @@ mod tests {
         let path = write_multi_torrent(&dir, "a.torrent");
         let meta = parse_at(&path);
         let mut app = make_app("add");
-        app.cfg.http_trackers = vec!["udp://cfg1/ann".into()];
+        app.cfg.trackers = vec!["udp://cfg1/ann".into()];
         app.open_add_bt_dialog_with(&path, &meta);
         {
             let d = app.dialog.as_ref().unwrap();
@@ -1001,7 +1037,7 @@ mod tests {
         let path = write_multi_torrent(&dir, "a.torrent");
         let meta = parse_at(&path);
         let mut app = make_app("fallback");
-        app.cfg.udp_trackers = vec!["udp://cfg1/ann".into()];
+        app.cfg.trackers = vec!["udp://cfg1/ann".into()];
         app.open_add_bt_dialog_with(&path, &meta);
         app.dialog.as_mut().unwrap().trackers.reset();
         app.dlg_confirm_add_bt(false);
@@ -1439,7 +1475,7 @@ mod tests {
         let mut app = make_app("spec");
         app.cfg.task_max_download_speed = 1024;
         app.cfg.task_max_upload_speed = 2048;
-        app.cfg.udp_trackers = vec!["udp://cfg1/ann".into()];
+        app.cfg.trackers = vec!["udp://cfg1/ann".into()];
         app.open_add_bt_dialog_with(&path, &meta);
         app.dialog.as_mut().unwrap().conns.set("7");
         app.dlg_confirm_add_bt(false);

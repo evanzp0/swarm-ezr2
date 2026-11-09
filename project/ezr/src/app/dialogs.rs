@@ -388,8 +388,16 @@ impl App {
 
     pub(super) fn delete_task_files(save_dir: &str, name: &str) {
         let base = save_dir.trim_end_matches('/');
+        // 多文件 BT 任务的落盘形态是目录树（save_dir/name/…，bug28②）：
+        // 目录按整树删除，单文件（HTTP/单文件 BT）按文件删除。
+        let main_path = format!("{base}/{name}");
+        let main = std::path::Path::new(&main_path);
+        if main.is_dir() {
+            let _ = std::fs::remove_dir_all(main);
+        } else {
+            let _ = std::fs::remove_file(main);
+        }
         for path in [
-            format!("{base}/{name}"),
             format!("{base}/{name}{DOWNLOADING_EXT}"),
             format!("{base}/{name}{SIDECAR_EXT}"),
         ] {

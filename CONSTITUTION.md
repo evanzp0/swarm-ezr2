@@ -122,7 +122,7 @@ swarm/
     adversaries/     coder、reviewer
     two-pack/        coder、cleaner
     four-pack/       specifier、coder、refactorer、architect
-    six-pack/        specifier、coder、cleaner、architect、hardender、QA
+    six-pack/        specifier、coder、cleaner、architect、hardender（可选节点：默认链不含、按需显式 begin——操作者 20261109 裁决）、QA
     squad/           squad-leader、troubleshooter + 11 个角色模板 + reference/
   CONSTITUTION.md    宪法（本文件）
 

@@ -293,6 +293,7 @@ pub struct App {
 pub struct BtConnRow {
     pub id: usize,
     pub addr: String,
+    pub protocol: String,
     pub down_speed: f64,
     pub cum_down: u64,
     pub up_speed: f64,

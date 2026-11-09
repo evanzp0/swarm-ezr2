@@ -66,6 +66,7 @@ pub struct BtTunables {
     pub tracker_backoff_cap_secs: u64,
     pub udp_base_timeout_secs: u64,
     pub udp_retries: u32,
+    pub transports: crate::bt::webrtc::PeerTransports,
 }
 
 impl Default for BtTunables {
@@ -89,6 +90,7 @@ impl Default for BtTunables {
             tracker_backoff_cap_secs: c::DEFAULT_TRACKER_BACKOFF_CAP_SECS,
             udp_base_timeout_secs: c::DEFAULT_UDP_BASE_TIMEOUT_SECS,
             udp_retries: c::DEFAULT_UDP_RETRIES,
+            transports: crate::bt::webrtc::PeerTransports::default(),
         }
     }
 }

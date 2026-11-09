@@ -501,6 +501,7 @@ mod tests {
                 crate::app::BtConnRow {
                     id: 1,
                     addr: "10.0.0.1:51413".into(),
+                    protocol: "TCP".into(),
                     down_speed: 0.0,
                     cum_down: 0,
                     up_speed: 0.0,
@@ -512,6 +513,7 @@ mod tests {
                 crate::app::BtConnRow {
                     id: 2,
                     addr: "10.0.0.2:51413".into(),
+                    protocol: "TCP".into(),
                     down_speed: 0.0,
                     cum_down: 0,
                     up_speed: 0.0,

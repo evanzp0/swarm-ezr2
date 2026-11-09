@@ -4,14 +4,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sha1::{Digest, Sha1};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
 use super::metainfo::TorrentMeta;
 use super::pieces::PieceMap;
 use super::tracker::{
-    announce_http, announce_udp, udp_host_port, AnnounceParams, PeerAddr, TrackerEvent, TrackerUrl,
+    announce_http, announce_udp, announce_ws, build_announce_json, build_answer_announce_json,
+    classify_ws_message, udp_host_port, AnnounceParams, PeerAddr, TrackerEvent, TrackerUrl,
+    WsAnnounceResponse, WsInbound, WsOffer, WsSession, WsSignal,
+};
+use super::webrtc::{
+    PeerTransport, PeerTransports, PendingOffer, RtcReady, SignalState, OFFERS_PER_ANNOUNCE,
+    PENDING_OFFER_CAP,
 };
 use super::{peer, BtError, BtTaskCmd, REQUEST_BLOCK_LEN};
 use crate::engine::{BtConnView, BtTunables, EngineShared, Evt, Throttle};
@@ -94,6 +100,7 @@ enum PeerOut {
 struct ConnStat {
     peer_out: mpsc::Sender<PeerOut>,
     addr: String,
+    protocol: PeerTransport,
     client: String,
     peer_id: Option<[u8; 20]>,
     has: HashSet<u32>,
@@ -269,7 +276,7 @@ pub(crate) async fn run(
         if !f.selected {
             continue;
         }
-        match open_selected_file_handle(&spec.save_dir, &spec.name, f).await {
+        match open_selected_file_handle(&spec.save_dir, f).await {
             Ok(fh) => {
                 files_handles.insert(i, fh);
             }
@@ -377,6 +384,10 @@ pub(crate) async fn run(
         completed: false,
     }));
     let (tr_tx, mut tr_rx) = mpsc::channel::<TrackerReport>(32);
+    let signals: Arc<std::sync::Mutex<SignalState>> =
+        Arc::new(std::sync::Mutex::new(SignalState::default()));
+    let (rtc_tx, mut rtc_rx) = mpsc::channel::<RtcReady>(16);
+    let reannounce_notify = Arc::new(tokio::sync::Notify::new());
     let (mut completed_notifies, mut tr_handles) = start_tracker_pool(
         &trackers,
         spec.meta.infohash,
@@ -386,6 +397,9 @@ pub(crate) async fn run(
         &tun,
         &live,
         &tr_tx,
+        &signals,
+        &rtc_tx,
+        &reannounce_notify,
     );
 
     let (peer_tx, mut peer_rx) = mpsc::channel::<(usize, PeerIn)>(256);
@@ -459,6 +473,9 @@ pub(crate) async fn run(
                             &tun,
                             &live,
                             &tr_tx,
+                            &signals,
+                            &rtc_tx,
+                            &reannounce_notify,
                         );
                         completed_notifies = notifies;
                         tr_handles = handles;
@@ -486,7 +503,7 @@ pub(crate) async fn run(
                                     continue;
                                 }
                                 if let Ok(fh) =
-                                    open_selected_file_handle(&spec.save_dir, &spec.name, f).await
+                                    open_selected_file_handle(&spec.save_dir, f).await
                                 {
                                     files_handles.insert(i, fh);
                                 }
@@ -521,6 +538,10 @@ pub(crate) async fn run(
                                 &spec, &peer_id, &peer_tx, shared.as_ref(), &mut conns,
                                 &mut candidates, &mut next_conn, &dl_flow,
                             );
+                            // 扩容/仍有缺口：全 tracker 提前 re-announce（ws 会话立即携新
+                            // offers 重连 shed 的 WebRTC peer；http/udp 刷新候选池），
+                            // 不再等 tracker interval（操作者 bug28③ 调优）。
+                            reannounce_notify.notify_waiters();
                         }
                         if proxy_changed {
                             for h in tr_handles.drain(..) {
@@ -536,6 +557,9 @@ pub(crate) async fn run(
                                 &tun,
                                 &live,
                                 &tr_tx,
+                                &signals,
+                                &rtc_tx,
+                                &reannounce_notify,
                             );
                             completed_notifies = notifies;
                             tr_handles = handles;
@@ -597,7 +621,8 @@ pub(crate) async fn run(
             }
             Ok((stream, addr)) = listener.accept() => {
                 let sock_key = (addr.ip(), addr.port());
-                if inbound_admitted(&conns, sock_key, spec.concurrency.max(1) + 8)
+                if spec.tunables.transports.allows(PeerTransport::Tcp)
+                    && inbound_admitted(&conns, sock_key, spec.concurrency.max(1) + 8)
                     && !shared.is_blacklisted(addr.ip())
                 {
                     spawn_incoming_peer(
@@ -616,6 +641,44 @@ pub(crate) async fn run(
                 } else {
                     drop(stream);
                 }
+            }
+            Some(ready) = rtc_rx.recv() => {
+                if !spec.tunables.transports.allows(PeerTransport::WebRtc)
+                    || conns.len() >= spec.concurrency.max(1) + 8
+                {
+                    continue;
+                }
+                let cid = next_conn;
+                next_conn += 1;
+                // D71⑤ 改判（操作者 20261109）：协议列已显 WebRTC，地址列只保留
+                // 对端 peer_id 前 5 字节 hex 裸值，不再加 "WebRTC:" 前缀。
+                let addr = super::tracker::hex_lower(&ready.remote_peer_id[..5]);
+                let mut st = new_conn_stat_with(addr, PeerTransport::WebRtc);
+                st.inbound = !ready.initiator;
+                conns.insert(cid, st);
+                signals
+                    .lock()
+                    .expect("signals 锁")
+                    .mark_peer_alive(&ready.remote_peer_id);
+                let hs_timeout = spec.tunables.handshake_timeout_secs;
+                let ih: [u8; 20] = spec.meta.infohash;
+                let pid: [u8; 20] = peer_id;
+                let initiator = ready.initiator;
+                let ptx = peer_tx.clone();
+                let flow = dl_flow.clone();
+                tokio::spawn(async move {
+                    run_peer_loop(
+                        cid,
+                        ready.stream,
+                        &ih,
+                        &pid,
+                        hs_timeout,
+                        initiator,
+                        ptx,
+                        flow,
+                    )
+                    .await;
+                });
             }
             Some((conn_id, ev)) = peer_rx.recv() => {
                 let prev_downloaded = downloaded;
@@ -645,6 +708,12 @@ pub(crate) async fn run(
                             st.client = client;
                             st.peer_id = Some(peer_id);
                             st.peer_out = out;
+                            if st.protocol == PeerTransport::WebRtc {
+                                signals
+                                    .lock()
+                                    .expect("signals 锁")
+                                    .mark_peer_alive(&peer_id);
+                            }
                             if let Some(key) = addr_sock(&st.addr) {
                                 if let Some(c) = candidates.get_mut(&key) {
                                     c.fails = 0;
@@ -679,6 +748,21 @@ pub(crate) async fn run(
                         if let Some(st) = conns.remove(&conn_id) {
                             for &p in st.has.iter().filter(|&p| pmap.covers(*p)).collect::<Vec<_>>() {
                                 order_cache.peer_lost(p);
+                            }
+                            if st.protocol == PeerTransport::WebRtc {
+                                if let Some(pid) = st.peer_id {
+                                    // 本端主动收口（缩容 shed / 空闲置换 Drop / 自身拒绝）：
+                                    // 不记失败冷却（mark_peer_idle），扩容后下一轮 offer 即可
+                                    // 重连；异常断开仍走 mark_peer_closed 惩罚性退避（操作者
+                                    // bug28③ 调优：shed 的健康 peer 不得被计入失败）。
+                                    let local = reason == "引擎断开" || reason == "self";
+                                    let mut sig = signals.lock().expect("signals 锁");
+                                    if local {
+                                        sig.mark_peer_idle(&pid);
+                                    } else {
+                                        sig.mark_peer_closed(&pid);
+                                    }
+                                }
                             }
                             if let Some(key) = addr_sock(&st.addr) {
                                 if reason == "self" || reason == "dup" {
@@ -924,10 +1008,17 @@ struct AnnounceCtx {
     numwant: u32,
     live: Arc<std::sync::Mutex<LiveStats>>,
     completed_notify: Arc<tokio::sync::Notify>,
+    // 任务扩容（修改并发）触发的提前 re-announce（bug28③ 调优）
+    reannounce_notify: Arc<tokio::sync::Notify>,
     backoff_start_secs: u64,
     backoff_cap_secs: u64,
     udp_base_timeout_secs: u64,
     udp_retries: u32,
+    signals: Arc<std::sync::Mutex<SignalState>>,
+    rtc_tx: mpsc::Sender<RtcReady>,
+    transports: PeerTransports,
+    rtc_retry_base_secs: u64,
+    rtc_retry_cap_secs: u64,
 }
 
 #[derive(Default)]
@@ -962,11 +1053,21 @@ fn spawn_tracker(
         let mut min_interval_secs: u32 = 0;
         let mut first = true;
         let mut completed_sent = false;
+        let mut last_announce = tokio::time::Instant::now();
         loop {
             let wait = delay.max(min_interval_secs as u64);
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_secs(wait)) => {}
                 _ = ctx.completed_notify.notified() => {}
+                _ = ctx.reannounce_notify.notified() => {
+                    // 扩容触发的提前 announce（bug28③）：尊重 tracker min_interval，
+                    // 未到最早许可时刻则补足剩余等待后再发。
+                    let wait_more = u64::from(min_interval_secs)
+                        .saturating_sub(last_announce.elapsed().as_secs());
+                    if wait_more > 0 {
+                        tokio::time::sleep(Duration::from_secs(wait_more)).await;
+                    }
+                }
             }
             let first_now = first;
             first = false;
@@ -1001,8 +1102,15 @@ fn spawn_tracker(
                 event: ev,
                 numwant: ctx.numwant,
             };
-            let res = match &url {
+            last_announce = tokio::time::Instant::now();
+            let res: Result<super::tracker::TrackerResponse, BtError> = match &url {
                 TrackerUrl::Http(u) => announce_http(u, &params, &ctx.client).await,
+                TrackerUrl::Ws(u) => {
+                    // 持久会话：连接保持打开、推送即时处理；会话结束（断开/
+                    // 被拒）返回后由统一失败路径退避重连。
+                    let _ = ws_tracker_session(u, &ctx, &tx).await;
+                    Err(BtError::Tracker("ws tracker 会话结束".into()))
+                }
                 TrackerUrl::Udp(u) => {
                     let Some((host, port)) = udp_host_port(u) else {
                         break;
@@ -1064,6 +1172,9 @@ fn start_tracker_pool(
     tun: &BtTunables,
     live: &Arc<std::sync::Mutex<LiveStats>>,
     tr_tx: &mpsc::Sender<TrackerReport>,
+    signals: &Arc<std::sync::Mutex<SignalState>>,
+    rtc_tx: &mpsc::Sender<RtcReady>,
+    reannounce_notify: &Arc<tokio::sync::Notify>,
 ) -> (Vec<Arc<tokio::sync::Notify>>, Vec<tokio::task::AbortHandle>) {
     let mut notifies = Vec::with_capacity(trackers.len());
     let mut handles = Vec::with_capacity(trackers.len());
@@ -1077,10 +1188,16 @@ fn start_tracker_pool(
             numwant: tun.tracker_numwant,
             live: live.clone(),
             completed_notify: completed_notify.clone(),
+            reannounce_notify: Arc::clone(reannounce_notify),
             backoff_start_secs: tun.tracker_backoff_start_secs,
             backoff_cap_secs: tun.tracker_backoff_cap_secs,
             udp_base_timeout_secs: tun.udp_base_timeout_secs,
             udp_retries: tun.udp_retries,
+            signals: Arc::clone(signals),
+            rtc_tx: rtc_tx.clone(),
+            transports: tun.transports,
+            rtc_retry_base_secs: tun.peer_retry_base_secs,
+            rtc_retry_cap_secs: tun.peer_retry_cap_secs,
         };
         handles.push(spawn_tracker(url.clone(), ctx, tr_tx.clone()));
         notifies.push(completed_notify);
@@ -1120,6 +1237,9 @@ fn spawn_stopped_announce(
                 TrackerUrl::Http(u) => {
                     let _ = announce_http(u, &params, &client).await;
                 }
+                TrackerUrl::Ws(u) => {
+                    let _ = announce_ws(u, &params, &[], None).await;
+                }
                 TrackerUrl::Udp(u) => {
                     if let Some((host, p)) = udp_host_port(u) {
                         if let Ok(sock) = tokio::net::UdpSocket::bind("0.0.0.0:0").await {
@@ -1136,6 +1256,377 @@ fn spawn_stopped_announce(
 fn live_snapshot(live: &std::sync::Mutex<LiveStats>) -> (u64, u64, u64) {
     let st = live.lock().expect("live stats 锁");
     (st.uploaded, st.downloaded, st.left)
+}
+
+const DEFAULT_WS_ANNOUNCE_INTERVAL_SECS: u64 = 30;
+
+/// ws tracker 持久会话（真实 WebTorrent 语义）：连接保持打开，announce 周期
+/// 重发（interval 由服务器给出），offer/answer 推送即时处理。返回 Err 表示
+/// 会话结束（断开/被拒），由外层退避后重连。
+async fn ws_tracker_session(
+    url: &str,
+    ctx: &AnnounceCtx,
+    tx: &mpsc::Sender<TrackerReport>,
+) -> Result<(), BtError> {
+    let mut sess = tokio::time::timeout(
+        Duration::from_secs(super::tracker::WS_CONNECT_TIMEOUT_SECS),
+        WsSession::connect(url),
+    )
+    .await
+    .map_err(|_| BtError::Tracker("ws tracker 连接超时".into()))??;
+    let url_owned = TrackerUrl::Ws(url.to_string());
+    let mut interval_secs: u64 = DEFAULT_WS_ANNOUNCE_INTERVAL_SECS;
+    let mut min_interval_secs: u64 = 0;
+    let mut first = true;
+    let mut completed_sent = false;
+    loop {
+        let ev = {
+            let st = ctx.live.lock().expect("live stats 锁");
+            if st.completed && !completed_sent {
+                completed_sent = true;
+                Some(TrackerEvent::Completed)
+            } else if first {
+                Some(TrackerEvent::Started)
+            } else {
+                None
+            }
+        };
+        first = false;
+        let (up, down, left) = {
+            let st = ctx.live.lock().expect("live stats 锁");
+            (st.uploaded, st.downloaded, st.left)
+        };
+        let params = AnnounceParams {
+            infohash: ctx.infohash,
+            peer_id: ctx.peer_id,
+            port: ctx.port,
+            uploaded: up,
+            downloaded: down,
+            left,
+            event: ev,
+            numwant: ctx.numwant,
+        };
+        // completed 不携带 offers（webtorrent 口径）；started/周期性 announce 携带
+        let offers = if ev == Some(TrackerEvent::Completed) {
+            Vec::new()
+        } else {
+            ws_prepare_offers(ctx).await
+        };
+        sess.send_json(&build_announce_json(&params, &offers, None))
+            .await?;
+        let last_announce = tokio::time::Instant::now();
+        let mut next_announce = last_announce + Duration::from_secs(interval_secs);
+        loop {
+            let wait = next_announce.saturating_duration_since(tokio::time::Instant::now());
+            tokio::select! {
+                _ = ctx.completed_notify.notified() => {
+                    if !completed_sent {
+                        completed_sent = true;
+                        let (up, down, left) = {
+                            let st = ctx.live.lock().expect("live stats 锁");
+                            (st.uploaded, st.downloaded, st.left)
+                        };
+                        let p = AnnounceParams {
+                            event: Some(TrackerEvent::Completed),
+                            uploaded: up,
+                            downloaded: down,
+                            left,
+                            ..params
+                        };
+                        sess.send_json(&build_announce_json(&p, &[], None)).await?;
+                    }
+                    next_announce =
+                        tokio::time::Instant::now() + Duration::from_secs(interval_secs);
+                }
+                _ = ctx.reannounce_notify.notified() => {
+                    // 扩容触发的提前 announce（携带新 offers，bug28③）：尊重
+                    // min_interval，未到最早许可时刻则补足剩余等待后重发。
+                    let wait_more =
+                        min_interval_secs.saturating_sub(last_announce.elapsed().as_secs());
+                    if wait_more > 0 {
+                        tokio::time::sleep(Duration::from_secs(wait_more)).await;
+                    }
+                    break;
+                }
+                inbound = sess.recv_json(wait) => match inbound {
+                    Err(e) => return Err(e),
+                    Ok(None) => break,
+                    Ok(Some(v)) => match classify_ws_message(&v) {
+                        WsInbound::Failure(fr) => {
+                            return Err(BtError::Tracker(format!("tracker 拒绝：{fr}")));
+                        }
+                        WsInbound::Response(r) => {
+                            if r.interval > 0 {
+                                interval_secs = u64::from(r.interval);
+                            }
+                            min_interval_secs = u64::from(r.min_interval.unwrap_or(0));
+                            let _ = tx
+                                .send(TrackerReport::Peers {
+                                    url: announce_url(&url_owned),
+                                    peers: r.peers.clone(),
+                                    complete: r.complete,
+                                    incomplete: r.incomplete,
+                                    interval_secs,
+                                })
+                                .await;
+                            ws_process_response(ctx, &mut sess, &r).await;
+                            next_announce = tokio::time::Instant::now()
+                                + Duration::from_secs(interval_secs);
+                        }
+                        WsInbound::Offer(sig) => {
+                            ws_handle_offer(ctx, &mut sess, &sig).await;
+                        }
+                        WsInbound::Answer(sig) => {
+                            ws_handle_answer(ctx, &sig).await;
+                        }
+                        WsInbound::Other => {}
+                    },
+                },
+            }
+        }
+    }
+}
+
+/// 组装本轮 announce 携带的 offers：已知 swarm peer（响应含 peer_id 列表，
+/// 如 harness/mini tracker 场景）按角色分工定向发；swarm 未知（真实 tracker
+/// 不返回 peers 列表）则盲发，由 tracker 抽样转发。
+async fn ws_prepare_offers(ctx: &AnnounceCtx) -> Vec<WsOffer> {
+    if !ctx.transports.webrtc {
+        return Vec::new();
+    }
+    {
+        let mut st = ctx.signals.lock().expect("signals 锁");
+        st.prune_expired();
+    }
+    let targets = {
+        let st = ctx.signals.lock().expect("signals 锁");
+        st.plan_offer_targets(
+            &ctx.peer_id,
+            OFFERS_PER_ANNOUNCE,
+            ctx.rtc_retry_base_secs,
+            ctx.rtc_retry_cap_secs,
+        )
+    };
+    let blind = {
+        let st = ctx.signals.lock().expect("signals 锁");
+        st.swarm_peers.is_empty()
+    };
+    let mut offers = Vec::new();
+    for target in targets {
+        let pc = match super::webrtc::new_peer_connection().await {
+            Ok(pc) => pc,
+            Err(_) => {
+                ctx.signals
+                    .lock()
+                    .expect("signals 锁")
+                    .mark_peer_fail(&target);
+                continue;
+            }
+        };
+        match super::webrtc::create_data_channel_offer(
+            &pc,
+            &ctx.peer_id,
+            Some(target),
+            ctx.rtc_tx.clone(),
+        )
+        .await
+        {
+            Ok(bundle) => {
+                let accepted = {
+                    let mut st = ctx.signals.lock().expect("signals 锁");
+                    let ok =
+                        st.pending_offers.len() < PENDING_OFFER_CAP && !st.is_busy_with(&target);
+                    if ok {
+                        st.pending_offers.insert(
+                            bundle.offer_id.clone(),
+                            PendingOffer {
+                                to_peer_id: target,
+                                pc: Arc::clone(&bundle.pc),
+                                answered: false,
+                                created: std::time::Instant::now(),
+                                remote_slot: Arc::clone(&bundle.remote_slot),
+                            },
+                        );
+                        st.pcs.push(Arc::clone(&bundle.pc));
+                    }
+                    ok
+                };
+                if accepted {
+                    offers.push(WsOffer {
+                        offer_id: bundle.offer_id,
+                        sdp: bundle.sdp,
+                        to_peer_id: target,
+                    });
+                } else {
+                    let _ = bundle.pc.close().await;
+                }
+            }
+            Err(_) => {
+                let _ = pc.close().await;
+                ctx.signals
+                    .lock()
+                    .expect("signals 锁")
+                    .mark_peer_fail(&target);
+            }
+        }
+    }
+    if blind {
+        while offers.len() < OFFERS_PER_ANNOUNCE {
+            let room = {
+                let st = ctx.signals.lock().expect("signals 锁");
+                st.pending_offers.len() < PENDING_OFFER_CAP
+            };
+            if !room {
+                break;
+            }
+            let pc = match super::webrtc::new_peer_connection().await {
+                Ok(pc) => pc,
+                Err(_) => break,
+            };
+            match super::webrtc::create_data_channel_offer(
+                &pc,
+                &ctx.peer_id,
+                None,
+                ctx.rtc_tx.clone(),
+            )
+            .await
+            {
+                Ok(bundle) => {
+                    let accepted = {
+                        let mut st = ctx.signals.lock().expect("signals 锁");
+                        let ok = st.pending_offers.len() < PENDING_OFFER_CAP;
+                        if ok {
+                            st.pending_offers.insert(
+                                bundle.offer_id.clone(),
+                                PendingOffer {
+                                    to_peer_id: [0u8; 20],
+                                    pc: Arc::clone(&bundle.pc),
+                                    answered: false,
+                                    created: std::time::Instant::now(),
+                                    remote_slot: Arc::clone(&bundle.remote_slot),
+                                },
+                            );
+                            st.pcs.push(Arc::clone(&bundle.pc));
+                        }
+                        ok
+                    };
+                    if accepted {
+                        offers.push(WsOffer {
+                            offer_id: bundle.offer_id,
+                            sdp: bundle.sdp,
+                            to_peer_id: [0u8; 20],
+                        });
+                    } else {
+                        let _ = bundle.pc.close().await;
+                        break;
+                    }
+                }
+                Err(_) => {
+                    let _ = pc.close().await;
+                    break;
+                }
+            }
+        }
+    }
+    offers
+}
+
+/// 处理收到的 offer：建立 answer 并沿会话 socket 立即回发
+/// （真实服务器对 answer 类 announce 不回响应，不能等待）。
+async fn ws_handle_offer(ctx: &AnnounceCtx, sess: &mut WsSession, sig: &WsSignal) {
+    if !ctx.transports.webrtc {
+        return;
+    }
+    let busy = ctx
+        .signals
+        .lock()
+        .expect("signals 锁")
+        .is_busy_with(&sig.peer_id);
+    if busy || sig.peer_id == ctx.peer_id {
+        return;
+    }
+    match super::webrtc::create_data_channel_answer(sig, ctx.rtc_tx.clone()).await {
+        Ok((pc, ans)) => {
+            {
+                let mut st = ctx.signals.lock().expect("signals 锁");
+                st.pcs.push(Arc::clone(&pc));
+            }
+            let body = build_answer_announce_json(&ctx.infohash, &ctx.peer_id, &ans);
+            if sess.send_json(&body).await.is_err() {
+                ctx.signals
+                    .lock()
+                    .expect("signals 锁")
+                    .mark_peer_fail(&sig.peer_id);
+            }
+        }
+        Err(_) => {
+            ctx.signals
+                .lock()
+                .expect("signals 锁")
+                .mark_peer_fail(&sig.peer_id);
+        }
+    }
+}
+
+/// 处理收到的 answer：匹配 pending offer，接受后回填远端真实 peer_id
+/// （盲 offer 发出时对端身份未知，answer 推送携带真实 id）。
+async fn ws_handle_answer(ctx: &AnnounceCtx, sig: &WsSignal) {
+    let entry = ctx
+        .signals
+        .lock()
+        .expect("signals 锁")
+        .pending_offers
+        .remove(&sig.offer_id);
+    let Some(po) = entry else { return };
+    match super::webrtc::accept_answer(&po.pc, sig).await {
+        Ok(()) => {
+            if let Ok(mut slot) = po.remote_slot.lock() {
+                *slot = Some(sig.peer_id);
+            }
+            let mut st = ctx.signals.lock().expect("signals 锁");
+            st.pending_offers.insert(
+                sig.offer_id.clone(),
+                PendingOffer {
+                    to_peer_id: sig.peer_id,
+                    pc: Arc::clone(&po.pc),
+                    answered: true,
+                    created: po.created,
+                    remote_slot: Arc::clone(&po.remote_slot),
+                },
+            );
+        }
+        Err(_) => {
+            let pc = Arc::clone(&po.pc);
+            tokio::spawn(async move {
+                let _ = pc.close().await;
+            });
+            ctx.signals
+                .lock()
+                .expect("signals 锁")
+                .mark_peer_fail(&sig.peer_id);
+        }
+    }
+}
+
+/// 处理 announce 响应：注册 swarm peers + 处理捎带数组（harness/mini tracker
+/// 契约；真实 tracker 的响应不含这些字段，推送走会话循环的 Offer/Answer 分支）。
+async fn ws_process_response(ctx: &AnnounceCtx, sess: &mut WsSession, resp: &WsAnnounceResponse) {
+    {
+        let mut st = ctx.signals.lock().expect("signals 锁");
+        for pid in &resp.peer_ids {
+            st.swarm_peers.insert(*pid);
+        }
+        st.swarm_peers.remove(&ctx.peer_id);
+    }
+    if !ctx.transports.webrtc {
+        return;
+    }
+    for a in &resp.answers {
+        ws_handle_answer(ctx, a).await;
+    }
+    for sig in &resp.offers_to_answer {
+        ws_handle_offer(ctx, sess, sig).await;
+    }
 }
 
 fn spawn_outgoing_peer(
@@ -1178,6 +1669,7 @@ fn spawn_outgoing_peer(
             &meta.infohash,
             &pid,
             handshake_timeout,
+            true,
             tx,
             dl_flow,
         )
@@ -1199,7 +1691,17 @@ fn spawn_incoming_peer(
     let hs_timeout = spec.tunables.handshake_timeout_secs;
     tokio::spawn(async move {
         let _ = sock.set_nodelay(true);
-        run_peer_loop(conn_id, sock, &meta.infohash, &pid, hs_timeout, tx, dl_flow).await;
+        run_peer_loop(
+            conn_id,
+            sock,
+            &meta.infohash,
+            &pid,
+            hs_timeout,
+            false,
+            tx,
+            dl_flow,
+        )
+        .await;
         let _ = addr;
     });
 }
@@ -1211,6 +1713,7 @@ fn addr_ip(addr: &str) -> Option<IpAddr> {
 fn announce_url(u: &TrackerUrl) -> String {
     match u {
         TrackerUrl::Http(s) => s.clone(),
+        TrackerUrl::Ws(s) => s.clone(),
         TrackerUrl::Udp(s) => s.clone(),
     }
 }
@@ -1221,18 +1724,28 @@ fn addr_sock(addr: &str) -> Option<(IpAddr, u16)> {
     Some((host.parse().ok()?, port.parse().ok()?))
 }
 
-async fn run_peer_loop(
+async fn run_peer_loop<S>(
     conn_id: usize,
-    mut sock: TcpStream,
+    mut sock: S,
     infohash: &[u8; 20],
     peer_id: &[u8; 20],
     handshake_timeout_secs: u64,
+    initiator: bool,
     tx: mpsc::Sender<(usize, PeerIn)>,
     dl_flow: Arc<DlFlow>,
-) {
+) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let (out_tx, mut out_rx) = mpsc::channel::<PeerOut>(64);
 
-    let hs = peer::handshake(&mut sock, infohash, peer_id, true, handshake_timeout_secs).await;
+    let hs = peer::handshake(
+        &mut sock,
+        infohash,
+        peer_id,
+        initiator,
+        handshake_timeout_secs,
+    )
+    .await;
     match hs {
         Ok(ok) => {
             if ok.peer_id == *peer_id {
@@ -1279,14 +1792,16 @@ async fn run_peer_loop(
     }
 }
 
-async fn peer_pump(
+async fn peer_pump<S>(
     conn_id: usize,
-    sock: TcpStream,
+    sock: S,
     out_rx: &mut mpsc::Receiver<PeerOut>,
     tx: mpsc::Sender<(usize, PeerIn)>,
     dl_flow: Arc<DlFlow>,
-) {
-    let (mut rd, mut wr) = sock.into_split();
+) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let (mut rd, mut wr) = tokio::io::split(sock);
     let tx_read = tx.clone();
     let reader = tokio::spawn(async move {
         loop {
@@ -1384,11 +1899,10 @@ const GRACE_CLOSE_SECS: u64 = 5;
 /// 其长闲置连接依赖本保活维持（遗留受限项「ezr 不发 KeepAlive」的修复）。
 const PEER_KEEPALIVE_SECS: u64 = 90;
 
-async fn graceful_close(
-    mut wr: tokio::net::tcp::OwnedWriteHalf,
-    reader: tokio::task::JoinHandle<()>,
-    grace: Duration,
-) {
+async fn graceful_close<W>(mut wr: W, reader: tokio::task::JoinHandle<()>, grace: Duration)
+where
+    W: AsyncWrite + Unpin,
+{
     let _ = wr.shutdown().await;
     drop(wr);
     let mut reader = reader;
@@ -1397,10 +1911,15 @@ async fn graceful_close(
 }
 
 fn new_conn_stat(addr: String) -> ConnStat {
+    new_conn_stat_with(addr, PeerTransport::Tcp)
+}
+
+fn new_conn_stat_with(addr: String, protocol: PeerTransport) -> ConnStat {
     let (dummy_tx, _dummy_rx) = mpsc::channel(1);
     ConnStat {
         peer_out: dummy_tx,
         addr,
+        protocol,
         client: String::new(),
         peer_id: None,
         has: HashSet::new(),
@@ -1507,14 +2026,9 @@ async fn handle_peer_msg(
             let have = done.contains(&index);
             let valid_len = length > 0 && length as usize <= UPLOAD_BLOCK * 2;
             if allowed && have && valid_len {
-                if let Some(plan) = upload_read_plan(
-                    pmap,
-                    &spec.save_dir,
-                    &spec.name,
-                    index,
-                    begin,
-                    length as usize,
-                ) {
+                if let Some(plan) =
+                    upload_read_plan(pmap, &spec.save_dir, index, begin, length as usize)
+                {
                     st.cum_up += u64::from(length);
                     let out = st.peer_out.clone();
                     let ul = ul.clone();
@@ -1923,10 +2437,9 @@ fn recompute_downloaded(done: &HashSet<u32>, pmap: &PieceMap) -> u64 {
 
 async fn open_selected_file_handle(
     save_dir: &str,
-    name: &str,
     f: &crate::model::BtFile,
 ) -> Result<tokio::fs::File, String> {
-    let abs = file_abs_path(save_dir, name, &f.path);
+    let abs = file_abs_path(save_dir, &f.path);
     if let Some(parent) = std::path::Path::new(&abs).parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
@@ -1954,6 +2467,9 @@ fn fill_peer_slots(
     next_conn: &mut usize,
     dl_flow: &Arc<DlFlow>,
 ) {
+    if !spec.tunables.transports.allows(PeerTransport::Tcp) {
+        return;
+    }
     // 端点级（ip:port）去重：候选 = tracker/PEX 给出的 ip:listen，连接 = 出连
     // ip:listen 或入连 ip:ephemeral。同 IP 不同端口的多个 peer（多客户端一台机/
     // NAT 共享出口）都必须可达；同一客户端实例的出连+入连双通道由握手后
@@ -2214,12 +2730,11 @@ async fn on_block(
     None
 }
 
-fn file_abs_path(save_dir: &str, task_name: &str, rel: &str) -> String {
-    let p = std::path::Path::new(rel);
-    if p.parent().is_none() || p.components().count() == 1 {
-        return format!("{save_dir}/{rel}");
-    }
-    format!("{save_dir}/{task_name}/{rel}")
+/// rel 已含 torrent name 首段（单文件 = name；多文件 = name/…，metainfo
+/// 解析保证），落盘路径恒为 save_dir/rel——与任务详情展示的
+/// target_path = save_dir/name 一致（bug28①：多文件不得再叠一层 name）。
+fn file_abs_path(save_dir: &str, rel: &str) -> String {
+    format!("{save_dir}/{rel}")
 }
 
 /// 从盘上读一块 piece 并做 SHA-1 校验（启动重校验用）。
@@ -2336,6 +2851,7 @@ fn conn_views(
         views.push(BtConnView {
             id: *cid,
             addr: st.addr.clone(),
+            protocol: st.protocol.label().to_string(),
             down_speed,
             cum_down: st.cum_down,
             up_speed,
@@ -2390,7 +2906,6 @@ type UploadSeg = (String, u64, usize, usize);
 fn upload_read_plan(
     pmap: &PieceMap,
     save_dir: &str,
-    name: &str,
     piece: u32,
     begin: u32,
     len: usize,
@@ -2416,7 +2931,7 @@ fn upload_read_plan(
         let n = (o_hi - o_lo) as usize;
         let rel = &pmap.files.get(fi)?.path;
         plan.push((
-            file_abs_path(save_dir, name, rel),
+            file_abs_path(save_dir, rel),
             off_in_file + (o_lo - seg_lo),
             dst,
             n,
@@ -4096,15 +4611,14 @@ mod tests {
         std::fs::write(dir.join("a.bin"), &a).unwrap();
         std::fs::write(dir.join("b.bin"), &b).unwrap();
         let save_dir = dir.to_string_lossy().into_owned();
-        let plan =
-            upload_read_plan(&pmap, &save_dir, "", 1, 32, 32).expect("跨文件区间可出读盘计划");
+        let plan = upload_read_plan(&pmap, &save_dir, 1, 32, 32).expect("跨文件区间可出读盘计划");
         let out = read_upload_blocks(plan, 32).await.expect("跨文件区间可读");
         let mut expect = Vec::new();
         expect.extend_from_slice(&a[96..100]);
         expect.extend_from_slice(&b[0..28]);
         assert_eq!(out, expect, "仅读请求区间（piece1 全局 [96..128)）");
         assert!(
-            upload_read_plan(&pmap, &save_dir, "", 1, 60, 8).is_none(),
+            upload_read_plan(&pmap, &save_dir, 1, 60, 8).is_none(),
             "越界区间拒绝"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -4375,7 +4889,7 @@ mod tests {
         let mut handles: HashMap<usize, tokio::fs::File> = HashMap::new();
         handles.insert(
             0,
-            open_selected_file_handle(&save_dir, "r.bin", &files[0])
+            open_selected_file_handle(&save_dir, &files[0])
                 .await
                 .unwrap(),
         );
@@ -4442,7 +4956,7 @@ mod tests {
         let mut handles: HashMap<usize, tokio::fs::File> = HashMap::new();
         handles.insert(
             0,
-            open_selected_file_handle(&save_dir, "i.bin", &files[0])
+            open_selected_file_handle(&save_dir, &files[0])
                 .await
                 .unwrap(),
         );
@@ -5261,6 +5775,150 @@ mod tests {
             max_upload_speed: 0,
             tunables: BtTunables::default(),
         }
+    }
+
+    #[test]
+    fn file_abs_path_single_layer_for_multi_file() {
+        // bug28①：rel 首段已含 torrent name（metainfo 解析保证：单文件 = name，
+        // 多文件 = name/…），落盘路径 = save_dir/rel，不得再叠加任务名（旧实现
+        // 多段 rel 拼成 save_dir/name/name/… 双层）。
+        assert_eq!(file_abs_path("/a", "b"), "/a/b");
+        assert_eq!(file_abs_path("/a", "b/sub/f.bin"), "/a/b/sub/f.bin");
+        assert_eq!(file_abs_path("/a", "b/sub/dir/f.bin"), "/a/b/sub/dir/f.bin");
+    }
+
+    /// 本地 ws announce 计数服务器：每收到一条 announce 回一条响应
+    /// （interval/min interval 可配），返回 ws:// 地址供会话连接。
+    async fn ws_announce_counter_server(
+        count: Arc<std::sync::atomic::AtomicUsize>,
+        interval: u32,
+        min_interval: u32,
+    ) -> String {
+        use futures::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let Ok((sock, _)) = listener.accept().await else {
+                return;
+            };
+            let Ok(mut ws) = tokio_tungstenite::accept_async(sock).await else {
+                return;
+            };
+            while let Some(Ok(msg)) = ws.next().await {
+                let Message::Text(t) = msg else {
+                    continue;
+                };
+                let Ok(req) = serde_json::from_str::<serde_json::Value>(&t) else {
+                    continue;
+                };
+                if req.get("action").and_then(|v| v.as_str()) != Some("announce") {
+                    continue;
+                }
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let resp = serde_json::json!({
+                    "action": "announce",
+                    "info_hash": req["info_hash"],
+                    "interval": interval,
+                    "min interval": min_interval,
+                    "complete": 1,
+                    "incomplete": 0,
+                    "peers": []
+                });
+                if ws.send(Message::Text(resp.to_string())).await.is_err() {
+                    break;
+                }
+            }
+        });
+        format!("ws://{addr}/announce")
+    }
+
+    fn ws_test_ctx(reannounce: Arc<tokio::sync::Notify>) -> AnnounceCtx {
+        AnnounceCtx {
+            infohash: [7u8; 20],
+            peer_id: [8u8; 20],
+            port: 6881,
+            client: reqwest::Client::new(),
+            numwant: 50,
+            live: Arc::new(std::sync::Mutex::new(LiveStats::default())),
+            completed_notify: Arc::new(tokio::sync::Notify::new()),
+            reannounce_notify: reannounce,
+            backoff_start_secs: 8,
+            backoff_cap_secs: 60,
+            udp_base_timeout_secs: 2,
+            udp_retries: 2,
+            signals: Arc::new(std::sync::Mutex::new(SignalState::default())),
+            rtc_tx: mpsc::channel(4).0,
+            transports: PeerTransports {
+                tcp: true,
+                webrtc: false,
+            },
+            rtc_retry_base_secs: 5,
+            rtc_retry_cap_secs: 60,
+        }
+    }
+
+    async fn wait_announce_count(count: &Arc<std::sync::atomic::AtomicUsize>, n: usize) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while count.load(std::sync::atomic::Ordering::SeqCst) < n {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "announce 计数未达 {n}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn ws_tracker_session_reannounces_immediately_on_grow_notify() {
+        // bug28③：扩容触发 reannounce_notify → ws 会话不等 interval（120s），
+        // 立即重发 announce（携带新 offers 重连 shed 的 peer）。
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let url = ws_announce_counter_server(count.clone(), 120, 0).await;
+        let reannounce = Arc::new(tokio::sync::Notify::new());
+        let sess = {
+            let reannounce = Arc::clone(&reannounce);
+            tokio::spawn(async move {
+                let ctx = ws_test_ctx(reannounce);
+                let (tx, _rx) = mpsc::channel::<TrackerReport>(32);
+                let _ = ws_tracker_session(&url, &ctx, &tx).await;
+            })
+        };
+        wait_announce_count(&count, 1).await;
+        let t1 = tokio::time::Instant::now();
+        reannounce.notify_waiters();
+        wait_announce_count(&count, 2).await;
+        assert!(
+            t1.elapsed() < Duration::from_secs(4),
+            "notify 后应立即 re-announce，实际 {:?}",
+            t1.elapsed()
+        );
+        sess.abort();
+    }
+
+    #[tokio::test]
+    async fn ws_tracker_session_reannounce_respects_min_interval() {
+        // min_interval=60：即使收到 notify，也不得早于 min_interval 提前 announce。
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let url = ws_announce_counter_server(count.clone(), 120, 60).await;
+        let reannounce = Arc::new(tokio::sync::Notify::new());
+        let sess = {
+            let reannounce = Arc::clone(&reannounce);
+            tokio::spawn(async move {
+                let ctx = ws_test_ctx(reannounce);
+                let (tx, _rx) = mpsc::channel::<TrackerReport>(32);
+                let _ = ws_tracker_session(&url, &ctx, &tx).await;
+            })
+        };
+        wait_announce_count(&count, 1).await;
+        reannounce.notify_waiters();
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert_eq!(
+            count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "min_interval 未到不得提前 announce"
+        );
+        sess.abort();
     }
 
     #[tokio::test]

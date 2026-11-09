@@ -27,6 +27,11 @@
 # 探测相符（实为同一文件）→ 原地接续，场景 13 口径不变（补判别前提注）。判别载体 =
 # FR-01-22 三要素探测（sidecar 无 URL、已删任务不在注册表，同/异 URL 无元数据可判，
 # 合成裁决随 phase-01 v1.46 注记登记）。
+# v1.47 修订注（bug28 轮，操作者 20261109）：场景 12「删除任务和文件」多文件 BT 语义澄清——
+# 多文件 BT 任务落盘形态为目录 save_dir/<name>/（内含 torrent 全部文件，v1.42 落盘布局钦定），
+# 「目标文件」删除 = 该目录树整删（remove_dir_all）；单文件（HTTP/单文件 BT）仍为文件删除；
+# sidecar（如仍在）与任务记录删除口径不变。缺陷 = 旧实现仅 remove_file，对目录静默无效
+# （bug28②，D72 登记 handoff）。
 Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
 
   期号 01。依据 project/mission/phase-01.md FR-01-20~26 与 D10/D11 定案。sidecar 文件为

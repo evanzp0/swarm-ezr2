@@ -728,6 +728,7 @@ mod bt_key_tests {
         BtConnRow {
             id,
             addr: addr.to_string(),
+            protocol: "TCP".into(),
             down_speed: 0.0,
             cum_down: 0,
             up_speed: 0.0,

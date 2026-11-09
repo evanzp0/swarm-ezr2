@@ -10,7 +10,7 @@
 | adversaries | 2 | coder ⇄ reviewer（对抗式评审循环，reviewer 满意后结束） |
 | two-pack | 2 | coder → cleaner |
 | four-pack | 4 | specifier → coder → refactorer → architect |
-| six-pack | 6 | specifier → coder → cleaner → architect → hardender → QA |
+| six-pack | 6 | specifier → coder → cleaner → architect → QA（hardender 可选：默认链不含、按需显式 begin——操作者 20261109 裁决） |
 | squad | 13 | squad-leader 编排：analyst → gherkin-writer → qa-procedure-writer → implementer → cleaner → code-reviewer → hardener → qa → architect → senior-implementer；常驻：troubleshooter（排障）；支撑：system-analyst（产品框架） |
 
 > 角色链仅为**可用编排顺序**：`complete` 归档即会话终结，不自动流转到下一角色；
@@ -48,7 +48,7 @@
 | architect | `packs/six-pack/architect/SKILL.md` | 完整工作流：架构评审、模块边界、依赖方向与属性测试覆盖率 |
 | cleaner | `packs/six-pack/cleaner/SKILL.md` | 完整工作流：保持行为不变的清理、覆盖率提升、CRAP/DRY 审查与变异点扫描 |
 | coder | `packs/six-pack/coder/SKILL.md` | 完整工作流：以 TDD、单元测试和生成的验收测试实现已批准的行为切片 |
-| hardender | `packs/six-pack/hardender/SKILL.md` | 完整工作流：变异加固、语言变异、CRAP/DRY 验证与软 Gherkin 变异 |
+| hardender | `packs/six-pack/hardender/SKILL.md` | 完整工作流：变异加固、语言变异、CRAP/DRY 验证与软 Gherkin 变异（**可选节点**：默认链不含，按需显式 begin——操作者 20261109 裁决） |
 | specifier | `packs/six-pack/specifier/SKILL.md` | 完整工作流：Inversion 选择题访谈（chat 选择题面板提问，不支持时退化为 chat 输入选择题答案；两阶段需求澄清）收齐意图后，产出已认可的 Gherkin 规格与端到端 QA 套件规格 |
 
 ## squad

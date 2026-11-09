@@ -113,7 +113,7 @@ cmd_chains() {
   adversaries coder ⇄ reviewer —— 对抗式评审循环，reviewer 满意后入 Done
   two-pack    coder → cleaner → Done （cleaner 产出合并建议，供 coder 吸收）
   four-pack   specifier → coder → refactorer → architect → Done （refactorer/architect 产出合并建议）
-  six-pack    specifier → coder → cleaner → architect → hardender → QA → Done （cleaner/architect/QA 产出合并建议）
+  six-pack    specifier → coder → cleaner → architect → (hardender 可选) → QA → Done （hardender 默认链不含、按需显式 begin——操作者 20261109 裁决；cleaner/architect/QA 产出合并建议）
   squad       backlog → Start → analyst(实现计划,用户批准) → gherkin-writer + qa-procedure-writer(批准)
               → implementer → cleaner → code-reviewer(仅建议) → hardener(落实建议+加固)
               → qa → architect(建议) → senior-implementer(如有建议) → 故事完成

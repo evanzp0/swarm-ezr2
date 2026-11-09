@@ -307,6 +307,7 @@ impl App {
                             .map(|c| crate::app::BtConnRow {
                                 id: c.id,
                                 addr: c.addr,
+                                protocol: c.protocol,
                                 down_speed: c.down_speed,
                                 cum_down: c.cum_down,
                                 up_speed: c.up_speed,

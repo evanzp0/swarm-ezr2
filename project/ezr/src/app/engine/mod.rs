@@ -1427,6 +1427,35 @@ mod evt_tests {
     }
 
     #[tokio::test]
+    async fn delete_task_files_removes_multi_file_directory_tree() {
+        // bug28②：多文件 BT 落盘为目录树 save_dir/name/…，删除任务和文件
+        // 必须整目录删除（旧实现 remove_file 对目录无效且静默失败）。
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-evt-deldir");
+        let base = dir.to_string_lossy().trim_end_matches('/').to_string();
+        std::fs::create_dir_all(format!("{base}/bt-multi/sub")).unwrap();
+        std::fs::write(format!("{base}/bt-multi/sub/f1.bin"), b"x").unwrap();
+        std::fs::write(format!("{base}/bt-multi/f2.bin"), b"y").unwrap();
+        std::fs::write(format!("{base}/bt-multi.f.ck"), b"z").unwrap();
+        App::delete_task_files(&base, "bt-multi");
+        assert!(
+            !std::path::Path::new(&format!("{base}/bt-multi")).exists(),
+            "多文件任务目录树应整树删除"
+        );
+        assert!(
+            std::path::Path::new(&format!("{base}/bt-multi.f.ck")).exists(),
+            "同名前缀不相关文件不受影响"
+        );
+        // 单文件形态回归：仍是文件级删除
+        std::fs::write(format!("{base}/solo.bin"), b"w").unwrap();
+        App::delete_task_files(&base, "solo.bin");
+        assert!(
+            !std::path::Path::new(&format!("{base}/solo.bin")).exists(),
+            "单文件任务仍按文件删除"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
     async fn toast_sets_message_with_fresh_expiry() {
         let mut app = make_app("toast");
         app.on_evt(Evt::Toast("引擎提示".to_string())).await;
