@@ -1,4 +1,4 @@
-# project/mission.md — EZR Downloader（ezr download）需求大纲 (v1.44)
+# project/mission.md — EZR Downloader（ezr download）需求大纲 (v1.45)
 
 > **需求存放模式：分期模式**（宪法第一章「需求存放两模式」，操作者明确指定）。
 > 本文件只存放需求大纲：项目目标、范围、约束、验收期望与分期索引；
@@ -12,6 +12,7 @@
 > v1.42：操作者 bug25 轮指令（specifier 轮）：①面板层速度单位二进制统一——头部仪表/任务列表/并发三面板全部活速显示统一 B/s、KiB/s、MiB/s、GiB/s（1024 进位；原十进制 KB/s、MB/s 面板层退役，尺寸类 fmt_size 口径不在范围）；②并发 panel 列宽/表头——BT 下载速度/上传速度列宽 8→12、累计下载/累计上传 8→10（其余列不变、内容宽 99→111、HTTP 三列 22→28），速度/累计四列表头右对齐（其余表头左对齐不变），客户端收缩基线 65→77；③重复任务判定载体改判——添加重复 http(s)/bt 任务由 toast「⚠ 任务已存在」改弹出「错误」窗口（D56）消息「该链接的任务已存在」（D56 消息臂两臂→三臂；`暂不支持该类型的链接` 仅属命令窗口分流臂③不变），详见 phase-01 v1.44 注记与 phase-02 v1.13 注记（bug25 轮，操作者 chat 指令即修订裁决）；ezr-demo 文档与代码同构同步（coder 轮承接）。
 > v1.43：操作者 QA-RS-06 复验轮规格缺口裁决（specifier 轮；Inversion 阶段 1 受限退化 chat 输入选择题答案 1A/2A/3A/4A）：**FR-01-26 v1.45 修订——sidecar 接续臂加「无活任务占用」守卫**（v1.28 路径基接续臂无存活守卫，异 URL 同推导名且原任务存活时两活任务并发写同一目标文件互踩，QA-RS-06 屏面实证）：占用 = 任务列表内任何未完成任务目标路径（同目录+同名）相同即算（已完成不算）；守卫触发 = 接续臂不生效、新任务按 FR-01-02 追加序号全新下载且静默；对话框与 CLI 同口径；FR-01-22 兜底收窄为无占用情形。详见 phase-01 v1.45 注记（规格 features/01-resume-sidecar.feature 场景 15 新增 + QA-RS-15）。
 > v1.44：操作者审批改判（specifier 修订轮；审批原文「场景 14 的情形套用场景 15 的处理，遗留的 sidecar 由用户手工删除」）：**FR-01-26/FR-01-22 v1.46 修订——路径基孤儿接续「原地作废从头」改判「序号改道 + 孤儿保留」**（异 URL 同推导名 + 原任务已删除情形）：探测三要素不符 → 新任务按 FR-01-02 序号链落 `<推导名>.1` 从头全新下载且静默（套用场景 15 处理）；孤儿 sidecar 与部分文件原样保留、系统不自动清理（由用户手工删除）；探测相符（实为同一文件）→ 原地接续，场景 13 不变。详见 phase-01 v1.46 注记（规格 features/01-resume-sidecar.feature 场景 14 改判 + QA-RS-14 改判）。
+> v1.45：操作者修订轮指令（specifier 规格轮 20261109；Inversion 阶段 1 受限退化 chat 输入选择题答案 **1a/2b/3a/4a/5a**——会话中断致题目原文散失，题目录按 plan 基线记录重建并登记 handoff 待批、可回退）：**tracker 统一 + ws(s) 支持 + BT WebRTC 数据传输 + config 严格校验修订**——①[bt] config 键 `http_trackers`/`udp_trackers` 退役废弃（不迁移不兼容），统一为单键 **`trackers`**（scheme 白名单 {http, https, ws, wss, udp} 大小写不敏感；三来源 config/announce-list/手输同权入池，FR-02-21 v1.15）；②对话框白名单 toast 文案钦定 **`⚠ 不支持的 tracker 协议（仅 http(s)/ws(s)/udp）：<url 截尾>`**（截尾 = 首 44 显示字符硬截尾，FR-02-31 v1.15）；③.torrent announce-list ws(s) URL 同权入池（原「拒绝 + 警告」臂退役，仅白名单外 scheme 对 announce-list 来源保留忽略+警告）；④[bt] 新增 **`peer_connection_protocol`**（无序数组、默认 `["tcp","webrtc"]`、元素限 tcp/webrtc 大小写不敏感去重、**无跨协议回退**、BT peer 连接与数据传输的传输协议全局开关，FR-02-34）；⑤BT peer 数据传输新增 **WebRTC DataChannel** 承载臂（peer wire 全消息族，tracker announce 各按自身协议不变）；⑥并发面板「协议」列宽 4→**8**、值 = TCP/WebRTC 按连接实际传输（FR-02-33/08 v1.15）；⑦**config 全局规则（FR-02-35，操作者钦定记录于需求文档）**：任意条目含未知值或重复项 → 直接启动失败并报错；TOML 解析失败 → 拒绝启动；标量语义非法 → 拒绝启动（FR-01-71 逐键回退口径退役，phase-01 v1.48 注记）；config 旧条目退役一律不做兼容处理直接废弃；⑧ws(s) tracker 测试 harness（mini_ws_tracker.py）与 WebRTC 数据传输 harness e2e 要求。详见 phase-02 v1.15 注记（FR-02-21/31/33/08 修订、FR-02-34/35 新增、D70）。
 > 历史逐轮修订注记已按操作者 20261027 指令清理；各期现行需求以 `mission/phase-0*.md` 为准。
 
 ---
@@ -88,7 +89,7 @@ ezr-tui-demo 的 README 与历次修改记录，本大纲与各期详述保持�
 | 期号 | 需求文件 | 一句话主题 |
 |---|---|---|
 | **phase-01** | `mission/phase-01.md` | **HTTP/HTTPS 真实下载内核与 TUI 正式版 MVP**——把 demo 界面接到真实下载：Range 分块并发、断点续传（sidecar 元数据）、重试退避、Checksum 校验、全局限速、HTTP(S)代理、会话持久化与崩溃恢复（已收官，v1.35） |
-| **phase-02** | `mission/phase-02.md` | **BT 下载内核、做种上传与 BT 任务管理**——「命令窗口」A 键新入口（三分流 + 错误窗口）+「添加/修改任务：BT」对话框（文件树勾选/trackers 多行输入）+ BT 引擎（tokio；BEP 3/15/23/7/12/9/20；.torrent 解析，磁力链 phase-03）+ 按文件下载 + **下载完成自动做种/上传真实统计（D45）** + config `http_trackers`/`udp_trackers` + 全局/任务级上传下载限速（FR-02-28/29，v1.38）+ BT 自动反吸血 blacklist.yaml（FR-02-30）+ 't' trackers 弹窗（FR-02-31）+ [bt] listen_port（FR-02-32） |
+| **phase-02** | `mission/phase-02.md` | **BT 下载内核、做种上传与 BT 任务管理**——「命令窗口」A 键新入口（三分流 + 错误窗口）+「添加/修改任务：BT」对话框（文件树勾选/trackers 多行输入）+ BT 引擎（tokio；BEP 3/15/23/7/12/9/20；.torrent 解析，磁力链 phase-03）+ 按文件下载 + **下载完成自动做种/上传真实统计（D45）** + config trackers（v1.45：统一单键，http_trackers/udp_trackers 退役）+ [bt] peer_connection_protocol（v1.45，FR-02-34）+ 全局/任务级上传下载限速（FR-02-28/29，v1.38）+ BT 自动反吸血 blacklist.yaml（FR-02-30）+ 't' trackers 弹窗（FR-02-31）+ [bt] listen_port（FR-02-32） |
 | phase-03 | `mission/phase-03.md`（v0.1 计划登记稿） | BT 效率与发现扩展：DHT（BEP 5/32/51）、BEP 10/6/11/14、命令窗口磁力+40 位 infohash、config `dht_entry`（phase2 不处理） |
 | phase-04 | `mission/phase-04.md`（v0.1 计划登记稿） | 传输优化：BEP 29 uTP（先试 UDP 回退 TCP）+ BEP 47 padding files（phase2 不处理） |
 

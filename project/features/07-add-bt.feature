@@ -9,7 +9,7 @@
 #   07-add-bt-08 小终端自适应收缩（列表框不低于 1 可视行）
 #   07-add-bt-09 种子来源路径归一（v1.37 新增，D63）
 #   07-add-bt-10 限速两字段预填 config 任务级默认值且随任务创建落库（v1.38 新增，FR-02-29；v1.39 修订：二进制单位 + 输入即规范化显示）
-#   07-add-bt-11 trackers scheme 校验与默认 trackers（v1.9.1：wss 等拒绝不落库 + 留空默认 4 条入库）
+#   07-add-bt-11 trackers scheme 校验与默认 trackers（v1.9.1：wss 等拒绝不落库 + 留空默认 4 条入库；v1.43 反转：ws(s) 同权放行、白名单外 ftp 等拒绝、toast 文案更新，FR-02-31 v1.15）
 # 期号 02（phase-02）。需求依据 project/mission/phase-02.md FR-02-02/04、D44/D47–D50/D55/D59。
 # UI 基线 = ezr-demo phase2 源码（specifier 逐条核证：ui/dialogs.rs draw_bt_dialog /
 # app/dialogs.rs dlg_confirm_add_bt / ui/tree.rs / ui/multiline.rs；焦点表 0–8、
@@ -42,6 +42,13 @@
 # 原「预填整数 B/s」口径退役）；②裸数字输入确认恒按 B/s（512 → 512 B/s）；③config 键
 # task_max_* 旧写法 KB/MB/GB 十进制废弃不再识别（含旧写法的值 = 非法 → 回退 0 → 预填 0）;
 # 留空回退 config 默认口径不变。场景 10 随修订。
+# v1.43 修订注（操作者修订轮指令「tracker 统一 + ws(s) 支持 + BT WebRTC + config 严格校验」；
+# phase-02 v1.15，FR-02-31 v1.15/D70；Inversion 阶段 1 受限退化 chat 输入选择题答案 1a/2b/3a/4a/5a，
+# 题目录重建登记见 phase-02 v1.15 注记与 handoff 待批）：场景 11 反转——tracker scheme 白名单
+# 扩为 {http, https, ws, wss, udp}（大小写不敏感），ws:// 与 wss:// 行同权放行入库
+#（原 wss/ws 拒绝臂退役，FR-02-31 v1.15）；白名单外 scheme（如 ftp://）整单拒绝且 toast 文案
+# 钦定为 "⚠ 不支持的 tracker 协议（仅 http(s)/ws(s)/udp）：<url 截尾>"（截尾 = 首 44 显示字符
+# 硬截尾，无省略号后缀；旧文案「仅 http/https/udp」退役）。留空默认 4 条（http/https/udp）不变。
 Feature: 07-add-bt 添加任务：BT 对话框
 
   期号 02。命令窗口分流打开（仅 .torrent 路径，D53）：种子来源 + 保存到 + 文件树勾选
@@ -185,12 +192,15 @@ Feature: 07-add-bt 添加任务：BT 对话框
 
 
   # v1.9.1 新增（操作者 bug18 追轮 UI 反馈；FR-02-31）：trackers scheme 校验与默认 trackers。
-  Scenario: 07-add-bt-11 trackers scheme 校验与默认 trackers（v1.9.1，FR-02-31）
+  Scenario: 07-add-bt-11 trackers scheme 校验与默认 trackers（v1.9.1，FR-02-31；v1.43 反转：ws(s) 同权放行）
     When 经命令窗口打开「添加任务：BT」对话框，trackers 输入 <input> 后确认
-    Then 含不支持 scheme 行（wss://、ws:// 等非 http/https/udp，大小写不敏感）时整单拒绝：toast "⚠ 不支持的 tracker 协议（仅 http/https/udp）：<url 截尾>"、焦点回 trackers、对话框保持打开、任务不创建
+    Then 含白名单外 scheme 行（http/https/ws/wss/udp 五种之外，大小写不敏感，如 ftp://）时整单拒绝：toast "⚠ 不支持的 tracker 协议（仅 http(s)/ws(s)/udp）：<url 截尾>"、焦点回 trackers、对话框保持打开、任务不创建（<url 截尾> = 首 44 显示字符硬截尾、无省略号后缀；旧文案「仅 http/https/udp」退役）
+    And 输入含 ws:// 或 wss:// 行确认时同权放行（v1.43 反转，原 wss/ws 拒绝臂退役）：该行与 http(s)/udp 行一并入库，任务 tracker 池、T 弹窗、修改面板预填均含该行（scheme 大小写不敏感——WS://、Ws:// 与 ws:// 等价）
     And trackers 留空确认时任务创建成功：按种子元数据口径预置 4 条默认 tracker（http/https/udp）入库，T 弹窗与修改面板预填一致非空（v1.9.1 回归：面板预填不入库导致弹窗空的缺陷已修）
 
     Examples:
-      | input                    |
-      | wss://tracker.example/ws |
+      | input                     |
+      | ftp://tracker.example/ann |
+      | wss://tracker.example/ws  |
+      | WS://tracker.example/ws   |
       | （留空）                  |

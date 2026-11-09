@@ -592,3 +592,10 @@ QA 轮（2026-11-06）：对话框焦点几何漂移的探针实证法——添�
 - **QA 规程↔runner 版本欠账三层形态再证**：规程行已随 v1.46 改判同步而 runner 未改
   （RS-14 全套断言仍是 v1.28 原地作废口径）→ 以 feature 场景 Then 链逐条重写 runner，
   断言锚全部改持久物（改道名、孤儿保留、.1 独立 sidecar 生成/删除）。
+
+- specifier ws(s)/WebRTC 修订轮（2026-11-09）：钦定文案全角括号通道改写陷阱第二例（bug18
+  `ttp]` 写入侧同族）——toast 钦定文案 `（仅 http(s)/ws(s)/udp）：` 的**外层全角闭括号经
+  编辑通道落盘成半角 `)`**（内层 `(s)` 保持半角属正常混排，肉眼难辨）；写入后必须
+  `grep -c "udp）：" / cat -A` 字节级终审外层全角括号，python bytes 级 replace 修复；
+  本轮 features 2 处 + qa 3 处同修。mini_ws_tracker harness 端口段 17905（ws）/17906
+  （wss 自签）随夹具段 17901–17904 顺延（登记 harness/README.md 与 D70⑦）。

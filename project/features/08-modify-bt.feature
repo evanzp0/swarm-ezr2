@@ -7,7 +7,7 @@
 #   08-modify-bt-06 修改 trackers 确认后立即生效（v1.2：热更新 tracker 池，无需停止再启动）
 #   08-modify-bt-07 任意参数组合修改确认后立即生效且任务不中断（v1.3：FR-02-26 总规则）
 #   08-modify-bt-08 修改限速两字段立即生效（v1.5 新增，FR-02-29/FR-02-26；v1.6 修订：二进制单位 + 非法 toast 统一新文案；v1.7 修订：清空回填 config 默认 + fmt 回显）
-#   08-modify-bt-09 trackers scheme 校验确认拒绝不落库（v1.9.1：wss 等拒绝 + 焦点回 trackers）
+#   08-modify-bt-09 trackers scheme 校验确认（v1.9.1：拒绝不落库；v1.8 反转：ws(s) 同权放行 + 白名单外 ftp 等拒绝，FR-02-31 v1.15）
 # 期号 02（phase-02）。需求依据 project/mission/phase-02.md FR-02-03/04/26。
 # v1.4 修订（操作者 bug17 轮指令，FR-02-27 连接生命周期礼仪 + D66）：场景 05 补充收缩连接的
 # 关闭礼仪判据 = 优雅关闭（对端 EOF 无 RST）+ 自关重拨冷却（不记对端失败、冷却内不重拨），
@@ -37,6 +37,13 @@
 # dlg_confirm_modify_bt、ui/dialogs.rs draw_bt_dialog ModifyBt 臂；焦点表 0–5、
 # 按钮 [ 确定 ][ 取消 ]、toast 文案照录源码）。
 # M 键守卫（D45）= state != Completed（demo 核证）——「做种中」BT 任务同样可打开修改；仅「已完成」拒绝。
+# v1.8 修订注（操作者修订轮指令「tracker 统一 + ws(s) 支持 + BT WebRTC + config 严格校验」；
+# phase-02 v1.15，FR-02-31 v1.15/D70；Inversion 阶段 1 受限退化 chat 输入选择题答案 1a/2b/3a/4a/5a，
+# 题目录重建登记见 phase-02 v1.15 注记与 handoff 待批）：场景 09 反转——tracker scheme 白名单
+# 扩为 {http, https, ws, wss, udp}（大小写不敏感），ws:// 与 wss:// 行同权放行且立即生效
+#（热更新 announce，原「wss 拒绝不落库」臂退役）；白名单外 scheme（如 ftp://）拒绝 toast 文案
+# 钦定为 "⚠ 不支持的 tracker 协议（仅 http(s)/ws(s)/udp）：<url 截尾>"（截尾 = 首 44 显示字符
+# 硬截尾；旧文案「仅 http/https/udp」退役）。
 Feature: 08-modify-bt 修改任务：BT 对话框
 
   期号 02。M 键对 BT 任务分流进入：任务名静态行 + 文件列表框（预填当前勾选）+ 并发 +
@@ -169,12 +176,14 @@ Feature: 08-modify-bt 修改任务：BT 对话框
 
 
   # v1.9.1 新增（操作者 bug18 追轮 UI 反馈；FR-02-31）：trackers scheme 校验拒绝不落库。
-  Scenario: 08-modify-bt-09 trackers scheme 校验确认拒绝不落库（v1.9.1，FR-02-31）
+  Scenario: 08-modify-bt-09 trackers scheme 校验确认（白名单外拒绝 / ws(s) 同权放行）（v1.9.1，FR-02-31；v1.8 反转，FR-02-31 v1.15）
     Given 任务 tracker 池 <before> 条（全部 http/https/udp）
     When 按 M 在 trackers 追加 <input> 行并按 Enter 确认
-    Then toast "⚠ 不支持的 tracker 协议（仅 http/https/udp）：<url 截尾>"、焦点回 trackers、对话框保持打开
-    And 任务 tracker 池保持 <before> 条不变（不落库、引擎池无变更、无 announce 变化；修改面板重开预填原 <before> 条）
+    Then 白名单外 scheme（ftp:// 等，大小写不敏感）时拒绝：toast "⚠ 不支持的 tracker 协议（仅 http(s)/ws(s)/udp）：<url 截尾>"（截尾 = 首 44 显示字符硬截尾、无省略号后缀）、焦点回 trackers、对话框保持打开
+    And 白名单外时任务 tracker 池保持 <before> 条不变（不落库、引擎池无变更、无 announce 变化；修改面板重开预填原 <before> 条）
+    And ws:// 或 wss://（大小写不敏感）时同权放行（v1.8 反转，原 wss/ws 拒绝臂退役）：确认成功、池 <after> 条且立即生效（tracker 池热更新、后续 announce 含该 tracker；修改面板重开预填含该行）
 
     Examples:
-      | before | input                    |
-      | 2      | wss://tracker.example/ws |
+      | before | input                     | after |
+      | 2      | ftp://tracker.example/ann | —     |
+      | 2      | wss://tracker.example/ws  | 3     |

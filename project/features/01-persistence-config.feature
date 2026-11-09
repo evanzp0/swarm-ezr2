@@ -9,7 +9,7 @@
 #   （v1.4 注：config.toml 缺失时启动自动生成全注释默认模板，FR-01-85 ——
 #    判据由「允许缺失」改为「缺失时自动生成」，生成细则见 01-config-template.feature）
 #   01-persistence-config-03 配置文件缺失时全部使用默认值
-#   01-persistence-config-04 配置非法值回退默认或钳制边界（v1.16：block_size_http 增 <1MB 钳制行）
+#   01-persistence-config-04 配置非法值拒绝启动并报错（v1.21 行为翻转：语义非法值 fail-fast，FR-02-35；v1.16/v1.17/v1.19 历史口径退役）
 #   01-persistence-config-05 block_size_http 可配置生效（v1.16：下限 1 MB）
 #   01-persistence-config-06 download_slots 可配置生效
 #   01-persistence-config-07 单实例保护
@@ -71,50 +71,54 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
       | file       | http_concurrency |
       | five-m.bin | 4                   |
 
-  Scenario: 01-persistence-config-04 配置非法值回退默认或钳制边界（v1.17：点路径 + 新增调优键行；v1.19 注记：语义非法值口径）
-    # v1.19 修订（D63① 分层澄清）：本场景只收「语义非法值」（TOML 反序列化成功后的
-    # 0/负/越界/非法字符串值 → 逐键回退默认）；TOML 反序列化层错误（语法错、键类型
-    # 不匹配——如把字符串写进数字键）属「解析失败」→ 拒绝启动直接报错
-    #（01-config-template-03 v1.13 口径）。原 Examples 首行
-    # 「http.block_size_http = abc → 1 MB」随此退役（场景序号留痕不重排）。
+  Scenario: 01-persistence-config-04 配置非法值拒绝启动并报错（v1.21 行为翻转，FR-01-71 v1.47 回退臂退役；FR-02-35）
+    # v1.21 修订（操作者修订轮指令「config 任意条目含未知值或重复项 → 直接启动失败并报错；
+    # TOML 解析失败 → 拒绝启动；标量语义非法 → 拒绝启动」；phase-02 v1.15/FR-02-35/D70）：
+    # 原「语义非法值逐键回退默认」（v1.19 口径）整臂退役——任何键的语义非法值（0/负/越界/
+    # 非法字符串值/非法单位写法）= 启动失败并报错，与解析失败（01-config-template-03 v1.13）
+    # 同为拒绝启动；报错含配置文件路径、键点路径与非法原因，非零退出码退出，配置文件字节级
+    # 不变。Examples 键集合沿 v1.17/v1.19 点路径全量保留（「default」预期列剪除——翻转后
+    # 各行预期一致无变异价值）；末行 udp_trackers 随键退役改写为 trackers / peer_connection_protocol
+    # 数组行。未知键仍按静默忽略（FR-01-71 未知键口径不在本轮翻转面）。
     Given 配置文件设 "<key>" = "<value>"（非法）
-    When 启动 ezr 并正常使用
-    Then 该配置项按回退/钳制值 "<default>" 生效且启动不报错
+    When 启动 ezr
+    Then 启动失败并报错（错误信息含配置文件路径、键点路径 "<key>" 与非法原因；非零退出码退出；配置文件字节级不变）
 
     Examples:
-      | key                        | value | default |
-      | http.block_size_http       | 256 KB | 1 MB   |
-      | common.download_slots      | 0     | 5       |
-      | http.max_retries           | -1    | 5       |
-      | http.http_concurrency      | 99    | 64      |
-      | common.max_speed           | xyz   | 0       |
-      | http.progress_tick_ms      | 0     | 100     |
-      | http.sidecar_flush_secs    | 0     | 2       |
-      | http.throttle_burst_secs   | 0     | 0.5     |
-      | http.throttle_sleep_ms     | 0     | 20      |
-      | http.dns_race_grace_ms     | 0     | 1000    |
-      | bt.bt_concurrency          | 0     | 20      |
-      | bt.bt_concurrency          | 99    | 64      |
-      | bt.peer_pipeline           | 0     | 64      |
-      | bt.upload_slots            | 0     | 4       |
-      | bt.upload_read_concurrency | 0     | 128     |
-      | bt.idle_eviction_secs      | -1    | 60      |
-      | bt.connect_timeout_secs    | 0     | 3       |
-      | bt.handshake_timeout_secs  | 0     | 10      |
-      | bt.request_timeout_secs    | 0     | 20      |
-      | bt.requests_per_piece      | 0     | 4       |
-      | bt.rechoke_interval_secs   | 0     | 10      |
-      | bt.optimistic_interval_secs | 0    | 30      |
-      | bt.progress_emit_min_interval_ms | 0 | 250   |
-      | bt.tracker_numwant         | 0     | 200     |
-      | bt.peer_retry_base_secs    | 0     | 5       |
-      | bt.peer_retry_cap_secs     | 0     | 120     |
-      | bt.tracker_backoff_start_secs | 0  | 8       |
-      | bt.tracker_backoff_cap_secs | 0    | 60      |
-      | bt.udp_base_timeout_secs   | 0     | 15      |
-      | bt.udp_retries             | 0     | 3       |
-      | bt.seed_duration_secs      | 0     | 1800    |
-      | bt.udp_trackers            | ["ftp://x/ann"] | []（非法 URL 忽略 + 警告） |
+      | key                        | value |
+      | http.block_size_http       | 256 KB |
+      | common.download_slots      | 0     |
+      | http.max_retries           | -1    |
+      | http.http_concurrency      | 99    |
+      | common.max_speed           | xyz   |
+      | http.progress_tick_ms      | 0     |
+      | http.sidecar_flush_secs    | 0     |
+      | http.throttle_burst_secs   | 0     |
+      | http.throttle_sleep_ms     | 0     |
+      | http.dns_race_grace_ms     | 0     |
+      | bt.bt_concurrency          | 0     |
+      | bt.bt_concurrency          | 99    |
+      | bt.peer_pipeline           | 0     |
+      | bt.upload_slots            | 0     |
+      | bt.upload_read_concurrency | 0     |
+      | bt.idle_eviction_secs      | -1    |
+      | bt.connect_timeout_secs    | 0     |
+      | bt.handshake_timeout_secs  | 0     |
+      | bt.request_timeout_secs    | 0     |
+      | bt.requests_per_piece      | 0     |
+      | bt.rechoke_interval_secs   | 0     |
+      | bt.optimistic_interval_secs | 0    |
+      | bt.progress_emit_min_interval_ms | 0 |
+      | bt.tracker_numwant         | 0     |
+      | bt.peer_retry_base_secs    | 0     |
+      | bt.peer_retry_cap_secs     | 0     |
+      | bt.tracker_backoff_start_secs | 0  |
+      | bt.tracker_backoff_cap_secs | 0    |
+      | bt.udp_base_timeout_secs   | 0     |
+      | bt.udp_retries             | 0     |
+      | bt.seed_duration_secs      | 0     |
+      | bt.trackers                | ["ftp://x/ann"]（白名单外 scheme = 未知值） |
+      | bt.peer_connection_protocol | ["tcp","tcp"]（重复项） |
 
   Scenario: 01-persistence-config-05 block_size_http 可配置生效（v1.16：下限 1 MB；v1.17：迁入 [http]）
     Given 配置文件设 [http] 表 block_size_http = "<block_size>"
@@ -190,6 +194,7 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
     And 相关配置项全部按默认值生效（槽位 5、块大小 1 MB、并发默认 4、max_speed 不限）
     And 旧 [[proxies]] 条目不出现在代理下拉（proxy 键已改名迁入 [common.proxy]，旧表不读）
     And 同文件追加新表头（[common] download_slots = 3 等）后新表键正常生效（新格式不受旧键干扰）
+    And 退役键同口径（v1.21，FR-02-35）：配置含旧键 http_trackers / udp_trackers 时按未知键静默忽略——不迁移、不兼容、不并入 tracker 池、不阻塞启动（旧条目直接废弃；tracker 池只来自 [bt] trackers 键，场景见 09-bt-engine-09 v1.41）
 
   Scenario: 01-persistence-config-13 全量配置键合法值生效冒烟（v1.18 新增，D62③）
     Given 配置文件一次性写入全部 40 键的合法非默认值（[common] 6 键 + [[common.proxy]] 双条目 + [http]] 11 键 + [bt] 21 键，取值均在模板注明取值范围内且非代码默认；v1.20）

@@ -3,11 +3,11 @@
 #   09-bt-engine-02 BEP 3 HTTP tracker 获取 peers（compact=1 / BEP 23 紧凑解析 / interval / 事件）
 #   09-bt-engine-03 BEP 15 UDP tracker（connect / announce / 紧凑 peers / 超时重试）
 #   09-bt-engine-04 BEP 7 IPv6 peers（peers6 紧凑列表 / IPv6 连接）
-#   09-bt-engine-05 BEP 12 多 tracker 冗余与 tracker 池三来源合并去重
+#   09-bt-engine-05 BEP 12 多 tracker 冗余与 tracker 池三来源合并去重（v1.41：分型 = http(s)/ws(s)/udp 三族，FR-02-21 v1.15）
 #   09-bt-engine-06 peer 下载与 piece 校验（握手 / 分块请求 / SHA-1 / 多 peer 并发 / 上传统计；v1.36 修订：客户端列识别改 qBittorrent 源码口径，FR-02-08 v1.3）
 #   09-bt-engine-07 BEP 9 元数据交换（做种侧响应：ut_metadata request → data/reject）
 #   09-bt-engine-08 按文件下载语义（未选文件不落盘 / 边界 piece / 修改补下）
-#   09-bt-engine-09 config trackers 配置项（[bt] http_trackers / udp_trackers / 模板示例 / 任务合并）
+#   09-bt-engine-09 config trackers 配置项（v1.41：统一单键 [bt] trackers，http_trackers/udp_trackers 退役废弃，FR-02-21 v1.15/FR-02-35）
 #   09-bt-engine-10 下载完成转做种（piece 全校验 → 做种中 / 产物字节一致 / tracker completed 事件）
 #   09-bt-engine-11 B 断开连接（连接移除 / 分块补完 / 下载继续；做种中可用）
 #   09-bt-engine-12 P pieces 弹窗 BT 臂（真实 piece 四态 / 块大小 = piece length）
@@ -17,10 +17,23 @@
 #   09-bt-engine-16 BT 监听端口 [bt] listen_port（v1.38，FR-02-32：配置生效 / 未配置随机 / 占用回退+警告 / 进程级共享）
 #   09-bt-engine-17 partial 进度持久化与恢复不重下（v1.39，FR-02-22/D68：暂停重启不重发已收块 / 篡改自愈 / 重校验窗二次暂停允许边界）
 #   09-bt-engine-18 并发 panel 标志列数据语义（v1.40，FR-02-33/D69：qBt Peers Flags 子集 D/d/U/u/O/I/K/? 判定表 / 连写顺序 / 实时刷新）
+#   09-bt-engine-19 [bt] peer_connection_protocol 全局开关与 WebRTC 数据传输（v1.41 新增，FR-02-34/D70：无序数组 / 大小写不敏感 / 无跨协议回退；协议列 TCP·WebRTC）
+#   09-bt-engine-20 ws(s) tracker announce 与 peer_connection_protocol 严格校验（v1.41 新增，FR-02-34/35/D70：ws(s) tracker harness e2e；未知值/重复项启动失败）
 # 期号 02（phase-02）。需求依据 project/mission/phase-02.md FR-02-06…23、D45/D46/D51/D52/D54/D57/D58。
 # 协议基线 = 操作者钦定 BEP 3/15/23/7/12/9/20；tokio 异步（FR-02-10）。
 # BEP 9 做种侧响应（D53/D45——磁力拉取 phase-03）；上传真实统计（D58）；
 # 下载完成自动转做种（D57）；tracker 池三来源（去磁力 tr=，D53）。
+# v1.41 修订（操作者修订轮指令「tracker 统一 + ws(s) 支持 + BT WebRTC + config 严格校验」；
+# phase-02 v1.15，FR-02-21/31/33/08 v1.15、FR-02-34/35 新增、D70；Inversion 阶段 1 受限退化
+# chat 输入选择题答案 1a/2b/3a/4a/5a，题目录重建登记见 phase-02 v1.15 注记与 handoff 待批）：
+# ①场景 05/09：tracker scheme 白名单扩为 {http, https, ws, wss, udp}（大小写不敏感），
+#   ws(s) 三来源同权入池（原 ws(s) 拒绝臂退役）；config [bt] 统一单键 trackers，
+#   http_trackers/udp_trackers 退役废弃（不迁移不兼容，未知键忽略口径）；config trackers
+#   白名单外 scheme = 启动失败并报错（FR-02-35，原「非法 URL 行忽略 + 警告」仅 announce-list 来源保留）；
+# ②场景 19 新增：[bt] peer_connection_protocol 全局开关（无序数组、默认 ["tcp","webrtc"]、
+#   大小写不敏感、未知值/重复项启动失败）与 WebRTC DataChannel peer 数据传输（无跨协议回退）；
+# ③场景 20 新增：ws(s) tracker harness（mini_ws_tracker.py）e2e——ws(s) tracker announce +
+#   peers 获取 + WebRTC 数据传输全链路验收。
 # v1.36 修订（操作者 bug12 轮指令，客户端列识别修正）：客户端列解析法改 qBittorrent 源码口径
 # （FR-02-08 v1.3：扩展握手 v 自报名优先 + peer id 解码 = libtorrent identify_client 算法与
 # 映射表全量移植；验收例：BitComet 1.64 对端显示 BitComet 1.64——旧 62 项子集表与逐位四段
@@ -96,15 +109,16 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
     Then IPv6 peer 被解析并建立连接（并发面板 IP 列显示 IPv6 地址）
     And 下载经 IPv6 peer 推进（字节可观察落盘）
 
-  Scenario: 09-bt-engine-05 BEP 12 多 tracker 冗余与 tracker 池合并
-    When 任务 tracker 池 = config 默认（<cfg_tracker>）+ torrent announce-list + 手输 tracker 合并（三来源，去磁力 tr=）
-    Then 池内 URL 去重（同 URL 只保留一条）、http(s) 与 udp 分型
+  Scenario: 09-bt-engine-05 BEP 12 多 tracker 冗余与 tracker 池合并（v1.41：分型 = http(s)/ws(s)/udp 三族，FR-02-21 v1.15）
+    When 任务 tracker 池 = config 默认（<cfg_tracker>）+ torrent announce-list + 手输 tracker 合并（三来源，去磁力 tr=；ws(s) 与 http(s)/udp 同权入池，v1.41）
+    Then 池内 URL 去重（同 URL 只保留一条）、scheme 大小写不敏感归一分型为 http(s)/ws(s)/udp 三族（WS:// 与 ws:// 同族）
     And 主 tracker（fixture 停服）失败后其余 tracker 接续提供 peers、下载不中断（任一 tracker 可推进）
     And 全部 tracker 失败 → 任务走失败臂（重试退避同 FR-01-41 口径）；tracker 列表随任务持久化并在修改对话框 trackers 预填
 
     Examples:
       | cfg_tracker                              |
       | https://tracker.fixture.local/announce   |
+      | wss://tracker.fixture.local/ws           |
 
   Scenario: 09-bt-engine-06 peer 下载与 piece 校验
     When 下载进行中
@@ -134,16 +148,18 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
       | selected |
       | 3        |
 
-  Scenario: 09-bt-engine-09 config trackers 配置项（v1.35：迁入 [bt]）
-    When 配置文件写入 [bt] 表 http_trackers = [<http_url>] 与 udp_trackers = [<udp_url>]
+  Scenario: 09-bt-engine-09 config trackers 配置项（v1.41：统一单键 [bt] trackers，FR-02-21 v1.15/FR-02-35）
+    When 配置文件写入 [bt] 表 trackers = [<t1>, <t2>]（http(s)/ws(s)/udp 混排，scheme 大小写不敏感）
     And 配置文件不存在时首次启动生成模板
-    Then 模板包含两段注释示例行（位于 [bt] 表内，含用途与取值范围说明，FR-01-85 机制）；非法 URL 行启动忽略 + 警告
-    And 新建 BT 任务（未提供来源 tracker 时）tracker 池 = 两键合并结果；有来源 tracker 时并入池内去重
+    Then 模板包含 trackers 单键注释示例行（位于 [bt] 表内，含用途与取值范围说明——元素限 http(s)/ws(s)/udp scheme 白名单，FR-01-85 机制）；白名单外 scheme 元素 = 启动失败并报错（FR-02-35，原「非法 URL 行启动忽略 + 警告」对 config 来源退役）
+    And 旧键 http_trackers / udp_trackers 出现时按未知键口径直接废弃（不迁移、不兼容、不并入池，FR-02-35 退役规则；池只来自 trackers 键）
+    And 新建 BT 任务（未提供来源 tracker 时）tracker 池 = trackers 键合并结果（ws(s) 同权）；有来源 tracker 时并入池内去重
     And 手输 trackers（添加对话框 trackers 输入框每行一条）同样并入任务持久 tracker 列表
 
     Examples:
-      | http_url                                | udp_url                                  |
-      | https://tracker.fixture.local/announce  | udp://tracker.fixture.local:6969/announce |
+      | t1                                      | t2                                        |
+      | https://tracker.fixture.local/announce  | wss://tracker.fixture.local/ws            |
+      | ws://tracker.fixture.local:8080/announce | udp://tracker.fixture.local:6969/announce |
 
   Scenario: 09-bt-engine-10 下载完成转做种
     When 全部选中 piece 下载并通过 SHA-1 校验
@@ -194,10 +210,9 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
       udp_base_timeout_secs / udp_retries）未配置时按代码常量默认值生效、配置合法值时引擎按
       配置值执行（下载/做种全链路行为不变，仅节律/窗口随配置伸缩）
     And [http] 调优键同理（progress_tick_ms / sidecar_flush_secs / throttle_burst_secs /
-      throttle_sleep_ms / dns_race_grace_ms；HTTP 任务链路按配置值执行，非法值回退默认——
-      回退样例行见 01-persistence-config-04）
+      throttle_sleep_ms / dns_race_grace_ms；HTTP 任务链路按配置值执行，语义非法值拒绝启动（FR-02-35 v1.41，样例行见 01-persistence-config-04 v1.21）
     When [bt] 表写入 0/负值/非法值后启动
-    Then 对应键回退代码常量默认值且启动不报错（统一回退口径，FR-01-71）
+    Then 启动失败并报错（v1.41 反转：错误含配置文件路径、键点路径与非法原因，非零退出码退出；原「对应键回退代码常量默认值且启动不报错」口径随 FR-01-71 回退臂全局退役，FR-02-35）
 
     Examples:
       | conns | seed_secs | evict |
@@ -283,3 +298,37 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
     And 仅 BT 任务并发行显示标志（HTTP 三列形态不变）；握手未完成连接不显示（既有 peer_id=None 过滤口径）
     And qBt 图例其余旗标 P/S/X/H/E/e/L 不出现（μTP/snubbed/PEX/DHT/协议加密/本地发现为 phase-02 未实现能力，
       phase-03/04 落地时再评估扩充；fixture 侧无法触发即 QA 无判据，不作为缺陷）
+
+
+  # v1.41 新增（操作者修订轮指令：BT 任务支持 WebRTC——WebRTC DataChannel 承载 peer 数据传输；
+  # FR-02-34/D70；无跨协议回退；并发面板「协议」列按连接实际传输显示 TCP/WebRTC，见 04-ui-conns-08 v1.43；
+  # QA 经 ws(s) tracker harness 端到端验证，见场景 20 与 QA-BE-19/20）。
+  Scenario: 09-bt-engine-19 [bt] peer_connection_protocol 全局开关与 WebRTC 数据传输（v1.41 新增，FR-02-34/D70）
+    Given 配置文件 [bt] 表 peer_connection_protocol = <modes>（无序字符串数组；大小写不敏感；全局开关——决定 BT 任务 peer 连接与数据传输可用的传输协议集合；未配置时默认 ["tcp","webrtc"]，与模板示例值逐键一致）
+    When BT 任务经 tracker（含 ws(s) tracker harness）获取 peers 并下载至完成
+    Then 允许集 <expect>（Webrtc 臂 = WebRTC DataChannel 承载 peer wire 全消息族：握手后 bitfield/have/request/piece/cancel 收发与 TCP 臂同语义；piece SHA-1 校验、在飞窗口、上传统计、下载完成转做种口径不变）
+    And 无跨协议回退：peer 在允许集内某传输上失败时，不对该 peer 换用另一允许传输重拨（按 FR-02-27 同传输重试礼仪退避；允许集之外的传输一律不发起、不回退、不接受）
+    And 未配置时默认 ["tcp","webrtc"]：TCP 连接行为与既有基线一致、WebRTC 连接同为合法通道（缺省不改变既有 TCP 链路可用性）
+    And 并发面板「协议」列 = 该连接实际传输（"TCP" / "WebRTC"，列宽 8，见 04-ui-conns-08 v1.43）
+
+    Examples:
+      | modes                 | expect                                 |
+      | ["webrtc"]            | 仅 WebRTC（零 TCP peer 连接）          |
+      | ["tcp"]               | 仅 TCP（现行基线）                     |
+      | ["tcp", "webrtc"]     | TCP 与 WebRTC 均可（按 peer 能力择一） |
+      | ["WEBRTC", "Tcp"]     | 大小写不敏感，等价 ["webrtc","tcp"]    |
+
+
+  # v1.41 新增（操作者修订轮指令：ws(s) tracker harness 用于测试 + WebRTC 数据传输经 harness 验收；
+  # FR-02-34/35/D70）。harness 行为规格见 qa/09-bt-engine-qa.md QA-BE-20 与 harness/README 登记口径。
+  Scenario: 09-bt-engine-20 ws(s) tracker announce 与 peer_connection_protocol 严格校验（v1.41 新增，FR-02-34/35/D70）
+    Given ws(s) tracker harness（harness/tracker/mini_ws_tracker.py，行为规格见 QA-BE-20）已就绪（ws://127.0.0.1:17905/announce 与 wss://127.0.0.1:17906/announce）
+    When 配置 [bt] trackers = ["<ws_url>"]、peer_connection_protocol = ["webrtc"]，添加 harness 做种任务的 .torrent 下载至完成
+    Then announce 经 ws(s) tracker 完成（trackers 弹窗该行状态 = 工作中、Peers/Seeds 真实计数；peer 列表经 ws(s) tracker 下发并被引擎接续拨号）
+    And 下载数据经 WebRTC DataChannel 完成（SHA-1 全部通过、产物字节与做种侧一致、完成后转做种口径不变；并发面板该连接「协议」列 = "WebRTC"）
+    And [bt] peer_connection_protocol = <bad>（未知值或重复项，FR-02-35）时启动失败并报错（错误含配置文件路径、键点路径与非法元素；合法集合 = {tcp, webrtc} 去重后 1–2 项）
+
+    Examples:
+      | ws_url                           | bad            |
+      | ws://127.0.0.1:17905/announce    | ["tcp","tcp"]  |
+      | wss://127.0.0.1:17906/announce   | ["quic"]       |

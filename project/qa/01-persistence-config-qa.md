@@ -13,6 +13,12 @@
 > QA 写入 = 对应表头（`[common]` / `[http]` / `[bt]`）+ 键值行；QA-PC-04 扩充新增调优键
 > 非法值回退行（[http] 5 键 + [bt] 20 键代表性样例，统一回退口径 = 回退代码常量默认）；
 > 新增 QA-PC-12（旧格式顶层键与旧 [[proxies]] 表静默忽略）。
+> **v1.21 修订（操作者修订轮指令，FR-02-35/D70）**：QA-PC-04 行为翻转——全部非法值行改判
+> 「启动失败并报错」（错误含配置文件路径、键点路径与非法原因，非零退出码；原「回退/钳制生效
+> + udp_trackers 非法 URL 忽略警告」口径整体退役）；样例集改写：udp_trackers 行随键退役替换为
+> `[bt] trackers=["ftp://x/ann"]`（未知 scheme）与 `[bt] peer_connection_protocol=["tcp","tcp"]`
+> （重复项）两数组行；QA-PC-12 增退役键判据（http_trackers/udp_trackers 按未知键口径直接废弃，
+> 不迁移不兼容不并入池——见 01-persistence-config.feature v1.21）。
 
 ## 环境前置
 
@@ -27,7 +33,7 @@
 | QA-PC-01 | 01-persistence-config-01 | 预置各状态任务→优雅退出→重启 | 任务/历史/顺序完整还原；续传点与状态一致 |
 | QA-PC-02 | 01-persistence-config-02 | 添加任务后检查主目录 | 存在 `.ezr/state/`（注册表）；`.ezr/config.toml` 存在（v1.4/FR-01-85：缺失时启动自动生成全注释默认模板，细则见 `qa/01-config-template-qa.md`）；sidecar 随目标文件 |
 | QA-PC-03 | 01-persistence-config-03 | 删除 config.toml 后下载 | 默认并发 4/槽位 5/块 1MB/重试 5/auto_retry 开/不限速/download_dir=用户主目录下载目录（Linux ~/Downloads）；BT 侧默认并发 20/做种 1800s（v1.17 口径注记） |
-| QA-PC-04 | 01-persistence-config-04 | 分别写入非法值（v1.17 点路径）：`[http] block_size_http=abc`、`[http] block_size_http=256KB`（v1.16 钳制行）、`[common] download_slots=0`、`[http] max_retries=-1`、`[http] http_concurrency=99`、`[common] max_speed=xyz` + 新增调优键样例：`[http] progress_tick_ms=0`、`[http] sidecar_flush_secs=0`、`[http] throttle_burst_secs=0`、`[http] throttle_sleep_ms=0`、`[http] dns_race_grace_ms=0`、`[bt] bt_concurrency=0`、`[bt] bt_concurrency=99`、`[bt] peer_pipeline=0`、`[bt] upload_slots=0`、`[bt] upload_read_concurrency=0`、`[bt] idle_eviction_secs=-1`、`[bt] connect_timeout_secs=0`、`[bt] handshake_timeout_secs=0`、`[bt] request_timeout_secs=0`、`[bt] requests_per_piece=0`、`[bt] rechoke_interval_secs=0`、`[bt] optimistic_interval_secs=0`、`[bt] progress_emit_min_interval_ms=0`、`[bt] tracker_numwant=0`、`[bt] peer_retry_base_secs=0`、`[bt] peer_retry_cap_secs=0`、`[bt] tracker_backoff_start_secs=0`、`[bt] tracker_backoff_cap_secs=0`、`[bt] udp_base_timeout_secs=0`、`[bt] udp_retries=0`、`[bt] seed_duration_secs=0`、`[bt] udp_trackers=["ftp://x/ann"]` | 启动不报错；各按回退/钳制值 1MB/1MB（FR-01-104 下限）/5/5/64/0 + 100/2/0.5/20/1000/20/64（bt_concurrency=99 钳制上限）/64/4/128/60/3/10/20/4/10/30/250/200/5/120/8/60/15/3/1800 生效；`udp_trackers` 非法 URL 忽略 + 启动警告一次（v1.17 统一回退口径 = 代码常量默认，FR-01-71） |
+| QA-PC-04 | 01-persistence-config-04 | 分别写入非法值（v1.17/v1.19 点路径全量：`ttp] block_size_http=abc`、`[common] download_slots=0`、`ttp] max_retries=-1`、`ttp] http_concurrency=99`、`[common] max_speed=xyz` + 调优键 0/负值样例全集（同 feature Examples 表）+ `[bt] trackers=["ftp://x/ann"]`（未知 scheme）+ `[bt] peer_connection_protocol=["tcp","tcp"]`（重复项） | **v1.21 行为翻转（FR-02-35）**：每行均启动失败并报错——错误信息含配置文件路径、键点路径与非法原因，非零退出码退出，配置文件字节级不变（原「启动不报错 + 逐键回退/钳制 + udp_trackers 非法 URL 忽略警告」口径整体退役） |
 | QA-PC-05 | 01-persistence-config-05 | `[http] block_size_http=4MB / 2MB` 下载 5MB（v1.16：原 256KB 行因低于 1 MB 下限改判 4MB） | 分块行 `x/2 · 4 MB/块` / `x/3 · 2 MB/块` |
 | QA-PC-06 | 01-persistence-config-06 | `[common] download_slots=2` 后添加 4 任务 | 前 2 下载；队列栏「下载槽位 n/2」；其余排队 |
 | QA-PC-07 | 01-persistence-config-07 | 运行中二次启动 ezr | 第二实例提示「ezr 已在运行」非零退出；首实例正常；全程单实例（AC-11） |

@@ -4,7 +4,7 @@
 #   11-trackers-window-03 状态列三态（工作中 / 失败退避 / 待运行）与 Peers/Seeds/消息 列
 #   11-trackers-window-04 滚动与鼠标（滚动条、键盘/滚轮滚动、拖拽移动、点击外部无操作）
 #   11-trackers-window-05 关闭通道与模态（t/Esc/q/Q/✗、浮层集合、Ctrl+C 直通）
-#   11-trackers-window-06 t 页签切换废除与 wss 不支持（页签键收敛 ]/[；wss URL 引擎拒入池 + 对话框层拒绝）
+#   11-trackers-window-06 t 页签切换废除与 tracker 协议白名单（页签键收敛 ]/[；v1.13 反转：ws(s) 同权入池，白名单外 scheme 三来源分流处置，FR-02-31 v1.15）
 # 期号 02（phase-02，操作者 bug18 轮指令五项功能之四「't' 快捷键弹出 trackers 窗口」）。
 # 需求依据 project/mission/phase-02.md FR-02-31 与 phase-02 D67。
 # 原页签 t 切换方式废除（keys.rs cycle_filter 的 t/T 臂退役；]/[ 保留）；
@@ -32,6 +32,16 @@
 #   92×20、内容区宽 88；列起点不变 #/URL 44/状态 49/Peers 62/Seeds 69/消息 76）；
 #   末列「消息」预算 8 → 12 列——「下轮 Ns / 重试 NNNNs」3–6 位秒数完整显示，
 #   无 '…' 截断（修复前缺陷：预算 8 列 < 「下轮 120s」9 列，三位秒数被截断）。
+# v1.13（操作者修订轮指令「tracker 统一 + ws(s) 支持 + BT WebRTC + config 严格校验」；
+#   phase-02 v1.15，FR-02-31 v1.15/D70；Inversion 阶段 1 受限退化 chat 输入选择题答案
+#   1a/2b/3a/4a/5a，题目录重建登记见 phase-02 v1.15 注记与 handoff 待批）：
+#   tracker 支持面反转——scheme 白名单扩为 {http, https, ws, wss, udp}（大小写不敏感），
+#   ws:// 与 wss:// 同权入池照常显示与 announce（原「wss/ws 不支持」口径退役）；
+#   白名单外 scheme 三来源分流处置：config trackers 键来源 = 启动失败并报错（FR-02-35）；
+#   .torrent announce-list 来源 = 该行忽略 + 警告（非 config 条目不入 fail-fast 面）；
+#   对话框手输来源 = 确认时 toast "⚠ 不支持的 tracker 协议（仅 http(s)/ws(s)/udp）：
+#   <url 截尾>"（截尾 = 首 44 显示字符硬截尾）、焦点回 trackers、不落库。
+#   旧口径「引擎按非法 URL 忽略 + 启动警告」仅对 announce-list 来源保留。
 Feature: 11-trackers-window trackers 弹窗（t）
 
   期号 02。任务列表选中任务按 t 弹出与该任务关联的 trackers 窗口：只读查看
@@ -97,12 +107,14 @@ Feature: 11-trackers-window trackers 弹窗（t）
     Then 窗口关闭回主界面（q/Q 先关窗不退出；Ctrl+C 退出优先级不变）
     And 窗口打开期间底层面板降级暗框（FR-01-108 浮层集合含 trackers 窗口）、其余快捷键被窗口消费
 
-  Scenario: 11-trackers-window-06 t 页签切换废除与 wss 不支持
+  Scenario: 11-trackers-window-06 t 页签切换废除与 tracker 协议白名单（v1.13：ws(s) 入池，FR-02-31 v1.15）
     Given 主界面（无浮层）
     When 按 t/T
     Then 不再切换过滤页签（原 cycle_filter 的 t/T 臂退役；过滤页签切换仅 ]/[ 承担；帮助【页签】组 T 条目同步移除、帮助【任务列表】组新增 T 条目、帮助【trackers 弹窗（T）】组含列口径与滚动条目）
-    And tracker 来源含 "<bad_url>"（wss:// 形态）时该 URL 拒绝入池（引擎：非法 URL 忽略 + 启动警告；对话框：确认时 toast "⚠ 不支持的 tracker 协议（仅 http/https/udp）：<url 截尾>"、焦点回 trackers、不落库；trackers 窗口与任务 tracker 列表均不出现）
+    And 任务 tracker 来源含 "<ws_url>"（ws:// 或 wss:// 形态，大小写不敏感）时同权入池并照常显示（v1.13 反转，原「wss/ws 拒入池」臂退役；窗口行、Peers/Seeds/消息列与非 ws 行同口径，状态真实数据源不变）
+    And 来源含白名单外 scheme "<bad_url>"（ftp:// 形态）时三来源分流：config trackers 键来源 = 启动失败并报错（FR-02-35）；announce-list 来源 = 该行忽略 + 警告（trackers 窗口与任务 tracker 列表均不出现）；对话框手输来源 = 确认时 toast "⚠ 不支持的 tracker 协议（仅 http(s)/ws(s)/udp）：<url 截尾>"、焦点回 trackers、不落库
 
     Examples:
-      | bad_url                    |
-      | wss://tracker.example/ws   |
+      | ws_url                   | bad_url                   |
+      | wss://tracker.example/ws | ftp://tracker.example/ann |
+      | ws://tracker.example/ws  | ftp://tracker.example/ann |

@@ -1,124 +1,63 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/QA（终验轮，本轮已完成）——**six-pack 流转路径走完**
-> 路径：specifier → coder → cleaner → architect（2026-11-07）→ hardender（操作者指示跳过并
-> 关闭，不回补）→ **QA 终验轮（本轮，2026-11-07）→ Done**
-> 会话：ezr-qa-final-20261107（任务 = hardender 关闭后的最终独立验证：环境全量重建 + 基线
-> 复验 + QA 套件实跑 + DRY/CRAP + 规程一致性核对；上游交接 = project/handoff.md（architect 轮））
-> 环境注记：本沙箱全新重建——rustup nightly 1.101.0（TUNA 双变量**前台**装齐，探针 36.0MB/s
-> 最快且清单新鲜，rsproxy 20.4/USTC 12.0/NJU 404；minimal+rustfmt+clippy，PATH=~/.cargo/bin）；
-> registry rsproxy sparse；pip 阿里云镜像（pyte/torf/libtorrent 2.1.1/wcwidth）；DRY = PMD CPD
-> 7.29.0 落位 `swarm/.tools/pmd`（tag 形态 `pmd_releases/7.29.0`，Java 21）；CRAP = llvm-tools
-> preview + llvm-cov 手工管线（instrument-coverage 临时 target-dir，已清理口径见下）。
+> 流程：six-pack　当前节点：six-pack/specifier（规格修订轮 2026-11-09，本轮已完成）——**下游 coder 待操作者显式启动**
+> 路径：specifier → coder → cleaner → architect（2026-11-07）→ hardender（操作者指示跳过并关闭）→ QA 终验轮（2026-11-07，Done）→ **specifier 修订轮（本轮，2026-11-09）⇒ coder（待启动）**
+> 会话：ezr-specifier-ws-webrtc-20261109（任务 = tracker 统一 + ws(s) 支持 + BT WebRTC 数据传输 + config peer_connection_protocol 与严格校验修订轮规格；上游交接 = project/handoff.md（QA 终验轮）+ 操作者 chat 修订指令与 Inversion 选择题作答「1a 2b 3a 4a 5a」）
+> 环境注记：本沙箱会话曾中断，按 plan.md 勾选续做（重 begin，工作区无损）；rustc/cargo 本沙箱未装（操作者另有前台安装指令）；APS 验收工具走 Go 版装机（bb release 资产不可达，见 notes/environment.md）。
 
 ## 一、产物历史完成情况
 
 ### 项目与需求
-- ezr：Rust TUI 下载器（HTTP + BT 双协议，ratatui 交互层 + tokio 引擎）。需求权威来源 =
-  `mission.md`（分期模式）+ `mission/` 4 份 phase 详述（phase-01 v1.47 / phase-02 v1.14）。
+- ezr：Rust TUI 下载器（HTTP + BT 双协议，ratatui + tokio）。需求权威来源 = `mission.md`（分期模式，**v1.45 本轮修订**）+ `mission/` 4 份 phase 详述（**phase-02 v1.15 本轮修订**、phase-01 v1.48 注记、phase-03/04 计划登记稿）。
 
 ### 产物总账
 | 节点 | 产物 | 完成情况 | 验证状态 |
 |---|---|---|---|
-| specifier | features/ 全套 Gherkin 规格 + qa/ 全套 QA 规程；phase-01 v1.47 / phase-02 v1.14 | 已交付 | 历轮对账在案 |
+| specifier 历轮 | features/ 全套 Gherkin + qa/ 全套规程（phase-02 v1.14 时点） | 已交付 | 历轮对账在案 |
 | coder 历轮 | ezr 产品实现 + 12 集成测试目标 + bin 单测；bug6–bug27 修复 | 已交付 | 历轮全绿 |
 | cleaner 历轮 | 保持行为清理 + 四件度量；bug27 批次三单点化 | 已交付 | bin/集成/clippy 全绿 |
-| architect（2026-11-07） | 四阶段评审 + 五项裁决 + 测试基建收编 + 属性测试 +2 + arch_check 17 规则 | 已交付 | bin 951P / 集成 6357P / CPD 181 |
-| hardender | —（操作者指示跳过并关闭，链路径改道，不回补） | 不适用 | — |
-| QA（2026-11-06） | 对话框焦点几何、fixture cd=、套件过滤机制 | 已交付 | e2e 套件实跑 |
-| 复验轮（2026-11-06） | KeepAlive 90s 一处产品变更；受限项 15→2 | 已交付 | 集成精确对账 |
-| **QA 终验轮（本轮）** | 环境全量重建 + 全基线复验 + 14 套件 187P 实跑 + 修复 5 族问题 + cmd_complete_path 补测 +3 + DRY/CRAP + 规程一致性核对（详见第二节） | 已交付 | 全绿（见验证证据） |
+| architect（2026-11-07） | 四阶段评审 + 五项裁决 + arch_check 17 规则 + 属性测试 76P | 已交付 | bin 951P / 集成 6357P / CPD 181 |
+| hardender | —（操作者指示跳过并关闭，不回补） | 不适用 | — |
+| QA + 复验 + 终验（2026-11-06/07） | 14 套件 187P 实跑 + harness 自适应化等 12 项 + cmd_complete 补测 +3 | 已交付 | 全绿（bin 954P / 集成 6378P / 套件 187P / CPD 181 零漂移） |
+| **specifier（本轮 2026-11-09）** | phase-02 v1.15（FR-02-21/31/33/08 v1.15 注记 + FR-02-34/35 新增 + D70）+ phase-01 v1.48 + mission v1.45；features 9 份修订；qa 8 份同步；harness mini_ws_tracker 规格 | 已交付 | APS parser+dry-check 9/9 exit=0（findings 全为 aps.md 登记的中文分词假阳性类） |
 
 ### 遗留受限项（当前有效）
-- **leech 判据无 e2e 自动化**（six-pack 链唯一长期有效受限项，历轮维持）。
-- **变异实跑未执行**：hardender 路径被操作者关闭，变异加固收益按 `--file` 分块口径悬置
-  待裁决（architect 轮裁决：交互层三文件不拆）。
-- **QA 规程 6 个 BT/命令窗口族无专属 runner**（07-11 BT 族 = harness/swarm_e2e.py e2e 承载、
-  06 命令窗口分流 = suite_add_task 的 open_add_dialog_via_cmd 链路 + harness 承载）——历轮
-  既定形态，本轮核对确认在案。
-- **CRAP 观察项（bin 套件范围口径）**：`ezr_main`（main 组装根，e2e/CLI 承载）与
-  `on_mouse_trackers`（comp 12，鼠标路径，集成/PT 面承载）bin 套件 0 覆盖——承载面差异
-  登记，不硬凑覆盖。
+- **leech 判据无 e2e 自动化**（six-pack 链长期受限项，历轮维持）。
+- **变异实跑未执行**（hardender 关闭，`--file` 分块口径悬置）。
+- **QA 规程 6 个 BT/命令窗口族无专属 runner**（harness/命令链路承载，历轮既定形态）。
+- **CRAP 观察项**：`ezr_main` 与 `on_mouse_trackers` bin 套件 0 覆盖（承载面差异登记）。
+- **本轮新增：D70 待批**（Inversion 题目录重建映射与「协议」列宽 8，见待办与待批）。
+
+### 实现定义值登记（累计，当前有效口径）
+- 历轮 D44–D69 沿 QA 终验轮登记不变；**新增 D70**（specifier 裁决 7 项，待批）：①题目录重建登记；②toast `<url 截尾>` = 首 44 显示字符硬截尾无省略号（沿现行代码口径）；③「协议」列宽 8（操作者作答 2b）；④scheme 白名单五族 {http, https, ws, wss, udp} 大小写不敏感，announce-list 白名单外 scheme 保留忽略+警告；⑤[bt] peer_connection_protocol 默认 `["tcp","webrtc"]`（代码默认 = 模板示例值，缺省双栈全开）；⑥留空 trackers 默认 4 条（http/https/udp）不变；⑦mini_ws_tracker 端口 ws 17905 / wss 17906。
 
 ## 二、当前产出情况
 
-### 本会话产物清单（净产品行为变更 = 0，净产品 API 面 = 0；测试净追加 +3）
-1. **harness 清场自适应化**（`qa/runners/harness.py`）：`clear_dir_prefill/clear_url_prefill`
-   由固定 64 退格单发改为「单字节退格 ×16 → 读屏判空（含占位符 `/srv/downloads` 形态）→
-   未空再来一轮」自适应循环。根因双缺陷：①PTY 对 `\x7f` 连发投递上限（64 连发仅 ~18 达，
-   bug19 口径）②本工作区路径更深（预填 75 字符 > 64）→ 残留与键入拼接 → save_dir 畸变
-   （registry 实录 `/home/z/my` + 全路径）→ 伴随校验用例全家假红。
-2. **bracketed paste 三段分片**（7 处：add_task/modify_task）：PTY 对 ESC 序列连发也丢字节
-   （19B 单发整段无效），按语义单元三写 + pump；逐字节写破坏 crossterm 解析（实测否决）。
-3. **判重口径适配（v1.43/v1.47 同 URL 即任务身份）**：同 env.home 内多相位/多迭代复用同
-   URL 的用例改查询参数差异化——IC-01（七算法异文件）、PC-05/PC-09（两相位）、MT-02/MT-04
-   （相位 B）、NP-08（https/socks5 相位）、NP-14/16/17（invalid-entry 各相位）、TP-05（五档
-   循环 + 2 GiB 对照档）、AT-12（CLI 三算法）。旧「独立子目录避守卫」假设随判重改判失效。
-4. **瞬时 toast 竞态改持久证据锚**：SQ-13（重排队 toast 被再探失败 toast 顶替，回环全链
-   87ms、可见窗 65ms，20ms 连拍取证）→ 改锚 fixture 访问日志新增请求；TD-02（完成 toast 被
-   并发慢任务同刻完成 toast 顶替）→ toast 观测 + wait_file_size 落盘双臂。
-5. **RS-14 重写到 v1.46 改判口径**：规程行已改而 runner 滞留 v1.28 原地作废口径——按
-   feature 场景 Then 链重写（序号改道 `<名>.1` 静默、孤儿 sidecar/部分文件原样保留、
-   `.1.ezr` 独立生成随完成删除；新任务限速 400KB/s 使 sidecar 首刷可观察）。
-6. **环境时序适配**：UC-13 大任务降速 40KB/s（100MB@16 连接×150KB/s ≈ 42s 与用例序列同长，
-   完成迁移污染列表锚）；TD-06 rate 8KB/s（12 任务须活过加序列，本沙箱 5 槽位下 60KB/s ×4
-   连接在加序列内完成前 7 个 → 排队任务不存在）。
-7. **PC-04 磁盘真实损坏修复**：`suite_persistence_config.py:205` 写入侧 `ttp]`（chat 通道
-   改写遗留）→ 恢复 `[http]`（bug18 判别法定位；该行两种形态均解析失败故此前未显形）。
-8. **QA-01-21 对齐 Gherkin 前提**：中位忽略需字段已满 2 位（feature When 明文 + 单测锚），
-   先补满再验；光标归位用 Right（产品 End 键仅作用于 trackers 列表，文本字段无 End 处理）。
-9. **AT-11 预填断言改尾部锚**：pyte display 对超宽字段「…头截断」，全路径包含断言在深
-   工作区必败 → 锚 `<home basename>/cfgdl` 尾部两段。
-10. **cmd_complete_path 补测 +3**（`ezr/src/app/cmd.rs` 测试模块纯追加）：命令窗口 Tab 补全
-    comp 24 × bin 套件 0 覆盖（CRAP 600 全仓最差）→ 唯一目录追加 / + toast / 多候选 lcp
-    列表 / 无匹配 toast 三测 → cov 0.824、CRAP 27.17。零行为变更。
-11. **notes 沉淀 + INDEX 同步 + RAG 索引增量刷新**（188 文件/1606 分块，健康）。
-12. **QA 规程↔runner 一致性核对**：14 runner ↔ 14 规程一一对应（头部标注规程路径），
-    6 个无专属 runner 规程的承载形态在案（见遗留受限项）。
+### 本会话产物清单（零产品代码改动；规格与需求文档面）
+1. **需求文档**：`mission.md` v1.45（大纲注记八项：trackers 统一/ws(s)/toast 钦定文案/announce-list 入池/peer_connection_protocol/WebRTC 承载/协议列 8/config 全局规则与退役规则 + 分期索引行 + 标题版本）；`mission/phase-02.md` v1.15（修订注含题目录重建登记 + FR-02-21/31/33/08 v1.15 注记 + **FR-02-34**（WebRTC DataChannel 传输 + peer_connection_protocol 全局开关，无跨协议回退）与 **FR-02-35**（config fail-fast 全局规则：未知值/重复项启动失败、TOML 解析失败拒绝启动、标量语义非法拒绝启动、旧条目退役不兼容直接废弃）+ D70 + 验收清单第 8 条）；`mission/phase-01.md` v1.48（FR-01-71 逐键回退臂全局退役注记，钳制臂一并翻转；未知键静默忽略口径维持）。
+2. **features/**（9 份）：`07-add-bt` v1.43（场景 11 反转：ws(s) 同权放行 + 白名单外 ftp 拒绝 + toast 钦定文案 + 大小写不敏感示例行）；`08-modify-bt` v1.8（场景 09 反转：ws(s) 放行即热生效 + ftp 拒绝）；`11-trackers-window` v1.13（场景 06 反转：ws(s) 入池照常显示 + 白名单外 scheme 三来源分流处置）；`09-bt-engine` v1.41（场景 05 分型 = http(s)/ws(s)/udp 三族 + wss 示例行、场景 09 统一单键 trackers + 旧两键废弃 + config 白名单外启动失败、场景 14 非法值臂翻转、**场景 19 新增**：peer_connection_protocol 四臂全局开关 + WebRTC DataChannel 传输语义、**场景 20 新增**：ws(s) tracker harness e2e + 未知值/重复项启动失败）；`04-ui-conns` v1.43（场景 08：协议列 4→8、值 = TCP/WebRTC 按连接实际传输、内容宽 111→115、收缩基线 77→81、视口 ≥107 完整可见、≥115 维持 34、末列吸附区间 (内容宽−8, 内容宽)）；`01-config-template` v1.16（键表与模板块：http_trackers/udp_trackers → trackers + peer_connection_protocol（默认 `["tcp","webrtc"]`），62 处取值范围注释回退口径翻转）；`01-persistence-config` v1.21（场景 04 行为翻转：33 行非法值全改「启动失败并报错」+ 数组两行、场景 12 退役键废弃判据）；`01-throttle-proxy` v1.12（场景 04/05 回退臂翻转、场景 09 旧写法行剪除）；`01-add-task` v1.45（场景 20 旧写法行剪除）。
+3. **qa/**（8 份）：QA-AB-11 / QA-MB-09 / QA-TW-06 反转改写；QA-BE-05/09 修订 + **QA-BE-19/20 新增**（WebRTC 四臂与无跨协议回退判据；ws(s) tracker harness `mini_ws_tracker.py` 行为规格：WebSocket 文本帧 JSON 消息契约、ws 17905/wss 17906 双监听自签、多 peer 注册互换、started/completed 事件）+ 头注 v1.41；QA-UC-08 v1.43 增判据（⑥⑦⑧）；QA-PC-04 行为翻转 + 头注 v1.21；QA-TP-04/05 翻转、QA-TP-09 片段翻转；QA-CT v1.16 同步注记。
+4. **harness/README.md**：目录结构登记 `mini_ws_tracker.py`（[v1.41 规格登记，coder/QA 轮实现]）+ 端口段 17905/17906。
+5. **notes 沉淀 + INDEX 同步 + RAG 索引增量刷新**（192 文件/1613 分块，健康）。
 
 ### 验证证据
-| 验证项 | 结果 | 命令（cd project/ezr，CARGO_INCREMENTAL=0） |
+| 验证项 | 结果 | 命令（可复现） |
 |---|---|---|
-| cargo fmt --check | 全仓干净（含新测试，fmt 已套用） | `cargo fmt --check` |
-| clippy --bins --tests | 0 警告 / 0 错误 | `cargo clippy --bins --tests` |
-| arch_check | 17 规则全绿 | `bash scripts/arch_check.sh` |
-| bin 单测 | **954P / 0F**（基线 951 + 补测 3） | `cargo test --bin ezr` |
-| 属性测试（独立显式命令） | **76P / 0F** | `cargo test property_tests::` |
-| 集成 12 目标 | **6378P / 0F**（对账见下） | 逐目标 `cargo test --test <名>` |
-| harness BT 互操作 e2e | **PASS**（ezr 2.2s 到做种、三方 SHA-256 一致、HTTP+UDP announce 在案） | `python3 harness/swarm_e2e.py --ezr-bin ../ezr/target/release/ezr --payload-mb 4 --timeout 150` |
-| QA 套件 14 套件 | **187P / 0F / 0S**（分节计数见 plan.md 勾选） | `python3 qa/runners/suite_<名>.py`（TP 分三批 QA_TP_ONLY） |
-| DRY（PMD CPD 7.29.0 `-l rust`，≥70tok） | **181 克隆组**（与 architect 基线精确同数，零漂移） | `.tools/pmd/bin/pmd cpd --dir src --language rust --minimum-tokens 70` |
-| CRAP（bin 套件 llvm-cov + 语法决策点 comp） | 关注集 = comp≥7 且 cov<1：全部为 architect 裁决保留的本质复杂度链（on_mouse_dialog/on_key/on_dialog_key 等，cov 0.6–0.99）+ 两个承载面 0 覆盖观察项；cmd_complete_path 修复后 27.17 | llvm-cov 手工管线（报告 `.work/tmp/crap-report.md`，会话级） |
+| APS parser（Go 版） | 9/9 exit=0 | `.work/tmp/gherkin-parser project/features/<f>.feature .work/tmp/<f>.json`（f ∈ 本轮 9 份） |
+| APS dry-checker（Go 版） | 9/9 exit=0；findings 全为 near-duplicate/possible-synonym 中文分词假阳性类（aps.md 登记口径） | `.work/tmp/gherkin-ir-dry-checker .work/tmp/<f>.json .work/tmp/<f>.dry.json` |
+| 钦定 toast 文案字节级校验 | features 2 处 + qa 3 处全角闭括号正确（`grep -c "仅 http(s)/ws(s)/udp）："） | grep 逐文件 |
+| RAG 索引 | 健康 | `bin/rag/rag status` |
 
 ### 对账口径
-- 测试数：bin 951→954（+3 = cmd_complete 补测）；集成 6357→6378（+21 = 7 个挂载套件各
-  +3：g_supervisor 716→719、g_engine 743→746、g_appcore 747→750、g_v147 730→733、
-  engine_backfill 849→852、ui_backfill 879→882、v115 872→875；g_throttle_err 458 / hardening
-  142 / g_slots 203 / g_main 2 / g_proxy 16 不挂载零变化）。自洽：+3×8 = 24 = 7332−7308 ✓。
-- 属性测试 76P 独立口径不变（工程规则：属性测试不进覆盖率/CRAP 命令，本轮 llvm-cov 运行
-  以 `--skip property_tests` 执行，实测 875P = 954−76 −3 新测试后 875+3=878 filtered 口径
-  一致 ✓）。
-- 变更面：`qa/runners/`（harness + 8 个套件文件）、`ezr/src/app/cmd.rs`（测试区纯追加）、
-  `project/notes/`（environment/testing/INDEX）；与 `src/` 产品代码零接触（cmd.rs 仅 cfg(test)
-  区追加），与 `mission.md`/`mission/` 零接触（QA 只读）。
-- 幻影行登记：CRAP 管线 if-let 收尾 `}` 幻影行 306 个（bug27 登记判据，不计真实缺口）。
+- 零产品代码改动（specifier 规格轮）；`src/`、`Cargo.toml` 零接触。
+- 场景数：09-bt-engine 18→20（+19/20）；其余文件场景数不变（07-11/08-09/11-06 原位反转，PC-04/TP-04/05 行翻转或剪行留痕，序号不重排）。
+- 需求文档版本链：mission v1.44→v1.45；phase-02 v1.14→v1.15；phase-01 注记追加 v1.48。
 
 ### 待办与待批
-- **判重谓词「已完成任务」张力（登记待操作者裁决）**：v1.47 谓词注记与 feature
-  01-add-task-16 Given 均无限定（同 URL 即拦、与状态无关，产品实现 + 单测同向）；而
-  phase-01 FR-01-26 引用句带「同 URL **非完成**任务的添加由重复任务判定拦截」。本轮 runner
-  按无限定口径适配（两个来源 vs 一个交叉引用句）；若操作者裁决为「已完成不拦」，需走
-  specifier 修订轮翻转 feature 16 Given + 产品 `url_task_exists`（一行谓词）+ 本轮 12 处
-  runner URL 差异化可保留（不影响两口径）。
-- **变异加固悬置**（沿前轮）：hardender 关闭，>100 变异点三文件与高 comp 函数族收益无从
-  兑现；如重启 hardender，`cargo mutants --file` 分块口径沿 cleaner 登记。
-- **QA-01-11 全路径预填断言已改尾部锚**：若操作者要求恢复全路径包含口径，需产品对话框
-  字段渲染改「…中截断」或加宽字段——属行为面变更，须裁决。
+- **D70 待批（操作者）**：①题目录重建映射——会话中断致上轮题目原文散失，本轮按 plan 基线记录 + 操作者原始需求重建五题并与作答「1a 2b 3a 4a 5a」对位（题1 toast 截尾=44 字硬截尾 / 题2 协议列宽=8 / 题3 ws(s) 三来源完全同权 / 题4 WebRTC=仅 peer 数据传输、tracker announce 各按自身协议 / 题5 fail-fast=全部条目）；如重建与操作者原意有偏差，指认题号即可回退（改动均为规格注记级）；②「协议」列宽 8（作答 2b）。
+- **沿 QA 终验轮未决**：判重谓词「已完成任务」张力（phase-01 FR-01-26 引用句「非完成」限定 vs v1.47 无限定口径，待操作者裁决）；变异加固悬置；QA-01-11 全路径预填断言口径（如需恢复须行为面变更裁决）。
+- **coder 轮实现清单（已规格化，Phase-02 v1.15）**：TrackerUrl 增 ws(s) 分型与三族归一；[bt] `trackers`/`peer_connection_protocol` 两键接入 config（含 fail-fast 校验接入启动链，FR-02-35①③）；FR-01-71 语义非法值全局翻转接入；WebRTC DataChannel 传输臂（无跨协议回退）；并发面板协议列 8/TCP·WebRTC；对话框 toast 新文案；模板 v1.16 文本；`mini_ws_tracker.py` harness。
 
 ### 移交建议
-- **six-pack 流转路径已走完**：specifier → coder → cleaner → architect →（hardender 操作者
-  关闭）→ QA → **Done**。归档即本轮终点，不自动流转。
-- 操作者直接复测（行为面与 bug27 轮交接完全一致，本轮零产品变更）：同 URL（bt/http）异
-  目录添加 → 错误窗口 `该链接的任务已存在`；CLI 同 URL 二次 → toast `⚠ 该链接的任务已存在`；
-  异 URL 同名 → `.1` 递增照旧；命令窗口 Tab 补全（本轮补测覆盖的行为）。
-- 若续跑其他工作流：`bin/swarm begin <工作流>/<角色>`（以本文件为上游交接内容）。
+- 下一步运行 **six-pack/coder**（以本文件为上游交接内容，依据 phase-02 v1.15 规格实现）；之后沿 six-pack 链 cleaner → architect → QA。
+- 操作者审批入口：mission.md v1.45 注记、phase-02.md v1.15 修订注与 D70、handoff 本节待办与待批。

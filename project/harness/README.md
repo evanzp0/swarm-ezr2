@@ -18,6 +18,15 @@ harness/
     mini_http_tracker.py   自研极简 BEP 3 HTTP tracker（stdlib-only，JSONL announce 日志；
                            --static-peer IP:PORT 注入静态 peer、--only-static-peers 只回静态
                            peer（延迟代理基准用，见 notes/architecture.md 代理观测法））
+    mini_ws_tracker.py     [v1.41 规格登记，coder/QA 轮实现] 自研极简 ws(s) WebSocket tracker
+                           （stdlib + 标准库 asyncio WebSocket 或仅依赖 websockets 单包；
+                           ws://0.0.0.0:17905/announce 与 wss://0.0.0.0:17906/announce 双监听，
+                           wss 用自签证书；文本帧 JSON 消息——announce 请求
+                           {action:"announce", info_hash, peer_id, port, uploaded, downloaded,
+                           left, event}，响应 {interval, complete, incomplete,
+                           peers:[{ip, port, peer_id}]}；注册多 peer 并互换 peers 下发；
+                           接受 started/completed/空 event；行为验收规格 = qa/09-bt-engine-qa.md
+                           QA-BE-20）
   swarm_e2e.py             主编排：造种 → 双 tracker → seeder → ezr pty 驱动 → leecher 同时下载 → 对账
   bench_multipeer.py       多 peer 速度基准：N seeder + M 并行 leecher 对照（限速/中途加入/侧车采样速度曲线）
   README.md                本文件
@@ -90,7 +99,7 @@ python3 swarm_e2e.py --ezr-bin ../ezr/target/release/ezr --payload-mb 4 --timeou
 （A → 种子路径 → Enter → Enter 立即下载）→ libtorrent leecher（17904）同时下载 →
 等全部完成 → SHA-256 三方对账（原始 payload / ezr 产物 / libtorrent leecher 产物）。
 
-端口占用：17901/17902/17903/17904（夹具专用，避开 QA fixture 端口段；跑前确保无残留，
+端口占用：17901/17902/17903/17904 + 17905（ws tracker）/17906（wss tracker）（夹具专用，避开 QA fixture 端口段；跑前确保无残留，
 见「已知坑」）。
 
 工作目录默认 `../../.work/tmp/swarm-e2e/`（宪法临时文件纪律），保留证据文件：

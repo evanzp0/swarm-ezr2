@@ -34,7 +34,7 @@
 | QA-TW-03 | 11-trackers-window-03 | 运行中任务（HTTP tracker 正常 / UDP 正常 / 停服退避中 / 暂停任务）分别开窗读状态/Peers/Seeds/消息列；**含 ≥3 位秒数用例（下轮倒计时 ≥100s 与重试退避 ≥100s 各一轮）** | 正常 = `工作中`（Peers/Seeds 计数与 fixture peers 响应对账、消息 = `下轮 <s>s` = interval 倒计时）；退避 = `失败`（Peers/Seeds = —、消息 = `重试 <s>s`）；暂停任务 = `待 announce`（三列均 —）；**3–6 位秒数在 12 列预算内完整显示无 '…' 截断（v1.12，bug24 验收判据：120s/3600s 级全可见）**；数据与 fixture announce 日志交叉一致 |
 | QA-TW-04 | 11-trackers-window-04 | 12 条 tracker 任务（含长 URL 折行）开窗；↑↓/PgUp·PgDn/Home/End/滚轮滚动；拖拽移动；点击外部 | 右缘滚动条出现（FR-01-109：↑│║↓ 恒绿滑块；按折行后显示行计数，**分隔细线同为滚动单位**）；视口滚动首尾钳制（续行与首行同为滚动单位，折行行不被拆断）；拖拽移动钳制终端内、关闭不保留；点击外部 = 无任何操作 |
 | QA-TW-05 | 11-trackers-window-05 | 开窗后依次按 t/T/Esc/q/Q（每次重开）；开窗时按 Ctrl+C；开窗时按 A/D/M | 五通道均关闭且不退出（q/Q 先关窗）；Ctrl+C 退出程序；模态期间 A/D/M 等被窗口消费（不开对话框）；开窗时底层面板降级暗框 |
-| QA-TW-06 | 11-trackers-window-06 | ①主界面按 t/T 观察；②任务 tracker 含 `wss://tracker.example/ws`（手输或 config）后开窗；③添加/修改 BT 对话框 trackers 输入含 wss:// 行后确认 | ①不再切换过滤页签（页签仅 ]/[ 可切；帮助【页签】组无 T 条目、【任务列表】组有 T 条目、【trackers 弹窗（T）】组含列口径与滚动条目）；②引擎拒绝入池（窗口与任务 tracker 列表均无）；③对话框层拒绝：toast `⚠ 不支持的 tracker 协议（仅 http/https/udp）：…`、焦点回 trackers、不落库（对话框保持打开） |
+| QA-TW-06 | 11-trackers-window-06 | ①主界面按 t/T 观察；②任务 tracker 含 `wss://tracker.example/ws`（config trackers 键 / announce-list / 手输三来源分别注入）后开窗；③来源含 `ftp://tracker.example/ann` 按三来源分别注入 | ①不再切换过滤页签（页签仅 ]/[ 可切；帮助【页签】组无 T 条目、【任务列表】组有 T 条目、【trackers 弹窗（T）】组含列口径与滚动条目）；②ws(s) 行同权入池照常显示（v1.13 反转：原「拒绝入池」臂退役；Peers/Seeds/消息与非 ws 行同口径）；③白名单外 scheme 三来源分流：config trackers 键来源 = 启动失败并报错（FR-02-35）；announce-list 来源 = 该行忽略 + 警告（窗口与任务 tracker 列表均不出现）；对话框手输来源 = toast `⚠ 不支持的 tracker 协议（仅 http(s)/ws(s)/udp）：…`、焦点回 trackers、不落库 |
 
 ## 通过准则
 

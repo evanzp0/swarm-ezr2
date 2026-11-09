@@ -81,7 +81,7 @@ Feature: 01-throttle-proxy 全局与任务级限速
       | url                              | param_speed |
       | http://fixture.local/files/a.bin | 512 KiB/s   |
 
-  Scenario: 01-throttle-proxy-04 global_max_download_speed 为 0 不限速且非法值回退默认
+  Scenario: 01-throttle-proxy-04 global_max_download_speed 为 0 不限速且非法值拒绝启动（v1.12 回退臂退役，FR-02-35）
     Given 配置文件设 [common] 表 global_max_download_speed = "<speed>"
     When 下载文件至传输稳定
     Then 全局速度行为为 "<behavior>"
@@ -89,8 +89,8 @@ Feature: 01-throttle-proxy 全局与任务级限速
     Examples:
       | speed   | behavior                                    |
       | 0       | 不限速（满速下载）                          |
-      | abc     | 回退默认 0（不限速）                        |
-      | 2 MB/s  | 回退默认 0（旧写法 KB/MB/GB 废弃不识别，v1.11） |
+      | abc     | 启动失败并报错（v1.12，FR-02-35：标量语义非法拒绝启动；原「回退默认 0」臂退役）                        |
+      | 2 MB/s  | 启动失败并报错（旧写法 KB/MB/GB 废弃不识别，v1.11；v1.12 起 FR-02-35 拒绝启动） |
 
   Scenario: 01-throttle-proxy-05 限速值单位格式解析（新写法二进制生效 + 旧写法十进制废弃，v1.11）
     Given 配置文件设 [common] 表 <key> = "<value>"
@@ -104,8 +104,8 @@ Feature: 01-throttle-proxy 全局与任务级限速
       | global_max_download_speed | 2 GiB/s   | 2147483648 B/s 生效（新写法二进制 1024^3）        |
       | global_max_download_speed | 2000000   | 2000000 B/s 生效（裸整数 = B/s）                  |
       | global_max_download_speed | 512 B/s   | 512 B/s 生效（B 后缀 = B/s）                      |
-      | global_max_download_speed | 2 MB/s    | 旧写法废弃不识别 → 非法回退 0（不限速，FR-01-71） |
-      | global_max_download_speed | 500KB/s   | 旧写法废弃不识别 → 非法回退 0（不限速）           |
+      | global_max_download_speed | 2 MB/s    | 旧写法废弃不识别 → 启动失败并报错（v1.12，FR-02-35） |
+      | global_max_download_speed | 500KB/s   | 旧写法废弃不识别 → 启动失败并报错（v1.12，FR-02-35） |
       | global_max_upload_speed   | 1 MiB/s   | 1048576 B/s 生效（BT 上传合计观察）               |
 
   Scenario: 01-throttle-proxy-06 限速对不支持续传的任务同样生效
@@ -142,7 +142,9 @@ Feature: 01-throttle-proxy 全局与任务级限速
       | 0         | 1 MiB/s   | 0            | 1 MiB/s    | 1 M   | 1 MiB/s     | 1048576 |
       | 0         | 512 KiB/s | 0            | 500 KiB/s  | 512   | 512         | 512     |
       | 2000000   | 0         | 2000000 B/s  | 0          | 留空  | 2000000 B/s | 2000000 |
-      | 2 MB/s    | 0         | 0            | 0          | abc   | abc         | 0       |
+    # v1.12 修订（FR-02-35）：原末行「config 旧写法 2 MB/s → 非法回退 0 → 预填 0」随
+    # 回退臂退役剪除——旧写法 config 值现在启动失败并报错（01-throttle-proxy-04 v1.12），
+    # 对话框预填臂不可达（行剪除留痕，场景序号不重排）。
 
   Scenario: 01-throttle-proxy-10 任务级与全局限速取 min 合成
     Given 配置文件设 [common] 表 global_max_download_speed = "<g_down>" 与 task_max_download_speed = "<t_down>"

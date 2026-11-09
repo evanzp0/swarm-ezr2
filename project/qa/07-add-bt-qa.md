@@ -38,7 +38,7 @@
 | QA-AB-09 | 07-add-bt-09 | 经命令窗口分别输入绝对路径 / `~/qatorrents/<seed>` / `qatorrents/<seed>`（cwd 相对）/ `./qatorrents/<seed>` 四种形态打开 BT 对话框并确认创建；第二轮以同来源重复创建 | 四例任务均创建成功；任务 url（详情「URL」+ 注册表来源）= 归一后绝对路径：绝对不变 / `<主目录>/qatorrents/<seed>` / `<cwd>/qatorrents/<seed>` / `<cwd>/qatorrents/<seed>`；对话框种子行预填保持原样输入（所见即所输）；**同来源重复创建（v1.42/bug27：保存目录同或异均命中）弹出「错误」窗口消息 `该链接的任务已存在`（v1.41/bug25：原 toast `⚠ 任务已存在` 承载退役；判重用归一后路径比对）** |
 
 | QA-AB-10 | 07-add-bt-10 | 配置 task 两键（2 MiB/s/1 MiB/s、512 KiB/s/0、0/512 KiB/s、2 MB/s/0 四行）后命令窗口开 BT 框；下载限速改输入（`2m`/留空/`512`/非法）观察显示后确认创建 | 限速两字段预填 = config 解析后 fmt 规范化显示（`2 MiB/s`/`1 MiB/s`、`500 KiB/s`、`500 KiB/s`、`0`——非 1024 整倍数显裸 N B/s、0 显 0，v1.40；config 旧写法 2 MB/s = 废弃回退 0 → 预填 0）、插在并发与代理之间、无占位提示；键入/粘贴即规范化显示（`2m` → `2 MiB/s`，前导零剥离；退格不回写）；**裸数字 512 确认 = 512 B/s**（输入态显示 512 不缀单位，落库 512，v1.40）；确认后任务级限速落库（注册表回读一致）；BT 引擎按 min(全局, 任务级) 生效（判据归口 QA-TP-12）；留空/非法回退 config 默认（同 HTTP 框 QA-01-20）；并发满容量重启录入口径同 QA-01-21 |
-| QA-AB-11 | 07-add-bt-11 | ①添加 BT 对话框 trackers 输入 `wss://tracker.example/ws` 确认；②trackers 留空确认后开 T 弹窗与修改面板比对 | ①toast `⚠ 不支持的 tracker 协议（仅 http/https/udp）：wss://tracker.example/ws…`、焦点回 trackers、对话框不关闭、任务不创建；②任务创建成功且 4 条默认 tracker（http/https/udp）入库，T 弹窗 4 条与面板预填一致（回归：旧版面板预填不入库 → 弹窗空） |
+| QA-AB-11 | 07-add-bt-11 | ①添加 BT 对话框 trackers 输入 `ftp://tracker.example/ann` 确认；②输入 `wss://tracker.example/ws` 确认后开 T 弹窗与修改面板比对；③输入 `WS://tracker.example/ws`（大写 scheme）确认；④trackers 留空确认 | ①toast `⚠ 不支持的 tracker 协议（仅 http(s)/ws(s)/udp）：ftp://tracker.example/ann`（截尾 = 首 44 显示字符硬截尾、无省略号后缀）、焦点回 trackers、对话框不关闭、任务不创建；②同权放行（v1.8 反转，原 wss 拒绝臂退役）：任务创建成功、tracker 池/T 弹窗/修改面板预填均含 wss 行；③大写 scheme 等价放行（白名单大小写不敏感）；④留空默认 4 条（http/https/udp）入库，T 弹窗 4 条与面板预填一致 |
 
 ## 通过准则
 

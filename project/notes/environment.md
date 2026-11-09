@@ -367,3 +367,15 @@ QA 轮（2026-11-06）补记：接手被中断会话先清残留进程——上�
 - **git clone HTTP2 framing layer 报错**：`git -c http.version=HTTP/1.1 clone` 一次过。
 - **api.github.com releases 清单本轮不可用**（解析 tag=None）——按历轮登记资产名直接
   gh-proxy 下载可行，资产名漂移时再走清单页。
+
+## specifier ws(s)/WebRTC 修订轮（2026-11-09）：bb 不可达 → APS Go 版工具装机
+- **bb release 资产本轮不可达**：github.com release 资产下载返回 9 字节 Not Found（git clone
+  协议仍可用；NJU github-release 路径 404、TUNA github-release 无 babashka、api.github.com
+  无响应）——沿「清单先查」条款逐镜像排除后弃 bb，改走 engineering.md 预留的 Go 版备用路径
+  （APS 仓库自带 cmd/ 三件：gherkin-parser / gherkin-ir-dry-checker / gherkin-mutator）。
+- **Go 工具链 = 阿里云 golang 镜像一次过**：`mirrors.aliyun.com/golang/go1.23.4.linux-amd64.tar.gz`
+  73.6MB 直下解压 `.tools/go`（工具缓存位，不进归档）；APS 仓库 `git clone --depth 1` 到
+  `.tools/Acceptance-Pipeline-Specification`，`GOPROXY=https://goproxy.cn,direct go build -o
+  .work/tmp/gherkin-<名> ./cmd/<名>` 秒级出静态二进制。bb.edn 三任务与 cmd/ 三件等价，
+  调用口径同（parser `<feature> <out>.json`、dry-checker `<ir> <out>.dry.json`、中间产物
+  落 `.work/tmp/`），findings 仍按 aps.md 中文分词假阳性口径读。

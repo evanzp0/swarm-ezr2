@@ -63,6 +63,16 @@ Feature: 01-config-template 配置模板自动生成
   十进制废弃不再识别（含旧写法的值 = 非法 → 回退 0，FR-01-71；解析器行为，模板注释
   不展开）；③钦定文本整体替换为 v1.15 版（行数与行集结构不变 = 191 行，仅四键取值范围
   注释行文本修订，EOF 单换行收尾）。
+  v1.16 修订注（操作者修订轮指令「tracker 统一 + ws(s) 支持 + BT WebRTC + config 严格校验」；
+  phase-02 v1.15，FR-02-21 v1.15/FR-02-34/FR-02-35、D70；Inversion 阶段 1 受限退化 chat 输入
+  选择题答案 1a/2b/3a/4a/5a，题目录重建登记见 phase-02 v1.15 注记与 handoff 待批）：
+  ①[bt] 表两键替换——http_trackers/udp_trackers 退役废弃，统一单键 trackers（元素限
+  http(s)/ws(s)/udp scheme，大小写不敏感；未知 scheme 或重复项拒绝启动，FR-02-35）+
+  新增 peer_connection_protocol（无序数组、默认 ["tcp","webrtc"]、元素限 tcp/webrtc、
+  大小写不敏感去重；未知值或重复项拒绝启动，FR-02-34）；键总数不变（40 键）；
+  ②全文取值范围注释随 FR-02-35 fail-fast 翻转——「0 或非法值回退默认 / 越界钳制」类说明
+  统一改「拒绝启动」（FR-01-71 回退臂退役，验收归口 01-persistence-config-04 v1.21）；
+  ③模板行数不变（191 行，仅 [bt] 两键行与其注释块、各键取值范围注释文本替换）。
 
   v1.13 修订（操作者 bug14 轮指令，D63；FR-01-85 v1.13/FR-01-71 v1.39）：模板改版为
   「示例行活跃」形态——36 个键值行与 3 个表声明行（[common]/[http]/[bt]）取消注释成为
@@ -90,44 +100,44 @@ Feature: 01-config-template 配置模板自动生成
     Examples:
       | key                          | default_line                              | purpose                                          | range                                       |
       | download_dir                 | download_dir = ""                       | 默认保存目录                                     | 留空或缺失 = 用户主目录下的下载目录         |
-      | download_slots               | download_slots = 5                      | 全局下载槽位数                                   | 正整数（≥1）；0 或非法值回退默认            |
+      | download_slots               | download_slots = 5                      | 全局下载槽位数                                   | 正整数（≥1）；0 或非法值拒绝启动            |
       | global_max_download_speed    | global_max_download_speed = 0           | 全局下载限速（全部任务合计）                     | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
       | global_max_upload_speed      | global_max_upload_speed = 0             | 全局上传限速（BT 上传合计）                      | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
       | task_max_download_speed      | task_max_download_speed = 0             | 新任务默认任务级下载限速                         | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
       | task_max_upload_speed        | task_max_upload_speed = 0               | 新任务默认任务级上传限速                         | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
-      | block_size_http              | block_size_http = 1048576               | HTTP 分块块大小（字节）                          | 正整数（≥1）；0 或非法值回退默认            |
-      | http_concurrency             | http_concurrency = 4                    | 默认并发数                                       | 1–64 的整数；越界钳制到边界                 |
-      | max_retries                  | max_retries = 5                         | 自动重试上限次数                                 | ≥1 的整数；0 或非法值回退默认               |
+      | block_size_http              | block_size_http = 1048576               | HTTP 分块块大小（字节）                          | 正整数（≥1）；0 或非法值拒绝启动            |
+      | http_concurrency             | http_concurrency = 4                    | 默认并发数                                       | 1–64 的整数；0 或越界拒绝启动                 |
+      | max_retries                  | max_retries = 5                         | 自动重试上限次数                                 | ≥1 的整数；0 或非法值拒绝启动               |
       | auto_retry                   | auto_retry = true                       | 失败后是否自动重试                               | true / false                                |
-      | backoff_initial              | backoff_initial = 8.0                   | 自动重试退避初始秒                               | >0 的有限数；非法值回退默认                 |
-      | backoff_cap                  | backoff_cap = 60.0                      | 自动重试退避封顶秒                               | >0 的有限数；非法值回退默认                 |
-      | progress_tick_ms             | progress_tick_ms = 100                  | HTTP 下载进度事件节拍（毫秒）                    | 正整数（≥1）；0 或非法值回退默认            |
-      | sidecar_flush_secs           | sidecar_flush_secs = 2                  | 断点 sidecar 落盘间隔（秒）                      | 正整数（≥1）；0 或非法值回退默认            |
-      | throttle_burst_secs          | throttle_burst_secs = 0.5               | 限速令牌桶突发窗（秒）                           | >0 的有限数；非法值回退默认                 |
-      | throttle_sleep_ms            | throttle_sleep_ms = 20                  | 限速循环步进睡眠（毫秒）                         | 正整数（≥1）；0 或非法值回退默认            |
-      | dns_race_grace_ms            | dns_race_grace_ms = 1000                | DNS 双腿竞速宽限（毫秒）                         | 正整数（≥1）；0 或非法值回退默认            |
-      | http_trackers                | http_trackers = []                      | HTTP(S) tracker 列表（BT 任务默认池来源之一）    | 字符串数组；非法 URL 行启动时忽略并警告     |
-      | udp_trackers                 | udp_trackers = []                       | UDP tracker 列表（BT 任务默认池来源之一）        | 字符串数组；非法 URL 行启动时忽略并警告     |
-      | bt_concurrency               | bt_concurrency = 20                     | BT 任务默认并发数                                | 1–64 的整数；越界钳制到边界                 |
-      | peer_pipeline                | peer_pipeline = 64                      | 单 peer 在飞请求块数上限                         | 正整数（≥1）；0 或非法值回退默认            |
-      | upload_slots                 | upload_slots = 4                        | 同时获得上传槽位的 peer 数                       | 正整数（≥1）；0 或非法值回退默认            |
-      | upload_read_concurrency      | upload_read_concurrency = 128           | 上传读盘并发上限                                 | 正整数（≥1）；0 或非法值回退默认            |
-      | idle_eviction_secs           | idle_eviction_secs = 60                 | 空闲连接置换阈值（秒）                           | 正整数（≥1）；0 或非法值回退默认            |
-      | connect_timeout_secs         | connect_timeout_secs = 3                | 出连 TCP 拨号超时（秒）                          | 正整数（≥1）；0 或非法值回退默认            |
-      | handshake_timeout_secs       | handshake_timeout_secs = 10             | peer 握手超时（秒）                              | 正整数（≥1）；0 或非法值回退默认            |
-      | request_timeout_secs         | request_timeout_secs = 20               | 在飞块请求超时（秒）                             | 正整数（≥1）；0 或非法值回退默认            |
-      | requests_per_piece           | requests_per_piece = 4                  | 单 piece 请求块粒度                              | 正整数（≥1）；0 或非法值回退默认            |
-      | rechoke_interval_secs        | rechoke_interval_secs = 10              | 上传 choker 重排周期（秒）                       | 正整数（≥1）；0 或非法值回退默认            |
-      | optimistic_interval_secs     | optimistic_interval_secs = 30           | 乐观 unchoke 轮换周期（秒）                      | 正整数（≥1）；0 或非法值回退默认            |
-      | progress_emit_min_interval_ms | progress_emit_min_interval_ms = 250    | 进度事件最小发送间隔（毫秒）                     | 正整数（≥1）；0 或非法值回退默认            |
-      | tracker_numwant              | tracker_numwant = 200                   | announce 请求的 peer 数上限                      | 正整数（≥1）；0 或非法值回退默认            |
-      | peer_retry_base_secs         | peer_retry_base_secs = 5                | peer 连接失败重试退避起始（秒）                  | 正整数（≥1）；0 或非法值回退默认            |
-      | peer_retry_cap_secs          | peer_retry_cap_secs = 120               | peer 连接失败重试退避封顶（秒）                  | 正整数（≥1）；0 或非法值回退默认            |
-      | tracker_backoff_start_secs   | tracker_backoff_start_secs = 8          | tracker 失败退避起始（秒）                       | 正整数（≥1）；0 或非法值回退默认            |
-      | tracker_backoff_cap_secs     | tracker_backoff_cap_secs = 60           | tracker 失败退避封顶（秒）                       | 正整数（≥1）；0 或非法值回退默认            |
-      | udp_base_timeout_secs        | udp_base_timeout_secs = 15              | UDP tracker 单轮超时起始（秒）                   | 正整数（≥1）；0 或非法值回退默认            |
-      | udp_retries                  | udp_retries = 3                         | UDP tracker 超时重试次数                         | 正整数（≥1）；0 或非法值回退默认            |
-      | seed_duration_secs           | seed_duration_secs = 1800               | 做种时长默认值（秒）                             | >0 的数；0 或非法值回退默认                 |
+      | backoff_initial              | backoff_initial = 8.0                   | 自动重试退避初始秒                               | >0 的有限数；非法值拒绝启动                 |
+      | backoff_cap                  | backoff_cap = 60.0                      | 自动重试退避封顶秒                               | >0 的有限数；非法值拒绝启动                 |
+      | progress_tick_ms             | progress_tick_ms = 100                  | HTTP 下载进度事件节拍（毫秒）                    | 正整数（≥1）；0 或非法值拒绝启动            |
+      | sidecar_flush_secs           | sidecar_flush_secs = 2                  | 断点 sidecar 落盘间隔（秒）                      | 正整数（≥1）；0 或非法值拒绝启动            |
+      | throttle_burst_secs          | throttle_burst_secs = 0.5               | 限速令牌桶突发窗（秒）                           | >0 的有限数；非法值拒绝启动                 |
+      | throttle_sleep_ms            | throttle_sleep_ms = 20                  | 限速循环步进睡眠（毫秒）                         | 正整数（≥1）；0 或非法值拒绝启动            |
+      | dns_race_grace_ms            | dns_race_grace_ms = 1000                | DNS 双腿竞速宽限（毫秒）                         | 正整数（≥1）；0 或非法值拒绝启动            |
+      | trackers                     | trackers = []                           | BT 任务默认 tracker 池（默认池来源之一，三来源合并） | 字符串数组；元素限 http(s)/ws(s)/udp scheme（大小写不敏感）；未知 scheme 或重复项拒绝启动 |
+      | peer_connection_protocol     | peer_connection_protocol = ["tcp", "webrtc"] | BT peer 连接与数据传输的传输协议全局开关（v1.16 新增） | 无序字符串数组；元素限 tcp/webrtc（大小写不敏感、去重）；未知值或重复项拒绝启动 |
+      | bt_concurrency               | bt_concurrency = 20                     | BT 任务默认并发数                                | 1–64 的整数；0 或越界拒绝启动                 |
+      | peer_pipeline                | peer_pipeline = 64                      | 单 peer 在飞请求块数上限                         | 正整数（≥1）；0 或非法值拒绝启动            |
+      | upload_slots                 | upload_slots = 4                        | 同时获得上传槽位的 peer 数                       | 正整数（≥1）；0 或非法值拒绝启动            |
+      | upload_read_concurrency      | upload_read_concurrency = 128           | 上传读盘并发上限                                 | 正整数（≥1）；0 或非法值拒绝启动            |
+      | idle_eviction_secs           | idle_eviction_secs = 60                 | 空闲连接置换阈值（秒）                           | 正整数（≥1）；0 或非法值拒绝启动            |
+      | connect_timeout_secs         | connect_timeout_secs = 3                | 出连 TCP 拨号超时（秒）                          | 正整数（≥1）；0 或非法值拒绝启动            |
+      | handshake_timeout_secs       | handshake_timeout_secs = 10             | peer 握手超时（秒）                              | 正整数（≥1）；0 或非法值拒绝启动            |
+      | request_timeout_secs         | request_timeout_secs = 20               | 在飞块请求超时（秒）                             | 正整数（≥1）；0 或非法值拒绝启动            |
+      | requests_per_piece           | requests_per_piece = 4                  | 单 piece 请求块粒度                              | 正整数（≥1）；0 或非法值拒绝启动            |
+      | rechoke_interval_secs        | rechoke_interval_secs = 10              | 上传 choker 重排周期（秒）                       | 正整数（≥1）；0 或非法值拒绝启动            |
+      | optimistic_interval_secs     | optimistic_interval_secs = 30           | 乐观 unchoke 轮换周期（秒）                      | 正整数（≥1）；0 或非法值拒绝启动            |
+      | progress_emit_min_interval_ms | progress_emit_min_interval_ms = 250    | 进度事件最小发送间隔（毫秒）                     | 正整数（≥1）；0 或非法值拒绝启动            |
+      | tracker_numwant              | tracker_numwant = 200                   | announce 请求的 peer 数上限                      | 正整数（≥1）；0 或非法值拒绝启动            |
+      | peer_retry_base_secs         | peer_retry_base_secs = 5                | peer 连接失败重试退避起始（秒）                  | 正整数（≥1）；0 或非法值拒绝启动            |
+      | peer_retry_cap_secs          | peer_retry_cap_secs = 120               | peer 连接失败重试退避封顶（秒）                  | 正整数（≥1）；0 或非法值拒绝启动            |
+      | tracker_backoff_start_secs   | tracker_backoff_start_secs = 8          | tracker 失败退避起始（秒）                       | 正整数（≥1）；0 或非法值拒绝启动            |
+      | tracker_backoff_cap_secs     | tracker_backoff_cap_secs = 60           | tracker 失败退避封顶（秒）                       | 正整数（≥1）；0 或非法值拒绝启动            |
+      | udp_base_timeout_secs        | udp_base_timeout_secs = 15              | UDP tracker 单轮超时起始（秒）                   | 正整数（≥1）；0 或非法值拒绝启动            |
+      | udp_retries                  | udp_retries = 3                         | UDP tracker 超时重试次数                         | 正整数（≥1）；0 或非法值拒绝启动            |
+      | seed_duration_secs           | seed_duration_secs = 1800               | 做种时长默认值（秒）                             | >0 的数；0 或非法值拒绝启动                 |
       | listen_port                  | listen_port = 0                         | BT 监听端口（0 = 随机绑定）                      | 0 = 随机；1–65535 = 指定（占用回退随机+警告）；负/非法回退随机 |
 
   （v1.13 操作者钦定模板原文——default_template() 输出与其逐字节一致，coder 不得增删改
@@ -147,7 +157,7 @@ Feature: 01-config-template 配置模板自动生成
   download_dir = ""
   
   # 全局下载槽位数（同时下载的任务数上限）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   download_slots = 5
   
   # 全局下载限速（全部任务合计；0 = 不限）
@@ -188,15 +198,15 @@ Feature: 01-config-template 配置模板自动生成
   [http]
   
   # HTTP 分块块大小（字节）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认（1 MB）
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动（1 MB）
   block_size_http = 1048576
   
   # 默认并发数
-  # 取值范围：1–64 的整数；越界钳制到边界
+  # 取值范围：1–64 的整数；0 或越界拒绝启动
   http_concurrency = 4
   
   # 自动重试上限次数（达上限转停等，可按 R 手动重试）
-  # 取值范围：≥1 的整数；0 或非法值回退默认
+  # 取值范围：≥1 的整数；0 或非法值拒绝启动
   max_retries = 5
   
   # 失败后是否自动重试
@@ -204,123 +214,123 @@ Feature: 01-config-template 配置模板自动生成
   auto_retry = true
   
   # 自动重试退避初始秒（指数退避序列起点）
-  # 取值范围：>0 的有限数；非法值回退默认
+  # 取值范围：>0 的有限数；非法值拒绝启动
   backoff_initial = 8.0
   
   # 自动重试退避封顶秒
-  # 取值范围：>0 的有限数；非法值回退默认
+  # 取值范围：>0 的有限数；非法值拒绝启动
   backoff_cap = 60.0
   
   # HTTP 下载进度事件节拍（毫秒）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   progress_tick_ms = 100
   
   # 断点 sidecar 落盘间隔（秒）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   sidecar_flush_secs = 2
   
   # 限速令牌桶突发窗（秒）
-  # 取值范围：>0 的有限数；非法值回退默认
+  # 取值范围：>0 的有限数；非法值拒绝启动
   throttle_burst_secs = 0.5
   
   # 限速循环步进睡眠（毫秒）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   throttle_sleep_ms = 20
   
   # DNS 双腿竞速宽限（毫秒，双栈并行解析）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   dns_race_grace_ms = 1000
   
   # ===== BT 引擎配置 =====
   
   [bt]
   
-  # HTTP(S) tracker 列表（BT 任务默认 tracker 池来源之一）
-  # 取值范围：字符串数组，每项为 http:// 或 https:// 开头的 tracker announce URL；非法 URL 行启动时忽略并警告
-  http_trackers = []
+  # tracker 列表（BT 任务默认 tracker 池来源之一，三来源合并入池）
+  # 取值范围：字符串数组，每项为 http(s)://、ws(s):// 或 udp:// 开头的 tracker announce URL（scheme 大小写不敏感）；未知 scheme 或重复项拒绝启动
+  trackers = []
   
-  # UDP tracker 列表（BT 任务默认 tracker 池来源之一）
-  # 取值范围：字符串数组，每项为 udp:// 开头的 tracker announce URL（含端口）；非法 URL 行启动时忽略并警告
-  udp_trackers = []
+  # BT peer 连接与数据传输的传输协议全局开关（无序数组；无跨协议回退）
+  # 取值范围：无序字符串数组，元素限 tcp / webrtc（大小写不敏感、去重）；未知值或重复项拒绝启动
+  peer_connection_protocol = ["tcp", "webrtc"]
   
   # BT 任务默认并发数（新任务预填）
-  # 取值范围：1–64 的整数；越界钳制到边界
+  # 取值范围：1–64 的整数；0 或越界拒绝启动
   bt_concurrency = 20
   
   # 单 peer 在飞请求块数上限（×16 KiB = 在飞窗口）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   peer_pipeline = 64
   
   # 同时获得上传槽位的 peer 数（choker 周期分配）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   upload_slots = 4
   
   # 上传读盘并发上限（进程级）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   upload_read_concurrency = 128
   
   # 空闲连接置换阈值（秒，无新增进账超时即断开重拨）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   idle_eviction_secs = 60
   
   # 出连 TCP 拨号超时（秒）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   connect_timeout_secs = 3
   
   # peer 握手超时（秒）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   handshake_timeout_secs = 10
   
   # 在飞块请求超时（秒）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   request_timeout_secs = 20
   
   # 单 piece 请求块粒度（piece 细分为 n 块请求）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   requests_per_piece = 4
   
   # 上传 choker 重排周期（秒）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   rechoke_interval_secs = 10
   
   # 乐观 unchoke 轮换周期（秒）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   optimistic_interval_secs = 30
   
   # 进度事件最小发送间隔（毫秒，节流）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   progress_emit_min_interval_ms = 250
   
   # announce 请求的 peer 数上限
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   tracker_numwant = 200
   
   # peer 连接失败重试退避起始（秒，倍增）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   peer_retry_base_secs = 5
   
   # peer 连接失败重试退避封顶（秒）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   peer_retry_cap_secs = 120
   
   # tracker 失败退避起始（秒，倍增）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   tracker_backoff_start_secs = 8
   
   # tracker 失败退避封顶（秒）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   tracker_backoff_cap_secs = 60
   
   # UDP tracker 单轮超时起始（秒，倍增重试）
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   udp_base_timeout_secs = 15
   
   # UDP tracker 超时重试次数
-  # 取值范围：正整数（≥1）；0 或非法值回退默认
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   udp_retries = 3
   
   # 做种时长默认值（秒，任务做种倒计时起点）
-  # 取值范围：>0 的数；0 或非法值回退默认
+  # 取值范围：>0 的数；0 或非法值拒绝启动
   seed_duration_secs = 1800
 
   # BT 监听端口（0 = 随机绑定）
