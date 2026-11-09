@@ -79,6 +79,14 @@
 # 会话立即携新 offers 重连 shed 的 peer；http/udp 刷新候选池；尊重 tracker min_interval）+
 # 本端主动收口（缩容 shed/空闲置换）的 WebRTC peer 不记失败冷却（mark_peer_idle，区别于异常
 # 断开的惩罚性退避）——peer 重连不再等 tracker interval 周期。QA 严格检查 = QA-BE-19（观察面注记）。
+# v1.43 修订（操作者修订轮指令 20261109「BT 多文件任务修改对话框文件勾选行为修订」三需求；
+# phase-02 v1.16，FR-02-03/FR-02-19 v1.16，D73；Inversion 阶段 1 受限退化 chat 输入选择题答案
+# 1A 2B 3B 4A 5A）：场景 08 修订——①取消选中 = 已落盘该文件数据删除钦定落实（文件粒度 +
+# 变空目录自底向上整树清理，4A；目标不存在静默跳过，5A；删除 IO 失败不阻塞确认与勾选生效，
+# D73④；勾回已删文件从头补下，原数据保留断点语义退役）；②新增做种回退臂：做种中任务补选
+# 新文件 → 任务回下载态、上传暂停至再次全部完成（2B；可观察面 = 上传速度 0 / uploaded 与
+# announce uploaded 不增长 / leecher 拉不到数据）、回做种时 seed_left 重置 config 默认（3B）。
+# QA 严格检查 = QA-BE-08（修订）+ QA-MB-10/11/12（UI 层）。
 Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文件选择）
 
   期号 02。真实 BT 链路：.torrent 解析 → tracker announce（HTTP/UDP、紧凑 peer、
@@ -149,6 +157,8 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
     And 对超出元数据范围的分片请求回 reject（msg_type=2）
     And leecher 拼接元数据后 SHA-1 = infohash 校验通过（fixture 侧观察；完整 BEP 10 与拉取侧属 phase-03）
 
+  # v1.43 修订（操作者修订轮 20261109，FR-02-19 v1.16/D73）：取消选中 = 落盘数据删除；
+  # 新增做种回退臂（上传暂停 + seed_left 重置）。
   Scenario: 09-bt-engine-08 按文件下载语义
     When 添加多文件任务且仅勾选 <selected> 个文件后确认下载
     Then 只下载选中文件覆盖的 piece、未选文件不建立数据不落盘（保存目录无未选文件路径）
@@ -156,6 +166,15 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
     And 下载完成后选中文件字节与 seeder 原始字节一致（fixture 侧校验）
     When 经修改对话框补选先前未选文件
     Then 新增文件覆盖 piece 进入缺口补下（已落盘数据不重下）
+    When 经修改对话框取消已下载文件的勾选后确认
+    Then 该文件落盘数据删除（保存目录无该文件路径；变空目录自底向上整树清理；目标不存在静默跳过）
+    And 对应 piece 退出缺口与可服务集合、已下载量按新 total 钳制
+    When 重新勾选该文件后确认
+    Then 该文件从头补下（数据已删无断点；v1.43 反转，原断点保留语义退役）
+    When 做种中任务经修改对话框补选新文件确认
+    Then 任务回下载态且上传暂停（该任务上传速度 0、uploaded 与 announce uploaded 不增长、
+      leecher 拉不到数据；D73②）直至再次全部完成
+    And 再次全部完成后回做种态、seed_left 重置为 config seed_duration_secs 当前值（D73③）、上传恢复
 
     Examples:
       | selected |

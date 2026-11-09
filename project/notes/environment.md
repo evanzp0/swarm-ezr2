@@ -379,5 +379,8 @@ QA 轮（2026-11-06）补记：接手被中断会话先清残留进程——上�
   .work/tmp/gherkin-<名> ./cmd/<名>` 秒级出静态二进制。bb.edn 三任务与 cmd/ 三件等价，
   调用口径同（parser `<feature> <out>.json`、dry-checker `<ir> <out>.dry.json`、中间产物
   落 `.work/tmp/`），findings 仍按 aps.md 中文分词假阳性口径读。;
+- **同日下午复测（文件勾选修订轮）：gh-proxy.com 前缀对 bb release 资产同样可用**（v1.12.197
+  静态包 24.2MB/411KB/s + APS clone 均成，免 go build 路径）——上午「bb release 不可达」为
+  通道漂移而非恒定阻断；装机次序 = 先试 gh-proxy 前缀直下 → 不通再降级 go build 备用路径。
 
 ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单点测速 TUNA 0.38s 最快（USTC 1.16/rsproxy 1.75/官方 1.48）+ rustup-init 直链 TUNA + default profile 前台一次装齐 nightly 1.101（--component 参数不接受，default profile 自带 clippy/rustfmt）+ registry 仍 rsproxy sparse + 10G 盘纪律升级：webrtc 依赖树使 target/ 单次全量 ~7G——必须 CARGO_PROFILE_DEV_DEBUG=0 + CARGO_PROFILE_TEST_DEBUG=0 + CARGO_INCREMENTAL=0 三件套且 cargo clean 后分批构建，不同 profile 环境混用即双倍占用 + python websockets 16.0/cryptography 本轮预装可用（mini_ws_tracker 依赖面零安装）
