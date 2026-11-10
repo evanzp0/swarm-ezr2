@@ -399,3 +399,6 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - **llvm-cov release 资产名漂移**：v0.9.1 实名 = `cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz`（无版本前缀形态，旧带版本名 404）——「清单先查」再证；cargo-mutants 27.1.0 资产名同族无漂移。
 - **PMD 7.29 cpd 参数漂移**：目录参数 = `-d`（历轮记录的 `--dir` 在 7.29 为无效参数，报 usage）；EXIT=4=有克隆。bb 1.13.229 + APS 经 gh-proxy.com 装机复证秒级（api.github.com 清单直连可用）。
 - ezr-demo PTY 守卫在沙箱的退格投递上限（bug19 家族）对 demo 守卫同样生效——判别与裁决法见 testing.md cleaner 轮条目。
+
+## 架构评审轮（2026-11-10，architect）追加
+- 新 shell 会话 PATH 不含 ~/.cargo/bin（表象 = `cargo: command not found`）——先 `source ~/.cargo/env` 再跑；cargo-mutants 装于 ~/.local/bin 亦不在 PATH，且须以 cargo 子命令形态调用（PATH 补 `~/.local/bin` 后 `cargo mutants --list`；直调 `cargo-mutants --list` 报 unexpected argument——子命令按 cargo 插件协议分发）。

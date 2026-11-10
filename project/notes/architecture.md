@@ -690,3 +690,9 @@ ws/webrtc 轮（2026-11-09）：TrackerUrl 三族分型（Ws 变体与 Http/Udp 
 
 - **CRAP 收敛的两类拆分落点**（comp=语法决策点+1、cov=1 时 CRAP=comp，门槛 ≤6）：①纯函数提纯——delete_deselected_files 提 `push_ancestor_dirs`（祖先目录收集）、BtTaskData::selected_bytes_of_pieces 提 `span_sum_over_selected_files`（单 piece×选中文件交叠求和），主函数保留数据编排、子函数单一职责，comp 8→6 与 8→4/5；②拆不动的登记而非硬凑——on_bt_done（事件臂守卫链 comp=7）、handle_peer_msg/Reconfigure 臂（分发核心）、dlg_confirm_modify_bt（对话框路由）按 architect 定性法（路由/守卫链=本质复杂度）登记口径。
 - **三处 DRY 单点化**：①测试基建收编规范位——tick.rs 两个兄弟测试模块的 recv_cmd/assert_no_cmd 重复对收编 `crate::app::testutil`（pub(crate)，cfg(test) 门控，与 make_app_in 工厂同位）；②NotFound 容忍删除单点化——BtSidecar::remove 与 BT 侧 sidecar::remove 同体实现收编 `model::remove_missing_ok`；③引擎取消命令块单点化——暂停/失败两臂的 bt_stopping 登记 + spawn CancelBt/Cancel 分派收编 `App::request_engine_cancel`（is_bt 布尔参，入口差异留在调用侧）。
+
+## 架构评审轮（2026-11-10，architect）追加
+
+- **8477 行单文件目录化拆分的「私有子模块 + glob 收编」模式**：bt/engine.rs → bt/engine/{mod 6260/pieceio 754/trackpool 738/peerwire 468/conn 358}。保行为的关键 = 子模块私有声明（`mod conn;` 无 pub）+ `use conn::*;` 收编 mod.rs 作用域——engine 内既有项的路径与可见性（pub(super)/pub(crate)）零改动，下游 use 面（crate::bt::engine::X）与 12 个集成测试目标零触碰。职责分片法：mod=编排核心与共享类型（6260 行大头是 cfg(test) 测试主体）、conn=连接状态与生命周期、peerwire=wire 协议编解码、pieceio=piece 读写与校验、trackpool=tracker 池。拆分完整性的机械验证 = `cargo mutants --list` 点数对账：engine.rs 465 → 五文件 20/106/78/209/52 总和精确 465、全仓 5994 不变（搬运不增减）；mod.rs 仅 20 点因变异扫描跳过 cfg(test) 测试主体。
+- **对账类规则不入 arch_check 的裁决判据（第 18 条=否）**：coder 轮提请「规格逐 When/Then 全量对账固化为 arch_check 第 18 条」裁决否——When/Then ↔ 规则映射是语义级对应（grep 表达不了「该 Then 被此断言覆盖」），硬编码映射表维护面无界（规格每轮修订即漂移），且与 QA 套件的场景问责职责重复；arch_check 定位 = 结构性边界（依赖方向/可见性/禁入）的 grep 可表达面，arch_check.sh 保持 17 规则零改动。
+- bt_dialog.rs（119 变异点）不强拆维持登记：可见性耦合 + 阈值边缘，拆分触及全模块签名（rust.md 口径）；engine 拆分后 hardender `--file` 分块消费面就绪（五文件 20–209 点/文件，全部 <250）。

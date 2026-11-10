@@ -2,10 +2,13 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use crossterm::event::KeyCode;
 use proptest::prelude::*;
+use ratatui::prelude::Rect;
 
 use crate::app::DialogKind;
 use crate::bt::bencode::{decode, decode_all, encode, BValue};
+use crate::bt::peer_id::session_peer_id;
 use crate::bt::pieces::PieceMap;
+use crate::bt::tracker::{bin_string, hex_lower, id20, TrackerUrl};
 use crate::engine::{merge_answers, parse_retry_after_header, HostsFile};
 use crate::model::bt::BtFile;
 use crate::model::checksum::{
@@ -24,6 +27,7 @@ use crate::model::retry::{backoff_secs, classify_http_status, decide};
 use crate::model::slots::{queue_pos, queue_positions};
 use crate::model::speed::SmoothedSpeed;
 use crate::model::{is_http_url, protocol_of_url, FailKind, Protocol, Task, TaskState};
+use crate::scrollbar::Bar;
 
 proptest! {
     #[test]
@@ -2197,5 +2201,179 @@ proptest! {
             "未收单位拒绝: n={}",
             n
         );
+    }
+}
+
+proptest! {
+    #[test]
+    fn prop_tracker_url_scheme_classification(
+        scheme in prop::sample::select(&["http", "https", "ws", "wss", "udp"]),
+        host in "[a-z0-9]{1,12}(\\.[a-z]{2,4}){1,2}",
+        port in 1u16..=65535u16,
+        with_port in prop::bool::ANY,
+        tail in prop::bool::ANY,
+    ) {
+        let authority = if with_port { format!("{host}:{port}") } else { host.clone() };
+        let suffix = if tail { "/announce" } else { "" };
+        let url = format!("{scheme}://{authority}{suffix}");
+        let parsed = TrackerUrl::parse(&url);
+        if scheme == "udp" && !with_port {
+            prop_assert!(parsed.is_none(), "udp 无端口必须拒绝: url={}", url);
+        } else {
+            let p = parsed.unwrap_or_else(|| panic!("规范 scheme 必须可解析: url={url}"));
+            let family = matches!(
+                (&p, scheme),
+                (TrackerUrl::Http(_), "http" | "https")
+                    | (TrackerUrl::Ws(_), "ws" | "wss")
+                    | (TrackerUrl::Udp(_), "udp")
+            );
+            prop_assert!(family, "scheme 族分类一致: url={}", url);
+            match &p {
+                TrackerUrl::Http(s) | TrackerUrl::Ws(s) | TrackerUrl::Udp(s) => {
+                    prop_assert_eq!(s, &url, "原样保存不重写");
+                }
+            }
+        }
+        if scheme == "udp" && with_port {
+            prop_assert_eq!(
+                crate::bt::tracker::udp_host_port(&url),
+                Some((host.clone(), port)),
+                "udp 主机端口对齐: url={}",
+                url
+            );
+        }
+        prop_assert!(
+            TrackerUrl::parse(&format!("ftp://{host}")).is_none(),
+            "未收 scheme 拒绝"
+        );
+        prop_assert!(
+            TrackerUrl::parse(&format!("{scheme}://")).is_none(),
+            "空 authority 拒绝"
+        );
+    }
+
+    #[test]
+    fn prop_hex_lower_round_trip_charset(bytes in prop::collection::vec(any::<u8>(), 0..64)) {
+        let hexed = hex_lower(&bytes);
+        prop_assert_eq!(hexed.len(), bytes.len() * 2, "输出长度 = 2×输入");
+        prop_assert!(
+            hexed
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "字符集小写十六进制: {}",
+            hexed
+        );
+        let back: Vec<u8> = hexed
+            .as_bytes()
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| {
+                let hi = (pair[0] as char).to_digit(16).expect("已验字符集");
+                let lo = (pair[1] as char).to_digit(16).expect("已验字符集");
+                ((hi << 4) | lo) as u8
+            })
+            .collect();
+        prop_assert_eq!(back, bytes, "hex_lower 可无损还原");
+    }
+
+    #[test]
+    fn prop_bin_string_latin1_round_trip(bytes in prop::collection::vec(any::<u8>(), 0..64)) {
+        let s = bin_string(&bytes);
+        let back: Vec<u8> = s.chars().map(|c| u32::from(c) as u8).collect();
+        prop_assert_eq!(back, bytes, "latin-1 字节↔char 双射往返");
+    }
+
+    #[test]
+    fn prop_id20_both_line_forms(bytes in prop::collection::vec(any::<u8>(), 20..=20)) {
+        let pid: [u8; 20] = bytes.try_into().unwrap_or([0u8; 20]);
+        let as_bin = bin_string(&pid);
+        prop_assert_eq!(id20(&as_bin), Some(pid), "20 字符 latin-1 二进制串形态");
+        let as_hex = hex_lower(&pid);
+        prop_assert_eq!(id20(&as_hex), Some(pid), "40 字符小写 hex 形态");
+        prop_assert_eq!(id20(&as_hex[..38]), None, "38 字符拒绝");
+        let mut bad = as_hex.clone();
+        bad.replace_range(0..1, "g");
+        prop_assert_eq!(id20(&bad), None, "非 hex 40 字符拒绝");
+    }
+
+    #[test]
+    fn prop_peer_id_shape_and_session_stability(_unit in Just(())) {
+        let a = session_peer_id();
+        let b = session_peer_id();
+        prop_assert_eq!(a, b, "会话 peer_id 进程内恒定（OnceLock 单例）");
+        prop_assert!(a[..8] == *b"-EZ2000-", "前缀口径");
+        for c in &a[8..] {
+            prop_assert!(c.is_ascii_alphanumeric(), "随机段字符集字母数字: {}", c);
+        }
+        prop_assert_eq!(
+            id20(&bin_string(&a)),
+            Some(a),
+            "会话 id 可经 latin-1 形态解析还原"
+        );
+    }
+
+    #[test]
+    fn prop_scrollbar_bar_geometry_monotone(
+        panel in prop::collection::vec(any::<u16>(), 4),
+        vertical in prop::bool::ANY,
+        total in 0usize..5000usize,
+        page in 0usize..5000usize,
+        pos in 0usize..5000usize,
+    ) {
+        let rect = Rect {
+            x: panel[0].min(200),
+            y: panel[1].min(200),
+            width: panel[2].min(80),
+            height: panel[3].min(80),
+        };
+        let bar = if vertical {
+            Bar::vertical(rect, total, page, pos)
+        } else {
+            Bar::horizontal(rect, total, page, pos)
+        };
+        prop_assert_eq!(
+            bar.max_pos(),
+            total.saturating_sub(page),
+            "max_pos = total−page 饱和"
+        );
+        let tl = bar.track_len();
+        let th = bar.thumb_len();
+        prop_assert!(th <= tl, "thumb 不越轨道: th={} track={}", th, tl);
+        prop_assert_eq!(bar.travel(), tl.saturating_sub(th), "travel = track−thumb");
+        let tp = bar.thumb_pos();
+        prop_assert!(tp <= bar.travel(), "thumb_pos 不越 travel: tp={}", tp);
+        if total <= page || page == 0 {
+            prop_assert_eq!(tp, 0, "无滚动空间 thumb 归零");
+            prop_assert!(bar.hit(0, 0).is_none(), "无滚动空间无命中");
+        }
+        let half = if vertical {
+            Bar::vertical(rect, total, page, pos / 2)
+        } else {
+            Bar::horizontal(rect, total, page, pos / 2)
+        };
+        prop_assert!(
+            half.thumb_pos() <= tp,
+            "thumb_pos 对 pos 单调: half={} full={}",
+            half.thumb_pos(),
+            tp
+        );
+        let max = bar.max_pos();
+        let travel = bar.travel();
+        if max > 0 && travel > 0 {
+            prop_assert_eq!(bar.pos_from_thumb(0), 0, "thumb 起点 = pos 0");
+            prop_assert_eq!(bar.pos_from_thumb(travel), max, "thumb 终点 = max_pos");
+            let back = bar.pos_from_thumb(tp);
+            let target = pos.min(max);
+            let slack = max / travel + 1;
+            prop_assert!(
+                back <= target.saturating_add(slack) && back + slack >= target,
+                "缩放往返在舍入误差带内: back={} target={} slack={}"
+                ,
+                back,
+                target,
+                slack
+            );
+        }
     }
 }

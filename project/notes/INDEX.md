@@ -19,3 +19,8 @@
 - architecture.md — 「赋值≠倒计时」缺口模式（配置键已实现≠规格闭环，须按 When/Then 对账）/递减载体归 App tick 层（引擎只认 Cmd::StopSeed）/归零臂与空格停止臂共用 finish_seeding 单点（新增）；cleaner 收敛轮：CRAP 收敛两类拆分（纯函数提准收 comp/守卫链登记不硬凑）+ 三处 DRY 单点化（testutil 收编、remove_missing_ok、request_engine_cancel）（新增）
 - testing.md — tick 直调合成 dt 测法与开区间断言/接线缺失类缺口的回归锁形态/挂载收编三方对账 +3（新增）
 - environment.md — rsproxy UPDATE_ROOT 布局再漂移（官方脚本双层路径 404、直链二进制+裸根 UPDATE_ROOT 前台装齐 1.102.0）/Write 工具限主目录第 2 次复现（新增）；cleaner 收敛轮：rsproxy 直链 18.8MB/s 三度复现成功装齐 nightly 1.102.0/llvm-cov v0.9.1 资产名漂移（无版本前缀形态）/PMD 7.29 cpd 参数 -d 非 --dir 与 EXIT=4 语义（新增）
+
+## 架构评审轮（2026-11-10，architect）追加
+- architecture.md — 8477 行单文件目录化拆分的「私有子模块 + glob 收编」零下游改动模式（职责分片法/变异点 465 精确再分布 20/106/78/209/52 机械对账/mod 仅 20 点因测试主体跳过）/对账类规则不入 arch_check 裁决判据（第 18 条=否）/bt_dialog 119 点不强拆维持 + hardender --file 分块消费面就绪（新增）
+- testing.md — 中断恢复 mtime 时序校验法（产物 mtime vs 验证日志时刻 + 编译域白名单前提）/过滤运行双重收益（独立属性报告 + 全目标编译通行证）/bin 对账属性分层口径 1003=921+82（新增）
+- environment.md — 新 shell PATH 补装（source ~/.cargo/env + ~/.local/bin）/cargo-mutants 须 cargo 子命令形态调用（新增）
