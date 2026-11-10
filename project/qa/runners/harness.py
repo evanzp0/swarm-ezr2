@@ -402,6 +402,18 @@ class EzrApp:
         """当前画面纯文本（逐行 rstrip 后按行拼接）。"""
         return "\n".join(row.rstrip() for row in self.screen.display)
 
+    def raw_text(self) -> str:
+        """原始输出尾流（UTF-8 解码 + VS15/VS16 零宽变体选择符剥离）。
+
+        pyte 0.8.2 的 draw 对「零宽且非组合」字符 break 整个绘制 chunk
+        （screens.py draw else: break）：break_links 在 http(s)://、www. 后
+        插入的 U+FE0E 会使同 chunk 内其后的文本（如 ://host/ann）全部不落
+        缓冲——此类断言只能取原始字节流（QA-UC-18 OSC52 同口径）。
+        """
+        raw = bytes(self._raw_tail)
+        return (raw.decode("utf-8", errors="replace")
+                .replace("\uFE0E", "").replace("\uFE0F", ""))
+
     def display_rows(self) -> list[str]:
         return [row.rstrip() for row in self.screen.display]
 

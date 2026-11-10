@@ -753,14 +753,16 @@ class AddTaskSuite(Suite):
 
 
     def _case_20(self):
-        """QA-01-20（v1.41 修订同步）任务级限速键预填 fmt 规范化 + 键入规范化 + 无上传限速字段。
+        """QA-01-20（v1.41 修订同步；v1.45 剪行同步）任务级限速键预填 fmt 规范化 + 键入规范化。
 
-        规程 v1.40/v1.41 口径：config task_max_download_speed 三代表行——
-        "2 MiB/s" → 预填 `2 MiB/s`；2000000（裸整数）→ `2000000 B/s`；
-        "2 MB/s"（旧写法废弃）→ 回退 0 → 预填 `0`；无上传限速字段行
-        （v1.40 退役）；限速字段无占位提示；键入即规范化（500k → `500 KiB/s`）。
+        规程 v1.40/v1.41 口径：config task_max_download_speed 现行 Examples 行——
+        "2 MiB/s" → 预填 `2 MiB/s`；2000000（裸整数）→ `2000000 B/s`；无上传限速
+        字段行（v1.40 退役）；限速字段无占位提示；键入即规范化（500k → `500 KiB/s`）。
         主行（2 MiB/s）确认创建（改输 500k → 任务限速 512000）；其余行
         预填断言后 Esc（有效性由 TP-10 实跑承载，此处不重复计时断言）。
+        v1.45 剪行同步（FR-02-35/D70）：原「"2 MB/s" 旧写法 → 回退 0 → 预填 0」行
+        随回退臂退役剪除——旧写法 config 值现在启动失败并报错（TP-04 v1.12 实跑
+        承载），对话框预填臂不可达（feature 行剪除留痕，场景序号不重排）。
         """
         @self.case("QA-01-20")
         def go(env: Env):
@@ -769,7 +771,6 @@ class AddTaskSuite(Suite):
             rows = (
                 ("2 MiB/s", "2 MiB/s"),
                 ("2000000", "2000000 B/s"),
-                ("2 MB/s", "0"),
             )
             for seq, (cfgval, prefill) in enumerate(rows):
                 env.write_config(

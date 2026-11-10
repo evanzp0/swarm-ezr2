@@ -1,9 +1,9 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/architect（收敛轮已完成）——**下游 QA 待操作者显式启动**
-> 路径：specifier → coder（ws/webrtc 轮）⇒ 诊断/复验/bug28 轮 ⇒ specifier 修订轮 ⇒ coder 修订实现轮 ⇒ coder 补缺口轮（2026-11-10）⇒ cleaner 收敛轮（2026-11-10）⇒ **architect 收敛轮（本轮，2026-11-10）** ⇒ QA（待操作者显式 begin）
-> 会话：six-pack-architect-20261110（任务 = cleaner 交接的架构评审与属性测试；上游交接 = project/handoff.md cleaner 收敛轮版）
-> 环境：nightly 1.102.0（rustup 经 rsproxy 直链前台装齐，dist 清单 date 2026-11-10）+ cargo registry rsproxy sparse + bb 1.13.229 / APS / PMD 7.29.0 / llvm-cov 0.9.1 / mutants 27.1.0 装于 `.tools/` 与 `~/.local/bin`（工具缓存不进归档）；RAG 索引 `.work/rag` 已随产出刷新（200 文件，索引健康）
+> 流程：six-pack　当前节点：six-pack/QA（终验轮已完成）——**工作流已走完（QA 为末位角色），待操作者 `bin/swarm complete` 归档**
+> 路径：specifier → coder（ws/webrtc 轮）⇒ 诊断/复验/bug28 轮 ⇒ specifier 修订轮 ⇒ coder 修订实现轮 ⇒ coder 补缺口轮（2026-11-10）⇒ cleaner 收敛轮（2026-11-10）⇒ architect 收敛轮（2026-11-10）⇒ **QA 终验轮（本轮，2026-11-10）** ⇒ Done
+> 会话：six-pack-QA-20261110（任务 = architect 收敛轮交接的最终独立验证；上游交接 = project/handoff.md architect 收敛轮版；会话因上下文中断按宪法中断恢复口径凭 plan.md 续跑完成）
+> 环境：nightly 1.102.0（rustup 1.29.3 前台装齐）+ cargo registry rsproxy sparse + bb 1.13.229 / APS / PMD 7.29.0 / llvm-cov 0.9.1 / mutants 27.1.0（工具缓存不进归档）
 
 ## 一、产物历史完成情况
 
@@ -14,68 +14,64 @@
 | 节点 | 产物 | 完成情况 | 验证状态 |
 |---|---|---|---|
 | specifier 历轮 | features/ 全套 Gherkin + qa/ 全套规程 | 已交付 | 历轮对账在案 |
-| coder 历轮（ws/webrtc + bug28 + 修订 + 补缺口轮） | ezr 产品实现 + 12 集成测试目标 + bin 单测；bug6–bug28 修复；FR-02 全量实现 + D71/D72/D73 落地；ezr-demo 同构同步 | 已交付 | bin 997P + 集成 12 目标 6869P 全绿（cleaner 轮口径） |
-| cleaner 历轮 | 保持行为清理 + 度量四件（覆盖率/CRAP/DRY/变异点扫描） | 已交付 | 全绿；CPD 198（70 阈值） |
-| architect（2026-11-07） | 四阶段评审 + arch_check 17 规则 + 属性测试 76P | 已交付 | bin 951P / 集成 6357P / CPD 181 |
-| hardender | —（操作者 20261109 裁决定为可选节点，默认链不含） | 不适用 | — |
+| coder 历轮（ws/webrtc + bug28 + 修订 + 补缺口轮） | ezr 产品实现 + 12 集成测试目标 + bin 单测；bug6–bug28 修复；FR-02 全量实现 + D71/D72/D73 落地；ezr-demo 同构同步 | 已交付 | bin + 集成全绿（历轮口径在案） |
+| cleaner 历轮 | 保持行为清理 + 度量四件 | 已交付 | 全绿；CPD 198 |
+| architect（2026-11-07） | 四阶段评审 + arch_check 17 规则 + 属性测试 76P | 已交付 | 历轮口径在案 |
+| hardender | —（操作者 20261109 裁定为可选节点，默认链不含） | 不适用 | — |
 | QA + 终验（2026-11-06/07） | 14 套件 187P 实跑 + harness 自适应化 | 已交付 | 全绿 |
 | 诊断轮（2026-11-09 下午） | mini_ws_tracker 修复 + Sintel 真实 swarm 129.3MB ×2 全成 + 三方冒烟 | 已交付 | ezr 源码零改动 |
 | specifier 修订轮（2026-11-09） | phase-02 v1.16（FR-02-03/19 v1.16 + D73）+ mission.md v1.46 + features 2 份 + qa 2 份同步 | 已交付 | APS parser+dry-check 2/2 exit=0 |
-| cleaner 收敛轮（2026-11-10） | CRAP 收敛拆分 ×2 + DRY 单点化 ×3 + demo 守卫修否裁决=否 | 已交付 | bin 997P/0F + 集成 6869P/0F + clippy 0 警告 + fmt 干净 + APS 20/20 exit=0 + CPD 198 |
-| **architect 收敛轮（本轮 2026-11-10）** | engine.rs 8477 行目录化拆分（5 文件零下游改动）+ 属性测试 +6（76→82）+ arch_check 第 18 条裁决=否 | 已交付 | bin 1003P/0F + 集成 6869P/0F + clippy 0 警告 + fmt 干净 + arch_check 17 规则通过 + 变异点 5994 精确再分布 |
+| cleaner 收敛轮（2026-11-10） | CRAP 收敛拆分 ×2 + DRY 单点化 ×3 + demo 守卫修否裁决=否 | 已交付 | bin 997P/0F + 集成 6869P/0F + clippy 0 警告 + fmt 干净 + APS 20/20 |
+| architect 收敛轮（2026-11-10） | engine.rs 8477 行目录化拆分（5 文件零下游改动）+ 属性测试 +6（76→82）+ arch_check 第 18 条裁决=否 | 已交付 | bin 1003P/0F + 集成 6869P/0F + clippy 0 警告 + fmt 干净 + arch_check 17 规则 + 变异点 5994 再分布 |
+| **QA 终验轮（本轮 2026-11-10）** | 全 15 套件注册用例对账实跑 + QA-MB-03 补齐可执行化 + MB-10 门控修复 + 1 项产品缺陷修复（D73② 上传暂停协议化） | 已交付 | 本轮验证证据见第二节 |
 
 ### 遗留受限项（当前有效）
-- **leech 判据无 e2e 自动化**（six-pack 链长期受限项，历轮维持）。上传暂停（D73②）的 leecher 拉取面归入同族：闸门单测锁「request 不被服务、cum_up 零增长」可观察契约，leecher 端到端拉取验证待 QA/harness 轮。
-- **变异实跑未执行**（hardender 可选节点；`--file` 分块口径悬置转政策性关闭）。全仓 5994 点在案；engine 拆分后 `--file` 分块消费面就绪（五文件 20/106/78/209/52，全部 <250/文件）。
+- ~~**leech 判据无 e2e 自动化**~~ → **本轮部分结案**：D73② 上传暂停/恢复的 leecher 端到端拉取面已入 `suite_modify_bt.py`（QA-MB-10 上传恢复臂 leecher 拉完断言，本轮修复后实证）；「leech 判据」（BanKind::Leech 触发面）仍无专属 e2e，维持历史受限口径。
+- **变异实跑未执行**（hardender 可选节点；`--file` 分块口径悬置转政策性关闭）。全仓 5994 点在案；engine 拆分后 `--file` 分块消费面就绪（五文件 20/106/78/209/52）。
 - **QA 规程 6 个 BT/命令窗口族无专属 runner**（harness/命令链路承载，历轮既定形态）。
 - **CRAP 观察项**：`ezr_main` 与 `on_mouse_trackers` bin 套件 0 覆盖（承载面差异登记，历轮维持）。
 - **ws(s) tracker announce 无代理面**——操作者 20261109 chat 裁决不补齐，长期已知边界关闭。
-- **ezr-demo 守卫 FAIL（cleaner 轮裁决=否，architect 轮维持不立项重定基线）**：影响面 = `ezr-demo/scripts/` 10 个 PTY 守卫（根因两类：A 族 = 守卫清场退格连发被沙箱 PTY 投递上限吞没，环境预存；主守卫/弹窗族 = 场景时间线与锚点基线漂移）。行为口径权威裁决归操作者；产品面验证（bin/集成/APS）不受影响。如需立项守卫重定基线轮请显式指令，建议由 specifier 先行钉各守卫行为口径版本。
-- **CRAP 残余高 comp 登记（拆不动的本质复杂度，architect 定性法）**：`on_bt_done` comp=7（事件臂守卫链）、`handle_peer_msg`/Reconfigure 臂（引擎分发核心）、`dlg_confirm_modify_bt`/`make_bt_spec`（对话框路由）——本轮拆分不触及，口径维持。
-- **CPD 残余克隆家族**：198 群组（70 阈值）/9 群组（200 阈值），主体 = engine 测试字面量家族（309 处，随拆分分布于 engine/*.rs，未消）+ supervisor 测试夹具（47 处）。
-- **bt_dialog.rs 变异点 119（>100 登记维持）**：可见性耦合 + 阈值边缘不强拆（rust.md 口径）；engine.rs 465 点同族登记已随本轮拆分结案。
-- **arch_check 第 18 条（规格逐 When/Then 对账固化）裁决=否**（本轮按职权结案，判据见 notes/architecture.md；登记备查）。
+- **ezr-demo 守卫 FAIL（cleaner 轮裁决=否，architect 轮维持）**：影响面 = `ezr-demo/scripts/` 10 个 PTY 守卫（环境预存退格投递上限 + 场景基线漂移两类）；行为口径权威裁决归操作者，产品面验证不受影响。
+- **CRAP 残余高 comp 登记**：`on_bt_done` comp=7、`handle_peer_msg`/Reconfigure 臂、`dlg_confirm_modify_bt`/`make_bt_spec`（拆不动的本质复杂度，architect 定性维持）。
+- **CPD 残余克隆家族**：198 群组（70 阈值）/9 群组（200 阈值），主体 = engine 测试字面量家族 + supervisor 测试夹具（历轮维持）。
+- **bt_dialog.rs 变异点 119（>100 登记维持）**；arch_check 第 18 条裁决=否（备查）。
 
 ### 实现定义值登记（累计，当前有效口径）
-- **D44–D73 沿历轮登记不变**（全量清单见 phase-01/phase-02 D 值表；D71 ws/webrtc 八项、D72 bug28 五项、D73 文件勾选修订轮八项均已实现并验证）。
-- **D73 实现载体登记（coder 轮落地，cleaner 轮确认、本轮零改动原样维持；规格锁可观察面、载体归实现定义——如对载体有异议请在 QA 闸门提出）**：
-  - D73①（回退判据与时机）：App 层确认链路内即时判 `selected_bytes_of_pieces(done_blocks) < new_total` → 状态即时翻「下载中」+ `downloaded = recalc`；不新增引擎事件、不等进度帧。
-  - D73②（上传暂停）：单点闸门 = `handle_peer_msg` Request 臂 `allowed = !am_choking && !upload_paused`（闸门静默忽略）；载体 = `BtTaskData.upload_paused`（serde default，跨重启持久）+ Reconfigure 回退臂置位 + 引擎双完成臂与 App `on_bt_done` 双侧清除。
-  - D73③（seed_left 重置）：`on_bt_done` 无条件 `seed_left = cfg.seed_duration_secs`。
-  - D73④⑤⑥⑦（删除细则/toast/暂停同口径/目录等价）：`delete_deselected_files` 单一实现路径（文件粒度 remove_file + 祖先链自底向上 remove_dir 非空即停 + NotFound/IO 失败双静默不阻塞；句柄先关后删）。
-  - 配套引擎缺口四件（done/partial 跨 Reconfigure 持久、请求泵主动泵动、PieceOrderCache.avail 重建、句柄关闭）维持 coder 轮落地原样。
+- **D44–D73 沿历轮登记不变**。
+- **D73② 载体修订登记（本轮 QA 修复，规格可观察面不变、载体升级为协议级）**：
+  - 闸门：`handle_peer_msg` Request 臂 `allowed = !am_choking && !upload_paused`（保留，第二防线）。
+  - **新增协议通知**：Reconfigure 做种回退臂置位 `upload_paused=true` 时统一对全部连接 `am_choking=true` + 发送 Choke（暂停即协议级 choke）；暂停期 tick 跳过 apply_choker（防 rechoke 周期解 choke）；恢复（双完成臂）既有 `apply_choker(seeding=true)` 因状态迁移自动发 Unchoke。
+  - 修复依据：原「静默忽略请求」使 libtorrent 侧请求悬挂 + snubbed 后永不重发，回做种后上传无法恢复（QA-MB-10 e2e 双侧观测实证，见 notes/testing.md QA 终验轮条目）。
+- D73①③④⑤⑥⑦ 载体沿 architect 轮登记不变。
 
 ## 二、当前产出情况
 
-### 本会话产物清单（architect 收敛轮）
-1. **`src/bt/engine.rs` → `src/bt/engine/` 目录化拆分**：mod 6260（编排核心 + 测试主体）/pieceio 754/trackpool 738/peerwire 468/conn 358；私有子模块 + `use *` 收编 = 公共 API 与下游 use 面零改动（行为保持）；变异点 465 精确再分布 20/106/78/209/52。
-2. **`src/property_tests.rs`**：+6 属性（76→82）——tracker URL scheme 分类、hex_lower 往返、bin_string latin-1 双射、id20 双形态、peer_id 会话稳定、滚动条 Bar 几何单调（bt 层纯函数覆盖缺口评估后选定）。
-3. **`notes/`**：architecture/testing/environment 三文件追记 architect 轮条目 + INDEX.md 索引同步。
-4. **arch_check 第 18 条裁决=否**：arch_check.sh 保持 17 规则零改动。
+### 本会话产物清单（QA 终验轮）
+1. **产品缺陷修复 ×1（最小改动，与已接受规格一致）**：`src/bt/engine/mod.rs` 两处——①Reconfigure 做种回退臂新增统一 Choke 循环（6 行）；②tick rechoke 增加 `!upload_paused` 门控（1 处条件）。修复「做种回退→回做种后上传不恢复」（D73③「上传恢复 leecher 可拉到数据」此前不可达）。
+2. **e2e 套件修复与补齐**：`project/qa/runners/suite_modify_bt.py`——①MB-10 暂停窗等待条件重写（占位文件全尺寸稀疏预分配使旧门控 0 秒塌缩；改为回做种翻转等待 + 下载文件与种子原件字节比对 + 有界冻结断言）；②新增 `_case_3`（QA-MB-03 v1.8 可执行化：取消未完成文件=落盘删除+total 重算+勾回从头补下字节级验证；限速门控 + 顺序无关完成态 + 动态取消目标）；③run() 纳入 03。
+3. **e2e 全量对账实跑**：15 套件全部注册用例与实跑记录差集归零（含本会话早段中断前的 14 批日志合并对账 + 本轮补跑）；TP-08 确认为 v1.6 已退役（非缺口）。
+4. **`project/notes/testing.md`**：追加 QA 终验轮三条经验（上传暂停协议化修复判别法 / BT e2e 门控三课 / 断言数值先验）+ INDEX.md 索引既有行覆盖。
 5. **`project/handoff.md`**：重写为当前有效口径（本文件）。
 
 ### 验证证据
 | 验证项 | 结果 | 命令（可复现） |
 |---|---|---|
-| bin 全部单元测试 | 1003P/0F（= 921 非属性 + 82 属性；非属性面与基线精确一致） | `cargo test --bin ezr`（CARGO_INCREMENTAL=0 + CARGO_PROFILE_*_DEBUG=0 三件套，nightly 1.102.0） |
-| 属性测试（独立报告，对账隔离） | 82P/0F（+6 新增全绿） | `cargo test property_tests::` |
-| 集成 12 目标 | 6869P/0F（时序校验有效：engine/ mtime 05:48 早于验证 05:55–06:25；被改 property_tests.rs 不在集成编译域） | 逐目标 `cargo test --test <t>`（分项 247+925+793+918+895+789+762+2+16+254+492+776 = 6869） |
-| clippy | 0 警告 | `cargo clippy --bins --tests` |
-| fmt | 干净 | `cargo fmt --check` |
-| arch_check | 17 规则全过 | `bash scripts/arch_check.sh` |
-| 变异点扫描（cargo-mutants 27.1） | 全仓 5994 不变；engine 465 → mod 20/conn 106/peerwire 78/pieceio 209/trackpool 52 精确再分布；bt_dialog 119 维持 | `cargo mutants --list` |
+| bin 全部单元测试（修复后重跑） | 1049P/0F（--bins 全部二进制口径；含 82 属性） | `cargo test --bins`（CARGO_INCREMENTAL=0 + CARGO_PROFILE_*_DEBUG=0） |
+| 集成回归（修复触及面） | hardening 247P + hardening_g_engine 789P + hardening_g_supervisor 762P + hardening_engine_backfill 895P，全 0F | 逐目标 `cargo test --test <t>` |
+| e2e modify_bt（修复后） | QA-MB-03/10/11/12 = 4/4 P（161.8s/60.3s/13.0s/16.4s） | `python3 suite_modify_bt.py` |
+| e2e throttle_proxy 补口 | TP-07/14/10/13 = 4/4 P（缺口语合并后该套件注册用例全覆盖） | `QA_TP_ONLY=7,8,9,10 python3 suite_throttle_proxy.py` |
+| e2e 其余 13 套件 | 本会话早段实跑日志合并对账：add_task 21P、config_template 5P、download_engine 16P、integrity_check 12P、modify_task 10P、named_proxy 18P、persistence_config 11P、resume_sidecar 14P、retry_backoff 9P、slots_queue 15P、tui_display 21P、ui_conns 18P、ui_pieces 7P，全 0F | `.work/tmp/e2e-suite_*.log`（complete 前请勿清） |
+| 用例对账 | 15 套件源码注册 ID × 实跑 ID 差集 = 0（退役/移交用例凭规程注记豁免） | 对账脚本见会话记录 |
 
 ### 对账口径
-- bin：997 → 1003（+6 全归属新增属性测试；非属性单测面 921 零变动——属性测试独立报告不计入单测基线对账）。
-- 集成 12 目标：6869 → 6869（精确一致，拆分零下游改动的直接证据）。
-- 变异点：5994 → 5994（engine.rs 465 → engine/ 五文件 465，搬运不增减）。
-- mission/features/qa：零改动（architect 只动实现结构与测试基建）。
+- 产品改动面：仅 `bt/engine/mod.rs` 2 处（做种回退臂 + rechoke 门控）——正常下载/做种流程 `upload_paused=false` 下 rechoke 行为逐位不变；仅做种回退臂行为升级为协议级。
+- bins 口径说明：本轮 `--bins` 1049P 覆盖全部二进制目标（ezr + proxy/mktorrent/fixture），较 architect 轮 `--bin ezr` 1003P 口径宽——同源测试零改动，差异 = 计入子命令二进制的 46P。
+- mission/features/qa 规程文件：零改动（QA 只动 runners 与产品缺陷，规格面无修订请求）。
 
 ### 待办与待批
-- 无待批项（arch_check 第 18 条按职权裁决=否；ezr-demo 守卫重定基线维持 cleaner 裁决不立项——如操作者希望立项请显式指令）。
-- **移交 QA（下下游）**：QA-MB-10/11/12 与 QA-BE-08 可实跑（历轮口径不变）；上传暂停 leecher 拉取面可借 harness mini_ws_tracker/lt leecher 观察。
-- **移交 hardender（若启动）**：engine 拆分后 `--file` 分块消费面就绪（五文件 20–209 点/文件）；bt_dialog.rs 119 点单文件块维持。
+- 无待批项。QA 未发现规格矛盾（Gherkin/单测/实现三方一致面内无冲突需裁决）。
+- 历轮受限项（leech 专属 e2e、变异实跑、ezr-demo 守卫重定基线）维持登记，如需立项请操作者显式指令。
 
 ### 移交建议
-- 下一步运行 **six-pack/QA**（以本文件为上游交接内容）。
-- 操作者可直接 `bin/swarm begin six-pack/QA`（以本文件为上游交接内容）。
+- **six-pack 流转路径已走完（specifier → coder → cleaner → architect → QA → Done）**：请操作者运行 `bin/swarm complete` 归档（`project/` 工作区保留，下一轮可直接续跑或开新项目）。
+- 如需继续迭代（如 leech 专属 e2e 立项、hardender 变异实跑），建议以本文件为上游交接内容显式 `bin/swarm begin` 对应角色。

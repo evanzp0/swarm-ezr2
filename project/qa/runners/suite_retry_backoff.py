@@ -41,7 +41,15 @@ class RetryBackoffSuite(Suite):
 
     def run(self) -> list[CaseResult]:
         # v140 修订：RB-09 删除（编号留空，见模块 docstring）
-        for i in [i for i in range(1, 11) if i != 9]:
+        # QA_RB_ONLY=1,3 → 只跑 _case_01/_case_03（QA_TP_ONLY 同款分批口径）。
+        # 退避等待用例（RB-04 ≈223s、RB-05 三轮 Retry-After）使全量实跑逼近
+        # 沙箱前台单命令 10min 上限，缺省全量、分批复跑时汇总由调用方合并。
+        only = os.environ.get("QA_RB_ONLY", "").strip()
+        if only:
+            idxs = [int(x) for x in only.split(",") if x.strip().isdigit()]
+        else:
+            idxs = [i for i in range(1, 11) if i != 9]
+        for i in idxs:
             getattr(self, f"_case_{i:02d}")()
         return self.results
 

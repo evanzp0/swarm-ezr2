@@ -333,6 +333,13 @@ pub(crate) async fn run(
                                 seeding = false;
                                 upload_paused = true;
                                 live.lock().expect("live stats 锁").completed = false;
+                                for st in conns.values_mut() {
+                                    st.am_choking = true;
+                                    let _ = st
+                                        .peer_out
+                                        .send(PeerOut::Send(peer::PeerMsg::Choke))
+                                        .await;
+                                }
                             }
                             if !seeding {
                                 let claimed = claimed_blocks(&conns, &partial);
@@ -773,7 +780,9 @@ pub(crate) async fn run(
                     save_bt_sidecar(&sidecar_path, &done);
                     sidecar_saved_done = done.len();
                 }
-                if now.duration_since(last_rechoke).as_secs() >= tun.rechoke_interval_secs {
+                if !upload_paused
+                    && now.duration_since(last_rechoke).as_secs() >= tun.rechoke_interval_secs
+                {
                     let rotate =
                         now.duration_since(last_optimistic).as_secs() >= tun.optimistic_interval_secs;
                     if rotate {

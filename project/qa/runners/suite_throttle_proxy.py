@@ -248,44 +248,60 @@ class ThrottleProxySuite(Suite):
                 app.graceful_quit()
 
     def _case_04(self):
-        """QA-TP-04 global_max_download_speed = 0 / "abc" / "2 MB/s"：均不限速（v1.11：旧写法废弃回退 0）。"""
+        """QA-TP-04 0 不限速；"abc"/"2 MB/s" 旧写法废弃值拒绝启动（v1.12 翻转，FR-02-35）。"""
         @self.case("QA-TP-04")
         def go(env: Env):
-            for seq, body in enumerate((
-                    '[common]\nglobal_max_download_speed = 0\n',
-                    '[common]\nglobal_max_download_speed = "abc"\n',
-                    '[common]\nglobal_max_download_speed = "2 MB/s"\n')):
-                env.write_config(body)
+            # v1.12 修订（FR-02-35/D70 标量语义非法翻转）：0 = 不限速（合法）；
+            # "abc"（非法字符串值）与 "2 MB/s"（旧写法废弃值）= 启动失败并报错
+            # （错误含配置文件路径与键点路径；原「回退默认 0」臂退役）。
+            env.write_config('[common]\nglobal_max_download_speed = 0\n')
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                add_task_via_dialog(
+                    app, env, env.fixture.url("three-m.bin?swapsize=3000000"))
+                # 无门控瞬时完成：以完成 toast 验证正常启动
+                assert app.wait_for("（无校验）", 30), "0 = 不限速应正常启动"
+                app.graceful_quit()
+            except Exception:
+                app.graceful_quit()
+                raise
+            for value in ('"abc"', '"2 MB/s"'):
+                env.write_config(
+                    f'[common]\nglobal_max_download_speed = {value}\n')
                 app = EzrApp(env.home, save_dir=env.save_dir)
                 try:
-                    add_task_via_dialog(
-                        app, env,
-                        env.fixture.url(f"three-m.bin?swapsize={3000000+seq}"))
-                    # 无门控瞬时完成：以完成 toast 验证正常启动
-                    assert app.wait_for("（无校验）", 30), f"{body!r} 应正常启动"
-                    app.graceful_quit()
-                except Exception:
-                    app.graceful_quit()
-                    raise
+                    deadline = time.time() + 8
+                    while app.exit_code is None and time.time() < deadline:
+                        app.pump(0.2)
+                    assert app.exit_code is not None, \
+                        f"{value} 应拒绝启动（8s 内退出）"
+                    assert app.exit_code != 0, \
+                        f"{value} 退出码应非零，实得 {app.exit_code}"
+                    text = app.text()[-2000:]
+                    flat = "".join(text.split("\n"))
+                    assert_in("配置文件", text, f"{value}：报错含配置文件语义")
+                    assert_in("common.global_max_download_speed", flat,
+                              f"{value}：报错含键点路径（终端换行归一后断言）")
+                    assert_in("拒绝启动", text, f"{value}：报错含拒绝启动原因")
+                finally:
+                    if app.exit_code is None:
+                        app.graceful_quit()
 
     def _case_05(self):
-        """QA-TP-05 v1.11 二进制口径：新写法按 1024^n 生效、旧写法回退 0 不限速。"""
+        """QA-TP-05 v1.12 口径：新写法按 1024^n 生效；旧写法拒绝启动（FR-02-35 翻转）。"""
         @self.case("QA-TP-05")
         def go(env: Env):
-            # v1.11 口径：耗时期望 = 10MB/rate（rate 按二进制 1024^n）；
-            # 旧写法（KB/MB/GB 十进制）废弃 → 回退 0（不限速，秒完成）。
-            # 裁剪登记：规格 7 行中 "2 GiB/s"（与不限速形态不可区分）与
-            # "512 B/s"（ten-m 需 5.4h，超会话预算）两行不实测，键解析行为
-            # 由 model/config.rs speed_parsing_binary_units /
-            # speed_parsing_decimal_units_retired 单测锁承载。
+            # v1.12 口径：耗时期望 = 10MB/rate（rate 按二进制 1024^n）；
+            # 旧写法（KB/MB/GB 十进制）废弃 = 启动失败并报错（原「回退 0」臂退役）。
+            # 裁剪登记：规格 7 行中 "2 GiB/s"（与不限速形态不可实测区分，尾部保留
+            # 秒完成对照档）与 "512 B/s"（ten-m 需 5.4h，超会话预算）两行不实测，
+            # 键解析行为由 model/config.rs speed_parsing_binary_units /
+            # speed_limit_keys_accept_string_and_integer 单测锁承载。
             # 每档独立子目录：避免上一档已落盘的 ten-m.bin 使 exists 判定
             # 立即成真（脏测），亦避免同 URL 同目录重复守卫（QA-01-16）。
             for seq, (spec, want) in enumerate(
                     (("2 MiB/s", 2_097_152), ("500 KiB/s", 512_000),
-                     ("2000000", 2_000_000), ("512 B/s 单测锁承载", None),
-                     ("2 MB/s", 0), ("500KB/s", 0))):
-                if spec.endswith("单测锁承载"):
-                    continue
+                     ("2000000", 2_000_000))):
                 sub = os.path.join(env.save_dir, f"r{seq}")
                 env.write_config(
                     f'[common]\nglobal_max_download_speed = "{spec}"\n')
@@ -293,10 +309,7 @@ class ThrottleProxySuite(Suite):
                 try:
                     add_task_via_dialog(app, env, env.fixture.url(f"ten-m.bin?r={seq}"),
                                         save_dir=sub)
-                    # 回退 0 档（旧写法废弃）不限速亚秒完成——「下载中」为瞬时态
-                    # 不可稳定观察（engineering.md 锚定持久终态），只对限速档断言
-                    if want != 0:
-                        assert app.wait_for("下载中", 8), f"{spec} 应正常启动"
+                    assert app.wait_for("下载中", 8), f"{spec} 应正常启动"
                     t0 = time.time()
                     bare = os.path.join(sub, "ten-m.bin")
                     deadline = t0 + 90
@@ -306,17 +319,34 @@ class ThrottleProxySuite(Suite):
                             break
                     assert os.path.exists(bare), f"{spec} 应完成"
                     elapsed = time.time() - t0
-                    if want == 0:
-                        assert elapsed <= 6, \
-                            f"{spec}（旧写法废弃回退 0）应不限速秒完成: {elapsed:.1f}s"
-                    else:
-                        want_t = 10_000_000 / want
-                        assert 0.7 * want_t <= elapsed <= 1.6 * want_t, \
-                            f"{spec} 耗时应 ≈{want_t:.1f}s: {elapsed:.1f}s"
+                    want_t = 10_000_000 / want
+                    assert 0.7 * want_t <= elapsed <= 1.6 * want_t, \
+                        f"{spec} 耗时应 ≈{want_t:.1f}s: {elapsed:.1f}s"
                     app.graceful_quit()
                 except Exception:
                     app.graceful_quit()
                     raise
+            for seq, spec in ((5, "2 MB/s"), (6, "500KB/s")):
+                env.write_config(
+                    f'[common]\nglobal_max_download_speed = "{spec}"\n')
+                app = EzrApp(env.home, save_dir=env.save_dir)
+                try:
+                    deadline = time.time() + 8
+                    while app.exit_code is None and time.time() < deadline:
+                        app.pump(0.2)
+                    assert app.exit_code is not None, \
+                        f"{spec} 应拒绝启动（8s 内退出）"
+                    assert app.exit_code != 0, \
+                        f"{spec} 退出码应非零，实得 {app.exit_code}"
+                    text = app.text()[-2000:]
+                    flat = "".join(text.split("\n"))
+                    assert_in("配置文件", text, f"{spec}：报错含配置文件语义")
+                    assert_in("common.global_max_download_speed", flat,
+                              f"{spec}：报错含键点路径（终端换行归一后断言）")
+                    assert_in("拒绝启动", text, f"{spec}：报错含拒绝启动原因")
+                finally:
+                    if app.exit_code is None:
+                        app.graceful_quit()
             # 2 GiB/s（新写法上限档）：与不限速形态不可实测区分，由单测锁承载；
             # 此处保留一档不限速形态秒完成对照（独立子目录同理）
             env.write_config('[common]\nglobal_max_download_speed = "2 GiB/s"\n')

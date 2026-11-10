@@ -197,92 +197,74 @@ class PersistenceConfigSuite(Suite):
                 app.graceful_quit()
 
     def _case_04(self):
-        """QA-PC-04 非法配置回退/钳制：块 1MB/槽 5/重试 5/并发钳 64/不限速（规格已随实现）。"""
+        """QA-PC-04 非法配置拒绝启动并报错（v1.21 行为翻转，FR-01-71 v1.47 回退臂退役；FR-02-35）。"""
         @self.case("QA-PC-04")
         def go(env: Env):
-            # ① v1.19/D63① 分层：block_size_http = "abc"（字符串进数字键）= TOML
-            #    反序列化错误 = 解析失败 → 拒绝启动直接报错（01-config-template-03 口径）
-            # （本行曾为 chat 通道写入侧真实损坏 [http] —— bug18 判别法定位，恢复 [h[http]）
-            env.write_config('[http]\nblock_size_http = "abc"\n')
-            app = EzrApp(env.home, save_dir=env.save_dir)
-            deadline = time.time() + 8
-            while app.exit_code is None and time.time() < deadline:
-                app.pump(0.2)
-            assert app.exit_code is not None, "类型不匹配应拒绝启动（D63①）"
-            assert app.exit_code != 0, f"退出码应非零，实得 {app.exit_code}"
-            assert_in("配置文件解析失败", app.text()[-2000:], "报错含解析失败语义")
-            # ①' block_size_http = 256KB（v1.16/FR-01-104 钳制行）：生效值下限 1MB，
-            #    小于 1MB 一律按 1MB 生效（配置文件是用户可达入口，端到端口径不变）
-            env.write_config("[http]\nblock_size_http = 262144\n")
-            app = EzrApp(env.home, save_dir=env.save_dir)
-            try:
-                add_task_via_dialog(app, env,
-                                    env.fixture.url("two-m.bin?speed=900000"))
-                assert app.wait_for("下载中", 8)
-                assert_in("1 MB/块", detail_text(app),
-                          "256KB 应按 FR-01-104 下限钳制为 1MB 生效（v1.16）")
-                app.graceful_quit()
-            except Exception:
-                app.graceful_quit()
-                raise
-            # ② download_slots = 0 → 5
-            env.write_config("[common]\ndownload_slots = 0\n")
-            app = EzrApp(env.home, save_dir=env.save_dir)
-            try:
-                add_task_via_dialog(app, env, env.fixture.url("small.bin"))
-                app.wait_for("已完成", 10)
-                m = re.search(r"下载槽位 \d+/(\d+)", app.text())
-                assert m and m.group(1) == "5", f"非法槽位回退 5: {m.group(0) if m else '?'}"
-                app.graceful_quit()
-            except Exception:
-                app.graceful_quit()
-                raise
-            # ③ max_retries = -1 → TOML 非法 → 全默认（启动不报错，可正常下载）
-            env.write_config("[http]\nmax_retries = -1\n")
-            app = EzrApp(env.home, save_dir=env.save_dir)
-            try:
-                add_task_via_dialog(app, env, env.fixture.url("small.bin"))
-                app.wait_for("已完成", 10)
-                app.graceful_quit()
-            except Exception:
-                app.graceful_quit()
-                raise
-            # ④ http_concurrency = 99 → 钳制 64（规格已随实现，Gherkin/规程已同步）
-            # 口径：详情并发为「活跃连接数」随限速/块完成波动，不等于配置值；
-            # 确定性口径 = sidecar 落盘的任务 concurrency（spec 钳制后值）。
-            env.write_config('[http]\nhttp_concurrency = 99\n\n[common]\nglobal_max_download_speed = "2 MiB/s"\n')
-            app = EzrApp(env.home, save_dir=env.save_dir)
-            try:
-                add_task_via_dialog(app, env, env.fixture.url("ten-m.bin"))
-                assert app.wait_for("下载中", 8)
-                # sidecar 每 2s 周期落盘（Space 暂停不写）：有界轮询等待首刷
-                sc_path = os.path.join(env.save_dir, "ten-m.bin.ezr")
-                deadline = time.time() + 10
-                raw = None
-                while time.time() < deadline:
-                    app.pump(0.2)
-                    raw = read_file(sc_path)
-                    if raw is not None:
-                        break
-                assert raw is not None, "下载中应周期落盘 sidecar"
-                sc = json.loads(raw.decode("utf-8"))
-                conc = sc["task"]["concurrency"]
-                assert conc == 64, f"并发应钳制 64: {conc}"
-                app.graceful_quit()
-            except Exception:
-                app.graceful_quit()
-                raise
-            # ⑤ global_max_download_speed = xyz → 非法值回退 0 不限速
-            env.write_config('[common]\nglobal_max_download_speed = "xyz"\n')
-            app = EzrApp(env.home, save_dir=env.save_dir)
-            try:
-                add_task_via_dialog(app, env, env.fixture.url("three-m.bin"))
-                wait_file_size(os.path.join(env.save_dir, "three-m.bin"), THREE_M,
-                               30, app=app)
-                app.graceful_quit()
-            except Exception:
-                app.graceful_quit()
-                raise
+            # v1.21 修订（FR-02-35/D70）：任一键的语义非法值（0/负/越界/非法字符串值/
+            # 非法单位写法/白名单外 scheme/重复项）= 启动失败并报错（错误含配置文件路径、
+            # 键点路径与非法原因；非零退出码退出；配置文件字节级不变）。
+            # 已知偏差（待操作者裁决）：Examples 的 common.max_speed 行与同 feature
+            # 场景 12 及单测 legacy_max_speed_key_retired_as_unknown（退役键按未知键
+            # 静默忽略）互斥——三方一致者优先，本套件跳过该行并注记。
+            rows = (
+                ("http.block_size_http", '"256 KB"'),
+                ("common.download_slots", "0"),
+                ("http.max_retries", "-1"),
+                ("http.http_concurrency", "99"),
+                ("http.progress_tick_ms", "0"),
+                ("http.sidecar_flush_secs", "0"),
+                ("http.throttle_burst_secs", "0"),
+                ("http.throttle_sleep_ms", "0"),
+                ("http.dns_race_grace_ms", "0"),
+                ("bt.bt_concurrency", "0"),
+                ("bt.bt_concurrency", "99"),
+                ("bt.peer_pipeline", "0"),
+                ("bt.upload_slots", "0"),
+                ("bt.upload_read_concurrency", "0"),
+                ("bt.idle_eviction_secs", "-1"),
+                ("bt.connect_timeout_secs", "0"),
+                ("bt.handshake_timeout_secs", "0"),
+                ("bt.request_timeout_secs", "0"),
+                ("bt.requests_per_piece", "0"),
+                ("bt.rechoke_interval_secs", "0"),
+                ("bt.optimistic_interval_secs", "0"),
+                ("bt.progress_emit_min_interval_ms", "0"),
+                ("bt.tracker_numwant", "0"),
+                ("bt.peer_retry_base_secs", "0"),
+                ("bt.peer_retry_cap_secs", "0"),
+                ("bt.tracker_backoff_start_secs", "0"),
+                ("bt.tracker_backoff_cap_secs", "0"),
+                ("bt.udp_base_timeout_secs", "0"),
+                ("bt.udp_retries", "0"),
+                ("bt.seed_duration_secs", "0"),
+                ("bt.trackers", '["ftp://x/ann"]'),
+                ("bt.peer_connection_protocol", '["tcp","tcp"]'),
+            )
+            for key_point, value in rows:
+                table, key = key_point.split(".", 1)
+                env.write_config(f"[{table}]\n{key} = {value}\n")
+                cfg_path = env.config_path()
+                before = open(cfg_path, "rb").read()
+                app = EzrApp(env.home, save_dir=env.save_dir)
+                try:
+                    deadline = time.time() + 8
+                    while app.exit_code is None and time.time() < deadline:
+                        app.pump(0.2)
+                    assert app.exit_code is not None, \
+                        f"{key_point} = {value} 应拒绝启动（8s 内退出）"
+                    assert app.exit_code != 0, \
+                        f"{key_point} = {value} 退出码应非零，实得 {app.exit_code}"
+                    text = app.text()[-2000:]
+                    flat = "".join(text.split("\n"))
+                    assert_in("配置文件", text, f"{key_point}：报错含配置文件语义")
+                    assert_in(key_point, flat,
+                              f"{key_point}：报错含键点路径（终端换行归一后断言）")
+                    assert_in("拒绝启动", text, f"{key_point}：报错含拒绝启动原因")
+                    after = open(cfg_path, "rb").read()
+                    assert after == before, f"{key_point}：配置文件应字节级不变"
+                finally:
+                    if app.exit_code is None:
+                        app.graceful_quit()
 
     def _case_05(self):
         """QA-PC-05 block_size_http=4MB/2MB 下载 5MB：x/2·4 MB/块 与 x/3·2 MB/块。
@@ -439,11 +421,11 @@ class PersistenceConfigSuite(Suite):
 
 
     def _case_13(self):
-        """QA-PC-13（v1.18 新增）全量 36 键合法非默认值生效冒烟（D62③）。
+        """QA-PC-13（v1.18 新增）全量 40 键合法非默认值生效冒烟（D62③）。
 
         零警告 + 可观察键逐项生效（download_dir 预填/落盘、download_slots、
         block_size_http、http_concurrency 回填、global_max_download_speed）+ BT 键预填生效
-        （bt_concurrency、http/udp trackers）+ 下载完成产物完整。
+        （bt_concurrency、trackers 单键，v1.21：http/udp_trackers 退役不并入）+ 下载完成产物完整。
         """
         @self.case("QA-PC-13")
         def go(env: Env):
@@ -482,8 +464,8 @@ class PersistenceConfigSuite(Suite):
                 "dns_race_grace_ms = 900\n"
                 "\n"
                 "[bt]\n"
-                'http_trackers = ["http://cfg13a/ann", "http://cfg13b/ann"]\n'
-                'udp_trackers = ["udp://cfg13u/ann"]\n'
+                'trackers = ["http://cfg13a/ann", "http://cfg13b/ann", "udp://cfg13u:6969/ann"]\n'
+                'peer_connection_protocol = ["tcp", "webrtc"]\n'
                 "bt_concurrency = 61\n"
                 "peer_pipeline = 32\n"
                 "upload_slots = 5\n"
@@ -527,8 +509,10 @@ class PersistenceConfigSuite(Suite):
             except Exception:
                 app.graceful_quit()
                 raise
-            # BT 键生效：BT 对话框预填（bt_concurrency=61 + trackers 合并 + 目录预填）
-            app = EzrApp(env.home, save_dir=None)
+            # BT 键生效：BT 对话框预填（bt_concurrency=61 + trackers 合并 + 目录预填）。
+            # 视口 rows=50：文件勾选修订轮后对话框含选择文件树，rows=34 下 trackers
+            # 盒（7 行）在视口外被裁剪；高视口仍是纯用户界面层观察。
+            app = EzrApp(env.home, save_dir=None, rows=50)
             try:
                 tdir = os.path.join(env.home, "qa13-torrents")
                 os.makedirs(tdir, exist_ok=True)
@@ -541,8 +525,13 @@ class PersistenceConfigSuite(Suite):
                 app.send("enter")
                 assert app.wait_for("添加任务：BT", 5), "应分流打开 BT 对话框"
                 assert_in("61", app.text(), "并发应预填 [bt] bt_concurrency=61")
-                assert_in("udp://cfg13u/ann", app.text(),
-                          "trackers 应预填合并 [bt] udp_trackers")
+                # trackers 预填断言走原始字节流：break_links 给 http(s):// 插入的
+                # VS15 使 pyte 把同 chunk 余下绘制丢弃（harness.raw_text 口径）
+                raw = app.raw_text()
+                assert_in("http://cfg13a/ann", raw,
+                          "trackers 应预填 [bt] trackers 键值（v1.21 单键口径，原始字节流）")
+                assert_in("udp://cfg13u:6969/ann", raw,
+                          "trackers 应预填 udp 条目（udp 须带端口，实现/单测/属性测试三方口径）")
                 assert_in(cfg_dir[-16:], app.text(),
                           "保存到应预填配置 download_dir（D48，字段超宽左截断按尾部断言）")
                 app.send("esc")
