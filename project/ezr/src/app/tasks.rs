@@ -91,19 +91,28 @@ impl App {
             }
             TaskState::Completed => self.set_toast("该任务已完成，无需操作"),
             TaskState::Seeding => {
-                let id = self.tasks[idx].id;
-                self.tasks[idx].state = TaskState::Completed;
-                self.tasks[idx].upload_speed = 0.0;
-                self.tasks[idx].has_slot = false;
-                let engine = self.engine.clone();
-                tokio::spawn(async move {
-                    engine.send(Cmd::StopSeed { id }).await;
-                });
-                self.set_toast(format!("⏸ 已停止做种（进入已完成）: {name}"));
-                self.save_registry();
+                let toast = format!("⏸ 已停止做种（进入已完成）: {name}");
+                self.finish_seeding(idx, toast);
             }
             _ => self.set_toast("当前状态下不可暂停/继续"),
         }
+    }
+
+    /// 做种停止共用落点（空格提前停止 09-bt-engine-13 停止臂 / 做种倒计时归零臂）：
+    /// 转「已完成」+ 上传速度归零 + 释放槽位 + 引擎停止做种（tracker 收 stopped、
+    /// 上传连接随引擎退出清空）+ 即时持久化。入口差异仅 toast 文案。
+    pub(super) fn finish_seeding(&mut self, idx: usize, toast: String) {
+        let id = self.tasks[idx].id;
+        self.tasks[idx].state = TaskState::Completed;
+        self.tasks[idx].upload_speed = 0.0;
+        self.tasks[idx].has_slot = false;
+        self.tasks[idx].seed_left = 0.0;
+        let engine = self.engine.clone();
+        tokio::spawn(async move {
+            engine.send(Cmd::StopSeed { id }).await;
+        });
+        self.set_toast(toast);
+        self.save_registry();
     }
 
     pub fn retry(&mut self) {

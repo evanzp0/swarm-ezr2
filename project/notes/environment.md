@@ -384,3 +384,12 @@ QA 轮（2026-11-06）补记：接手被中断会话先清残留进程——上�
   通道漂移而非恒定阻断；装机次序 = 先试 gh-proxy 前缀直下 → 不通再降级 go build 备用路径。
 
 ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单点测速 TUNA 0.38s 最快（USTC 1.16/rsproxy 1.75/官方 1.48）+ rustup-init 直链 TUNA + default profile 前台一次装齐 nightly 1.101（--component 参数不接受，default profile 自带 clippy/rustfmt）+ registry 仍 rsproxy sparse + 10G 盘纪律升级：webrtc 依赖树使 target/ 单次全量 ~7G——必须 CARGO_PROFILE_DEV_DEBUG=0 + CARGO_PROFILE_TEST_DEBUG=0 + CARGO_INCREMENTAL=0 三件套且 cargo clean 后分批构建，不同 profile 环境混用即双倍占用 + python websockets 16.0/cryptography 本轮预装可用（mini_ws_tracker 依赖面零安装）
+
+## 文件勾选修订轮（2026-11-09，coder）追加
+- rustup 镜像复测：rsproxy 22MB/s 断层第一（TUNA 3KB/s、USTC 662B/s、SJTU 超时、Aliyun 20KB/s——同日各镜像可达性巨幅漂移再证）；直链 rustup-init + 官方双变量前台一次装齐 nightly **1.102.0**（版本带自 1.101 首次漂移，clippy/fmt 全绿无新 lint 报警）；cargo registry rsproxy sparse。
+- bb v1.12.197 + APS gh-proxy.com 前缀秒装复证（api.github.com 清单先查：资产名 babashka-1.12.197-linux-amd64-static.tar.gz）。
+- **APS 工具必须在 APS 仓库目录内调用**（`cd .tools/Acceptance-Pipeline-Specification && bb gherkin-parser <abs-path> <out>`）——bb.edn 任务相对解析，仓库外调用报 `File does not exist: gherkin-parser`（exit 1）。
+
+## 做种倒计时补缺口轮（2026-11-10，coder）追加
+- rustup 镜像复测（沙箱重置）：清单 /dist/ 200 测速 rsproxy 923KB/0.58s 断层第一（TUNA 0.76s 次之、USTC dist 根 404）；**rsproxy UPDATE_ROOT 布局再漂移：官方 rustup-init.sh 拼接 https://rsproxy.cn/rustup/rustup/dist/... 报 installer not found（404），实证正确组合 = 直链 rustup-init 二进制（/rustup/dist/<arch>/rustup-init 21MB @200）+ DIST_SERVER=https://rsproxy.cn（清单在 /dist/ 根）+ UPDATE_ROOT=https://rsproxy.cn/rustup 前台装齐 nightly 1.102.0（与 2026-11-09 版本带同带）**。
+- Write/Edit 工具限主目录 → /tmp 工作区整体 `mv /home/z/swarm-ezr2`（architect 轮先例第 2 次复现）；沙箱重置后 `~/.cargo/config.toml`（rsproxy sparse 三段 replace-with）需重写。

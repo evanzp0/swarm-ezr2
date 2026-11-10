@@ -21,6 +21,7 @@ impl App {
         self.tick_consume_events().await;
         self.tick_grant_and_start().await;
         self.tick_retry_countdown(dt).await;
+        self.tick_seed_countdown(dt);
         self.tick_speed_and_session(now);
         self.tick_housekeeping(now);
         self.tick_clamp_selection(now);
@@ -121,6 +122,30 @@ impl App {
             .collect();
         for id in retry_starts {
             self.send_retry_start(id).await;
+        }
+    }
+
+    /// 做种倒计时递减与归零自动停止（09-bt-engine-13 归零臂，QA-BE-13）。
+    /// 递减口径与 tick_retry_countdown 同款（逐帧 dt 累计、仅 Seeding 态递减）；
+    /// 归零落点与空格提前停止共用 finish_seeding（仅 toast 文案不同）：
+    /// 转「已完成」+ 上传速度归零 + 释放槽位 + 引擎停止做种（tracker stopped）。
+    fn tick_seed_countdown(&mut self, dt: f64) {
+        let mut expired: Vec<u32> = Vec::new();
+        for t in &mut self.tasks {
+            if t.state == TaskState::Seeding {
+                t.seed_left -= dt;
+                if t.seed_left <= 0.0 {
+                    t.seed_left = 0.0;
+                    expired.push(t.id);
+                }
+            }
+        }
+        for id in expired {
+            let Some(idx) = self.tasks.iter().position(|t| t.id == id) else {
+                continue;
+            };
+            let name = self.tasks[idx].name.clone();
+            self.finish_seeding(idx, format!("✓ 做种结束: {name}"));
         }
     }
 
@@ -394,6 +419,7 @@ mod bt_route_tests {
                 size: 12,
                 selected: true,
             }],
+            upload_paused: false,
         });
         t
     }
@@ -578,5 +604,130 @@ mod bt_route_tests {
         assert_eq!(app.tasks[0].state, TaskState::Downloading);
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod seed_countdown_tests {
+    use tokio::sync::mpsc;
+
+    use super::*;
+    use crate::engine::EngineHandle;
+
+    fn make_app(tag: &str) -> App {
+        crate::app::testutil::make_app_in("ezr-seed", tag)
+    }
+
+    fn seeding_bt(id: u32) -> crate::model::Task {
+        let mut t = crate::model::Task::new_queued(
+            id,
+            "seed.bin".to_string(),
+            crate::model::Protocol::Bt,
+            "/tmp/a.torrent".to_string(),
+            "/tmp".to_string(),
+            1 << 20,
+            4,
+            3,
+            None,
+            crate::model::ProxyChoice::Direct,
+            crate::model::unix_now(),
+        );
+        t.state = TaskState::Seeding;
+        t.upload_speed = 4096.0;
+        t.uploaded = 123_456;
+        t.seed_left = 1800.0;
+        t
+    }
+
+    async fn recv_cmd(rx: &mut mpsc::Receiver<Cmd>) -> Cmd {
+        tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("引擎命令应在超时前到达")
+            .expect("发送端存活，命令应为 Some")
+    }
+
+    async fn assert_no_cmd(rx: &mut mpsc::Receiver<Cmd>) {
+        let got = tokio::time::timeout(std::time::Duration::from_millis(120), rx.recv()).await;
+        assert!(
+            got.is_err(),
+            "不应向引擎发送命令，实际收到: {:?}",
+            got.ok().flatten()
+        );
+    }
+
+    #[tokio::test]
+    async fn seed_countdown_decrements_only_while_seeding() {
+        let mut app = make_app("seed-dec");
+        let (spy_tx, mut spy_rx) = mpsc::channel::<Cmd>(8);
+        app.engine = EngineHandle::from_sender(spy_tx);
+        let mut dl = seeding_bt(2);
+        dl.state = TaskState::Downloading;
+        dl.seed_left = 999.0;
+        app.tasks.push(seeding_bt(1));
+        app.tasks.push(dl);
+        app.tick_seed_countdown(1.0);
+        assert_eq!(app.tasks[0].seed_left, 1799.0, "做种中逐帧递减");
+        assert_eq!(app.tasks[0].state, TaskState::Seeding, "未归零不转态");
+        assert_eq!(
+            app.tasks[1].seed_left, 999.0,
+            "仅 Seeding 态递减，下载中任务不动"
+        );
+        assert_no_cmd(&mut spy_rx).await;
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn seed_countdown_zero_stops_seeding_to_completed() {
+        let mut app = make_app("seed-zero");
+        let (spy_tx, mut spy_rx) = mpsc::channel::<Cmd>(8);
+        app.engine = EngineHandle::from_sender(spy_tx);
+        let mut t = seeding_bt(1);
+        t.seed_left = 1.0;
+        app.tasks.push(t);
+        app.tick_seed_countdown(2.0);
+        let t = &app.tasks[0];
+        assert_eq!(
+            t.state,
+            TaskState::Completed,
+            "倒计时归零 → 已完成（09-bt-engine-13 归零臂）"
+        );
+        assert_eq!(t.seed_left, 0.0, "归零清底");
+        assert_eq!(t.upload_speed, 0.0, "上传速度归零");
+        assert!(!t.has_slot, "释放槽位");
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|m| m.contains("✓ 做种结束: seed.bin")),
+            "归零 toast: {:?}",
+            app.toast
+        );
+        match recv_cmd(&mut spy_rx).await {
+            Cmd::StopSeed { id } => {
+                assert_eq!(id, 1, "引擎收到停止做种（tracker stopped 载体）")
+            }
+            other => panic!("归零应发 StopSeed，实际: {other:?}"),
+        }
+        // 已离做种态：再次递减不重复触发（无第二条命令、状态不再变化）
+        app.tick_seed_countdown(2.0);
+        assert_eq!(app.tasks[0].state, TaskState::Completed);
+        assert_no_cmd(&mut spy_rx).await;
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn full_tick_drives_seed_countdown() {
+        let mut app = make_app("seed-tick-wire");
+        let (spy_tx, mut spy_rx) = mpsc::channel::<Cmd>(8);
+        app.engine = EngineHandle::from_sender(spy_tx);
+        app.tasks.push(seeding_bt(1));
+        app.tick().await;
+        assert!(
+            app.tasks[0].seed_left < 1800.0,
+            "主 tick 必须驱动做种倒计时递减（本轮缺口回归锁）: {}",
+            app.tasks[0].seed_left
+        );
+        assert_eq!(app.tasks[0].state, TaskState::Seeding);
+        assert_no_cmd(&mut spy_rx).await;
+        app.shutdown().await;
     }
 }

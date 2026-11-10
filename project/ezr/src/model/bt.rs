@@ -14,6 +14,39 @@ pub struct BtTaskData {
     pub trackers: Vec<String>,
     pub piece_length: u32,
     pub files: Vec<BtFile>,
+    #[serde(default)]
+    pub upload_paused: bool,
+}
+
+pub fn delete_deselected_files(save_dir: &str, old: &[BtFile], new: &[BtFile]) -> usize {
+    let base: std::path::PathBuf = std::path::Path::new(save_dir).components().collect();
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    let mut deleted = 0usize;
+    for f in new.iter().filter(|f| !f.selected) {
+        let was = old.iter().any(|o| o.path == f.path && o.selected);
+        if !was {
+            continue;
+        }
+        let abs = base.join(&f.path);
+        if std::fs::remove_file(&abs).is_ok() {
+            deleted += 1;
+            let mut parent = abs.parent();
+            while let Some(p) = parent {
+                let pc: std::path::PathBuf = p.components().collect();
+                if pc == base {
+                    break;
+                }
+                dirs.push(pc);
+                parent = p.parent();
+            }
+        }
+    }
+    dirs.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
+    dirs.dedup();
+    for d in dirs {
+        let _ = std::fs::remove_dir(&d);
+    }
+    deleted
 }
 
 impl BtTaskData {
@@ -302,6 +335,7 @@ mod tests {
             trackers: vec!["udp://t/ann".into()],
             piece_length,
             files,
+            upload_paused: false,
         }
     }
 
@@ -367,5 +401,102 @@ mod tests {
             !raw.contains("done_pieces"),
             "任务定义数据不得携带进度字段（进度唯一归属 .ezr）: {raw}"
         );
+    }
+
+    fn bf(path: &str, size: u64, selected: bool) -> BtFile {
+        BtFile {
+            path: path.into(),
+            size,
+            selected,
+        }
+    }
+
+    #[test]
+    fn delete_deselected_removes_files_and_empty_dirs_bottom_up() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bt-deldirs");
+        std::fs::create_dir_all(dir.join("tor/sub/deep")).unwrap();
+        std::fs::create_dir_all(dir.join("tor/keep")).unwrap();
+        std::fs::write(dir.join("tor/sub/a.txt"), b"aaaa").unwrap();
+        std::fs::write(dir.join("tor/sub/deep/b.bin"), b"bbbbbb").unwrap();
+        std::fs::write(dir.join("tor/keep/c.txt"), b"cc").unwrap();
+        let old = vec![
+            bf("tor/sub/a.txt", 4, true),
+            bf("tor/sub/deep/b.bin", 6, true),
+            bf("tor/keep/c.txt", 2, true),
+        ];
+        let new = vec![
+            bf("tor/sub/a.txt", 4, true),
+            bf("tor/sub/deep/b.bin", 6, false),
+            bf("tor/keep/c.txt", 2, true),
+        ];
+        let n = super::delete_deselected_files(dir.to_str().unwrap(), &old, &new);
+        assert_eq!(n, 1, "只删取消选中的一个文件");
+        assert!(!dir.join("tor/sub/deep/b.bin").exists(), "落盘数据已删除");
+        assert!(
+            !dir.join("tor/sub/deep").exists(),
+            "变空目录自底向上整树清理（深）"
+        );
+        assert!(
+            dir.join("tor/sub").exists(),
+            "仍有选中文件 a.txt 的目录保留"
+        );
+        assert!(dir.join("tor/sub/a.txt").exists(), "保留文件不动");
+        assert!(dir.join("tor").exists(), "非空祖先目录保留");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn delete_deselected_missing_skipped_and_io_failure_nonblocking() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bt-delskip");
+        std::fs::create_dir_all(dir.join("tor")).unwrap();
+        std::fs::write(dir.join("tor/plain"), b"x").unwrap();
+        std::fs::write(dir.join("tor/keep.txt"), b"k").unwrap();
+        let old = vec![
+            bf("tor/never-downloaded.bin", 4, true),
+            bf("tor/plain", 1, true),
+            bf("tor/plain/enotdir-child", 1, true),
+            bf("tor/keep.txt", 1, true),
+        ];
+        let new = vec![
+            bf("tor/never-downloaded.bin", 4, false),
+            bf("tor/plain", 1, false),
+            bf("tor/plain/enotdir-child", 1, false),
+            bf("tor/keep.txt", 1, true),
+        ];
+        let n = super::delete_deselected_files(dir.to_str().unwrap(), &old, &new);
+        assert_eq!(n, 1, "目标不存在静默跳过（5A），可删的照常删除");
+        assert!(!dir.join("tor/plain").exists(), "普通文件删除生效");
+        assert!(dir.join("tor/keep.txt").exists(), "保留文件不动");
+        assert!(dir.join("tor").exists(), "IO 失败不阻塞不扩散");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn delete_deselected_only_touches_previously_selected() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bt-delwas");
+        std::fs::create_dir_all(dir.join("tor")).unwrap();
+        std::fs::write(dir.join("tor/x.bin"), b"x").unwrap();
+        let old = vec![bf("tor/x.bin", 1, false)];
+        let new = vec![bf("tor/x.bin", 1, false)];
+        let n = super::delete_deselected_files(dir.to_str().unwrap(), &old, &new);
+        assert_eq!(n, 0, "此前未选中的文件无落盘数据，不算取消选中");
+        assert!(dir.join("tor/x.bin").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn upload_paused_field_serde_default_roundtrip() {
+        let legacy = serde_json::from_str::<BtTaskData>(
+            r#"{"source":"s","trackers":[],"piece_length":16,"files":[]}"#,
+        )
+        .expect("旧档无 upload_paused 键按 false 加载");
+        assert!(!legacy.upload_paused);
+        let d = BtTaskData {
+            upload_paused: true,
+            ..BtTaskData::default()
+        };
+        let raw = serde_json::to_string(&d).unwrap();
+        let back: BtTaskData = serde_json::from_str(&raw).unwrap();
+        assert!(back.upload_paused, "标志随序列化往返保留");
     }
 }

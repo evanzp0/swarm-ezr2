@@ -747,6 +747,7 @@ mod tests {
                 size: 1_000,
                 selected: true,
             }],
+            upload_paused: false,
         });
         t
     }

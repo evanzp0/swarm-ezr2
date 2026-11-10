@@ -49,8 +49,9 @@ impl App {
             t.downloaded = total.max(t.downloaded);
             t.total = if t.total > 0 { t.total } else { total };
             t.speed = 0.0;
-            if t.seed_left <= 0.0 {
-                t.seed_left = self.cfg.seed_duration_secs;
+            t.seed_left = self.cfg.seed_duration_secs;
+            if let Some(b) = t.bt.as_mut() {
+                b.upload_paused = false;
             }
             self.bt_conns.remove(&id);
             self.clear_bt_conn_stats(id);
@@ -144,6 +145,7 @@ mod bt_progress_speed_tests {
                 size: 12,
                 selected: true,
             }],
+            upload_paused: false,
         });
         t
     }
@@ -339,6 +341,33 @@ mod bt_progress_speed_tests {
         assert!(
             !app.bt_stopping.contains_key(&1),
             "BtFailed 后必须清除 bt_stopping 登记（避免任务永久卡在等待）"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn bt_done_resets_seed_left_and_clears_upload_pause() {
+        let mut app = make_app("bt-done-d73");
+        app.cfg.seed_duration_secs = 1800.0;
+        let mut t = bt_task(1, TaskState::Downloading);
+        t.seed_left = 1700.0;
+        t.bt.as_mut().unwrap().upload_paused = true;
+        app.tasks.push(t);
+        app.on_bt_done(1, 12);
+        let t = &app.tasks[0];
+        assert_eq!(t.state, TaskState::Seeding, "再次全部完成回做种态");
+        assert_eq!(
+            t.seed_left, 1800.0,
+            "D73③：回做种 seed_left 重置 config seed_duration_secs（原剩余值作废）"
+        );
+        assert!(
+            !t.bt.as_ref().unwrap().upload_paused,
+            "D73②：再次全部完成上传恢复做种形态"
+        );
+        assert_eq!(
+            app.toast.as_deref(),
+            Some("✓ 下载完成: tor"),
+            "D73⑤：再次完成 toast 照常出现"
         );
         app.shutdown().await;
     }

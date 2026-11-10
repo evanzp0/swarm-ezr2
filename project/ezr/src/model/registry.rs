@@ -389,6 +389,7 @@ mod tests {
                 size: 32_768,
                 selected: true,
             }],
+            upload_paused: false,
         });
         let reg = Registry::from_tasks(&[t]);
         let raw = serde_json::to_string(&reg).unwrap();

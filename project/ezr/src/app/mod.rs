@@ -822,6 +822,7 @@ mod tests {
                 size: 200,
                 selected: true,
             }],
+            upload_paused: false,
         });
         t
     }

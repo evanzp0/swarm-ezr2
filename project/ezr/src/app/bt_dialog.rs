@@ -144,6 +144,7 @@ impl App {
             concurrency: t.concurrency,
             proxy_endpoint: self.cfg.resolve_proxy(&t.proxy).0,
             seeding: false,
+            upload_paused: bt.is_some_and(|b| b.upload_paused),
             max_download_speed: t.max_download_speed,
             max_upload_speed: t.max_upload_speed,
             tunables: crate::engine::BtTunables {
@@ -517,6 +518,7 @@ impl App {
             trackers,
             piece_length: meta.piece_length,
             files,
+            upload_paused: false,
         });
         if paused {
             t.state = TaskState::Paused;
@@ -608,6 +610,11 @@ impl App {
 
         let state = self.tasks[idx].state;
         let new_total = new_total_of(&files);
+        let old_files = self.tasks[idx]
+            .bt
+            .as_ref()
+            .map(|b| b.files.clone())
+            .unwrap_or_default();
         let old_trackers = self.tasks[idx]
             .bt
             .as_ref()
@@ -628,6 +635,28 @@ impl App {
             }
             t.total = new_total;
             t.downloaded = t.downloaded.min(new_total);
+        }
+        let recalc = self.tasks[idx]
+            .bt
+            .as_ref()
+            .map(|b| b.selected_bytes_of_pieces(&self.tasks[idx].done_blocks))
+            .unwrap_or(0);
+        self.tasks[idx].downloaded = recalc;
+        if state == TaskState::Seeding && recalc < new_total {
+            let t = &mut self.tasks[idx];
+            t.state = TaskState::Downloading;
+            if let Some(b) = t.bt.as_mut() {
+                b.upload_paused = true;
+            }
+        }
+        if !matches!(state, TaskState::Downloading | TaskState::Seeding) {
+            let save_dir = self.tasks[idx].save_dir.clone();
+            let new_files = self.tasks[idx]
+                .bt
+                .as_ref()
+                .map(|b| b.files.clone())
+                .unwrap_or_default();
+            crate::model::bt::delete_deselected_files(&save_dir, &old_files, &new_files);
         }
         let new_trackers = self.tasks[idx]
             .bt
@@ -1821,6 +1850,208 @@ mod tests {
         );
         assert!(app.dialog.is_some(), "空选守卫保持对话框");
         assert!(app.tasks.is_empty(), "空选不建任务");
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn set_file_selected(d: &mut crate::app::Dialog, file_name: &str, on: bool) {
+        fn walk(nodes: &mut [crate::app::bt_tree::BtNode], name: &str, on: bool) -> bool {
+            for n in nodes.iter_mut() {
+                if !n.is_dir && n.name == name {
+                    n.selected = on;
+                    return true;
+                }
+                if n.is_dir && walk(&mut n.children, name, on) {
+                    return true;
+                }
+            }
+            false
+        }
+        assert!(
+            walk(&mut d.bt_tree, file_name, on),
+            "文件树含目标文件 {file_name}"
+        );
+    }
+
+    fn prepare_seeding_task(app: &mut App, dir: &std::path::Path, total: u64, done: Vec<u32>) {
+        let path = write_multi_torrent(dir, "a.torrent");
+        let meta = parse_at(&path);
+        app.open_add_bt_dialog_with(&path, &meta);
+        app.dlg_confirm_add_bt(false);
+        app.selected = 0;
+        app.filter = 1;
+        let t = &mut app.tasks[0];
+        t.state = TaskState::Seeding;
+        t.total = total;
+        t.downloaded = total;
+        t.done_blocks = done.clone();
+        t.chunk_done = done.len() as u32;
+    }
+
+    #[tokio::test]
+    async fn confirm_modify_seeding_new_file_flips_to_downloading() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-seedflip");
+        let mut app = make_app("seedflip");
+        prepare_seeding_task(&mut app, &dir, 5, vec![0, 1]);
+        app.tasks[0].bt.as_mut().unwrap().files[1].selected = false;
+        let (spy_tx, mut spy_rx) = tokio::sync::mpsc::channel::<crate::engine::Cmd>(16);
+        app.engine = crate::engine::EngineHandle::from_sender(spy_tx);
+
+        app.modify_dialog_entry();
+        set_file_selected(app.dialog.as_mut().unwrap(), "b.bin", true);
+        app.dlg_confirm_modify_bt();
+        assert!(app.dialog.is_none(), "确认后关闭");
+        let t = &app.tasks[0];
+        assert_eq!(
+            t.state,
+            TaskState::Downloading,
+            "D73①：做种中勾新文件确认即由「做种中」翻「下载中」，不等进度帧"
+        );
+        assert_eq!(t.total, 12, "total 重算 = 选中文件大小合计");
+        assert_eq!(
+            t.downloaded, 8,
+            "完成度按 piece 记账重算（piece1 跨界整块已含 b 前 3 字节）：< total → 有缺口"
+        );
+        assert!(
+            t.bt.as_ref().unwrap().upload_paused,
+            "D73②：做种回退下载态上传暂停标志生效"
+        );
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|s| s.starts_with("✓ BT 任务已更新：")),
+            "toast 沿既有更新口径（D73⑤），实际: {:?}",
+            app.toast
+        );
+        let got = tokio::time::timeout(std::time::Duration::from_millis(500), spy_rx.recv())
+            .await
+            .expect("运行态任务确认应发引擎命令")
+            .expect("发送端存活");
+        match got {
+            crate::engine::Cmd::ReconfigureBt { files, .. } => {
+                assert!(files[1].selected, "ReconfigureBt 携带勾选后的文件全集");
+            }
+            other => panic!("应发 ReconfigureBt，实际: {other:?}"),
+        }
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn confirm_modify_seeding_deselect_completed_stays_seeding() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-seedkeep");
+        let mut app = make_app("seedkeep");
+        prepare_seeding_task(&mut app, &dir, 12, vec![0, 1, 2]);
+        let (spy_tx, mut spy_rx) = tokio::sync::mpsc::channel::<crate::engine::Cmd>(16);
+        app.engine = crate::engine::EngineHandle::from_sender(spy_tx);
+
+        app.modify_dialog_entry();
+        set_file_selected(app.dialog.as_mut().unwrap(), "b.bin", false);
+        app.dlg_confirm_modify_bt();
+        assert!(app.dialog.is_none(), "确认后关闭");
+        let t = &app.tasks[0];
+        assert_eq!(
+            t.state,
+            TaskState::Seeding,
+            "场景 11：取消勾选已完成文件重算仍 100%，保持做种中"
+        );
+        assert!(
+            !t.bt.as_ref().unwrap().upload_paused,
+            "上传暂停仅在回退下载态，纯删减不触发"
+        );
+        assert_eq!(t.total, 5, "total 按剩余选中集合重算");
+        assert_eq!(t.downloaded, 5, "已下载按 piece 记账重算");
+        let got = tokio::time::timeout(std::time::Duration::from_millis(500), spy_rx.recv())
+            .await
+            .expect("应发引擎命令")
+            .expect("发送端存活");
+        match got {
+            crate::engine::Cmd::ReconfigureBt { files, .. } => {
+                assert!(!files[1].selected, "取消勾选随命令携带（引擎落盘删除）");
+            }
+            other => panic!("应发 ReconfigureBt，实际: {other:?}"),
+        }
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn confirm_modify_paused_deletes_file_and_keeps_paused() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-pausemod");
+        let path = write_multi_torrent(&dir, "a.torrent");
+        let meta = parse_at(&path);
+        let mut app = make_app("pausemod");
+        app.open_add_bt_dialog_with(&path, &meta);
+        app.dlg_confirm_add_bt(false);
+        app.selected = 0;
+        std::fs::create_dir_all(dir.join("tor")).unwrap();
+        std::fs::write(dir.join("tor/b.bin"), b"1234567").unwrap();
+        {
+            let t = &mut app.tasks[0];
+            t.save_dir = dir.to_string_lossy().into_owned();
+            t.state = TaskState::Paused;
+            t.total = 12;
+            t.downloaded = 8;
+            t.done_blocks = vec![0, 1];
+            t.chunk_done = 2;
+        }
+        let (spy_tx, mut spy_rx) = tokio::sync::mpsc::channel::<crate::engine::Cmd>(16);
+        app.engine = crate::engine::EngineHandle::from_sender(spy_tx);
+
+        app.modify_dialog_entry();
+        set_file_selected(app.dialog.as_mut().unwrap(), "b.bin", false);
+        app.dlg_confirm_modify_bt();
+        assert!(app.dialog.is_none());
+        assert!(
+            !dir.join("tor/b.bin").exists(),
+            "D73⑥：已暂停任务取消勾选在确认时立即删除落盘数据"
+        );
+        let t = &app.tasks[0];
+        assert_eq!(t.state, TaskState::Paused, "已暂停任务不被唤醒");
+        assert_eq!(t.total, 5, "total 按新选中集合重算");
+        assert_eq!(t.downloaded, 5, "已下载按 piece 记账重算且 ≤ 新 total");
+        let more = tokio::time::timeout(std::time::Duration::from_millis(150), spy_rx.recv()).await;
+        assert!(
+            more.is_err(),
+            "非运行态确认不得发引擎命令，实际: {:?}",
+            more.ok().flatten()
+        );
+
+        app.modify_dialog_entry();
+        set_file_selected(app.dialog.as_mut().unwrap(), "b.bin", true);
+        app.dlg_confirm_modify_bt();
+        assert_eq!(
+            app.tasks[0].state,
+            TaskState::Paused,
+            "D73⑥：勾选新文件不唤醒任务（恢复后补下）"
+        );
+        assert_eq!(app.tasks[0].total, 12, "total 随重新勾选重算");
+        let more = tokio::time::timeout(std::time::Duration::from_millis(150), spy_rx.recv()).await;
+        assert!(
+            more.is_err(),
+            "暂停态勾新文件不得触发引擎启动，实际: {:?}",
+            more.ok().flatten()
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn make_bt_spec_carries_upload_pause_flag() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-specflag");
+        let path = write_multi_torrent(&dir, "a.torrent");
+        let meta = parse_at(&path);
+        let mut app = make_app("specflag");
+        app.open_add_bt_dialog_with(&path, &meta);
+        app.dlg_confirm_add_bt(false);
+        app.tasks[0].bt.as_mut().unwrap().upload_paused = true;
+        let t = app.tasks[0].clone();
+        let spec = app.make_bt_spec(&t, &meta);
+        assert!(
+            spec.upload_paused,
+            "暂停/恢复重启后零上传语义随 spec 存续（D73②）"
+        );
+        assert!(!spec.seeding);
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }

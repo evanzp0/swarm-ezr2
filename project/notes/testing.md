@@ -605,3 +605,16 @@ ws/webrtc 轮（2026-11-09）：ws announce 单测用 tokio_tungstenite::accept_
 裁决落账轮（2026-11-09，操作者 chat 十一项）：D71 八项（①③④「与参考实现同策略」核证落账 = qBt/libtorrent 无 WebRTC、参考实为 WebTorrent 家族线协议、peer_id 角色分裂为防 glare 确定性补充且线协议兼容；⑥ DataChannel label 改 "data_channel"——发起侧 create_data_channel 单点、应答侧 on_data_channel 随对端故仅一处）+ QA 终验轮未决三项全结案：判重张力（url_task_exists 本无状态过滤=钦定口径，规格删「非完成」限定零码变）、hardender 定可选节点（CONSTITUTION/chains/INDEX/SKILL 同步）、QA-01-11 双锚断言（pyte「…头截断」从「必败障碍」转正为「有意深路径渲染行为锚」+ 短路径整值逐字符断言恢复全路径口径——教训：屏幕捕获断言要先锁「被测值在可视宽内」这一前提，短路径整值锚与深路径尾部锚双管齐下才同时覆盖准确性与正确性）；harness 新增 QA_ONLY 环境变量单用例复跑入口（默认不设=全量行为不变，长套件复跑不再整跑）。另：沙箱第二次重置（仓库/rustup 全失），从 my-project 归档 081517 恢复重建 git 基线 839b8e4 后续做——归档含已提交全态，恢复成本 ≈ 解包+rustup 前台重装，「每里程碑 commit + complete 后归档同步 my-project」纪律再次验证必要。;
 
 bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker_session(&url,&ctx,&tx) 全引用签名无法直接 spawn，测试内改「spawn 的 async move 块里构造 ctx + channel 再调用」（url/reannounce Arc move 进去）；AnnounceCtx 字段扩展时 start_tracker_pool 三处调用点（初始/UpdateTrackers/proxy 重建）同改易漏，编译器兜底即可但测试夹具构造体也要同步（ws_test_ctx 集中构造防漂移）；tokio::time::Instant 与 std::time::Instant 不可互赋（next_announce 混用 E0308，统一 tokio 版）；WsAnnounceResponse 此前漏解析 "min interval" 字段——补字段时 Default 派生让结构体扩展零破坏（..Default::default() 尾随）；clippy unnecessary_get_then_check 新 lint（HashMap get().is_none() → !contains_key）；删除文件类函数「先 is_dir 分支再删」对不存在路径天然幂等（remove_file 对目录无效且静默——多文件 BT 目录树删除缺陷的教训是删除函数要按落盘形态分支，不是加错误处理）。
+
+文件勾选修订轮（2026-11-09，coder）测试经验：
+
+- **引擎 evt 通道容量 256 是测试死线**：磁盘轮询循环不消费 evt_rx → 引擎 `evt_tx.send().await` 满阻塞 → 引擎整体冻结（表象 = 连接活着、零事件、零进度，与「下载停滞」同形极易误诊为业务 bug）。轮询必须 `while evt_rx.try_recv().is_ok() {}` 排水。
+- **handle 的 set_len 立即创建稀疏零字节文件**：「文件存在」≠「补下完成」——勾回补下轮询若先判存在即断言，会在 set_len 瞬间读到全零假绿（或字节不符假红）。轮询条件必须字节 == 期望（bug23 轮「预分配 set_len 未落盘断言全零」的轮询形态姊妹坑）。
+- 结构体加字段的全仓同步面：BtSpec/BtTaskData 字面量遍布 src 测试 + `tests/gen/*_stripped.rs` 副本（rg 全 tests/）。python 大括号匹配批量补丁的两个假阳性：`-> BtTaskData {`（返回类型+函数体括号被当字面量，字段插进函数体）与 `impl BtTaskData {`（impl 块被当字面量）——补丁后必须 brace-match 复扫 missing + 抽样布尔探针，肉眼比对不可靠。
+- 做种任务在 `filter=0`（进行中视图）不可见（`is_done` 含 Seeding）——M 键修改对话框链路测试须 `app.filter = 1`（已完成视图），否则 `modify_dialog_entry` 走「没有选中的任务」臂、dialog 恒 None（表象 = `dialog.unwrap()` panic 于 None）。
+- 引擎级集成范式：`reconfigure_deselect_deletes_then_reselect_redownloads`（真 seeder + 首下载 BtDone → 删除+目录清理断言 → 勾回字节断言），多文件 meta 构建器 `make_meta_files`（files 列表 + name 首段路径）可复用。
+
+## 做种倒计时补缺口轮（2026-11-10，coder）追加
+- **tick 类逻辑直调 + 合成 dt 测法**：倒计时勿依赖真实 Instant（dt 被 clamp 0.001~0.5 且随机器抖动）——测试直调 `tick_seed_countdown(1.0)` 得确定性断言（1800→1799.0）；主 tick 接线另立独立回归锁，断言用开区间 `seed_left < 1800.0`（钉值会被首帧 dt 漂移随机打破，bug24 轮「不钉具体数值」纪律同源）。
+- **「接线缺失」类缺口的回归锁形态**：本缺口本质是 tick() 漏挂递减臂——直调私有函数的测试即便全绿也防不住漏挂回归，必须有一条走 `app.tick()` 全链路的接线测试；再配 `assert_no_cmd` 锁「未归零不发命令」与「归零后二次递减不重复触发」。
+- 挂载收编对账：app::engine::tick 新 3 测 → g_appcore 790→793 / g_engine 786→789 各 +3，与 bin 994→997 同源三方一致。

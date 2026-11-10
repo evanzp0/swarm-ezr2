@@ -445,6 +445,7 @@ mod tests {
             trackers: trackers.iter().map(|s| s.to_string()).collect(),
             piece_length: 16 * 1024,
             files: Vec::new(),
+            upload_paused: false,
         });
         t
     }

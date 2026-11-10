@@ -433,6 +433,7 @@ mod tests {
                 size: 3_000_000,
                 selected: true,
             }],
+            upload_paused: false,
         });
         app.tasks.push(t);
         app.selected = 0;
@@ -493,6 +494,7 @@ mod tests {
                 size: 3_000_000,
                 selected: true,
             }],
+            upload_paused: false,
         });
         app.tasks.push(t);
         app.bt_conns.insert(

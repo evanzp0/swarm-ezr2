@@ -9,3 +9,13 @@
 - architecture.md — TrackerUrl 三族/announce_ws hex JSON 契约/DataChannel 流适配器（发送任务+overflow waker）/信令角色分裂+定向中继/webrtc-rs 五坑/wss accept-any/MutexGuard 假阳性规避（新增）
 - testing.md — accept_async 本地 ws 单测/每里程碑 commit 纪律/hardening bt 垫片第三形态与挂载面/#[path] 内联 mod 基目录陷阱/对齐翻转断言面/统一环境 --no-run+逐二进制跑（新增）
 - environment.md — 重置后镜像复测（TUNA 64KB 0.38s 最快、default profile 装齐）/10G 盘 webrtc 树三件套纪律/websockets+cryptography 预装可用（新增）
+
+## 文件勾选修订轮（2026-11-09，coder）追加
+- architecture.md — Reconfigure 文件面四件套联动（删除单一路径/句柄先关后删防孤儿 inode 写入/done 跨 Reconfigure 持久须按「选中且磁盘缺失」失效覆盖 piece/PieceOrderCache.avail 为事件流累计不得 new 清空须从 st.has 重建）+ 请求泵纯反应式须主动泵动 + 上传暂停单点闸门与跨重启持久载体 + App 层做种回退判据与 seed_left 无条件重置（新增）
+- testing.md — 引擎 evt 通道 256 容量测试死线（磁盘轮询必须 try_recv 排水防引擎冻结）/set_len 稀疏零字节文件「存在≠补下完成」/结构体加字段全仓同步面与批量补丁假阳性（`-> T {` 与 `impl T {` 误匹配）/做种任务 filter=1 可见性（新增）
+- environment.md — rustup 镜像复测（rsproxy 22MB/s 断层第一、nightly 1.102.0 版本带首漂）/bb v1.12.197 + APS gh-proxy 秒装复证/APS 工具须仓库目录内调用（新增）
+
+## 做种倒计时补缺口轮（2026-11-10，coder）追加
+- architecture.md — 「赋值≠倒计时」缺口模式（配置键已实现≠规格闭环，须按 When/Then 对账）/递减载体归 App tick 层（引擎只认 Cmd::StopSeed）/归零臂与空格停止臂共用 finish_seeding 单点（新增）
+- testing.md — tick 直调合成 dt 测法与开区间断言/接线缺失类缺口的回归锁形态/挂载收编三方对账 +3（新增）
+- environment.md — rsproxy UPDATE_ROOT 布局再漂移（官方脚本双层路径 404、直链二进制+裸根 UPDATE_ROOT 前台装齐 1.102.0）/Write 工具限主目录第 2 次复现（新增）

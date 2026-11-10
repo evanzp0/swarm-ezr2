@@ -407,6 +407,7 @@ pub(crate) async fn run(
     let mut conns: HashMap<usize, ConnStat> = HashMap::new();
     let mut candidates: HashMap<(IpAddr, u16), PeerCandidate> = HashMap::new();
     let mut seeding = spec.seeding;
+    let mut upload_paused = spec.upload_paused;
 
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -495,9 +496,50 @@ pub(crate) async fn run(
                         spec.concurrency = target;
                         spec.proxy_endpoint = proxy_endpoint;
                         if files_changed {
+                            let old_files = std::mem::take(&mut spec.files);
+                            for (i, f) in files.iter().enumerate() {
+                                if !f.selected {
+                                    files_handles.remove(&i);
+                                }
+                            }
+                            crate::model::bt::delete_deselected_files(
+                                &spec.save_dir,
+                                &old_files,
+                                &files,
+                            );
                             spec.files = files;
                             pmap = Arc::new(PieceMap::new(&spec.files, spec.meta.piece_length));
-                            order_cache = PieceOrderCache::new();
+                            let mut avail: HashMap<u32, usize> = HashMap::new();
+                            for st in conns.values() {
+                                for &p in st.has.iter().filter(|&p| pmap.covers(*p)) {
+                                    *avail.entry(p).or_insert(0) += 1;
+                                }
+                            }
+                            order_cache.avail = avail;
+                            order_cache.order = Vec::new();
+                            order_cache.dirty = true;
+                            let pl = u64::from(pmap.piece_length).max(1);
+                            let mut off = 0u64;
+                            let mut invalid: HashSet<u32> = HashSet::new();
+                            for f in spec.files.iter() {
+                                let (s, e) = (off, off + f.size);
+                                off = e;
+                                if !f.selected || f.size == 0 {
+                                    continue;
+                                }
+                                let abs = file_abs_path(&spec.save_dir, &f.path);
+                                if !std::path::Path::new(&abs).exists() {
+                                    let p0 = (s / pl) as u32;
+                                    let p1 = ((e - 1) / pl) as u32;
+                                    for p in p0..=p1 {
+                                        invalid.insert(p);
+                                    }
+                                }
+                            }
+                            for p in &invalid {
+                                done.remove(p);
+                                partial.remove(p);
+                            }
                             for (i, f) in pmap.files.iter().enumerate() {
                                 if !f.selected || files_handles.contains_key(&i) {
                                     continue;
@@ -520,7 +562,21 @@ pub(crate) async fn run(
                             }
                             if seeding && !all_selected_done(&done, &pmap) {
                                 seeding = false;
+                                upload_paused = true;
                                 live.lock().expect("live stats 锁").completed = false;
+                            }
+                            if !seeding {
+                                let claimed = claimed_blocks(&conns, &partial);
+                                let cids: Vec<usize> = conns.keys().copied().collect();
+                                for cid in cids {
+                                    if let Some(st) = conns.get_mut(&cid) {
+                                        issue_requests(
+                                            cid, st, &claimed, &pmap, &tun, &done, &partial,
+                                            &mut order_cache,
+                                        )
+                                        .await;
+                                    }
+                                }
                             }
                         }
                         for cid in shed_excess_conns(&conns, target) {
@@ -808,6 +864,7 @@ pub(crate) async fn run(
                             &mut files_handles,
                             &mut partial,
                             &mut order_cache,
+                            upload_paused,
                         )
                         .await;
                         if let Some(kind) = ban {
@@ -852,6 +909,7 @@ pub(crate) async fn run(
                         }
                         if !seeding && all_selected_done(&done, &pmap) {
                             seeding = true;
+                            upload_paused = false;
                             sidecar_saved_done = done.len();
                             live.lock().expect("live stats 锁").completed = true;
                             for n in &completed_notifies {
@@ -961,6 +1019,7 @@ pub(crate) async fn run(
                 }
                 if !seeding && all_selected_done(&done, &pmap) {
                     seeding = true;
+                    upload_paused = false;
                     sidecar_saved_done = done.len();
                     live.lock().expect("live stats 锁").completed = true;
                     for n in &completed_notifies {
@@ -1962,6 +2021,7 @@ async fn handle_peer_msg(
     files: &mut HashMap<usize, tokio::fs::File>,
     partial: &mut PartialPieces,
     order: &mut PieceOrderCache,
+    upload_paused: bool,
 ) -> Option<BanKind> {
     let st = conns.get_mut(&conn_id)?;
     match msg {
@@ -2022,7 +2082,7 @@ async fn handle_peer_msg(
             begin,
             length,
         } => {
-            let allowed = !st.am_choking;
+            let allowed = !st.am_choking && !upload_paused;
             let have = done.contains(&index);
             let valid_len = length > 0 && length as usize <= UPLOAD_BLOCK * 2;
             if allowed && have && valid_len {
@@ -3358,6 +3418,7 @@ mod tests {
             concurrency: 4,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -3483,6 +3544,7 @@ mod tests {
             concurrency: 2,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -3584,6 +3646,7 @@ mod tests {
             concurrency: 4,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -3676,6 +3739,7 @@ mod tests {
             concurrency: 4,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 100_000,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -3753,6 +3817,7 @@ mod tests {
             concurrency: 4,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -4187,6 +4252,7 @@ mod tests {
             concurrency: 2,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -4300,6 +4366,7 @@ mod tests {
             concurrency: 2,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: crate::engine::BtTunables {
@@ -4370,6 +4437,7 @@ mod tests {
             concurrency: 2,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -4434,6 +4502,7 @@ mod tests {
             concurrency: 2,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -4507,6 +4576,7 @@ mod tests {
             concurrency: 4,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -4652,6 +4722,7 @@ mod tests {
             concurrency: 2,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -4730,6 +4801,7 @@ mod tests {
             concurrency: 4,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -4800,6 +4872,7 @@ mod tests {
             concurrency: 4,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -5131,6 +5204,7 @@ mod tests {
             concurrency: 2,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -5219,6 +5293,7 @@ mod tests {
             concurrency: 2,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -5287,6 +5362,7 @@ mod tests {
             concurrency: 4,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -5771,6 +5847,7 @@ mod tests {
             concurrency,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: BtTunables::default(),
@@ -6486,6 +6563,7 @@ mod tests {
             concurrency: 4,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -6520,6 +6598,7 @@ mod tests {
             &mut handles,
             &mut partial,
             &mut PieceOrderCache::new(),
+            false,
         )
         .await;
         assert!(
@@ -6549,6 +6628,7 @@ mod tests {
             &mut handles,
             &mut partial,
             &mut PieceOrderCache::new(),
+            false,
         )
         .await;
         let served =
@@ -6613,6 +6693,7 @@ mod tests {
             concurrency: 4,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -6659,6 +6740,7 @@ mod tests {
                 &mut handles,
                 &mut partial,
                 &mut PieceOrderCache::new(),
+                false,
             ),
         )
         .await;
@@ -6711,6 +6793,7 @@ mod tests {
             concurrency: 4,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -6761,6 +6844,7 @@ mod tests {
             &mut handles,
             &mut partial,
             &mut PieceOrderCache::new(),
+            false,
         )
         .await;
         let drained = tokio::time::timeout(std::time::Duration::from_millis(2000), rx_a.recv())
@@ -6844,6 +6928,7 @@ mod tests {
             concurrency: 4,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -6958,6 +7043,7 @@ mod tests {
             concurrency: 8,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -7070,6 +7156,7 @@ mod tests {
             concurrency: 4,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -7339,6 +7426,7 @@ mod tests {
             concurrency: 1,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -7421,6 +7509,7 @@ mod tests {
             concurrency: 2,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -7610,6 +7699,7 @@ mod tests {
             concurrency: 2,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -7679,6 +7769,7 @@ mod tests {
             concurrency: 2,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
@@ -7760,6 +7851,7 @@ mod tests {
             concurrency: 2,
             proxy_endpoint: None,
             seeding: false,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: crate::engine::BtTunables {
@@ -7843,6 +7935,302 @@ mod tests {
                 !handle.is_finished(),
                 "热调不得重启引擎（引擎任务必须存活）"
             );
+        }
+
+        cmd_tx.send(BtTaskCmd::Cancel).await.unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn make_meta_files(files: &[(&str, u64)], piece_len: usize, tracker: &str) -> TorrentMeta {
+        let total: u64 = files.iter().map(|(_, s)| *s).sum();
+        let data: Vec<u8> = (0..total as usize).map(|i| (i % 241) as u8).collect();
+        let mut pieces = Vec::new();
+        for chunk in data.chunks(piece_len) {
+            let mut h = Sha1::new();
+            h.update(chunk);
+            pieces.extend_from_slice(&h.finalize());
+        }
+        let mut items = Vec::new();
+        for (rel, size) in files {
+            let segs: Vec<BValue> = rel
+                .split('/')
+                .map(|s| BValue::Bytes(s.as_bytes().to_vec()))
+                .collect();
+            let mut d = BTreeMap::new();
+            d.insert(b"length".to_vec(), BValue::Int(*size as i64));
+            d.insert(b"path".to_vec(), BValue::List(segs));
+            items.push(BValue::Dict(d));
+        }
+        let mut info = BTreeMap::new();
+        info.insert(b"files".to_vec(), BValue::List(items));
+        info.insert(b"name".to_vec(), BValue::Bytes(b"mftor".to_vec()));
+        info.insert(b"piece length".to_vec(), BValue::Int(piece_len as i64));
+        info.insert(b"pieces".to_vec(), BValue::Bytes(pieces));
+        let mut root = BTreeMap::new();
+        root.insert(
+            b"announce".to_vec(),
+            BValue::Bytes(tracker.as_bytes().to_vec()),
+        );
+        root.insert(b"info".to_vec(), BValue::Dict(info));
+        TorrentMeta::parse(&encode(&BValue::Dict(root))).unwrap()
+    }
+
+    fn concat_bytes(files: &[(&str, u64)]) -> Vec<u8> {
+        let total: u64 = files.iter().map(|(_, s)| *s).sum();
+        (0..total as usize).map(|i| (i % 241) as u8).collect()
+    }
+
+    #[tokio::test]
+    async fn request_silenced_while_upload_paused() {
+        let piece_len = 16 * 1024;
+        let data: Vec<u8> = (0..16_384usize).map(|i| (i % 211) as u8).collect();
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bteng-upause");
+        let save_dir = dir.to_string_lossy().into_owned();
+        let files = vec![BtFile {
+            path: "g.bin".into(),
+            size: data.len() as u64,
+            selected: true,
+        }];
+        std::fs::write(format!("{save_dir}/g.bin"), &data).unwrap();
+        let mut handles: HashMap<usize, tokio::fs::File> = HashMap::new();
+        let fh = tokio::fs::OpenOptions::new()
+            .read(true)
+            .open(format!("{save_dir}/g.bin"))
+            .await
+            .unwrap();
+        handles.insert(0, fh);
+        let meta = make_meta(&data, piece_len, "udp://127.0.0.1:1/announce");
+        let spec = crate::engine::BtSpec {
+            id: 98,
+            source: "/tmp/g.torrent".into(),
+            meta,
+            save_dir: save_dir.clone(),
+            name: "g.bin".into(),
+            files,
+            trackers: vec![],
+            concurrency: 4,
+            proxy_endpoint: None,
+            seeding: false,
+            upload_paused: false,
+            max_download_speed: 0,
+            max_upload_speed: 0,
+            tunables: Default::default(),
+        };
+        let pmap = PieceMap::new(&spec.files, spec.meta.piece_length);
+        let mut done: HashSet<u32> = HashSet::new();
+        done.insert(0);
+        let mut downloaded = data.len() as u64;
+        let mut partial: PartialPieces = HashMap::new();
+
+        let mut unchoked = new_conn_stat("10.0.0.9:999".into());
+        unchoked.am_choking = false;
+        let (tx_a, mut rx_a) = mpsc::channel(8);
+        unchoked.peer_out = tx_a;
+        let mut conns = HashMap::from([(1usize, unchoked)]);
+        handle_peer_msg(
+            1,
+            peer::PeerMsg::Request {
+                index: 0,
+                begin: 0,
+                length: 4096,
+            },
+            &mut conns,
+            &pmap,
+            &spec,
+            &BtTunables::default(),
+            Arc::new(tokio::sync::Semaphore::new(8)),
+            &test_ul(),
+            &test_ul(),
+            &mut done,
+            &mut downloaded,
+            &mut handles,
+            &mut partial,
+            &mut PieceOrderCache::new(),
+            true,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            rx_a.try_recv().is_err(),
+            "做种回退下载态零上传（D73②）：request 不被服务、cum_up 不增长"
+        );
+        assert_eq!(conns.get(&1).unwrap().cum_up, 0, "上传累计必须为零");
+        handle_peer_msg(
+            1,
+            peer::PeerMsg::Request {
+                index: 0,
+                begin: 0,
+                length: 4096,
+            },
+            &mut conns,
+            &pmap,
+            &spec,
+            &BtTunables::default(),
+            Arc::new(tokio::sync::Semaphore::new(8)),
+            &test_ul(),
+            &test_ul(),
+            &mut done,
+            &mut downloaded,
+            &mut handles,
+            &mut partial,
+            &mut PieceOrderCache::new(),
+            false,
+        )
+        .await;
+        let served =
+            tokio::time::timeout(std::time::Duration::from_millis(2000), rx_a.recv()).await;
+        assert!(
+            matches!(served, Ok(Some(PeerOut::Send(peer::PeerMsg::Block { .. })))),
+            "解除暂停后同一 request 被服务（D58 互惠面不受影响）"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reconfigure_deselect_deletes_then_reselect_redownloads() {
+        let piece_len = 16 * 1024;
+        let file_list: Vec<(&str, u64)> =
+            vec![("mftor/a.bin", 20_000), ("mftor/sub/b.bin", 30_000)];
+        let data = concat_bytes(&file_list);
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-bteng-reconf-deldisk");
+        let save_dir = dir.to_string_lossy().into_owned();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seeder_ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 7));
+        let meta0 = make_meta_files(&file_list, piece_len, "udp://127.0.0.1:1/announce");
+        let mut pid = *b"-QX7777-seederpeer00";
+        pid[19] = b'7';
+        let seeder_port = counting_seeder_any(
+            data.clone(),
+            piece_len,
+            meta0.infohash,
+            counter.clone(),
+            &pid,
+        )
+        .await;
+        let tracker_port = fake_udp_tracker_multi(vec![(seeder_ip, seeder_port)]).await;
+        let meta = make_meta_files(
+            &file_list,
+            piece_len,
+            &format!("udp://127.0.0.1:{tracker_port}/announce"),
+        );
+
+        let files = vec![
+            BtFile {
+                path: "mftor/a.bin".into(),
+                size: 20_000,
+                selected: true,
+            },
+            BtFile {
+                path: "mftor/sub/b.bin".into(),
+                size: 30_000,
+                selected: true,
+            },
+        ];
+        let shared = crate::engine::shared_for_tests();
+        let spec = crate::engine::BtSpec {
+            id: 99,
+            source: "/tmp/e2e-deldisk.torrent".into(),
+            meta,
+            save_dir,
+            name: "mftor".into(),
+            files,
+            trackers: vec![format!("udp://127.0.0.1:{tracker_port}/announce")],
+            concurrency: 2,
+            proxy_endpoint: None,
+            seeding: false,
+            upload_paused: false,
+            max_download_speed: 0,
+            max_upload_speed: 0,
+            tunables: Default::default(),
+        };
+
+        let (evt_tx, mut evt_rx) = mpsc::channel(256);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
+        let handle = tokio::spawn(run(spec.clone(), shared.clone(), cmd_rx, evt_tx));
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            assert!(std::time::Instant::now() < deadline, "首下载未在时限内完成");
+            let Some(evt) = tokio::time::timeout(Duration::from_millis(500), evt_rx.recv())
+                .await
+                .ok()
+                .flatten()
+            else {
+                continue;
+            };
+            if matches!(evt, Evt::BtDone { .. }) {
+                break;
+            }
+        }
+        let a_path = format!("{}/mftor/a.bin", spec.save_dir);
+        let b_path = format!("{}/mftor/sub/b.bin", spec.save_dir);
+        assert_eq!(
+            std::fs::read(&a_path).unwrap(),
+            data[..20_000],
+            "首下载文件 A 字节正确"
+        );
+        assert_eq!(
+            std::fs::read(&b_path).unwrap(),
+            data[20_000..],
+            "首下载文件 B 字节正确"
+        );
+
+        let mut deselected = spec.files.clone();
+        deselected[1].selected = false;
+        cmd_tx
+            .send(BtTaskCmd::Reconfigure {
+                concurrency: 2,
+                files: deselected.clone(),
+                proxy_endpoint: None,
+                max_download_speed: 0,
+                max_upload_speed: 0,
+            })
+            .await
+            .unwrap();
+        let del_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::fs::read(&b_path).is_ok() {
+            assert!(
+                std::time::Instant::now() < del_deadline,
+                "取消选中后落盘文件未被删除（FR-02-19 v1.16）"
+            );
+            while evt_rx.try_recv().is_ok() {}
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            !std::path::Path::new(&format!("{}/mftor/sub", spec.save_dir)).exists(),
+            "变空目录自底向上整树清理"
+        );
+        assert_eq!(
+            std::fs::read(&a_path).unwrap(),
+            data[..20_000],
+            "保留文件不受删除影响"
+        );
+
+        let mut reselected = deselected.clone();
+        reselected[1].selected = true;
+        cmd_tx
+            .send(BtTaskCmd::Reconfigure {
+                concurrency: 2,
+                files: reselected,
+                proxy_endpoint: None,
+                max_download_speed: 0,
+                max_upload_speed: 0,
+            })
+            .await
+            .unwrap();
+        let re_deadline = std::time::Instant::now() + Duration::from_secs(20);
+        let expect = &data[20_000..];
+        loop {
+            assert!(
+                std::time::Instant::now() < re_deadline,
+                "勾回文件未从头补下（句柄未关闭会写入孤儿 inode，文件永不落盘）"
+            );
+            while evt_rx.try_recv().is_ok() {}
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if std::fs::read(&b_path).is_ok_and(|bytes| bytes == expect) {
+                break;
+            }
         }
 
         cmd_tx.send(BtTaskCmd::Cancel).await.unwrap();
@@ -7951,6 +8339,7 @@ mod seeding_tests {
             concurrency: 4,
             proxy_endpoint: None,
             seeding: true,
+            upload_paused: false,
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
