@@ -393,3 +393,9 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 ## 做种倒计时补缺口轮（2026-11-10，coder）追加
 - rustup 镜像复测（沙箱重置）：清单 /dist/ 200 测速 rsproxy 923KB/0.58s 断层第一（TUNA 0.76s 次之、USTC dist 根 404）；**rsproxy UPDATE_ROOT 布局再漂移：官方 rustup-init.sh 拼接 https://rsproxy.cn/rustup/rustup/dist/... 报 installer not found（404），实证正确组合 = 直链 rustup-init 二进制（/rustup/dist/<arch>/rustup-init 21MB @200）+ DIST_SERVER=https://rsproxy.cn（清单在 /dist/ 根）+ UPDATE_ROOT=https://rsproxy.cn/rustup 前台装齐 nightly 1.102.0（与 2026-11-09 版本带同带）**。
 - Write/Edit 工具限主目录 → /tmp 工作区整体 `mv /home/z/swarm-ezr2`（architect 轮先例第 2 次复现）；沙箱重置后 `~/.cargo/config.toml`（rsproxy sparse 三段 replace-with）需重写。
+
+## cleaner 收敛轮（2026-11-10）追加
+- rustup 镜像复测（沙箱重置）：rsproxy 直链 rustup-init 18.8MB/s 断层最快（TUNA 双层 1.5MB/s、USTC 7.6、NJU/aliyun 404），dist 清单 /dist/ date=2026-11-10 新鲜；直链二进制 + 裸根 DIST_SERVER=https://rsproxy.cn + UPDATE_ROOT=https://rsproxy.cn/rustup 前台 -y minimal + rustfmt/clippy/llvm-tools-preview 一次装齐 nightly 1.102.0（与历轮版本带一致，EXIT=0）——上轮 UPDATE_ROOT 布局第三次复现成功。
+- **llvm-cov release 资产名漂移**：v0.9.1 实名 = `cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz`（无版本前缀形态，旧带版本名 404）——「清单先查」再证；cargo-mutants 27.1.0 资产名同族无漂移。
+- **PMD 7.29 cpd 参数漂移**：目录参数 = `-d`（历轮记录的 `--dir` 在 7.29 为无效参数，报 usage）；EXIT=4=有克隆。bb 1.13.229 + APS 经 gh-proxy.com 装机复证秒级（api.github.com 清单直连可用）。
+- ezr-demo PTY 守卫在沙箱的退格投递上限（bug19 家族）对 demo 守卫同样生效——判别与裁决法见 testing.md cleaner 轮条目。

@@ -685,3 +685,8 @@ ws/webrtc 轮（2026-11-09）：TrackerUrl 三族分型（Ws 变体与 Http/Udp 
 - **「赋值≠倒计时」缺口模式**：seed_duration_secs（配置总时长）与 seed_left（任务剩余量）的衔接原只有完成时一次性赋值与 UI 显示两环——规格「自 <seed_secs> 起**倒计时**」的后半句（递减与归零）全仓无实现，字段是死数。配置键已实现极易造成「功能已存在」误判：缺口审计须按规格逐 When/Then 对账，按键名 grep 只能证明赋值点存在。
 - **递减载体归 App tick 层**：seed_left 是 App 模型显示/持久化字段，`tick_seed_countdown(dt)` 与 tick_retry_countdown 同款口径（逐帧 dt 累计、仅 Seeding 态、归零清底后转臂）。不进 BT 引擎：引擎只认 Cmd::StopSeed，归零的 tracker stopped / 上传连接清空 / 引擎退出全复用既有停止臂，App 侧零新增引擎协议面。
 - **归零臂与空格停止臂共用 finish_seeding 单点**（tasks.rs 提取，pub(super)）：转「已完成」+ upload_speed 归零 + 释放槽位 + seed_left 清底 + spawn 发 StopSeed + 即时 save_registry；入口差异仅 toast 文案（`✓ 做种结束: <name>` vs `⏸ 已停止做种（进入已完成）: <name>`）。空格臂原内联实现随即退役——双臂单点 = 行为漂移免疫。
+
+## cleaner 收敛轮（2026-11-10）追加
+
+- **CRAP 收敛的两类拆分落点**（comp=语法决策点+1、cov=1 时 CRAP=comp，门槛 ≤6）：①纯函数提纯——delete_deselected_files 提 `push_ancestor_dirs`（祖先目录收集）、BtTaskData::selected_bytes_of_pieces 提 `span_sum_over_selected_files`（单 piece×选中文件交叠求和），主函数保留数据编排、子函数单一职责，comp 8→6 与 8→4/5；②拆不动的登记而非硬凑——on_bt_done（事件臂守卫链 comp=7）、handle_peer_msg/Reconfigure 臂（分发核心）、dlg_confirm_modify_bt（对话框路由）按 architect 定性法（路由/守卫链=本质复杂度）登记口径。
+- **三处 DRY 单点化**：①测试基建收编规范位——tick.rs 两个兄弟测试模块的 recv_cmd/assert_no_cmd 重复对收编 `crate::app::testutil`（pub(crate)，cfg(test) 门控，与 make_app_in 工厂同位）；②NotFound 容忍删除单点化——BtSidecar::remove 与 BT 侧 sidecar::remove 同体实现收编 `model::remove_missing_ok`；③引擎取消命令块单点化——暂停/失败两臂的 bt_stopping 登记 + spawn CancelBt/Cancel 分派收编 `App::request_engine_cancel`（is_bt 布尔参，入口差异留在调用侧）。

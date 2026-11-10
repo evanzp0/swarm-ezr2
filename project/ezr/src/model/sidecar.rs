@@ -113,11 +113,7 @@ impl Sidecar {
     }
 
     pub fn remove(path: &str) -> std::io::Result<()> {
-        match std::fs::remove_file(path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e),
-        }
+        super::remove_missing_ok(path)
     }
 }
 

@@ -46,17 +46,7 @@ impl App {
                 self.tasks[idx].state = TaskState::Paused;
                 self.tasks[idx].has_slot = false;
                 if held {
-                    if is_bt {
-                        self.bt_stopping.insert(id, Instant::now());
-                    }
-                    let engine = self.engine.clone();
-                    tokio::spawn(async move {
-                        if is_bt {
-                            engine.send(Cmd::CancelBt { id }).await;
-                        } else {
-                            engine.send(Cmd::Cancel { id }).await;
-                        }
-                    });
+                    self.request_engine_cancel(id, is_bt);
                 }
                 let toast = if held {
                     format!("⏸ 已暂停（退出等待队列，释放下载槽位）: {name}")
@@ -73,17 +63,7 @@ impl App {
                 self.tasks[idx].retries = 1;
                 self.tasks[idx].retry_in = None;
                 self.tasks[idx].has_slot = false;
-                if is_bt {
-                    self.bt_stopping.insert(id, Instant::now());
-                }
-                let engine = self.engine.clone();
-                tokio::spawn(async move {
-                    if is_bt {
-                        engine.send(Cmd::CancelBt { id }).await;
-                    } else {
-                        engine.send(Cmd::Cancel { id }).await;
-                    }
-                });
+                self.request_engine_cancel(id, is_bt);
                 let name = self.tasks[idx].name.clone();
                 self.set_toast(format!(
                     "⏸ 已暂停（失败），不再自动重试；按空格恢复: {name}"
@@ -273,6 +253,20 @@ impl App {
             self.set_toast("没有可清理的已完成任务");
         }
         self.save_registry();
+    }
+
+    fn request_engine_cancel(&mut self, id: u32, is_bt: bool) {
+        if is_bt {
+            self.bt_stopping.insert(id, Instant::now());
+        }
+        let engine = self.engine.clone();
+        tokio::spawn(async move {
+            if is_bt {
+                engine.send(Cmd::CancelBt { id }).await;
+            } else {
+                engine.send(Cmd::Cancel { id }).await;
+            }
+        });
     }
 }
 

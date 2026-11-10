@@ -372,6 +372,7 @@ mod bt_route_tests {
     use tokio::sync::mpsc;
 
     use super::*;
+    use crate::app::testutil::{assert_no_cmd, recv_cmd};
     use crate::engine::EngineHandle;
     use crate::model::BtTaskData;
 
@@ -422,22 +423,6 @@ mod bt_route_tests {
             upload_paused: false,
         });
         t
-    }
-
-    async fn recv_cmd(rx: &mut mpsc::Receiver<Cmd>) -> Cmd {
-        tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-            .await
-            .expect("引擎命令应在超时前到达")
-            .expect("发送端存活，命令应为 Some")
-    }
-
-    async fn assert_no_cmd(rx: &mut mpsc::Receiver<Cmd>) {
-        let got = tokio::time::timeout(std::time::Duration::from_millis(120), rx.recv()).await;
-        assert!(
-            got.is_err(),
-            "不应向引擎发送命令，实际收到: {:?}",
-            got.ok().flatten()
-        );
     }
 
     #[tokio::test]
@@ -612,6 +597,7 @@ mod seed_countdown_tests {
     use tokio::sync::mpsc;
 
     use super::*;
+    use crate::app::testutil::{assert_no_cmd, recv_cmd};
     use crate::engine::EngineHandle;
 
     fn make_app(tag: &str) -> App {
@@ -637,22 +623,6 @@ mod seed_countdown_tests {
         t.uploaded = 123_456;
         t.seed_left = 1800.0;
         t
-    }
-
-    async fn recv_cmd(rx: &mut mpsc::Receiver<Cmd>) -> Cmd {
-        tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-            .await
-            .expect("引擎命令应在超时前到达")
-            .expect("发送端存活，命令应为 Some")
-    }
-
-    async fn assert_no_cmd(rx: &mut mpsc::Receiver<Cmd>) {
-        let got = tokio::time::timeout(std::time::Duration::from_millis(120), rx.recv()).await;
-        assert!(
-            got.is_err(),
-            "不应向引擎发送命令，实际收到: {:?}",
-            got.ok().flatten()
-        );
     }
 
     #[tokio::test]

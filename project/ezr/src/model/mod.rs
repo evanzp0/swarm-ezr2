@@ -85,6 +85,14 @@ pub fn is_http_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
 }
 
+pub(crate) fn remove_missing_ok(path: &str) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 #[must_use]
 pub fn protocol_of_url(s: &str) -> Protocol {
     if s.starts_with("https://") {

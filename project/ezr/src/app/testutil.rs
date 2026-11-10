@@ -119,3 +119,21 @@ pub(crate) fn seed_bt_conn_speeds(app: &mut App, task_id: u32, conn_id: usize, d
     }
     app.bt_conn_stats.insert((task_id, conn_id), st);
 }
+
+pub(crate) async fn recv_cmd(
+    rx: &mut tokio::sync::mpsc::Receiver<crate::engine::Cmd>,
+) -> crate::engine::Cmd {
+    tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("引擎命令应在超时前到达")
+        .expect("发送端存活，命令应为 Some")
+}
+
+pub(crate) async fn assert_no_cmd(rx: &mut tokio::sync::mpsc::Receiver<crate::engine::Cmd>) {
+    let got = tokio::time::timeout(std::time::Duration::from_millis(120), rx.recv()).await;
+    assert!(
+        got.is_err(),
+        "不应向引擎发送命令，实际收到: {:?}",
+        got.ok().flatten()
+    );
+}

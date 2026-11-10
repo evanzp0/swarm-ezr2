@@ -18,6 +18,22 @@ pub struct BtTaskData {
     pub upload_paused: bool,
 }
 
+fn push_ancestor_dirs(
+    abs: &std::path::Path,
+    base: &std::path::Path,
+    dirs: &mut Vec<std::path::PathBuf>,
+) {
+    let mut parent = abs.parent();
+    while let Some(p) = parent {
+        let pc: std::path::PathBuf = p.components().collect();
+        if pc == base {
+            break;
+        }
+        dirs.push(pc);
+        parent = p.parent();
+    }
+}
+
 pub fn delete_deselected_files(save_dir: &str, old: &[BtFile], new: &[BtFile]) -> usize {
     let base: std::path::PathBuf = std::path::Path::new(save_dir).components().collect();
     let mut dirs: Vec<std::path::PathBuf> = Vec::new();
@@ -30,15 +46,7 @@ pub fn delete_deselected_files(save_dir: &str, old: &[BtFile], new: &[BtFile]) -
         let abs = base.join(&f.path);
         if std::fs::remove_file(&abs).is_ok() {
             deleted += 1;
-            let mut parent = abs.parent();
-            while let Some(p) = parent {
-                let pc: std::path::PathBuf = p.components().collect();
-                if pc == base {
-                    break;
-                }
-                dirs.push(pc);
-                parent = p.parent();
-            }
+            push_ancestor_dirs(&abs, base.as_path(), &mut dirs);
         }
     }
     dirs.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
@@ -51,6 +59,28 @@ pub fn delete_deselected_files(save_dir: &str, old: &[BtFile], new: &[BtFile]) -
 
 impl BtTaskData {
     #[must_use]
+    fn span_sum_over_selected_files(
+        files: &[BtFile],
+        offsets: &[u64],
+        start: u64,
+        end: u64,
+    ) -> u64 {
+        let mut sum = 0u64;
+        for (i, f) in files.iter().enumerate() {
+            if !f.selected || f.size == 0 {
+                continue;
+            }
+            let f_start = offsets[i];
+            let f_end = f_start + f.size;
+            let lo = start.max(f_start);
+            let hi = end.min(f_end);
+            if lo < hi {
+                sum += hi - lo;
+            }
+        }
+        sum
+    }
+
     pub fn selected_bytes_of_pieces(&self, pieces: &[u32]) -> u64 {
         let pl = u64::from(self.piece_length).max(1);
         let mut offsets = Vec::with_capacity(self.files.len());
@@ -67,18 +97,7 @@ impl BtTaskData {
                 continue;
             }
             let end = (start + pl).min(total);
-            for (i, f) in self.files.iter().enumerate() {
-                if !f.selected || f.size == 0 {
-                    continue;
-                }
-                let f_start = offsets[i];
-                let f_end = f_start + f.size;
-                let lo = start.max(f_start);
-                let hi = end.min(f_end);
-                if lo < hi {
-                    sum += hi - lo;
-                }
-            }
+            sum += Self::span_sum_over_selected_files(&self.files, &offsets, start, end);
         }
         sum
     }
@@ -175,11 +194,7 @@ impl BtSidecar {
     }
 
     pub fn remove(path: &str) -> std::io::Result<()> {
-        match std::fs::remove_file(path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e),
-        }
+        super::remove_missing_ok(path)
     }
 }
 
