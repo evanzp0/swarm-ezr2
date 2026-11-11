@@ -1,77 +1,65 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/QA（终验轮已完成）——**工作流已走完（QA 为末位角色），待操作者 `bin/swarm complete` 归档**
-> 路径：specifier → coder（ws/webrtc 轮）⇒ 诊断/复验/bug28 轮 ⇒ specifier 修订轮 ⇒ coder 修订实现轮 ⇒ coder 补缺口轮（2026-11-10）⇒ cleaner 收敛轮（2026-11-10）⇒ architect 收敛轮（2026-11-10）⇒ **QA 终验轮（本轮，2026-11-10）** ⇒ Done
-> 会话：six-pack-QA-20261110（任务 = architect 收敛轮交接的最终独立验证；上游交接 = project/handoff.md architect 收敛轮版；会话因上下文中断按宪法中断恢复口径凭 plan.md 续跑完成）
-> 环境：nightly 1.102.0（rustup 1.29.3 前台装齐）+ cargo registry rsproxy sparse + bb 1.13.229 / APS / PMD 7.29.0 / llvm-cov 0.9.1 / mutants 27.1.0（工具缓存不进归档）
+> 流程：six-pack　当前节点：six-pack/specifier（v1.51 调整轮已完成，待操作者 `bin/swarm complete` 归档）
+> 路径：specifier → coder（ws/webrtc 轮）⇒ 诊断/复验/bug28 轮 ⇒ specifier 修订轮 ⇒ coder 修订实现轮 ⇒ coder 补缺口轮 ⇒ cleaner 收敛轮 ⇒ architect 收敛轮 ⇒ QA 终验轮 ⇒ specifier 显示指标轮（2026-11-10）⇒ specifier 调整轮 v1.48/v1.49/v1.50（2026-11-11）⇒ **specifier 调整轮（本轮 v1.51，2026-11-11）** ⇒（操作者显式指令：本轮由 specifier 会话直接落地 ezr-demo 修改）
+> 会话：six-pack-specifier-20261111（任务 = tab-switch-state-preserve；上游交接 = project/handoff.md v1.50 版 + 操作者 chat 指令「下载任务列表：从一个 tab 切换到另一个 tab，然后又切换回原来的 tab，原下载任务列表的滚动条不在原先位置，并且切回后的选中的任务也不是原来选中的任务了。应该是 tab 切换时，需要保留原有列表控件的状态（包括滚动条位置以及选中的明细等），切回原列表时，根据之前保留的状态尽可能进行还原」）
+> 环境：stable 1.99.1（rustup 1.29.x 前台装齐）+ cargo registry rsproxy sparse + bb 1.13.229 / APS（.tools，工具缓存不进归档）
 
 ## 一、产物历史完成情况
 
 ### 项目与需求
-- ezr：Rust TUI 下载器（HTTP + BT 双协议，ratatui + tokio）。需求权威来源 = `mission.md`（分期模式，v1.46）+ `mission/` 4 份 phase 详述（phase-02 v1.16 为当前实现依据）。
+- ezr：Rust TUI 下载器（HTTP + BT 双协议，ratatui + tokio）。需求权威来源 = `mission.md`（分期模式，**v1.51**）+ `mission/` 两份 phase 详述（**phase-01 v1.50** 为当前页签交互与 FR-01-117 依据、**phase-02 v1.20** 为当前 BT 列表行布局与显示指标依据）。
 
 ### 产物总账
 | 节点 | 产物 | 完成情况 | 验证状态 |
 |---|---|---|---|
 | specifier 历轮 | features/ 全套 Gherkin + qa/ 全套规程 | 已交付 | 历轮对账在案 |
-| coder 历轮（ws/webrtc + bug28 + 修订 + 补缺口轮） | ezr 产品实现 + 12 集成测试目标 + bin 单测；bug6–bug28 修复；FR-02 全量实现 + D71/D72/D73 落地；ezr-demo 同构同步 | 已交付 | bin + 集成全绿（历轮口径在案） |
-| cleaner 历轮 | 保持行为清理 + 度量四件 | 已交付 | 全绿；CPD 198 |
-| architect（2026-11-07） | 四阶段评审 + arch_check 17 规则 + 属性测试 76P | 已交付 | 历轮口径在案 |
-| hardender | —（操作者 20261109 裁定为可选节点，默认链不含） | 不适用 | — |
-| QA + 终验（2026-11-06/07） | 14 套件 187P 实跑 + harness 自适应化 | 已交付 | 全绿 |
-| 诊断轮（2026-11-09 下午） | mini_ws_tracker 修复 + Sintel 真实 swarm 129.3MB ×2 全成 + 三方冒烟 | 已交付 | ezr 源码零改动 |
-| specifier 修订轮（2026-11-09） | phase-02 v1.16（FR-02-03/19 v1.16 + D73）+ mission.md v1.46 + features 2 份 + qa 2 份同步 | 已交付 | APS parser+dry-check 2/2 exit=0 |
-| cleaner 收敛轮（2026-11-10） | CRAP 收敛拆分 ×2 + DRY 单点化 ×3 + demo 守卫修否裁决=否 | 已交付 | bin 997P/0F + 集成 6869P/0F + clippy 0 警告 + fmt 干净 + APS 20/20 |
-| architect 收敛轮（2026-11-10） | engine.rs 8477 行目录化拆分（5 文件零下游改动）+ 属性测试 +6（76→82）+ arch_check 第 18 条裁决=否 | 已交付 | bin 1003P/0F + 集成 6869P/0F + clippy 0 警告 + fmt 干净 + arch_check 17 规则 + 变异点 5994 再分布 |
-| **QA 终验轮（本轮 2026-11-10）** | 全 15 套件注册用例对账实跑 + QA-MB-03 补齐可执行化 + MB-10 门控修复 + 1 项产品缺陷修复（D73② 上传暂停协议化） | 已交付 | 本轮验证证据见第二节 |
+| coder/cleaner/architect/QA 历轮（至 2026-11-10 QA 终验轮） | ezr 产品实现 + 15 套件 e2e + 引擎拆分 + 终验 | 已交付 | QA 终验全绿（上轮 handoff 口径在案） |
+| specifier 显示指标轮（2026-11-10） | phase-02 v1.17（FR-02-33 v1.17 修订 + FR-02-36/37/38 新增 + D74）+ mission.md v1.47 + features 2 份 + qa 2 份 + **ezr-demo 同构修改** | 已交付 | APS parser+dry-check 2/2 exit=0；ezr-demo cargo test 45P/0F；PTY 实证三项显示形态 |
+| specifier 调整轮 v1.48（2026-11-11） | phase-02 v1.18（FR-02-38 v1.18 布局修订 + FR-02-33/36/37 渲染口径注记）+ mission.md v1.48 + features 2 份 + qa 2 份 + **ezr-demo 修改（BT 尺寸对上移/协议列切片渲染/守卫 6 项）** | 已交付 | APS dry-check 2/2 exit=0；cargo test 51P/0F；PTY 实证 90–190 列全宽协议列对齐 |
+| specifier 调整轮 v1.49（2026-11-11） | phase-02 v1.19（FR-02-38 v1.19 全类型扩面）+ mission.md v1.49 + features 2 份 + qa 3 份 + **ezr-demo 修改（全类型尺寸上移/切页签自愈缺陷修复/守卫 9 项/verify_size_move.py）** | 已交付 | APS dry-check exit=0；cargo test 54P/0F；PTY 实证 39 项全过 |
+| specifier 调整轮 v1.50（2026-11-11） | phase-02 v1.20（FR-02-38 v1.20 做种已上传对退役 + FR-02-09 ② 退役注 + 验收清单 11）+ mission.md v1.50 + features/09-bt-engine v1.50（场景 10/13/21）+ qa/09-bt-engine-qa.md v1.50 + **ezr-demo 修改（list.rs 做种臂去已上传对/守卫反转/verify 脚本改版/README 40/设计规范 §5.2）** | 已交付 | APS parser+dry-check 2/2 exit=0；cargo test 54P/0F；PTY 实证 40 项全过 |
+| **specifier 调整轮（本轮 2026-11-11，v1.51）** | **phase-01 v1.50（FR-01-117 新增：页签切换列表状态保留与还原）** + mission.md v1.51 + features/01-tui-display v1.50（场景 07/08 修订）+ qa/01-tui-display-qa.md v1.50（QA-TD-07/08）+ **ezr-demo 修改（TabListState/set_filter 三路径收口/守卫三守卫改版/verify 脚本场景 E/README 41/设计规范 §4.1.6+§5.2）** | 已交付 | cargo build 零警告、cargo test 56P/0F；PTY 实证 53 项全过 |
 
 ### 遗留受限项（当前有效）
-- ~~**leech 判据无 e2e 自动化**~~ → **本轮部分结案**：D73② 上传暂停/恢复的 leecher 端到端拉取面已入 `suite_modify_bt.py`（QA-MB-10 上传恢复臂 leecher 拉完断言，本轮修复后实证）；「leech 判据」（BanKind::Leech 触发面）仍无专属 e2e，维持历史受限口径。
-- **变异实跑未执行**（hardender 可选节点；`--file` 分块口径悬置转政策性关闭）。全仓 5994 点在案；engine 拆分后 `--file` 分块消费面就绪（五文件 20/106/78/209/52）。
-- **QA 规程 6 个 BT/命令窗口族无专属 runner**（harness/命令链路承载，历轮既定形态）。
-- **CRAP 观察项**：`ezr_main` 与 `on_mouse_trackers` bin 套件 0 覆盖（承载面差异登记，历轮维持）。
-- **ws(s) tracker announce 无代理面**——操作者 20261109 chat 裁决不补齐，长期已知边界关闭。
-- **ezr-demo 守卫 FAIL（cleaner 轮裁决=否，architect 轮维持）**：影响面 = `ezr-demo/scripts/` 10 个 PTY 守卫（环境预存退格投递上限 + 场景基线漂移两类）；行为口径权威裁决归操作者，产品面验证不受影响。
-- **CRAP 残余高 comp 登记**：`on_bt_done` comp=7、`handle_peer_msg`/Reconfigure 臂、`dlg_confirm_modify_bt`/`make_bt_spec`（拆不动的本质复杂度，architect 定性维持）。
-- **CPD 残余克隆家族**：198 群组（70 阈值）/9 群组（200 阈值），主体 = engine 测试字面量家族 + supervisor 测试夹具（历轮维持）。
-- **bt_dialog.rs 变异点 119（>100 登记维持）**；arch_check 第 18 条裁决=否（备查）。
+- 历轮受限项沿 QA 终验轮口径不变（leech 专属 e2e、变异实跑、6 个 BT/命令窗口族无专属 runner、CRAP 观察项、ws(s) announce 无代理面、bt_dialog 变异点 119、CPD 残余克隆家族）。
+- **ezr-demo verify_ezr.py 预存 FAIL 15 项维持（脚本锚点漂移，非产品回归）**：表头锚/conn_token 正则/横滚算术/t 键语义四族全部先于 v1.48 存在；本轮改动面（页签切换状态还原）不在其锚点面，实测 56 项单元守卫全绿为证。
+- dialogs.rs 3 条预存 clippy 风格警告 + ui/mod.rs 5 条预存 unused-mut 警告（均先于本轮存在，与本轮无关；cargo build 零警告维持）。
 
 ### 实现定义值登记（累计，当前有效口径）
-- **D44–D73 沿历轮登记不变**。
-- **D73② 载体修订登记（本轮 QA 修复，规格可观察面不变、载体升级为协议级）**：
-  - 闸门：`handle_peer_msg` Request 臂 `allowed = !am_choking && !upload_paused`（保留，第二防线）。
-  - **新增协议通知**：Reconfigure 做种回退臂置位 `upload_paused=true` 时统一对全部连接 `am_choking=true` + 发送 Choke（暂停即协议级 choke）；暂停期 tick 跳过 apply_choker（防 rechoke 周期解 choke）；恢复（双完成臂）既有 `apply_choker(seeding=true)` 因状态迁移自动发 Unchoke。
-  - 修复依据：原「静默忽略请求」使 libtorrent 侧请求悬挂 + snubbed 后永不重发，回做种后上传无法恢复（QA-MB-10 e2e 双侧观测实证，见 notes/testing.md QA 终验轮条目）。
-- D73①③④⑤⑥⑦ 载体沿 architect 轮登记不变。
+- **D44–D74 沿历轮登记不变**。
+- v1.49 轮登记的两个可回退口径中，「做种中已上传对保留」已经 v1.50 轮退役（另一口径「尺寸未知任务行 1 不显示任何尺寸」维持）。
+- v1.51 轮无新增 D 值；两个推导裁决可回退：①**滚动位置原样还原、不做视口吸附**（另一候选 = 还原后将视口吸附回选中行，未采纳——操作者明确要求「滚动条在原先位置」，且滚轮「只移视口不动选中」的浏览态属用户意志）；②**页签快照含选中任务身份（id）而非仅索引**（另一候选 = 纯索引快照，未采纳——集合位移时纯索引会选中错位邻居，正是操作者报告的缺陷形态）。
 
 ## 二、当前产出情况
 
-### 本会话产物清单（QA 终验轮）
-1. **产品缺陷修复 ×1（最小改动，与已接受规格一致）**：`src/bt/engine/mod.rs` 两处——①Reconfigure 做种回退臂新增统一 Choke 循环（6 行）；②tick rechoke 增加 `!upload_paused` 门控（1 处条件）。修复「做种回退→回做种后上传不恢复」（D73③「上传恢复 leecher 可拉到数据」此前不可达）。
-2. **e2e 套件修复与补齐**：`project/qa/runners/suite_modify_bt.py`——①MB-10 暂停窗等待条件重写（占位文件全尺寸稀疏预分配使旧门控 0 秒塌缩；改为回做种翻转等待 + 下载文件与种子原件字节比对 + 有界冻结断言）；②新增 `_case_3`（QA-MB-03 v1.8 可执行化：取消未完成文件=落盘删除+total 重算+勾回从头补下字节级验证；限速门控 + 顺序无关完成态 + 动态取消目标）；③run() 纳入 03。
-3. **e2e 全量对账实跑**：15 套件全部注册用例与实跑记录差集归零（含本会话早段中断前的 14 批日志合并对账 + 本轮补跑）；TP-08 确认为 v1.6 已退役（非缺口）。
-4. **`project/notes/testing.md`**：追加 QA 终验轮三条经验（上传暂停协议化修复判别法 / BT e2e 门控三课 / 断言数值先验）+ INDEX.md 索引既有行覆盖。
-5. **`project/handoff.md`**：重写为当前有效口径（本文件）。
+### 本会话产物清单（specifier 调整轮 v1.51——页签切换列表状态保留与还原）
+1. **需求文档**：`project/mission.md` 标题升 v1.51 + v1.51 头注记；`project/mission/phase-01.md` **v1.50 修订注**（追加式）+ **FR-01-117 立项**（页签切换列表状态保留与还原：切走快照「选中任务身份 + 选中索引 + 滚动位置」、切回按任务身份重定位 + 滚动原样还原、空页签复位 0/0、互不串扰、夹紧兜底；v1.49 切页签夹紧/视口跟随切换语义退役）+ **FR-01-109 ⑧ 退役注记**（「页签切换视口跟随选中项」移出滚动跟随触发源）。
+2. **规格**：`project/features/01-tui-display.feature` v1.50（头部 v1.50 修订注 + 场景清单 07/08 注 + 场景 07 `]`/`[` 快照/还原断言改版 + 场景 08 页签点击同口径注）。09-bt-engine/04-ui-conns 等其余规格核对无页签状态语义表述，零改动。
+3. **QA 规程**：`project/qa/01-tui-display-qa.md` v1.50 注记 + 对应规格行版本对齐 + QA-TD-07 判据修订（页签往返状态还原对账：计数行/▌ 行号/首可见任务行 + 不串扰 + 位移/收缩兜底）+ QA-TD-08 判据修订（页签点击与键盘同口径快照还原）。09-bt-engine-qa.md 零改动。
+4. **ezr-demo 修改（操作者显式指令）**：`src/app/mod.rs`（新增 `TabListState` 快照结构 + `tab_states` 每页签状态 + `set_filter` 统一切页签入口：快照→切换→还原（按任务 id 重定位选中）→夹紧→同步 last_selected 抑制 tick 视口跟随；`cycle_filter` 退化为 `set_filter(next)`）、`src/app/mouse.rs`（页签点击接 set_filter，原直改 filter + scroll_to_selection 退役）、`src/app/dialogs.rs`（添加任务完成跳回页签 0 两处接 set_filter）、`src/ui/mod.rs`（旧 `cycle_filter_clamps_stale_selection…` 自愈守卫重写为快照语义三守卫：`tab_switch_preserves_and_restores_selection_and_scroll` / `tab_switch_relocates_selection_by_task_identity_when_tab_set_shifts` / `tab_switch_clamps_restored_state_when_tab_set_shrinks_and_renders_all_rows`）、`scripts/verify_size_move.py`（键序重排 Home/End 基准态 + 新增场景 E 13 项：切走期间页签独立状态证明 + 还原 A/复验还原 A/还原 B 帧对断言，40→53 项）、`README.md`（变更记录新增 41 条）、`docs/ezr-demo UI界面及交互设计规范.md`（头部 v1.51 注 + §4.1.6 滚动跟随触发源改版（页签切换拆出为快照还原源）+ §5.2 新增「页签切换状态保留与还原」段）。
+5. **经验沉淀**：`project/notes/`（architecture v1.51 节：共享 selected/scroll 漂移根因与任务身份快照/set_filter 后抑制 tick 视口跟随/三路径收口单入口/还原与夹紧语义分层；testing v1.51 节：PTY 帧对断言法/pyte 显示行 CJK 字间空格锚定计数徽标/还原实证确定性键序与差异制造臂；INDEX.md 追加节）。
+6. **本 handoff.md** 更新为当前有效口径。
 
 ### 验证证据
 | 验证项 | 结果 | 命令（可复现） |
 |---|---|---|
-| bin 全部单元测试（修复后重跑） | 1049P/0F（--bins 全部二进制口径；含 82 属性） | `cargo test --bins`（CARGO_INCREMENTAL=0 + CARGO_PROFILE_*_DEBUG=0） |
-| 集成回归（修复触及面） | hardening 247P + hardening_g_engine 789P + hardening_g_supervisor 762P + hardening_engine_backfill 895P，全 0F | 逐目标 `cargo test --test <t>` |
-| e2e modify_bt（修复后） | QA-MB-03/10/11/12 = 4/4 P（161.8s/60.3s/13.0s/16.4s） | `python3 suite_modify_bt.py` |
-| e2e throttle_proxy 补口 | TP-07/14/10/13 = 4/4 P（缺口语合并后该套件注册用例全覆盖） | `QA_TP_ONLY=7,8,9,10 python3 suite_throttle_proxy.py` |
-| e2e 其余 13 套件 | 本会话早段实跑日志合并对账：add_task 21P、config_template 5P、download_engine 16P、integrity_check 12P、modify_task 10P、named_proxy 18P、persistence_config 11P、resume_sidecar 14P、retry_backoff 9P、slots_queue 15P、tui_display 21P、ui_conns 18P、ui_pieces 7P，全 0F | `.work/tmp/e2e-suite_*.log`（complete 前请勿清） |
-| 用例对账 | 15 套件源码注册 ID × 实跑 ID 差集 = 0（退役/移交用例凭规程注记豁免） | 对账脚本见会话记录 |
+| ezr-demo 构建 | release 零错误零警告（预存 dialogs.rs 3 条 clippy 风格警告与本轮无关） | `cd ezr-demo && cargo build --release` |
+| ezr-demo 单元测试 | **56P/0F**（含改版快照语义三守卫 tab_switch_* 三项） | `cd ezr-demo && cargo test` |
+| PTY 实证 | **53 项全过**：13 尺寸不变量 + 关键状态行 7 项 + 旧尺寸对缺席 8 项 + 已上传对缺席 2 项 + 保留项 7 项 + **场景 E 页签还原 13 项**（切走期间页签独立状态证明 3 项 + 还原 A/复验还原 A/还原 B 帧对断言 12 项：计数行 k/y 项、▌ 光标行号、首可见任务行逐项对账） | `cd ezr-demo && python3 scripts/verify_size_move.py` |
+| APS 复验 | parser + dry-checker 双 exit=0（01-tui-display.feature/01-tui-display-qa.md 本轮修订后复验） | `.tools/bin/bb gherkin-parser / gherkin-ir-dry-checker`（.tools/Acceptance-Pipeline-Specification 目录内调用） |
+| 做种行/尺寸项（v1.49/v1.50 口径沿用） | list.rs 本轮零改动，守卫 + PTY 场景 A–D 结论沿用 | `cargo test seeding_task_title` |
 
 ### 对账口径
-- 产品改动面：仅 `bt/engine/mod.rs` 2 处（做种回退臂 + rechoke 门控）——正常下载/做种流程 `upload_paused=false` 下 rechoke 行为逐位不变；仅做种回退臂行为升级为协议级。
-- bins 口径说明：本轮 `--bins` 1049P 覆盖全部二进制目标（ezr + proxy/mktorrent/fixture），较 architect 轮 `--bin ezr` 1003P 口径宽——同源测试零改动，差异 = 计入子命令二进制的 46P。
-- mission/features/qa 规程文件：零改动（QA 只动 runners 与产品缺陷，规格面无修订请求）。
+- 产品端 ezr（project/ezr）**零改动**——本轮只有需求文档、规格、QA 规程与 ezr-demo 改动；ezr 实现 FR-01-117 页签状态还原归下一 coder 轮（**实现要点：每页签独立快照（选中任务 id + 索引 + 滚动）；键盘/鼠标/添加任务跳回三路径收口单入口；还原后抑制视口跟随（同步选中代偿标记）；集合收缩夹紧兜底沿用；水平滚动渲染切片（v1.48）、任务行尺寸项 size_known 门控（v1.49）、做种臂无已上传对（v1.50）均为验收判据——notes/architecture.md v1.49–v1.51 节**）。
+- ezr-demo 改动面 = 源码 4 文件 + 文档 2 文件 + 脚本 1 个；守卫测试 56 项全绿；做种行/尺寸项口径零改动沿用。
+- 产物归档 = `bin/swarm complete`（含 CONSTITUTION.md、packs、bin、project）；**ezr-demo 不在归档集内**——操作者要求产物复制 my-project 时额外打包 ezr-demo 源码归档（不含 target/）与 release 二进制一并交付。
 
 ### 待办与待批
-- 无待批项。QA 未发现规格矛盾（Gherkin/单测/实现三方一致面内无冲突需裁决）。
-- 历轮受限项（leech 专属 e2e、变异实跑、ezr-demo 守卫重定基线）维持登记，如需立项请操作者显式指令。
+- **v1.51 调整轮为操作者 chat 直接裁决**（无 Inversion 题目、无新增 D 值）；本轮登记的两个推导裁决可回退：①滚动位置原样还原不做视口吸附（另一候选 = 还原后视口吸附回选中行，未采纳）；②快照含选中任务身份 id（另一候选 = 纯索引快照，未采纳）。若操作者另有指示按批注回退。
+- v1.49 轮「切页签夹紧残留 selection + 视口跟随选中项」切换语义经本轮退役（夹紧保留为还原兜底，历史注记保留）。
+- 下一角色建议：`six-pack/coder`（ezr 产品端实现 FR-01-117 + 01-tui-display v1.50，规格与 QA 已就绪；**页签快照按任务身份重定位 + 三路径单入口 + 还原后抑制视口跟随 + 集合收缩夹紧兜底为验收判据**）。
 
 ### 移交建议
-- **six-pack 流转路径已走完（specifier → coder → cleaner → architect → QA → Done）**：请操作者运行 `bin/swarm complete` 归档（`project/` 工作区保留，下一轮可直接续跑或开新项目）。
-- 如需继续迭代（如 leech 专属 e2e 立项、hardender 变异实跑），建议以本文件为上游交接内容显式 `bin/swarm begin` 对应角色。
+- 请操作者运行 `bin/swarm complete` 归档（`project/` 工作区保留，下一轮可直接续跑）。
+- 续跑下一轮：`bin/swarm begin six-pack/coder`（以本文件为上游交接内容）。

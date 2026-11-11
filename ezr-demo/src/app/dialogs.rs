@@ -482,7 +482,9 @@ impl App {
         self.tasks.push(t);
         self.dialog = None;
 
-        self.filter = 0;
+        // 添加完成跳回「正在下载」页签选中新任务（页签快照保留/还原同口径，FR-01-117；
+        // 新任务选中变化由 tick 守卫让视口跟随，其余任务状态在切回时按快照还原）
+        self.set_filter(0);
         let flen = self.filtered().len();
         if flen > 0 {
             self.selected = flen - 1;
@@ -1132,6 +1134,7 @@ impl App {
         let h = (id as u64) % 97;
         t.seeders = (3 + h % 40) as usize;
         t.peers = (t.seeders * 2 + (h % 17) as usize).max(t.seeders);
+        t.availability = 0.350 + ((h * 37 + id as u64 * 11) % 2400) as f64 / 1000.0;
         if paused {
         } else {
             t.queued_since = Some(Instant::now());
@@ -1140,7 +1143,9 @@ impl App {
         self.tasks.push(t);
         self.dialog = None;
 
-        self.filter = 0;
+        // 添加完成跳回「正在下载」页签选中新任务（页签快照保留/还原同口径，FR-01-117；
+        // 新任务选中变化由 tick 守卫让视口跟随，其余任务状态在切回时按快照还原）
+        self.set_filter(0);
         let flen = self.filtered().len();
         if flen > 0 {
             self.selected = flen - 1;

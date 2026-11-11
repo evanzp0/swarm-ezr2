@@ -11,15 +11,46 @@ use crate::scrollable_panel::{ScrollablePanel, ScrollbarMode};
 
 use super::*;
 
-pub(crate) fn dl_total_txt(t: &Task) -> String {
+/// 任务行标题尺寸项：所有协议/所有状态下，尺寸已知即在状态徽标后显示 <总字节>。
+/// 尺寸未知（不可断点 HTTP 且未进入后期阶段）时不显示，避免出现伪造的 0 B。
+pub(crate) fn title_size_txt(t: &Task) -> String {
     if t.size_known() {
-        format!("{}/{}", fmt_size(t.downloaded), fmt_size(t.total))
+        format!(" {}", fmt_size(t.total))
     } else {
-        format!("{}/? B", fmt_size(t.downloaded))
+        String::new()
     }
 }
 
-fn task_lines(
+fn share_ratio_text(t: &Task) -> String {
+    let up = t.uploaded as f64;
+    let total = t.total as f64;
+    let dl = if total > 0.0 && (t.downloaded as f64) < total * 0.01 {
+        total
+    } else {
+        t.downloaded as f64
+    };
+    if dl == 0.0 {
+        if up == 0.0 {
+            "0.00".to_string()
+        } else {
+            "∞".to_string()
+        }
+    } else {
+        format!("{:.2}", up / dl)
+    }
+}
+
+fn share_spans(t: &Task) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(" 分享".to_string(), Style::default().fg(DIM)),
+        Span::styled(
+            format!(" {}", share_ratio_text(t)),
+            Style::default().fg(MAGENTA),
+        ),
+    ]
+}
+
+pub(crate) fn task_lines(
     t: &Task,
     sel: bool,
     spinner: char,
@@ -40,11 +71,13 @@ fn task_lines(
     let proto_badge = format!("[{}]", t.protocol.label());
 
     let state_badge = format!("[{}]", t.state.label());
+    let title_size = title_size_txt(t);
     let cursor_w = 2usize;
-    let badges_w = w(&proto_badge) + 1 + w(&state_badge) + 1;
+    let badges_w = w(&proto_badge) + 1 + w(&state_badge) + w(&title_size);
     let pct_w = w(&pct_txt);
+    // 预留 2 列：1 列名称与徽标间隔 + 1 列徽标/尺寸与右端百分比最小间隔
     let name_budget = width
-        .saturating_sub(cursor_w + badges_w + pct_w + 1)
+        .saturating_sub(cursor_w + badges_w + pct_w + 2)
         .clamp(8, 64);
     let name_txt = truncate(&t.name, name_budget);
     let used = cursor_w + w(&name_txt) + 1 + badges_w;
@@ -69,6 +102,7 @@ fn task_lines(
         Span::styled(proto_badge, Style::default().fg(YELLOW)),
         Span::raw(" "),
         Span::styled(state_badge, Style::default().fg(state_c)),
+        Span::styled(title_size, Style::default().fg(FG)),
         Span::raw(" ".repeat(pad)),
         Span::styled(
             pct_txt,
@@ -121,8 +155,6 @@ fn task_lines(
             l3.push(Span::styled(retry, Style::default().fg(RED)));
             l3.push(Span::styled(" · ", Style::default().fg(RED)));
             l3.push(Span::styled(countdown, Style::default().fg(RED)));
-            l3.push(Span::styled(" · ", Style::default().fg(RED)));
-            l3.push(Span::styled(dl_total_txt(t), Style::default().fg(RED)));
         }
         TaskState::Queued => {
             if t.has_slot {
@@ -136,8 +168,6 @@ fn task_lines(
                     Style::default().fg(YELLOW),
                 ));
             }
-            l3.push(Span::styled(" · ", Style::default().fg(DIM)));
-            l3.push(Span::styled(dl_total_txt(t), Style::default().fg(FG)));
         }
         TaskState::Completed => {
             match (&t.checksum, t.verify_ok) {
@@ -151,8 +181,6 @@ fn task_lines(
                 )),
                 _ => l3.push(Span::styled("无校验".to_string(), Style::default().fg(DIM))),
             }
-            l3.push(Span::styled(" · ", Style::default().fg(DIM)));
-            l3.push(Span::styled(fmt_size(t.total), Style::default().fg(FG)));
         }
         TaskState::Seeding => {
             l3.push(Span::styled(
@@ -160,13 +188,10 @@ fn task_lines(
                 Style::default().fg(MAGENTA),
             ));
             l3.push(Span::styled(
-                format!("  {}/{}", t.seeders, t.peers),
+                format!("  {}/{}/{:.3}", t.seeders, t.peers, t.availability),
                 Style::default().fg(MAGENTA),
             ));
-            l3.push(Span::styled(
-                format!("  已上传 {}", fmt_size_pair(t.uploaded, t.total)),
-                Style::default().fg(FG),
-            ));
+            l3.extend(share_spans(t));
             l3.push(Span::styled(
                 format!("  剩余做种 {}", fmt_dur(t.seed_left.ceil() as u64)),
                 Style::default().fg(DIM),
@@ -191,16 +216,13 @@ fn task_lines(
             }
             if downloading {
                 l3.push(Span::styled(
-                    format!("  {}/{}", t.seeders, t.peers),
+                    format!("  {}/{}/{:.3}", t.seeders, t.peers, t.availability),
                     Style::default().fg(FG),
                 ));
             } else {
-                l3.push(Span::raw("  -/-"));
+                l3.push(Span::raw("  -/-/-"));
             }
-            l3.push(Span::styled(
-                format!("  {}", fmt_size_pair(t.downloaded, t.total)),
-                Style::default().fg(FG),
-            ));
+            l3.extend(share_spans(t));
             if downloading {
                 l3.push(Span::styled(
                     format!("  剩余 {}", fmt_eta(t.eta_secs())),
@@ -222,10 +244,6 @@ fn task_lines(
                 l3.push(Span::raw("↓ "));
                 l3.push(dash.clone());
             }
-            l3.push(Span::styled(
-                format!("  {}", dl_total_txt(t)),
-                Style::default().fg(FG),
-            ));
             if downloading && known {
                 l3.push(Span::styled(
                     format!("  剩余 {}", fmt_eta(t.eta_secs())),
@@ -314,6 +332,18 @@ pub(crate) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let spinner = app.spinner();
+    // 集合收缩自愈（切页签 / 模拟迁移状态 / 清理已完成）：
+    //   1) 选中项越界 → 夹紧到最后，并让滚动窗口重新覆盖选中行；
+    //   2) 滚动越界（残留 scroll > 可渲染上限）→ 夹紧到 len-rows，
+    //      避免视口只渲染尾部残行（PTY 实证发现：切页签后列表仅剩 1 行）。
+    if app.selected >= idxs.len() {
+        app.selected = idxs.len() - 1;
+        app.scroll_to_selection();
+    }
+    let max_scroll = idxs.len().saturating_sub(rows);
+    if app.scroll > max_scroll {
+        app.scroll = max_scroll;
+    }
     let max_items = rows.min(idxs.len().saturating_sub(app.scroll));
 
     let mut waiting = 0usize;

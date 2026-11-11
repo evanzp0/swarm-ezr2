@@ -696,3 +696,79 @@ ws/webrtc 轮（2026-11-09）：TrackerUrl 三族分型（Ws 变体与 Http/Udp 
 - **8477 行单文件目录化拆分的「私有子模块 + glob 收编」模式**：bt/engine.rs → bt/engine/{mod 6260/pieceio 754/trackpool 738/peerwire 468/conn 358}。保行为的关键 = 子模块私有声明（`mod conn;` 无 pub）+ `use conn::*;` 收编 mod.rs 作用域——engine 内既有项的路径与可见性（pub(super)/pub(crate)）零改动，下游 use 面（crate::bt::engine::X）与 12 个集成测试目标零触碰。职责分片法：mod=编排核心与共享类型（6260 行大头是 cfg(test) 测试主体）、conn=连接状态与生命周期、peerwire=wire 协议编解码、pieceio=piece 读写与校验、trackpool=tracker 池。拆分完整性的机械验证 = `cargo mutants --list` 点数对账：engine.rs 465 → 五文件 20/106/78/209/52 总和精确 465、全仓 5994 不变（搬运不增减）；mod.rs 仅 20 点因变异扫描跳过 cfg(test) 测试主体。
 - **对账类规则不入 arch_check 的裁决判据（第 18 条=否）**：coder 轮提请「规格逐 When/Then 全量对账固化为 arch_check 第 18 条」裁决否——When/Then ↔ 规则映射是语义级对应（grep 表达不了「该 Then 被此断言覆盖」），硬编码映射表维护面无界（规格每轮修订即漂移），且与 QA 套件的场景问责职责重复；arch_check 定位 = 结构性边界（依赖方向/可见性/禁入）的 grep 可表达面，arch_check.sh 保持 17 规则零改动。
 - bt_dialog.rs（119 变异点）不强拆维持登记：可见性耦合 + 阈值边缘，拆分触及全模块签名（rust.md 口径）；engine 拆分后 hardender `--file` 分块消费面就绪（五文件 20–209 点/文件，全部 <250）。
+
+## v1.47 显示指标轮（2026-11-10，specifier）追加
+- qBt 三口径源码锚点（新增）：相关度 = qBt PeerInfo::calcRelevance（peerinfo.cpp）——（对端拥有 ∧ 本端缺失 piece）÷ 本端缺失 piece 总数、本端无缺失恒 0（不是「÷ 对端拥有数」）；显示 ×100 一位小数 + %（peerlistwidget.cpp `fromDouble(relevance*100, 1) + '%'`）；种子健康度 = qBt General「Availability」= libtorrent `torrent_status.distributed_copies`（piece_picker.cpp distributed_copies：每 piece 持有者计数【非种子 peer 持有记 1 + 本端已有记 1】取最小值 + 连接种子数 m_seeds + 超出最小值的 piece 数 ÷ 总 piece 数；qBt 显示 fromDouble(...,3) 三位小数、且 finished torrent 隐藏该行——ezr 因 <s>/<p> 项两态共用选择做种中照常显示，D74⑥ 登记可回退）；分享率 = qBt realRatio（torrentimpl.cpp）——uploaded/downloaded、下载量 < 1% total_done 按 total_done 兜底（防 seeder 丢统计）、分母 0 且上传 >0 显示 ∞（MAX_RATIO → C_INFINITY）、两位小数（propertieswidget.cpp fromDouble(ratio,2)）。
+- ezr-demo 同构实现点（新增）：并发 panel 九列 = colw [18,4,12,12,10,10,34,7,8]、客户端收缩基线 81→89（base 123 − 客户端 34）、相关度单元格 pad_left 右对齐 + `{:.1}%`；列表行健康度三段 `{}/{}/{:.3}`（dash 臂 `-/-/-`）与分享项 `share_spans`（标签「 分享」DIM + 数字 MAGENTA、单空格衔接尺寸项=操作者钦定示例字面口径）；数据面 `Connection.relevance`（pseudo_relevance 确定性哈希 0..1、done≥total 臂恒 0）与 `Task.availability`（demo 钦定值 2.418/1.675 + 对话框建单伪随机 0.350–2.749）——单构造点（make_chunk_conns_lease/mk）注入即全路径覆盖，是 demo 数据面加字段的最小改动位。
+
+## ratatui Paragraph 水平滚动遇 CJK 表头跨列截断会整行错位，宽字表格水平窗口必须自行切片（v1.48 轮）
+- **现象**：并发 panel「协议」列数据值在特定滚动偏移下越过表头左边界 1 列（操作者屏面实证；
+  PTY 复现条件 = 终端宽度使 hmax = 内容宽 − 视口宽 + 1 恰落在表头 CJK 字符跨列位 p+1，
+  如 150 列终端 hmax=59 切入「累计下载」末字「载」右半格、160 列同型）。
+- **处置**：不再用 `Paragraph::new(lines).scroll((0, hscroll))` 的逐行独立截断，改为按显示
+  宽度自行切片渲染水平窗口（`ui::slice_spans` + `slice_by_width`）：按单元格累计显示宽走查，
+  完全在窗口左侧的单元格丢弃、跨界单元格按显示宽精确切片（跨界 CJK 以可见余量**前导空格**
+  占位、不渲染半字）、其余原样保留，行渲染不再带 scroll 偏移。
+- **根因**：ratatui 0.29 `LineTruncator` 对 horizontal_offset 逐 grapheme 消耗显示宽，遇
+  `w > offset` 的宽字调 `trim_offset`——宽字不可切分只能整字返回，该行其余内容整体右移
+  1 列；数据行纯 ASCII 不触发该臂、不位移，于是表头（含 CJK）与数据在特定偏移下错位。
+  陷阱细节：切片时跨界宽字的可见余量必须占位在**原字符位置**（前导空格），若放行尾补齐
+  （drop 后 pad-after），同 span 内跨界字后有后继字符时后继内容仍 +1 错位——仅在「跨界字
+  恰为 span 末字」时两种写法等价，单点验证会漏。
+- **自查口径**：含 CJK 表头的可水平滚动表格，「表头/数据任意偏移同列」必须作为不变式
+  守卫（对每个 cut 断言两行单元格起点恒等），且跨界位覆盖须含「跨界字非 span 末字」的样本。
+
+## v1.49 全类型扩面轮（2026-11-11，specifier）
+- **作用面扩判的代码落点形态**：任务行标题尺寸项从「协议×状态白名单」（上一轮
+  `bt_title_size_visible`：BT 且状态 ∈ 下载中/校验中/后期处理/已暂停）收为单点
+  `title_size_txt(t)`（`size_known()` 门控 + 前导空格承载间隔）——作用面扩判时优先
+  收单点谓词而非扩散 if 分支，协议/状态枚举再增员也不需要回改；尺寸未知（不可续传
+  HTTP 且未入后期）返回空串即「不伪造 0 B」。
+- **明细行瘦身成对删除纪律**：删除尾缀数据项必须连同其前置分隔符（`" · "` /
+  `"  "`）同删，遗留孤立分隔符会让明细行以悬挂 ` · ` 开头（等待中队列位 0 且无槽位
+  提示时 l3 只有分隔符）；四个臂（Failed/Queued/Completed/HTTP fallback）各删一处，
+  做种中「已上传 up/total」对不在迁移范围（操作者口径：迁移对象 = 已下载/总字节对）。
+- **切页签残留 selection 越界 + scroll 搁浅根因**：`cycle_filter` 只切 filter 不夹紧
+  `selected`（另一页签长度不同），`scroll_to_selection` 用旧 selected 把 scroll 推到
+  `selected+1-vis`；切到短页签后 `max_items = min(rows, flen - scroll)` 只渲染尾部
+  残行（PTY 实测：11 项选中尾项切 4 项页签仅剩 1 行）。修法两层：`cycle_filter`
+  夹紧 selected 到新页签范围（光标与动作面立即正确）+ `draw_list` 按视口容量自愈
+  夹紧 scroll = len−rows、selected 越界夹紧——自愈点放 draw 层可覆盖模拟状态迁移/
+  清理任务等一切集合收缩源，不限于切页签；`scroll_to_selection` 需 `pub(crate)`
+  才能从 ui 层调用（可见性是接线第一坑）。
+- **窄面板贴合预防**：名称预算公式多预留 1 列（`pct_w + 2`），否则预算恰好的长名行
+  `pad = 0`、尺寸与百分比贴合（`96.4 MB100.0%`）；该形态此前就存在于徽标贴合
+  百分比，尺寸项加入后视觉恶化显著，属「预留量随行内新增元素同步」纪律。
+
+## v1.50 做种已上传对退役轮（2026-11-11，specifier）
+- **删除类修订的「保留判据」翻转链**：历史上明文登记「保留/不在迁移范围」的显示项被后续
+  指令退役时，三层判据须同步翻转——守卫测试（断言极性反转 + 测试名 keeps→drops，否则旧守卫
+  反向拦截正确实现）、PTY 脚本（该项自「保留项完好」清单移入缺席判据）、规格/QA 做种臂
+  （形态串重写 + 历史注记保留退役痕）；本轮 v1.49 的「做种已上传对保留」口径即被 v1.50
+  指令退役，v1.49 节该句为历史记录不再回改。
+- **动态值缺席判据的形态选择**：fmt_size_pair 产物为无空格 `x/y 单位` 形（`1.71/4.32 GB`），
+  与详情面板带空格 `x / y` 形天然可区分；做种上传量随模拟每帧增长（全字面断言必漏），
+  缺席判据用「标签缺席（已上传）+ 形态正则 `\d+\.\d+/\d+\.\d+ (GB|MB)`」双判据任意帧稳定命中。
+- **孤儿辅助函数随唯一调用点退役**：fmt_size_pair 唯一非测试调用点删除后立即移入 tests 模块
+  （pub(crate) fn 留在主代码 cargo build 即报 dead_code 警告，破坏零警告验收线）；
+  产品端 ezr task_lines.rs 同名函数归下一 coder 轮同处置。
+- **衔接对象改接的同构校验**：分享率项改接健康度项后做种臂与 BT 下载臂 span 序列完全同构
+  （share_spans 首跨度自带单空格「 分享」），衔接格式零新增逻辑——改接类修订优先复用既有
+  臂的 span 构造顺序而非新写衔接串。
+
+## v1.51 页签状态快照还原轮（2026-11-11，specifier）
+- **共享 selected/scroll 是页签状态漂移根因**：两页签共用一对 selected/scroll，切走再切回
+  即漂移；修法 = 每页签独立 TabListState 快照（selected_task id + selected + scroll），
+  切走时存、切回时还原——快照存「任务身份」而非仅索引：页签内集合位移/收缩（任务完成
+  移页签、新增插队）时按 id 重新定位选回原任务，纯索引还原会选中错位邻居（操作者报告
+  的缺陷形态正是索引漂移）。
+- **还原后必须抑制 tick 视口跟随**：set_filter 还原 (selected, scroll) 后须同步
+  `last_selected = selected`——sim tick 守卫「last_selected ≠ selected → scroll_to_selection」
+  会把还原的 scroll 吸附回选中窗口，滚轮「只移视口不动选中」留下的选中离屏态被破坏
+  （这是「滚动条不在原先位置」的第二根因，不抑制则快照还原只对选中可见项成立）。
+- **三条 filter 变更路径收口单入口**：键盘 ]/[（cycle_filter）、鼠标点击页签（原直改
+  self.filter + scroll_to_selection）、添加任务跳回（原直改 filter=0）三处同走 set_filter——
+  漏一路则该路径行为分叉（如鼠标切页签不还原）；cycle_filter 退化为 set_filter(next)。
+- **还原语义与自愈夹紧的分层**：还原 = 忠实恢复快照（含选中离屏态）；夹紧 = 越界兜底
+  （selected ≥ len 夹紧 + scroll 越界夹紧，tick 守卫与 draw_list 双层保留）——「尽可能还原」
+  的落点是快照优先、夹紧只兜集合收缩/视口变化，不把夹紧当切换语义本体。

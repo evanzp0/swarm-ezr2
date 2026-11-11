@@ -45,6 +45,7 @@ pub(super) fn mk(
         chunk_done,
         seeders: 0,
         peers: 0,
+        availability: 0.0,
         upload_speed: 0.0,
         uploaded: 0,
         seed_left: 0.0,
@@ -273,6 +274,7 @@ pub(super) fn demo_tasks() -> Vec<Task> {
 
     v[2].seeders = 12;
     v[2].peers = 35;
+    v[2].availability = 2.418;
     v[2].upload_speed = 1_900_000.0;
     v[2].uploaded = 1_712_000_000;
     v[2].seed_left = 1_800.0;
@@ -295,6 +297,7 @@ pub(super) fn demo_tasks() -> Vec<Task> {
 
     v[13].seeders = 8;
     v[13].peers = 23;
+    v[13].availability = 1.675;
     v[13].upload_speed = 420_000.0;
     v[13].uploaded = 96_000_000;
     v[13].trackers = vec![

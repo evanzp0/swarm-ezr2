@@ -24,3 +24,23 @@
 - architecture.md — 8477 行单文件目录化拆分的「私有子模块 + glob 收编」零下游改动模式（职责分片法/变异点 465 精确再分布 20/106/78/209/52 机械对账/mod 仅 20 点因测试主体跳过）/对账类规则不入 arch_check 裁决判据（第 18 条=否）/bt_dialog 119 点不强拆维持 + hardender --file 分块消费面就绪（新增）
 - testing.md — 中断恢复 mtime 时序校验法（产物 mtime vs 验证日志时刻 + 编译域白名单前提）/过滤运行双重收益（独立属性报告 + 全目标编译通行证）/bin 对账属性分层口径 1003=921+82（新增）
 - environment.md — 新 shell PATH 补装（source ~/.cargo/env + ~/.local/bin）/cargo-mutants 须 cargo 子命令形态调用（新增）
+
+## v1.48 调整轮（2026-11-11，specifier）追加
+- architecture.md — ratatui Paragraph 水平滚动 CJK 跨列截断整行错位根因（LineTruncator trim_offset 宽字整字返回致该行 +1、ASCII 数据行不位移）与修法（slice_spans 自行切片渲染水平窗口、跨界宽字可见余量前导空格占位——pad-after 陷阱：跨界字非 span 末字时仍错位）（新增）
+- testing.md — 宽字表格水平窗口对齐测试口径（TestBackend/pyte cell 下标=显示列、join 串 find 下标 ≠ cell 下标两坑；复现条件 = hscroll 落 CJK 起点 p+1、多档终端宽度扫描撞点；守卫 = cut 全域宽度恒等 + 单元格起点恒等 + TestBackend 渲染级对账）（新增）
+
+## v1.47 显示指标轮（2026-11-10，specifier）追加
+- architecture.md — qBt 三口径源码锚点（calcRelevance 分母=本端缺失非对端拥有/distributed_copies 组成/realRatio 兜底与 ∞）+ ezr-demo 同构实现点（九列 colw/收缩基线 89/share_spans 单空格/两数据字段单构造点注入）（新增）
+- testing.md — PTY capture 三坑（j=滚动非选中/0.18s 发键节奏与 duration 换算/TestBackend 全宽优先）+ 守卫预存漂移不新增破坏确认法（几何推演 HEAD 同败、列偏移假设扫描）（新增）
+- environment.md — rustup 镜像复测（aliyun 新鲜度剔除/rsproxy 组件 11.8MB/s 胜出/USTC 组件 403 漂移再现/直链+双变量前台装齐 stable 1.99.1）+ bb/APS gh-proxy 秒装复证与 findings 口径 + MultiEdit 非原子性实测（新增）
+
+## v1.49 全类型扩面轮（2026-11-11，specifier）追加
+- architecture.md — 作用面扩判收单点谓词形态（title_size_txt/size_known 门控替代协议×状态白名单）+ 明细尾缀成对删除纪律（分隔符同删防悬挂）+ 切页签残留 selection 越界与 scroll 搁浅根因两层修法（cycle_filter 夹紧 + draw_list 视口容量自愈，覆盖一切集合收缩源）+ 名称预算预留量随行内新增元素同步（新增）
+- testing.md — pyte 占位格双形态重建法（跳过=逻辑行/补空格=显示行）+ ratatui Buffer 占位格=空格与 pyte data='' 两库两口径 + 模拟动态窗口键序设计法（按仿真时限排布、帧并集、PTY 实证兼缺陷探测）+ 尺寸不变量正则断言与无空格特征串缺席判别 + 跨面板整行拼接断言锚（新增）
+
+## v1.50 做种已上传对退役轮（2026-11-11，specifier）追加
+- architecture.md — 删除类修订「保留判据」三层翻转链（守卫极性反转+改名/PTY 保留项移缺席/规格做种臂重写留退役痕）+ 动态值缺席判据形态选择（标签缺席+无空格形态正则双判据，全字面断言必漏）+ 孤儿辅助函数随唯一调用点退役移入 tests 模块防 dead_code + 衔接对象改接复用既有臂 span 序列同构（新增）
+
+## v1.51 页签状态快照还原轮（2026-11-11，specifier）追加
+- architecture.md — 共享 selected/scroll 页签漂移根因与 TabListState 快照还原（任务身份优先定位）+ set_filter 后同步 last_selected 抑制 tick 视口跟随（选中离屏态保真）+ 三条 filter 变更路径收口单入口 + 还原/夹紧语义分层（新增）
+- testing.md — PTY 帧对断言法（计数行/▌ 行号/首可见任务 token 三元组对账，禁整屏等值）+ pyte 显示行 CJK 字间空格（标题定位锚计数徽标）+ 还原实证确定性键序（Home+定数↓ 基准态 + 差异制造臂防假阳性 + 时窗避开状态迁移）（新增）

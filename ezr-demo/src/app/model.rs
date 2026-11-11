@@ -170,6 +170,17 @@ fn pseudo_flags(seed: u64, idx: usize) -> String {
     FLAG_POOL[(h % FLAG_POOL.len() as u64) as usize].to_string()
 }
 
+fn pseudo_relevance(seed: u64, idx: usize) -> f64 {
+    let mix = |mut x: u64| {
+        x ^= x >> 33;
+        x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        x ^= x >> 33;
+        x
+    };
+    let h = mix(seed ^ mix((idx as u64 + 17).wrapping_mul(0x9E37_79B9_7F4A_7C15)));
+    (h % 1001) as f64 / 1000.0
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ConnPhase {
     Connecting,
@@ -206,6 +217,8 @@ pub struct Connection {
     pub cum_down: u64,
 
     pub cum_up: u64,
+
+    pub relevance: f64,
 
     pub flags: String,
 
@@ -298,6 +311,8 @@ pub struct Task {
     pub seeders: usize,
 
     pub peers: usize,
+
+    pub availability: f64,
 
     pub upload_speed: f64,
 
@@ -1147,6 +1162,12 @@ pub(super) fn make_chunk_conns_lease(
 
                 cum_down: partial,
                 cum_up: 0,
+
+                relevance: if done >= total {
+                    0.0
+                } else {
+                    pseudo_relevance(seed, i)
+                },
 
                 flags: pseudo_flags(seed, i),
 

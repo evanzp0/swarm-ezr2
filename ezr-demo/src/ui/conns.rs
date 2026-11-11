@@ -90,7 +90,7 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let mut colw: Vec<usize> = if is_bt {
-        vec![18, 4, 12, 12, 10, 10, 34, 8]
+        vec![18, 4, 12, 12, 10, 10, 34, 7, 8]
     } else {
         vec![4, 12, 10]
     };
@@ -98,7 +98,7 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
         let vw = view.width as usize;
         let base = colw.iter().sum::<usize>() + colw.len().saturating_sub(1);
         if base > vw {
-            colw[6] = vw.saturating_sub(81).max(26);
+            colw[6] = vw.saturating_sub(89).max(26);
         }
     }
     let content_w = colw.iter().sum::<usize>() + colw.len().saturating_sub(1);
@@ -122,6 +122,8 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
             Span::raw(" "),
             head_cell("客户端", colw[6]),
             Span::raw(" "),
+            head_cell_r("相关度", 7),
+            Span::raw(" "),
             head_cell("协议", 8),
         ]
     } else {
@@ -133,7 +135,17 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
             head_cell_r("累计下载", 10),
         ]
     };
-    let mut lines = vec![Line::from(head)];
+
+    let hmax = content_w.saturating_sub(view.width as usize) + 1;
+    let mut hscroll = app.conns_hscroll.min(hmax);
+    if is_bt {
+        let edge = hscroll + view.width as usize;
+        if edge + 4 > content_w && edge < content_w {
+            hscroll = hmax;
+        }
+    }
+
+    let mut lines = vec![Line::from(slice_spans(&head, hscroll))];
 
     let total_rows = rows_idx.len();
     let start = app.conns_scroll.min(total_rows.saturating_sub(rows));
@@ -192,6 +204,12 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().fg(DIM).bg(bg),
                 ),
                 Span::styled(" ", Style::default().bg(bg)),
+                cell(
+                    format!("{:.1}%", c.relevance * 100.0),
+                    colw[7],
+                    FG,
+                ),
+                Span::styled(" ", Style::default().bg(bg)),
                 Span::styled(
                     pad_right(c.transport.label(), 8),
                     Style::default().fg(DIM).bg(bg),
@@ -218,21 +236,12 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                 cell(fmt_size(c.cum_down), colw[2], FG),
             ]
         };
-        lines.push(Line::from(spans));
+        lines.push(Line::from(slice_spans(&spans, hscroll)));
     }
 
-    let hmax = content_w.saturating_sub(view.width as usize) + 1;
-    let mut hscroll = app.conns_hscroll.min(hmax);
-    if is_bt {
-        let edge = hscroll + view.width as usize;
-        if edge + 4 > content_w && edge < content_w {
-            hscroll = hmax;
-        }
-    }
-    let hscroll = hscroll as u16;
     app.conns_max_hscroll = hmax;
     app.visible_conns_rows = data_rows;
-    f.render_widget(Paragraph::new(lines).scroll((0, hscroll)), view);
+    f.render_widget(Paragraph::new(lines), view);
 
     sb.vertical(total_rows, data_rows, app.conns_scroll)
         .horizontal(content_w, view.width as usize, hscroll as usize);

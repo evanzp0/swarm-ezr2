@@ -577,10 +577,8 @@ impl App {
                     .find(|(r, _)| in_rect(*r))
                     .map(|(_, i)| *i);
                 if let Some(i) = tab_hit {
-                    if i != self.filter {
-                        self.filter = i;
-                        self.scroll_to_selection();
-                    }
+                    // 页签点击与键盘 ]/[ 同口径：按页签快照保留/还原列表状态（FR-01-117）
+                    self.set_filter(i);
 
                     self.focus = Panel::List;
                     return;

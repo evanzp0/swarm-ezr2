@@ -31,6 +31,20 @@ pub use scroll::*;
 
 pub const FILTERS: [&str; 2] = ["正在下载", "已完成"];
 
+/// 页签列表视图状态快照（页签切换保留/还原，FR-01-117）：
+/// 切走页签时快照「选中任务身份 + 选中索引 + 滚动位置」，切回时尽可能还原——
+/// 选中优先按任务身份重新定位（任务仍在该页签即选回原任务，页签内集合位移免疫），
+/// 滚动位置原样还原，集合收缩/视口变化由 tick 守卫与 draw_list 自愈夹紧兜底。
+#[derive(Clone, Copy)]
+pub struct TabListState {
+    /// 上次离开页签时选中任务的 id（还原时优先按任务身份定位）
+    pub selected_task: Option<u32>,
+    /// 上次离开页签时的选中索引（任务不在该页签时兜底）
+    pub selected: usize,
+    /// 上次离开页签时的滚动位置（首行任务索引）
+    pub scroll: usize,
+}
+
 pub const MAX_DOWNLOAD_SLOTS: usize = 5;
 
 pub const TASK_LIMIT_DEFAULTS: (u64, u64) = (0, 0);
@@ -47,6 +61,9 @@ pub struct App {
     pub scroll: usize,
 
     pub filter: usize,
+
+    /// 每个过滤页签独立的列表视图状态（切页签保留/还原，FR-01-117）
+    pub tab_states: Vec<TabListState>,
 
     pub speed_hist: Vec<u64>,
 
@@ -317,6 +334,13 @@ impl App {
             last_selected: 0,
             scroll: 0,
             filter: 0,
+            tab_states: (0..FILTERS.len())
+                .map(|_| TabListState {
+                    selected_task: None,
+                    selected: 0,
+                    scroll: 0,
+                })
+                .collect(),
 
             speed_hist: Vec::new(),
             bw_t: 0.0,
@@ -531,13 +555,50 @@ impl App {
         self.scroll_to_selection();
     }
 
-    fn cycle_filter(&mut self, delta: i32) {
+    pub(crate) fn cycle_filter(&mut self, delta: i32) {
         let n = FILTERS.len() as i32;
-        self.filter = ((self.filter as i32 + delta).rem_euclid(n)) as usize;
-        self.scroll_to_selection();
+        let next = ((self.filter as i32 + delta).rem_euclid(n)) as usize;
+        self.set_filter(next);
     }
 
-    fn scroll_to_selection(&mut self) {
+    /// 切换过滤页签统一入口（键盘 ]/[ 循环、鼠标点击页签、添加任务跳回，FR-01-117）：
+    /// ①快照当前页签列表状态（选中任务身份 + 选中索引 + 滚动位置）；
+    /// ②还原目标页签快照——选中优先按任务身份重新定位（任务仍在该页签即选回
+    ///   原任务，页签内集合位移/收缩免疫），否则回退快照索引并夹紧；
+    ///   滚动位置原样还原（「尽可能还原」，集合收缩/视口变化由 tick 守卫与
+    ///   draw_list 自愈夹紧兜底）；空页签复位 0/0；
+    /// ③同步 last_selected 抑制 tick 视口跟随，保证还原的滚动位置不被
+    ///   吸附回选中窗口（滚轮「只移视口不动选中」留下的选中离屏态也按原样还原）。
+    pub(crate) fn set_filter(&mut self, idx: usize) {
+        if idx >= FILTERS.len() || idx == self.filter {
+            return;
+        }
+        self.tab_states[self.filter] = TabListState {
+            selected_task: self.sel_task().map(|t| t.id),
+            selected: self.selected,
+            scroll: self.scroll,
+        };
+        self.filter = idx;
+        let saved = self.tab_states[idx];
+        self.selected = saved.selected;
+        self.scroll = saved.scroll;
+        let idxs = self.filtered();
+        if idxs.is_empty() {
+            self.selected = 0;
+            self.scroll = 0;
+            self.last_selected = 0;
+            return;
+        }
+        if let Some(tid) = saved.selected_task {
+            if let Some(pos) = idxs.iter().position(|&ti| self.tasks[ti].id == tid) {
+                self.selected = pos;
+            }
+        }
+        self.selected = self.selected.min(idxs.len() - 1);
+        self.last_selected = self.selected;
+    }
+
+    pub(crate) fn scroll_to_selection(&mut self) {
         let vis = self.visible_rows.max(1);
         if self.scroll > self.selected {
             self.scroll = self.selected;

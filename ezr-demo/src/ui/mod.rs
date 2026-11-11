@@ -204,6 +204,51 @@ pub(crate) fn pad_left(s: &str, width: usize) -> String {
     }
 }
 
+pub(crate) fn slice_by_width(s: &str, cut: usize) -> String {
+    let mut out = String::new();
+    let mut acc = 0usize;
+    for ch in s.chars() {
+        let cw = w(&ch.to_string());
+        if acc >= cut {
+            out.push(ch);
+        } else if acc + cw > cut {
+            out.push_str(&" ".repeat(acc + cw - cut));
+        }
+        acc += cw;
+    }
+    out
+}
+
+pub(crate) fn slice_spans(spans: &[Span<'static>], cut: usize) -> Vec<Span<'static>> {
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut acc = 0usize;
+    for sp in spans {
+        let tw = w(&sp.content);
+        if tw == 0 {
+            continue;
+        }
+        let end = acc + tw;
+        if end <= cut {
+            acc = end;
+            continue;
+        }
+        if acc >= cut {
+            out.push(sp.clone());
+            acc = end;
+            continue;
+        }
+        let vis = tw - (cut - acc);
+        let mut s = slice_by_width(&sp.content, cut - acc);
+        let got = w(&s);
+        if got < vis {
+            s.push_str(&" ".repeat(vis - got));
+        }
+        out.push(Span::styled(s, sp.style));
+        acc = end;
+    }
+    out
+}
+
 pub(crate) fn fmt_size(bytes: u64) -> String {
     const MB: f64 = 1_000_000.0;
     const GB: f64 = 1_000_000_000.0;
@@ -250,30 +295,6 @@ pub(crate) fn fmt_dur(s: u64) -> String {
         format!("{}:{:02}:{:02}", h, m, sec)
     } else {
         format!("{:02}:{:02}", m, sec)
-    }
-}
-
-pub(crate) fn fmt_size_pair(a: u64, b: u64) -> String {
-    const KB: f64 = 1_000.0;
-    const MB: f64 = 1_000_000.0;
-    const GB: f64 = 1_000_000_000.0;
-    let (x, y) = (a as f64, b as f64);
-    let unit = if y >= GB {
-        ("GB", GB)
-    } else if y >= MB {
-        ("MB", MB)
-    } else if y >= KB {
-        ("KB", KB)
-    } else {
-        ("B", 1.0)
-    };
-    let (u, div) = unit;
-    if u == "GB" {
-        format!("{:.2}/{:.2} {}", x / div, y / div, u)
-    } else if u == "MB" {
-        format!("{:.1}/{:.1} {}", x / div, y / div, u)
-    } else {
-        format!("{:.0}/{:.0} {}", x / div, y / div, u)
     }
 }
 
@@ -698,7 +719,7 @@ mod conns_flags_tests {
     }
 
     #[test]
-    fn bt_conns_panel_renders_eight_columns_with_flags() {
+    fn bt_conns_panel_renders_nine_columns_with_flags_and_relevance() {
         let mut app = App::new();
         app.focus = Panel::Conns;
         let bt = *app
@@ -710,8 +731,9 @@ mod conns_flags_tests {
         assert!(!app.tasks[bt].connections.is_empty(), "BT 任务有并发明细");
         app.tasks[bt].connections[0].flags = "DUOI".to_string();
         app.tasks[bt].connections[0].speed = 1024.0;
+        app.tasks[bt].connections[0].relevance = 1.0;
 
-        let text = render_conns(&mut app, 120, 14);
+        let text = render_conns(&mut app, 130, 14);
         let head = text
             .lines()
             .find(|l| l.contains("地址"))
@@ -724,7 +746,14 @@ mod conns_flags_tests {
         let fl = head.find("标志").unwrap();
         let d = head.find("下载速度").unwrap();
         assert!(a < fl && fl < d, "标志列位于地址后第二列: {head:?}");
-        assert!(head.contains("协议"), "末列协议仍在: {head:?}");
+        assert!(
+            head.contains("相关度") && head.contains("协议"),
+            "相关度列与末列协议在位（FR-02-36 九列）: {head:?}"
+        );
+        let cl = head.find("客户端").unwrap();
+        let rel = head.find("相关度").unwrap();
+        let p = head.find("协议").unwrap();
+        assert!(cl < rel && rel < p, "相关度列位于客户端与协议之间（v1.47）: {head:?}");
         let row = text
             .lines()
             .find(|l| l.contains("TCP"))
@@ -733,10 +762,14 @@ mod conns_flags_tests {
             row.contains("DUOI"),
             "极值 4 枚连写 DUOI 左对齐渲染（数据宽 4 + 分隔 1 = 视觉列宽 5）: {row:?}"
         );
+        assert!(
+            row.contains("100.0%"),
+            "相关度百分数一位小数（qBt relevance 口径）: {row:?}"
+        );
     }
 
     #[test]
-    fn bt_conns_panel_flags_no_flag_dash_and_shrink_base_65() {
+    fn bt_conns_panel_flags_no_flag_dash_and_shrink_base_89() {
         let mut app = App::new();
         app.focus = Panel::Conns;
         let bt = *app
@@ -746,7 +779,7 @@ mod conns_flags_tests {
             .expect("正在下载页签含可显示并发的 BT 任务");
         app.selected = app.filtered().iter().position(|&i| i == bt).unwrap();
         app.tasks[bt].connections[0].flags = "-".to_string();
-        let text = render_conns(&mut app, 120, 14);
+        let text = render_conns(&mut app, 130, 14);
         assert!(text.contains("标志"), "表头含标志列: {text}");
         assert!(!text.contains('…'), "宽视口无省略号截断: {text}");
 
@@ -758,7 +791,43 @@ mod conns_flags_tests {
         assert!(head.contains("标志"), "窄视口标志列仍首屏可见: {head:?}");
         assert!(
             !narrow.contains('…'),
-            "收缩基线 65（下限 26）后客户端单元格无省略号（D69⑥ 同构）: {narrow}"
+            "收缩基线 89（下限 26）后客户端单元格无省略号（v1.47 同构）: {narrow}"
+        );
+    }
+
+    #[test]
+    fn bt_task_line_shows_health_and_share_ratio() {
+        let mut app = App::new();
+        let seeding = app
+            .tasks
+            .iter()
+            .position(|t| t.state == TaskState::Seeding)
+            .expect("演示数据含做种中 BT 任务");
+        {
+            let t = &mut app.tasks[seeding];
+            t.seeders = 12;
+            t.peers = 35;
+            t.availability = 2.418;
+            t.uploaded = 1_712_000_000;
+        }
+        let lines = list::task_lines(&app.tasks[seeding], false, ' ', 160, 0, 0);
+        let text = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("12/35/2.418"),
+            "健康度三段 3 位小数（FR-02-37）: {text}"
+        );
+        assert!(
+            text.contains("分享 0.40"),
+            "分享率 2 位小数（FR-02-38，1712MB/4320MB）: {text}"
         );
     }
 
@@ -792,6 +861,429 @@ mod conns_flags_tests {
                 "帮助【并发连接】组标志缩写条目缺失: {needle}"
             );
         }
+    }
+
+    fn flatten(lines: &[ratatui::text::Line<'static>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
+    }
+
+    fn fmt_size_pair(a: u64, b: u64) -> String {
+        const KB: f64 = 1_000.0;
+        const MB: f64 = 1_000_000.0;
+        const GB: f64 = 1_000_000_000.0;
+        let (x, y) = (a as f64, b as f64);
+        let unit = if y >= GB {
+            ("GB", GB)
+        } else if y >= MB {
+            ("MB", MB)
+        } else if y >= KB {
+            ("KB", KB)
+        } else {
+            ("B", 1.0)
+        };
+        let (u, div) = unit;
+        if u == "GB" {
+            format!("{:.2}/{:.2} {}", x / div, y / div, u)
+        } else if u == "MB" {
+            format!("{:.1}/{:.1} {}", x / div, y / div, u)
+        } else {
+            format!("{:.0}/{:.0} {}", x / div, y / div, u)
+        }
+    }
+
+    #[test]
+    fn bt_task_title_carries_total_size_and_detail_drops_pair() {
+        let mut app = App::new();
+        let bt = app
+            .tasks
+            .iter()
+            .position(|t| t.protocol.is_bt() && t.state == TaskState::Downloading)
+            .expect("演示数据含下载中 BT 任务");
+        let t = &app.tasks[bt];
+        let total_txt = fmt_size(t.total);
+        let rows = flatten(&list::task_lines(t, false, ' ', 160, 0, 0));
+        let l1 = &rows[0];
+        let l3 = &rows[2];
+        assert!(
+            l1.contains(&format!("[下载中] {total_txt}")),
+            "任务行状态徽标后以间隔显示 <总字节>（操作者调整轮）: {l1:?}"
+        );
+        assert!(
+            !l3.contains("GB"),
+            "明细行不再含 <已下载>/<总字节> 尺寸对: {l3:?}"
+        );
+        assert!(l3.contains("分享"), "分享率项保留（FR-02-38）: {l3:?}");
+        assert!(
+            l3.contains(&format!("{}/{}/", t.seeders, t.peers)),
+            "种子健康度三段保留（FR-02-37）: {l3:?}"
+        );
+    }
+
+    #[test]
+    fn http_task_rows_move_total_to_title_and_drop_pair() {
+        let mut app = App::new();
+        let http = app
+            .tasks
+            .iter()
+            .position(|t| t.state == TaskState::Downloading && !t.protocol.is_bt() && t.size_known())
+            .expect("演示数据含尺寸已知的下载中 HTTP(S) 任务");
+        let t = &app.tasks[http];
+        let total_txt = fmt_size(t.total);
+        let rows = flatten(&list::task_lines(t, false, ' ', 160, 0, 0));
+        let l1 = &rows[0];
+        let l3 = &rows[2];
+        assert!(
+            l1.contains(&format!("[下载中] {total_txt}")),
+            "HTTP 任务行状态徽标后以间隔显示 <总字节>（全类型调整轮）: {l1:?}"
+        );
+        assert!(
+            !l3.contains(&fmt_size(t.total)) && !l3.contains(&fmt_size(t.downloaded)),
+            "HTTP 明细行不再含 <已下载>/<总字节> 尺寸对: {l3:?}"
+        );
+        assert!(l3.contains("剩余"), "HTTP 明细行保留剩余时间: {l3:?}");
+    }
+
+    #[test]
+    fn unknown_size_http_task_hides_title_size_and_pair() {
+        let mut app = App::new();
+        let unk = app
+            .tasks
+            .iter()
+            .position(|t| t.state == TaskState::Downloading && !t.protocol.is_bt() && !t.size_known())
+            .expect("演示数据含尺寸未知的下载中 HTTP 任务");
+        let t = &app.tasks[unk];
+        let rows = flatten(&list::task_lines(t, false, ' ', 160, 0, 0));
+        let l1 = &rows[0];
+        let l3 = &rows[2];
+        assert!(
+            l1.ends_with("?%"),
+            "尺寸未知任务行进度列仍显示 ?%（无伪造总字节）: {l1:?}"
+        );
+        assert!(
+            !l3.contains("? B"),
+            "尺寸未知任务明细行不再含 <已下载>/? B 对: {l3:?}"
+        );
+    }
+
+    #[test]
+    fn failed_queued_completed_details_drop_size_items() {
+        let mut app = App::new();
+        // 已失败：任务行携带总字节，明细只剩重试/倒计时
+        let f = app
+            .tasks
+            .iter()
+            .position(|t| t.state == TaskState::Failed)
+            .expect("演示数据含已失败任务");
+        let tf = &app.tasks[f];
+        let rows = flatten(&list::task_lines(tf, false, ' ', 160, 0, 0));
+        assert!(
+            rows[0].contains(&format!("[已失败] {}", fmt_size(tf.total))),
+            "已失败任务行状态徽标后显示 <总字节>: {:?}",
+            rows[0]
+        );
+        assert!(
+            !rows[2].contains("GB") && !rows[2].contains("MB"),
+            "已失败明细行不再含尺寸对: {:?}",
+            rows[2]
+        );
+        assert!(rows[2].contains("重试"), "已失败明细行保留重试信息: {:?}", rows[2]);
+        // 等待中：明细只剩排队/槽位提示
+        let q = app
+            .tasks
+            .iter()
+            .position(|t| t.state == TaskState::Queued)
+            .expect("演示数据含等待中任务");
+        let tq = &app.tasks[q];
+        let rows = flatten(&list::task_lines(tq, false, ' ', 160, 2, 0));
+        assert!(
+            rows[0].contains(&format!("[等待中] {}", fmt_size(tq.total))),
+            "等待中任务行状态徽标后显示 <总字节>: {:?}",
+            rows[0]
+        );
+        assert!(
+            !rows[2].contains("GB") && !rows[2].contains("MB"),
+            "等待中明细行不再含尺寸对: {:?}",
+            rows[2]
+        );
+        assert!(
+            rows[2].contains("排队") || rows[2].contains("槽位"),
+            "等待中明细行保留排队提示: {:?}",
+            rows[2]
+        );
+        // 已完成：明细只剩校验结论
+        let c = app
+            .tasks
+            .iter()
+            .position(|t| t.state == TaskState::Completed)
+            .expect("演示数据含已完成任务");
+        let tc = &app.tasks[c];
+        let rows = flatten(&list::task_lines(tc, false, ' ', 160, 0, 0));
+        assert!(
+            rows[0].contains(&format!("[已完成] {}", fmt_size(tc.total))),
+            "已完成任务行状态徽标后显示 <总字节>: {:?}",
+            rows[0]
+        );
+        assert!(
+            !rows[2].contains("GB") && !rows[2].contains("MB"),
+            "已完成明细行不再含尺寸（总字节已上移任务行）: {:?}",
+            rows[2]
+        );
+        assert!(
+            rows[2].contains("校验成功") || rows[2].contains("无校验"),
+            "已完成明细行保留校验结论: {:?}",
+            rows[2]
+        );
+    }
+
+    #[test]
+    fn seeding_task_title_carries_total_and_detail_drops_uploaded_pair() {
+        let mut app = App::new();
+        let seeding = app
+            .tasks
+            .iter()
+            .position(|t| t.state == TaskState::Seeding)
+            .expect("演示数据含做种中 BT 任务");
+        let t = &app.tasks[seeding];
+        let total_txt = fmt_size(t.total);
+        let rows = flatten(&list::task_lines(t, false, ' ', 160, 0, 0));
+        let l1 = &rows[0];
+        let l3 = &rows[2];
+        assert!(
+            l1.contains(&format!("[做种中] {total_txt}")),
+            "做种中任务行状态徽标后显示 <总字节>（全类型统一口径）: {l1:?}"
+        );
+        assert!(
+            !l3.contains("已上传") && !l3.contains(&fmt_size_pair(t.uploaded, t.total)),
+            "做种明细行已上传对退役（v1.50，上传量仅经分享率体现）: {l3:?}"
+        );
+        assert!(
+            l3.contains("分享") && l3.contains("剩余做种"),
+            "做种明细行保留分享率与剩余做种: {l3:?}"
+        );
+    }
+
+    #[test]
+    fn slice_spans_window_width_invariant_mixed_cjk() {
+        let spans = vec![
+            Span::raw(pad_right("地址", 18)),
+            Span::raw(" "),
+            Span::raw(pad_left("下载速度", 12)),
+            Span::raw(" "),
+            Span::raw(pad_right("qBittorrent/5.1.2", 26)),
+            Span::raw(" "),
+            Span::raw(pad_left("相关度", 7)),
+            Span::raw(" "),
+            Span::raw(pad_right("TCP", 8)),
+        ];
+        let total: usize = spans.iter().map(|s| w(&s.content)).sum();
+        for cut in 0..=total {
+            let out = slice_spans(&spans, cut);
+            let got: usize = out.iter().map(|s| w(&s.content)).sum();
+            assert_eq!(got, total - cut, "cut={cut} 切片后可见宽度恒等");
+        }
+    }
+
+    #[test]
+    fn slice_spans_keeps_header_and_data_cells_aligned_at_any_offset() {
+        let cw = 26usize;
+        let head = vec![
+            Span::raw(pad_right("地址", 18)),
+            Span::raw(" "),
+            Span::raw(pad_right("标志", 4)),
+            Span::raw(" "),
+            Span::raw(pad_left("下载速度", 12)),
+            Span::raw(" "),
+            Span::raw(pad_left("上传速度", 12)),
+            Span::raw(" "),
+            Span::raw(pad_left("累计下载", 10)),
+            Span::raw(" "),
+            Span::raw(pad_left("累计上传", 10)),
+            Span::raw(" "),
+            Span::raw(pad_right("客户端", cw)),
+            Span::raw(" "),
+            Span::raw(pad_left("相关度", 7)),
+            Span::raw(" "),
+            Span::raw(pad_right("协议", 8)),
+        ];
+        let row = vec![
+            Span::raw(pad_right("185.*.92/4829", 18)),
+            Span::raw(" "),
+            Span::raw(pad_right("DU", 4)),
+            Span::raw(" "),
+            Span::raw(pad_left("229 KiB/s", 12)),
+            Span::raw(" "),
+            Span::raw(pad_left("28 KiB/s", 12)),
+            Span::raw(" "),
+            Span::raw(pad_left("1.4 MB", 10)),
+            Span::raw(" "),
+            Span::raw(pad_left("242 KB", 10)),
+            Span::raw(" "),
+            Span::raw(pad_right("qBittorrent/5.1.2", cw)),
+            Span::raw(" "),
+            Span::raw(pad_left("36.1%", 7)),
+            Span::raw(" "),
+            Span::raw(pad_right("TCP", 8)),
+        ];
+        let proto_start =
+            18 + 1 + 4 + 1 + 12 + 1 + 12 + 1 + 10 + 1 + 10 + 1 + cw + 1 + 7 + 1;
+        let pos_of = |spans: &[Span<'static>], token: &str| -> Option<usize> {
+            let mut acc = 0usize;
+            for s in spans {
+                if let Some(i) = s.content.find(token) {
+                    return Some(acc + w(&s.content[..i]));
+                }
+                acc += w(&s.content);
+            }
+            None
+        };
+        for cut in 0..proto_start + 8 {
+            let h = slice_spans(&head, cut);
+            let d = slice_spans(&row, cut);
+            let hp = pos_of(&h, "协").map(|p| p + cut);
+            let dp = pos_of(&d, "TCP").map(|p| p + cut);
+            assert_eq!(
+                hp, dp,
+                "cut={cut} 协议列单元格起点在任意滚动偏移下表头/数据对齐"
+            );
+        }
+    }
+
+    #[test]
+    fn conns_panel_renders_protocol_aligned_at_straddle_scroll() {
+        let mut app = App::new();
+        app.focus = Panel::Conns;
+        let bt = *app
+            .filtered()
+            .iter()
+            .find(|&&i| app.tasks[i].protocol.is_bt() && app.tasks[i].state.shows_conns())
+            .expect("正在下载页签含可显示并发的 BT 任务");
+        app.selected = app.filtered().iter().position(|&i| i == bt).unwrap();
+        app.conns_hscroll = 59;
+        let w = 61u16;
+        let mut term = Terminal::new(TestBackend::new(w, 12)).unwrap();
+        let area = Rect::new(0, 0, w, 12);
+        term.draw(|f| draw_conns(f, &mut app, area)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let cell_at = |x: u16, y: u16| buf[(x, y)].symbol().to_string();
+        let mut xie = None;
+        let mut tcp = None;
+        for y in 0..12u16 {
+            for x in 0..w {
+                let s = cell_at(x, y);
+                if s == "协" && xie.is_none() {
+                    xie = Some((x, y));
+                }
+                if s == "T" && tcp.is_none() {
+                    let right: String = (1..3).map(|k| cell_at(x + k, y)).collect();
+                    if right == "CP" {
+                        tcp = Some((x, y));
+                    }
+                }
+            }
+        }
+        let (hx, hy) = xie.expect("表头协议列在位");
+        let (dx, dy) = tcp.expect("数据 TCP 值在位");
+        assert_eq!(
+            hx, dx,
+            "跨列滚动偏移（hscroll=59 切入「载」右半）下协议表头与数据同列渲染"
+        );
+        assert_ne!(hy, dy, "表头行与数据行分层");
+    }
+
+    #[test]
+    fn tab_switch_preserves_and_restores_selection_and_scroll() {
+        let mut app = App::new();
+        // 页签 0：选中第 3 项（滚动置顶附近）后切走
+        app.selected = 2;
+        app.scroll = 0;
+        let origin_id = app.tasks[app.filtered()[2]].id;
+        // 切到「已完成」页签，改动选中/滚动后再切回
+        app.cycle_filter(1);
+        app.selected = app.filtered().len() - 1;
+        app.scroll_to_selection();
+        assert_ne!(app.sel_task().map(|t| t.id), Some(origin_id));
+        app.cycle_filter(-1);
+        assert_eq!(app.filter, 0);
+        assert_eq!(
+            app.sel_task().map(|t| t.id),
+            Some(origin_id),
+            "切回原页签选回原任务（快照按任务身份还原，FR-01-117）"
+        );
+        assert_eq!(app.selected, 2, "选中索引还原");
+        assert_eq!(app.scroll, 0, "滚动位置还原");
+    }
+
+    #[test]
+    fn tab_switch_relocates_selection_by_task_identity_when_tab_set_shifts() {
+        let mut app = App::new();
+        app.selected = 2;
+        app.scroll = 0;
+        let origin_id = app.tasks[app.filtered()[2]].id;
+        app.cycle_filter(1);
+        // 离开期间页签 0 集合位移：首位任务转「已完成」移出页签 0，其后任务索引整体前移
+        // （纯索引还原会选中错位邻居 = 操作者报告的缺陷形态）
+        app.tasks[0].state = TaskState::Completed;
+        app.cycle_filter(-1);
+        assert_eq!(
+            app.sel_task().map(|t| t.id),
+            Some(origin_id),
+            "页签集合位移后仍按任务身份选回原任务"
+        );
+        assert_eq!(app.selected, 1, "选中索引随集合位移重新定位到原任务新位置");
+    }
+
+    #[test]
+    fn tab_switch_clamps_restored_state_when_tab_set_shrinks_and_renders_all_rows() {
+        let mut app = App::new();
+        // 页签 1 选中尾项并让视口跟随
+        app.cycle_filter(1);
+        app.selected = app.filtered().len() - 1;
+        app.scroll_to_selection();
+        let tail_id = app.sel_task().map(|t| t.id).expect("页签 1 非空");
+        app.cycle_filter(-1);
+        // 离开期间页签 1 集合收缩：原尾项任务转「下载中」移出页签 1
+        let ti = app
+            .tasks
+            .iter()
+            .position(|t| t.id == tail_id)
+            .expect("任务仍在 tasks 中");
+        app.tasks[ti].state = TaskState::Downloading;
+        app.cycle_filter(1);
+        let flen = app.filtered().len();
+        assert!(
+            app.selected < flen,
+            "还原状态越界时夹紧（selected={}/len={flen}）",
+            app.selected
+        );
+        assert_eq!(app.selected, flen - 1, "原尾项已移出 → 兜底夹紧到新尾项");
+        // 渲染列表：视口足以容纳全部任务时必须全量渲染
+        // （还原 scroll 越界时 draw_list 按视口容量自愈夹紧兜底）
+        let w = 110u16;
+        let h = 34u16;
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let area = Rect::new(0, 0, w, h);
+        term.draw(|f| draw_list(f, &mut app, area)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let mut rows: Vec<String> = vec![String::new(); h as usize];
+        for y in 0..h {
+            for x in 0..w {
+                rows[y as usize].push_str(buf[(x, y)].symbol());
+            }
+        }
+        let text = rows.join("\n");
+        // ratatui Buffer 宽字符占位格为空格符号，去空格归一化后再查 CJK 徽标
+        let compact = text.replace(' ', "");
+        assert!(
+            compact.contains("[做种中]") && compact.contains("[已完成]"),
+            "切回页签后全列表渲染（做种中/已完成行同屏可见）: {text}"
+        );
+        assert!(
+            compact.contains(&format!("{flen}/{flen}项")),
+            "列表计数行显示 {flen}/{flen} 项: {text}"
+        );
     }
 }
 
