@@ -396,8 +396,11 @@ pub(crate) async fn run(
                             completed_notifies = notifies;
                             tr_handles = handles;
                         }
-                        let views = conn_views(&mut conns, pmap.covered_pieces(), &done, optimistic_slot);
-                        let _ = evt_tx.send(Evt::BtConns { id, conns: views }).await;
+                        let (views, availability) =
+                            conn_views(&mut conns, pmap.covered_pieces(), &done, optimistic_slot);
+                        let _ = evt_tx
+                            .send(Evt::BtConns { id, conns: views, availability })
+                            .await;
                     }
                 }
             }
@@ -573,8 +576,11 @@ pub(crate) async fn run(
                                     .await;
                             }
                         }
-                        let views = conn_views(&mut conns, pmap.covered_pieces(), &done, optimistic_slot);
-                        let _ = evt_tx.send(Evt::BtConns { id, conns: views }).await;
+                        let (views, availability) =
+                            conn_views(&mut conns, pmap.covered_pieces(), &done, optimistic_slot);
+                        let _ = evt_tx
+                            .send(Evt::BtConns { id, conns: views, availability })
+                            .await;
                     }
                     PeerIn::Closed { reason } => {
                         if let Some(st) = conns.remove(&conn_id) {
@@ -621,8 +627,11 @@ pub(crate) async fn run(
                             BanKind::Protocol,
                         )
                         .await;
-                        let views = conn_views(&mut conns, pmap.covered_pieces(), &done, optimistic_slot);
-                        let _ = evt_tx.send(Evt::BtConns { id, conns: views }).await;
+                        let (views, availability) =
+                            conn_views(&mut conns, pmap.covered_pieces(), &done, optimistic_slot);
+                        let _ = evt_tx
+                            .send(Evt::BtConns { id, conns: views, availability })
+                            .await;
                     }
                     PeerIn::Msg(msg) => {
                         let ban = handle_peer_msg(
@@ -655,8 +664,11 @@ pub(crate) async fn run(
                                 kind,
                             )
                             .await;
-                            let views = conn_views(&mut conns, pmap.covered_pieces(), &done, optimistic_slot);
-                            let _ = evt_tx.send(Evt::BtConns { id, conns: views }).await;
+                            let (views, availability) =
+                            conn_views(&mut conns, pmap.covered_pieces(), &done, optimistic_slot);
+                            let _ = evt_tx
+                            .send(Evt::BtConns { id, conns: views, availability })
+                            .await;
                         }
                         if downloaded != prev_downloaded {
                             {
@@ -670,7 +682,8 @@ pub(crate) async fn run(
                             // 对进度与速度显示足够（qBittorrent 同为秒级刷新）。
                             if progress_emit_due(last_emit, std::time::Instant::now(), tun.progress_emit_min_interval_ms) {
                                 last_emit = std::time::Instant::now();
-                                let views = conn_views(&mut conns, pmap.covered_pieces(), &done, optimistic_slot);
+                                let (views, availability) =
+                            conn_views(&mut conns, pmap.covered_pieces(), &done, optimistic_slot);
                                 let _ = evt_tx.send(Evt::BtProgress {
                                     id,
                                     downloaded,
@@ -680,7 +693,9 @@ pub(crate) async fn run(
                                     active_blocks: inflight_piece_list(&conns, &done),
                                     uploaded: uploaded_total(&conns),
                                 }).await;
-                                let _ = evt_tx.send(Evt::BtConns { id, conns: views }).await;
+                                let _ = evt_tx
+                            .send(Evt::BtConns { id, conns: views, availability })
+                            .await;
                             }
                         }
                         if !seeding && all_selected_done(&done, &pmap) {
@@ -812,7 +827,8 @@ pub(crate) async fn run(
                     let _ = evt_tx.send(Evt::BtDone { id, total: pmap.selected_total() }).await;
                 }
                 last_emit = now;
-                let views = conn_views(&mut conns, pmap.covered_pieces(), &done, optimistic_slot);
+                let (views, availability) =
+                            conn_views(&mut conns, pmap.covered_pieces(), &done, optimistic_slot);
                 let _ = evt_tx.send(Evt::BtProgress {
                     id,
                     downloaded,
@@ -822,7 +838,9 @@ pub(crate) async fn run(
                     active_blocks: inflight_piece_list(&conns, &done),
                     uploaded: uploaded_total(&conns),
                 }).await;
-                let _ = evt_tx.send(Evt::BtConns { id, conns: views }).await;
+                let _ = evt_tx
+                            .send(Evt::BtConns { id, conns: views, availability })
+                            .await;
             }
             _ = sweep.tick() => {
                 fill_peer_slots(
@@ -3999,13 +4017,128 @@ mod tests {
             selected: true,
         }];
         let pmap = PieceMap::new(&files, 32 * 1024);
-        let views = conn_views(&mut conns, pmap.covered_pieces(), &HashSet::new(), None);
+        let (views, _availability) =
+            conn_views(&mut conns, pmap.covered_pieces(), &HashSet::new(), None);
         assert_eq!(
             views.len(),
             1,
             "握手未完成的连接不得出现在并发 panel（同 IP 两行根因）"
         );
         assert_eq!(views[0].addr, "10.0.0.7:51413", "保留的是已建立连接");
+    }
+
+    #[test]
+    fn conn_views_relevance_is_missing_overlap_ratio() {
+        // FR-02-36：qBt calcRelevance 同源 =（对端有 ∧ 本端缺失）÷（本端缺失总数）。
+        let files = vec![BtFile {
+            path: "a.bin".into(),
+            size: 256 * 1024,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 32 * 1024);
+        let covered: Vec<u32> = (0..8).collect(); // 8 piece
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        let mut peer = new_conn_stat("10.0.0.1:6881".into());
+        peer.peer_id = Some([1u8; 20]);
+        // 对端持有 {0,1,2,3}；本端缺失全部 8 → 相关度 4/8 = 0.5
+        peer.has = covered[..4].iter().copied().collect();
+        conns.insert(1, peer);
+        let done = HashSet::new();
+        let (views, _) = conn_views(&mut conns, &covered, &done, None);
+        assert_eq!(views[0].relevance, 0.5, "对端有∧本端缺 ÷ 本端缺: 4/8");
+        // 本端已有 {0,1}（缺失 {2..8} 共 6）→ 交集 {2,3} = 2 → 2/6 ≈ 0.3333
+        let done: HashSet<u32> = [0u32, 1].into_iter().collect();
+        let (views, _) = conn_views(&mut conns, &covered, &done, None);
+        assert!(
+            (views[0].relevance - 2.0 / 6.0).abs() < 1e-9,
+            "缺失收缩后相关度 2/6: {}",
+            views[0].relevance
+        );
+        // 对端持有全部 → 1.0
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        let mut full = new_conn_stat("10.0.0.2:6881".into());
+        full.peer_id = Some([2u8; 20]);
+        full.has = covered.iter().copied().collect();
+        conns.insert(1, full);
+        let (views, _) = conn_views(&mut conns, &covered, &HashSet::new(), None);
+        assert!((views[0].relevance - 1.0).abs() < 1e-9, "全持有 → 1.0");
+    }
+
+    #[test]
+    fn conn_views_relevance_zero_when_seeding() {
+        // FR-02-36：本端无缺失（做种/已完成下载）时相关度恒 0（分母 0）。
+        let files = vec![BtFile {
+            path: "a.bin".into(),
+            size: 64 * 1024,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 32 * 1024);
+        let covered: Vec<u32> = (0..2).collect();
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        let mut peer = new_conn_stat("10.0.0.3:6881".into());
+        peer.peer_id = Some([3u8; 20]);
+        peer.has = [0u32].into_iter().collect();
+        conns.insert(1, peer);
+        let done: HashSet<u32> = covered.iter().copied().collect();
+        let (views, _) = conn_views(&mut conns, &covered, &done, None);
+        assert_eq!(views[0].relevance, 0.0, "做种中相关度恒 0");
+    }
+
+    #[test]
+    fn distributed_copies_follows_d74_formula() {
+        // FR-02-37/D74③：健康度 = 计数最小值 + 连接种子数
+        // +（计数超出最小值的 piece 数 ÷ 总 piece 数）。
+        // 场景：2 piece；本端无、1 个种子（全持有）、1 个普通 peer 持有 piece 0。
+        //   计数（非种子 peer + 本端）：piece0 = 1、piece1 = 0 → min 0；种子 1；
+        //   超出 min 的 piece 数 = 1 → 健康度 = 0 + 1 + 1/2 = 1.5。
+        let files = vec![BtFile {
+            path: "a.bin".into(),
+            size: 64 * 1024,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 32 * 1024);
+        let covered: Vec<u32> = (0..2).collect();
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        let mut seed = new_conn_stat("10.0.0.1:6881".into());
+        seed.peer_id = Some([1u8; 20]);
+        seed.has = covered.iter().copied().collect();
+        let mut half = new_conn_stat("10.0.0.2:6881".into());
+        half.peer_id = Some([2u8; 20]);
+        half.has = [0u32].into_iter().collect();
+        conns.insert(1, seed);
+        conns.insert(2, half);
+        let avail = distributed_copies(&conns, &covered, &HashSet::new());
+        assert!((avail - 1.5).abs() < 1e-9, "种子 1 + 覆盖分数 0.5: {avail}");
+        // 本端持有 piece1（计数 piece0=1、piece1=1）→ min 1；种子 1；
+        // 超出 min 的 piece 数 0 → 1 + 1 + 0 = 2.0。
+        let done: HashSet<u32> = [1u32].into_iter().collect();
+        let avail = distributed_copies(&conns, &covered, &done);
+        assert!((avail - 2.0).abs() < 1e-9, "本端持有抬升最小值: {avail}");
+    }
+
+    #[test]
+    fn distributed_copies_excludes_pre_handshake_and_counts_local_have() {
+        // 握手未完成连接不计入（与并发 panel 显示口径一致）；covered 空 → 0。
+        let files = vec![BtFile {
+            path: "a.bin".into(),
+            size: 32 * 1024,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 32 * 1024);
+        let covered: Vec<u32> = vec![0];
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        let mut dialing = new_conn_stat("10.0.0.4:6881".into());
+        dialing.peer_id = None;
+        dialing.has = [0u32].into_iter().collect();
+        conns.insert(1, dialing);
+        let avail = distributed_copies(&conns, &covered, &HashSet::new());
+        assert!((avail - 0.0).abs() < 1e-9, "位图未知连接不计入: {avail}");
+        let empty: Vec<u32> = Vec::new();
+        assert_eq!(distributed_copies(&conns, &empty, &HashSet::new()), 0.0);
+        // 做种（本端全持有）无连接：min 1 + 种子 0 + 0 = 1.0。
+        let done: HashSet<u32> = covered.iter().copied().collect();
+        let avail = distributed_copies(&HashMap::new(), &covered, &done);
+        assert!((avail - 1.0).abs() < 1e-9, "纯做种基线健康度 1.0: {avail}");
     }
 
     fn flags_case(

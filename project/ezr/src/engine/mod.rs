@@ -137,6 +137,9 @@ pub enum Evt {
     BtConns {
         id: u32,
         conns: Vec<BtConnView>,
+        /// 种子健康度（FR-02-37：qBt Availability / libtorrent distributed_copies
+        /// 同源）；与并发明细同帧产生，随 tick 同节拍刷新。
+        availability: f64,
     },
     BtProgress {
         id: u32,
@@ -193,6 +196,10 @@ pub struct BtConnView {
     pub client: String,
     pub seeder: bool,
     pub flags: String,
+    /// 相关度（FR-02-36：qBt PeerInfo::calcRelevance 同源）=
+    /// （对端拥有 ∧ 本端缺失的 piece 数）÷（本端缺失 piece 总数）；
+    /// 本端无缺失（做种/已完成下载）时恒 0。
+    pub relevance: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

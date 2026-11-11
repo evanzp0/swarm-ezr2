@@ -1385,6 +1385,153 @@ mod ui_v114_tests {
 }
 
 #[cfg(test)]
+mod tab_restore_tests {
+    use ratatui::backend::TestBackend;
+    use ratatui::layout::Rect;
+    use ratatui::Terminal;
+
+    use super::*;
+    use crate::model::{Task, TaskState};
+
+    fn make_app(tag: &str) -> App {
+        crate::app::testutil::make_app_in("ezr-tabrestore", tag)
+    }
+
+    fn task(id: u32, name: &str, state: TaskState) -> Task {
+        let mut t = crate::model::sample_task();
+        t.id = id;
+        t.name = name.to_string();
+        t.state = state;
+        t.total = 3000;
+        t.downloaded = 1500;
+        t.probed = true;
+        t
+    }
+
+    fn seed_mixed(app: &mut App) {
+        for i in 1..=10u32 {
+            app.tasks
+                .push(task(i, &format!("dl{i}.bin"), TaskState::Downloading));
+        }
+        app.tasks.push(task(11, "seed11.bin", TaskState::Seeding));
+        app.tasks.push(task(12, "seed12.bin", TaskState::Seeding));
+        app.tasks.push(task(13, "seed13.bin", TaskState::Seeding));
+        app.tasks.push(task(14, "done14.bin", TaskState::Completed));
+        app.tasks.push(task(15, "done15.bin", TaskState::Completed));
+    }
+
+    fn seed_done_heavy(app: &mut App) {
+        app.tasks.push(task(1, "dl1.bin", TaskState::Downloading));
+        for i in 11..=13u32 {
+            app.tasks
+                .push(task(i, &format!("seed{i}.bin"), TaskState::Seeding));
+        }
+        for i in 14..=20u32 {
+            app.tasks
+                .push(task(i, &format!("done{i}.bin"), TaskState::Completed));
+        }
+    }
+
+    #[tokio::test]
+    async fn tab_switch_preserves_and_restores_selection_and_scroll() {
+        let mut app = make_app("preserve");
+        seed_mixed(&mut app);
+        app.visible_rows = 6;
+        app.selected = 2;
+        app.scroll = 4;
+        let origin_id = app.tasks[app.filtered()[2]].id;
+        app.cycle_filter(1);
+        app.selected = app.filtered().len() - 1;
+        app.scroll_to_selection();
+        assert_ne!(app.sel_task().map(|t| t.id), Some(origin_id));
+        app.cycle_filter(-1);
+        assert_eq!(app.filter, 0);
+        assert_eq!(
+            app.sel_task().map(|t| t.id),
+            Some(origin_id),
+            "切回原页签选回原任务（快照按任务身份还原，FR-01-117）"
+        );
+        assert_eq!(app.selected, 2, "选中索引还原");
+        assert_eq!(app.scroll, 4, "滚动位置原样还原（选中离屏态不吸附视口）");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn tab_switch_relocates_selection_by_task_identity_when_tab_set_shifts() {
+        let mut app = make_app("relocate");
+        seed_mixed(&mut app);
+        app.visible_rows = 6;
+        app.selected = 2;
+        app.scroll = 0;
+        let origin_id = app.tasks[app.filtered()[2]].id;
+        app.cycle_filter(1);
+        app.tasks[0].state = TaskState::Completed;
+        app.cycle_filter(-1);
+        assert_eq!(
+            app.sel_task().map(|t| t.id),
+            Some(origin_id),
+            "页签集合位移后仍按任务身份选回原任务"
+        );
+        assert_eq!(app.selected, 1, "选中索引随集合位移重新定位到原任务新位置");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn tab_switch_clamps_restored_state_when_tab_set_shrinks_and_renders_all_rows() {
+        let mut app = make_app("clamprender");
+        seed_done_heavy(&mut app);
+        app.visible_rows = 6;
+        app.cycle_filter(1);
+        app.selected = app.filtered().len() - 1;
+        app.scroll_to_selection();
+        let tail_id = app.sel_task().map(|t| t.id).expect("页签 1 非空");
+        app.cycle_filter(-1);
+        let ti = app
+            .tasks
+            .iter()
+            .position(|t| t.id == tail_id)
+            .expect("任务仍在 tasks 中");
+        app.tasks[ti].state = TaskState::Downloading;
+        app.cycle_filter(1);
+        let flen = app.filtered().len();
+        assert!(
+            app.selected < flen,
+            "还原状态越界时夹紧（selected={}/len={flen}）",
+            app.selected
+        );
+        assert_eq!(app.selected, flen - 1, "原尾项已移出 → 兜底夹紧到新尾项");
+        let w = 110u16;
+        let h = 48u16;
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let area = Rect::new(0, 0, w, h);
+        term.draw(|f| draw_list(f, &mut app, area)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let mut rows: Vec<String> = vec![String::new(); h as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let cell = buf.cell((x, y)).expect("网格坐标在界内");
+                rows[y as usize].push_str(cell.symbol());
+            }
+        }
+        let text = rows.join("\n");
+        let compact = text.replace(' ', "");
+        assert!(
+            compact.contains("[做种中]") && compact.contains("[已完成]"),
+            "切回页签后全列表渲染（做种中/已完成行同屏可见）: {text}"
+        );
+        assert!(
+            compact.contains(&format!("{flen}/{flen}项")),
+            "列表计数行显示 {flen}/{flen} 项: {text}"
+        );
+        assert_eq!(
+            app.scroll, 0,
+            "滚动越界按视口容量自愈夹紧（视口容纳全部时回 0）"
+        );
+        app.shutdown().await;
+    }
+}
+
+#[cfg(test)]
 pub(crate) mod testfx {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;

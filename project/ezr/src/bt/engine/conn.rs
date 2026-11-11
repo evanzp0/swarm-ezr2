@@ -317,14 +317,60 @@ pub(super) fn conn_flags(
     }
 }
 
+/// 种子健康度（FR-02-37）：qBt Availability / libtorrent distributed_copies
+/// 同源。公式（D74 钦定口径）：每 piece 持有者计数 = 连接的非种子 peer 持有
+/// 记 1 + 本端已有记 1；健康度 = 计数最小值 + 连接种子数 +（计数超出最小值
+/// 的 piece 数 ÷ 总 piece 数）。连接 = 已握手连接（位图未知不计入，与并发
+/// panel 显示口径一致）。
+pub(super) fn distributed_copies(
+    conns: &HashMap<usize, ConnStat>,
+    covered: &[u32],
+    done: &HashSet<u32>,
+) -> f64 {
+    if covered.is_empty() {
+        return 0.0;
+    }
+    let known: Vec<(usize, &ConnStat)> = conns
+        .iter()
+        .filter(|(_, st)| st.peer_id.is_some())
+        .map(|(cid, st)| (*cid, st))
+        .collect();
+    let seeds: HashSet<usize> = known
+        .iter()
+        .filter(|(_, st)| {
+            st.has.len() >= covered.len() && covered.iter().all(|p| st.has.contains(p))
+        })
+        .map(|(cid, _)| *cid)
+        .collect();
+    let mut counts = vec![0usize; covered.len()];
+    for (i, p) in covered.iter().enumerate() {
+        let mut c = usize::from(done.contains(p));
+        for (cid, st) in &known {
+            if !seeds.contains(cid) && st.has.contains(p) {
+                c += 1;
+            }
+        }
+        counts[i] = c;
+    }
+    let min_c = counts.iter().copied().min().unwrap_or(0);
+    let extra = counts.iter().filter(|c| **c > min_c).count();
+    (min_c + seeds.len()) as f64 + extra as f64 / covered.len() as f64
+}
+
 pub(super) fn conn_views(
     conns: &mut HashMap<usize, ConnStat>,
     covered: &[u32],
     done: &HashSet<u32>,
     optimistic_slot: Option<usize>,
-) -> Vec<BtConnView> {
+) -> (Vec<BtConnView>, f64) {
     let now = std::time::Instant::now();
     let mut views = Vec::with_capacity(conns.len());
+    // 本端缺失 piece 集（FR-02-36 相关度分母）：covered − done。
+    let missing: HashSet<u32> = covered
+        .iter()
+        .copied()
+        .filter(|p| !done.contains(p))
+        .collect();
     for (cid, st) in conns.iter_mut() {
         // 握手未完成（peer_id 未知）的连接不进并发 panel：对方交叉拨入
         // （我们出连的同时对方也拨入）在握手完成前会以同 IP 挂在表里，
@@ -336,6 +382,15 @@ pub(super) fn conn_views(
         let seeder = !covered.is_empty()
             && st.has.len() >= covered.len()
             && covered.iter().all(|p| st.has.contains(p));
+        // 相关度（FR-02-36，qBt PeerInfo::calcRelevance 同源）=
+        // （对端拥有 ∧ 本端缺失的 piece 数）÷（本端缺失 piece 总数）；
+        // 本端无缺失（做种中/已完成下载）时恒 0。
+        let relevance = if missing.is_empty() {
+            0.0
+        } else {
+            let overlap = st.has.iter().filter(|p| missing.contains(*p)).count();
+            overlap as f64 / missing.len() as f64
+        };
         let down_speed = ConnStat::speed(&st.down_window, st.cum_down);
         let up_speed = ConnStat::speed(&st.up_window, st.cum_up);
         st.down_window = (st.cum_down, now);
@@ -351,8 +406,10 @@ pub(super) fn conn_views(
             client: st.client.clone(),
             seeder,
             flags: conn_flags(st, covered, done, optimistic_slot, *cid),
+            relevance,
         });
     }
     views.sort_unstable_by_key(|v| v.id);
-    views
+    let availability = distributed_copies(conns, covered, done);
+    (views, availability)
 }

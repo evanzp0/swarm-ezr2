@@ -281,7 +281,15 @@ impl App {
                     t.peers = incomplete as usize;
                 }
             }
-            Evt::BtConns { id, conns } => {
+            Evt::BtConns {
+                id,
+                conns,
+                availability,
+            } => {
+                // 种子健康度（FR-02-37）：与并发明细同帧刷新，仅活跃态任务接收。
+                if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
+                    t.availability = availability;
+                }
                 let active = self
                     .tasks
                     .iter()
@@ -315,6 +323,7 @@ impl App {
                                 client: c.client,
                                 seeder: c.seeder,
                                 flags: c.flags,
+                                relevance: c.relevance,
                             })
                             .collect(),
                     );

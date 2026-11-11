@@ -14,6 +14,9 @@ pub fn fmt_size(bytes: u64) -> String {
     }
 }
 
+/// 明细统计行尺寸对（fmt_size_pair 形态）已随 FR-02-38 v1.19 全面退役；
+/// 函数仅余测试不变量引用（property_tests 单位绑定总量），测试构建编译。
+#[cfg(test)]
 #[must_use]
 pub fn fmt_size_pair(a: u64, b: u64) -> String {
     const KB: f64 = 1_000.0;

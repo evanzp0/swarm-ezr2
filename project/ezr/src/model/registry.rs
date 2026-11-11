@@ -164,6 +164,8 @@ impl From<&TaskSnapshot> for Task {
             seeders: 0,
             peers: 0,
             seed_left: s.seed_left,
+            // 瞬时显示指标不持久化：恢复后首帧 BtConns 事件即刷新（FR-02-37）。
+            availability: 0.0,
             max_download_speed: s.max_download_speed,
             max_upload_speed: s.max_upload_speed,
             resume_orphan: s.resume_orphan,

@@ -22,7 +22,9 @@ pub fn pad_left(s: &str, width: usize) -> String {
     }
 }
 
-pub use crate::model::sizefmt::{fmt_size, fmt_size_pair};
+pub use crate::model::sizefmt::fmt_size;
+#[cfg(test)]
+pub use crate::model::sizefmt::fmt_size_pair;
 
 pub fn fmt_speed(bps: f64) -> String {
     const KIB: f64 = 1024.0;
@@ -46,6 +48,59 @@ pub fn fmt_eta(secs: Option<u64>) -> String {
         None => "--:--".to_string(),
         Some(s) => fmt_dur(s),
     }
+}
+
+/// 按显示宽度从 `cut` 起自左切片（FR-02-33 v1.18 口径注记：并发 panel 水平
+/// 窗口按显示宽度自行切片渲染，规避 ratatui LineTruncator 对 CJK 跨列截断
+/// 整字渲染造成的表头行/数据行错位）。当被切字符宽度跨越 cut 边界时，以
+/// 空格补齐至边界（保持后续内容列位置恒定）。
+pub fn slice_by_width(s: &str, cut: usize) -> String {
+    let mut out = String::new();
+    let mut acc = 0usize;
+    for ch in s.chars() {
+        let cw = w(&ch.to_string());
+        if acc >= cut {
+            out.push(ch);
+        } else if acc + cw > cut {
+            out.push_str(&" ".repeat(acc + cw - cut));
+        }
+        acc += cw;
+    }
+    out
+}
+
+/// 对整行 spans 按显示宽度切出 `[cut, cut + 窗口)` 起始的可见窗口内容
+/// （即自 cut 处开始的剩余部分；调用方以「滚动偏移」为 cut）。逐 span 保
+/// 持自身样式；被切 span 的可见宽度不足时以空格补齐，确保任意滚动偏移下
+/// 表头与数据逐列恒对齐（v1.48 ②）。
+pub fn slice_spans(spans: &[Span<'static>], cut: usize) -> Vec<Span<'static>> {
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut acc = 0usize;
+    for sp in spans {
+        let tw = w(sp.content.as_ref());
+        if tw == 0 {
+            continue;
+        }
+        let end = acc + tw;
+        if end <= cut {
+            acc = end;
+            continue;
+        }
+        if acc >= cut {
+            out.push(sp.clone());
+            acc = end;
+            continue;
+        }
+        let vis = tw - (cut - acc);
+        let mut s = slice_by_width(sp.content.as_ref(), cut - acc);
+        let got = w(&s);
+        if got < vis {
+            s.push_str(&" ".repeat(vis - got));
+        }
+        out.push(Span::styled(s, sp.style));
+        acc = end;
+    }
+    out
 }
 
 pub fn fmt_dur(s: u64) -> String {
@@ -356,5 +411,100 @@ mod tests {
         let at: String = a.iter().map(|s| s.content.as_ref()).collect();
         let bt: String = b.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(at, bt, "走马灯按周期循环");
+    }
+
+    #[test]
+    fn slice_spans_window_width_invariant_mixed_cjk() {
+        let spans = vec![
+            Span::raw(pad_right("地址", 18)),
+            Span::raw(" "),
+            Span::raw(pad_left("下载速度", 12)),
+            Span::raw(" "),
+            Span::raw(pad_right("qBittorrent/5.1.2", 26)),
+            Span::raw(" "),
+            Span::raw(pad_left("相关度", 7)),
+            Span::raw(" "),
+            Span::raw(pad_right("TCP", 8)),
+        ];
+        let total: usize = spans.iter().map(|s| w(s.content.as_ref())).sum();
+        for cut in 0..=total {
+            let out = slice_spans(&spans, cut);
+            let got: usize = out.iter().map(|s| w(s.content.as_ref())).sum();
+            assert_eq!(got, total - cut, "cut={cut} 切片后可见宽度恒等");
+        }
+    }
+
+    #[test]
+    fn slice_spans_keeps_header_and_data_cells_aligned_at_any_offset() {
+        let cw = 26usize;
+        let head = vec![
+            Span::raw(pad_right("地址", 18)),
+            Span::raw(" "),
+            Span::raw(pad_right("标志", 4)),
+            Span::raw(" "),
+            Span::raw(pad_left("下载速度", 12)),
+            Span::raw(" "),
+            Span::raw(pad_left("上传速度", 12)),
+            Span::raw(" "),
+            Span::raw(pad_left("累计下载", 10)),
+            Span::raw(" "),
+            Span::raw(pad_left("累计上传", 10)),
+            Span::raw(" "),
+            Span::raw(pad_right("客户端", cw)),
+            Span::raw(" "),
+            Span::raw(pad_left("相关度", 7)),
+            Span::raw(" "),
+            Span::raw(pad_right("协议", 8)),
+        ];
+        let row = vec![
+            Span::raw(pad_right("185.*.92/4829", 18)),
+            Span::raw(" "),
+            Span::raw(pad_right("DU", 4)),
+            Span::raw(" "),
+            Span::raw(pad_left("229 KiB/s", 12)),
+            Span::raw(" "),
+            Span::raw(pad_left("28 KiB/s", 12)),
+            Span::raw(" "),
+            Span::raw(pad_left("1.4 MB", 10)),
+            Span::raw(" "),
+            Span::raw(pad_left("242 KB", 10)),
+            Span::raw(" "),
+            Span::raw(pad_right("qBittorrent/5.1.2", cw)),
+            Span::raw(" "),
+            Span::raw(pad_left("36.1%", 7)),
+            Span::raw(" "),
+            Span::raw(pad_right("TCP", 8)),
+        ];
+        let proto_start = 18 + 1 + 4 + 1 + 12 + 1 + 12 + 1 + 10 + 1 + 10 + 1 + cw + 1 + 7 + 1;
+        let pos_of = |spans: &[Span<'static>], token: &str| -> Option<usize> {
+            let mut acc = 0usize;
+            for s in spans {
+                if let Some(i) = s.content.find(token) {
+                    return Some(acc + w(&s.content[..i]));
+                }
+                acc += w(s.content.as_ref());
+            }
+            None
+        };
+        for cut in 0..proto_start + 8 {
+            let h = slice_spans(&head, cut);
+            let d = slice_spans(&row, cut);
+            let hp = pos_of(&h, "协").map(|p| p + cut);
+            let dp = pos_of(&d, "TCP").map(|p| p + cut);
+            assert_eq!(
+                hp, dp,
+                "cut={cut} 协议列单元格起点在任意滚动偏移下表头/数据对齐"
+            );
+        }
+    }
+
+    #[test]
+    fn slice_by_width_pads_straddling_wide_char_to_boundary() {
+        // 切片语义：完全位于 cut 左侧的字符被丢弃；被切字符宽度跨越 cut
+        // 边界时以空格补齐，保证后续列位不漂移。
+        assert_eq!(slice_by_width("a下", 2), " "); // 「a」在左被切，「下」跨界补空格
+        assert_eq!(slice_by_width("下", 1), " "); // 整字被切 → 空格
+        assert_eq!(slice_by_width("下", 0), "下");
+        assert_eq!(slice_by_width("ab", 1), "b");
     }
 }

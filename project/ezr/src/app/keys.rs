@@ -266,8 +266,8 @@ impl App {
 
     pub(crate) fn cycle_filter(&mut self, delta: i32) {
         let n = super::FILTERS.len() as i32;
-        self.filter = ((self.filter as i32 + delta).rem_euclid(n)) as usize;
-        self.scroll_to_selection();
+        let next = ((self.filter as i32 + delta).rem_euclid(n)) as usize;
+        self.set_filter(next);
     }
 
     pub(crate) fn scroll_to_selection(&mut self) {
@@ -736,6 +736,7 @@ mod bt_key_tests {
             client: "QB".to_string(),
             seeder: false,
             flags: "-".to_string(),
+            relevance: 0.0,
         }
     }
 

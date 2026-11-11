@@ -44,3 +44,8 @@
 ## v1.51 页签状态快照还原轮（2026-11-11，specifier）追加
 - architecture.md — 共享 selected/scroll 页签漂移根因与 TabListState 快照还原（任务身份优先定位）+ set_filter 后同步 last_selected 抑制 tick 视口跟随（选中离屏态保真）+ 三条 filter 变更路径收口单入口 + 还原/夹紧语义分层（新增）
 - testing.md — PTY 帧对断言法（计数行/▌ 行号/首可见任务 token 三元组对账，禁整屏等值）+ pyte 显示行 CJK 字间空格（标题定位锚计数徽标）+ 还原实证确定性键序（Home+定数↓ 基准态 + 差异制造臂防假阳性 + 时窗避开状态迁移）（新增）
+
+## v1.52 页签快照还原产品实现轮（2026-11-11，coder）追加
+- architecture.md — 同构移植守卫几何按被测端常量重推（ITEM_HEIGHT 4≠2 面积不可照抄）+ 三路径收口完成判据=filter 写点普查归零 + draw_list 自愈与 tick_clamp 双层兜底不可互替（当帧 rows vs 上一帧 visible_rows）与自愈落位次序（新增）
+- testing.md — TDD 红阶段失败消息即缺陷指纹（三守卫红点=三缺陷形态）+ 防视口吸附断言用选中离屏态构造（scroll>selected 合法态才抓得住吸附回归）+ bin-only crate 逐目标跑与 --tests --no-run 分块（新增）
+- environment.md — rustup 镜像复测（rsproxy 18.3MB/s 最快、直链+双变量前台装齐、末尾 404=自更新噪音）+ bb gh-proxy 慢速续传可用 + APS 双位置参数形态（新增）

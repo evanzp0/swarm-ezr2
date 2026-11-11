@@ -157,11 +157,13 @@ mod bt_progress_speed_tests {
         app.on_evt(crate::engine::Evt::BtConns {
             id: 1,
             conns: vec![bt_view(1, 1000, false)],
+            availability: 0.0,
         })
         .await;
         app.on_evt(crate::engine::Evt::BtConns {
             id: 1,
             conns: vec![bt_view(1, 3000, false)],
+            availability: 0.0,
         })
         .await;
         app.sample_bt_conn_speed_display();
@@ -186,11 +188,13 @@ mod bt_progress_speed_tests {
         app.on_evt(crate::engine::Evt::BtConns {
             id: 1,
             conns: vec![bt_view(1, 1000, false), bt_view(2, 0, false)],
+            availability: 0.0,
         })
         .await;
         app.on_evt(crate::engine::Evt::BtConns {
             id: 1,
             conns: vec![bt_view(1, 5000, false), bt_view(2, 2000, false)],
+            availability: 0.0,
         })
         .await;
         app.sample_bt_conn_speed_display();
@@ -218,16 +222,19 @@ mod bt_progress_speed_tests {
         app.on_evt(crate::engine::Evt::BtConns {
             id: 1,
             conns: vec![bt_view(1, 0, false)],
+            availability: 0.0,
         })
         .await;
         app.on_evt(crate::engine::Evt::BtConns {
             id: 1,
             conns: vec![bt_view(1, 0, false)],
+            availability: 0.0,
         })
         .await;
         app.on_evt(crate::engine::Evt::BtConns {
             id: 1,
             conns: vec![bt_view(1, 0, true)],
+            availability: 0.0,
         })
         .await;
         app.sample_bt_conn_speed_display();
@@ -384,6 +391,7 @@ mod bt_progress_speed_tests {
             client: "QB".into(),
             seeder,
             flags: "-".into(),
+            relevance: 0.0,
         }
     }
 
@@ -394,11 +402,13 @@ mod bt_progress_speed_tests {
         app.on_evt(crate::engine::Evt::BtConns {
             id: 1,
             conns: vec![bt_view(1, 1000, true), bt_view(2, 0, false)],
+            availability: 0.0,
         })
         .await;
         app.on_evt(crate::engine::Evt::BtConns {
             id: 1,
             conns: vec![bt_view(1, 3000, true), bt_view(2, 0, false)],
+            availability: 0.0,
         })
         .await;
         assert_eq!(
@@ -425,11 +435,13 @@ mod bt_progress_speed_tests {
         app.on_evt(crate::engine::Evt::BtConns {
             id: 1,
             conns: vec![bt_view(1, 1000, false), bt_view(2, 1000, false)],
+            availability: 0.0,
         })
         .await;
         app.on_evt(crate::engine::Evt::BtConns {
             id: 1,
             conns: vec![bt_view(1, 2000, false)],
+            availability: 0.0,
         })
         .await;
         assert!(

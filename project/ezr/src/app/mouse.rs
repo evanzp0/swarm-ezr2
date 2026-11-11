@@ -673,10 +673,7 @@ impl App {
     fn main_down_tab(&mut self, m: &MouseEvent) -> bool {
         let tab_rects = self.tab_rects.clone();
         if let Some(i) = rect_hit(&tab_rects, m.column, m.row) {
-            if i != self.filter {
-                self.filter = i;
-                self.scroll_to_selection();
-            }
+            self.set_filter(i);
             self.focus = Panel::List;
             return true;
         }
@@ -1897,6 +1894,7 @@ mod bt_mouse_tests {
                     client: "QB".to_string(),
                     seeder: false,
                     flags: "-".to_string(),
+                    relevance: 0.0,
                 },
                 BtConnRow {
                     id: 2,
@@ -1909,6 +1907,7 @@ mod bt_mouse_tests {
                     client: "TR".to_string(),
                     seeder: false,
                     flags: "-".to_string(),
+                    relevance: 0.0,
                 },
             ],
         );

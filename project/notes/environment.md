@@ -407,3 +407,15 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - rustup 镜像复测（2026-11-10 新沙箱）：五家 dist 清单探针全 200——aliyun 最快（10.9MB/s）但清单 date=2026-05-28 快照过期剔除（判据含新鲜度沿用）；组件大包（rust-std 1.99.1 tar.xz 31.5MB）实测 rsproxy 11.8MB/s ≫ TUNA 1.4MB/s、USTC 本轮对该组件 403（可达性逐轮漂移第 N 次复现，装前测速+清单 date 双查纪律不变）；rsproxy 直链 rustup-init（21MB，落盘名恰为 rustup-init）+ DIST_SERVER=https://rsproxy.cn + UPDATE_ROOT=https://rsproxy.cn/rustup 前台一次装齐 stable 1.99.1 default profile（rustc/cargo/rustup 三件 4s 内）。
 - registry 沿 rsproxy sparse 口径（~/.cargo/config.toml replace-with）一次过；bb 1.13.229 gh-proxy 直链资产秒装复证（.tools/bin/bb）+ APS clone gh-proxy 秒级——APS parser/dry-checker 对 09-bt-engine（22 场景）/04-ui-conns（18 场景）exit=0，findings=88/92 全为 near-duplicate 信息性提示（历轮同形态）。
 - MultiEdit 非原子性实测：多编辑批次中途失败时前面编辑已落盘（本次 09-bt-engine 头注/清单各重复一份）——大文件多编辑后必须 rg 复查重复与行号漂移，不再假设「报错=零改动」。
+
+## v1.52 页签快照还原产品实现轮（2026-11-11，coder）追加
+- rustup 镜像复测：rsproxy 直链 rustup-init 18.3MB/s 最快（21MB 一次到位）、USTC 9.5/
+  SJTU 7.1MB/s、官方 8KB/s 超时、TUNA/NJU dist 路径本轮 404；直链二进制 + DIST_SERVER=
+  裸根 + UPDATE_ROOT=https://rsproxy.cn/rustup 前台装齐 stable 1.99.1 + nightly 1.102.0
+  （minimal+rustfmt+clippy）——工具链安装末尾 release-stable.toml 404 = rustup 自更新检查
+  噪音，工具链已装齐勿误判失败。
+- bb v1.13.229 gh-proxy 本轮慢速可用（~300KB/s，26.6MB 断点续传 -C - 完成）、ghfast.top
+  同量级、GitHub release 直连超时；APS clone 同走 gh-proxy（直连 GnuTLS 断连）。
+- APS 工具调用为双位置参数：`bb gherkin-parser <feature-file> <json-output>`、
+  `bb gherkin-ir-dry-checker <json-ir> <report-output>`（单参数报 usage exit=2）；
+  findings 数为信息性 near-duplicate 报告，exit=0 即通过口径。

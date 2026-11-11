@@ -108,6 +108,9 @@ pub struct Task {
     pub peers: usize,
     #[allow(dead_code)]
     pub seed_left: f64,
+    /// 种子健康度（FR-02-37：qBt Availability 同源，3 位小数显示）；
+    /// 随 BtConns 事件同帧刷新，非活跃/未知时保持 0（UI 按状态臂渲染 dash）。
+    pub availability: f64,
     pub max_download_speed: u64,
     pub max_upload_speed: u64,
     pub resume_orphan: bool,
@@ -170,6 +173,7 @@ impl Task {
             seeders: 0,
             peers: 0,
             seed_left: 0.0,
+            availability: 0.0,
             max_download_speed: 0,
             max_upload_speed: 0,
             resume_orphan: false,

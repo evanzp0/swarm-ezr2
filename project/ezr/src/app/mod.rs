@@ -73,6 +73,13 @@ impl Panel {
 
 pub const FILTERS: [&str; 2] = ["正在下载", "已完成"];
 
+#[derive(Clone, Copy)]
+pub struct TabListState {
+    pub selected_task: Option<u32>,
+    pub selected: usize,
+    pub scroll: usize,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DetailField {
     Checksum,
@@ -150,6 +157,7 @@ pub struct App {
     pub selected: usize,
     pub scroll: usize,
     pub filter: usize,
+    pub tab_states: Vec<TabListState>,
     pub focus: Panel,
     pub speed_hist: Vec<u64>,
     pub up_hist: Vec<u64>,
@@ -301,6 +309,8 @@ pub struct BtConnRow {
     pub client: String,
     pub seeder: bool,
     pub flags: String,
+    /// 相关度（FR-02-36：qBt Peers Relevance 同源，1 位小数百分数显示）。
+    pub relevance: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -338,6 +348,14 @@ impl App {
             selected: 0,
             scroll: 0,
             filter: 0,
+            tab_states: vec![
+                TabListState {
+                    selected_task: None,
+                    selected: 0,
+                    scroll: 0,
+                };
+                FILTERS.len()
+            ],
             focus: Panel::List,
             last_selected: 0,
             speed_hist: vec![0; 90],
@@ -652,6 +670,35 @@ impl App {
     #[must_use]
     pub fn sel_task(&self) -> Option<&Task> {
         self.sel_idx().and_then(|i| self.tasks.get(i))
+    }
+
+    pub(crate) fn set_filter(&mut self, idx: usize) {
+        if idx >= FILTERS.len() || idx == self.filter {
+            return;
+        }
+        self.tab_states[self.filter] = TabListState {
+            selected_task: self.sel_task().map(|t| t.id),
+            selected: self.selected,
+            scroll: self.scroll,
+        };
+        self.filter = idx;
+        let saved = self.tab_states[idx];
+        self.selected = saved.selected;
+        self.scroll = saved.scroll;
+        let idxs = self.filtered();
+        if idxs.is_empty() {
+            self.selected = 0;
+            self.scroll = 0;
+            self.last_selected = 0;
+            return;
+        }
+        if let Some(tid) = saved.selected_task {
+            if let Some(pos) = idxs.iter().position(|&ti| self.tasks[ti].id == tid) {
+                self.selected = pos;
+            }
+        }
+        self.selected = self.selected.min(idxs.len() - 1);
+        self.last_selected = self.selected;
     }
 
     pub(crate) fn set_toast(&mut self, msg: impl Into<String>) {

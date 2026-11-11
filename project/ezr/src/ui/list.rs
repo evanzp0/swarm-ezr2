@@ -77,6 +77,14 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let spinner = app.spinner();
+    if app.selected >= idxs.len() {
+        app.selected = idxs.len() - 1;
+        app.scroll_to_selection();
+    }
+    let max_scroll = idxs.len().saturating_sub(rows);
+    if app.scroll > max_scroll {
+        app.scroll = max_scroll;
+    }
     let max_items = rows.min(idxs.len().saturating_sub(app.scroll));
     let qpos = slots::queue_positions(&app.tasks, &idxs);
     for vi in 0..max_items {

@@ -772,3 +772,16 @@ ws/webrtc 轮（2026-11-09）：TrackerUrl 三族分型（Ws 变体与 Http/Udp 
 - **还原语义与自愈夹紧的分层**：还原 = 忠实恢复快照（含选中离屏态）；夹紧 = 越界兜底
   （selected ≥ len 夹紧 + scroll 越界夹紧，tick 守卫与 draw_list 双层保留）——「尽可能还原」
   的落点是快照优先、夹紧只兜集合收缩/视口变化，不把夹紧当切换语义本体。
+
+## v1.52 页签快照还原产品实现轮（2026-11-11，coder）
+- **同构移植的守卫几何不可照抄参考实现**：demo 渲染守卫 110×34 在 demo ITEM_HEIGHT=2 下
+  rows=16 ≥ flen'=9 成立，直搬产品（ITEM_HEIGHT=4 → rows=8 < flen'=9）会令「全列表渲染」
+  断言在正确实现下也红（行 0 恒滚出视口）——守卫断言依赖视口容量时，容量必须从**被测端**
+  常量重推（产品 110×48 → inner 46/4=11 ≥ flen'），不从参考端复制面积。
+- **三路径收口的完成判据 = 写点普查归零**：rg `\.filter = ` 全 src，生产代码直写 filter
+  必须归零（唯一写点 set_filter），测试直设 filter 属合法非产品路径（bt_dialog/tasks 等
+  测试夹具不受限）——「主要路径已接」不算收口，残留直写点即行为分叉源。
+- **draw_list 自愈与 tick_clamp_selection 双层兜底不可互替**：tick 层用 visible_rows
+  （上一帧视口，App::new 默认 6），draw 层用当帧 rows（真容量）——终端改尺寸/首帧前的
+  快照还原只有 draw 层能按真容量兜住；draw 层自愈落位在 empty 早退之后、max_items 计算
+  之前（先行夹紧保 qpos/渲染循环下标合法），顺序错置 = 越界下标 panic。

@@ -117,7 +117,7 @@ impl App {
     pub(super) fn register_new_task(&mut self, t: Task) {
         self.tasks.push(t);
         self.dialog = None;
-        self.filter = 0;
+        self.set_filter(0);
         let flen = self.filtered().len();
         if flen > 0 {
             self.selected = flen - 1;

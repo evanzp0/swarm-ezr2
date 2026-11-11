@@ -511,6 +511,7 @@ mod tests {
                     client: "qB".into(),
                     seeder: true,
                     flags: "-".into(),
+                    relevance: 0.0,
                 },
                 crate::app::BtConnRow {
                     id: 2,
@@ -523,6 +524,7 @@ mod tests {
                     client: "qB".into(),
                     seeder: false,
                     flags: "-".into(),
+                    relevance: 0.0,
                 },
             ],
         );

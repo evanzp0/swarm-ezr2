@@ -1,7 +1,7 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::text::{fmt_dur, fmt_eta, fmt_size, fmt_size_pair, fmt_speed, plain_bar, truncate, w};
+use super::text::{fmt_dur, fmt_eta, fmt_size, fmt_speed, plain_bar, truncate, w};
 use super::{state_color, ACCENT, DIM, FG, GREEN, LIGHT_BLUE, MAGENTA, RED, YELLOW};
 use crate::model::{FailKind, Task, TaskState};
 
@@ -33,11 +33,16 @@ fn title_row(t: &Task, sel: bool, width: usize) -> Vec<Span<'static>> {
     };
     let proto_badge = format!("[{}]", t.protocol.label());
     let state_badge = format!("[{}]", t.state.label());
+    // 任务行标题尺寸项（FR-02-38 v1.18 立项 / v1.19 全类型扩面）：
+    // 尺寸已知即在「[状态]」徽标后单空格显示 <总字节>，明细统计行
+    // 尺寸项整项退役；尺寸未知不显示，无伪造总字节。
+    let title_size = title_size_txt(t);
     let cursor_w = 2usize;
-    let badges_w = w(&proto_badge) + 1 + w(&state_badge) + 1;
+    let badges_w = w(&proto_badge) + 1 + w(&state_badge) + w(&title_size);
     let pct_w = w(&pct_txt);
+    // 预留 2 列：1 列名称与徽标间隔 + 1 列徽标/尺寸与右端百分比最小间隔。
     let name_budget = width
-        .saturating_sub(cursor_w + badges_w + pct_w + 1)
+        .saturating_sub(cursor_w + badges_w + pct_w + 2)
         .clamp(8, 64);
     let name_txt = truncate(&t.name, name_budget);
     let used = cursor_w + w(&name_txt) + 1 + badges_w;
@@ -62,6 +67,7 @@ fn title_row(t: &Task, sel: bool, width: usize) -> Vec<Span<'static>> {
         Span::styled(proto_badge, Style::default().fg(YELLOW)),
         Span::raw(" "),
         Span::styled(state_badge, Style::default().fg(state_c)),
+        Span::styled(title_size, Style::default().fg(FG)),
         Span::raw(" ".repeat(pad)),
         Span::styled(
             pct_txt,
@@ -69,6 +75,51 @@ fn title_row(t: &Task, sel: bool, width: usize) -> Vec<Span<'static>> {
         ),
     ];
     l1
+}
+
+/// 任务行标题尺寸项：所有协议/所有状态下，尺寸已知即在状态徽标后显示
+/// <总字节>（FR-02-38 v1.19 全类型/全状态；FR-01-116 size_known 语义）。
+/// 尺寸未知时不显示，避免伪造的 0 B。
+pub(super) fn title_size_txt(t: &Task) -> String {
+    if t.size_known() {
+        format!(" {}", fmt_size(t.total))
+    } else {
+        String::new()
+    }
+}
+
+/// 分享率文本（FR-02-38，qBt realRatio 同源，D74⑦）：累计上传 ÷ 累计下载；
+/// 下载量 < total_done 1% 时按 total_done 兑底（防 seeder 丢统计特例）；
+/// 分母 0 且上传 > 0 → ∞（qBt C_INFINITY 同款）；两者均 0 → 0.00。
+fn share_ratio_text(t: &Task) -> String {
+    let up = t.uploaded as f64;
+    let total = t.total as f64;
+    let dl = if total > 0.0 && (t.downloaded as f64) < total * 0.01 {
+        total
+    } else {
+        t.downloaded as f64
+    };
+    if dl == 0.0 {
+        if up == 0.0 {
+            "0.00".to_string()
+        } else {
+            "∞".to_string()
+        }
+    } else {
+        format!("{:.2}", up / dl)
+    }
+}
+
+/// 「 分享 <分享率>」项（D74④）：单空格衔接宿主项（<seeders>/<peers>/<健康度>），
+/// 异于行内其他数据项双空格；「分享」标签 DIM，数字 MAGENTA（粉红，操作者钦定）。
+fn share_spans(t: &Task) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(" 分享".to_string(), Style::default().fg(DIM)),
+        Span::styled(
+            format!(" {}", share_ratio_text(t)),
+            Style::default().fg(MAGENTA),
+        ),
+    ]
 }
 
 fn progress_row(
@@ -153,14 +204,7 @@ fn stat_row(t: &Task, queue_pos: usize) -> Vec<Span<'static>> {
     }
 }
 
-fn dl_total_txt(t: &Task) -> String {
-    if t.size_known() {
-        format!("{}/{}", fmt_size(t.downloaded), fmt_size(t.total))
-    } else {
-        format!("{}/? B", fmt_size(t.downloaded))
-    }
-}
-
+/// 失败统计行：重试计数 · 倒计时（尾随尺寸对已上移退役，FR-02-38 v1.19）。
 fn stat_failed(t: &Task) -> Vec<Span<'static>> {
     let mut l3: Vec<Span<'static>> = vec![Span::raw("  ")];
     let retry = format!("重试 {}/{}", t.retries, t.max_retries);
@@ -175,11 +219,10 @@ fn stat_failed(t: &Task) -> Vec<Span<'static>> {
     l3.push(Span::styled(retry, Style::default().fg(RED)));
     l3.push(Span::styled(" · ", Style::default().fg(RED)));
     l3.push(Span::styled(countdown, Style::default().fg(RED)));
-    l3.push(Span::styled(" · ", Style::default().fg(RED)));
-    l3.push(Span::styled(dl_total_txt(t), Style::default().fg(RED)));
     l3
 }
 
+/// 等待统计行：槽位/排队话术（尾随尺寸对已上移退役，FR-02-38 v1.19）。
 fn stat_queued(t: &Task, queue_pos: usize) -> Vec<Span<'static>> {
     let mut l3: Vec<Span<'static>> = vec![Span::raw("  ")];
     if t.has_slot {
@@ -193,18 +236,10 @@ fn stat_queued(t: &Task, queue_pos: usize) -> Vec<Span<'static>> {
             Style::default().fg(YELLOW),
         ));
     }
-    l3.push(Span::styled(" · ", Style::default().fg(DIM)));
-    if t.total == 0 {
-        l3.push(Span::styled("未知".to_string(), Style::default().fg(DIM)));
-    } else {
-        l3.push(Span::styled(
-            format!("{}/{}", fmt_size(t.downloaded), fmt_size(t.total)),
-            Style::default().fg(FG),
-        ));
-    }
     l3
 }
 
+/// 已完成统计行：校验结论（尾随 ` · total` 已上移退役，FR-02-38 v1.19）。
 fn stat_completed(t: &Task) -> Vec<Span<'static>> {
     let mut l3: Vec<Span<'static>> = vec![Span::raw("  ")];
     match (&t.checksum, t.verify_ok) {
@@ -218,11 +253,12 @@ fn stat_completed(t: &Task) -> Vec<Span<'static>> {
         )),
         _ => l3.push(Span::styled("无校验".to_string(), Style::default().fg(DIM))),
     }
-    l3.push(Span::styled(" · ", Style::default().fg(DIM)));
-    l3.push(Span::styled(fmt_size(t.total), Style::default().fg(FG)));
     l3
 }
 
+/// 做种统计行（FR-02-09 ② / FR-02-38 v1.20）：
+/// `↑ <上传速度>  <seeders>/<peers>/<健康度> 分享 <分享率>  剩余做种 <剩余时长>`。
+/// v1.50：`已上传 <已上传>/<总大小>` 项整项退役，上传量仅经分享率体现。
 fn stat_seeding(t: &Task) -> Vec<Span<'static>> {
     let mut l3: Vec<Span<'static>> = vec![Span::raw("  ")];
     l3.push(Span::styled(
@@ -230,13 +266,10 @@ fn stat_seeding(t: &Task) -> Vec<Span<'static>> {
         Style::default().fg(MAGENTA),
     ));
     l3.push(Span::styled(
-        format!("  {}/{}", t.seeders, t.peers),
+        format!("  {}/{}/{:.3}", t.seeders, t.peers, t.availability),
         Style::default().fg(MAGENTA),
     ));
-    l3.push(Span::styled(
-        format!("  已上传 {}", fmt_size_pair(t.uploaded, t.total)),
-        Style::default().fg(FG),
-    ));
+    l3.extend(share_spans(t));
     l3.push(Span::styled(
         format!("  剩余做种 {}", fmt_dur((t.seed_left.ceil() as u64).max(1))),
         Style::default().fg(DIM),
@@ -244,6 +277,9 @@ fn stat_seeding(t: &Task) -> Vec<Span<'static>> {
     l3
 }
 
+/// BT 其余状态统计行（下载中/校验中/后期处理/已暂停；FR-02-37/38）：
+/// 下载臂 `↓ <速度> ↑ <上传>  <s>/<p>/<健康度> 分享 <r>  剩余 <eta>`；
+/// 非下载臂速度/健康度逐位 dash（`-/-/-`），分享率照常显示（D74⑤ 其余两臂）。
 fn stat_bt_rest(t: &Task) -> Vec<Span<'static>> {
     let downloading = t.state == TaskState::Downloading;
     let mut l3: Vec<Span<'static>> = vec![Span::raw("  ")];
@@ -254,30 +290,24 @@ fn stat_bt_rest(t: &Task) -> Vec<Span<'static>> {
             Style::default().fg(MAGENTA),
         ));
         l3.push(Span::styled(
-            format!("  {}/{}", t.seeders, t.peers),
+            format!("  {}/{}/{:.3}", t.seeders, t.peers, t.availability),
             Style::default().fg(FG),
         ));
     } else {
         l3.push(Span::raw(" ↑ "));
         l3.push(Span::styled("-", Style::default().fg(DIM)));
-        l3.push(Span::raw("  -/-"));
+        l3.push(Span::raw("  -/-/-"));
     }
-    l3.push(Span::styled(
-        format!("  {}", fmt_size_pair(t.downloaded, t.total)),
-        Style::default().fg(FG),
-    ));
+    l3.extend(share_spans(t));
     l3.extend(remaining_tail(t, downloading));
     l3
 }
 
+/// HTTP(S) 统计行（尺寸对 `x/y` 与未知尺寸 `? B` 形态已上移退役，v1.49）。
 fn stat_http_rest(t: &Task) -> Vec<Span<'static>> {
     let downloading = t.state == TaskState::Downloading;
     let mut l3: Vec<Span<'static>> = vec![Span::raw("  ")];
     l3.extend(dl_speed_head(t, downloading));
-    l3.push(Span::styled(
-        format!("  {}", dl_total_txt(t)),
-        Style::default().fg(FG),
-    ));
     l3.extend(remaining_tail(t, downloading));
     l3
 }
@@ -323,6 +353,32 @@ mod tests {
         assert!(s.contains("33.3%"), "百分比: {s}");
         let row = title_row(&t, false, 60);
         assert!(text_of(&row).starts_with("  "));
+    }
+
+    #[test]
+    fn title_size_after_state_badge_all_types_all_states() {
+        // FR-02-38 v1.19：全类型/全状态，尺寸已知任务行「[状态]」徽标后
+        // 单空格显示 <总字节>；未知尺寸不显示。
+        for bt in [true, false] {
+            for st in [
+                TaskState::Downloading,
+                TaskState::Seeding,
+                TaskState::Completed,
+                TaskState::Failed,
+                TaskState::Queued,
+                TaskState::Paused,
+                TaskState::Verifying,
+            ] {
+                let t = mk(st, bt);
+                let s = text_of(&title_row(&t, false, 80));
+                let want = format!("[{}] 3.0 MB", st.label());
+                assert!(s.contains(&want), "{st:?} bt={bt} 徽标后总字节: {s}");
+            }
+        }
+        let mut t = mk_streaming(TaskState::Downloading);
+        let s = text_of(&title_row(&t, false, 80));
+        assert!(s.contains("?%"), "未知尺寸 ?% 保留: {s}");
+        assert!(!s.contains("3.0 MB"), "未知尺寸不显示总字节: {s}");
     }
 
     #[test]
@@ -378,19 +434,19 @@ mod tests {
         let mut t = mk_streaming(TaskState::Downloading);
         t.speed = 1000.0;
         let s = text_of(&stat_http_rest(&t));
-        assert!(s.contains("? B"), "统计行 ? B: {s}");
+        assert!(!s.contains("? B"), "列表行 ? B 形态上移退役（v1.49）: {s}");
         assert!(s.contains("剩余 -"), "剩余 -: {s}");
         assert!(!s.contains("--:--"), "未知大小不显示 ETA 表盘: {s}");
         let t = mk_streaming(TaskState::Paused);
         let s = text_of(&stat_row(&t, 0));
-        assert!(s.contains("? B"), "{s}");
+        assert!(!s.contains("? B"), "暂停行无伪造尺寸: {s}");
         assert!(s.contains("剩余 -"), "{s}");
         let t = mk_streaming(TaskState::Failed);
-        assert!(text_of(&stat_failed(&t)).contains("? B"));
+        assert!(!text_of(&stat_failed(&t)).contains("? B"));
         let mut t2 = mk(TaskState::Downloading, false);
         t2.speed = 1_000_000.0;
         let s2 = text_of(&stat_http_rest(&t2));
-        assert!(!s2.contains("? B"), "{s2}");
+        assert!(!s2.contains("MB"), "尺寸对已上移退役: {s2}");
         assert!(
             s2.contains("剩余 ") && !s2.contains("剩余 -"),
             "ETA 正常: {s2}"
@@ -423,14 +479,15 @@ mod tests {
     }
 
     #[test]
-    fn stat_failed_countdown_and_size() {
+    fn stat_failed_countdown_without_size() {
         let mut x = mk(TaskState::Failed, false);
         x.retries = 2;
         x.retry_in = Some(2.4);
         let s = text_of(&stat_failed(&x));
         assert!(s.contains("重试 2/3"), "{s}");
         assert!(s.contains("3s 后重试"));
-        assert!(s.contains("0.9 MB / 2.9 MB") || s.contains("MB"), "大小对");
+        assert!(!s.contains("MB"), "尾随尺寸对已上移退役（v1.49）: {s}");
+        assert_eq!(s.matches(" · ").count(), 1, "仅重试·倒计时一处间隔: {s}");
         let mut x = mk(TaskState::Failed, false);
         x.retry_in = None;
         assert!(text_of(&stat_failed(&x)).contains("不自动重试"));
@@ -451,7 +508,13 @@ mod tests {
         let mut x = mk(TaskState::Queued, false);
         x.total = 0;
         let s = text_of(&stat_queued(&x, 0));
-        assert!(s.contains("未知"), "{s}");
+        assert!(
+            !s.contains("未知"),
+            "尾随尺寸/未知项已上移退役（v1.49）: {s}"
+        );
+        let x = mk(TaskState::Queued, false);
+        let s = text_of(&stat_queued(&x, 0));
+        assert!(!s.contains("MB"), "等待行无尺寸: {s}");
     }
 
     #[test]
@@ -466,20 +529,81 @@ mod tests {
         x.verify_ok = Some(false);
         assert!(text_of(&stat_completed(&x)).contains("MD5 校验失败"));
         x.verify_ok = Some(true);
-        assert!(text_of(&stat_completed(&x)).contains("MD5 校验成功"));
+        let s = text_of(&stat_completed(&x));
+        assert!(s.contains("MD5 校验成功"));
+        assert!(
+            !s.contains(" · "),
+            "尾随 ` · total` 已上移退役（v1.49）: {s}"
+        );
     }
 
     #[test]
-    fn stat_seeding_speeds_and_peers() {
+    fn stat_seeding_speeds_peers_health_share() {
+        // FR-02-37/38 + v1.50：三段健康度 + 分享率，已上传对整项退役。
         let mut x = mk(TaskState::Seeding, true);
         x.upload_speed = 2048.0;
         x.seeders = 3;
         x.peers = 5;
+        x.availability = 1.675;
+        x.uploaded = 300_000;
+        x.downloaded = 3_000_000;
         let s = text_of(&stat_seeding(&x));
         assert!(s.contains("↑"), "{s}");
-        assert!(s.contains("3/5"));
-        assert!(s.contains("已上传"));
+        assert!(s.contains("3/5/1.675"), "做种臂同形态三段: {s}");
+        assert!(
+            s.contains(" 分享 0.10"),
+            "分享率（单空格衔接，2 位小数）: {s}"
+        );
+        assert!(
+            !s.contains("已上传") && !s.contains("300 KB"),
+            "已上传对整项退役（v1.50，上传量仅经分享率体现）: {s}"
+        );
         assert!(s.contains("剩余做种"));
+    }
+
+    #[test]
+    fn share_ratio_qbt_real_ratio_rules() {
+        // D74⑦：1% 兑底、∞、0.00 三边界。
+        let mut t = mk(TaskState::Seeding, true);
+        t.total = 0;
+        t.downloaded = 0;
+        t.uploaded = 0;
+        assert_eq!(share_ratio_text(&t), "0.00", "两者均 0 → 0.00");
+        // 分母 0（total 未知且无下载）且上传 > 0 → ∞。
+        t.uploaded = 4096;
+        assert_eq!(share_ratio_text(&t), "∞");
+        t.total = 3_000_000;
+        t.downloaded = 1_000; // < 1% total_done → 兑底按 total
+        t.uploaded = 150_000;
+        assert_eq!(share_ratio_text(&t), "0.05", "1% 兑底: 150000/3000000");
+        t.downloaded = 1_500_000;
+        t.uploaded = 1_125_000;
+        assert_eq!(share_ratio_text(&t), "0.75", "正常口径");
+        // 下载量小但 total 已知：兜底后分母非 0，不显 ∞（qBt realRatio 同源）。
+        t.total = 3_000_000;
+        t.downloaded = 0;
+        t.uploaded = 4096;
+        assert_eq!(
+            share_ratio_text(&t),
+            "0.00",
+            "兑底分母 total ≠ 0 → 数值口径"
+        );
+    }
+
+    #[test]
+    fn share_spans_label_dim_number_magenta() {
+        let mut t = mk(TaskState::Seeding, true);
+        t.downloaded = 3_000_000;
+        t.uploaded = 300_000;
+        let sp = share_spans(&t);
+        assert_eq!(sp[0].content, " 分享", "单空格衔接（D74④）");
+        assert_eq!(sp[0].style.fg, Some(DIM), "分享标签 DIM");
+        assert_eq!(sp[1].content, " 0.10");
+        assert_eq!(
+            sp[1].style.fg,
+            Some(MAGENTA),
+            "数字粉红 MAGENTA（操作者钦定）"
+        );
     }
 
     #[test]
@@ -487,7 +611,12 @@ mod tests {
         let x = mk(TaskState::Paused, true);
         let s = text_of(&stat_bt_rest(&x));
         assert!(s.contains("↓"), "{s}");
-        assert!(s.contains("-/-"));
+        assert!(
+            s.contains("-/-/-"),
+            "非活跃 BT 逐位 dash 扩位（FR-02-37）: {s}"
+        );
+        assert!(s.contains("-/-/- 分享"), "dash 臂后单空格衔接分享率: {s}");
+        assert!(s.contains(" 分享 0.00"), "其余两臂分享率照常（D74⑤）: {s}");
         assert!(!s.contains("↓ -↓ -"), "速度占位不双写: {s}");
         assert_eq!(s.matches("↓ ").count(), 1, "单个 ↓ 箭头: {s}");
         let x = mk(TaskState::Paused, false);
@@ -501,31 +630,53 @@ mod tests {
         let mut t = mk(TaskState::Downloading, false);
         t.speed = 1_048_576.0;
         let s = text_of(&stat_http_rest(&t));
-        assert!(s.contains("MiB/s  "), "速度后 2 列分隔: {s}");
-        assert!(!s.contains("MiB/s1.0"), "速度与字节不粘连: {s}");
-        assert!(s.contains("↓ 1.0 MiB/s  1.0 MB/3.0 MB"), "列序: {s}");
+        assert!(s.contains("MiB/s  "), "速度后 2 列分隔（接剩余项）: {s}");
+        assert!(!s.contains("MiB/s1.0"), "速度与后项不粘连: {s}");
+        assert!(
+            s.contains("↓ 1.0 MiB/s  剩余"),
+            "尺寸对退役后速度直接接剩余: {s}"
+        );
         let mut t = mk_streaming(TaskState::Downloading);
         t.speed = 500.0;
         let s = text_of(&stat_http_rest(&t));
         assert!(
-            s.contains("B/s  ") && s.contains("  1.0 MB/? B"),
-            "未知大小: {s}"
+            s.contains("B/s  ") && s.contains("剩余 -"),
+            "未知大小：无 ? B、剩余 dash: {s}"
         );
     }
 
     #[test]
     fn stat_bt_downloading_layout_matches_demo_spacing() {
+        // FR-02-37/38：下载臂 `↓ <速度> ↑ <上传>  <s>/<p>/<健康度> 分享 <r>  剩余 <eta>`。
         let mut t = mk(TaskState::Downloading, true);
         t.speed = 2_097_152.0;
         t.upload_speed = 307_200.0;
         t.seeders = 3;
         t.peers = 5;
+        t.availability = 1.675;
+        t.downloaded = 1_000_000;
+        t.uploaded = 70_000;
         let s = text_of(&stat_bt_rest(&t));
         assert!(s.contains("↓ 2.0 MiB/s"), "{s}");
         assert!(s.contains(" ↑ 300 KiB/s"), "{s}");
-        assert!(s.contains("  3/5"), "{s}");
-        assert!(s.contains("  1.0/3.0 MB"), "{s}");
+        assert!(s.contains("  3/5/1.675"), "三段健康度（3 位小数）: {s}");
+        assert!(s.contains(" 分享 0.07"), "分享率（D74 示例字面口径）: {s}");
+        assert!(
+            !s.contains("1.0/3.0 MB"),
+            "明细统计行尺寸对已上移退役（v1.18）: {s}"
+        );
         assert!(s.contains("  剩余 "), "{s}");
+        // 健康度跟随所在项原色：下载臂 FG / 做种臂 MAGENTA（D74③）。
+        let sp = stat_bt_rest(&t);
+        let seg = sp.iter().find(|x| x.content.contains("3/5/1.675")).unwrap();
+        assert_eq!(seg.style.fg, Some(FG), "下载臂三段 FG");
+        t.state = TaskState::Seeding;
+        let sp2 = stat_seeding(&t);
+        let seg2 = sp2
+            .iter()
+            .find(|x| x.content.contains("3/5/1.675"))
+            .unwrap();
+        assert_eq!(seg2.style.fg, Some(MAGENTA), "做种臂三段 MAGENTA");
     }
 
     #[test]

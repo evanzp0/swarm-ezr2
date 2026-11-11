@@ -686,3 +686,16 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
   End/Home/↓）保证「还原值 ≠ 目标页签自然态」，防还原断言被「恰好没变」假阳性通过；
   状态 A/B 两次往返覆盖重复快照与不同还原值；时窗避开任务状态迁移（~2.2s neovim 移页签
   后集合成员稳定，win11 重试/再失败均不换页签，计数 k/y 可硬断言）。
+
+## v1.52 页签快照还原产品实现轮（2026-11-11，coder）追加
+- **TDD 红阶段失败消息即缺陷指纹**：三守卫红点与三缺陷形态一一对应——共享 selection
+  选错任务（Some(5)≠Some(3)）/ 纯索引选中错位邻居（Some(4)≠Some(3)，操作者报告形态）/
+  越界无夹紧（selected=9/len=9）；红形态核对无误即覆盖成立，绿后无须人工推演守卫覆盖度。
+- **防视口吸附断言用「选中离屏态」构造**：scroll 原样还原守卫取 scroll=4 > selected=2
+  （滚轮只移视口不动选中的合法态，合法性前提 flen−vis ≥ scroll）替代「scroll=0 还原」
+  ——scroll_to_selection 类吸附回归会把 scroll 吸回选中窗（≤selected），离屏态断言
+  才能抓住吸附回归；scroll=0 形态对吸附回归天然免疫（吸回后仍 0）。
+- **bin-only crate 测试目标运行口径**：cargo test --lib 报 no library targets（单元测试
+  挂在 bin 目标）；cargo test --bin a --bin b 多值混跑遇无测试目标（如 ezr-proxy-certs）
+  整体 exit 1——逐目标跑各自收数；全量 cargo test 管道超 600s 会话超时丢输出，落盘
+  .work/tmp + --tests --no-run 预编译 + --test 分块（3 块 ≤150s/块）是唯一稳态。
