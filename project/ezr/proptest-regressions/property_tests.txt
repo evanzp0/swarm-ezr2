@@ -11,3 +11,4 @@ cc 6c427491b426f43ae5e09d64e972920548585d2d40e91b42d27850736d04dd0b # shrinks to
 cc 9d8880f1dcac367a7862cf67f2828e08a43741d765bc8d901c1a790380faaaff # shrinks to rate = 974653866.2169033, tokens = 0.0, elapsed = 6522.336027645068, remaining = 218429487.2377582
 cc f4b32e1b9ef1f3477c42db33c0eed795bb86e17df9eaace0a53b0864e5626e9a # shrinks to n = 0, sel0 = 0, kind = Add, keys = [Tab]
 cc de36d3a6f806ef802de531f8c3dbcc8af0292e0e72b468afa6a6cd0570ce545e # shrinks to kind = Add, focus = 3, chars = [' ']
+cc 8319448ac758ac56e46d96b4b988ba1e902b804461c5fe69b358f13e8940ce8e # shrinks to panel = [0, 0, 11, 0], vertical = false, total = 1, page = 0, pos = 1

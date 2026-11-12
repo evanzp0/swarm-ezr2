@@ -714,3 +714,9 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 - 同一工具族两属性域不同，域按属性语义选不按工具选：strip-identity 属性域排除 VS15（输入自身含 VS15 时 strip 后 ≠ 输入，变换只保证「自己插入的不丢」）；幂等属性全域成立（插入位被 VS15 隔断二次零增量）——break_links 一族两属性两种域。
 - prop_assert_eq! 按值移动 E0382 再实录：同值多断言场景比较断言改 prop_assert!(a == b, "…: len={} len={}", x.len(), y.len()) 借用形态，或先借用断言后消费断言排序；rust.md 既有条款第三次踩中，断言消息统一显式位置参数。
 - 属性分层对账口径续：bin 1028 = 942 单测 + 86 属性（独立命令 `cargo test --bin ezr property_tests::` 86P/0F；+4 全部落在 property 层，单测基线 942 不动）。
+
+## QA 终验轮（2026-11-12）追加
+- **显示退役类修订的观察锚漂移是 QA 套件假红高发位**：v1.49 把明细行尺寸对/「未知」项整项退役后，规程行与 runner 断言未同步的锚三例连发（DE-15 等待行「未知」/MB-03 `1.0/1.6 MB` 尺寸对/TD-17 明细行 `↓ 速度 <dl>/` 锚）——修复模式 = 用例按实现口径断言 + docstring 偏差注记 + handoff 待批（待 specifier 修订 feature/规程行），产品零改动；新锚选取 = 同语义的存活可观察物（无预取 → fixture 请求日志；重算 → 任务行[状态]徽标后总字节+进度百分数；块内推进 → 头部「会话已下载」，同源 Evt::Progress 的 t.downloaded）。
+- **proptest 随机探索中签「全量绿」探不到的臂 + 回归文件常驻守卫**：属性测试每轮随机熵，普通运行绿 ≠ 全域成立——llvm-cov 轮中签 prop_scrollbar_bar_geometry_monotone 最小失败输入（`page==0 && total>page` 时属性期待 thumb_pos=0，实现按几何 max=total>0 算出 2）；裁决法 = 实现+守卫层+单测三方对读（scrollbar.rs thumb_pos 几何合法、render/hit 的 page==0 守卫与 TD-20 显示条件一致、单测 stat_queued 同口径）→ 属性过宽非产品 bug，最小修复 = 拆臂（`total<=page` 保归零断言、`page==0` 只断 hit None）；proptest 自动落盘回归文件（proptest-regressions/）在修复后成为该输入的永久守卫，不删。
+- **llvm-cov 全目标覆盖超单调用时限的逐目标跑+并集合并**：全目标单次 `cargo llvm-cov --lcov` 插桩测试运行 ~40min 超 10min 上限 → 逐目标 `--bin/--test <t> --output-path` 各产出 lcov（插桩编译一次后缓存，每次调用只跑该目标）+ 合并脚本同行取 max（=覆盖并集语义）；mangled 符号名跨编译单元不同 → FN 记录按 (start,name) 不去重不影响行级 cov；CRAP 受限近似计算脚本随产物流转 `qa/runners/crap_calc.py`（口径头注内嵌）。
+- **属性文件改动的 mtime 编译域核验实例**：property_tests.rs 是 bin 模块（main.rs `mod` 声明、无 lib.rs、tests/ 零引用）→ 修改后 12 集成目标结果沿用有效（中断恢复 mtime 校验法前提核验的实证）。

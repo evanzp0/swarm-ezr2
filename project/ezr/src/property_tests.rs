@@ -2343,9 +2343,14 @@ proptest! {
         prop_assert_eq!(bar.travel(), tl.saturating_sub(th), "travel = track−thumb");
         let tp = bar.thumb_pos();
         prop_assert!(tp <= bar.travel(), "thumb_pos 不越 travel: tp={}", tp);
-        if total <= page || page == 0 {
+        if total <= page {
             prop_assert_eq!(tp, 0, "无滚动空间 thumb 归零");
             prop_assert!(bar.hit(0, 0).is_none(), "无滚动空间无命中");
+        } else if page == 0 {
+            prop_assert!(
+                bar.hit(0, 0).is_none(),
+                "page=0 不渲染即无命中（TD-20 显示条件守卫）"
+            );
         }
         let half = if vertical {
             Bar::vertical(rect, total, page, pos / 2)

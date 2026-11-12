@@ -359,7 +359,9 @@ class ModifyBtSuite(Suite):
 
         门控 = seeder1 限速 16KB/s（带宽限制下相邻 piece 完成间隔 ≈ 16s，
         远大于轮询间隔）：完成序由调度决定非索引序（实测 b→c→a→d），
-        门控取「恰 2 文件字节级完成」态，取消一个未完成文件。"""
+        门控取「恰 2 文件字节级完成」态，取消一个未完成文件。
+        偏差注记（QA 终验轮 20261112）：列表进度断言按 v1.49 口径 —— 明细行尺寸对
+        已退役，重算证据 = 任务行[状态]徽标后总字节（1.6 MB）+ 进度百分数（66.7%）。"""
         @self.case("QA-MB-03")
         def go(env: Env):
             tr_port = self._next_port()
@@ -428,13 +430,16 @@ class ModifyBtSuite(Suite):
                 deadline = time.time() + 8
                 saw = False
                 while time.time() < deadline:
-                    txt = app.text()
-                    if "1.0/1.6 MB" in txt and "66.7%" in txt:
+                    rows = app.display_rows()
+                    bt_row = next((r for r in rows if "[下载中]" in r), "")
+                    if "1.6 MB" in bt_row and "66.7%" in "\n".join(rows):
                         saw = True
                         break
                     app.pump(0.4)
                 assert saw, (
-                    "total 应按选中集合重算且列表进度即时更新（1.0/1.6 MB · 66.7%）")
+                    "total 应按选中集合重算且任务行即时更新（[下载中] 徽标后 1.6 MB + 进度 66.7%；"
+                    "v1.49 偏差注记：明细行 1.0/1.6 MB 尺寸对已退役，任务行[状态]徽标后"
+                    "单空格显示总字节；待 specifier 修订规程锚后对齐，已记 handoff 待批）")
                 assert _cycle_to_visible(app, "下载中", 6), \
                     "剩余未完文件应保持下载中"
                 _confirm_modify_files(app, [(cancel_target, True)])

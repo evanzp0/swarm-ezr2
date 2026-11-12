@@ -429,3 +429,8 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 ## architect 收敛轮（2026-11-12）追加
 - rustup 镜像复测（USTC 首次断层第一）：NJU/TUNA 布局漂移新形态——dist/ 变日期目录（镜像的是工具链分发树）、rustup-init 移到双层 rustup/rustup/dist/<arch>/（NJU/TUNA 同族新布局，旧单层路径 404 属布局漂移非资源缺失，先查目录清单再判死）；可用四镜实测 rustup-init 20.4MB 两轮均值：USTC 11.5/12.2MB/s 第一、SJTU 8.5/9.1、NJU 8.5/9.5、TUNA ~1；USTC 双变量（DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static + UPDATE_ROOT=…/rust-static/rustup）前台一次装齐 nightly 1.102.0（9c5648833）与交接基线同 commit。
 - 全新沙箱本轮工具面收窄先例：architect 轮仅装 rustup + rsproxy sparse registry 即满足全部验证（build/clippy/fmt/test/arch_check 零外部依赖）——cargo-mutants/llvm-cov/PMD/bb/APS 未装机（.tools 缓存不跨会话，hardender/QA 轮开工先按「工具启动」条款重建度量三件+APS，清缓存路径沿用上轮清单）。
+
+## QA 终验轮（2026-11-12）追加
+- **会话中断后持久 shell 的 cwd 重置**：工具调用 context canceled 后重开会话，持久 shell 的 cwd 回到 my-project 根（非 swarm 工作区）——工具报 "No files to analyze"/找不到文件时第一嫌疑 = cwd 不对；绝对路径 --dir/绝对路径产物的纪律（engineering.md「路径与工作目录确定性」）在多轮中断会话里是刚需，本轮 PMD 首跑即在错误目录静默空扫。
+- **rustup 镜像复测（本轮）**：8MB 探针 rsproxy 17.8MB/s 最快但其 dist 清单第 5 次复现 NoSuchKey XML 错误页、USTC 清单同病、aliyun 404——TUNA 双层路径清单有效（channel-rust-nightly.toml date 2026-11-11）→ TUNA 整链路前台装齐 nightly 1.102.0（9c5648833，与交接基线同 commit）；装前 curl 清单验 TOML 纪律持续有效。
+- **CARGO_PROFILE_DEV_DEBUG=0 漏带的爆盘具体数字**：12 个集成测试二进制各 300-400MB（target/debug/build/ezr/<hash>/out/）合计 ~4.5G + 依赖编译物，9.9G 盘 100% 满（os error 28, "compilation terminated"）——处置 = 保 release 二进制后 rm -rf target/debug 带 debug=0 重编（~9 分钟、df 100%→46%）；cleaner 轮「小盘磁盘第二杀手」条款的预防形态补充：cargo test 前先核对 debug=0 在环境变量里。

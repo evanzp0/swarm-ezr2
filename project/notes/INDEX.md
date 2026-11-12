@@ -59,3 +59,7 @@
 - architecture.md — fg_shadow「语义分歧」误判修正（match 首臂字面捕获核查判据、两版全输入恒等）+ 反链接 VS15 工具族单源化 text.rs（E0364 反向实录、规则 18 守卫）+ 规则 14 白名单扩展判例（视口自愈写=渲染派生钳制同类、精确字面豁免）+ 变异点四文件不拆维持（新增）
 - testing.md — 判定表全域属性先例（conn_flags 逐臂 oracle+结构断言）+ fn 门面优于类型门面（pub(super) 字段跨树不可见）+ 同族两属性域不同（identity 排除 VS15/幂等全域）+ prop_assert_eq 移动 E0382 再实录 + 分层对账 1028=942+86（新增）
 - environment.md — rustup 镜像复测（USTC 11.5/12.2MB/s 断层第一、NJU/TUNA dist 日期目录布局漂移、rustup-init 双层路径）+ architect 轮工具面收窄先例（度量四件未装机、hardender/QA 先重建）（新增）
+
+## QA 终验轮（2026-11-12）追加
+- testing.md — 显示退役类修订的观察锚漂移三例连发与修复模式（实现口径断言+偏差注记+handoff 待批）/proptest 随机探索中签与回归文件常驻守卫（属性过宽臂拆臂裁决法）/llvm-cov 全目标逐目标跑+lcov 并集合并与 crap_calc.py 流转/属性文件 mtime 编译域核验实例（新增）
+- environment.md — 会话中断后持久 shell cwd 重置（No files to analyze 第一嫌疑）/rustup 镜像复测（rsproxy 清单第 5 次 NoSuchKey、TUNA 唯一可用装齐 1.102.0）/debug=0 漏带爆盘具体数字与重编处置（新增）

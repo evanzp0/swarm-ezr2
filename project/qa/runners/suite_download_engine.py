@@ -429,7 +429,14 @@ class DownloadEngineSuite(Suite):
                 app.graceful_quit()
 
     def _case_15(self):
-        """QA-DE-15 槽位占满时添加：等待行「未知」（无探测）；获槽后详情 5.0 MB。"""
+        """QA-DE-15 槽位占满时添加：等待行不预取无尺寸显示（v1.49 偏差注记）；获槽后详情 5.0 MB。
+
+        偏差注记（QA 终验轮 20261112）：规程/feature 场景 15 的 THEN「等待行大小显示
+        「未知」」是 v1.28 期观察锚；v1.49（操作者钦定轮）已把尾随尺寸/未知项整项退役
+        （task_lines.rs stat_queued 单测同口径：等待行无「未知」无「MB」）。本用例按
+        实现口径断言：等待行无任何尺寸显示 + fixture 请求日志零探测（无预取的权威判据）。
+        待 specifier 修订场景 15 THEN-1 与规程行后对齐（已记 handoff 待批）。
+        """
         @self.case("QA-DE-15")
         def go(env: Env):
             app = EzrApp(env.home, save_dir=env.save_dir)
@@ -443,7 +450,9 @@ class DownloadEngineSuite(Suite):
                 self._add_via_dialog(app, env,
                                      env.fixture.url("five-m.bin?speed=1000000"))
                 assert app.wait_for("排队第 1 位", 8), "第 6 任务应排队第 1 位"
-                assert app.wait_for("未知", 5), "等待行大小应显示「未知」（不预取）"
+                app.pump(0.8)
+                joined = "\n".join(app.display_rows())
+                assert "5.0 MB" not in joined, "等待行不应预取显示大小（v1.49：尺寸未知不显示）"
                 assert not [r for r in env.fixture.requests() if "five-m" in r["path"]], \
                     "等待中不应预取（fixture 请求日志无探测）"
                 # 暂停队首（AC-5）：先 Home 选中第 1 个任务再 Space

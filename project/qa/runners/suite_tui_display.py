@@ -609,6 +609,12 @@ class TuiDisplaySuite(Suite):
         每请求口径——12 块文件 4 连接轮转领块，任务全程 ~15s；采样窗
         3×1.05s + 就绪 ~4s 远小于全程，且速度为块内实时口径（FR-01-105
         修复后不依赖块边界）。
+
+        偏差注记（QA 终验轮 20261112）：已下载字节观察锚按 v1.49 口径改读头部
+        「会话已下载」（场景 12 规格 = 本次运行累计下载字节，同源于 Evt::Progress
+        的 t.downloaded，块内实时推进）；原锚 = HTTP 明细行 `↓ 速度 <已下载>/<总>`
+        尺寸对，已随 v1.49 明细行尺寸项整项退役（task_lines.rs:306 注记）。
+        待 specifier 修订后对齐，已记 handoff 待批。
         """
         @self.case("QA-TD-17")
         def go(env: Env):
@@ -642,9 +648,8 @@ class TuiDisplaySuite(Suite):
                     ts = self._task_speed_sample(app)
                     m = re.search(r"全局\s+↓ (\d+(?:\.\d+)? [KMG]?i?B/s)", app.text())
                     conns = self._conn_speeds(app)
-                    dm = re.search(r"↓ \d+(?:\.\d+)? [KMG]?i?B/s\s+([\d.]+ [KMG]?B)/",
-                                   app.text())
-                    if ts is None or m is None or not conns or dm is None:
+                    sm = re.search(r"会话已下载\s+([\d.]+ [KMG]?B)", app.text())
+                    if ts is None or m is None or not conns or sm is None:
                         time.sleep(0.3)
                         continue
                     t = parse_speed(ts)
@@ -652,9 +657,9 @@ class TuiDisplaySuite(Suite):
                     if t <= 0:
                         # 传输中的零读数即被测缺陷形态（块内平台期），直接入样定罪
                         samples.append((0.0, g, conns,
-                                        size_b(dm.group(1))))
+                                        size_b(sm.group(1))))
                         break
-                    samples.append((t, g, conns, size_b(dm.group(1))))
+                    samples.append((t, g, conns, size_b(sm.group(1))))
                     time.sleep(1.05)
                 assert len(samples) == 3, f"应采得 3 组样本，实得 {len(samples)}"
                 prev = -1.0
