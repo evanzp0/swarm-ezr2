@@ -8,7 +8,7 @@ use ratatui::Frame;
 
 use super::btn::{clip_wide_at_edges, dialog_rect, draw_close_btn};
 use super::scrollable_panel::{ScrollablePanel, ScrollbarMode};
-use super::text::{pad_left, truncate, w};
+use super::text::{break_links, link_break_spans, pad_left, truncate, w};
 use super::{panel_border_style, panel_title_style, BORDER, FG, FOCUS_BORDER, GREEN, RED, YELLOW};
 use crate::app::{App, SbKey};
 use crate::model::TaskState;
@@ -23,56 +23,6 @@ const TRACKERS_COL_STATUS: usize = 49;
 const TRACKERS_COL_PEERS: usize = 62;
 const TRACKERS_COL_SEEDS: usize = 69;
 const TRACKERS_COL_MSG: usize = 76;
-
-pub(super) fn break_links(s: &str) -> String {
-    const VS15: &str = "\u{FE0E}";
-    s.replace("https://", &format!("https{VS15}://"))
-        .replace("http://", &format!("http{VS15}://"))
-        .replace("www.", &format!("www{VS15}."))
-}
-
-fn fg_shadow(c: Option<Color>) -> Option<Color> {
-    match c {
-        Some(Color::Rgb(r, g, 0)) => Some(Color::Rgb(r, g.saturating_add(1), 1)),
-        Some(Color::Rgb(r, g, b)) => Some(Color::Rgb(r, g, b.saturating_sub(1))),
-        other => other,
-    }
-}
-
-pub(super) fn link_break_spans(s: &str, style: Style) -> Vec<Span<'static>> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut rest = s;
-    let mut shadow = false;
-    while let Some((i, c)) = rest.char_indices().find(|&(_, c)| c == '\u{FE0E}') {
-        let (head, tail) = rest.split_at(i + c.len_utf8());
-        let st = if shadow {
-            Style {
-                fg: fg_shadow(style.fg),
-                ..style
-            }
-        } else {
-            style
-        };
-        spans.push(Span::styled(head.to_string(), st));
-        rest = tail;
-        shadow = !shadow;
-    }
-    if !rest.is_empty() {
-        let st = if shadow {
-            Style {
-                fg: fg_shadow(style.fg),
-                ..style
-            }
-        } else {
-            style
-        };
-        spans.push(Span::styled(rest.to_string(), st));
-    }
-    if spans.is_empty() {
-        spans.push(Span::styled(String::new(), style));
-    }
-    spans
-}
 
 type TrackerStatusView = Option<(bool, Option<u32>, Option<u32>, Option<Instant>)>;
 

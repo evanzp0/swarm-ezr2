@@ -107,7 +107,7 @@ pub(crate) fn draw_multi_line_input(
                     };
                     let st = Style::default().fg(Color::White);
                     let spans: Vec<Span> = if no_link {
-                        super::popups::link_break_spans(&super::popups::break_links(&text), st)
+                        super::text::link_break_spans(&super::text::break_links(&text), st)
                     } else {
                         vec![Span::styled(text, st)]
                     };

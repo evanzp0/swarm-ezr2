@@ -192,6 +192,16 @@ fi
 #   min(max) 钳制：app 键盘/滚动写（popups.rs trackers_scroll_by、
 #   scrollbar.rs 拖拽置位）+ ui 渲染期钳制双写形态——与 help/pieces/val
 #   同款，architect 本轮白名单扩展。）
+#   architect 收敛轮（2026-11-12）白名单扩展（2 项精确形态，阳性对照实测本轮
+#   会话）：src/ui/list.rs draw_list 的 v1.49/v1.52 视口容量自愈——
+#   `app.selected = idxs.len() - 1;`（选中越界夹紧到当帧过滤集）与
+#   `app.scroll = max_scroll;`（滚动搁浅夹紧到当帧 max_scroll，max_scroll =
+#   idxs.len().saturating_sub(rows) 当帧派生）。裁决依据：当帧 rows 自愈与
+#   tick 层夹紧不可互替（tick 只有上一帧 visible_rows，notes/testing.md
+#   v1.52 轮在案），移出渲染路径即行为等价改写不成立；写入与白名单既有
+#   「渲染派生钳制回填」同类。按精确赋值字面豁免（判例对齐）——selected/
+#   scroll 的其他写入形态（如 `app.scroll = 3;`、`app.selected = 0;`）仍
+#   响亮失败，政策字段零整体豁免。
 ui_product_lines=$(for f in src/ui/*.rs; do
   awk '/#\[cfg\(test\)\]/{exit} {print FILENAME":"FNR":"$0}' "$f"
 done)
@@ -199,6 +209,8 @@ hit=$(printf '%s\n' "$ui_product_lines" \
   | grep -E 'app\.[a-z_]+([[:space:]]*=[^=]|\.(push|clear|insert|remove|retain|swap|drain|resize|append|truncate)\()' \
   | grep -vE 'app\.[a-z_]*(rect|area|visible|_pos|_scrollbar|max_hscroll|max_scroll|follow|dlg_field_wins|dlg_cursor_screen|cmd_cursor_screen|(dlg_(bt|trackers|trackers_h)|cmd|trackers)_sb)' \
   | grep -vE 'app\.(help|pieces|val|trackers)_scroll\b' \
+  | grep -vE 'app\.selected[[:space:]]*=[[:space:]]*idxs\.len\(\) - 1;' \
+  | grep -vE 'app\.scroll[[:space:]]*=[[:space:]]*max_scroll;' \
   | grep -vE ':[0-9]+:[[:space:]]*//' || true)
 if [ -n "$hit" ]; then
   echo "[FAIL] ui 渲染路径改写非回填 App 字段（写面只限回填白名单，政策字段零豁免）:"; echo "$hit"; fails=$((fails+1))
@@ -249,6 +261,21 @@ else
   echo "[ OK ] bt 层零 app/ui 依赖（机制层方向纯净）"
 fi
 
+# 规则 18【单源】反链接 VS15 工具族唯一定义点（architect 收敛轮 2026-11-12：
+# break_links/fg_shadow/link_break_spans 双实现副本曾漂移出「语义分歧」误判
+# （实为 fg_shadow 首臂捕获 b==0、两版对所有输入行为恒等），本轮已单源化到
+# src/ui/text.rs（popups.rs 退役、multiline.rs 改指）。再出现第二定义点即
+# CPD 双胞胎回归。扫描域 = 函数定义行（fn 定义而非调用点），跳过注释。
+# break_links_deep 是逐字符注入的深变体（不同算法），不在本规则域。）
+hit=$(grep -rnE '^[[:space:]]*(pub[^ ]*[[:space:]]+)?fn[[:space:]]+(break_links|fg_shadow|link_break_spans)[[:space:]]*[({]' \
+      src/ui/ src/app/ src/engine/ src/bt/ src/model/ --include='*.rs' \
+      | grep -v 'src/ui/text.rs' || true)
+if [ -n "$hit" ]; then
+  echo "[FAIL] 反链接 VS15 工具族出现第二定义点（单源于 src/ui/text.rs）:"; echo "$hit"; fails=$((fails+1))
+else
+  echo "[ OK ] 反链接 VS15 工具族单源 src/ui/text.rs（break_links/fg_shadow/link_break_spans）"
+fi
+
 if [ "$fails" -gt 0 ]; then
   echo "arch_check: ${fails} 条规则未过"; exit 1
 fi
@@ -294,3 +321,11 @@ echo "arch_check: 全部边界规则通过"
 #   ② 向 src/bt/mod.rs 末尾临时追加真实 use 语句 `use ratatui::layout::Rect;`
 #      → 规则 16 扩域后命中并非零退出（bt 层渲染框架禁令生效）；
 #   对照后均已移除，复跑全绿。
+# architect 收敛轮（2026-11-12）规则 14 白名单扩展 + 规则 18 阳性对照（本轮会话实测）：
+#   ① 规则 14：白名单扩展前现状即红（list.rs:81/86 两处 v1.49/v1.52 视口自愈写
+#      未登记）；扩展后全绿；政策写探针 `app.scroll = 3;` 插入 list.rs 产品区
+#      → 命中并非零退出（精确字面豁免未误放政策字段）；对照后已移除。
+#   ② 规则 18：向 src/ui/popups.rs 临时插入真实第二定义
+#      `fn break_links(s: &str) -> String { super::text::break_links(s) }`
+#      → 命中并非零退出；移除后全绿。（探针必须是 fn 定义行——注释形态不被
+#      扫描，与判例对齐。）

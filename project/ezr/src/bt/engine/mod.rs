@@ -893,7 +893,7 @@ async fn report_stopped(
 }
 
 #[cfg(test)]
-pub(crate) use tests::make_meta;
+pub(crate) use tests::{flags_case, make_meta};
 
 #[cfg(test)]
 mod tests {
@@ -4120,7 +4120,7 @@ mod tests {
         assert!((avail - 1.0).abs() < 1e-9, "纯做种基线健康度 1.0: {avail}");
     }
 
-    fn flags_case(
+    pub(crate) fn flags_case(
         conn_id: usize,
         covered: &[u32],
         done: &HashSet<u32>,

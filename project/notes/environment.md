@@ -425,3 +425,7 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - rsproxy 本轮 dist 与 crates 下载均间歇 504（registry sparse 拉全依赖靠 cargo 内建重试恢复，构建日志 38 行 spurious network error 全为网络噪音非编译警告——grep warning 归因先分网络/编译两族再计数）。
 - 全新沙箱重建清单（本轮实测时序）：探测（cargo/rustup/.tools 全缺）→ 镜像测速 → rustup-init 前台装 nightly+clippy+rustfmt+llvm-tools-preview（--component 一次带上避免 llvm-cov 首跑交互挂死）→ ~/.cargo/config.toml rsproxy sparse → gh-proxy 预编译四件（llvm-cov 0.9.1/mutants 27.1.0 资产名无版本前缀形态、bb 1.13.229、PMD 7.29.0 zip 完整性探针）→ APS gh-proxy clone（bb tasks 探针）。工具链安装位 ~/.cargo/bin + ~/.local/bin（PATH 需双注入）。
 - 小盘磁盘第二杀手实锤：CARGO_PROFILE_TEST_DEBUG=0 下逐套件测试二进制仍 300MB+（静态符号表为主），target/debug/build/ezr 下 20 个 hash 目录共 6.5G；12 套件顺序重链即把盘顶到 95%——已验证套件按名 `find target/debug/build/ezr -maxdepth 3 -type f -name "<套件>*" -size +10M -delete` 释放 1.4G，重链成本（分钟级）远优于构建挂死；llvm-cov 插桩构建独立 target 目录约 2-3G，覆盖率跑前先清测试二进制。
+
+## architect 收敛轮（2026-11-12）追加
+- rustup 镜像复测（USTC 首次断层第一）：NJU/TUNA 布局漂移新形态——dist/ 变日期目录（镜像的是工具链分发树）、rustup-init 移到双层 rustup/rustup/dist/<arch>/（NJU/TUNA 同族新布局，旧单层路径 404 属布局漂移非资源缺失，先查目录清单再判死）；可用四镜实测 rustup-init 20.4MB 两轮均值：USTC 11.5/12.2MB/s 第一、SJTU 8.5/9.1、NJU 8.5/9.5、TUNA ~1；USTC 双变量（DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static + UPDATE_ROOT=…/rust-static/rustup）前台一次装齐 nightly 1.102.0（9c5648833）与交接基线同 commit。
+- 全新沙箱本轮工具面收窄先例：architect 轮仅装 rustup + rsproxy sparse registry 即满足全部验证（build/clippy/fmt/test/arch_check 零外部依赖）——cargo-mutants/llvm-cov/PMD/bb/APS 未装机（.tools 缓存不跨会话，hardender/QA 轮开工先按「工具启动」条款重建度量三件+APS，清缓存路径沿用上轮清单）。

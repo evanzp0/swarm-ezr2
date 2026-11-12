@@ -54,3 +54,8 @@
 - environment.md — rustup 镜像复测（NJU 首次入选 11.2/10.5MB/s 断层第一、rsproxy dist 后端 504「清单活组件死」新形态、TUNA 慢速漂移、USTC 403 两连）/rsproxy crates 504 网络噪音与编译警告 grep 归因分族/全新沙箱重建清单时序（llvm-tools-preview 随 init 带上）/小盘磁盘第二杀手=逐套件 300MB+ 测试二进制与按名 find 删除释放法（新增）
 - testing.md — CRAP 分析器两坑（行切片错位 bug/闭包并入外层防假阴性）与阳性对照纪律/llvm-cov 幻影收尾行第三形态（普通 if 块 `}`）与判据放宽/挂载收编增量逐套件实测口径（8 守卫→7×8+1×2+4×0）/spawn+watch 函数纯函数提准+快乐路径组合拳与 panic 臂登记/夹具收编两通道（testutil 升共享+门面 re-export）/nightly 同版本异 commit 漂移 lint 基线复核（新增）
 - architecture.md — conn_flags 表驱动化先例（互斥标志对 match+then_some 收 comp 17→6）/link_break_spans 双胞胎克隆不可机械合并判据（传递闭包捕获语义分歧的 fg_shadow，b=0 角落行为分歧登记移交）/start_bt_task 纯函数提准先例（join_panic_reason 三载荷）/变异点扫描按文件计数与 >100 登记口径（新增）
+
+## architect 收敛轮（2026-11-12）追加
+- architecture.md — fg_shadow「语义分歧」误判修正（match 首臂字面捕获核查判据、两版全输入恒等）+ 反链接 VS15 工具族单源化 text.rs（E0364 反向实录、规则 18 守卫）+ 规则 14 白名单扩展判例（视口自愈写=渲染派生钳制同类、精确字面豁免）+ 变异点四文件不拆维持（新增）
+- testing.md — 判定表全域属性先例（conn_flags 逐臂 oracle+结构断言）+ fn 门面优于类型门面（pub(super) 字段跨树不可见）+ 同族两属性域不同（identity 排除 VS15/幂等全域）+ prop_assert_eq 移动 E0382 再实录 + 分层对账 1028=942+86（新增）
+- environment.md — rustup 镜像复测（USTC 11.5/12.2MB/s 断层第一、NJU/TUNA dist 日期目录布局漂移、rustup-init 双层路径）+ architect 轮工具面收窄先例（度量四件未装机、hardender/QA 先重建）（新增）

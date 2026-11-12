@@ -788,6 +788,12 @@ ws/webrtc 轮（2026-11-09）：TrackerUrl 三族分型（Ws 变体与 Http/Udp 
 
 ## cleaner 收敛轮（2026-11-12）追加
 - conn_flags 表驱动化先例（互斥标志对收 comp）：if 链 8 臂（D/d、U/u、O、I、K、? 互斥对 + 单条件旗）→ (bool,bool)→Option<char> match ×4 + then_some ×2 + 数组 into_iter().flatten().collect()——输出字符序不变（D/d,U/u,O,I,K,?）、comp 17→6、CRAP 17→≤6（cov=1.0 下 CRAP=comp）；判据：多臂互斥布尔对映射到固定字符序列，表驱动不损可读性。
-- link_break_spans 双胞胎克隆裁决（CPD min200 唯一批内产品家族）：popups.rs/text.rs 两份完全同体 34 行，但各自捕获**语义分歧的本地 fg_shadow**（popups=saturating_sub(1) 防下溢，text.rs=裸 b-1，b=0 角落 debug panic/release 回绕）——「同体克隆」要读齐其传递闭包捕获链再判可否合并，机械单点化=改变另一侧 b=0 角落行为（违反不引入新行为）；已登记 handoff 移交 fg_shadow 语义统一裁决。
+- link_break_spans 双胞胎克隆裁决（CPD min200 唯一批内产品家族）：popups.rs/text.rs 两份完全同体 34 行，但各自捕获**语义分歧的本地 fg_shadow**（popups=saturating_sub(1) 防下溢，text.rs=裸 b-1，b=0 角落 debug panic/release 回绕）——「同体克隆」要读齐其传递闭包捕获链再判可否合并，机械单点化=改变另一侧 b=0 角落行为（违反不引入新行为）；已登记 handoff 移交 fg_shadow 语义统一裁决。（→ architect 收敛轮修正：首臂已捕获 b==0，两版全输入恒等，已零行为差单源化，见下轮追加。）
 - spawn+watch 函数纯函数提准先例：start_bt_task 的 panic 消息提取链（downcast &str→String→回退）抽 join_panic_reason 纯函数（Box<dyn Any + Send> 三载荷直测），本体 comp 降、CRAP 达标；提取前后行为逐字等价（format! 参数化仅形态变化）。
 - 变异点扫描本轮口径：cargo mutants --list 按文件计数（--file 多值一次扫全批），批次 10 文件 777 点、>100 文件 4 个（app/mod.rs 149/conn.rs 125/text.rs 122/task.rs 101，密度 0.14-0.30/行）——沿 rust.md §7 登记 hardender --file 分块消费，模块边界裁决权在 architect（conn.rs 本身即上一轮 8477 行拆分的产物，变异点 465 精确再分布的延续账）。
+
+## architect 收敛轮（2026-11-12）追加
+- fg_shadow「语义分歧」误判修正与 CPD 克隆裁决判据升级（修正 cleaner 收敛轮同日条目）：判「捕获语义分歧」先核对 match 首臂的字面捕获——fg_shadow 两版首臂 `Rgb(r,g,0) → Rgb(r,g+1,1)` 已捕获 b==0，第二臂只收 b≥1，`b-1` 不可能下溢，两版对**全部输入**行为恒等（非仅可达路径恒等）；「同体克隆语义分歧」判读必须穷举输入域证恒等/分歧，不能只看算子形态（saturating vs 裸减）。修正后单点化零行为差，原「机械合并改角落行为」结论作废。
+- 反链接 VS15 工具族单源化落位：break_links/fg_shadow/link_break_spans 收编 ui/text.rs（共享文本工具既有归属，detail/val_popup 本就指向 text），popups.rs 退役为纯弹窗面板渲染、multiline.rs:110 改指 super::text::*；link_break_spans 保持 pub(crate)——门面 re-export 要求项自身可见性 ≥ re-export 口径，pub(super) 项 + pub(crate) use 即 E0364（rust.md 门面条款的反向实录）；arch_check 新规则 18 单源守卫（扫描域 = fn 定义行，break_links_deep 逐字符深变体不同算法不在域）。
+- arch_check 规则 14 白名单扩展判例（响亮失败机制首次实战）：v1.49/v1.52 视口容量自愈写（draw_list 当帧 rows 夹紧 `app.selected = idxs.len() - 1;` / `app.scroll = max_scroll;`）属「渲染派生钳制回填」同类——当帧 rows 自愈与 tick 层夹紧不可互替（tick 只有上一帧 visible_rows），移出渲染路径即行为等价改写不成立；按精确赋值字面豁免（非字段整体豁免，政策写 `app.scroll = 3;` 探针仍红）；v1.49/v1.52 两轮漏登记由本轮评审抓出，「新增面板渲染钳制写入会响亮失败需显式扩白名单」的设计预期兑现。
+- 变异点 >100 四文件不拆维持（app/mod.rs 149/conn.rs 125/text.rs 122/model task.rs 101，密度 0.10-0.30/行带内、无接口收窄收益、拆分属不安全类）——与前两轮 architect 判例一致，hardender --file 分块消费面就绪。

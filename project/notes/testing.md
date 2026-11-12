@@ -707,3 +707,10 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 - spawn+watch 型函数（start_bt_task）可达覆盖上界与收敛组合拳：快乐路径（登记发送端/引擎起停/Cancel 干净退出无 BtFailed）单测可达；join Err panic 臂无产品面确定性触发（run() 全程优雅报错无 unwrap 面）——「纯函数提准收 comp」（join_panic_reason 三载荷 &str/String/未知直测 cov=1）+ 快乐路径单测把 CRAP 30→≤6，panic 臂留白属登记不属硬凑；引擎级单测构造用 shared_for_tests + make_meta 门面 re-export + 不可达 tracker（udp://127.0.0.1:1）+ Cancel 收尾 + try_recv 排水（evt 通道 256 死线纪律）。
 - 夹具 DRY 收编两通道：跨测试模块重复夹具升 testutil 共享（bt_task：bt.rs 改委托一行、调用点零改动）；跨 crate 模块测试助手用「门面 re-export」（make_meta pub(crate) 于 tests 模块 + 父级 #[cfg(test)] pub(crate) use，零外部 API 增量）；收编后旧导入即死代码，clippy unused import 清单跟改。
 - lint 警告清零的 nightly 漂移形态本轮实录：同版本号 nightly（1.102.0）不同 commit（9c5648833）引入 5 条 unused/mut 需要 lint（4 处测试死 setup files+pmap 构造后未用、1 处多余 mut）——「上轮 clippy 0」复核必须在本沙箱重跑才算数；unused 类是死代码免费信号，先查死因（本例：上一轮 coder 补字段时构造点成死 setup）再删。
+
+## architect 收敛轮（2026-11-12）追加
+- 判定表全域属性先例（conn_flags 8 臂）：逐臂语义 oracle（we_want 单行重推 `covered.iter().any(|&p| !done.contains(&p) && has.contains(&p))`）+ 结构断言（字符域 ⊆ 判定表字符集或单 "-"、旗标不重复、ORDER 表 windows(2) 严格递增——一箭双雕锁顺序与互斥臂唯一）；表驱动重写的属性锁定形态，比固定值单测覆盖全域组合。
+- 跨模块属性测试可达性选 fn 门面而非类型门面：flags_case 升 pub(crate) + `#[cfg(test)] pub(crate) use tests::{flags_case, make_meta}` —— ConnStat 字段是 pub(super)，跨子树 re-export 类型名不给字段访问权（构造仍不可见），暴露「测试包装 fn」才是正确粒度（零产品 API 增量不变）。
+- 同一工具族两属性域不同，域按属性语义选不按工具选：strip-identity 属性域排除 VS15（输入自身含 VS15 时 strip 后 ≠ 输入，变换只保证「自己插入的不丢」）；幂等属性全域成立（插入位被 VS15 隔断二次零增量）——break_links 一族两属性两种域。
+- prop_assert_eq! 按值移动 E0382 再实录：同值多断言场景比较断言改 prop_assert!(a == b, "…: len={} len={}", x.len(), y.len()) 借用形态，或先借用断言后消费断言排序；rust.md 既有条款第三次踩中，断言消息统一显式位置参数。
+- 属性分层对账口径续：bin 1028 = 942 单测 + 86 属性（独立命令 `cargo test --bin ezr property_tests::` 86P/0F；+4 全部落在 property 层，单测基线 942 不动）。

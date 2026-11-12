@@ -130,6 +130,13 @@ pub(super) fn plain_bar(width: usize, frac: f64, fill: Color) -> Vec<Span<'stati
     spans
 }
 
+pub(crate) fn break_links(s: &str) -> String {
+    const VS15: &str = "\u{FE0E}";
+    s.replace("https://", &format!("https{VS15}://"))
+        .replace("http://", &format!("http{VS15}://"))
+        .replace("www.", &format!("www{VS15}."))
+}
+
 pub(crate) fn break_links_deep(s: &str) -> String {
     const VS15: &str = "\u{FE0E}";
     let mut out = String::with_capacity(s.len() + s.chars().count() * 3);
@@ -145,7 +152,7 @@ pub(crate) fn break_links_deep(s: &str) -> String {
 fn fg_shadow(c: Option<Color>) -> Option<Color> {
     match c {
         Some(Color::Rgb(r, g, 0)) => Some(Color::Rgb(r, g.saturating_add(1), 1)),
-        Some(Color::Rgb(r, g, b)) => Some(Color::Rgb(r, g, b - 1)),
+        Some(Color::Rgb(r, g, b)) => Some(Color::Rgb(r, g, b.saturating_sub(1))),
         other => other,
     }
 }

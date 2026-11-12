@@ -2377,3 +2377,111 @@ proptest! {
         }
     }
 }
+
+fn link_text() -> impl proptest::strategy::Strategy<Value = String> {
+    proptest::collection::vec(
+        prop_oneof![
+            3 => Just("http://".to_string()),
+            3 => Just("https://".to_string()),
+            2 => Just("www.".to_string()),
+            1 => Just("\u{FE0E}".to_string()),
+            6 => "[a-zA-Z0-9.:/_-]{1,5}",
+        ],
+        0..24,
+    )
+    .prop_map(|pieces| pieces.concat())
+}
+
+proptest! {
+    #[test]
+    fn prop_break_links_strip_vs15_identity(
+        s in "[a-zA-Z0-9.:/_-]{0,40}(https://[a-z]{0,8})?(http://[a-z]{0,8})?(www\\.[a-z]{0,8})?[a-zA-Z0-9.:/_-]{0,40}",
+    ) {
+        let out = crate::ui::break_links(&s);
+        let stripped: String = out.chars().filter(|&c| c != '\u{FE0E}').collect();
+        prop_assert_eq!(stripped, s, "strip VS15 还原输入：变换只插入 VS15 不改其他字符");
+        prop_assert!(
+            !out.contains("http://") && !out.contains("https://") && !out.contains("www."),
+            "变换后链接前缀均被 VS15 隔断，不再含裸前缀"
+        );
+    }
+
+    #[test]
+    fn prop_break_links_idempotent(s in link_text()) {
+        let once = crate::ui::break_links(&s);
+        let twice = crate::ui::break_links(&once);
+        prop_assert_eq!(twice, once, "二次应用零增量（VS15 隔断所有插入位）");
+    }
+
+    #[test]
+    fn prop_link_break_spans_lossless_and_alternation(s in link_text()) {
+        use ratatui::style::{Color, Style};
+        let base_fg = Color::Rgb(198, 208, 212);
+        let shadow_fg = Color::Rgb(198, 208, 211);
+        let base = Style::default().fg(base_fg);
+        let input = crate::ui::break_links(&s);
+        let spans = crate::ui::link_break_spans(&input, base);
+        let joined: String = spans.iter().map(|sp| sp.content.to_string()).collect();
+        prop_assert!(joined == input, "span 拼接还原输入失败: joined_len={} input_len={}", joined.len(), input.len());
+        prop_assert!(!spans.is_empty(), "空输入回退单空 span，永不产出空 vec");
+        let k = input.chars().filter(|&c| c == '\u{FE0E}').count();
+        prop_assert!(
+            spans.len() == k || spans.len() == k + 1,
+            "span 数 ∈ {{k, k+1}}（k=VS15 数，尾段空则少一）: len={} k={}",
+            spans.len(),
+            k
+        );
+        for (i, sp) in spans.iter().enumerate() {
+            let want = if i % 2 == 1 { shadow_fg } else { base_fg };
+            prop_assert_eq!(sp.style.fg, Some(want), "shadow 交替：偶位原色奇位影色，臂位={}", i);
+        }
+    }
+
+    #[test]
+    fn prop_conn_flags_domain_invariants(
+        conn_id in 0usize..8usize,
+        covered in proptest::collection::vec(0u32..8u32, 0..6),
+        done_v in proptest::collection::vec(0u32..8u32, 0..6),
+        peer_choking in proptest::bool::ANY,
+        am_choking in proptest::bool::ANY,
+        peer_interested in proptest::bool::ANY,
+        has_v in proptest::collection::vec(0u32..8u32, 0..6),
+        inbound in proptest::bool::ANY,
+        optimistic in proptest::option::of(0usize..8usize),
+    ) {
+        use std::collections::HashSet;
+        const ORDER: [char; 8] = ['D', 'd', 'U', 'u', 'O', 'I', 'K', '?'];
+        let done: HashSet<u32> = done_v.iter().copied().collect();
+        let out = crate::bt::engine::flags_case(
+            conn_id, &covered, &done, peer_choking, am_choking, peer_interested, &has_v,
+            inbound, optimistic,
+        );
+        let chars: Vec<char> = out.chars().collect();
+        prop_assert!(chars.iter().all(|c| ORDER.contains(c)) || out == "-",
+            "字符域 ⊆ 判定表字符集或空回退: out={}", out);
+        if out == "-" {
+            prop_assert_eq!(chars.len(), 1, "空回退恰为单字符 -");
+        } else {
+            let mut seen = Vec::new();
+            for c in &chars {
+                prop_assert!(!seen.contains(c), "旗标不重复: out={}", out);
+                seen.push(*c);
+            }
+            let idxs: Vec<usize> = chars.iter().map(|c| ORDER.iter().position(|o| o == c).unwrap()).collect();
+            prop_assert!(
+                idxs.windows(2).all(|w| w[0] < w[1]),
+                "旗标按 D/d,U/u,O,I,K,? 规范序严格递增（互斥臂唯一）: out={}",
+                out
+            );
+        }
+        let we_want = covered.iter().any(|&p| !done.contains(&p) && has_v.contains(&p));
+        prop_assert_eq!(chars.contains(&'D'), we_want && !peer_choking, "D 臂语义: out={}", out);
+        prop_assert_eq!(chars.contains(&'d'), we_want && peer_choking, "d 臂语义: out={}", out);
+        prop_assert_eq!(chars.contains(&'U'), peer_interested && !am_choking, "U 臂语义: out={}", out);
+        prop_assert_eq!(chars.contains(&'u'), peer_interested && am_choking, "u 臂语义: out={}", out);
+        prop_assert_eq!(chars.contains(&'K'), !we_want && !peer_choking, "K 臂语义: out={}", out);
+        prop_assert_eq!(chars.contains(&'?'), !am_choking && !peer_interested, "? 臂语义: out={}", out);
+        prop_assert_eq!(chars.contains(&'O'), optimistic == Some(conn_id), "O 臂语义: out={}", out);
+        prop_assert_eq!(chars.contains(&'I'), inbound, "I 臂语义: out={}", out);
+    }
+}
