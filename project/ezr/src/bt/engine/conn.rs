@@ -285,31 +285,35 @@ pub(super) fn conn_flags(
     let we_want = covered
         .iter()
         .any(|&p| !done.contains(&p) && st.has.contains(&p));
-    let mut flags = String::new();
-    if we_want && !st.peer_choking {
-        flags.push('D');
-    }
-    if we_want && st.peer_choking {
-        flags.push('d');
-    }
-    if st.peer_interested && !st.am_choking {
-        flags.push('U');
-    }
-    if st.peer_interested && st.am_choking {
-        flags.push('u');
-    }
-    if optimistic_slot == Some(conn_id) {
-        flags.push('O');
-    }
-    if st.inbound {
-        flags.push('I');
-    }
-    if !we_want && !st.peer_choking {
-        flags.push('K');
-    }
-    if !st.am_choking && !st.peer_interested {
-        flags.push('?');
-    }
+    let download = match (we_want, st.peer_choking) {
+        (true, false) => Some('D'),
+        (true, true) => Some('d'),
+        _ => None,
+    };
+    let upload = match (st.peer_interested, st.am_choking) {
+        (true, false) => Some('U'),
+        (true, true) => Some('u'),
+        _ => None,
+    };
+    let idle = match (we_want, st.peer_choking) {
+        (false, false) => Some('K'),
+        _ => None,
+    };
+    let uninterested = match (st.am_choking, st.peer_interested) {
+        (false, false) => Some('?'),
+        _ => None,
+    };
+    let flags: String = [
+        download,
+        upload,
+        (optimistic_slot == Some(conn_id)).then_some('O'),
+        st.inbound.then_some('I'),
+        idle,
+        uninterested,
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     if flags.is_empty() {
         "-".to_string()
     } else {

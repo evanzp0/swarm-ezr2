@@ -893,6 +893,9 @@ async fn report_stopped(
 }
 
 #[cfg(test)]
+pub(crate) use tests::make_meta;
+
+#[cfg(test)]
 mod tests {
 
     fn test_ul() -> std::sync::Arc<crate::engine::Throttle> {
@@ -911,7 +914,7 @@ mod tests {
     use crate::bt::REQUEST_BLOCK_LEN;
     use crate::model::BtFile;
 
-    fn make_meta(data: &[u8], piece_len: usize, tracker: &str) -> TorrentMeta {
+    pub(crate) fn make_meta(data: &[u8], piece_len: usize, tracker: &str) -> TorrentMeta {
         let mut pieces = Vec::new();
         for chunk in data.chunks(piece_len) {
             let mut h = Sha1::new();
@@ -4030,12 +4033,6 @@ mod tests {
     #[test]
     fn conn_views_relevance_is_missing_overlap_ratio() {
         // FR-02-36：qBt calcRelevance 同源 =（对端有 ∧ 本端缺失）÷（本端缺失总数）。
-        let files = vec![BtFile {
-            path: "a.bin".into(),
-            size: 256 * 1024,
-            selected: true,
-        }];
-        let pmap = PieceMap::new(&files, 32 * 1024);
         let covered: Vec<u32> = (0..8).collect(); // 8 piece
         let mut conns: HashMap<usize, ConnStat> = HashMap::new();
         let mut peer = new_conn_stat("10.0.0.1:6881".into());
@@ -4067,12 +4064,6 @@ mod tests {
     #[test]
     fn conn_views_relevance_zero_when_seeding() {
         // FR-02-36：本端无缺失（做种/已完成下载）时相关度恒 0（分母 0）。
-        let files = vec![BtFile {
-            path: "a.bin".into(),
-            size: 64 * 1024,
-            selected: true,
-        }];
-        let pmap = PieceMap::new(&files, 32 * 1024);
         let covered: Vec<u32> = (0..2).collect();
         let mut conns: HashMap<usize, ConnStat> = HashMap::new();
         let mut peer = new_conn_stat("10.0.0.3:6881".into());
@@ -4091,12 +4082,6 @@ mod tests {
         // 场景：2 piece；本端无、1 个种子（全持有）、1 个普通 peer 持有 piece 0。
         //   计数（非种子 peer + 本端）：piece0 = 1、piece1 = 0 → min 0；种子 1；
         //   超出 min 的 piece 数 = 1 → 健康度 = 0 + 1 + 1/2 = 1.5。
-        let files = vec![BtFile {
-            path: "a.bin".into(),
-            size: 64 * 1024,
-            selected: true,
-        }];
-        let pmap = PieceMap::new(&files, 32 * 1024);
         let covered: Vec<u32> = (0..2).collect();
         let mut conns: HashMap<usize, ConnStat> = HashMap::new();
         let mut seed = new_conn_stat("10.0.0.1:6881".into());
@@ -4119,12 +4104,6 @@ mod tests {
     #[test]
     fn distributed_copies_excludes_pre_handshake_and_counts_local_have() {
         // 握手未完成连接不计入（与并发 panel 显示口径一致）；covered 空 → 0。
-        let files = vec![BtFile {
-            path: "a.bin".into(),
-            size: 32 * 1024,
-            selected: true,
-        }];
-        let pmap = PieceMap::new(&files, 32 * 1024);
         let covered: Vec<u32> = vec![0];
         let mut conns: HashMap<usize, ConnStat> = HashMap::new();
         let mut dialing = new_conn_stat("10.0.0.4:6881".into());

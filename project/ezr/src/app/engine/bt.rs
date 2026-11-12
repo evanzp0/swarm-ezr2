@@ -119,35 +119,14 @@ impl App {
 #[cfg(test)]
 mod bt_progress_speed_tests {
     use super::super::App;
-    use crate::model::{
-        sample_task, BtFile, BtTaskData, FailKind, PieceState, Protocol, TaskState,
-    };
+    use crate::model::{FailKind, PieceState, TaskState};
 
     fn make_app(tag: &str) -> App {
         crate::app::testutil::make_app_in("ezr-bt-speed", tag)
     }
 
     fn bt_task(id: u32, state: TaskState) -> crate::model::Task {
-        let mut t = sample_task();
-        t.id = id;
-        t.protocol = Protocol::Bt;
-        t.name = "tor".to_string();
-        t.url = "/tmp/tor.torrent".to_string();
-        t.state = state;
-        t.probed = true;
-        t.total = 12;
-        t.bt = Some(BtTaskData {
-            source: "/tmp/tor.torrent".to_string(),
-            trackers: vec!["udp://seed/ann".to_string()],
-            piece_length: 4,
-            files: vec![BtFile {
-                path: "tor".to_string(),
-                size: 12,
-                selected: true,
-            }],
-            upload_paused: false,
-        });
-        t
+        crate::app::testutil::bt_task(id, state)
     }
 
     #[tokio::test]

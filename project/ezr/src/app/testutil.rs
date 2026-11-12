@@ -110,6 +110,29 @@ pub(crate) fn task_with_conns(
     t
 }
 
+pub(crate) fn bt_task(id: u32, state: crate::model::TaskState) -> crate::model::Task {
+    let mut t = crate::model::sample_task();
+    t.id = id;
+    t.protocol = crate::model::Protocol::Bt;
+    t.name = "tor".to_string();
+    t.url = "/tmp/tor.torrent".to_string();
+    t.state = state;
+    t.probed = true;
+    t.total = 12;
+    t.bt = Some(crate::model::BtTaskData {
+        source: "/tmp/tor.torrent".to_string(),
+        trackers: vec!["udp://seed/ann".to_string()],
+        piece_length: 4,
+        files: vec![crate::model::BtFile {
+            path: "tor".to_string(),
+            size: 12,
+            selected: true,
+        }],
+        upload_paused: false,
+    });
+    t
+}
+
 pub(crate) fn seed_bt_conn_speeds(app: &mut App, task_id: u32, conn_id: usize, down: f64, up: f64) {
     use crate::app::BtConnSpeedStat;
     let mut st = BtConnSpeedStat::default();

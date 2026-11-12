@@ -586,6 +586,14 @@ async fn handle_cmd(
     }
 }
 
+fn join_panic_reason(payload: Box<dyn std::any::Any + Send>) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "引擎任务 panic".to_string())
+}
+
 fn start_bt_task(
     bt_tasks: &mut HashMap<u32, mpsc::Sender<crate::bt::BtTaskCmd>>,
     spec: supervisor::BtSpec,
@@ -600,13 +608,7 @@ fn start_bt_task(
         let task = tokio::spawn(crate::bt::engine::run(spec, shared, rx, evt_tx));
         if let Err(join_err) = task.await {
             let reason = if join_err.is_panic() {
-                let payload = join_err.into_panic();
-                let msg = payload
-                    .downcast_ref::<&str>()
-                    .map(|s| (*s).to_string())
-                    .or_else(|| payload.downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "引擎任务 panic".to_string());
-                format!("引擎内部错误：{msg}")
+                format!("引擎内部错误：{}", join_panic_reason(join_err.into_panic()))
             } else {
                 "引擎任务中止".to_string()
             };
@@ -1172,5 +1174,71 @@ mod proxy_auth_tests {
             build_endpoint_client(&anon, dns::GRACE).is_some(),
             "https 匿名 → Some"
         );
+    }
+}
+
+#[cfg(test)]
+mod supervisor_tests {
+    use super::*;
+
+    #[test]
+    fn join_panic_reason_extracts_str_string_and_fallback() {
+        assert_eq!(
+            join_panic_reason(Box::new("字面量 panic")),
+            "字面量 panic",
+            "&str 载荷原样提取"
+        );
+        assert_eq!(
+            join_panic_reason(Box::new(String::from("拥有串 panic"))),
+            "拥有串 panic",
+            "String 载荷原样提取"
+        );
+        assert_eq!(
+            join_panic_reason(Box::new(42u32)),
+            "引擎任务 panic",
+            "未知载荷回退口径文案"
+        );
+    }
+
+    #[tokio::test]
+    async fn start_bt_task_registers_sender_and_engine_stops_cleanly() {
+        let shared = shared_for_tests();
+        let (evt_tx, mut evt_rx) = tokio::sync::mpsc::channel::<Evt>(256);
+        let mut bt_tasks: HashMap<u32, mpsc::Sender<crate::bt::BtTaskCmd>> = HashMap::new();
+        let save_dir = crate::model::testenv::uniq_tmp_dir("ezr-sbt-clean");
+        let data = vec![0u8; 64 * 1024];
+        let meta = crate::bt::engine::make_meta(&data, 32 * 1024, "udp://127.0.0.1:1/announce");
+        let spec = supervisor::BtSpec {
+            id: 901,
+            source: "t.torrent".into(),
+            meta,
+            save_dir: save_dir.to_string_lossy().into_owned(),
+            name: "clean.bin".into(),
+            files: vec![crate::model::BtFile {
+                path: "clean.bin".into(),
+                size: data.len() as u64,
+                selected: true,
+            }],
+            trackers: vec!["udp://127.0.0.1:1/announce".into()],
+            concurrency: 2,
+            proxy_endpoint: None,
+            seeding: false,
+            upload_paused: false,
+            max_download_speed: 0,
+            max_upload_speed: 0,
+            tunables: Default::default(),
+        };
+        start_bt_task(&mut bt_tasks, spec, shared, evt_tx);
+        assert!(bt_tasks.contains_key(&901), "start_bt_task 必须登记发送端");
+        if let Some(tx) = bt_tasks.get(&901) {
+            let _ = tx.send(crate::bt::BtTaskCmd::Cancel).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        while let Ok(evt) = evt_rx.try_recv() {
+            assert!(
+                !matches!(evt, Evt::BtFailed { .. }),
+                "干净退出不得报 BtFailed: {evt:?}"
+            );
+        }
     }
 }

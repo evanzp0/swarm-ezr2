@@ -470,3 +470,156 @@ impl App {
         self.save_registry();
     }
 }
+
+#[cfg(test)]
+mod evt_arm_tests {
+    use super::super::App;
+    use crate::app::testutil;
+    use crate::engine::Evt;
+    use crate::model::{FailKind, TaskState};
+
+    fn make_app(tag: &str) -> App {
+        testutil::make_app_in("ezr-evt-arms", tag)
+    }
+
+    #[tokio::test]
+    async fn bt_peers_arm_updates_seeders_and_peers() {
+        let mut app = make_app("bt-peers");
+        app.tasks.push(testutil::bt_task(5, TaskState::Downloading));
+        app.on_evt(Evt::BtPeers {
+            id: 5,
+            complete: 7,
+            incomplete: 3,
+        })
+        .await;
+        let t = app.tasks.iter().find(|t| t.id == 5).unwrap();
+        assert_eq!(t.seeders, 7, "complete → seeders");
+        assert_eq!(t.peers, 3, "incomplete → peers");
+    }
+
+    #[tokio::test]
+    async fn bt_trackers_arm_pushes_then_updates_rows() {
+        let mut app = make_app("bt-trackers");
+        app.tasks.push(testutil::bt_task(5, TaskState::Downloading));
+        app.on_evt(Evt::BtTrackers {
+            id: 5,
+            url: "udp://t1/ann".into(),
+            working: true,
+            peers: Some(4),
+            seeds: Some(2),
+            next_in_secs: 30,
+        })
+        .await;
+        let rows = app.trackers_status.get(&5).unwrap();
+        assert_eq!(rows.len(), 1, "新 URL 推入新行");
+        assert!(rows[0].working && rows[0].peers == Some(4) && rows[0].seeds == Some(2));
+        app.on_evt(Evt::BtTrackers {
+            id: 5,
+            url: "udp://t1/ann".into(),
+            working: false,
+            peers: Some(9),
+            seeds: Some(1),
+            next_in_secs: 60,
+        })
+        .await;
+        let rows = app.trackers_status.get(&5).unwrap();
+        assert_eq!(rows.len(), 1, "同 URL 就地更新不追加");
+        assert!(!rows[0].working && rows[0].peers == Some(9));
+        assert!(rows[0].next_at.is_some(), "next_at 随事件刷新");
+        app.on_evt(Evt::BtTrackers {
+            id: 5,
+            url: "udp://t2/ann".into(),
+            working: true,
+            peers: None,
+            seeds: None,
+            next_in_secs: 5,
+        })
+        .await;
+        assert_eq!(
+            app.trackers_status.get(&5).unwrap().len(),
+            2,
+            "异 URL 追加第二行"
+        );
+    }
+
+    #[tokio::test]
+    async fn bt_trackers_arm_ignored_when_not_showing_conns() {
+        let mut app = make_app("bt-trackers-idle");
+        app.tasks.push(testutil::bt_task(5, TaskState::Paused));
+        app.on_evt(Evt::BtTrackers {
+            id: 5,
+            url: "udp://t1/ann".into(),
+            working: true,
+            peers: Some(4),
+            seeds: Some(2),
+            next_in_secs: 30,
+        })
+        .await;
+        app.on_evt(Evt::BtTrackers {
+            id: 999,
+            url: "udp://t2/ann".into(),
+            working: true,
+            peers: Some(1),
+            seeds: Some(1),
+            next_in_secs: 30,
+        })
+        .await;
+        assert!(
+            app.trackers_status.get(&5).is_none_or(|r| r.is_empty()),
+            "非活跃态任务不收 tracker 行"
+        );
+    }
+
+    #[tokio::test]
+    async fn bt_stopped_arm_lands_final_sets_on_paused_task() {
+        let mut app = make_app("bt-stopped");
+        app.tasks.push(testutil::bt_task(5, TaskState::Paused));
+        app.on_evt(Evt::BtStopped {
+            id: 5,
+            downloaded: 500,
+            done_pieces: vec![0, 1],
+            partial_pieces: vec![2],
+        })
+        .await;
+        let t = app.tasks.iter().find(|t| t.id == 5).unwrap();
+        assert_eq!(t.done_blocks, vec![0, 1], "终态 done 集合落地");
+        assert_eq!(t.partial_blocks, vec![2], "终态 partial 集合落地");
+        assert_eq!(t.chunk_done, 2);
+        assert_eq!(t.downloaded, 500);
+        assert_eq!(t.speed, 0.0, "停止后速度清零");
+        assert!(!app.bt_conns.contains_key(&5), "停止后连接行清空");
+    }
+
+    #[tokio::test]
+    async fn bt_stopped_arm_ignores_stale_report_for_active_state() {
+        let mut app = make_app("bt-stopped-stale");
+        let mut t = testutil::bt_task(5, TaskState::Downloading);
+        t.done_blocks = vec![9];
+        app.tasks.push(t);
+        app.on_evt(Evt::BtStopped {
+            id: 5,
+            downloaded: 500,
+            done_pieces: vec![0, 1],
+            partial_pieces: vec![2],
+        })
+        .await;
+        let t = app.tasks.iter().find(|t| t.id == 5).unwrap();
+        assert_eq!(t.done_blocks, vec![9], "活跃态滞后回报不得覆盖新引擎集合");
+        assert_eq!(t.state, TaskState::Downloading, "状态不得回落");
+    }
+
+    #[tokio::test]
+    async fn bt_failed_arm_marks_task_failed() {
+        let mut app = make_app("bt-failed");
+        app.tasks.push(testutil::bt_task(5, TaskState::Downloading));
+        app.on_evt(Evt::BtFailed {
+            id: 5,
+            kind: FailKind::Fatal,
+            reason: "boom".into(),
+        })
+        .await;
+        let t = app.tasks.iter().find(|t| t.id == 5).unwrap();
+        assert_eq!(t.state, TaskState::Failed, "Fatal → Failed");
+        assert_eq!(t.error.as_deref(), Some("boom"));
+    }
+}

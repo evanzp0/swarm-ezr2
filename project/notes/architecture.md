@@ -785,3 +785,9 @@ ws/webrtc 轮（2026-11-09）：TrackerUrl 三族分型（Ws 变体与 Http/Udp 
   （上一帧视口，App::new 默认 6），draw 层用当帧 rows（真容量）——终端改尺寸/首帧前的
   快照还原只有 draw 层能按真容量兜住；draw 层自愈落位在 empty 早退之后、max_items 计算
   之前（先行夹紧保 qpos/渲染循环下标合法），顺序错置 = 越界下标 panic。
+
+## cleaner 收敛轮（2026-11-12）追加
+- conn_flags 表驱动化先例（互斥标志对收 comp）：if 链 8 臂（D/d、U/u、O、I、K、? 互斥对 + 单条件旗）→ (bool,bool)→Option<char> match ×4 + then_some ×2 + 数组 into_iter().flatten().collect()——输出字符序不变（D/d,U/u,O,I,K,?）、comp 17→6、CRAP 17→≤6（cov=1.0 下 CRAP=comp）；判据：多臂互斥布尔对映射到固定字符序列，表驱动不损可读性。
+- link_break_spans 双胞胎克隆裁决（CPD min200 唯一批内产品家族）：popups.rs/text.rs 两份完全同体 34 行，但各自捕获**语义分歧的本地 fg_shadow**（popups=saturating_sub(1) 防下溢，text.rs=裸 b-1，b=0 角落 debug panic/release 回绕）——「同体克隆」要读齐其传递闭包捕获链再判可否合并，机械单点化=改变另一侧 b=0 角落行为（违反不引入新行为）；已登记 handoff 移交 fg_shadow 语义统一裁决。
+- spawn+watch 函数纯函数提准先例：start_bt_task 的 panic 消息提取链（downcast &str→String→回退）抽 join_panic_reason 纯函数（Box<dyn Any + Send> 三载荷直测），本体 comp 降、CRAP 达标；提取前后行为逐字等价（format! 参数化仅形态变化）。
+- 变异点扫描本轮口径：cargo mutants --list 按文件计数（--file 多值一次扫全批），批次 10 文件 777 点、>100 文件 4 个（app/mod.rs 149/conn.rs 125/text.rs 122/task.rs 101，密度 0.14-0.30/行）——沿 rust.md §7 登记 hardender --file 分块消费，模块边界裁决权在 architect（conn.rs 本身即上一轮 8477 行拆分的产物，变异点 465 精确再分布的延续账）。

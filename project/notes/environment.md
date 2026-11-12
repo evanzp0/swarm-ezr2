@@ -419,3 +419,9 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - APS 工具调用为双位置参数：`bb gherkin-parser <feature-file> <json-output>`、
   `bb gherkin-ir-dry-checker <json-ir> <report-output>`（单参数报 usage exit=2）；
   findings 数为信息性 near-duplicate 报告，exit=0 即通过口径。
+
+## cleaner 收敛轮（2026-11-12）追加
+- rustup 镜像复测（NJU 首次入选）：五镜清单探测后 rsproxy dist 后端 504（清单 200 属「清单活组件死」新形态）、TUNA 组件慢速 0.2-0.56MB/s（历史 27-56MB/s 漂移）、USTC 组件 403 两连、Aliyun 快照停 2026-05 新鲜度排除、SJTU/BFSU/HIT/BJTU 不通；NJU（mirrors.nju.edu.cn）以 TUNA 同款双层路径布局可用（清单 /rustup/dist/channel-rust-nightly.toml + init /rustup/rustup/dist/<arch>/rustup-init），rust-std 31.9MB 11.2MB/s + rustup-init 21.3MB 10.5MB/s 双样本断层第一；直链 rustup-init（落盘名恰为 rustup-init）+ DIST_SERVER=https://mirrors.nju.edu.cn/rustup + UPDATE_ROOT=https://mirrors.nju.edu.cn/rustup/rustup 前台一次装齐 nightly 1.102.0（9c5648833 2026-11-10）+ clippy/rustfmt/llvm-tools-preview，与上轮交接版本精确对齐；NJU 布局探针：DIST_SERVER=裸根、UPDATE_ROOT 加 /rustup 层（与 TUNA 同族）。
+- rsproxy 本轮 dist 与 crates 下载均间歇 504（registry sparse 拉全依赖靠 cargo 内建重试恢复，构建日志 38 行 spurious network error 全为网络噪音非编译警告——grep warning 归因先分网络/编译两族再计数）。
+- 全新沙箱重建清单（本轮实测时序）：探测（cargo/rustup/.tools 全缺）→ 镜像测速 → rustup-init 前台装 nightly+clippy+rustfmt+llvm-tools-preview（--component 一次带上避免 llvm-cov 首跑交互挂死）→ ~/.cargo/config.toml rsproxy sparse → gh-proxy 预编译四件（llvm-cov 0.9.1/mutants 27.1.0 资产名无版本前缀形态、bb 1.13.229、PMD 7.29.0 zip 完整性探针）→ APS gh-proxy clone（bb tasks 探针）。工具链安装位 ~/.cargo/bin + ~/.local/bin（PATH 需双注入）。
+- 小盘磁盘第二杀手实锤：CARGO_PROFILE_TEST_DEBUG=0 下逐套件测试二进制仍 300MB+（静态符号表为主），target/debug/build/ezr 下 20 个 hash 目录共 6.5G；12 套件顺序重链即把盘顶到 95%——已验证套件按名 `find target/debug/build/ezr -maxdepth 3 -type f -name "<套件>*" -size +10M -delete` 释放 1.4G，重链成本（分钟级）远优于构建挂死；llvm-cov 插桩构建独立 target 目录约 2-3G，覆盖率跑前先清测试二进制。

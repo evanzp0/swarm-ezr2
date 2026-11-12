@@ -699,3 +699,11 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
   挂在 bin 目标）；cargo test --bin a --bin b 多值混跑遇无测试目标（如 ezr-proxy-certs）
   整体 exit 1——逐目标跑各自收数；全量 cargo test 管道超 600s 会话超时丢输出，落盘
   .work/tmp + --tests --no-run 预编译 + --test 分块（3 块 ≤150s/块）是唯一稳态。
+
+## cleaner 收敛轮（2026-11-12）追加
+- CRAP 受限近似分析器两坑（自制分析器首次投产实录）：① lcov FN 行区间切割必须按「非闭包 FN 起始行」定界且切片用源码行列表（先 "\n".join 再按行号切字符位是错位 bug，comp 全错、on_evt 报 comp=2 假象）；② 闭包 FN 记录（mangled _RNC*）不得切分外层区间——否则大分发表被切碎成 comp 1-2 的假低值（815 函数 0 超 6 假阴性），闭包并入外层后 run comp=110/on_evt comp=32 现形；零发现结论先跑阳性对照（cmd.rs 历史 cmd_complete_path 家族可见）再采信。
+- llvm-cov 幻影未覆盖行第三形态：**普通 if 块的收尾 `}`**（body 已覆盖）同幻影（app/mod.rs:528、task.rs:279/292/293 复核均幻影——restore/pieces 实际 cov=1.0）；幻影判据从「if-let 单行臂」放宽为「行文本恰为 } 且向上 5 行内存在已覆盖的块开启行（{ 或 => 收尾）」，不为幻影行造测试。
+- 挂载收编增量逐套件实测口径：8 条新守卫（evt_arm_tests 6 + supervisor_tests 2）→ engine_backfill/g_appcore/g_engine/g_supervisor/g_v147/ui_backfill/v115 各 +8、g_throttle_err 仅 +2（只挂 supervisor_tests）、hardening/g_main/g_proxy/g_slots +0——挂载面按各套件 include 树差异，±N 对账必须逐套件实测不套「×N 套件」公式。
+- spawn+watch 型函数（start_bt_task）可达覆盖上界与收敛组合拳：快乐路径（登记发送端/引擎起停/Cancel 干净退出无 BtFailed）单测可达；join Err panic 臂无产品面确定性触发（run() 全程优雅报错无 unwrap 面）——「纯函数提准收 comp」（join_panic_reason 三载荷 &str/String/未知直测 cov=1）+ 快乐路径单测把 CRAP 30→≤6，panic 臂留白属登记不属硬凑；引擎级单测构造用 shared_for_tests + make_meta 门面 re-export + 不可达 tracker（udp://127.0.0.1:1）+ Cancel 收尾 + try_recv 排水（evt 通道 256 死线纪律）。
+- 夹具 DRY 收编两通道：跨测试模块重复夹具升 testutil 共享（bt_task：bt.rs 改委托一行、调用点零改动）；跨 crate 模块测试助手用「门面 re-export」（make_meta pub(crate) 于 tests 模块 + 父级 #[cfg(test)] pub(crate) use，零外部 API 增量）；收编后旧导入即死代码，clippy unused import 清单跟改。
+- lint 警告清零的 nightly 漂移形态本轮实录：同版本号 nightly（1.102.0）不同 commit（9c5648833）引入 5 条 unused/mut 需要 lint（4 处测试死 setup files+pmap 构造后未用、1 处多余 mut）——「上轮 clippy 0」复核必须在本沙箱重跑才算数；unused 类是死代码免费信号，先查死因（本例：上一轮 coder 补字段时构造点成死 setup）再删。

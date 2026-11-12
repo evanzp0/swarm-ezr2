@@ -49,3 +49,8 @@
 - architecture.md — 同构移植守卫几何按被测端常量重推（ITEM_HEIGHT 4≠2 面积不可照抄）+ 三路径收口完成判据=filter 写点普查归零 + draw_list 自愈与 tick_clamp 双层兜底不可互替（当帧 rows vs 上一帧 visible_rows）与自愈落位次序（新增）
 - testing.md — TDD 红阶段失败消息即缺陷指纹（三守卫红点=三缺陷形态）+ 防视口吸附断言用选中离屏态构造（scroll>selected 合法态才抓得住吸附回归）+ bin-only crate 逐目标跑与 --tests --no-run 分块（新增）
 - environment.md — rustup 镜像复测（rsproxy 18.3MB/s 最快、直链+双变量前台装齐、末尾 404=自更新噪音）+ bb gh-proxy 慢速续传可用 + APS 双位置参数形态（新增）
+
+## cleaner 收敛轮（2026-11-12）追加
+- environment.md — rustup 镜像复测（NJU 首次入选 11.2/10.5MB/s 断层第一、rsproxy dist 后端 504「清单活组件死」新形态、TUNA 慢速漂移、USTC 403 两连）/rsproxy crates 504 网络噪音与编译警告 grep 归因分族/全新沙箱重建清单时序（llvm-tools-preview 随 init 带上）/小盘磁盘第二杀手=逐套件 300MB+ 测试二进制与按名 find 删除释放法（新增）
+- testing.md — CRAP 分析器两坑（行切片错位 bug/闭包并入外层防假阴性）与阳性对照纪律/llvm-cov 幻影收尾行第三形态（普通 if 块 `}`）与判据放宽/挂载收编增量逐套件实测口径（8 守卫→7×8+1×2+4×0）/spawn+watch 函数纯函数提准+快乐路径组合拳与 panic 臂登记/夹具收编两通道（testutil 升共享+门面 re-export）/nightly 同版本异 commit 漂移 lint 基线复核（新增）
+- architecture.md — conn_flags 表驱动化先例（互斥标志对 match+then_some 收 comp 17→6）/link_break_spans 双胞胎克隆不可机械合并判据（传递闭包捕获语义分歧的 fg_shadow，b=0 角落行为分歧登记移交）/start_bt_task 纯函数提准先例（join_panic_reason 三载荷）/变异点扫描按文件计数与 >100 登记口径（新增）

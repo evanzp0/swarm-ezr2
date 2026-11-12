@@ -375,7 +375,7 @@ mod tests {
                 assert!(s.contains(&want), "{st:?} bt={bt} 徽标后总字节: {s}");
             }
         }
-        let mut t = mk_streaming(TaskState::Downloading);
+        let t = mk_streaming(TaskState::Downloading);
         let s = text_of(&title_row(&t, false, 80));
         assert!(s.contains("?%"), "未知尺寸 ?% 保留: {s}");
         assert!(!s.contains("3.0 MB"), "未知尺寸不显示总字节: {s}");
