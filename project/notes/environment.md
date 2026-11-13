@@ -442,3 +442,6 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 ## QA 收敛轮（2026-11-13）追加
 - rustup 镜像复测（2026-11-13，全新沙箱）：TUNA 双层路径 rustup-init 全文件实测 36.6MB/s 最快（USTC 单路径 13.0MB/s、官方 static.rust-lang.org 1.9MB/s、TUNA/Aliyun 单层路径 404 属布局陷阱再证）；直链 rustup-init（落盘名恰为 rustup-init）+ DIST_SERVER/UPDATE_ROOT 双变量指 TUNA 前台一次装齐 nightly 1.102.0（9c5648833 2026-11-10）+ clippy/rustfmt/llvm-tools-preview，与交接基线同 commit。
 - 10G 盘全新沙箱全量测试基线（8060P/16 目标）：默认 debuginfo 一次 --no-run 即爆盘（target 6.5G ENOSPC）→ `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0` 重建仅 1.4G 一次过；覆盖率构建（instrument-coverage 全 deps 重编 ~2G）用隔离 `CARGO_TARGET_DIR=.work/tmp/cov_target` 用后即删，主 target 的 e2e 二进制不受挤占。
+
+## specifier 规程措辞对齐轮（2026-11-13）追加
+- rustup 镜像复测（本轮，全新沙箱）：rsproxy 全文件直链 ~16.4MB/s 最快且整链路可用（dist 清单 channel-rust-nightly.toml date 2026-11-13 新鲜 TOML、无缺键）；USTC 6.7MB/s、SJTU 6.0MB/s、TUNA 双层路径 ~2.9MB/s、aliyun 单层路径 404。直链 rustup-init + DIST_SERVER/UPDATE_ROOT 双变量指 rsproxy 前台一次装齐 nightly（rustc 8eb778d04 2026-11-12）+ rustfmt/clippy，cargo registry rsproxy sparse、pip 阿里云装 pyte/wcwidth——与 QA 收敛轮（同日，TUNA 36.6MB/s 最快）结论互换，逐轮漂移再证，下轮仍需先探针。
