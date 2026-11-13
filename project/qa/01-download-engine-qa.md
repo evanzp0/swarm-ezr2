@@ -2,6 +2,7 @@
 
 > 对应规格：`project/features/01-download-engine.feature`（16 场景）。
 > 端到端 UI 层验证：TUI 可观察状态 + fixture 请求记录（fixture 属 QA 工具入口，允许）+ 磁盘产物。
+> **v1.49 锚点对齐（specifier 遗留项处理轮 20261112，QA 终验轮移交待批项②）**：QA-DE-15 判据修订——原「等待行显示『未知』」为 v1.28 期观察锚，v1.49（FR-02-38 v1.19）尾随尺寸/未知项整项退役后改「等待行不显示尺寸（尺寸未知不显示、无预取，以 fixture 请求日志为准）」，与 runner suite_download_engine.py QA-DE-15 现行断言一致。
 
 ## 环境前置
 
@@ -28,7 +29,7 @@
 | QA-DE-12 | 01-download-engine-12 | 受信证书 HTTPS URL | 下载完成字节完整；类型 HTTPS |
 | QA-DE-13 | 01-download-engine-13 | 下载 5MB（请求头记录） | 全部分块请求 `Accept-Encoding: identity` |
 | QA-DE-14 | 01-download-engine-14 | 下载中观察列表/头部/头部右侧内嵌流量图（v1.13 布局） | 三处速度每秒真实更新；完成后归零/完成态 |
-| QA-DE-15 | 01-download-engine-15 | 槽位占满时添加 5MB 观察等待行（fixture 请求日志无探测）；获槽开始后再观察详情 | 等待行显示「未知」；获槽后详情显示 5.0 MB |
+| QA-DE-15 | 01-download-engine-15 | 槽位占满时添加 5MB 观察等待行（fixture 请求日志无探测）；获槽开始后再观察详情 | 等待行不显示尺寸（尺寸未知不显示、无预取，以 fixture 请求日志为准）；获槽后详情显示 5.0 MB |
 | QA-DE-16 | 01-download-engine-16 | 默认并发 4 下载 big-100m.bin（含 .sha256） | 分块行 x/100 · 1 MB/块；活跃连接 4；乱序完成；「SHA-256 校验成功」；字节数 104857600（AC-1） |
 
 ## 通过准则

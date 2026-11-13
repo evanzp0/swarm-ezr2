@@ -63,3 +63,7 @@
 ## QA 终验轮（2026-11-12）追加
 - testing.md — 显示退役类修订的观察锚漂移三例连发与修复模式（实现口径断言+偏差注记+handoff 待批）/proptest 随机探索中签与回归文件常驻守卫（属性过宽臂拆臂裁决法）/llvm-cov 全目标逐目标跑+lcov 并集合并与 crap_calc.py 流转/属性文件 mtime 编译域核验实例（新增）
 - environment.md — 会话中断后持久 shell cwd 重置（No files to analyze 第一嫌疑）/rustup 镜像复测（rsproxy 清单第 5 次 NoSuchKey、TUNA 唯一可用装齐 1.102.0）/debug=0 漏带爆盘具体数字与重编处置（新增）
+
+## specifier 锚点对齐轮（2026-11-12）追加
+- testing.md — 移交待批清单是 QA 视角最小集、接手角色同形全查（第 5 处漂移 05-ui-pieces 描述性括号的发现与「登记供否决」通道）/锚点对齐轮闭环形态（断言对齐后 runner 尾注转过时、清理归 runner 面）与语义零变更修订不递增版本号/mission 只读约束下口径张力 = 登记待批不移改、操作者显式指令后出注记结案 + 登记类注记裁决后必须回填结案态（裁决轮追加）
+- environment.md — rustup 镜像复测（TUNA 26.9MB/s 最快可用、aliyun 快但快照陈旧再证「测速 ≠ 能装」、rsproxy 第 6 次无缺键、USTC 0.0）/gh-proxy 直连慢断兜底复证与 .sha256 裸哈希手工拼行校验（新增）

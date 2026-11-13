@@ -29,6 +29,11 @@ Feature: 05-ui-pieces P 键 pieces 分块弹窗（FR-01-106，对齐 ezr-demo �
   图例行）、滚动条滑块恒聚焦绿、模态优先级按 FR-01-107（帮助窗口 > pieces > 对话框 > 主界面）；
   v1.35 修订（操作者指令，对齐 ezr-demo README 变更记录 21+22）：窗口 64×21→68×20（呼吸行 +
   加宽 + 高度收缩，FR-01-106 v1.35）。
+  v1.49 锚点对齐（specifier 遗留项处理轮 20261112，超出 QA 待批清单的同类漂移，登记供否决——
+  操作者 20261112 裁决保留，结案）：
+  场景 06 未探测臂括号内「列表大小显示『未知』」为 v1.28 期观察描述，随 v1.49（FR-02-38 v1.19）
+  尺寸未知不显示口径改「列表行不显示尺寸」——D35 门槛谓词（probed = false 且 total = 0）与
+  toast 文案零变更，仅描述性括号对齐。
   权威参照：ezr-demo/docs/ezr-demo UI界面及交互设计规范.md §6.5 与 ezr-demo 源码
   （open_pieces / draw_pieces / on_mouse pieces 分支；v1.29 权威参照 = docs/UI交互需求文档-定稿.md）。
   功能门槛：仅支持分块下载的任务才有此功能——BT 任务恒支持（phase-02 预留，01 期不触发）；
@@ -134,7 +139,7 @@ Feature: 05-ui-pieces P 键 pieces 分块弹窗（FR-01-106，对齐 ezr-demo �
   Scenario: 05-ui-pieces-06 功能门槛拒绝臂
     When 无任何任务时按 P
     Then toast 显示 "未选中任务，无法查看分块" 且弹窗不打开
-    When 等待中未探测的任务 "<ufile>"（列表大小显示「未知」——probed = false 且 total = 0 大小未知态，D35/v1.31 收窄口径）被选中后按 P
+    When 等待中未探测的任务 "<ufile>"（列表行不显示尺寸——尺寸未知不显示（v1.49 锚点对齐），probed = false 且 total = 0 大小未知态，D35/v1.31 收窄口径）被选中后按 P
     Then toast 显示 "任务尚未探测，暂无分块信息" 且弹窗不打开
     And 恢复重探窗口（有断点任务获槽后 Probed 事件未至，total 已知）按 P 不落入本臂——落入正常三臂可开窗（v1.31 未探测臂收窄：!probed && total == 0，FR-01-106①；窗口过窄由产品单测承载，端到端不驱动）
     When 不支持断点续传的任务 "<nfile>"（服务器无 Range 支持，详情类型行「不支持断点续传」）被选中后按 P
