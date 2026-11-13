@@ -265,8 +265,7 @@ class TuiDisplaySuite(Suite):
                 assert_in("three-m.bin", app.text(), "[ 应回正在下载页签")
                 # T/t trackers 弹窗门控（FR-02-31/bug18 轮已批准语义）：toast 拒绝
                 # 且不开窗、页签不变（toast 文案二选一 = 选中 HTTP 任务或未选中
-                # 态，均在 FR-02-31 门控臂内；断言按 feature v1.42/FR-02-31 口径，
-                # 规程行「T 切/循环页签」滞后项已移交操作者/specifier 待办）
+                # 态，均在 FR-02-31 门控臂内；断言按 feature v1.42/FR-02-31 口径）
                 app.send("T")
                 app.pump(0.4)
                 assert ("该任务没有 trackers（仅 BT 任务支持）" in app.text()
