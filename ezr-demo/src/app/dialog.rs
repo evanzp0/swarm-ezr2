@@ -51,6 +51,9 @@ pub struct Dialog {
 
     pub proxy_open: bool,
 
+    /// （仅 AddBt/ModifyBt）按顺序下载复选项（FR-02-39；默认不勾选）
+    pub sequential: bool,
+
     pub focus: usize,
 
     pub task_name: String,
@@ -110,8 +113,8 @@ impl Dialog {
     /// （仅 AddBt/ModifyBt）trackers 多行输入在对话框内的 focus 编号
     pub fn trackers_focus(&self) -> Option<usize> {
         match self.kind {
-            DialogKind::AddBt => Some(7),
-            DialogKind::ModifyBt => Some(5),
+            DialogKind::AddBt => Some(8),
+            DialogKind::ModifyBt => Some(6),
             _ => None,
         }
     }
@@ -275,8 +278,8 @@ pub(super) fn proxy_dropdown_open_key(d: &mut Dialog, n: usize, code: KeyCode) {
             let f = match d.kind {
                 DialogKind::Add => 7,
                 DialogKind::Modify => 5,
-                DialogKind::AddBt => 7,
-                _ => 5,
+                DialogKind::AddBt => 8,
+                _ => 6,
             };
             d.focus_field(f);
         }

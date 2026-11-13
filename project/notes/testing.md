@@ -735,3 +735,9 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 - **`--skip property_tests` 省时可行但非覆盖恒等（修正 QA 收敛轮「完全同数」条目）**：带 skip=37239 覆盖/104 ACT/35 REG，不带 skip=37251/103/36——被跳过属性函数自身 cov<1 翻转一条 ACT↔REG 并 -10 行覆盖；精确对账必须不带 skip 复跑（属性测试运行仅 +55s，省时收益有限）。
 - **harness `QA_ONLY` 过滤键是完整用例号**（`QA_ONLY=QA-TD-01,QA-TD-02,…`），传裸数字 = 过滤器全不命中 → 零用例静默通过（EXIT=0、P=0 F=0 S=0）——分段复跑先验首段 P>0 再续跑，勿把空跑当绿。
 - **过时移交指针的清理面 = 移交目标角色**：「已移交 X 待办」形态注释随移交事项结案转为过时叙述，清理归被移交角色的改动面（本 QA 轮清 QA-TD-07 指针）；同形全查中「历史缘由注释」（修订已落地）与「协议登记注释」（待操作者裁决偏差）不属过时态，维持不动。
+
+## BT 顺序下载/做种退出规则/显示缩写轮（2026-11-13，specifier）追加
+- demo 做种演示任务的 seed_left=0 会被 sim 首 tick 立即收割转「已完成」（`seed_left -= dt; if <= 0 → Completed`）——做种形态的 PTY/演示验证必须给 fixture 正 seed_left（本轮 v[2].seed_left=1800.0，与 docs 示例 29:56 同源）；单元测试不受影响（fresh App 未跑 tick）。
+- 做种任务在「已完成」页签（`is_done` 含 Seeding）——「正在下载」页签里上下滚动找不到做种行属页签归属、不是渲染缺陷；PTY 断言序 = 先按 `]` 切页签再扫描，C/B 段之间用 `[` 切回（页签快照还原保证往返无损）。
+- 对话框焦点环插入式扩展（新增字段行）的同步面清单：nfocus / trackers_focus / proxy 下拉 Tab·BackTab 跳转 / enter 焦点表注释 / 按钮焦点索引 / reject_bad_trackers 焦点回跳 / Dialog 构造点 ×N（漏一处 = E0560 编译错或默认值假绿）/ mouse 字段点击映射 / 键层早退分支（复选项 Space·Enter = 切换语义必须在 Enter 分发前短路，否则 enter 表 else 臂兜底成确认）。struct literal 内引用 `t.field` 与同函数 `&mut self.xxx` 冲突（E0502/E0506）——标量提前拷贝再入 literal。
+- PTY 断言「其余行不受影响」类检查要考虑添加任务后 set_filter 跳转 + 选中跟随会把视口拉走：先 scroll_until 回目标锚再断言，别在跳转后的视口里做缺席断言。

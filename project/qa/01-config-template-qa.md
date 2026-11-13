@@ -1,6 +1,7 @@
 # QA 套件 · 01-config-template 配置模板自动生成（期号 01 · v1.4/FR-01-85）
 
 > 对应规格：`project/features/01-config-template.feature`（5 场景）。
+> **v1.18 同步（操作者裁决落实 20261113「share_ratio_gt 允许小数，保留1位小数；seeders_count_gt/seed_duration_m 为正整数」——v1.17 轮 D75–D79 否决窗口关闭/D79① 细化，phase-02 v1.22/FR-02-40）**：QA-CT-01 判据同步——钦定文本 v1.18 版（207 行不变）：模板尾部 [bt.seed_exit_rule] 注释块 share_ratio_gt 取值范围注释行补「保留 1 位小数」（注释文本级改动，键面/活跃行集/行数均不变）；seeders_count_gt/seed_duration_m 正整数口径追认不变；整文本逐字节比对基准随之更新。
 > 端到端 UI 层验证：CLI 启动/退出操作 + 磁盘产物观察（文件存在性/全注释/字节级对比）+
 > TUI 默认值行为断言；不使用项目内部 API。
 > v1.10（操作者第七批指令，模板最小化）：模板内容契约基线改为**操作者钦定文本整文本**
@@ -43,7 +44,7 @@
 
 | 用例 | 场景 | 操作 | 通过判据 |
 |---|---|---|---|
-| QA-CT-01 | 01-config-template-01 | 干净 HOME 启动 ezr（无 config.toml）后退出 | `<HOME>/.ezr/config.toml` 已生成；文件内容与钦定文本**逐字节一致**（整文本 `cmp` 比对，v1.13）；**v1.13 活跃模板判据**：3 个表声明行 `[common]`/`[http]`/`[bt]` 与 40 个键值行为活跃 TOML（无 `#` 前缀，v1.14：36 → 40 键），注释行（用途/取值范围注释、3 条 `# ===== … =====` 分隔头、`# 命名代理列表（可配置多个）` 一句头、双 `# [[common.proxy]]` 示例块）保持 `#` 注释；`tomllib` 解析生成的 config.toml 成功且解析值 = 代码常量默认逐键一致（download_slots=5、bt_concurrency=20、http_concurrency=4、block_size_http=1048576、idle_eviction_secs=60 等全 40 键，含 global/task_max_* 四限速键与 listen_port）⇒ 解析结果与文件缺失一致；proxy 表不存在（示例块未激活，D63②）；启动行为与缺失文件一致（并发 4/槽位 5/块 1 MB/重试 5/auto_retry 开/不限速/默认目录=用户下载目录） |
+| QA-CT-01 | 01-config-template-01 | 干净 HOME 启动 ezr（无 config.toml）后退出 | `<HOME>/.ezr/config.toml` 已生成；文件内容与钦定文本**逐字节一致**（整文本 `cmp` 比对，v1.13）；**v1.13 活跃模板判据**：3 个表声明行 `[common]`/`[http]`/`[bt]` 与 40 个键值行为活跃 TOML（无 `#` 前缀，v1.14：36 → 40 键），注释行（用途/取值范围注释、3 条 `# ===== … =====` 分隔头、`# 命名代理列表（可配置多个）` 一句头、双 `# [[common.proxy]]` 示例块、**[bt.seed_exit_rule] 做种退出条件子表注释块——含子表声明行整块 `#` 注释（v1.21/FR-02-40：share_ratio_gt/seeders_count_gt/seed_duration_m 三键全注释；v1.18：share_ratio_gt 取值范围注释含「保留 1 位小数」——D79① 细化；任一键取消注释 → default_seed_duration_m 失效）**）保持 `#` 注释；`tomllib` 解析生成的 config.toml 成功且解析值 = 代码常量默认逐键一致（download_slots=5、bt_concurrency=20、http_concurrency=4、block_size_http=1048576、idle_eviction_secs=60 等全 40 键，含 global/task_max_* 四限速键与 listen_port、default_seed_duration_m（v1.21 替代 seed_duration_secs））⇒ 解析结果与文件缺失一致；proxy 表不存在（示例块未激活，D63②）；启动行为与缺失文件一致（并发 4/槽位 5/块 1 MB/重试 5/auto_retry 开/不限速/默认目录=用户下载目录） |
 | QA-CT-02 | 01-config-template-02 | 预置 `[common]` 表 + `download_slots = 2` 的合法 config.toml → 记录字节与 mtime → 启动 ezr 添加 3 任务 | 文件字节级不变（cmp 一致）；槽位按 2 生效（队列栏「下载槽位 n/2」，第 3 个任务排队） |
 | QA-CT-03 | 01-config-template-03 | 预置损坏 config.toml（非法 TOML）→ 记录字节 → 启动 ezr（v1.13 行为翻转，FR-01-71 v1.39/D63①） | **ezr 拒绝启动**：进程以非零退出码退出、TUI 不进入；报错输出含配置文件路径与解析失败原因（含 TOML 错误位置/描述）；文件字节级不变（cmp 一致，不被重写不被模板覆盖）；将文件修复为合法 TOML 后再次启动正常进入 |
 | QA-CT-04 | 01-config-template-04 | 干净 HOME 预建 `~/.ezr` 目录并 `chmod 555` → 启动 ezr | 启动正常不报错；无 config.toml 生成（或生成失败不留半截文件）；行为全默认；退出后 `chmod 755` 清理 |

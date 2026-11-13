@@ -545,6 +545,8 @@ pub(crate) fn help_lines() -> Vec<Line<'static>> {
         kd("C", "清除已完成任务"),
         kd("P", "查看分块状态（仅分块下载任务）"),
         kd("T", "查看 trackers 弹窗（仅 BT 任务）"),
+        kd("SR", "分享率（Share Ratio）：累计上传 ÷ 累计下载（BT 任务做种/下载明细行缩写）"),
+        kd("LT", "剩余时间（Left Time）：BT/HTTP 下载完成预计还需时长（明细行缩写）"),
         sec("命令窗口（A）"),
         kd("输入内容", "http(s) URL / 本地 .torrent 路径 / 磁力链接"),
         kd("Enter", "确认分流（= 触发 [确定] 按钮 click；Ctrl+Enter / Ctrl+J 同效）"),

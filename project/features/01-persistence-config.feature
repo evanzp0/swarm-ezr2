@@ -197,11 +197,11 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
     And 退役键同口径（v1.21，FR-02-35）：配置含旧键 http_trackers / udp_trackers 时按未知键静默忽略——不迁移、不兼容、不并入 tracker 池、不阻塞启动（旧条目直接废弃；tracker 池只来自 [bt] trackers 键，场景见 09-bt-engine-09 v1.41）
 
   Scenario: 01-persistence-config-13 全量配置键合法值生效冒烟（v1.18 新增，D62③）
-    Given 配置文件一次性写入全部 40 键的合法非默认值（[common] 6 键 + [[common.proxy]] 双条目 + [http]] 11 键 + [bt] 21 键，取值均在模板注明取值范围内且非代码默认；v1.20）
+    Given 配置文件一次性写入全部 40 键的合法非默认值（[common] 6 键 + [[common.proxy]] 双条目 + [http]] 11 键 + [bt] 21 键——v1.21：seed_duration_secs 废弃由 default_seed_duration_m 替代、键数不变，另可选子表 [bt.seed_exit_rule] 保持未配置（默认形态，default_seed_duration_m 生效）；取值均在模板注明取值范围内且非代码默认；v1.20/v1.21）
     When 启动 ezr 并正常使用（添加 HTTP 下载、打开添加对话框与代理下拉、打开 BT 对话框）
     Then 启动不报错且无任何警告 toast（全量合法值零警告）
     And 可观察键逐项生效：download_dir = 添加对话框保存目录字段预填值；download_slots = 任务队列栏「n/<slots>」；global_max_download_speed = 下载限速生效（速度曲线封顶）、global_max_upload_speed = BT 上传限速生效、task_max_download_speed/task_max_upload_speed = 添加对话框（HTTP/BT）限速字段预填值；命名代理 = 代理下拉按配置顺序出现且可选；block_size_http = 详情分块行显示自定义块大小；http_concurrency = HTTP 对话框并发自动回填值；auto_retry/max_retries/backoff_initial/backoff_cap = 失败重试行为按配置推进（序列与上限一致）；progress_tick_ms/sidecar_flush_secs/throttle_burst_secs/throttle_sleep_ms/dns_race_grace_ms = 运行期无异常（行为不劣化，无错误 toast）
-    And BT 键逐项生效：listen_port = 实际监听端口生效（fixture announce port 可观察）;http_trackers/udp_trackers = BT 对话框 trackers 预填合并来源；bt_concurrency = BT 对话框并发预填值；peer_pipeline/upload_slots/upload_read_concurrency/idle_eviction_secs/connect_timeout_secs/handshake_timeout_secs/request_timeout_secs/requests_per_piece/rechoke_interval_secs/optimistic_interval_secs/progress_emit_min_interval_ms/tracker_numwant/peer_retry_base_secs/peer_retry_cap_secs/tracker_backoff_start_secs/tracker_backoff_cap_secs/udp_base_timeout_secs/udp_retries/seed_duration_secs = BT 下载与做种全程无错误（引擎行为正常、无致命 toast）
+    And BT 键逐项生效：listen_port = 实际监听端口生效（fixture announce port 可观察）;http_trackers/udp_trackers = BT 对话框 trackers 预填合并来源；bt_concurrency = BT 对话框并发预填值；peer_pipeline/upload_slots/upload_read_concurrency/idle_eviction_secs/connect_timeout_secs/handshake_timeout_secs/request_timeout_secs/requests_per_piece/rechoke_interval_secs/optimistic_interval_secs/progress_emit_min_interval_ms/tracker_numwant/peer_retry_base_secs/peer_retry_cap_secs/tracker_backoff_start_secs/tracker_backoff_cap_secs/udp_base_timeout_secs/udp_retries/default_seed_duration_m（exit rule 未配置时生效默认 30 分钟，做种倒计时正常） = BT 下载与做种全程无错误（引擎行为正常、无致命 toast；v1.21：seed_duration_secs 键退役）
     And 下载正常完成且产物完整（全量配置下核心链路不致病）
 
   Scenario: 01-persistence-config-14 活跃模板起步改值生效链（v1.19 新增，D63②：操作者 bug14 复现路径回归）

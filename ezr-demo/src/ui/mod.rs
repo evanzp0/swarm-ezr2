@@ -167,6 +167,27 @@ pub(crate) fn link_break_spans(s: &str, style: Style) -> Vec<Span<'static>> {
     spans
 }
 
+/// 任务行 1 文件名三点折叠（FR-01-118/D75）：总长 ≤ max 显示列原样；
+/// 超出即保留前 max−3 列 + "..."（三个 ASCII 句点），按字符边界切分不劈宽字。
+pub(crate) fn fold_name_dots(s: &str, max: usize) -> String {
+    if w(s) <= max {
+        return s.to_string();
+    }
+    let budget = max.saturating_sub(3);
+    let mut out = String::new();
+    let mut acc = 0;
+    for ch in s.chars() {
+        let cw = w(&ch.to_string());
+        if acc + cw > budget {
+            break;
+        }
+        acc += cw;
+        out.push(ch);
+    }
+    out.push_str("...");
+    out
+}
+
 pub(crate) fn truncate(s: &str, max: usize) -> String {
     if w(s) <= max {
         return s.to_string();
@@ -822,12 +843,12 @@ mod conns_flags_tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            text.contains("12/35/2.418"),
-            "健康度三段 3 位小数（FR-02-37）: {text}"
+            text.contains("12(45)/35(120)/2.418"),
+            "健康度三段 3 位小数 + x1(x2)/y1(y2)（FR-02-37 v1.2）: {text}"
         );
         assert!(
-            text.contains("分享 0.40"),
-            "分享率 2 位小数（FR-02-38，1712MB/4320MB）: {text}"
+            text.contains("SR 0.40"),
+            "SR 2 位小数（FR-02-38 v1.21，1712MB/4320MB）: {text}"
         );
     }
 
@@ -846,8 +867,8 @@ mod conns_flags_tests {
             .join("\n");
         assert_eq!(
             lines.len(),
-            81,
-            "帮助内容 81 行（源码实测基线 76 + 5 标志缩写条目，FR-02-33/D69）"
+            83,
+            "帮助内容 83 行（源码实测基线 81 = 76 + 5 标志缩写条目，v1.51 + 2 SR/LT 条目，FR-02-38 v1.21/D77）"
         );
         for needle in [
             "D=正在下载 · d=欲下被 choke",
@@ -915,10 +936,11 @@ mod conns_flags_tests {
             !l3.contains("GB"),
             "明细行不再含 <已下载>/<总字节> 尺寸对: {l3:?}"
         );
-        assert!(l3.contains("分享"), "分享率项保留（FR-02-38）: {l3:?}");
+        assert!(l3.contains("SR"), "SR 缩写项保留（FR-02-38 v1.21）: {l3:?}");
+        assert!(l3.contains("LT"), "LT 缩写项保留（FR-02-38 v1.21）: {l3:?}");
         assert!(
-            l3.contains(&format!("{}/{}/", t.seeders, t.peers)),
-            "种子健康度三段保留（FR-02-37）: {l3:?}"
+            l3.contains(&format!("{}/{:.3}", sp_txt(t), t.availability)),
+            "seeders/peers x1(x2)/y1(y2) + 健康度三段保留（FR-02-37 v1.2）: {l3:?}"
         );
     }
 
@@ -943,7 +965,10 @@ mod conns_flags_tests {
             !l3.contains(&fmt_size(t.total)) && !l3.contains(&fmt_size(t.downloaded)),
             "HTTP 明细行不再含 <已下载>/<总字节> 尺寸对: {l3:?}"
         );
-        assert!(l3.contains("剩余"), "HTTP 明细行保留剩余时间: {l3:?}");
+        assert!(
+            l3.contains(" LT ") && !l3.contains("剩余"),
+            "HTTP 明细行「剩余」同改 LT（FR-02-38 v1.22/D77②，v1.54 裁决扩面）: {l3:?}"
+        );
     }
 
     #[test]
@@ -1059,9 +1084,10 @@ mod conns_flags_tests {
             !l3.contains("已上传") && !l3.contains(&fmt_size_pair(t.uploaded, t.total)),
             "做种明细行已上传对退役（v1.50，上传量仅经分享率体现）: {l3:?}"
         );
+        assert!(l3.contains("SR"), "做种明细行保留 SR 缩写项: {l3:?}");
         assert!(
-            l3.contains("分享") && l3.contains("剩余做种"),
-            "做种明细行保留分享率与剩余做种: {l3:?}"
+            !l3.contains("剩余做种"),
+            "做种明细行剩余做种项退役（FR-02-38 v1.21，退出规则归 FR-02-40）: {l3:?}"
         );
     }
 
@@ -1304,3 +1330,51 @@ mod fmt_speed_binary_tests {
         assert!(!fmt_speed(1500.0).contains("KB/s"));
     }
 }
+
+    #[test]
+    fn fold_name_dots_caps_at_32_display_widths() {
+        // 32 ASCII 列恰好原样（FR-01-118/D75）
+        let exact = "a".repeat(32);
+        assert_eq!(fold_name_dots(&exact, 32), exact);
+        // 33 ASCII 列 → 前 29 列 + "..."（三个 ASCII 句点，共 32 列）
+        let long = "a".repeat(33);
+        let folded = fold_name_dots(&long, 32);
+        assert_eq!(folded, format!("{}...", "a".repeat(29)));
+        assert_eq!(w(&folded), 32);
+        // 16 个汉字 = 32 显示列，恰好不折叠
+        let cjk16 = "汉".repeat(16);
+        assert_eq!(fold_name_dots(&cjk16, 32), cjk16);
+        // 17 个汉字 = 34 列 → 折叠到 29 列内完整汉字 + "..."（不劈半）
+        let cjk17 = "汉".repeat(17);
+        let folded_cjk = fold_name_dots(&cjk17, 32);
+        assert!(folded_cjk.ends_with("..."));
+        assert!(w(&folded_cjk) <= 32, "折叠后总长恒 ≤ 32（FR-01-118 上限）");
+        assert_eq!(w(&folded_cjk), 31, "CJK 粒度边界：预算 29 列容纳 14 个完整汉字（28 列）+ 3 点 = 31 ≤ 32");
+        assert!(folded_cjk.starts_with(&"汉".repeat(14)));
+        assert!(!folded_cjk.contains('\u{FFFD}'));
+        // 预算 < 32（窄面板）继续按预算折叠
+        let folded20 = fold_name_dots(&long, 20);
+        assert_eq!(w(&folded20), 20);
+    }
+
+    #[test]
+    fn sp_txt_omits_parens_when_tracker_unknown() {
+        let app = App::new();
+        let bt = app
+            .tasks
+            .iter()
+            .position(|t| t.protocol.is_bt() && t.tracker_seeds.is_some())
+            .expect("演示数据含带 tracker 值的 BT 任务");
+        let t = &app.tasks[bt];
+        let x2 = t.tracker_seeds.unwrap();
+        let y2 = t.tracker_peers.unwrap();
+        assert_eq!(list::sp_txt(t), format!("{}({})/{}({})", t.seeders, x2, t.peers, y2));
+        let mut t2 = t.clone();
+        t2.tracker_seeds = None;
+        t2.tracker_peers = None;
+        assert_eq!(
+            list::sp_txt(&t2),
+            format!("{}/{}", t.seeders, t.peers),
+            "tracker 值未知 → 括号段省略（D78②，qBt total == -1 同款）"
+        );
+    }

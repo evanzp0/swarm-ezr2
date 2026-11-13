@@ -74,6 +74,27 @@ Feature: 01-config-template 配置模板自动生成
   统一改「拒绝启动」（FR-01-71 回退臂退役，验收归口 01-persistence-config-04 v1.21）；
   ③模板行数不变（191 行，仅 [bt] 两键行与其注释块、各键取值范围注释文本替换）。
 
+  v1.18 修订注（操作者裁决落实 20261113「share_ratio_gt 允许小数，保留1位小数；
+  seeders_count_gt/seed_duration_m 为正整数」——v1.17 轮 D75–D79 否决窗口关闭/D79① 细化，
+  phase-02 v1.22/FR-02-40）：①模板尾部 [bt.seed_exit_rule] 注释块 share_ratio_gt 取值
+  范围注释行补「保留 1 位小数」（模板行数不变，仍 207 行；注释文本级改动，键面/活跃行集不变）；
+  ②场景 01 取值范围表 [bt.seed_exit_rule] 行同步；③seeders_count_gt/seed_duration_m
+  正整数口径追认不变。场景 01 内嵌钦定原文同步。
+
+  v1.17 修订注（操作者修订轮指令 20261113「做种退出规则 + seed_duration_secs 废弃改
+  default_seed_duration_m」；phase-02 v1.21，FR-02-40、D79；Inversion 受限退化沿
+  v1.45–v1.52 先例，操作者指令文本即阶段 1 答案）：①[bt] 表键替换——seed_duration_secs
+  废弃（按未知键口径直接废弃，FR-02-35 ⑤），改 default_seed_duration_m（分钟；未配置
+  默认 30；正整数，0/负/非整数拒绝启动）；键总数不变（40 键）；②模板尾部新增
+  [bt.seed_exit_rule] 做种退出条件注释块（整块 # 注释形态：share_ratio_gt 正浮点
+  1.5 = 150% / seeders_count_gt 正整数（按实际连接种子数 x1 计算）/ seed_duration_m
+  正整数（做种状态累计时长，跨重启续走）；三键全为可选，任一键取消注释配置后
+  default_seed_duration_m 即失效、全部保持注释时其生效；三键任一 0/负/非整数拒绝启动；
+  子表声明行保持注释——不改变活跃行集与「3 个表声明行」断言，且置于 listen_port 之后
+  避免 TOML 表归属陷阱）；③钦定文本整体替换为 v1.17 版（207 行：191 + 尾部子表注释块
+  16 行；seed_duration_secs 三行式原位替换为 default_seed_duration_m，行数不变；EOF 单
+  换行收尾）。场景 01 的取值范围表行与内嵌钦定原文同步。
+
   v1.13 修订（操作者 bug14 轮指令，D63；FR-01-85 v1.13/FR-01-71 v1.39）：模板改版为
   「示例行活跃」形态——36 个键值行与 3 个表声明行（[common]/[http]/[bt]）取消注释成为
   活跃 TOML（示例值仍与代码常量默认逐键一致 ⇒ 解析结果与文件缺失一致，默认值生效不变）；
@@ -91,7 +112,7 @@ Feature: 01-config-template 配置模板自动生成
     Given 不存在配置文件 <config_path>
     When 启动 ezr 并正常使用
     Then 配置文件 <config_path> 已生成
-    And 3 个表声明行（[common]/[http]/[bt]）与 40 个键值行为活跃 TOML（v1.13 取消注释：无 # 前缀；v1.14：36 → 40 键）且其余行（用途/取值范围注释、3 条分隔头注释、proxy 一句头注释、双示例块）保持 # 注释
+    And 3 个表声明行（[common]/[http]/[bt]）与 40 个键值行为活跃 TOML（v1.13 取消注释：无 # 前缀；v1.14：36 → 40 键；v1.17：seed_duration_secs → default_seed_duration_m 键数不变）且其余行（用途/取值范围注释、3 条分隔头注释、proxy 一句头注释、双示例块、[bt.seed_exit_rule] 做种退出条件子表注释块——含子表声明行整块 # 注释）保持 # 注释
     And 生成的文件可解析且解析结果与文件缺失一致（示例值 = 代码常量默认逐键一致，全部默认值生效；活跃模板不改变默认行为）
     And 模板内容与操作者钦定文本逐字节一致（钦定原文行集内嵌于本场景下方注释块：标题行、3 组「分隔头注释 + 空行 + 表声明行（活跃）」、40 键三行式（首行注释无键名前缀、键值行活跃）、[[common.proxy]] 一句头注释 + 双示例块、空行位置与行序、EOF 单换行收尾全部一致，v1.13）
     And 键 "<key>" 以注释形式给出默认值 "<default_line>"
@@ -137,7 +158,8 @@ Feature: 01-config-template 配置模板自动生成
       | tracker_backoff_cap_secs     | tracker_backoff_cap_secs = 60           | tracker 失败退避封顶（秒）                       | 正整数（≥1）；0 或非法值拒绝启动            |
       | udp_base_timeout_secs        | udp_base_timeout_secs = 15              | UDP tracker 单轮超时起始（秒）                   | 正整数（≥1）；0 或非法值拒绝启动            |
       | udp_retries                  | udp_retries = 3                         | UDP tracker 超时重试次数                         | 正整数（≥1）；0 或非法值拒绝启动            |
-      | seed_duration_secs           | seed_duration_secs = 1800               | 做种时长默认值（秒）                             | >0 的数；0 或非法值拒绝启动                 |
+      | default_seed_duration_m      | default_seed_duration_m = 30            | 默认做种时长（分钟；[bt.seed_exit_rule] 任一键配置时失效） | 正整数（≥1）；0/负/非整数拒绝启动；未配置默认 30（v1.17，FR-02-40） |
+      | [bt.seed_exit_rule]（注释块） | # [bt.seed_exit_rule] + 三注释键         | 做种退出条件（全部已配置条件 AND 满足 → 停止做种；未配置项不参与） | share_ratio_gt = 正浮点（保留 1 位小数，1.5 = 150%——v1.18/D79① 细化）；seeders_count_gt / seed_duration_m = 正整数（按实际连接种子数 x1 / 累计做种时长计）；任一键配置 → default_seed_duration_m 失效；0/负/非整数拒绝启动（v1.17，FR-02-40） |
       | listen_port                  | listen_port = 0                         | BT 监听端口（0 = 随机绑定）                      | 0 = 随机；1–65535 = 指定（占用回退随机+警告）；负/非法回退随机 |
 
   （v1.13 操作者钦定模板原文——default_template() 输出与其逐字节一致，coder 不得增删改
@@ -329,13 +351,29 @@ Feature: 01-config-template 配置模板自动生成
   # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   udp_retries = 3
   
-  # 做种时长默认值（秒，任务做种倒计时起点）
-  # 取值范围：>0 的数；0 或非法值拒绝启动
-  seed_duration_secs = 1800
+  # 默认做种时长（分钟，[bt.seed_exit_rule] 未配置任一键时生效）
+  # 取值范围：正整数（≥1）；0/负/非整数拒绝启动；未配置默认 30
+  default_seed_duration_m = 30
 
   # BT 监听端口（0 = 随机绑定）
   # 取值范围：0 = 随机绑定；1–65535 = 指定端口（占用时回退随机 + 启动警告）；负值或非法值回退随机
   listen_port = 0
+
+  # 做种退出条件（可选，[bt.seed_exit_rule]；全部已配置条件同时满足后任务停止做种，未配置项不参与判定）
+  # 任一键取消注释后上方 default_seed_duration_m 即失效；三键全部保持注释时其生效
+  # [bt.seed_exit_rule]
+  
+  # 分享率 ≥ a 即满足（比率语义，保留 1 位小数，1.5 = 150%）
+  # 取值范围：正浮点数（保留 1 位小数，v1.18/D79①）；0 或负数拒绝启动
+  # share_ratio_gt = 1.5
+  
+  # 种子数 ≥ b 个即满足（按实际连接种子数计算）
+  # 取值范围：正整数（≥1）；0/负/非整数拒绝启动
+  # seeders_count_gt = 3
+  
+  # 做种时间 ≥ c 分钟即满足（做种状态累计时长，跨重启续走）
+  # 取值范围：正整数（≥1）；0/负/非整数拒绝启动
+  # seed_duration_m = 60
   ）
 
   Scenario: 01-config-template-02 已有配置文件不重写不覆盖

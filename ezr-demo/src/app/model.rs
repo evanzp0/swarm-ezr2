@@ -310,6 +310,10 @@ pub struct Task {
 
     pub seeders: usize,
 
+    pub tracker_seeds: Option<usize>,
+
+    pub tracker_peers: Option<usize>,
+
     pub peers: usize,
 
     pub availability: f64,
@@ -319,6 +323,8 @@ pub struct Task {
     pub uploaded: u64,
 
     pub seed_left: f64,
+
+    pub sequential: bool,
 
     pub post_process: bool,
     pub(crate) post_started: Option<Instant>,

@@ -71,3 +71,8 @@
 ## QA 收敛轮（2026-11-13，QA）追加
 - environment.md — rustup 镜像复测（TUNA 双层路径全文件 36.6MB/s 最快、USTC 13.0、官方 1.9、单层路径 404 布局陷阱再证）/DEBUG=0 全量测试构建防爆盘（默认 6.5G ENOSPC → 1.4G）/覆盖率构建隔离 CARGO_TARGET_DIR 落 .work/tmp 用后即删（新增）
 - testing.md — harness QA_ONLY 点名分段对账法（>600s 全套墙钟标准解、throttle_proxy 10 案实证、点名段结果按段口径计入）/CRAP 复跑 --skip property_tests 不改覆盖面（属性与单测覆盖并集无差、cargo-llvm-cov 0.9.1 零挥发）（新增）
+
+## BT 顺序下载/做种退出规则/显示缩写轮（2026-11-13，specifier）追加
+- architecture.md — 焦点环插入式扩展九处同步面清单与借用拷贝纪律/折叠双形态并存判据（fold_name_dots 仅行 1）/Option 括号省略臂/同构改签与独有项退役分层/fixture seed_left 稳定态调整登记（新增）
+- testing.md — 做种 fixture seed_left=0 被 sim 首 tick 收割陷阱/做种任务在「已完成」页签（is_done 含 Seeding）的页签归属判据/焦点环扩展的 PTY 断言序（复选项 Space·Enter=切换须键层短路）/添加跳转后视口拉走的缺席断言陷阱（新增）
+- environment.md — rustup 镜像复测（rsproxy 直链 12.6MB/s 最快、裸根 UPDATE_ROOT）/bb 1.13.229 tar.gz 形态再证 + ghfast.top 秒级/cargo registry 重建与 demo clippy 基线对照/APS 双检六份全过（新增）

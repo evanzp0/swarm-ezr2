@@ -797,3 +797,7 @@ ws/webrtc 轮（2026-11-09）：TrackerUrl 三族分型（Ws 变体与 Http/Udp 
 - 反链接 VS15 工具族单源化落位：break_links/fg_shadow/link_break_spans 收编 ui/text.rs（共享文本工具既有归属，detail/val_popup 本就指向 text），popups.rs 退役为纯弹窗面板渲染、multiline.rs:110 改指 super::text::*；link_break_spans 保持 pub(crate)——门面 re-export 要求项自身可见性 ≥ re-export 口径，pub(super) 项 + pub(crate) use 即 E0364（rust.md 门面条款的反向实录）；arch_check 新规则 18 单源守卫（扫描域 = fn 定义行，break_links_deep 逐字符深变体不同算法不在域）。
 - arch_check 规则 14 白名单扩展判例（响亮失败机制首次实战）：v1.49/v1.52 视口容量自愈写（draw_list 当帧 rows 夹紧 `app.selected = idxs.len() - 1;` / `app.scroll = max_scroll;`）属「渲染派生钳制回填」同类——当帧 rows 自愈与 tick 层夹紧不可互替（tick 只有上一帧 visible_rows），移出渲染路径即行为等价改写不成立；按精确赋值字面豁免（非字段整体豁免，政策写 `app.scroll = 3;` 探针仍红）；v1.49/v1.52 两轮漏登记由本轮评审抓出，「新增面板渲染钳制写入会响亮失败需显式扩白名单」的设计预期兑现。
 - 变异点 >100 四文件不拆维持（app/mod.rs 149/conn.rs 125/text.rs 122/model task.rs 101，密度 0.10-0.30/行带内、无接口收窄收益、拆分属不安全类）——与前两轮 architect 判例一致，hardender --file 分块消费面就绪。
+
+## BT 顺序下载/做种退出规则/显示缩写轮（2026-11-13，specifier）追加
+- 显示退役/改判同构三件：①折叠新形态与既有形态并存判据——fold_name_dots（三点 ASCII）只替换任务行 1 调用点，既有 truncate（单字符 …）保留给详情/对话框等面（双形态并存是有意设计、不是漏改）；②seeders/peers 括号段 = Option 字段 + None 省略臂（qBt total==-1 同款），fixture 连接值/tracker 值分离构造；③做种臂与下载臂同构改签（SR）+ 做种独有项退役（剩余做种）——同构字段改签随字段走、独有项退役单臂处理，混做即把 SR 误用到 HTTP 行。
+- demo fixture 调整登记：v[2].seed_left 0→1800.0（做种演示稳定态，见 testing 条目）；verify_v153.py 为本轮新增 PTY 脚本（A 折叠/B 下载臂/C 做种臂/D 复选项/E 帮助五段 29 项）。

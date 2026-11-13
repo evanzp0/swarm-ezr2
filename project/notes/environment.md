@@ -449,3 +449,9 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 ## QA 观察项清理轮（2026-11-13）追加
 - rustup 镜像复测（本轮，全新沙箱）：rsproxy 最快——dist 清单 date 2026-11-13 当日新鲜、dist 组件 206 @ 16.3MB/s（307 重定向，curl 计速须 -L）；TUNA 布局再漂移至 /rustup/dist/ 单层可用（manifest 200 但 date 2026-11-11 陈旧、dist 组件传输中断 000）——布局、新鲜度、传输三轴逐轮独立漂移再证；USTC dist 文件 403（清单可用）、SJTU 连接失败。直链 rustup-init + DIST_SERVER/UPDATE_ROOT 双变量指 rsproxy 前台一次装齐 nightly（rustc 8eb778d04 2026-11-12，与交接基线同 commit）+ rustfmt/clippy/llvm-tools-preview；cargo registry rsproxy sparse、pip 阿里云装 pyte/wcwidth。
 - 度量二件套装机（gh-proxy 前缀）：cargo-llvm-cov 0.9.1 资产 tar 包内**无版本子目录**（二进制在包根，勿按 pmd 式子目录路径 mv）；PMD pmd-dist-7.29.0-bin.zip 解包根目录为 **pmd-bin-7.29.0**（资产名与解包目录名不一致），落位 swarm/.tools/pmd-bin-7.29.0。
+
+## BT 顺序下载/做种退出规则/显示缩写轮（2026-11-13，specifier）追加
+- rustup 镜像复测：rsproxy dist 直链 12.6MB/s 五镜像最快（USTC 11.2、TUNA/NJU 404 布局漂移再现、SJTU 302）；直链 rustup-init 二进制（argv0 必须恰为 rustup-init 再证）+ DIST_SERVER=https://rsproxy.cn + UPDATE_ROOT=https://rsproxy.cn/rustup（裸根）前台一次装齐 nightly 1.102.0（与上轮同 commit）。
+- bb v1.13.229 资产形态 = tar.gz 非 tar.xz（「发行资产形态会随版本漂移」条款再证）；GitHub 直连 clone 120s 超时 → ghfast.top 前缀秒级（bb 下载 + APS clone）；latest 版本号定位 = `curl -w %{url_effective}` 跟随 /releases/latest 重定向。
+- 全新沙箱 ~/.cargo/config.toml 随环境重置消失（rsproxy-sparse 重建一次过）；ezr-demo clippy「mut 警告」基线对照：stash 前后计数（基线 5、本轮 +1 归新测试、修后回 5）——demo 不持产品零警告门槛，但新增告警仍须归零。
+- APS 双检六份修订 feature 全过（bb 1.13.229 + ghfast.top clone，.work/tmp 落盘 IR/dry）。

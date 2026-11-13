@@ -228,8 +228,8 @@ impl App {
             DialogKind::Add => 10,
             DialogKind::Modify => 7,
             DialogKind::Delete => 3,
-            DialogKind::AddBt => 11,
-            DialogKind::ModifyBt => 8,
+            DialogKind::AddBt => 12,
+            DialogKind::ModifyBt => 9,
         };
 
         let on_bt_list = matches!(
@@ -240,6 +240,17 @@ impl App {
             .dialog
             .as_ref()
             .is_some_and(|d| d.trackers_focus() == Some(d.focus));
+        // 按顺序下载复选项（FR-02-39）：Space/Enter = 切换勾选（不确认不关窗）
+        let seq_focused = matches!(
+            (kind, focus),
+            (DialogKind::AddBt, 7) | (DialogKind::ModifyBt, 5)
+        );
+        if seq_focused && matches!(code, KeyCode::Enter | KeyCode::Char(' ')) {
+            if let Some(d) = self.dialog.as_mut() {
+                d.sequential = !d.sequential;
+            }
+            return;
+        }
 
         if self.dialog.as_ref().is_some_and(|d| d.ck_open) {
             if let Some(d) = self.dialog.as_mut() {

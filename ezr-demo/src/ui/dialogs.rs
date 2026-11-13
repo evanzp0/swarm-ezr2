@@ -546,6 +546,24 @@ fn bt_text_row(
 }
 
 /// BT 下拉行渲染（代理）：黄色值 + ▾。
+fn bt_checkbox_row(f: &mut Frame, focus: usize, idx: usize, label: &str, checked: bool, rect: Rect) {
+    let focused = focus == idx;
+    let spans = vec![
+        Span::styled(
+            pad_right(label, 12),
+            Style::default().fg(if focused { ACCENT } else { DIM }),
+        ),
+        Span::styled("  ", Style::default().fg(DIM2)),
+        Span::styled(
+            if checked { "☑" } else { "☐" }.to_string(),
+            Style::default()
+                .fg(if checked { GREEN } else { DIM })
+                .add_modifier(if focused { Modifier::BOLD } else { Modifier::empty() }),
+        ),
+    ];
+    f.render_widget(Paragraph::new(Line::from(spans)), rect);
+}
+
 fn bt_dropdown_row(f: &mut Frame, focus: usize, idx: usize, label: &str, value: &str, rect: Rect) {
     let focused = focus == idx;
     let spans = vec![
@@ -596,11 +614,11 @@ fn bt_dropdown_row(f: &mut Frame, focus: usize, idx: usize, label: &str, value: 
 pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: DialogKind) {
     let is_add = kind == DialogKind::AddBt;
     let (title, dw, dh) = if is_add {
-        (" 添加任务：BT ", 78u16, 28u16)
+        (" 添加任务：BT ", 78u16, 29u16)
     } else {
-        (" 修改任务：BT ", 78, 26)
+        (" 修改任务：BT ", 78, 27)
     };
-    let nfocus = if is_add { 11usize } else { 8usize };
+    let nfocus = if is_add { 12usize } else { 9usize };
     let list_focus = if is_add { 2usize } else { 0usize };
     let trackers_focus = if is_add { 7usize } else { 5usize };
 
@@ -621,10 +639,10 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: Dia
     f.render_widget(block, dlg);
 
     app.popup_close_rect = draw_close_btn(f, app, dlg, w(title));
-    // 布局最低需求：Add = 顶 padding 1 + 2 字段行 + 1 列表行 + 并发/限速/代理 4
-    // + trackers 框 7 + 按钮前空行 1 + 按钮 1 + 底 padding 1 + 边框 2（自留 19）；
-    // Modify = 顶 padding 1 + 1 任务名 + 其余同上（自留 18）。低于此值不渲染。
-    let min_h = if is_add { 20 } else { 19 };
+    // 布局最低需求：Add = 顶 padding 1 + 2 字段行 + 1 列表行 + 并发/限速/代理/按顺序下载 5
+    // + trackers 框 7 + 按钮前空行 1 + 按钮 1 + 底 padding 1 + 边框 2（自留 20）；
+    // Modify = 顶 padding 1 + 1 任务名 + 其余同上（自留 19）。低于此值不渲染。
+    let min_h = if is_add { 21 } else { 20 };
     if inner.width < 30 || inner.height < min_h {
         return;
     }
@@ -657,6 +675,7 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: Dia
     };
     let avail = (inner.width as usize).saturating_sub(13);
 
+    let seq_checked = app.dialog.as_ref().is_some_and(|d| d.sequential);
     let mut field_rects: Vec<Option<Rect>> = vec![None; nfocus];
     let mut field_wins: Vec<Option<FieldWin>> = vec![None; nfocus];
 
@@ -666,7 +685,7 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: Dia
     let list_y = if is_add { inner.y + 3 } else { inner.y + 2 };
     // 可视行数：标准 7 行（Modify 6；限速字段加入后窗口同步 78×28/78×26）；
     // 小终端按剩余高度收缩（Add 需 19 行自留，Modify 需 18）
-    let list_rows = ((inner.height as usize).saturating_sub(if is_add { 19 } else { 18 }))
+    let list_rows = ((inner.height as usize).saturating_sub(if is_add { 20 } else { 19 }))
         .min(if is_add { 7 } else { 6 })
         .max(1);
     let box_rect = Rect {
@@ -837,6 +856,8 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: Dia
         );
         field_rects[6] = Some(row_rect(fields_y + 3));
         bt_dropdown_row(f, focus, 6, "代理", &proxy_label, row_rect(fields_y + 3));
+        field_rects[7] = Some(row_rect(fields_y + 4));
+        bt_checkbox_row(f, focus, 7, "按顺序下载", seq_checked, row_rect(fields_y + 4));
     } else {
         // 任务名行（静态；顶 padding 1 行）
         let name_rect = Rect {
@@ -896,6 +917,8 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: Dia
         );
         field_rects[4] = Some(row_rect(fields_y + 3));
         bt_dropdown_row(f, focus, 4, "代理", &proxy_label, row_rect(fields_y + 3));
+        field_rects[5] = Some(row_rect(fields_y + 4));
+        bt_checkbox_row(f, focus, 5, "按顺序下载", seq_checked, row_rect(fields_y + 4));
     }
 
     // ---------- trackers 多行输入框（可复用组件，无 wrap 模式） ----------
@@ -903,7 +926,7 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: Dia
     // 水平滚动条（下边框）承接，溢出 5 行由垂直滚动条（右边框）承接
     let trackers_rect = Rect {
         x: inner.x + 2,
-        y: list_y + box_rect.height + 4,
+        y: list_y + box_rect.height + 5,
         width: inner.width.saturating_sub(4),
         height: 7,
     };
@@ -944,9 +967,9 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: Dia
     // ---------- 按钮行 ----------
     let btn_row = inner.y + inner.height - 2;
     let buttons: Vec<(&str, usize)> = if is_add {
-        vec![("立即下载", 8), ("仅添加", 9), ("取消", 10)]
+        vec![("立即下载", 9), ("仅添加", 10), ("取消", 11)]
     } else {
-        vec![("确定", 6), ("取消", 7)]
+        vec![("确定", 7), ("取消", 8)]
     };
     let btn_ws: Vec<usize> = buttons
         .iter()

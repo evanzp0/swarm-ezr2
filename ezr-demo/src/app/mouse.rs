@@ -919,12 +919,20 @@ impl App {
                 Some(DialogKind::ModifyBt) => 4,
                 _ => usize::MAX,
             };
+            let seq_i = match kind {
+                Some(DialogKind::AddBt) => 7,
+                Some(DialogKind::ModifyBt) => 5,
+                _ => usize::MAX,
+            };
             if i == ck_i {
                 let d = self.dialog.as_mut().unwrap();
                 d.ck_open = true;
                 d.ck_sel = d.ck_type;
             } else if i == proxy_i {
                 self.dialog.as_mut().unwrap().proxy_open = true;
+            } else if i == seq_i {
+                let d = self.dialog.as_mut().unwrap();
+                d.sequential = !d.sequential;
             }
         } else if let Some(btn) = hit(&btn_rects) {
             if let Some(d) = self.dialog.as_mut() {

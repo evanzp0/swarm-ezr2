@@ -44,11 +44,14 @@ pub(super) fn mk(
         connections,
         chunk_done,
         seeders: 0,
+        tracker_seeds: None,
+        tracker_peers: None,
         peers: 0,
         availability: 0.0,
         upload_speed: 0.0,
         uploaded: 0,
         seed_left: 0.0,
+        sequential: false,
         post_process: false,
         post_started: None,
         retries: 0,
@@ -273,8 +276,11 @@ pub(super) fn demo_tasks() -> Vec<Task> {
     v[0].proxy = ProxyChoice::Named("办公网代理".to_string());
 
     v[2].seeders = 12;
+    v[2].tracker_seeds = Some(45);
     v[2].peers = 35;
+    v[2].tracker_peers = Some(120);
     v[2].availability = 2.418;
+    v[2].seed_left = 1800.0;
     v[2].upload_speed = 1_900_000.0;
     v[2].uploaded = 1_712_000_000;
     v[2].seed_left = 1_800.0;
@@ -296,7 +302,9 @@ pub(super) fn demo_tasks() -> Vec<Task> {
     });
 
     v[13].seeders = 8;
+    v[13].tracker_seeds = Some(14);
     v[13].peers = 23;
+    v[13].tracker_peers = Some(31);
     v[13].availability = 1.675;
     v[13].upload_speed = 420_000.0;
     v[13].uploaded = 96_000_000;

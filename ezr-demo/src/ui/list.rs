@@ -40,9 +40,23 @@ fn share_ratio_text(t: &Task) -> String {
     }
 }
 
+/// seeders/peers 段（FR-02-37 v1.2/D78）：x1(x2)/y1(y2)——x1 连接种子、x2 tracker 报告种子、
+/// y1 连接 peers、y2 tracker 报告 peers；tracker 值未知 → 括号段省略（x1/y1）。
+pub(crate) fn sp_txt(t: &Task) -> String {
+    let seeds = match t.tracker_seeds {
+        Some(x2) => format!("{}({})", t.seeders, x2),
+        None => t.seeders.to_string(),
+    };
+    let peers = match t.tracker_peers {
+        Some(y2) => format!("{}({})", t.peers, y2),
+        None => t.peers.to_string(),
+    };
+    format!("{}/{}", seeds, peers)
+}
+
 fn share_spans(t: &Task) -> Vec<Span<'static>> {
     vec![
-        Span::styled(" 分享".to_string(), Style::default().fg(DIM)),
+        Span::styled(" SR".to_string(), Style::default().fg(DIM)),
         Span::styled(
             format!(" {}", share_ratio_text(t)),
             Style::default().fg(MAGENTA),
@@ -78,8 +92,9 @@ pub(crate) fn task_lines(
     // 预留 2 列：1 列名称与徽标间隔 + 1 列徽标/尺寸与右端百分比最小间隔
     let name_budget = width
         .saturating_sub(cursor_w + badges_w + pct_w + 2)
-        .clamp(8, 64);
-    let name_txt = truncate(&t.name, name_budget);
+        .clamp(8, 64)
+        .min(32);
+    let name_txt = fold_name_dots(&t.name, name_budget);
     let used = cursor_w + w(&name_txt) + 1 + badges_w;
     let pad = width.saturating_sub(used + pct_w);
 
@@ -188,14 +203,10 @@ pub(crate) fn task_lines(
                 Style::default().fg(MAGENTA),
             ));
             l3.push(Span::styled(
-                format!("  {}/{}/{:.3}", t.seeders, t.peers, t.availability),
+                format!("  {}/{:.3}", sp_txt(t), t.availability),
                 Style::default().fg(MAGENTA),
             ));
             l3.extend(share_spans(t));
-            l3.push(Span::styled(
-                format!("  剩余做种 {}", fmt_dur(t.seed_left.ceil() as u64)),
-                Style::default().fg(DIM),
-            ));
         }
         _ if t.protocol.is_bt() => {
             let downloading = t.state == TaskState::Downloading;
@@ -216,7 +227,7 @@ pub(crate) fn task_lines(
             }
             if downloading {
                 l3.push(Span::styled(
-                    format!("  {}/{}/{:.3}", t.seeders, t.peers, t.availability),
+                    format!("  {}/{:.3}", sp_txt(t), t.availability),
                     Style::default().fg(FG),
                 ));
             } else {
@@ -225,11 +236,11 @@ pub(crate) fn task_lines(
             l3.extend(share_spans(t));
             if downloading {
                 l3.push(Span::styled(
-                    format!("  剩余 {}", fmt_eta(t.eta_secs())),
+                    format!("  LT {}", fmt_eta(t.eta_secs())),
                     Style::default().fg(DIM),
                 ));
             } else {
-                l3.push(Span::raw("  剩余 "));
+                l3.push(Span::raw("  LT "));
                 l3.push(dash.clone());
             }
         }
@@ -246,11 +257,11 @@ pub(crate) fn task_lines(
             }
             if downloading && known {
                 l3.push(Span::styled(
-                    format!("  剩余 {}", fmt_eta(t.eta_secs())),
+                    format!("  LT {}", fmt_eta(t.eta_secs())),
                     Style::default().fg(DIM),
                 ));
             } else {
-                l3.push(Span::raw("  剩余 "));
+                l3.push(Span::raw("  LT "));
                 l3.push(dash.clone());
             }
         }

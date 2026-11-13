@@ -12,15 +12,17 @@
 #   09-bt-engine-11 B 断开连接（连接移除 / 分块补完 / 下载继续；做种中可用）
 #   09-bt-engine-12 P pieces 弹窗 BT 臂（真实 piece 四态 / 块大小 = piece length）
 #   09-bt-engine-13 做种与上传端到端（做种列表行 / 互惠上传 / 倒计时结束 / 空格停止做种 / 做种中交互）
-#   09-bt-engine-14 [bt] 调优键配置生效与回退（三大表重构：bt_concurrency 预填 / seed_duration_secs / 其余键引擎生效与缺省回退）
+#   09-bt-engine-14 [bt] 调优键配置生效与回退（三大表重构：bt_concurrency 预填 / default_seed_duration_m（v1.51：seed_duration_secs 退役）/ 其余键引擎生效与缺省回退）
 #   09-bt-engine-15 peer 连接生命周期礼仪（v1.37，FR-02-27：会话级 peer_id 稳定 / 优雅关闭 / 自关不计失败+冷却）
 #   09-bt-engine-16 BT 监听端口 [bt] listen_port（v1.38，FR-02-32：配置生效 / 未配置随机 / 占用回退+警告 / 进程级共享）
 #   09-bt-engine-17 partial 进度持久化与恢复不重下（v1.39，FR-02-22/D68：暂停重启不重发已收块 / 篡改自愈 / 重校验窗二次暂停允许边界）
 #   09-bt-engine-18 并发 panel 标志列数据语义（v1.40，FR-02-33/D69：qBt Peers Flags 子集 D/d/U/u/O/I/K/? 判定表 / 连写顺序 / 实时刷新）
 #   09-bt-engine-19 [bt] peer_connection_protocol 全局开关与 WebRTC 数据传输（v1.41 新增，FR-02-34/D70：无序数组 / 大小写不敏感 / 无跨协议回退；协议列 TCP·WebRTC）
 #   09-bt-engine-20 ws(s) tracker announce 与 peer_connection_protocol 严格校验（v1.41 新增，FR-02-34/35/D70：ws(s) tracker harness e2e；未知值/重复项启动失败）
-#   09-bt-engine-21 BT 下载列表行布局与种子健康度/分享率（v1.47 新增，v1.48 布局修订，v1.49 全类型扩面，FR-02-37/38：任务行 [状态] 后 <总字节>（全类型尺寸已知） / 明细行 <s>/<p>/<h> 三段 / 分享率 2 位小数粉红 / ∞ 边界 / 非活跃 dash）
+#   09-bt-engine-21 BT 下载列表行布局与种子健康度/分享率（v1.47 新增，v1.48 布局修订，v1.49 全类型扩面，v1.51 x1(x2)/y1(y2)+SR/LT+做种剩余做种退役，v1.52 D77② 落定/D78② 追认，FR-02-37/38：任务行 [状态] 后 <总字节>（全类型尺寸已知） / 明细行 <x1(x2)/y1(y2)>/<h> / SR 2 位小数粉红 / LT 缩写（HTTP 同改 v1.52） / ∞ 边界 / 非活跃 dash）
 #   09-bt-engine-22 并发 panel 相关度列数据语义（v1.47 新增，FR-02-36/D74：qBt calcRelevance 口径——对端有∧本端缺 ÷ 本端缺）
+#   09-bt-engine-23 [bt.seed_exit_rule] 做种退出规则（v1.51 新增，v1.52 share_ratio_gt 保留 1 位小数细化，FR-02-40/D79：三键 AND 满足停止做种 / 未配置项不参与 / default_seed_duration_m 生效关系 / 非法值拒绝启动）
+#   09-bt-engine-24 BT 顺序下载引擎语义（v1.51 新增，FR-02-39/D76：piece 索引升序线性领用 / 取消恢复 rarest-first / 随任务持久化）
 # 期号 02（phase-02）。需求依据 project/mission/phase-02.md FR-02-06…23、D45/D46/D51/D52/D54/D57/D58。
 # 协议基线 = 操作者钦定 BEP 3/15/23/7/12/9/20；tokio 异步（FR-02-10）。
 # BEP 9 做种侧响应（D53/D45——磁力拉取 phase-03）；上传真实统计（D58）；
@@ -81,6 +83,15 @@
 # 会话立即携新 offers 重连 shed 的 peer；http/udp 刷新候选池；尊重 tracker min_interval）+
 # 本端主动收口（缩容 shed/空闲置换）的 WebRTC peer 不记失败冷却（mark_peer_idle，区别于异常
 # 断开的惩罚性退避）——peer 重连不再等 tracker interval 周期。QA 严格检查 = QA-BE-19（观察面注记）。
+# v1.52 修订（操作者裁决落实 20261113「LT: http和 BT 下载任务都是做 '剩余时间→LT' 这样的改动；
+# share_ratio_gt 允许小数保留1位小数；SR 作用于做种/下载两臂同构；tracker 值未知时括号段省略」——
+# v1.51 轮合成闸门 B + D75–D79 否决窗口关闭，phase-02 v1.22，FR-02-38 v1.22/D77②、FR-02-40/D79①）：
+# ①场景 21 HTTP 臂注记修订——HTTP 任务行「剩余」标签同改 LT（v1.51「HTTP 行不变」口径退役；
+# HTTP 下载/暂停两态信息行归 01-tui-display v1.52 场景 02 承载），SR 两臂同构追认（D77①）、
+# tracker 未知括号段省略追认（D78②）；②场景 23 share_ratio_gt 取值细化——正浮点保留 1 位小数
+# （D79①，原「无小数位」裁读注记退役）；本文件场景行形态零改动（判据面注记级）。
+# v1.51 修订（操作者修订轮指令 20261113「BT 顺序下载 / 做种退出规则 / 显示折叠与缩写」——phase-02 v1.21，FR-02-37 v1.2/FR-02-38 v1.21/FR-02-39/40 新增、D75–D79；Inversion 受限退化沿 v1.45–v1.52 先例，操作者指令文本即阶段 1 答案）：
+# ①场景 10/21 明细行格式修订——seeders/peers 改 x1(x2)/y1(y2)（x1 连接种子/x2 tracker complete/y1 连接 peers/y2 tracker incomplete，tracker 值未知括号段省略，FR-02-37 v1.2/D78）；「分享」标签改「SR」、BT 下载臂「剩余」标签改「LT」（HTTP 行不变，FR-02-38 v1.21/D77）；做种臂「剩余做种 <时长>」项整项退役（退出规则归 FR-02-40）；②场景 14 seed_duration_secs 键退役改 default_seed_duration_m（分钟，默认 30；exit rule 任一键配置时失效）；③场景 13 退出触发改「退出条件满足」（时长臂 = default_seed_duration_m 倒计时归零，rule 臂 = 已配置条件 AND 满足）；④场景 23 新增（[bt.seed_exit_rule] 退出规则）、场景 24 新增（顺序下载引擎语义）。
 # v1.50 修订（操作者调整轮指令 20261111「bt 下载任务：做种的 bt 任务，去除 '已上传 <上传字节数>/<总字节数>'」——phase-02 v1.20，FR-02-38 v1.20；操作者 chat 指令即修订裁决）：
 # 做种统计行已上传对退役——场景 10/21 做种臂形态去 `已上传 <x>/<总大小>`，分享率改接
 # <seeders>/<peers>/<健康度> 项（单空格衔接不变，与 BT 下载臂同构）；场景 13 上传统计观察面
@@ -221,7 +232,7 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
   Scenario: 09-bt-engine-10 下载完成转做种
     When 全部选中 piece 下载并通过 SHA-1 校验
     Then toast 显示 "✓ 下载完成: <name>"（demo 无校验完成文案）且任务状态转「做种中」（D45/D57）
-    And 列表信息行切做种中形态 "↑ <上传速度>  <做种>/<peer>/<健康度> 分享 <分享率>  剩余做种 <时长>"（MAGENTA 做种/peer/健康度段，分享率数字 MAGENTA 粉红、剩余时长向上取整；v1.47 修订：原 "<做种>/<peer>" 两段与无分享率形态退役，FR-02-37/38/D74，细则见场景 21；v1.50 修订：原 `已上传 <x>/<总大小>` 项退役，分享率改接健康度项，FR-02-38 v1.20）
+    And 列表信息行切做种中形态 "↑ <上传速度>  <x1(x2)/y1(y2)>/<健康度> SR <分享率>"（MAGENTA 做种/peer/健康度段，SR 数字 MAGENTA 粉红；v1.47 修订：原 "<做种>/<peer>" 两段与无分享率形态退役，FR-02-37/38/D74，细则见场景 21；v1.50 修订：原 `已上传 <x>/<总大小>` 项退役，分享率改接健康度项，FR-02-38 v1.20；v1.51 修订：seeders/peers 改 x1(x2)/y1(y2)（FR-02-37 v1.2/D78）、"分享" 标签改 "SR"（FR-02-38 v1.21/D77）、"剩余做种 <时长>" 项整项退役——v1.50"健康度/剩余做种不变"口径中剩余做种臂退役，做种退出规则归 FR-02-40，剩余时长不再展示）
     And 产物文件字节与 seeder 原始数据逐字节一致（fixture 侧校验）
     And 引擎已对 tracker 发送 event=completed 且继续周期 announce（left=0、uploaded 真实）
 
@@ -246,18 +257,18 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
     Then 本端对 leecher 全量 unchoke 并响应其 request（发送已完成 piece 块、块 ≤ 16 KB）——leecher 从本端拉到数据字节（fixture 侧对账）
     And 任务上传统计真实增长（头部 ↑ 与峰值 ↑、并发明细上传两列、tracker announce uploaded 参数；v1.50：列表行不再含已上传项，上传量仅经列表分享率体现，FR-02-38 v1.20）
     And 做种中任务可查看并发明细、可按 B 断开、可按 M 修改（FR-02-03/08）、删除走既有删除对话框
-    When 做种倒计时归零（seed_left 默认 1800s，D57）
+    When 做种退出条件满足（v1.51/FR-02-40：[bt.seed_exit_rule] 未配置 → default_seed_duration_m 时长倒计时归零（未配置默认 30 分钟，D57/D79）；已配置 → 已配置条件全部满足（AND）即时收尾）
     Then toast 显示 "✓ 做种结束: <name>" 且任务转「已完成」、上传连接清空、tracker 收到 stopped
     When 做种中按空格提前停止
     Then toast 显示 "⏸ 已停止做种（进入已完成）: <name>" 且任务转「已完成」、tracker 收到 stopped
-    And 重启 ezr 后做种中任务恢复继续做种（uploaded 延续、seed_left 续走，FR-02-22）
+    And 重启 ezr 后做种中任务恢复继续做种（uploaded 延续、default_seed_duration_m 臂 seed_left 续走 / [bt.seed_exit_rule] 臂做种时长累计续走，FR-02-22）
 
-  Scenario: 09-bt-engine-14 [bt] 调优键配置生效与回退（v1.35，三大表重构）
-    Given 配置文件 [bt] 表设 bt_concurrency = <conns>、seed_duration_secs = <seed_secs>、
-      idle_eviction_secs = <evict>（其余调优键未配置）
+  Scenario: 09-bt-engine-14 [bt] 调优键配置生效与回退（v1.35，三大表重构；v1.51：seed_duration_secs → default_seed_duration_m）
+    Given 配置文件 [bt] 表设 bt_concurrency = <conns>、default_seed_duration_m = <seed_m>、
+      idle_eviction_secs = <evict>（其余调优键未配置；v1.51：seed_duration_secs 键退役废弃——按未知键口径直接废弃（FR-02-35 ⑤/FR-02-40：零迁移零警告不报错），改 default_seed_duration_m 单位分钟）
     When 添加 BT 任务（不经修改对话框改并发）并观察至下载完成转做种
     Then 新任务并发预填/默认 = <conns>（v1.35：BT_DEFAULT_CONCURRENCY 硬编码退役，缺省回退代码常量 20）
-    And 做种列表行「剩余做种」自 <seed_secs> 起倒计时（v1.35：SEED_DURATION_SECS 硬编码退役，缺省回退代码常量 1800）
+    And 做种时长默认 = <seed_m> 分钟（v1.35：SEED_DURATION_SECS 硬编码退役；v1.51：seed_duration_secs 键退役改 default_seed_duration_m，未配置默认 30 分钟（原 1800s 等值）；[bt.seed_exit_rule] 任一键配置时本键失效（FR-02-40/D79）；做种列表行不再显示剩余做种倒计时（FR-02-38 v1.21），退出时点经 fixture 侧观察）
     And 空闲连接置换按 <evict> 秒阈值执行（无新增进账超时即断开重拨；缺省回退 60，操作者已批默认值）
     And 其余 [bt] 调优键（peer_pipeline / upload_slots / upload_read_concurrency /
       connect_timeout_secs / handshake_timeout_secs / request_timeout_secs /
@@ -272,8 +283,8 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
     Then 启动失败并报错（v1.41 反转：错误含配置文件路径、键点路径与非法原因，非零退出码退出；原「对应键回退代码常量默认值且启动不报错」口径随 FR-01-71 回退臂全局退役，FR-02-35）
 
     Examples:
-      | conns | seed_secs | evict |
-      | 8     | 60        | 30    |
+      | conns | seed_m | evict |
+      | 8     | 1      | 30    |
 
 
   # v1.37 新增（操作者 bug17 轮指令，FR-02-27 连接生命周期礼仪 + D66）：修改并发与暂停/启用
@@ -395,37 +406,46 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
   # 列表行统计行的显示形态与数据语义层——种子健康度 = qBt General 面板 Availability
   # （libtorrent distributed_copies 同源口径），分享率 = qBt General 面板 Share Ratio
   # （realRatio 同源口径）。并发 panel 相关度列显示形态归 04-ui-conns-08 v1.47，数据语义归场景 22。
-  Scenario: 09-bt-engine-21 BT 下载列表行布局与种子健康度/分享率（v1.47 新增，v1.48 布局修订，v1.49 全类型扩面，v1.50 做种已上传对退役，FR-02-37/38/D74）
-    Given BT 任务下载中且 tracker 响应 complete/incomplete 已计入 <seeders>/<peers> 展示
+  Scenario: 09-bt-engine-21 BT 下载列表行布局与种子健康度/分享率（v1.47 新增，v1.48 布局修订，v1.49 全类型扩面，v1.50 做种已上传对退役，v1.51 x1(x2)/y1(y2) + SR/LT + 做种剩余做种退役，v1.52 D77② 落定/D78② 追认，FR-02-37 v1.2/38 v1.21/D74/D77/D78）
+    Given BT 任务下载中且 tracker 已有成功 announce 应答（complete/incomplete 计入 x2/y2）
     Then 任务行「[状态]」徽标后以单空格间隔显示 "<总字节> <单位>"（fmt_size 口径、普通前景色；
       如 "[下载中] 4.19 GB"；v1.48：原明细统计行尺寸对 <已下载>/<总大小> 整项上移至此、
       删除 <已下载字节> 只保留 <总字节>；v1.49 扩面：作用面 = 全部任务类型与状态（尺寸已知即显示，
       FR-01-116 size_known 语义；尺寸未知任务行 1 不显示尺寸、无伪造总字节）——BT 全状态含
       做种中/已完成/已失败/等待中均追加，HTTP/HTTPS 任务行同样追加）
-    And 列表统计行 seeders/peers 项显示 "<seeders>/<peers>/<健康度>"（健康度保留 3 位小数，如 12/35/1.675；
-      计算 = 连接 peer piece 位图估算的分布式完整副本数——每 piece 持有者计数（连接的非种子 peer 持有该 piece 记 1、
-      本端已有该 piece 记 1）取全部 piece 最小值 + 连接种子数 + 持有者计数超出该最小值的 piece 数 ÷ 总 piece 数，
-      qBt Availability / libtorrent distributed_copies 同源，随 tick 与 seeders/peers 同节拍刷新）
+    And 列表统计行 seeders/peers 项显示 "<x1(x2)/y1(y2)>/<健康度>"（健康度保留 3 位小数，如 12(45)/35(120)/1.675；
+      v1.51：x1 = 实际连接种子数、x2 = tracker 最新成功应答 complete 值、y1 = 实际连接 peers 数、
+      y2 = tracker 最新成功应答 incomplete 值（qBt 任务列表 SEEDS/PEERS 列取值逻辑同源，FR-02-37 v1.2/D78；
+      原 <seeders>/<peers> 两段口径退役）；tracker 值未知（无 tracker/本轮未成功应答/未带字段）→ 括号段省略
+      显示 "x1/y1" 形态（qBt total == -1 只显计数同款，D78②；操作者 20261113 追认——v1.52）；健康度计算 = 连接 peer piece 位图估算的分布式完整副本数
+      ——每 piece 持有者计数（连接的非种子 peer 持有该 piece 记 1、本端已有该 piece 记 1）取全部 piece 最小值 +
+      连接种子数 + 持有者计数超出该最小值的 piece 数 ÷ 总 piece 数，qBt Availability / libtorrent distributed_copies
+      同源，随 tick 同节拍刷新）
     And 列表统计行不再含 <已下载>/<总大小> 尺寸对（v1.18：整项上移任务行，原位退役）
-    And 列表统计行 <seeders>/<peers>/<健康度> 项后以单空格显示 " 分享 <分享率>"（保留 2 位小数；分享率 = 累计上传 ÷ 累计下载，
+    And 列表统计行 <x1(x2)/y1(y2)>/<健康度> 项后以单空格显示 " SR <分享率>"（保留 2 位小数；分享率 = 累计上传 ÷ 累计下载，
       下载量 < total_done 1% 时按 total_done 兜底、分母 0 且上传 > 0 显示 "∞"、两者均 0 显示 "0.00"，qBt realRatio 同源；
-      分享率数字 MAGENTA 粉红、"分享" 标签 DIM；操作者钦定示例 "0.00/3.34 GB 分享 0.07"；v1.18 起衔接对象由尺寸对改健康度项）
+      分享率数字 MAGENTA 粉红、"SR" 标签 DIM——v1.51：标签 "分享" 改缩写 "SR"（FR-02-38 v1.21/D77，具体名称见帮助窗口
+      【任务列表】组 SR 条目；操作者钦定示例 "0.00/3.34 GB 分享 0.07" 的标签字面随此退役）；v1.18 起衔接对象为健康度项）
+    And BT 下载臂剩余时间标签显 " LT <eta>"（v1.51：标签 "剩余" 改缩写 "LT"（FR-02-38 v1.21/D77，具体名称见帮助窗口
+      【任务列表】组 LT 条目）；HTTP 任务行 "剩余" 标签同改 "LT"（v1.52：操作者裁决 D77② 扩面——http 与 BT
+      下载任务都做「剩余时间→LT」同款改动，HTTP 两态信息行归 01-tui-display v1.52 场景 02 承载）；非下载中臂显 " LT " + dash 位；ETA 值与 DIM 标签族口径不变）
     When 任务下载完成转做种中
-    Then 做种统计行同口径——"<seeders>/<peers>/<健康度> 分享 <分享率>"（品红段整体同色；分享率数字 MAGENTA；
+    Then 做种统计行同口径——"↑ <上传速度>  <x1(x2)/y1(y2)>/<健康度> SR <分享率>"（品红段整体同色；分享率数字 MAGENTA；
       uploaded 增长时分享率随之增长；v1.50：`已上传 <x>/<总大小>` 项整项退役——分享率改接健康度项
       （单空格衔接，与 BT 下载臂同构），做种上传量仅经分享率与头部/并发明细体现（FR-02-38 v1.20，
       原 v1.47 形态 `已上传 <x>/<总大小> 分享 <分享率>` 与 v1.49「已上传对保留」口径退役）；
-      v1.49：做种中任务行标题同样追加 <总字节>）
+      v1.51：`剩余做种 <时长>` 项整项退役（FR-02-38 v1.21/D77——v1.50「健康度/剩余做种……均不变」口径中
+      剩余做种臂退役，做种退出规则归 FR-02-40，剩余时长不再展示）；v1.49：做种中任务行标题同样追加 <总字节>）
     When 任务暂停（非活跃 BT 状态）
-    Then 速度段逐位 dash 照旧、seeders/peers 项显 "-/-/-"（原 "-/-" 退役）、任务行标题尺寸项照常、分享率按真实统计显示
-      （uploaded/downloaded；全 0 = "0.00"）
+    Then 速度段逐位 dash 照旧、seeders/peers 项显 "-/-/-"（dash 三段形态不变，D78③——不展开为六值括号形态）、
+      任务行标题尺寸项照常、分享率按真实统计显示（uploaded/downloaded；全 0 = "0.00"）、剩余时间标签 " LT " + dash
     And 已完成 BT 任务行明细只剩校验结论（v1.49：尾部 ` · <总大小>` 上移退役，行 1 已含总字节）与
       HTTP 任务行不含健康度与分享率项（FR-02-37/38 仍限 BT；已完成 BT 行无 <s>/<p> 形态）
 
     Examples:
-      | seeders | peers | 健康度 |
-      | 12      | 35    | 2.418  |
-      | 8       | 23    | 1.675  |
+      | seeders/peers  | 健康度 |
+      | 12(45)/35(120) | 2.418  |
+      | 8(14)/23(31)   | 1.675  |
 
 
   # v1.47 新增（操作者修订轮指令「bt 下载任务显示指标三项」①，FR-02-36/D74）：并发 panel
@@ -447,3 +467,50 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
       | 100      | 100           | 100.0% |
       | 40       | 15            | 37.5%  |
       | 0        | 0             | 0.0%   |
+
+
+  # v1.51 新增（操作者修订轮指令「config.toml [bt] 表添加子表 [bt.seed_exit_rule]（做种退出
+  # 条件），当满足所有条件后任务停止做种；[bt] seed_duration_secs 废弃改 default_seed_duration_m
+  # （单位分钟）」；FR-02-40/D79）：做种退出规则数据语义层；config 键面 = 01-persistence-config-13
+  # v1.21 与 01-config-template-01 v1.17（v1.18：share_ratio_gt 取值范围注记补「保留 1 位小数」）。
+  # v1.52：share_ratio_gt 取值细化（正浮点保留 1 位小数，D79① 操作者裁决）；seeders_count_gt/
+  # seed_duration_m 正整数追认。
+  Scenario: 09-bt-engine-23 [bt.seed_exit_rule] 做种退出规则（v1.51 新增，v1.52 share_ratio_gt 保留 1 位小数细化，FR-02-40/D79）
+    Given 配置文件 [bt] 子表 [bt.seed_exit_rule] 设 <rule>（三键可选——share_ratio_gt：正浮点比率语义、
+      保留 1 位小数，1.5 = 150%（操作者钦定示例 + 20261113 裁决细化/D79①）；seeders_count_gt：正整数，按 x1 实际连接种子数计算（操作者钦定）；
+      seed_duration_m：正整数，做种状态累计时长、跨暂停/重启续走（FR-02-22 同源机制））
+    When BT 任务下载完成进入做种中并持续观察至退出
+    Then 退出判定 = 全部已配置条件同时满足（AND）即停止做种——任务转「已完成」、toast "✓ 做种结束: <name>"、
+      上传连接清空、tracker 收到 stopped（与 default_seed_duration_m 倒计时收尾同口径，FR-02-13）
+    And 未配置的条件不参与判定（只配 share_ratio_gt = 1.5 即纯分享率退出、可能无限做种；
+      只配 seed_duration_m = 60 即纯时长退出；三者全配即三条件同时满足才退出）
+    And [bt.seed_exit_rule] 任一键配置时 [bt] default_seed_duration_m 失效（不再默认 30 分钟倒计时退出）；
+      子表未配置（不存在或三键皆无）时 default_seed_duration_m 生效（未配置默认 30 分钟）
+    And 条件随做种 tick 评估（秒级），满足即时收尾；seeders_count_gt 实时跟随 x1（实际连接种子数）变化；
+      share_ratio_gt 实时跟随分享率（累计上传 ÷ 累计下载，FR-02-38 口径）
+    And 做种中空格提前停止做种（FR-02-13）不变；D73③ 回做种重置在 exit rule 生效臂 = 做种时长累计清零
+      （若 seed_duration_m 为已配置条件之一）
+    And 非法值拒绝启动（FR-02-35 ③：任一键 0/负 → 启动失败；seeders_count_gt/seed_duration_m 非整数 →
+      启动失败；错误含配置文件路径、键点路径与非法原因）
+
+    Examples:
+      | rule                                        |
+      | share_ratio_gt = 1.5                        |
+      | seeders_count_gt = 3                        |
+      | seed_duration_m = 60                        |
+      | share_ratio_gt = 1.5 + seed_duration_m = 60 |
+
+  # v1.51 新增（操作者修订轮指令「添加和修改任务窗口，增加'按顺序下载' 选项，默认不勾选，
+  # 随任务持久化，策略参考 qtorrent 的 'Download in sequential order'，确认后应立即生效」；
+  # FR-02-39/D76）：顺序下载引擎数据语义层（对话框交互面 = 07-add-bt-12 / 08-modify-bt-13）。
+  Scenario: 09-bt-engine-24 BT 顺序下载引擎语义（v1.51 新增，FR-02-39/D76）
+    Given BT 任务开启「按顺序下载」（添加对话框勾选创建或修改对话框勾选确认；默认不勾选）
+    When 任务下载中观察 piece 领用与请求顺序（fixture seeder 侧 request 日志可观察）
+    Then piece 请求顺序 = 按 piece 索引升序线性推进（自当前首个缺口 piece 起依序领用，
+      qBt/libtorrent sequential_download 同源；中途开启不重扫已收 piece、不从 0 重下）
+    And 修改对话框取消勾选确认 → 立即恢复 rarest-first 领用（任务不中断、进度不重置、
+      已建立连接保持——FR-02-26 立即生效总规则兜底）
+    And 修改补下臂（FR-02-03/08 新勾选文件补下）在顺序开启时按 piece 索引升序
+    And 顺序臂只改领用顺序：在飞窗口、SHA-1 校验、choke 礼仪（FR-02-27）、限速、
+      做种上传/互惠上传（D58）全部不变
+    And 勾选状态随任务持久化（重启恢复保持，FR-02-22 机制）；既有任务（无该字段）默认不勾选

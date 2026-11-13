@@ -603,6 +603,7 @@ impl App {
             ck_sel: CK_NONE,
             proxy_sel: self.default_proxy_sel,
             proxy_open: false,
+            sequential: false,
             focus: 0,
             task_name: String::new(),
             task_id: None,
@@ -638,6 +639,7 @@ impl App {
             ck_sel: CK_NONE,
             proxy_sel: self.default_proxy_sel,
             proxy_open: false,
+            sequential: false,
             focus: 0,
             task_name: String::new(),
             task_id: None,
@@ -660,13 +662,14 @@ impl App {
             self.set_toast("⚠ 已完成任务不可修改");
             return;
         }
-        let (id, name, concurrency, proxy, max_down, max_up) = (
+        let (id, name, concurrency, proxy, max_down, max_up, sequential_flag) = (
             t.id,
             t.name.clone(),
             t.concurrency,
             t.proxy.clone(),
             t.task_max_down,
             t.task_max_up,
+            t.sequential,
         );
         let files = if t.bt_files.is_empty() {
             pseudo_bt_files(&name, t.total)
@@ -710,6 +713,7 @@ impl App {
             ck_sel: CK_NONE,
             proxy_sel,
             proxy_open: false,
+            sequential: sequential_flag,
             focus: Dialog::bt_list_focus(DialogKind::ModifyBt),
             task_name: name,
             task_id: Some(id),
@@ -815,6 +819,7 @@ impl App {
             ck_sel: ck_type,
             proxy_sel,
             proxy_open: false,
+            sequential: false,
             focus: 0,
             task_name: name,
             task_id: Some(id),
@@ -855,6 +860,7 @@ impl App {
             ck_sel: 0,
             proxy_sel: 0,
             proxy_open: false,
+            sequential: false,
             focus: 0,
             task_name: name,
             task_id: None,
@@ -881,16 +887,20 @@ impl App {
     }
 
     pub(super) fn add_bt_dialog_enter(&mut self, focus: usize) {
-        // 焦点表：0 种子 / 1 保存到 / 2 文件列表 / 3 并发 / 4 代理 / 5 trackers
-        // / 6 立即下载 / 7 仅添加 / 8 取消
+        // 焦点表：0 种子 / 1 保存到 / 2 文件列表 / 3 并发 / 4 下载限速 / 5 上传限速
+        // / 6 代理 / 7 按顺序下载（Enter 已在键层切换勾选，不达此处）/ 8 trackers
+        // / 9 立即下载 / 10 仅添加 / 11 取消
         if focus == 6 {
             let d = self.dialog.as_mut().unwrap();
             d.proxy_open = true;
-        } else if focus == 8 {
-            self.dlg_confirm_add_bt(false);
+        } else if focus == 7 {
+            let d = self.dialog.as_mut().unwrap();
+            d.sequential = !d.sequential;
         } else if focus == 9 {
-            self.dlg_confirm_add_bt(true);
+            self.dlg_confirm_add_bt(false);
         } else if focus == 10 {
+            self.dlg_confirm_add_bt(true);
+        } else if focus == 11 {
             self.dialog = None;
         } else {
             self.dlg_confirm_add_bt(false);
@@ -898,11 +908,15 @@ impl App {
     }
 
     pub(super) fn modify_bt_dialog_enter(&mut self, focus: usize) {
-        // 焦点表：0 文件列表 / 1 并发 / 2 代理 / 3 trackers / 4 确定 / 5 取消
+        // 焦点表：0 文件列表 / 1 并发 / 2 下载限速 / 3 上传限速 / 4 代理
+        // / 5 按顺序下载（Enter 已在键层切换勾选，不达此处）/ 6 trackers / 7 确定 / 8 取消
         if focus == 4 {
             let d = self.dialog.as_mut().unwrap();
             d.proxy_open = true;
-        } else if focus == 7 {
+        } else if focus == 5 {
+            let d = self.dialog.as_mut().unwrap();
+            d.sequential = !d.sequential;
+        } else if focus == 8 {
             self.dialog = None;
         } else {
             self.dlg_confirm_modify_bt();
@@ -1042,7 +1056,7 @@ impl App {
         let up_raw = d.up_limit.value.trim().to_string();
         let trackers = d.trackers.trim_lines();
         if tracker_reject(&trackers).is_some() {
-            self.reject_bad_trackers(&trackers, 7);
+            self.reject_bad_trackers(&trackers, 8);
             return;
         }
         let proxy_sel = d.proxy_sel.min(self.proxy_options.len() - 1);
@@ -1066,6 +1080,7 @@ impl App {
         }
         let down_prefill = d.down_prefill;
         let up_prefill = d.up_prefill;
+        let seq_flag = d.sequential;
         self.sync_sim_sidecars();
 
         let resumed = self.sim_sidecars.contains(&(dir.clone(), name0.clone()))
@@ -1133,8 +1148,11 @@ impl App {
         // BT 演示口径：伪生成做种人数/ peers，避免详情全为 0
         let h = (id as u64) % 97;
         t.seeders = (3 + h % 40) as usize;
+        t.tracker_seeds = Some(t.seeders + 5 + (h % 13) as usize);
         t.peers = (t.seeders * 2 + (h % 17) as usize).max(t.seeders);
+        t.tracker_peers = Some(t.peers + 8 + (h % 29) as usize);
         t.availability = 0.350 + ((h * 37 + id as u64 * 11) % 2400) as f64 / 1000.0;
+        t.sequential = seq_flag;
         if paused {
         } else {
             t.queued_since = Some(Instant::now());
@@ -1189,7 +1207,7 @@ impl App {
         let up_raw = d.up_limit.value.trim().to_string();
         let trackers = d.trackers.trim_lines();
         if tracker_reject(&trackers).is_some() {
-            self.reject_bad_trackers(&trackers, 5);
+            self.reject_bad_trackers(&trackers, 6);
             return;
         }
         let proxy_sel = d.proxy_sel.min(self.proxy_options.len().saturating_sub(1));
@@ -1223,6 +1241,7 @@ impl App {
             t.bt_files = files;
             t.concurrency = concurrency;
             t.proxy = proxy;
+            t.sequential = d.sequential;
             if changed {
                 let old_speeds: Vec<f64> = t.connections.iter().map(|c| c.speed).collect();
                 t.total = new_total;
