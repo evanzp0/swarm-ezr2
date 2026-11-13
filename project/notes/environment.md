@@ -438,3 +438,7 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 ## specifier 锚点对齐轮（2026-11-12）追加
 - **rustup 镜像复测（本轮）**：8MB 组件探针 TUNA 26.9MB/s 最快可用（manifest date 2026-11-11）；aliyun 15.2MB/s 但快照停 2026-05-29 新鲜度剔除（快与新鲜缺一不可，「测速 ≠ 能装」再证）；rsproxy 8.6MB/s（清单 date 2026-11-12 本轮有效、第 6 次观测无缺键）；USTC 0.0MB/s 不可用、SJTU 快照 2026-10-06 陈旧、NJU-rustup 9.0MB/s 可用作后备。TUNA 双层路径（dist=/rustup/dist/、init=/rustup/rustup/dist/）直链 rustup-init（落盘名必须恰为 rustup-init）+ DIST_SERVER/UPDATE_ROOT 双变量前台一次装齐 nightly 1.102.0（9c5648833 2026-11-10，与交接基线同 commit）。
 - **gh-proxy.com 装机复证（第 N 次）与 .sha256 裸哈希形态**：GitHub release 直连 26.6MB 超 60s、git clone 直连 90s 超时；gh-proxy.com 前缀下载 48s/26.6MB 一次过、clone 走 HTTP/1.1（-c http.version=HTTP/1.1）+ 前缀一次过——直连慢/断时前缀是稳定兜底。注意：release 的 .sha256 资产经前缀取到的是**裸哈希**（无文件名无换行），`sha256sum -c <file>` 报 "no properly formatted checksum lines"——手工拼行 `echo "<hash>  <file>" | sha256sum -c -` 校验。
+
+## QA 收敛轮（2026-11-13）追加
+- rustup 镜像复测（2026-11-13，全新沙箱）：TUNA 双层路径 rustup-init 全文件实测 36.6MB/s 最快（USTC 单路径 13.0MB/s、官方 static.rust-lang.org 1.9MB/s、TUNA/Aliyun 单层路径 404 属布局陷阱再证）；直链 rustup-init（落盘名恰为 rustup-init）+ DIST_SERVER/UPDATE_ROOT 双变量指 TUNA 前台一次装齐 nightly 1.102.0（9c5648833 2026-11-10）+ clippy/rustfmt/llvm-tools-preview，与交接基线同 commit。
+- 10G 盘全新沙箱全量测试基线（8060P/16 目标）：默认 debuginfo 一次 --no-run 即爆盘（target 6.5G ENOSPC）→ `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0` 重建仅 1.4G 一次过；覆盖率构建（instrument-coverage 全 deps 重编 ~2G）用隔离 `CARGO_TARGET_DIR=.work/tmp/cov_target` 用后即删，主 target 的 e2e 二进制不受挤占。

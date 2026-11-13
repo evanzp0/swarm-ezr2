@@ -435,7 +435,6 @@ class DownloadEngineSuite(Suite):
         「未知」」是 v1.28 期观察锚；v1.49（操作者钦定轮）已把尾随尺寸/未知项整项退役
         （task_lines.rs stat_queued 单测同口径：等待行无「未知」无「MB」）。本用例按
         实现口径断言：等待行无任何尺寸显示 + fixture 请求日志零探测（无预取的权威判据）。
-        待 specifier 修订场景 15 THEN-1 与规程行后对齐（已记 handoff 待批）。
         """
         @self.case("QA-DE-15")
         def go(env: Env):

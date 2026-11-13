@@ -438,8 +438,8 @@ class ModifyBtSuite(Suite):
                     app.pump(0.4)
                 assert saw, (
                     "total 应按选中集合重算且任务行即时更新（[下载中] 徽标后 1.6 MB + 进度 66.7%；"
-                    "v1.49 偏差注记：明细行 1.0/1.6 MB 尺寸对已退役，任务行[状态]徽标后"
-                    "单空格显示总字节；待 specifier 修订规程锚后对齐，已记 handoff 待批）")
+                    "v1.49 口径：明细行 1.0/1.6 MB 尺寸对已退役，任务行[状态]徽标后"
+                    "单空格显示总字节；与 08-modify-bt-qa.md QA-MB-03 v1.49 锚点对齐口径一致）")
                 assert _cycle_to_visible(app, "下载中", 6), \
                     "剩余未完文件应保持下载中"
                 _confirm_modify_files(app, [(cancel_target, True)])

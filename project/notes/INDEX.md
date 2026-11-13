@@ -67,3 +67,7 @@
 ## specifier 锚点对齐轮（2026-11-12）追加
 - testing.md — 移交待批清单是 QA 视角最小集、接手角色同形全查（第 5 处漂移 05-ui-pieces 描述性括号的发现与「登记供否决」通道）/锚点对齐轮闭环形态（断言对齐后 runner 尾注转过时、清理归 runner 面）与语义零变更修订不递增版本号/mission 只读约束下口径张力 = 登记待批不移改、操作者显式指令后出注记结案 + 登记类注记裁决后必须回填结案态（裁决轮追加）
 - environment.md — rustup 镜像复测（TUNA 26.9MB/s 最快可用、aliyun 快但快照陈旧再证「测速 ≠ 能装」、rsproxy 第 6 次无缺键、USTC 0.0）/gh-proxy 直连慢断兜底复证与 .sha256 裸哈希手工拼行校验（新增）
+
+## QA 收敛轮（2026-11-13，QA）追加
+- environment.md — rustup 镜像复测（TUNA 双层路径全文件 36.6MB/s 最快、USTC 13.0、官方 1.9、单层路径 404 布局陷阱再证）/DEBUG=0 全量测试构建防爆盘（默认 6.5G ENOSPC → 1.4G）/覆盖率构建隔离 CARGO_TARGET_DIR 落 .work/tmp 用后即删（新增）
+- testing.md — harness QA_ONLY 点名分段对账法（>600s 全套墙钟标准解、throttle_proxy 10 案实证、点名段结果按段口径计入）/CRAP 复跑 --skip property_tests 不改覆盖面（属性与单测覆盖并集无差、cargo-llvm-cov 0.9.1 零挥发）（新增）
