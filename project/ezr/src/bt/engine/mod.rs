@@ -190,6 +190,7 @@ pub(crate) async fn run(
     let mut optimistic_slot: Option<usize> = None;
     let mut optimistic_cursor: usize = 0;
     let mut order_cache = PieceOrderCache::new();
+    order_cache.sequential = spec.sequential;
     let mut last_emit = std::time::Instant::now();
 
     loop {
@@ -256,6 +257,7 @@ pub(crate) async fn run(
                         proxy_endpoint,
                         max_download_speed,
                         max_upload_speed,
+                        sequential,
                     } => {
                         task_dl.set_rate(max_download_speed);
                         task_ul.set_rate(max_upload_speed);
@@ -264,6 +266,10 @@ pub(crate) async fn run(
                         let proxy_changed = spec.proxy_endpoint != proxy_endpoint;
                         spec.concurrency = target;
                         spec.proxy_endpoint = proxy_endpoint;
+                        if order_cache.sequential != sequential {
+                            order_cache.sequential = sequential;
+                            order_cache.dirty = true;
+                        }
                         if files_changed {
                             let old_files = std::mem::take(&mut spec.files);
                             for (i, f) in files.iter().enumerate() {
@@ -1232,6 +1238,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -1358,6 +1365,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let (evt_tx, _evt_rx) = mpsc::channel(256);
         let (cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -1460,6 +1468,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -1553,6 +1562,7 @@ mod tests {
             max_download_speed: 100_000,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -1631,6 +1641,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -2066,6 +2077,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -2183,6 +2195,7 @@ mod tests {
                 rechoke_interval_secs: 1,
                 ..Default::default()
             },
+            sequential: false,
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -2251,6 +2264,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -2316,6 +2330,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -2390,6 +2405,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
 
         let (evt_tx1, mut evt_rx1) = mpsc::channel(256);
@@ -2536,6 +2552,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let sc_path = crate::model::namegen::sidecar_path_of(&save_dir, "sc.bin");
         let (evt_tx, _evt_rx) = mpsc::channel(256);
@@ -2615,6 +2632,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -2686,6 +2704,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let sc_path = crate::model::namegen::sidecar_path_of(&save_dir, "sc3.bin");
         std::fs::write(format!("{save_dir}/sc3.bin"), &data).unwrap();
@@ -3018,6 +3037,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -3107,6 +3127,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let (evt_tx2, _evt_rx2) = mpsc::channel(256);
         let (_cmd_tx2, cmd_rx2) = mpsc::channel::<BtTaskCmd>(8);
@@ -3176,6 +3197,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -3358,6 +3380,38 @@ mod tests {
         assert!(cache.dirty, "连接关闭失去报有必须标脏");
         cache.rebuild(&pmap);
         assert!(cache.order.is_empty(), "失去最后报有者后退出 order");
+    }
+
+    #[test]
+    fn piece_order_cache_sequential_mode_sorts_by_index() {
+        // FR-02-39/D76：顺序臂按 piece 索引升序线性领用，稀有度不再参与排序。
+        let files = vec![BtFile {
+            path: "a.bin".into(),
+            size: 96 * 1024,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 32 * 1024);
+        let mut cache = PieceOrderCache::new();
+        cache.sequential = true;
+        for p in [2u32, 0, 1] {
+            cache.peer_gained(p);
+        }
+        cache.peer_gained(1);
+        cache.peer_gained(1);
+        cache.rebuild(&pmap);
+        assert_eq!(
+            cache.order,
+            vec![0, 1, 2],
+            "顺序臂按索引升序（与稀有度无关）"
+        );
+        cache.sequential = false;
+        cache.dirty = true;
+        cache.rebuild(&pmap);
+        let pos = |p: u32| cache.order.iter().position(|&x| x == p).unwrap();
+        assert!(
+            pos(1) > pos(0) && pos(1) > pos(2),
+            "取消勾选恢复 rarest-first（报有最多者最后领用）"
+        );
     }
 
     #[test]
@@ -3661,6 +3715,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: BtTunables::default(),
+            sequential: false,
         }
     }
 
@@ -4468,6 +4523,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let pmap = PieceMap::new(&spec.files, spec.meta.piece_length);
         let mut done: HashSet<u32> = HashSet::new();
@@ -4598,6 +4654,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let pmap = PieceMap::new(&spec.files, spec.meta.piece_length);
         let mut done: HashSet<u32> = HashSet::new();
@@ -4698,6 +4755,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let pmap = PieceMap::new(&spec.files, spec.meta.piece_length);
         let mut done: HashSet<u32> = HashSet::new();
@@ -4833,6 +4891,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -4948,6 +5007,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let (evt_tx, _evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -5061,6 +5121,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);
@@ -5331,6 +5392,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
 
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
@@ -5346,6 +5408,7 @@ mod tests {
                 proxy_endpoint: None,
                 max_download_speed: 0,
                 max_upload_speed: 0,
+                sequential: false,
             })
             .await
             .unwrap();
@@ -5414,6 +5477,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
 
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
@@ -5454,6 +5518,7 @@ mod tests {
                 proxy_endpoint: None,
                 max_download_speed: 0,
                 max_upload_speed: 0,
+                sequential: false,
             })
             .await
             .unwrap();
@@ -5546,7 +5611,17 @@ mod tests {
             let mid = pw.write_all(b"hello").await.is_ok();
             let _ = done_rx.await;
             let _ = pw.write_all(b"x").await;
-            let late = pw.write_all(b"y").await.is_err();
+            let rst_probe_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+            let mut late = false;
+            while tokio::time::Instant::now() < rst_probe_deadline {
+                match pw.write_all(b"y").await {
+                    Err(_) => {
+                        late = true;
+                        break;
+                    }
+                    Ok(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+                }
+            }
             (mid, late)
         });
         graceful_close(wr, reader, Duration::from_millis(200)).await;
@@ -5604,6 +5679,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
 
         let (evt_tx1, mut evt_rx1) = mpsc::channel(256);
@@ -5674,6 +5750,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
 
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
@@ -5759,6 +5836,7 @@ mod tests {
                 peer_retry_base_secs: 1,
                 ..Default::default()
             },
+            sequential: false,
         };
 
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
@@ -5775,6 +5853,7 @@ mod tests {
                     proxy_endpoint: None,
                     max_download_speed: 0,
                     max_upload_speed: 0,
+                    sequential: false,
                 })
                 .await
                 .unwrap();
@@ -5805,6 +5884,7 @@ mod tests {
                     proxy_endpoint: None,
                     max_download_speed: 0,
                     max_upload_speed: 0,
+                    sequential: false,
                 })
                 .await
                 .unwrap();
@@ -5917,6 +5997,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let pmap = PieceMap::new(&spec.files, spec.meta.piece_length);
         let mut done: HashSet<u32> = HashSet::new();
@@ -6044,6 +6125,7 @@ mod tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
 
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
@@ -6086,6 +6168,7 @@ mod tests {
                 proxy_endpoint: None,
                 max_download_speed: 0,
                 max_upload_speed: 0,
+                sequential: false,
             })
             .await
             .unwrap();
@@ -6117,6 +6200,7 @@ mod tests {
                 proxy_endpoint: None,
                 max_download_speed: 0,
                 max_upload_speed: 0,
+                sequential: false,
             })
             .await
             .unwrap();
@@ -6247,6 +6331,7 @@ mod seeding_tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         let (evt_tx, mut evt_rx) = mpsc::channel(256);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<BtTaskCmd>(8);

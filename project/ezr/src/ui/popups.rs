@@ -396,6 +396,7 @@ mod tests {
             piece_length: 16 * 1024,
             files: Vec::new(),
             upload_paused: false,
+            sequential: false,
         });
         t
     }

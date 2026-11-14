@@ -482,6 +482,7 @@ fn add_dialog(focus: usize, ck_open: bool) -> Dialog {
         dir: textfield::TextInput::new(),
         conns: textfield::TextInput::new(),
         conns_edited: false,
+        sequential: false,
         down_limit: textfield::TextInput::new(),
         up_limit: textfield::TextInput::new(),
         down_prefill: 0,

@@ -434,6 +434,7 @@ mod tests {
                 selected: true,
             }],
             upload_paused: false,
+            sequential: false,
         });
         app.tasks.push(t);
         app.selected = 0;
@@ -495,6 +496,7 @@ mod tests {
                 selected: true,
             }],
             upload_paused: false,
+            sequential: false,
         });
         app.tasks.push(t);
         app.bt_conns.insert(

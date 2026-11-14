@@ -76,3 +76,12 @@
 - architecture.md — 焦点环插入式扩展九处同步面清单与借用拷贝纪律/折叠双形态并存判据（fold_name_dots 仅行 1）/Option 括号省略臂/同构改签与独有项退役分层/fixture seed_left 稳定态调整登记（新增）
 - testing.md — 做种 fixture seed_left=0 被 sim 首 tick 收割陷阱/做种任务在「已完成」页签（is_done 含 Seeding）的页签归属判据/焦点环扩展的 PTY 断言序（复选项 Space·Enter=切换须键层短路）/添加跳转后视口拉走的缺席断言陷阱（新增）
 - environment.md — rustup 镜像复测（rsproxy 直链 12.6MB/s 最快、裸根 UPDATE_ROOT）/bb 1.13.229 tar.gz 形态再证 + ghfast.top 秒级/cargo registry 重建与 demo clippy 基线对照/APS 双检六份全过（新增）
+
+## v1.53/v1.54 产品实现轮（2026-11-13，coder）追加
+- architecture.md — PieceOrderCache 顺序臂标志位与 dirty 切换/tracker 值(Option)与连接值分离双通道/exit rule 生效臂 seed_left=∞ 复用递减路径+seed_elapsed 注册表续走/share_ratio_value 数值口径单源 model/五链结构体扩展全仓同步面与 gen 剥头副本重生成/demo field_rects 覆盖潜伏 bug 不照抄/help 行数锚点联动（新增）
+- testing.md — RST 异步回达竞速的有界重试窗断言法/MultiEdit 部分应用核状态纪律/QA 套件 fixture 焦点链与行数基线漂移归因（coder 不维护 QA 套件边界）/模板与 help 修订的行数+计数断言翻转面清单（新增）
+- environment.md — 2026-11-13 全新沙箱重建实测（codeload 可达 github 超时/TUNA rustup 55MB/s 胜出+rsproxy sparse 与 dist 解耦/gh-proxy bb 33s/APS main 分支 default_branch 先查）/磁盘三连爆处置（build 3G+incremental 4.3G 手删、分批跑目标）/pip 一次装齐 torf+libtorrent+pyte+wcwidth（新增）
+
+## v1.54 复核重验轮（2026-11-14，coder）追加
+- testing.md — 剥头副本漂移归因与机械重生成修法（cargo fmt 不覆盖 include! 副本、双侧手改必漂、awk 单行模板）/总账对≠分项对（handoff 6 处分项目标归属错位实测修正、总数恒等）（新增）
+- environment.md — 爆盘第四形态与瘦身组合数字（INC=0+DEBUG=0 全量 1.4G vs default 6.6G）/每 Bash 调用新 shell 的 env 重 export 纪律（漏带=指纹翻转重编爆盘）（新增）

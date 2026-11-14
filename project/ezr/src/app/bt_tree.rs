@@ -342,16 +342,16 @@ impl Dialog {
     #[must_use]
     pub(crate) fn trackers_focus(&self) -> Option<usize> {
         match self.kind {
-            super::DialogKind::AddBt => Some(7),
-            super::DialogKind::ModifyBt => Some(5),
+            super::DialogKind::AddBt => Some(8),
+            super::DialogKind::ModifyBt => Some(6),
             _ => None,
         }
     }
 
     pub(crate) fn trackers_focus_of(kind: super::DialogKind) -> usize {
         match kind {
-            super::DialogKind::AddBt => 7,
-            super::DialogKind::ModifyBt => 5,
+            super::DialogKind::AddBt => 8,
+            super::DialogKind::ModifyBt => 6,
             _ => 0,
         }
     }

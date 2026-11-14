@@ -844,6 +844,7 @@ mod ui_tests {
             dir: crate::textfield::TextInput::new(),
             conns: crate::textfield::TextInput::new(),
             conns_edited: false,
+            sequential: false,
             down_limit: crate::textfield::TextInput::new(),
             up_limit: crate::textfield::TextInput::new(),
             down_prefill: 0,

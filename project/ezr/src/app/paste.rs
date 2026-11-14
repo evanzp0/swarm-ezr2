@@ -270,7 +270,7 @@ mod paste_tests {
     async fn on_paste_bt_dialog_trackers_multiline_and_fields() {
         let mut app = make_app("btpaste");
 
-        app.dialog = Some(crate::app::testutil::dialog(DialogKind::AddBt, 7));
+        app.dialog = Some(crate::app::testutil::dialog(DialogKind::AddBt, 8));
         app.on_paste("udp://a/ann\nudp://b/ann\r\nhttp://c/ann");
         {
             let d = app.dialog.as_ref().unwrap();
@@ -296,7 +296,7 @@ mod paste_tests {
             assert!(d.conns_edited);
         }
 
-        app.dialog = Some(crate::app::testutil::dialog(DialogKind::ModifyBt, 5));
+        app.dialog = Some(crate::app::testutil::dialog(DialogKind::ModifyBt, 6));
         app.on_paste("udp://m/ann");
         {
             let d = app.dialog.as_ref().unwrap();

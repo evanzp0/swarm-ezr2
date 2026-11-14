@@ -48,6 +48,7 @@ pub(crate) fn dialog(kind: DialogKind, focus: usize) -> Dialog {
         ck_sel: 4,
         proxy_sel: 0,
         proxy_open: false,
+        sequential: false,
         focus,
         task_name: String::new(),
         task_id: None,
@@ -129,6 +130,7 @@ pub(crate) fn bt_task(id: u32, state: crate::model::TaskState) -> crate::model::
             selected: true,
         }],
         upload_paused: false,
+        sequential: false,
     });
     t
 }

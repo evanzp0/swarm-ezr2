@@ -109,6 +109,7 @@ pub struct BtSpec {
     pub proxy_endpoint: Option<ProxyEndpoint>,
     pub seeding: bool,
     pub upload_paused: bool,
+    pub sequential: bool,
     pub max_download_speed: u64,
     pub max_upload_speed: u64,
     pub tunables: BtTunables,

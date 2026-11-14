@@ -16,6 +16,8 @@ pub struct BtTaskData {
     pub files: Vec<BtFile>,
     #[serde(default)]
     pub upload_paused: bool,
+    #[serde(default)]
+    pub sequential: bool,
 }
 
 fn push_ancestor_dirs(
@@ -351,6 +353,7 @@ mod tests {
             piece_length,
             files,
             upload_paused: false,
+            sequential: false,
         }
     }
 

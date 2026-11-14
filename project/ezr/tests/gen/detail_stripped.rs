@@ -297,6 +297,7 @@ mod bt_detail_tests {
                 selected: true,
             }],
             upload_paused: false,
+            sequential: false,
         });
         t.checksum = Some(Checksum {
             algo: "SHA-256",

@@ -51,6 +51,7 @@ pub enum BtTaskCmd {
         proxy_endpoint: Option<crate::model::ProxyEndpoint>,
         max_download_speed: u64,
         max_upload_speed: u64,
+        sequential: bool,
     },
 }
 

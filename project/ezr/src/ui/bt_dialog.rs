@@ -11,7 +11,7 @@ use crate::ui::dialog::draw_dropdown;
 use crate::ui::multiline::draw_multi_line_input;
 use crate::ui::text::{fmt_size, pad_right, truncate, w};
 use crate::ui::tree::{draw_tree_panel, TreeRow};
-use crate::ui::{panel_border_style, panel_title_style, ACCENT, DIM, DIM2, YELLOW};
+use crate::ui::{panel_border_style, panel_title_style, ACCENT, DIM, DIM2, GREEN, YELLOW};
 
 #[allow(dead_code)]
 pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect) {
@@ -22,13 +22,13 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect) {
         .unwrap_or(DialogKind::AddBt);
     let is_add = kind == DialogKind::AddBt;
     let (title, dw, dh) = if is_add {
-        (" 添加任务：BT ", 78u16, 28u16)
+        (" 添加任务：BT ", 78u16, 29u16)
     } else {
-        (" 修改任务：BT ", 78, 26)
+        (" 修改任务：BT ", 78, 27)
     };
-    let nfocus = if is_add { 11usize } else { 8usize };
+    let nfocus = if is_add { 12usize } else { 9usize };
     let list_focus = if is_add { 2usize } else { 0usize };
-    let trackers_focus = if is_add { 7usize } else { 5usize };
+    let trackers_focus = if is_add { 8usize } else { 6usize };
 
     app.dlg_btfile_rects.clear();
     app.dlg_btbtn_rects.clear();
@@ -58,7 +58,7 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(block, dlg);
 
     app.popup_close_rect = draw_close_btn(f, app, dlg, w(title));
-    let min_h = if is_add { 20 } else { 19 };
+    let min_h = if is_add { 21 } else { 20 };
     if inner.width < 30 || inner.height < min_h {
         return;
     }
@@ -93,9 +93,10 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect) {
 
     let mut field_rects: Vec<Option<Rect>> = vec![None; nfocus];
     let mut field_wins: Vec<Option<FieldWin>> = vec![None; nfocus];
+    let seq_checked = app.dialog.as_ref().is_some_and(|d| d.sequential);
 
     let list_y = if is_add { inner.y + 3 } else { inner.y + 2 };
-    let list_rows = ((inner.height as usize).saturating_sub(if is_add { 17 } else { 16 }))
+    let list_rows = ((inner.height as usize).saturating_sub(if is_add { 20 } else { 19 }))
         .min(if is_add { 7 } else { 6 })
         .max(1);
     let box_rect = Rect {
@@ -268,6 +269,15 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect) {
             &proxy_label,
             row_rect(list_y + box_rect.height + 3),
         );
+        field_rects[7] = Some(row_rect(list_y + box_rect.height + 4));
+        bt_checkbox_row(
+            f,
+            focus,
+            7,
+            "按顺序下载",
+            seq_checked,
+            row_rect(list_y + box_rect.height + 4),
+        );
     } else {
         let name_rect = Rect {
             x: inner.x + 2,
@@ -332,11 +342,20 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect) {
             &proxy_label,
             row_rect(list_y + box_rect.height + 3),
         );
+        field_rects[5] = Some(row_rect(list_y + box_rect.height + 4));
+        bt_checkbox_row(
+            f,
+            focus,
+            5,
+            "按顺序下载",
+            seq_checked,
+            row_rect(list_y + box_rect.height + 4),
+        );
     }
 
     let trackers_rect = Rect {
         x: inner.x + 2,
-        y: list_y + box_rect.height + 4,
+        y: list_y + box_rect.height + 5,
         width: inner.width.saturating_sub(4),
         height: 7,
     };
@@ -376,9 +395,9 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect) {
 
     let btn_row = inner.y + inner.height - 2;
     let buttons: Vec<(&str, usize)> = if is_add {
-        vec![("立即下载", 8), ("仅添加", 9), ("取消", 10)]
+        vec![("立即下载", 9), ("仅添加", 10), ("取消", 11)]
     } else {
-        vec![("确定", 6), ("取消", 7)]
+        vec![("确定", 7), ("取消", 8)]
     };
     let btn_ws: Vec<usize> = buttons
         .iter()
@@ -463,6 +482,35 @@ fn bt_text_row(
     Some(win)
 }
 
+fn bt_checkbox_row(
+    f: &mut Frame,
+    focus: usize,
+    idx: usize,
+    label: &str,
+    checked: bool,
+    rect: Rect,
+) {
+    let focused = focus == idx;
+    let spans = vec![
+        Span::styled(
+            pad_right(label, 12),
+            Style::default().fg(if focused { ACCENT } else { DIM }),
+        ),
+        Span::styled("  ".to_string(), Style::default().fg(DIM2)),
+        Span::styled(
+            if checked { "☑" } else { "☐" }.to_string(),
+            Style::default()
+                .fg(if checked { GREEN } else { DIM })
+                .add_modifier(if focused {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        ),
+    ];
+    f.render_widget(Paragraph::new(Line::from(spans)), rect);
+}
+
 fn bt_dropdown_row(f: &mut Frame, focus: usize, idx: usize, label: &str, value: &str, rect: Rect) {
     let focused = focus == idx;
     let spans = vec![
@@ -527,6 +575,8 @@ mod tests {
         assert!(s.contains("选择下载文件"), "文件列表标题: {s}");
         assert!(s.contains("已选 2 个文件，共 12 B"), "动态统计: {s}");
         assert!(s.contains("trackers"), "trackers 标题: {s}");
+        assert!(s.contains("按顺序下载"), "复选项行（FR-02-39）: {s}");
+        assert!(s.contains("☐"), "默认不勾选（☐）: {s}");
         assert!(
             s.contains("立即下载") && s.contains("仅添加") && s.contains("取消"),
             "按钮行: {s}"
@@ -542,12 +592,28 @@ mod tests {
         let field_focuses: Vec<usize> = app.dlg_field_rects.iter().map(|(_, i)| *i).collect();
         assert_eq!(
             field_focuses,
-            vec![0, 1, 2, 3, 4, 5, 6, 7],
-            "焦点表矩形回填"
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 8],
+            "焦点表矩形回填（7 复选 + 8 trackers，FR-02-39）"
         );
         assert_eq!(app.dlg_btn_rects.len(), 3, "三按钮热区");
+        let btn_idx: Vec<usize> = app.dlg_btn_rects.iter().map(|(_, i)| *i).collect();
+        assert_eq!(btn_idx, vec![9, 10, 11], "按钮焦点表后移一位");
+        let rect_of = |i: usize| {
+            app.dlg_field_rects
+                .iter()
+                .find(|(_, fi)| *fi == i)
+                .map(|(r, _)| *r)
+                .unwrap()
+        };
+        let seq_rect = rect_of(7);
+        let tr_rect = rect_of(8);
+        assert_eq!(
+            seq_rect.y + 1,
+            tr_rect.y,
+            "复选行紧邻 trackers 框上方且热区互斥"
+        );
         let a = app.dlg_area.unwrap();
-        assert_eq!((a.x, a.y, a.width, a.height), (16, 4, 78, 28));
+        assert_eq!((a.x, a.y, a.width, a.height), (16, 3, 78, 29));
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -574,8 +640,14 @@ mod tests {
         assert!(!s.contains("立即下载"), "修改框无立即下载: {s}");
         assert_eq!(app.dlg_bt_visible, 6, "Modify 列表 6 可视行");
         let field_focuses: Vec<usize> = app.dlg_field_rects.iter().map(|(_, i)| *i).collect();
-        assert_eq!(field_focuses, vec![0, 1, 2, 3, 4, 5], "焦点表 0–5 矩形回填");
+        assert_eq!(
+            field_focuses,
+            vec![0, 1, 2, 3, 4, 5, 6],
+            "焦点表 0–6 矩形回填（5 复选 + 6 trackers，FR-02-39）"
+        );
         assert_eq!(app.dlg_btn_rects.len(), 2);
+        let btn_idx: Vec<usize> = app.dlg_btn_rects.iter().map(|(_, i)| *i).collect();
+        assert_eq!(btn_idx, vec![7, 8], "按钮焦点表后移一位");
         assert!(s.contains("udp://seed/ann"), "trackers 预填渲染: {s}");
         app.shutdown().await;
         std::fs::remove_dir_all(&dir).ok();

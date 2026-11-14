@@ -49,6 +49,25 @@ pub fn truncate(s: &str, max: usize) -> String {
     out
 }
 
+pub fn fold_name_dots(s: &str, max: usize) -> String {
+    if w(s) <= max {
+        return s.to_string();
+    }
+    let budget = max.saturating_sub(3);
+    let mut out = String::new();
+    let mut acc = 0;
+    for ch in s.chars() {
+        let cw = w(&ch.to_string());
+        if acc + cw > budget {
+            break;
+        }
+        acc += cw;
+        out.push(ch);
+    }
+    out.push_str("...");
+    out
+}
+
 fn char_byte_offset(s: &str, n: usize) -> usize {
     s.chars().take(n).map(char::len_utf8).sum()
 }
@@ -454,6 +473,36 @@ mod tests {
         assert_eq!(truncate("abc", 10), "abc");
         assert_eq!(truncate("中文中文", 5), "中文…");
         assert_eq!(truncate("abcdef", 0), "…");
+    }
+
+    #[test]
+    fn fold_name_dots_caps_at_display_width_with_ascii_dots() {
+        assert_eq!(fold_name_dots("short.bin", 32), "short.bin", "预算内原样");
+        let exact = "a".repeat(32);
+        assert_eq!(fold_name_dots(&exact, 32), exact, "恰 32 列原样");
+        let long = "a".repeat(33);
+        let folded = fold_name_dots(&long, 32);
+        assert_eq!(
+            folded,
+            format!("{}...", "a".repeat(29)),
+            "29 列 + 三个 ASCII 句点"
+        );
+        assert_eq!(w(&folded), 32, "折叠后总长含点共 32 列");
+        let cjk16 = "中".repeat(16);
+        assert_eq!(fold_name_dots(&cjk16, 32), cjk16, "16 个宽字符恰 32 列原样");
+        let cjk17 = "中".repeat(17);
+        let folded_cjk = fold_name_dots(&cjk17, 32);
+        assert_eq!(
+            folded_cjk,
+            format!("{}...", "中".repeat(14)),
+            "宽字符不劈半：14 字 28 列 + 3 点"
+        );
+        assert_eq!(w(&folded_cjk), 31, "宽字符边界折叠后 31 列（28+3）");
+        let mixed = format!("{}中", "b".repeat(30));
+        let folded20 = fold_name_dots(&mixed, 20);
+        assert!(w(&folded20) <= 20, "小预算同样按显示宽度折叠: {folded20}");
+        assert!(folded20.ends_with("..."));
+        assert_eq!(fold_name_dots("ab", 0), "...", "预算 0 时仅句点（空主体）");
     }
 
     #[test]

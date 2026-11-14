@@ -141,6 +141,7 @@ pub struct Dialog {
     pub ck_sel: usize,
     pub proxy_sel: usize,
     pub proxy_open: bool,
+    pub sequential: bool,
     pub focus: usize,
     pub task_name: String,
     pub task_id: Option<u32>,
@@ -870,6 +871,7 @@ mod tests {
                 selected: true,
             }],
             upload_paused: false,
+            sequential: false,
         });
         t
     }

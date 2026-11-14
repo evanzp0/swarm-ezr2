@@ -41,8 +41,8 @@ impl super::App {
             DialogKind::Add => 10,
             DialogKind::Modify => 7,
             DialogKind::Delete => 3,
-            DialogKind::AddBt => 11,
-            DialogKind::ModifyBt => 8,
+            DialogKind::AddBt => 12,
+            DialogKind::ModifyBt => 9,
         };
         if self.dialog.as_ref().is_some_and(|d| d.ck_open) {
             if let Some(d) = self.dialog.as_mut() {
@@ -54,6 +54,16 @@ impl super::App {
             let n = self.proxy_options.len().max(1);
             if let Some(d) = self.dialog.as_mut() {
                 proxy_dropdown_open_key(d, n, code);
+            }
+            return;
+        }
+        let seq_focused = matches!(
+            (kind, focus),
+            (DialogKind::AddBt, 7) | (DialogKind::ModifyBt, 5)
+        );
+        if seq_focused && matches!(code, KeyCode::Enter | KeyCode::Char(' ')) {
+            if let Some(d) = self.dialog.as_mut() {
+                d.sequential = !d.sequential;
             }
             return;
         }
@@ -919,7 +929,7 @@ mod dialog_key_tests {
     #[tokio::test]
     async fn bt_dialog_trackers_edit_delete_and_navigation() {
         let mut app = make_app("trkedit");
-        app.dialog = Some(bt_add_dlg(7));
+        app.dialog = Some(bt_add_dlg(8));
 
         for c in "udp://a/ann".chars() {
             app.on_dialog_key(KeyCode::Char(c), crossterm::event::KeyModifiers::NONE);
@@ -1032,7 +1042,7 @@ mod dialog_key_tests {
     #[tokio::test]
     async fn modify_bt_dialog_trackers_backspace() {
         let mut app = make_app("mtrk");
-        app.dialog = Some(crate::app::testutil::dialog(DialogKind::ModifyBt, 5));
+        app.dialog = Some(crate::app::testutil::dialog(DialogKind::ModifyBt, 6));
         app.dialog
             .as_mut()
             .unwrap()

@@ -561,6 +561,11 @@ impl App {
                         Some(DialogKind::ModifyBt) => 4,
                         _ => usize::MAX,
                     };
+                    let seq_i = match kind {
+                        Some(DialogKind::AddBt) => 7,
+                        Some(DialogKind::ModifyBt) => 5,
+                        _ => usize::MAX,
+                    };
                     let is_trackers = self
                         .dialog
                         .as_ref()
@@ -586,6 +591,8 @@ impl App {
                         d.ck_sel = d.ck_type;
                     } else if i == proxy_i {
                         d.proxy_open = true;
+                    } else if i == seq_i {
+                        d.sequential = !d.sequential;
                     }
                 } else if let Some(btn) = hit(&btn_rects) {
                     if let Some(d) = self.dialog.as_mut() {

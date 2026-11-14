@@ -741,3 +741,12 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 - 做种任务在「已完成」页签（`is_done` 含 Seeding）——「正在下载」页签里上下滚动找不到做种行属页签归属、不是渲染缺陷；PTY 断言序 = 先按 `]` 切页签再扫描，C/B 段之间用 `[` 切回（页签快照还原保证往返无损）。
 - 对话框焦点环插入式扩展（新增字段行）的同步面清单：nfocus / trackers_focus / proxy 下拉 Tab·BackTab 跳转 / enter 焦点表注释 / 按钮焦点索引 / reject_bad_trackers 焦点回跳 / Dialog 构造点 ×N（漏一处 = E0560 编译错或默认值假绿）/ mouse 字段点击映射 / 键层早退分支（复选项 Space·Enter = 切换语义必须在 Enter 分发前短路，否则 enter 表 else 臂兜底成确认）。struct literal 内引用 `t.field` 与同函数 `&mut self.xxx` 冲突（E0502/E0506）——标量提前拷贝再入 literal。
 - PTY 断言「其余行不受影响」类检查要考虑添加任务后 set_filter 跳转 + 选中跟随会把视口拉走：先 scroll_until 回目标锚再断言，别在跳转后的视口里做缺席断言。
+## v1.53/v1.54 产品实现轮（2026-11-13，coder）追加
+- 计时型 e2e 断言依赖 RST 异步回达（graceful_close 对端写失败）时，单发写入判定间歇假红——改为有界重试窗（≤2s @10ms 持续写直到首次报错），断言「最终失败」性质不与内核回包竞速（沙箱负载抖动实测一绿一红）。
+- MultiEdit 部分应用实录：old_str 不匹配报错时先前编辑已落盘（非原子）——每步编辑后 grep 核状态再续，不信「失败=零变更」。
+- e2e 套件 fixture 漂移归因：suite 内嵌旧焦点链（树到按钮 6×Tab）与旧行数基线（模板 190 行）撞 v1.21+ 规格 = 套件面欠账非产品回归；coder 不维护 QA 套件（SKILL 边界），登记 handoff 移交 QA；判据 = 套件 docstring 内嵌的 UI 结构事实 vs 现行规格焦点表逐项对照。
+- 帮助/模板类「行数+计数」断言群（lines().count/取值范围 matches/拒绝启动 matches/End 钳制值）是模板与 help 修订的必查翻转面；lines() 与 split 计数差 1（EOF 单换行），钦定文本「207 行」= split 口径，lines() 断言写 206。
+
+## v1.54 复核重验轮（2026-11-14，coder）追加
+- 剥头副本漂移实测归因：`gen_fixtures_match_product_sources` 红 = fixture 侧手改 `sequential: false` 少尾逗号（src 侧经 cargo fmt 有逗号）——cargo fmt 不覆盖 include! 的 tests/gen/*.rs（根因条目见 packs/_common/notes/rust.md），双侧手改必漂；修复 = 按契约测试的剥头变换（跳过起始 `//!` 行后逐行相等）机械重生成 4 份副本，diff 预验零差异后复跑目标即绿（958P/0F）。重生成单行模板：`awk 'BEGIN{h=1} h && /^\/\/!/ {next} {h=0; print}' src.rs > fixture.rs`。
+- 总账对 ≠ 分项对：上轮 handoff 分项目标计数 6 处归属错位（928/951/797/500/16/2 六个数字在 v115/g_v147/engine_backfill/g_throttle_err/g_proxy/g_main 间错挂）而总数 8100 恒等——复核轮以逐目标实测为分项权威口径，实测对账按「总数先对、分项再核、错位修正入账不改总数」处理，分项数字必须能从逐目标日志复算。

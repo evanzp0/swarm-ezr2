@@ -49,7 +49,16 @@ impl App {
             t.downloaded = total.max(t.downloaded);
             t.total = if t.total > 0 { t.total } else { total };
             t.speed = 0.0;
-            t.seed_left = self.cfg.seed_duration_secs;
+            let rule = self.cfg.seed_exit_rule;
+            let rule_active = rule.is_some_and(|r| r.any_configured());
+            if rule_active {
+                t.seed_left = f64::INFINITY;
+            } else {
+                t.seed_left = (self.cfg.default_seed_duration_m * 60) as f64;
+            }
+            if rule.is_some_and(|r| r.seed_duration_m.is_some()) {
+                t.seed_elapsed = 0.0;
+            }
             if let Some(b) = t.bt.as_mut() {
                 b.upload_paused = false;
             }
@@ -334,9 +343,10 @@ mod bt_progress_speed_tests {
     #[tokio::test]
     async fn bt_done_resets_seed_left_and_clears_upload_pause() {
         let mut app = make_app("bt-done-d73");
-        app.cfg.seed_duration_secs = 1800.0;
+        app.cfg.default_seed_duration_m = 30;
         let mut t = bt_task(1, TaskState::Downloading);
         t.seed_left = 1700.0;
+        t.seed_elapsed = 900.0;
         t.bt.as_mut().unwrap().upload_paused = true;
         app.tasks.push(t);
         app.on_bt_done(1, 12);
@@ -344,7 +354,11 @@ mod bt_progress_speed_tests {
         assert_eq!(t.state, TaskState::Seeding, "再次全部完成回做种态");
         assert_eq!(
             t.seed_left, 1800.0,
-            "D73③：回做种 seed_left 重置 config seed_duration_secs（原剩余值作废）"
+            "D73③/D79③：exit rule 未配置时 seed_left 重置 default_seed_duration_m（30 分钟）"
+        );
+        assert!(
+            t.seed_elapsed > 0.0,
+            "rule 未配置且无 seed_duration_m 时累计时长不动"
         );
         assert!(
             !t.bt.as_ref().unwrap().upload_paused,

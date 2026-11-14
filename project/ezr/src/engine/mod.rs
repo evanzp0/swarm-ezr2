@@ -54,6 +54,7 @@ pub enum Cmd {
         proxy_endpoint: Option<crate::model::ProxyEndpoint>,
         max_download_speed: u64,
         max_upload_speed: u64,
+        sequential: bool,
     },
     BtUpdateTrackers {
         id: u32,
@@ -556,6 +557,7 @@ async fn handle_cmd(
             proxy_endpoint,
             max_download_speed,
             max_upload_speed,
+            sequential,
         } => bt_send(
             bt_tasks,
             id,
@@ -565,6 +567,7 @@ async fn handle_cmd(
                 proxy_endpoint,
                 max_download_speed,
                 max_upload_speed,
+                sequential,
             },
         ),
         Cmd::PauseBt { id } => bt_send(bt_tasks, id, crate::bt::BtTaskCmd::Pause),
@@ -1227,6 +1230,7 @@ mod supervisor_tests {
             max_download_speed: 0,
             max_upload_speed: 0,
             tunables: Default::default(),
+            sequential: false,
         };
         start_bt_task(&mut bt_tasks, spec, shared, evt_tx);
         assert!(bt_tasks.contains_key(&901), "start_bt_task 必须登记发送端");

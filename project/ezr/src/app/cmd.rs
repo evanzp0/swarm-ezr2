@@ -85,6 +85,7 @@ impl App {
             ck_sel: crate::model::checksum::CK_NONE,
             proxy_sel: self.default_proxy_sel,
             proxy_open: false,
+            sequential: false,
             focus: 0,
             task_name: String::new(),
             task_id: None,

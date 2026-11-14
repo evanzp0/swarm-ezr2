@@ -107,7 +107,13 @@ pub struct Task {
     #[allow(dead_code)]
     pub peers: usize,
     #[allow(dead_code)]
+    pub tracker_seeds: Option<usize>,
+    #[allow(dead_code)]
+    pub tracker_peers: Option<usize>,
+    #[allow(dead_code)]
     pub seed_left: f64,
+    #[allow(dead_code)]
+    pub seed_elapsed: f64,
     /// 种子健康度（FR-02-37：qBt Availability 同源，3 位小数显示）；
     /// 随 BtConns 事件同帧刷新，非活跃/未知时保持 0（UI 按状态臂渲染 dash）。
     pub availability: f64,
@@ -172,7 +178,10 @@ impl Task {
             uploaded: 0,
             seeders: 0,
             peers: 0,
+            tracker_seeds: None,
+            tracker_peers: None,
             seed_left: 0.0,
+            seed_elapsed: 0.0,
             availability: 0.0,
             max_download_speed: 0,
             max_upload_speed: 0,
@@ -219,6 +228,26 @@ impl Task {
         }
         let remain = self.total.saturating_sub(self.downloaded) as f64;
         Some((remain / self.speed) as u64)
+    }
+
+    #[must_use]
+    pub fn share_ratio_value(&self) -> f64 {
+        let up = self.uploaded as f64;
+        let total = self.total as f64;
+        let dl = if total > 0.0 && (self.downloaded as f64) < total * 0.01 {
+            total
+        } else {
+            self.downloaded as f64
+        };
+        if dl == 0.0 {
+            if up == 0.0 {
+                0.0
+            } else {
+                f64::INFINITY
+            }
+        } else {
+            up / dl
+        }
     }
 
     #[allow(dead_code)]
@@ -752,6 +781,7 @@ mod tests {
                 selected: true,
             }],
             upload_paused: false,
+            sequential: false,
         });
         t
     }

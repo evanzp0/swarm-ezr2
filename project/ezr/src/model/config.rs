@@ -31,8 +31,24 @@ pub const DEFAULT_TRACKER_BACKOFF_START_SECS: u64 = 8;
 pub const DEFAULT_TRACKER_BACKOFF_CAP_SECS: u64 = 60;
 pub const DEFAULT_UDP_BASE_TIMEOUT_SECS: u64 = 15;
 pub const DEFAULT_UDP_RETRIES: u32 = 3;
-pub const DEFAULT_SEED_DURATION_SECS: f64 = 1800.0;
+pub const DEFAULT_SEED_DURATION_M: u64 = 30;
 pub const DEFAULT_PEER_CONNECTION_PROTOCOL: [&str; 2] = ["tcp", "webrtc"];
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SeedExitRule {
+    pub share_ratio_gt: Option<f64>,
+    pub seeders_count_gt: Option<u64>,
+    pub seed_duration_m: Option<u64>,
+}
+
+impl SeedExitRule {
+    #[must_use]
+    pub fn any_configured(&self) -> bool {
+        self.share_ratio_gt.is_some()
+            || self.seeders_count_gt.is_some()
+            || self.seed_duration_m.is_some()
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProxyKind {
@@ -144,7 +160,8 @@ pub struct Config {
     pub tracker_backoff_cap_secs: u64,
     pub udp_base_timeout_secs: u64,
     pub udp_retries: u32,
-    pub seed_duration_secs: f64,
+    pub default_seed_duration_m: u64,
+    pub seed_exit_rule: Option<SeedExitRule>,
     pub bt_listen_port: u16,
     pub warnings: Vec<String>,
 }
@@ -194,7 +211,8 @@ impl Default for Config {
             tracker_backoff_cap_secs: DEFAULT_TRACKER_BACKOFF_CAP_SECS,
             udp_base_timeout_secs: DEFAULT_UDP_BASE_TIMEOUT_SECS,
             udp_retries: DEFAULT_UDP_RETRIES,
-            seed_duration_secs: DEFAULT_SEED_DURATION_SECS,
+            default_seed_duration_m: DEFAULT_SEED_DURATION_M,
+            seed_exit_rule: None,
             bt_listen_port: 0,
             warnings: Vec::new(),
         }
@@ -261,8 +279,16 @@ struct BtRaw {
     tracker_backoff_cap_secs: Option<toml::Value>,
     udp_base_timeout_secs: Option<toml::Value>,
     udp_retries: Option<toml::Value>,
-    seed_duration_secs: Option<toml::Value>,
+    default_seed_duration_m: Option<toml::Value>,
+    seed_exit_rule: Option<SeedExitRuleRaw>,
     listen_port: Option<toml::Value>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct SeedExitRuleRaw {
+    share_ratio_gt: Option<toml::Value>,
+    seeders_count_gt: Option<toml::Value>,
+    seed_duration_m: Option<toml::Value>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -708,11 +734,57 @@ impl Config {
             d.udp_base_timeout_secs,
         )?;
         let udp_retries = min1_u32_val(bt.udp_retries.as_ref(), "bt.udp_retries", d.udp_retries)?;
-        let seed_duration_secs = pos_f64_val(
-            bt.seed_duration_secs.as_ref(),
-            "bt.seed_duration_secs",
-            d.seed_duration_secs,
+        let default_seed_duration_m = min1_val(
+            bt.default_seed_duration_m.as_ref(),
+            "bt.default_seed_duration_m",
+            d.default_seed_duration_m,
         )?;
+        let seed_exit_rule = match &bt.seed_exit_rule {
+            None => None,
+            Some(raw) => {
+                let share_ratio_gt = match &raw.share_ratio_gt {
+                    None => None,
+                    Some(v) => {
+                        let f = match v {
+                            toml::Value::Float(f) if f.is_finite() => Some(*f),
+                            toml::Value::Integer(i) if *i > 0 => Some(*i as f64),
+                            _ => None,
+                        }
+                        .filter(|f| *f > 0.0)
+                        .ok_or_else(|| {
+                            format!(
+                                "键 bt.seed_exit_rule.share_ratio_gt：{v}（应为保留 1 位小数的正浮点，拒绝启动）"
+                            )
+                        })?;
+                        if (f * 10.0).round() / 10.0 != f {
+                            return Err(
+                                "键 bt.seed_exit_rule.share_ratio_gt：应为保留 1 位小数的正浮点，拒绝启动"
+                                    .to_string(),
+                            );
+                        }
+                        Some(f)
+                    }
+                };
+                let seeders_count_gt = match &raw.seeders_count_gt {
+                    None => None,
+                    Some(v) => Some(min1_val(Some(v), "bt.seed_exit_rule.seeders_count_gt", 1)?),
+                };
+                let seed_duration_m = match &raw.seed_duration_m {
+                    None => None,
+                    Some(v) => Some(min1_val(Some(v), "bt.seed_exit_rule.seed_duration_m", 1)?),
+                };
+                let rule = SeedExitRule {
+                    share_ratio_gt,
+                    seeders_count_gt,
+                    seed_duration_m,
+                };
+                if rule.any_configured() {
+                    Some(rule)
+                } else {
+                    None
+                }
+            }
+        };
         let bt_listen_port = listen_port_val(bt.listen_port.as_ref());
         Ok(Config {
             download_dir: common.download_dir.filter(|s| !s.trim().is_empty()),
@@ -754,7 +826,8 @@ impl Config {
             tracker_backoff_cap_secs,
             udp_base_timeout_secs,
             udp_retries,
-            seed_duration_secs,
+            default_seed_duration_m,
+            seed_exit_rule,
             bt_listen_port,
             warnings,
         })
@@ -1115,13 +1188,29 @@ udp_base_timeout_secs = 15
 # 取值范围：正整数（≥1）；0 或非法值拒绝启动
 udp_retries = 3
 
-# 做种时长默认值（秒，任务做种倒计时起点）
-# 取值范围：>0 的数；0 或非法值拒绝启动
-seed_duration_secs = 1800
+# 默认做种时长（分钟，[bt.seed_exit_rule] 未配置任一键时生效）
+# 取值范围：正整数（≥1）；0/负/非整数拒绝启动；未配置默认 30
+default_seed_duration_m = 30
 
 # BT 监听端口（0 = 随机绑定）
 # 取值范围：0 = 随机绑定；1–65535 = 指定端口（占用时回退随机 + 启动警告）；负值或非法值回退随机
 listen_port = 0
+
+# 做种退出条件（可选，[bt.seed_exit_rule]；全部已配置条件同时满足后任务停止做种，未配置项不参与判定）
+# 任一键取消注释后上方 default_seed_duration_m 即失效；三键全部保持注释时其生效
+# [bt.seed_exit_rule]
+
+# 分享率 ≥ a 即满足（比率语义，保留 1 位小数，1.5 = 150%）
+# 取值范围：正浮点数（保留 1 位小数，v1.18/D79①）；0 或负数拒绝启动
+# share_ratio_gt = 1.5
+
+# 种子数 ≥ b 个即满足（按实际连接种子数计算）
+# 取值范围：正整数（≥1）；0/负/非整数拒绝启动
+# seeders_count_gt = 3
+
+# 做种时间 ≥ c 分钟即满足（做种状态累计时长，跨重启续走）
+# 取值范围：正整数（≥1）；0/负/非整数拒绝启动
+# seed_duration_m = 60
 "#;
 
 impl Config {
@@ -1161,7 +1250,8 @@ mod tests {
         assert_eq!(c.progress_tick_ms, 100);
         assert_eq!(c.bt_concurrency, 20);
         assert_eq!(c.idle_eviction_secs, 60);
-        assert_eq!(c.seed_duration_secs, 1800.0);
+        assert_eq!(c.default_seed_duration_m, 30);
+        assert!(c.seed_exit_rule.is_none());
     }
 
     #[test]
@@ -1299,8 +1389,8 @@ mod tests {
         );
         assert_eq!(
             t.matches("拒绝启动").count(),
-            33,
-            "翻转后的拒绝启动注释计数"
+            36,
+            "翻转后的拒绝启动注释计数（v1.21/D79：default_seed_duration_m + exit rule 三键计入）"
         );
         assert!(
             t.contains("占用时回退随机 + 启动警告"),
@@ -1311,10 +1401,14 @@ mod tests {
     #[test]
     fn float_keys_accept_integer_form_per_key() {
         let c = Config::from_toml(
-            "[http]\nthrottle_burst_secs = 1\nbackoff_initial = 2\n[bt]\nseed_duration_secs = 1800\n",
+            "[http]\nthrottle_burst_secs = 1\nbackoff_initial = 2\n[bt]\nseed_exit_rule.share_ratio_gt = 2\n",
         );
         assert_eq!(c.throttle_burst_secs, 1.0, "整数写法逐键生效");
-        assert_eq!(c.seed_duration_secs, 1800.0);
+        assert_eq!(
+            c.seed_exit_rule.and_then(|r| r.share_ratio_gt),
+            Some(2.0),
+            "整数写法的比率语义键逐键生效"
+        );
         assert_eq!(c.backoff_initial, 2.0);
         let err = Config::try_from_toml("[http]\nthrottle_burst_secs = 0\n")
             .expect_err("FR-02-35：0 不再回退默认，拒绝启动");
@@ -1466,14 +1560,14 @@ mod tests {
     #[test]
     fn bt_tunables_effective_and_invalid_fail_fast() {
         let ok = Config::from_toml(
-            "[bt]\nbt_concurrency = 8\npeer_pipeline = 32\nupload_slots = 2\nupload_read_concurrency = 64\nidle_eviction_secs = 30\nseed_duration_secs = 60\n",
+            "[bt]\nbt_concurrency = 8\npeer_pipeline = 32\nupload_slots = 2\nupload_read_concurrency = 64\nidle_eviction_secs = 30\ndefault_seed_duration_m = 15\n",
         );
         assert_eq!(ok.bt_concurrency, 8);
         assert_eq!(ok.peer_pipeline, 32);
         assert_eq!(ok.upload_slots, 2);
         assert_eq!(ok.upload_read_concurrency, 64);
         assert_eq!(ok.idle_eviction_secs, 30);
-        assert_eq!(ok.seed_duration_secs, 60.0);
+        assert_eq!(ok.default_seed_duration_m, 15);
         for (text, key) in [
             ("[bt]\nbt_concurrency = 0\n", "bt.bt_concurrency"),
             ("[bt]\nbt_concurrency = 99\n", "bt.bt_concurrency"),
@@ -1528,7 +1622,34 @@ mod tests {
                 "bt.udp_base_timeout_secs",
             ),
             ("[bt]\nudp_retries = 0\n", "bt.udp_retries"),
-            ("[bt]\nseed_duration_secs = 0.0\n", "bt.seed_duration_secs"),
+            (
+                "[bt]\ndefault_seed_duration_m = 0\n",
+                "bt.default_seed_duration_m",
+            ),
+            (
+                "[bt]\nseed_exit_rule.share_ratio_gt = 0\n",
+                "bt.seed_exit_rule.share_ratio_gt",
+            ),
+            (
+                "[bt]\nseed_exit_rule.seeders_count_gt = 0\n",
+                "bt.seed_exit_rule.seeders_count_gt",
+            ),
+            (
+                "[bt]\nseed_exit_rule.seed_duration_m = 0\n",
+                "bt.seed_exit_rule.seed_duration_m",
+            ),
+            (
+                "[bt]\nseed_exit_rule.share_ratio_gt = 1.55\n",
+                "bt.seed_exit_rule.share_ratio_gt",
+            ),
+            (
+                "[bt]\nseed_exit_rule.seeders_count_gt = 1.5\n",
+                "bt.seed_exit_rule.seeders_count_gt",
+            ),
+            (
+                "[bt]\nseed_exit_rule.seed_duration_m = 1.5\n",
+                "bt.seed_exit_rule.seed_duration_m",
+            ),
         ] {
             let err = Config::try_from_toml(text).expect_err(&format!("{key} 拒绝启动"));
             assert!(err.contains(key), "{err}");
@@ -1701,7 +1822,10 @@ mod tests {
                 "bt.udp_base_timeout_secs",
             ),
             ("[bt]\nudp_retries = 0\n", "bt.udp_retries"),
-            ("[bt]\nseed_duration_secs = 0\n", "bt.seed_duration_secs"),
+            (
+                "[bt]\ndefault_seed_duration_m = 0\n",
+                "bt.default_seed_duration_m",
+            ),
             ("[bt]\ntrackers = [\"ftp://x/ann\"]\n", "bt.trackers"),
             (
                 "[bt]\npeer_connection_protocol = [\"tcp\", \"tcp\"]\n",
@@ -1890,11 +2014,11 @@ mod tests {
     }
 
     #[test]
-    fn template_line_count_is_174() {
+    fn template_line_count_is_207() {
         assert_eq!(
             Config::default_template().lines().count(),
-            190,
-            "钦定模板 v1.14 = 190 行（split 计数 191，含 48 空行）"
+            206,
+            "钦定模板 v1.17/v1.18 = 207 行（split 计数；lines 计数 206）"
         );
         assert!(Config::default_template().ends_with('\n'));
         assert!(
@@ -1933,7 +2057,11 @@ mod tests {
             "proxy 双示例块保持注释（D63②：占位主机/凭证不激活）"
         );
         assert!(t.contains("# 取值范围"), "用途/取值范围注释保持");
-        assert_eq!(t.matches("取值范围").count(), 40, "40 键各一段取值范围标注");
+        assert_eq!(
+            t.matches("取值范围").count(),
+            43,
+            "40 键 + [bt.seed_exit_rule] 注释块三键（v1.17/D79）"
+        );
         let active: Vec<&str> = t
             .lines()
             .filter(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
@@ -1987,7 +2115,7 @@ mod tests {
             "tracker_backoff_cap_secs",
             "udp_base_timeout_secs",
             "udp_retries",
-            "seed_duration_secs",
+            "default_seed_duration_m",
             "listen_port",
         ];
         assert_eq!(keys.len(), 40);
@@ -2020,7 +2148,11 @@ mod tests {
             let range = lines[name_line_idx - 1];
             assert!(range.starts_with("# 取值范围"), "键 {k} 取值范围行占位");
         }
-        assert_eq!(t.matches("取值范围").count(), 40, "40 键各一段取值范围标注");
+        assert_eq!(
+            t.matches("取值范围").count(),
+            43,
+            "40 键 + [bt.seed_exit_rule] 注释块三键（v1.17/D79）"
+        );
     }
 
     #[test]
@@ -2065,7 +2197,7 @@ mod tests {
             "tracker_backoff_cap_secs = 60",
             "udp_base_timeout_secs = 15",
             "udp_retries = 3",
-            "seed_duration_secs = 1800",
+            "default_seed_duration_m = 30",
             "listen_port = 0",
         ] {
             assert!(t.contains(expected), "模板缺默认值行：{expected}");
@@ -2195,7 +2327,7 @@ mod tests {
             c.udp_base_timeout_secs.to_string()
         );
         assert_eq!(val_of("udp_retries"), c.udp_retries.to_string());
-        assert_eq!(val_of("seed_duration_secs"), "1800");
+        assert_eq!(val_of("default_seed_duration_m"), "30");
     }
 
     #[test]

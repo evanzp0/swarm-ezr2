@@ -125,14 +125,37 @@ impl App {
         }
     }
 
-    /// 做种倒计时递减与归零自动停止（09-bt-engine-13 归零臂，QA-BE-13）。
-    /// 递减口径与 tick_retry_countdown 同款（逐帧 dt 累计、仅 Seeding 态递减）；
-    /// 归零落点与空格提前停止共用 finish_seeding（仅 toast 文案不同）：
-    /// 转「已完成」+ 上传速度归零 + 释放槽位 + 引擎停止做种（tracker stopped）。
+    /// 做种退出评估与自动停止（09-bt-engine-13/23，QA-BE-13/23）。
+    /// 未配置 [bt.seed_exit_rule] 时走 default_seed_duration_m 倒计时（逐帧 dt
+    /// 累计、归零即停）；任一键配置时倒计时失效，改按 AND 评估已配置条件
+    /// （share_ratio_gt 实时分享率、seeders_count_gt 实时 x1 连接种子、
+    /// seed_duration_m 做种累计时长），随 tick 秒级评估、满足即时收尾。
+    /// 做种累计时长仅 Seeding 态累加，跨暂停/重启经注册表续走（FR-02-22）。
+    /// 归零/满足落点与空格提前停止共用 finish_seeding（仅 toast 文案不同）。
     fn tick_seed_countdown(&mut self, dt: f64) {
+        let rule = self.cfg.seed_exit_rule;
+        let rule_active = rule.is_some_and(|r| r.any_configured());
         let mut expired: Vec<u32> = Vec::new();
         for t in &mut self.tasks {
-            if t.state == TaskState::Seeding {
+            if t.state != TaskState::Seeding {
+                continue;
+            }
+            t.seed_elapsed += dt;
+            if rule_active {
+                let r = rule.unwrap_or(crate::model::config::SeedExitRule {
+                    share_ratio_gt: None,
+                    seeders_count_gt: None,
+                    seed_duration_m: None,
+                });
+                let ratio_ok = r.share_ratio_gt.is_none_or(|a| t.share_ratio_value() >= a);
+                let seeds_ok = r.seeders_count_gt.is_none_or(|b| (t.seeders as u64) >= b);
+                let dur_ok = r
+                    .seed_duration_m
+                    .is_none_or(|c| t.seed_elapsed >= (c * 60) as f64);
+                if ratio_ok && seeds_ok && dur_ok {
+                    expired.push(t.id);
+                }
+            } else {
                 t.seed_left -= dt;
                 if t.seed_left <= 0.0 {
                     t.seed_left = 0.0;
@@ -421,6 +444,7 @@ mod bt_route_tests {
                 selected: true,
             }],
             upload_paused: false,
+            sequential: false,
         });
         t
     }
@@ -697,6 +721,141 @@ mod seed_countdown_tests {
             app.tasks[0].seed_left
         );
         assert_eq!(app.tasks[0].state, TaskState::Seeding);
+        assert_no_cmd(&mut spy_rx).await;
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn seed_exit_rule_share_ratio_only_arm_exits_by_ratio() {
+        let mut app = make_app("seed-rule-ratio");
+        let (spy_tx, mut spy_rx) = mpsc::channel::<Cmd>(8);
+        app.engine = EngineHandle::from_sender(spy_tx);
+        app.cfg.seed_exit_rule = Some(crate::model::config::SeedExitRule {
+            share_ratio_gt: Some(1.5),
+            seeders_count_gt: None,
+            seed_duration_m: None,
+        });
+        let mut t = seeding_bt(1);
+        t.seed_left = f64::INFINITY;
+        t.seed_elapsed = 600.0;
+        t.total = 3_000_000;
+        t.downloaded = 3_000_000;
+        t.uploaded = 3_000_000;
+        app.tasks.push(t);
+        app.tick_seed_countdown(1.0);
+        assert_eq!(
+            app.tasks[0].state,
+            TaskState::Seeding,
+            "分享率 1.0 < 1.5 不退出"
+        );
+        app.tasks[0].uploaded = 4_500_000;
+        app.tick_seed_countdown(1.0);
+        assert_eq!(
+            app.tasks[0].state,
+            TaskState::Completed,
+            "分享率达 1.5 即退出（时长臂未配置不参与）"
+        );
+        match recv_cmd(&mut spy_rx).await {
+            Cmd::StopSeed { id } => assert_eq!(id, 1),
+            other => panic!("rule 满足应发 StopSeed，实际: {other:?}"),
+        }
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn seed_exit_rule_and_combination_and_x1_semantics() {
+        let mut app = make_app("seed-rule-and");
+        let (spy_tx, mut spy_rx) = mpsc::channel::<Cmd>(8);
+        app.engine = EngineHandle::from_sender(spy_tx);
+        app.cfg.seed_exit_rule = Some(crate::model::config::SeedExitRule {
+            share_ratio_gt: Some(0.5),
+            seeders_count_gt: Some(2),
+            seed_duration_m: None,
+        });
+        let mut t = seeding_bt(1);
+        t.seed_left = f64::INFINITY;
+        t.total = 1_000_000;
+        t.downloaded = 1_000_000;
+        t.uploaded = 1_000_000;
+        t.seeders = 1;
+        t.peers = 3;
+        app.tasks.push(t);
+        app.tick_seed_countdown(0.5);
+        assert_eq!(
+            app.tasks[0].state,
+            TaskState::Seeding,
+            "AND 判定：分享率满足但 x1 < 2 不退出"
+        );
+        app.tasks[0].seeders = 2;
+        app.tick_seed_countdown(0.5);
+        assert_eq!(
+            app.tasks[0].state,
+            TaskState::Completed,
+            "x1（连接种子数）达 2 且分享率满足 → 退出"
+        );
+        match recv_cmd(&mut spy_rx).await {
+            Cmd::StopSeed { id } => assert_eq!(id, 1),
+            other => panic!("AND 满足应发 StopSeed，实际: {other:?}"),
+        }
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn seed_exit_rule_duration_arm_uses_cumulative_elapsed() {
+        let mut app = make_app("seed-rule-dur");
+        let (spy_tx, mut spy_rx) = mpsc::channel::<Cmd>(8);
+        app.engine = EngineHandle::from_sender(spy_tx);
+        app.cfg.seed_exit_rule = Some(crate::model::config::SeedExitRule {
+            share_ratio_gt: None,
+            seeders_count_gt: None,
+            seed_duration_m: Some(1),
+        });
+        let mut t = seeding_bt(1);
+        t.seed_left = f64::INFINITY;
+        t.seed_elapsed = 50.0;
+        app.tasks.push(t);
+        app.tick_seed_countdown(5.0);
+        assert_eq!(
+            app.tasks[0].state,
+            TaskState::Seeding,
+            "累计 55s < 60s 不退出（default_seed_duration_m 失效，无 30 分钟倒计时）"
+        );
+        app.tick_seed_countdown(10.0);
+        assert_eq!(
+            app.tasks[0].state,
+            TaskState::Completed,
+            "累计时长 ≥ 60s 退出（跨暂停续走由注册表持久化）"
+        );
+        match recv_cmd(&mut spy_rx).await {
+            Cmd::StopSeed { id } => assert_eq!(id, 1),
+            other => panic!("时长臂满足应发 StopSeed，实际: {other:?}"),
+        }
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn seed_exit_rule_active_disables_default_countdown() {
+        let mut app = make_app("seed-rule-no-countdown");
+        let (spy_tx, mut spy_rx) = mpsc::channel::<Cmd>(8);
+        app.engine = EngineHandle::from_sender(spy_tx);
+        app.cfg.seed_exit_rule = Some(crate::model::config::SeedExitRule {
+            share_ratio_gt: Some(9.9),
+            seeders_count_gt: None,
+            seed_duration_m: None,
+        });
+        let mut t = seeding_bt(1);
+        t.seed_left = 1.0;
+        t.total = 1_000_000;
+        t.downloaded = 1_000_000;
+        t.uploaded = 0;
+        app.tasks.push(t);
+        app.tick_seed_countdown(5.0);
+        assert_eq!(
+            app.tasks[0].state,
+            TaskState::Seeding,
+            "rule 生效臂不跑 default 倒计时（旧 seed_left 不驱动退出）"
+        );
+        assert!(app.tasks[0].seed_left > 0.0, "seed_left 不被递减");
         assert_no_cmd(&mut spy_rx).await;
         app.shutdown().await;
     }

@@ -2,7 +2,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 
 use super::EMPTY;
-pub use crate::textfield::{truncate, w};
+pub use crate::textfield::{fold_name_dots, truncate, w};
 
 pub fn pad_right(s: &str, width: usize) -> String {
     let cur = w(s);

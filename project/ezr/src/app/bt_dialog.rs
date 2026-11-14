@@ -44,6 +44,7 @@ impl App {
             ck_sel: crate::model::checksum::CK_NONE,
             proxy_sel: self.default_proxy_sel,
             proxy_open: false,
+            sequential: false,
             focus: 0,
             task_name: meta.name.clone(),
             task_id: None,
@@ -72,9 +73,9 @@ impl App {
         let (id, name, concurrency, proxy) = (t.id, t.name.clone(), t.concurrency, t.proxy.clone());
         let cur_down = t.max_download_speed;
         let cur_up = t.max_upload_speed;
-        let (files, trackers_text) = match t.bt.as_ref() {
-            Some(b) => (b.files.clone(), b.trackers.join("\n")),
-            None => (Vec::new(), String::new()),
+        let (files, trackers_text, sequential_flag) = match t.bt.as_ref() {
+            Some(b) => (b.files.clone(), b.trackers.join("\n"), b.sequential),
+            None => (Vec::new(), String::new(), false),
         };
 
         let proxy_sel = match self.proxy_options.iter().position(|o| o == &proxy) {
@@ -104,6 +105,7 @@ impl App {
             ck_sel: crate::model::checksum::CK_NONE,
             proxy_sel,
             proxy_open: false,
+            sequential: sequential_flag,
             focus: Dialog::bt_list_focus(DialogKind::ModifyBt),
             task_name: name,
             task_id: Some(id),
@@ -180,6 +182,7 @@ impl App {
                     crate::bt::webrtc::PeerTransports { tcp, webrtc }
                 },
             },
+            sequential: bt.is_some_and(|b| b.sequential),
         }
     }
 }
@@ -258,7 +261,7 @@ impl App {
                     super::dialog_keys::insert_limit(&mut d.up_limit, c);
                 }
             }
-        } else if focus == 7 {
+        } else if focus == 8 {
             self.bt_trackers_char(c);
         } else if c == ' ' {
             if focus == 6 {
@@ -285,7 +288,7 @@ impl App {
                     super::dialog_keys::insert_limit(&mut d.up_limit, c);
                 }
             }
-        } else if focus == 5 {
+        } else if focus == 6 {
             self.bt_trackers_char(c);
         } else if c == ' ' {
             if focus == 4 {
@@ -312,17 +315,17 @@ impl App {
 
     pub(super) fn dlg_activate_add_bt(&mut self, btn: usize) {
         match btn {
-            8 => self.dlg_confirm_add_bt(false),
-            9 => self.dlg_confirm_add_bt(true),
-            10 => self.dialog = None,
+            9 => self.dlg_confirm_add_bt(false),
+            10 => self.dlg_confirm_add_bt(true),
+            11 => self.dialog = None,
             _ => {}
         }
     }
 
     pub(super) fn dlg_activate_modify_bt(&mut self, btn: usize) {
         match btn {
-            6 => self.dlg_confirm_modify_bt(),
-            7 => self.dialog = None,
+            7 => self.dlg_confirm_modify_bt(),
+            8 => self.dialog = None,
             _ => {}
         }
     }
@@ -429,6 +432,7 @@ impl App {
             return;
         }
         let files = d.bt_flatten();
+        let seq_flag = d.sequential;
         let dir_raw = d.dir.value.trim().to_string();
         let conns_raw = d.conns.value.trim().to_string();
         let proxy_sel = d.proxy_sel.min(self.proxy_options.len() - 1);
@@ -519,6 +523,7 @@ impl App {
             piece_length: meta.piece_length,
             files,
             upload_paused: false,
+            sequential: seq_flag,
         });
         if paused {
             t.state = TaskState::Paused;
@@ -559,6 +564,7 @@ impl App {
             return;
         }
         let files = d.bt_flatten();
+        let seq_flag = d.sequential;
         let conns_raw = d.conns.value.trim().to_string();
         let trackers_lines = d.trackers.trim_lines();
         let down_raw = d.down_limit.value.trim().to_string();
@@ -629,6 +635,7 @@ impl App {
             t.max_upload_speed = new_up;
             if let Some(b) = t.bt.as_mut() {
                 b.files = files;
+                b.sequential = seq_flag;
                 if !trackers_lines.is_empty() {
                     b.trackers = trackers_lines;
                 }
@@ -674,6 +681,7 @@ impl App {
         }
         let running = matches!(state, TaskState::Downloading | TaskState::Seeding);
         if running {
+            let sequential = seq_flag;
             let files = self.tasks[idx]
                 .bt
                 .as_ref()
@@ -691,6 +699,7 @@ impl App {
                         proxy_endpoint: endpoint,
                         max_download_speed: max_down,
                         max_upload_speed: max_up,
+                        sequential,
                     })
                     .await;
             });
@@ -732,6 +741,8 @@ fn new_total_of(files: &[BtFile]) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
     use super::*;
     use crate::app::testutil::dialog;
 
@@ -1410,6 +1421,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn seq_checkbox_space_enter_toggle_and_confirm_persists() {
+        // FR-02-39：Space/Enter 于复选焦点翻转勾选（不确认不关窗）；确认随任务落库。
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-seq");
+        let path = write_multi_torrent(&dir, "a.torrent");
+        let meta = parse_at(&path);
+        let mut app = make_app("seq-toggle");
+        app.open_add_bt_dialog_with(&path, &meta);
+        assert!(!app.dialog.as_ref().unwrap().sequential, "默认不勾选");
+        for _ in 0..7 {
+            app.on_key(KeyCode::Tab, KeyModifiers::NONE);
+        }
+        assert_eq!(app.dialog.as_ref().unwrap().focus, 7, "焦点环到复选项");
+        app.on_key(KeyCode::Char(' '), KeyModifiers::NONE);
+        assert!(app.dialog.as_ref().unwrap().sequential, "Space 翻转勾选");
+        assert!(app.dialog.is_some(), "切换不关窗");
+        app.on_key(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(!app.dialog.as_ref().unwrap().sequential, "Enter 再翻转");
+        app.on_key(KeyCode::Char(' '), KeyModifiers::NONE);
+        assert!(app.dialog.as_ref().unwrap().sequential, "回勾选准备确认");
+        app.on_key(KeyCode::Tab, KeyModifiers::NONE);
+        app.on_key(KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(
+            app.dialog.as_ref().unwrap().focus,
+            9,
+            "Tab 两个焦点到立即下载"
+        );
+        app.on_key(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(app.dialog.is_none(), "立即下载按钮确认建任务");
+        let t = &app.tasks[0];
+        assert!(t.bt.as_ref().unwrap().sequential, "勾选随任务落库");
+        let snap = crate::model::registry::Registry::from_tasks(&app.tasks);
+        let raw = serde_json::to_string(&snap).unwrap();
+        assert!(raw.contains("\"sequential\":true"), "注册表携带 sequential");
+        let back: crate::model::registry::Registry = serde_json::from_str(&raw).unwrap();
+        let restored = back.restore_tasks();
+        assert!(
+            restored[0].bt.as_ref().unwrap().sequential,
+            "重启恢复保持勾选（FR-02-22）"
+        );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn confirm_modify_toggles_sequential_and_engine_gets_flag() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-seqmod");
+        let path = write_multi_torrent(&dir, "a.torrent");
+        let meta = parse_at(&path);
+        let mut app = make_app("seqmod");
+        app.open_add_bt_dialog_with(&path, &meta);
+        app.dlg_confirm_add_bt(false);
+        app.selected = 0;
+        app.tasks[0].state = TaskState::Downloading;
+        let (spy_tx, mut spy_rx) = tokio::sync::mpsc::channel::<crate::engine::Cmd>(16);
+        app.engine = crate::engine::EngineHandle::from_sender(spy_tx);
+        app.modify_dialog_entry();
+        assert!(
+            !app.dialog.as_ref().unwrap().sequential,
+            "修改框预填既有任务口径（无字段默认不勾选）"
+        );
+        for _ in 0..5 {
+            app.on_key(KeyCode::Tab, KeyModifiers::NONE);
+        }
+        assert_eq!(app.dialog.as_ref().unwrap().focus, 5, "焦点环到复选项");
+        app.on_key(KeyCode::Char(' '), KeyModifiers::NONE);
+        assert!(
+            app.dialog.as_ref().unwrap().sequential,
+            "ModifyBt 焦点 5 翻转"
+        );
+        app.dlg_confirm_modify_bt();
+        assert!(app.tasks[0].bt.as_ref().unwrap().sequential, "确认立即落库");
+        loop {
+            let c = tokio::time::timeout(std::time::Duration::from_millis(500), spy_rx.recv())
+                .await
+                .expect("应发出引擎命令")
+                .expect("发送端存活");
+            match c {
+                crate::engine::Cmd::ReconfigureBt { sequential, .. } => {
+                    assert!(sequential, "引擎 ReconfigureBt 携带勾选状态");
+                    break;
+                }
+                _ => continue,
+            }
+        }
+        app.shutdown().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
     async fn confirm_modify_combined_sends_reconfigure_bt_plus_tracker_hot_update() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-btdlg-hotcombo");
         let path = write_multi_torrent(&dir, "a.torrent");
@@ -1650,8 +1750,8 @@ mod tests {
         assert_eq!(app.dialog.as_ref().unwrap().down_limit.value, "9");
         app.add_bt_dialog_char(5, '3');
         assert_eq!(app.dialog.as_ref().unwrap().up_limit.value, "3");
-        // focus=7：trackers 输入
-        app.add_bt_dialog_char(7, 'x');
+        // focus=8：trackers 输入（FR-02-39 后 trackers 后移）
+        app.add_bt_dialog_char(8, 'x');
         assert_eq!(
             app.dialog.as_ref().unwrap().trackers.lines[0].value,
             "x",
@@ -1709,8 +1809,8 @@ mod tests {
         assert_eq!(app.dialog.as_ref().unwrap().down_limit.value, "8");
         app.modify_bt_dialog_char(3, '2');
         assert_eq!(app.dialog.as_ref().unwrap().up_limit.value, "2");
-        // focus=5：trackers
-        app.modify_bt_dialog_char(5, 'z');
+        // focus=6：trackers（FR-02-39 后 trackers 后移）
+        app.modify_bt_dialog_char(6, 'z');
         assert_eq!(
             app.dialog.as_ref().unwrap().trackers.lines[0].value,
             "z",
@@ -1726,28 +1826,28 @@ mod tests {
     #[tokio::test]
     async fn dlg_activate_buttons_route() {
         let mut app = make_app("bt-activate");
-        // AddBt：btn=10 取消关闭 / btn=99 无操作
+        // AddBt：btn=11 取消关闭 / btn=99 无操作
         app.dialog = Some(dialog(DialogKind::AddBt, 0));
-        app.dlg_activate_add_bt(10);
+        app.dlg_activate_add_bt(11);
         assert!(app.dialog.is_none(), "取消按钮关闭");
         app.dialog = Some(dialog(DialogKind::AddBt, 0));
         app.dlg_activate_add_bt(99);
         assert!(app.dialog.is_some(), "未知按钮无操作");
-        app.dialog = Some(dialog(DialogKind::AddBt, 8));
+        app.dialog = Some(dialog(DialogKind::AddBt, 9));
         if let Some(d) = app.dialog.as_mut() {
             d.torrent.set("/nonexistent/ezr-x.torrent");
             d.bt_tree = vec![bt_node("f1", 10, true)];
         }
-        app.dlg_activate_add_bt(8);
+        app.dlg_activate_add_bt(9);
         assert!(
             app.toast
                 .as_deref()
                 .is_some_and(|t| t.contains("无法读取种子")),
             "确认按钮走校验链（无效路径 toast）"
         );
-        // ModifyBt：btn=7 取消关闭
-        app.dialog = Some(dialog(DialogKind::ModifyBt, 7));
-        app.dlg_activate_modify_bt(7);
+        // ModifyBt：btn=8 取消关闭 / btn=7 确定走校验链
+        app.dialog = Some(dialog(DialogKind::ModifyBt, 0));
+        app.dlg_activate_modify_bt(8);
         assert!(app.dialog.is_none(), "修改对话框取消按钮关闭");
         app.shutdown().await;
     }

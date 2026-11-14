@@ -125,6 +125,7 @@ pub(super) struct PieceOrderCache {
     pub(super) avail: HashMap<u32, usize>,
     pub(super) order: Vec<u32>,
     pub(super) dirty: bool,
+    pub(super) sequential: bool,
 }
 
 impl PieceOrderCache {
@@ -133,6 +134,7 @@ impl PieceOrderCache {
             avail: HashMap::new(),
             order: Vec::new(),
             dirty: true,
+            sequential: false,
         }
     }
 
@@ -149,15 +151,19 @@ impl PieceOrderCache {
     }
 
     pub(super) fn rebuild(&mut self, pmap: &PieceMap) {
-        static ROUND: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let seed = ROUND.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut v: Vec<u32> = pmap
             .covered_pieces()
             .iter()
             .copied()
             .filter(|&p| self.avail.get(&p).copied().unwrap_or(0) > 0)
             .collect();
-        v.sort_by_key(|&p| (self.avail.get(&p).copied().unwrap_or(0), jitter(p, seed)));
+        if self.sequential {
+            v.sort_unstable();
+        } else {
+            static ROUND: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let seed = ROUND.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            v.sort_by_key(|&p| (self.avail.get(&p).copied().unwrap_or(0), jitter(p, seed)));
+        }
         self.order = v;
         self.dirty = false;
     }

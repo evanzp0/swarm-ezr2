@@ -455,3 +455,12 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - bb v1.13.229 资产形态 = tar.gz 非 tar.xz（「发行资产形态会随版本漂移」条款再证）；GitHub 直连 clone 120s 超时 → ghfast.top 前缀秒级（bb 下载 + APS clone）；latest 版本号定位 = `curl -w %{url_effective}` 跟随 /releases/latest 重定向。
 - 全新沙箱 ~/.cargo/config.toml 随环境重置消失（rsproxy-sparse 重建一次过）；ezr-demo clippy「mut 警告」基线对照：stash 前后计数（基线 5、本轮 +1 归新测试、修后回 5）——demo 不持产品零警告门槛，但新增告警仍须归零。
 - APS 双检六份修订 feature 全过（bb 1.13.229 + ghfast.top clone，.work/tmp 落盘 IR/dry）。
+## v1.53/v1.54 产品实现轮（2026-11-13，coder）追加
+- 全新沙箱重建（2026-11-13 实测）：github.com 直连超时但 codeload.github.com 可达（tarball 装仓用 codeload，gh-proxy 兜底）；rustup 镜像 1MB 范围测速 TUNA 206 可用 ~55MB/s 胜出（rsproxy dist 本轮不可达、USTC/SJTU/aliyun 404）——rustup-init 直链 + DIST_SERVER/UPDATE_ROOT 双变量指 TUNA 前台装齐 nightly 1.102.0；cargo registry rsproxy sparse 独立可达（裸根无 www、48ms，crate 下载 1.6MB/s 为 static.crates.io 5 倍）与 dist 面可用性解耦。
+- 磁盘三连爆处置（10G 盘）：target/debug/build 3.0G + incremental 4.3G 两大杀手——CARGO_INCREMENTAL=0 只防新增、不清旧缓存，需手动 rm -rf target/debug/incremental；分批跑测试目标（bin/g_* 两两一组）监控 df；cargo clean 后 rsproxy 全量重拉 ~2.5min。
+- python e2e 依赖 pip 一次装齐：`pip3 install torf libtorrent pyte wcwidth` 本沙箱可用（libtorrent 2.x 轮子直装），13 套件全跑通——历轮「缺 pyte/libtorrent」受限项本环境不成立。
+- APS/bb 装机：bb v1.13.229 静态 tarball 经 gh-proxy.com 33s；APS 仓 codeload main 分支 tarball（master 404 响应体会骗过退出码回退判断——先查 default_branch 再拉）。
+
+## v1.54 复核重验轮（2026-11-14，coder）追加
+- 爆盘第四形态与瘦身组合数字：default profile 全量重建（增量缓存 + debug=2）target 冲至 6.6G 爆盘（编译期 No space left，非测试失败——log 尾 "could not write output … .rcgu.o" 即此形态）；`CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0` 同项目全量（16 可执行）target 仅 1.4G 一次过，测试结果与 profile 无关。
+- 每 Bash 调用即新 shell：瘦身 env 漏带一次 → cargo 指纹翻转 → 全量 debug=2 重编 → 二次爆盘（g_supervisor exit=101 实录，log 无 test result 行 + 尾部编译错误即判此）。纪律 = env（PATH/CARGO_INCREMENTAL/PROFILE）随每条命令显式重 export，不依赖上一调用残留。

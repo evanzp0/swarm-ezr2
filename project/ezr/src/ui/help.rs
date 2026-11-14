@@ -56,6 +56,8 @@ fn help_lines() -> Vec<Line<'static>> {
         kd("C", "清除已完成任务"),
         kd("P", "查看分块状态（仅分块下载任务）"),
         kd("T", "查看 trackers 弹窗（仅 BT 任务）"),
+        kd("SR", "分享率（Share Ratio）：累计上传 ÷ 累计下载（BT 任务做种/下载明细行缩写）"),
+        kd("LT", "剩余时间（Left Time）：BT/HTTP 下载完成预计还需时长（明细行缩写）"),
         sec("命令窗口（A）"),
         kd("输入内容", "http(s) URL / 本地 .torrent 路径"),
         kd("Enter", "确认分流（= 触发 [确定] 按钮 click；Ctrl+Enter / Ctrl+J 同效）"),
@@ -220,7 +222,7 @@ mod tests {
             s.contains("修改 / 删除任务（BT 任务 M 开修改任务：BT）"),
             "M/D 条目 BT 补注: {s}"
         );
-        app.help_scroll = 10;
+        app.help_scroll = 12;
         let mut term_mid = Terminal::new(TestBackend::new(120, 40)).unwrap();
         term_mid.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         let sm = term_mid.backend().to_string();
@@ -274,7 +276,7 @@ mod tests {
         let mut term2 = Terminal::new(TestBackend::new(120, 40)).unwrap();
         term2.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         let s2 = term2.backend().to_string();
-        assert_eq!(app.help_scroll, 60, "End 钳制 = 80 − 20（末页视窗 60..79）");
+        assert_eq!(app.help_scroll, 62, "End 钳制 = 82 − 20（末页视窗 62..81）");
         for sec in [
             "【滚动条（通用组件）】",
             "【trackers 弹窗（T）】",
@@ -317,8 +319,8 @@ mod tests {
         let mut app = testfx::make_app_in("ezr-help", "scroll");
         let total = super::help_lines_len();
         assert_eq!(
-            total, 80,
-            "phase-02 内容 80 行（十二组 = 12 组标题 + 68 条目；v1.44 【并发连接】组新增标志缩写 5 条目，FR-02-33）"
+            total, 82,
+            "phase-02 内容 82 行（十二组；v1.44 标志缩写 5 条目 + v1.51 SR/LT 两条目，FR-02-33/38/D77）"
         );
         app.help_scroll = usize::MAX;
         let term = render_help(&mut app, 120, 40);

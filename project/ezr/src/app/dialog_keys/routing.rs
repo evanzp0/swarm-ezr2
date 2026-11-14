@@ -202,7 +202,8 @@ pub fn proxy_dropdown_open_key(d: &mut Dialog, n: usize, code: KeyCode) {
             d.proxy_open = false;
             let f = match d.kind {
                 DialogKind::Add => 7,
-                DialogKind::AddBt | DialogKind::ModifyBt => 7,
+                DialogKind::AddBt => 7,
+                DialogKind::ModifyBt => 5,
                 _ => 5,
             };
             d.focus_field(f);
@@ -211,7 +212,8 @@ pub fn proxy_dropdown_open_key(d: &mut Dialog, n: usize, code: KeyCode) {
             d.proxy_open = false;
             let f = match d.kind {
                 DialogKind::Add => 5,
-                DialogKind::AddBt | DialogKind::ModifyBt => 5,
+                DialogKind::AddBt => 5,
+                DialogKind::ModifyBt => 3,
                 _ => 3,
             };
             d.focus_field(f);
@@ -264,7 +266,7 @@ pub fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> bool {
             d.dir.backspace();
             true
         }
-        (DialogKind::AddBt, 7) | (DialogKind::ModifyBt, 5) => {
+        (DialogKind::AddBt, 8) | (DialogKind::ModifyBt, 6) => {
             d.trackers.backspace();
             true
         }

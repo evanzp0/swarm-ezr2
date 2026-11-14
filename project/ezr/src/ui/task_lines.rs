@@ -1,7 +1,7 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::text::{fmt_dur, fmt_eta, fmt_size, fmt_speed, plain_bar, truncate, w};
+use super::text::{fmt_eta, fmt_size, fmt_speed, fold_name_dots, plain_bar, w};
 use super::{state_color, ACCENT, DIM, FG, GREEN, LIGHT_BLUE, MAGENTA, RED, YELLOW};
 use crate::model::{FailKind, Task, TaskState};
 
@@ -43,8 +43,9 @@ fn title_row(t: &Task, sel: bool, width: usize) -> Vec<Span<'static>> {
     // 预留 2 列：1 列名称与徽标间隔 + 1 列徽标/尺寸与右端百分比最小间隔。
     let name_budget = width
         .saturating_sub(cursor_w + badges_w + pct_w + 2)
-        .clamp(8, 64);
-    let name_txt = truncate(&t.name, name_budget);
+        .clamp(8, 64)
+        .min(32);
+    let name_txt = fold_name_dots(&t.name, name_budget);
     let used = cursor_w + w(&name_txt) + 1 + badges_w;
     let pad = width.saturating_sub(used + pct_w);
 
@@ -88,38 +89,39 @@ pub(super) fn title_size_txt(t: &Task) -> String {
     }
 }
 
-/// 分享率文本（FR-02-38，qBt realRatio 同源，D74⑦）：累计上传 ÷ 累计下载；
-/// 下载量 < total_done 1% 时按 total_done 兑底（防 seeder 丢统计特例）；
-/// 分母 0 且上传 > 0 → ∞（qBt C_INFINITY 同款）；两者均 0 → 0.00。
+/// 分享率文本（FR-02-38，qBt realRatio 同源，D74⑦）：数值口径单源
+/// `Task::share_ratio_value`（1% 兜底、∞、0.00 三边界），此处仅做两位小数格式化。
 fn share_ratio_text(t: &Task) -> String {
-    let up = t.uploaded as f64;
-    let total = t.total as f64;
-    let dl = if total > 0.0 && (t.downloaded as f64) < total * 0.01 {
-        total
+    let v = t.share_ratio_value();
+    if v.is_infinite() {
+        "∞".to_string()
     } else {
-        t.downloaded as f64
-    };
-    if dl == 0.0 {
-        if up == 0.0 {
-            "0.00".to_string()
-        } else {
-            "∞".to_string()
-        }
-    } else {
-        format!("{:.2}", up / dl)
+        format!("{v:.2}")
     }
 }
 
-/// 「 分享 <分享率>」项（D74④）：单空格衔接宿主项（<seeders>/<peers>/<健康度>），
-/// 异于行内其他数据项双空格；「分享」标签 DIM，数字 MAGENTA（粉红，操作者钦定）。
+/// 「 SR <分享率>」项（D74④/D77①）：单空格衔接宿主项（<x1(x2)/y1(y2)>/<健康度>），
+/// 异于行内其他数据项双空格；「SR」标签 DIM，数字 MAGENTA（粉红，操作者钦定）。
 fn share_spans(t: &Task) -> Vec<Span<'static>> {
     vec![
-        Span::styled(" 分享".to_string(), Style::default().fg(DIM)),
+        Span::styled(" SR".to_string(), Style::default().fg(DIM)),
         Span::styled(
             format!(" {}", share_ratio_text(t)),
             Style::default().fg(MAGENTA),
         ),
     ]
+}
+
+pub(super) fn sp_txt(t: &Task) -> String {
+    let seeds = match t.tracker_seeds {
+        Some(x2) => format!("{}({})", t.seeders, x2),
+        None => t.seeders.to_string(),
+    };
+    let peers = match t.tracker_peers {
+        Some(y2) => format!("{}({})", t.peers, y2),
+        None => t.peers.to_string(),
+    };
+    format!("{}/{}", seeds, peers)
 }
 
 fn progress_row(
@@ -177,12 +179,12 @@ fn rest_dash_speed() -> Vec<Span<'static>> {
 fn remaining_tail(t: &Task, downloading: bool) -> Vec<Span<'static>> {
     if downloading && t.size_known() {
         vec![Span::styled(
-            format!("  剩余 {}", fmt_eta(t.eta_secs())),
+            format!("  LT {}", fmt_eta(t.eta_secs())),
             Style::default().fg(DIM),
         )]
     } else {
         vec![
-            Span::raw("  剩余 "),
+            Span::raw("  LT "),
             Span::styled("-", Style::default().fg(DIM)),
         ]
     }
@@ -256,9 +258,8 @@ fn stat_completed(t: &Task) -> Vec<Span<'static>> {
     l3
 }
 
-/// 做种统计行（FR-02-09 ② / FR-02-38 v1.20）：
-/// `↑ <上传速度>  <seeders>/<peers>/<健康度> 分享 <分享率>  剩余做种 <剩余时长>`。
-/// v1.50：`已上传 <已上传>/<总大小>` 项整项退役，上传量仅经分享率体现。
+/// 做种统计行（FR-02-09 ② / FR-02-38 v1.20/v1.21）：
+/// `↑ <上传速度>  <x1(x2)/y1(y2)>/<健康度> SR <分享率>`；已上传对与剩余做种项均退役。
 fn stat_seeding(t: &Task) -> Vec<Span<'static>> {
     let mut l3: Vec<Span<'static>> = vec![Span::raw("  ")];
     l3.push(Span::styled(
@@ -266,19 +267,15 @@ fn stat_seeding(t: &Task) -> Vec<Span<'static>> {
         Style::default().fg(MAGENTA),
     ));
     l3.push(Span::styled(
-        format!("  {}/{}/{:.3}", t.seeders, t.peers, t.availability),
+        format!("  {}/{:.3}", sp_txt(t), t.availability),
         Style::default().fg(MAGENTA),
     ));
     l3.extend(share_spans(t));
-    l3.push(Span::styled(
-        format!("  剩余做种 {}", fmt_dur((t.seed_left.ceil() as u64).max(1))),
-        Style::default().fg(DIM),
-    ));
     l3
 }
 
 /// BT 其余状态统计行（下载中/校验中/后期处理/已暂停；FR-02-37/38）：
-/// 下载臂 `↓ <速度> ↑ <上传>  <s>/<p>/<健康度> 分享 <r>  剩余 <eta>`；
+/// 下载臂 `↓ <速度> ↑ <上传>  <x1(x2)/y1(y2)>/<健康度> SR <r>  LT <eta>`；
 /// 非下载臂速度/健康度逐位 dash（`-/-/-`），分享率照常显示（D74⑤ 其余两臂）。
 fn stat_bt_rest(t: &Task) -> Vec<Span<'static>> {
     let downloading = t.state == TaskState::Downloading;
@@ -290,7 +287,7 @@ fn stat_bt_rest(t: &Task) -> Vec<Span<'static>> {
             Style::default().fg(MAGENTA),
         ));
         l3.push(Span::styled(
-            format!("  {}/{}/{:.3}", t.seeders, t.peers, t.availability),
+            format!("  {}/{:.3}", sp_txt(t), t.availability),
             Style::default().fg(FG),
         ));
     } else {
@@ -435,12 +432,12 @@ mod tests {
         t.speed = 1000.0;
         let s = text_of(&stat_http_rest(&t));
         assert!(!s.contains("? B"), "列表行 ? B 形态上移退役（v1.49）: {s}");
-        assert!(s.contains("剩余 -"), "剩余 -: {s}");
+        assert!(s.contains("LT -"), "LT -: {s}");
         assert!(!s.contains("--:--"), "未知大小不显示 ETA 表盘: {s}");
         let t = mk_streaming(TaskState::Paused);
         let s = text_of(&stat_row(&t, 0));
         assert!(!s.contains("? B"), "暂停行无伪造尺寸: {s}");
-        assert!(s.contains("剩余 -"), "{s}");
+        assert!(s.contains("LT -"), "{s}");
         let t = mk_streaming(TaskState::Failed);
         assert!(!text_of(&stat_failed(&t)).contains("? B"));
         let mut t2 = mk(TaskState::Downloading, false);
@@ -448,8 +445,80 @@ mod tests {
         let s2 = text_of(&stat_http_rest(&t2));
         assert!(!s2.contains("MB"), "尺寸对已上移退役: {s2}");
         assert!(
-            s2.contains("剩余 ") && !s2.contains("剩余 -"),
+            s2.contains(" LT ") && !s2.contains(" LT -"),
             "ETA 正常: {s2}"
+        );
+    }
+
+    #[test]
+    fn title_row_folds_long_name_to_32_display_cols_with_dots() {
+        // FR-01-118/D75：行 1 名称预算 = min(动态预算, 32)，尾部 ... 折叠。
+        let mut t = mk(TaskState::Downloading, false);
+        t.name = "a".repeat(60);
+        let s = text_of(&title_row(&t, false, 80));
+        let folded = format!("{}...", "a".repeat(29));
+        assert!(s.contains(&folded), "33+ 列名称折叠为 29 列+...: {s}");
+        assert!(
+            !s.contains("a".repeat(33).as_str()),
+            "折叠后不再含完整长名: {s}"
+        );
+        let mut cjk = mk(TaskState::Downloading, false);
+        cjk.name = "中".repeat(20);
+        let s2 = text_of(&title_row(&cjk, false, 80));
+        let cjk_folded = format!("{}...", "中".repeat(14));
+        assert!(
+            s2.contains(&cjk_folded),
+            "宽字符不劈半（14 字 28 列+...）: {s2}"
+        );
+        let mut short = mk(TaskState::Downloading, false);
+        short.name = "short-name.bin".to_string();
+        let s3 = text_of(&title_row(&short, false, 80));
+        assert!(
+            s3.contains("short-name.bin") && !s3.contains("..."),
+            "预算内原样: {s3}"
+        );
+        let mut exact = mk(TaskState::Downloading, false);
+        exact.name = "b".repeat(32);
+        let s4 = text_of(&title_row(&exact, false, 80));
+        assert!(
+            s4.contains("b".repeat(32).as_str()),
+            "恰 32 列原样不折叠: {s4}"
+        );
+    }
+
+    #[test]
+    fn sp_txt_bracket_form_uses_tracker_values() {
+        // FR-02-37 v1.2/D78：x1(x2)/y1(y2)；tracker 未知省括号段。
+        let mut t = mk(TaskState::Downloading, true);
+        t.seeders = 12;
+        t.peers = 35;
+        t.tracker_seeds = Some(45);
+        t.tracker_peers = Some(120);
+        assert_eq!(sp_txt(&t), "12(45)/35(120)");
+        t.tracker_seeds = None;
+        t.tracker_peers = None;
+        assert_eq!(sp_txt(&t), "12/35", "tracker 未知括号段省略（D78②）");
+        t.tracker_seeds = Some(45);
+        assert_eq!(sp_txt(&t), "12(45)/35", "单侧未知仅省该侧括号");
+    }
+
+    #[test]
+    fn bt_and_http_info_line_uses_lt_label() {
+        // FR-02-38 v1.21/v1.22/D77：BT 下载臂与 HTTP 行「剩余」→「LT」，两态同改。
+        let mut bt = mk(TaskState::Downloading, true);
+        bt.speed = 1000.0;
+        bt.total = 10_000_000;
+        bt.downloaded = 5_000_000;
+        let s = text_of(&stat_bt_rest(&bt));
+        assert!(
+            s.contains(" LT ") && !s.contains("剩余"),
+            "BT 下载臂 LT: {s}"
+        );
+        let http = mk(TaskState::Paused, false);
+        let s2 = text_of(&stat_http_rest(&http));
+        assert!(
+            s2.contains(" LT -") && !s2.contains("剩余"),
+            "HTTP 暂停臂 LT -: {s2}"
         );
     }
 
@@ -539,26 +608,33 @@ mod tests {
 
     #[test]
     fn stat_seeding_speeds_peers_health_share() {
-        // FR-02-37/38 + v1.50：三段健康度 + 分享率，已上传对整项退役。
+        // FR-02-37/38 + v1.50/v1.21：四值括号形态 + SR + 已上传对/剩余做种整项退役。
         let mut x = mk(TaskState::Seeding, true);
         x.upload_speed = 2048.0;
         x.seeders = 3;
         x.peers = 5;
+        x.tracker_seeds = Some(14);
+        x.tracker_peers = Some(31);
         x.availability = 1.675;
         x.uploaded = 300_000;
         x.downloaded = 3_000_000;
+        x.seed_left = 0.0;
         let s = text_of(&stat_seeding(&x));
         assert!(s.contains("↑"), "{s}");
-        assert!(s.contains("3/5/1.675"), "做种臂同形态三段: {s}");
+        assert!(s.contains("3(14)/5(31)/1.675"), "做种臂同构四值形态: {s}");
         assert!(
-            s.contains(" 分享 0.10"),
-            "分享率（单空格衔接，2 位小数）: {s}"
+            s.contains(" SR 0.10"),
+            "SR 标签（单空格衔接，2 位小数）: {s}"
         );
         assert!(
             !s.contains("已上传") && !s.contains("300 KB"),
-            "已上传对整项退役（v1.50，上传量仅经分享率体现）: {s}"
+            "已上传对退役: {s}"
         );
-        assert!(s.contains("剩余做种"));
+        assert!(!s.contains("剩余做种"), "剩余做种项整项退役（v1.21）: {s}");
+        x.tracker_seeds = None;
+        x.tracker_peers = None;
+        let s2 = text_of(&stat_seeding(&x));
+        assert!(s2.contains("  3/5/1.675"), "tracker 未知省括号段: {s2}");
     }
 
     #[test]
@@ -596,8 +672,8 @@ mod tests {
         t.downloaded = 3_000_000;
         t.uploaded = 300_000;
         let sp = share_spans(&t);
-        assert_eq!(sp[0].content, " 分享", "单空格衔接（D74④）");
-        assert_eq!(sp[0].style.fg, Some(DIM), "分享标签 DIM");
+        assert_eq!(sp[0].content, " SR", "单空格衔接（D74④/D77①）");
+        assert_eq!(sp[0].style.fg, Some(DIM), "SR 标签 DIM");
         assert_eq!(sp[1].content, " 0.10");
         assert_eq!(
             sp[1].style.fg,
@@ -615,14 +691,18 @@ mod tests {
             s.contains("-/-/-"),
             "非活跃 BT 逐位 dash 扩位（FR-02-37）: {s}"
         );
-        assert!(s.contains("-/-/- 分享"), "dash 臂后单空格衔接分享率: {s}");
-        assert!(s.contains(" 分享 0.00"), "其余两臂分享率照常（D74⑤）: {s}");
+        assert!(s.contains("-/-/- SR"), "dash 臂后单空格衔接分享率: {s}");
+        assert!(s.contains(" SR 0.00"), "其余两臂分享率照常（D74⑤）: {s}");
         assert!(!s.contains("↓ -↓ -"), "速度占位不双写: {s}");
         assert_eq!(s.matches("↓ ").count(), 1, "单个 ↓ 箭头: {s}");
+        assert!(s.contains(" LT -"), "非活跃臂 LT dash: {s}");
         let x = mk(TaskState::Paused, false);
         let s = text_of(&stat_http_rest(&x));
         assert!(s.contains("↓"), "{s}");
-        assert!(s.contains("剩余"));
+        assert!(
+            s.contains(" LT ") && !s.contains("剩余"),
+            "HTTP 行 LT（v1.22）: {s}"
+        );
     }
 
     #[test]
@@ -630,24 +710,24 @@ mod tests {
         let mut t = mk(TaskState::Downloading, false);
         t.speed = 1_048_576.0;
         let s = text_of(&stat_http_rest(&t));
-        assert!(s.contains("MiB/s  "), "速度后 2 列分隔（接剩余项）: {s}");
+        assert!(s.contains("MiB/s  "), "速度后 2 列分隔（接 LT 项）: {s}");
         assert!(!s.contains("MiB/s1.0"), "速度与后项不粘连: {s}");
         assert!(
-            s.contains("↓ 1.0 MiB/s  剩余"),
-            "尺寸对退役后速度直接接剩余: {s}"
+            s.contains("↓ 1.0 MiB/s  LT"),
+            "尺寸对退役后速度直接接 LT: {s}"
         );
         let mut t = mk_streaming(TaskState::Downloading);
         t.speed = 500.0;
         let s = text_of(&stat_http_rest(&t));
         assert!(
-            s.contains("B/s  ") && s.contains("剩余 -"),
-            "未知大小：无 ? B、剩余 dash: {s}"
+            s.contains("B/s  ") && s.contains("LT -"),
+            "未知大小：无 ? B、LT dash: {s}"
         );
     }
 
     #[test]
     fn stat_bt_downloading_layout_matches_demo_spacing() {
-        // FR-02-37/38：下载臂 `↓ <速度> ↑ <上传>  <s>/<p>/<健康度> 分享 <r>  剩余 <eta>`。
+        // FR-02-37/38：下载臂 `↓ <速度> ↑ <上传>  <x1(x2)/y1(y2)>/<健康度> SR <r>  LT <eta>`。
         let mut t = mk(TaskState::Downloading, true);
         t.speed = 2_097_152.0;
         t.upload_speed = 307_200.0;
@@ -659,22 +739,35 @@ mod tests {
         let s = text_of(&stat_bt_rest(&t));
         assert!(s.contains("↓ 2.0 MiB/s"), "{s}");
         assert!(s.contains(" ↑ 300 KiB/s"), "{s}");
-        assert!(s.contains("  3/5/1.675"), "三段健康度（3 位小数）: {s}");
-        assert!(s.contains(" 分享 0.07"), "分享率（D74 示例字面口径）: {s}");
+        assert!(
+            s.contains("  3/5/1.675"),
+            "tracker 未知省括号段（D78②）: {s}"
+        );
+        t.tracker_seeds = Some(14);
+        t.tracker_peers = Some(31);
+        let s = text_of(&stat_bt_rest(&t));
+        assert!(s.contains("  3(14)/5(31)/1.675"), "四值括号形态: {s}");
+        assert!(s.contains(" SR 0.07"), "分享率（D74 示例字面口径）: {s}");
         assert!(
             !s.contains("1.0/3.0 MB"),
             "明细统计行尺寸对已上移退役（v1.18）: {s}"
         );
-        assert!(s.contains("  剩余 "), "{s}");
+        assert!(
+            s.contains("  LT ") && !s.contains("剩余"),
+            "BT 下载臂 LT: {s}"
+        );
         // 健康度跟随所在项原色：下载臂 FG / 做种臂 MAGENTA（D74③）。
         let sp = stat_bt_rest(&t);
-        let seg = sp.iter().find(|x| x.content.contains("3/5/1.675")).unwrap();
+        let seg = sp
+            .iter()
+            .find(|x| x.content.contains("3(14)/5(31)/1.675"))
+            .unwrap();
         assert_eq!(seg.style.fg, Some(FG), "下载臂三段 FG");
         t.state = TaskState::Seeding;
         let sp2 = stat_seeding(&t);
         let seg2 = sp2
             .iter()
-            .find(|x| x.content.contains("3/5/1.675"))
+            .find(|x| x.content.contains("3(14)/5(31)/1.675"))
             .unwrap();
         assert_eq!(seg2.style.fg, Some(MAGENTA), "做种臂三段 MAGENTA");
     }

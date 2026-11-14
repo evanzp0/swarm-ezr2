@@ -277,8 +277,8 @@ impl App {
                 incomplete,
             } => {
                 if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
-                    t.seeders = complete as usize;
-                    t.peers = incomplete as usize;
+                    t.tracker_seeds = Some(complete as usize);
+                    t.tracker_peers = Some(incomplete as usize);
                 }
             }
             Evt::BtConns {
@@ -289,6 +289,8 @@ impl App {
                 // 种子健康度（FR-02-37）：与并发明细同帧刷新，仅活跃态任务接收。
                 if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
                     t.availability = availability;
+                    t.seeders = conns.iter().filter(|c| c.seeder).count();
+                    t.peers = conns.len();
                 }
                 let active = self
                     .tasks
@@ -493,8 +495,66 @@ mod evt_arm_tests {
         })
         .await;
         let t = app.tasks.iter().find(|t| t.id == 5).unwrap();
-        assert_eq!(t.seeders, 7, "complete → seeders");
-        assert_eq!(t.peers, 3, "incomplete → peers");
+        assert_eq!(t.tracker_seeds, Some(7), "complete → tracker_seeds（x2）");
+        assert_eq!(t.tracker_peers, Some(3), "incomplete → tracker_peers（y2）");
+        assert_eq!(t.seeders, 0, "tracker 应答不改连接计数（x1）");
+        assert_eq!(t.peers, 0, "tracker 应答不改连接计数（y1）");
+    }
+
+    #[tokio::test]
+    async fn bt_conns_arm_counts_connected_seeds_and_peers() {
+        let mut app = make_app("bt-conns-counts");
+        app.tasks.push(testutil::bt_task(9, TaskState::Downloading));
+        app.on_evt(Evt::BtConns {
+            id: 9,
+            conns: vec![
+                crate::engine::BtConnView {
+                    id: 1,
+                    addr: "127.0.0.1:1".into(),
+                    protocol: "tcp".into(),
+                    down_speed: 0.0,
+                    cum_down: 0,
+                    up_speed: 0.0,
+                    cum_up: 0,
+                    client: "t".into(),
+                    seeder: true,
+                    flags: String::new(),
+                    relevance: 0.0,
+                },
+                crate::engine::BtConnView {
+                    id: 2,
+                    addr: "127.0.0.1:2".into(),
+                    protocol: "tcp".into(),
+                    down_speed: 0.0,
+                    cum_down: 0,
+                    up_speed: 0.0,
+                    cum_up: 0,
+                    client: "t".into(),
+                    seeder: false,
+                    flags: String::new(),
+                    relevance: 0.0,
+                },
+                crate::engine::BtConnView {
+                    id: 3,
+                    addr: "127.0.0.1:3".into(),
+                    protocol: "tcp".into(),
+                    down_speed: 0.0,
+                    cum_down: 0,
+                    up_speed: 0.0,
+                    cum_up: 0,
+                    client: "t".into(),
+                    seeder: false,
+                    flags: String::new(),
+                    relevance: 0.0,
+                },
+            ],
+            availability: 1.5,
+        })
+        .await;
+        let t = app.tasks.iter().find(|t| t.id == 9).unwrap();
+        assert_eq!(t.seeders, 1, "连接种子计数（x1）");
+        assert_eq!(t.peers, 3, "连接 peers 总数（y1，含种子）");
+        assert_eq!(t.availability, 1.5);
     }
 
     #[tokio::test]

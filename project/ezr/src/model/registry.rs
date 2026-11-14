@@ -75,6 +75,8 @@ pub struct TaskSnapshot {
     #[serde(default)]
     pub seed_left: f64,
     #[serde(default)]
+    pub seed_elapsed: f64,
+    #[serde(default)]
     pub max_download_speed: u64,
     #[serde(default)]
     pub max_upload_speed: u64,
@@ -113,6 +115,7 @@ impl From<&Task> for TaskSnapshot {
             added_at: t.added_at,
             uploaded: t.uploaded,
             seed_left: t.seed_left,
+            seed_elapsed: t.seed_elapsed,
             max_download_speed: t.max_download_speed,
             max_upload_speed: t.max_upload_speed,
             resume_orphan: t.resume_orphan,
@@ -163,7 +166,10 @@ impl From<&TaskSnapshot> for Task {
             uploaded: s.uploaded,
             seeders: 0,
             peers: 0,
+            tracker_seeds: None,
+            tracker_peers: None,
             seed_left: s.seed_left,
+            seed_elapsed: s.seed_elapsed,
             // 瞬时显示指标不持久化：恢复后首帧 BtConns 事件即刷新（FR-02-37）。
             availability: 0.0,
             max_download_speed: s.max_download_speed,
@@ -392,6 +398,7 @@ mod tests {
                 selected: true,
             }],
             upload_paused: false,
+            sequential: false,
         });
         let reg = Registry::from_tasks(&[t]);
         let raw = serde_json::to_string(&reg).unwrap();

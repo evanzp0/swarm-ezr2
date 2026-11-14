@@ -801,3 +801,11 @@ ws/webrtc 轮（2026-11-09）：TrackerUrl 三族分型（Ws 变体与 Http/Udp 
 ## BT 顺序下载/做种退出规则/显示缩写轮（2026-11-13，specifier）追加
 - 显示退役/改判同构三件：①折叠新形态与既有形态并存判据——fold_name_dots（三点 ASCII）只替换任务行 1 调用点，既有 truncate（单字符 …）保留给详情/对话框等面（双形态并存是有意设计、不是漏改）；②seeders/peers 括号段 = Option 字段 + None 省略臂（qBt total==-1 同款），fixture 连接值/tracker 值分离构造；③做种臂与下载臂同构改签（SR）+ 做种独有项退役（剩余做种）——同构字段改签随字段走、独有项退役单臂处理，混做即把 SR 误用到 HTTP 行。
 - demo fixture 调整登记：v[2].seed_left 0→1800.0（做种演示稳定态，见 testing 条目）；verify_v153.py 为本轮新增 PTY 脚本（A 折叠/B 下载臂/C 做种臂/D 复选项/E 帮助五段 29 项）。
+## v1.53/v1.54 产品实现轮（2026-11-13，coder）追加
+- PieceOrderCache 顺序臂落点 = 缓存内 `sequential` 标志（rebuild 分支：索引升序 vs rarest+jitter），切换 = 标志翻转 + `dirty = true`（avail 为事件流累计不得清空重建）；partial-first 与 refill 的 st_has 过滤不动（在飞机制不变），领用顺序语义只由 rebuild 承载。
+- tracker 报告值与连接值分离：x2/y2 走 `BtPeers`（`Option<usize>` 承载「tracker 未知」态）、x1/y1 走 `BtConns` 连接快照计数（seeder 标志过滤 + 总数），渲染层括号段按 Option 逐侧省略——两数据源两个事件通道，混用会把「本轮未应答」渲染成「0(0)」。
+- [bt.seed_exit_rule] 生效臂的「倒计时失效」用 `seed_left = f64::INFINITY` 承载（INFINITY − dt 恒 ∞，既有 tick 递减路径零分支复用），退出判定独立分臂且共用 finish_seeding 收尾单点；seed_elapsed 仅 Seeding 态累加 + 注册表 serde default 续走，on_bt_done 里按「rule 含 seed_duration_m」清零（D79⑦）。
+- `share_ratio_value` 数值口径上移 model::Task（qBt realRatio 1% 兜底/∞/0.00 单源），UI 格式化与退出规则判定共用——两处各写一份比率公式是 DRY 反例。
+- 结构体扩展全仓同步面：BtTaskData/BtSpec/BtTaskCmd/Cmd::ReconfigureBt/Dialog 五链加字段，字面量散布 src/tests/gen（剥头副本）三处——批量括号匹配补丁会误伤 `impl T {`/`-> T {`/`..Default::default()`（base struct 后不得补逗号），收尾必 cargo fmt + cargo check 全目标对账；gen/ 剥头副本按 test 的剥头规则重新生成而非手补。
+- ezr-demo `field_rects[trackers_focus] = trackers_rect` 覆盖复选行 rect 是潜伏 bug（trackers 焦点与复选焦点同值），产品端照抄即复刻；焦点环扩展的 mapping 要按新表重推（产品复选 7/5、trackers 8/6、按钮 9-11/7-8），不抄 demo 局部变量名。
+- help 内容行数锚点 = 80→82（SR/LT 两 entries），End 钳制断言与中间帧滚动锚随行数联动——加帮助条目要同步 grep help.rs 内所有行数硬断言。
