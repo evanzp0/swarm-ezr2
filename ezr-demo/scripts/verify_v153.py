@@ -4,7 +4,8 @@
 A. 任务行 1 文件名 32 显示列尾部折叠（FR-01-118/D75）
 B. BT 下载臂统计行：x1(x2)/y1(y2) + SR + LT + HTTP 下载行同改 LT
    （FR-02-37 v1.2 / FR-02-38 v1.21；v1.54 裁决 LT 扩面 FR-02-38 v1.22/D77②）
-C. 做种臂：x1(x2)/y1(y2) + SR +「剩余做种」项退役（FR-02-38 v1.21）
+C. 做种臂：x1(x2)/y1(y2) + SR +「剩余做种」项退役（FR-02-38 v1.21）；
+   v1.56 真实做种形态 0(45)/35(120)（D80④ 修订，操作者钦定）
 D. BT 对话框「按顺序下载」复选项：添加 78×29 / 修改 78×27 / 默认 ☐ /
    Space·Enter 切换 / 确认落库 / 重开预填（FR-02-39/D76）
 E. 帮助窗口【任务列表】组 SR/LT 条目（FR-02-38 v1.21/D77）
@@ -152,24 +153,24 @@ def main():
         check("A5 任务列表其余行不受影响（ubuntu 名完整）",
               "ubuntu-24.04.2-desktop-amd64.iso" in s.screen())
 
-        print("== C. 做种臂（FR-02-38 v1.21） ==")
+        print("== C. 做种臂（FR-02-38 v1.21；v1.56 真实做种形态 D80④ 修订） ==")
         s.send(b"]", 0.5)
-        scroll_until(s, lambda t: "12(45)/35(120)" in t, b"\x1b[B", 32)
+        scroll_until(s, lambda t: "0(45)/35(120)" in t, b"\x1b[B", 32)
         scr = s.screen()
-        check("C1 做种行 x1(x2)/y1(y2)/健康度 = 12(45)/35(120)/2.418",
-              "12(45)/35(120)/2.418" in scr, "未见做种行新格式")
-        seed_row = next((r for r in s.rows() if "12(45)/35(120)" in r), "")
+        check("C1 做种行 x1(x2)/y1(y2)/健康度 = 0(45)/35(120)/2.418（做种态 SEEDS=0 而 PEERS 有数）",
+              "0(45)/35(120)/2.418" in scr, "未见做种行真实做种形态")
+        seed_row = next((r for r in s.rows() if "0(45)/35(120)" in r), "")
         check("C2 做种行 SR 标签在位", " SR " in seed_row, seed_row[:80])
         check("C3 做种行「剩余做种」项整项退役（全屏无「剩余做种」）",
               "剩余做种" not in scr, "仍见「剩余做种」字样")
 
-        print("== B. BT 下载臂统计行（FR-02-37 v1.2/FR-02-38 v1.21） ==")
+        print("== B. BT 下载臂统计行（FR-02-37 v1.3/FR-02-38 v1.21） ==")
         s.send(b"[", 0.5)
-        scroll_until(s, lambda t: "8(14)/23(31)" in t, b"\x1b[B", 32)
+        scroll_until(s, lambda t: "8(14)/15(31)" in t, b"\x1b[B", 32)
         scr = s.screen()
-        check("B1 seeders/peers = x1(x2)/y1(y2)（8(14)/23(31)）", "8(14)/23(31)" in scr, "未见 8(14)/23(31)")
-        check("B2 健康度三段完整 = 8(14)/23(31)/1.675", "8(14)/23(31)/1.675" in scr)
-        bt_row = next((r for r in s.rows() if "8(14)/23(31)" in r), "")
+        check("B1 seeders/peers = x1(x2)/y1(y2)（8(14)/15(31)，y1 = 15 非种子 peers 直读 FR-02-37 v1.3/D80④）", "8(14)/15(31)" in scr, "未见 8(14)/15(31)")
+        check("B2 健康度三段完整 = 8(14)/15(31)/1.675", "8(14)/15(31)/1.675" in scr)
+        bt_row = next((r for r in s.rows() if "8(14)/15(31)" in r), "")
         check("B3 BT 下载臂剩余时间标签 = LT", " LT " in bt_row, bt_row[:80])
         check("B4 BT 行不含旧「分享」标签（改 SR）", " 分享 " not in bt_row, bt_row[:80])
         check("B5 SR 标签在位（BT 下载臂）", " SR " in bt_row, bt_row[:80])

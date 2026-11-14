@@ -231,13 +231,15 @@ fn push_col_spans(
 }
 
 pub(crate) fn draw_trackers(f: &mut Frame, app: &mut App, area: Rect) {
-    let (name, state, peers, seeders, id, trackers) = {
+    let (name, state, peers, seeders, tr_seeds, tr_peers, id, trackers) = {
         let snap = app.sel_task().map(|t| {
             (
                 t.name.clone(),
                 t.state,
                 t.peers,
                 t.seeders,
+                t.tracker_seeds,
+                t.tracker_peers,
                 t.id,
                 t.trackers.clone(),
             )
@@ -387,14 +389,18 @@ pub(crate) fn draw_trackers(f: &mut Frame, app: &mut App, area: Rect) {
                 YELLOW,
             )
         } else {
+            // per-tracker 假值锚 tracker 报告值（v1.56/D80④ 修订：字段语义对齐后做种态
+            // x1=0，弹窗改锚 complete/incomplete，fallback 连接值），微扰模拟各 tracker 差异
+            let rep_seeds = tr_seeds.unwrap_or(seeders);
+            let rep_peers = tr_peers.unwrap_or(peers);
             (
                 "工作中".to_string(),
                 GREEN,
-                peers
+                rep_peers
                     .max(3)
                     .saturating_sub((id as usize * 7 + i * 13) % 9)
                     .to_string(),
-                seeders
+                rep_seeds
                     .max(1)
                     .saturating_sub((id as usize * 5 + i * 7) % 5)
                     .to_string(),

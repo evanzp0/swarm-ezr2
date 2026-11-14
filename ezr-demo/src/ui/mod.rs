@@ -826,7 +826,7 @@ mod conns_flags_tests {
             .expect("演示数据含做种中 BT 任务");
         {
             let t = &mut app.tasks[seeding];
-            t.seeders = 12;
+            t.seeders = 0;
             t.peers = 35;
             t.availability = 2.418;
             t.uploaded = 1_712_000_000;
@@ -843,8 +843,8 @@ mod conns_flags_tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            text.contains("12(45)/35(120)/2.418"),
-            "健康度三段 3 位小数 + x1(x2)/y1(y2)（FR-02-37 v1.2）: {text}"
+            text.contains("0(45)/35(120)/2.418"),
+            "健康度三段 3 位小数 + x1(x2)/y1(y2)（FR-02-37 v1.3/D80④：做种态 SEEDS 括号外 0、PEERS = 35 非种子直连）: {text}"
         );
         assert!(
             text.contains("SR 0.40"),
@@ -917,7 +917,7 @@ mod conns_flags_tests {
 
     #[test]
     fn bt_task_title_carries_total_size_and_detail_drops_pair() {
-        let mut app = App::new();
+        let app = App::new();
         let bt = app
             .tasks
             .iter()
@@ -940,13 +940,13 @@ mod conns_flags_tests {
         assert!(l3.contains("LT"), "LT 缩写项保留（FR-02-38 v1.21）: {l3:?}");
         assert!(
             l3.contains(&format!("{}/{:.3}", sp_txt(t), t.availability)),
-            "seeders/peers x1(x2)/y1(y2) + 健康度三段保留（FR-02-37 v1.2）: {l3:?}"
+            "seeders/peers x1(x2)/y1(y2) + 健康度三段保留（FR-02-37 v1.3，D80④ peers=y1 直读）: {l3:?}"
         );
     }
 
     #[test]
     fn http_task_rows_move_total_to_title_and_drop_pair() {
-        let mut app = App::new();
+        let app = App::new();
         let http = app
             .tasks
             .iter()
@@ -973,7 +973,7 @@ mod conns_flags_tests {
 
     #[test]
     fn unknown_size_http_task_hides_title_size_and_pair() {
-        let mut app = App::new();
+        let app = App::new();
         let unk = app
             .tasks
             .iter()
@@ -995,7 +995,7 @@ mod conns_flags_tests {
 
     #[test]
     fn failed_queued_completed_details_drop_size_items() {
-        let mut app = App::new();
+        let app = App::new();
         // 已失败：任务行携带总字节，明细只剩重试/倒计时
         let f = app
             .tasks
@@ -1065,7 +1065,7 @@ mod conns_flags_tests {
 
     #[test]
     fn seeding_task_title_carries_total_and_detail_drops_uploaded_pair() {
-        let mut app = App::new();
+        let app = App::new();
         let seeding = app
             .tasks
             .iter()
@@ -1368,13 +1368,18 @@ mod fmt_speed_binary_tests {
         let t = &app.tasks[bt];
         let x2 = t.tracker_seeds.unwrap();
         let y2 = t.tracker_peers.unwrap();
-        assert_eq!(list::sp_txt(t), format!("{}({})/{}({})", t.seeders, x2, t.peers, y2));
+        let y1 = t.peers;
+        assert_eq!(
+            list::sp_txt(t),
+            format!("{}({})/{}({})", t.seeders, x2, y1, y2),
+            "y1 = 连接的非种子 peers 数（Task.peers 与产品口径一致直读，FR-02-37 v1.3/D80④）"
+        );
         let mut t2 = t.clone();
         t2.tracker_seeds = None;
         t2.tracker_peers = None;
         assert_eq!(
             list::sp_txt(&t2),
-            format!("{}/{}", t.seeders, t.peers),
+            format!("{}/{}", t.seeders, y1),
             "tracker 值未知 → 括号段省略（D78②，qBt total == -1 同款）"
         );
     }

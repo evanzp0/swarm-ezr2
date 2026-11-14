@@ -19,7 +19,7 @@
 #   09-bt-engine-18 并发 panel 标志列数据语义（v1.40，FR-02-33/D69：qBt Peers Flags 子集 D/d/U/u/O/I/K/? 判定表 / 连写顺序 / 实时刷新）
 #   09-bt-engine-19 [bt] peer_connection_protocol 全局开关与 WebRTC 数据传输（v1.41 新增，FR-02-34/D70：无序数组 / 大小写不敏感 / 无跨协议回退；协议列 TCP·WebRTC）
 #   09-bt-engine-20 ws(s) tracker announce 与 peer_connection_protocol 严格校验（v1.41 新增，FR-02-34/35/D70：ws(s) tracker harness e2e；未知值/重复项启动失败）
-#   09-bt-engine-21 BT 下载列表行布局与种子健康度/分享率（v1.47 新增，v1.48 布局修订，v1.49 全类型扩面，v1.51 x1(x2)/y1(y2)+SR/LT+做种剩余做种退役，v1.52 D77② 落定/D78② 追认，FR-02-37/38：任务行 [状态] 后 <总字节>（全类型尺寸已知） / 明细行 <x1(x2)/y1(y2)>/<h> / SR 2 位小数粉红 / LT 缩写（HTTP 同改 v1.52） / ∞ 边界 / 非活跃 dash）
+#   09-bt-engine-21 BT 下载列表行布局与种子健康度/分享率（v1.47 新增，v1.48 布局修订，v1.49 全类型扩面，v1.51 x1(x2)/y1(y2)+SR/LT+做种剩余做种退役，v1.52 D77② 落定/D78② 追认，v1.53 y1 取值改排除种子（FR-02-37 v1.3/D80），FR-02-37/38：任务行 [状态] 后 <总字节>（全类型尺寸已知） / 明细行 <x1(x2)/y1(y2)>/<h> / SR 2 位小数粉红 / LT 缩写（HTTP 同改 v1.52） / ∞ 边界 / 非活跃 dash）
 #   09-bt-engine-22 并发 panel 相关度列数据语义（v1.47 新增，FR-02-36/D74：qBt calcRelevance 口径——对端有∧本端缺 ÷ 本端缺）
 #   09-bt-engine-23 [bt.seed_exit_rule] 做种退出规则（v1.51 新增，v1.52 share_ratio_gt 保留 1 位小数细化，FR-02-40/D79：三键 AND 满足停止做种 / 未配置项不参与 / default_seed_duration_m 生效关系 / 非法值拒绝启动）
 #   09-bt-engine-24 BT 顺序下载引擎语义（v1.51 新增，FR-02-39/D76：piece 索引升序线性领用 / 取消恢复 rarest-first / 随任务持久化）
@@ -83,6 +83,19 @@
 # 会话立即携新 offers 重连 shed 的 peer；http/udp 刷新候选池；尊重 tracker min_interval）+
 # 本端主动收口（缩容 shed/空闲置换）的 WebRTC peer 不记失败冷却（mark_peer_idle，区别于异常
 # 断开的惩罚性退避）——peer 重连不再等 tracker interval 周期。QA 严格检查 = QA-BE-19（观察面注记）。
+# v1.53 修订（操作者修订轮指令 20261114「bt 下载任务：确认下 QTORRENT 源码中这个任务列表中的
+# PEERS 和 SEEDS 连接数的取值是不是这个逻辑，如果 EZR 的任务列表中进度条下方的 PEERS 和 SEEDS
+# 连接数不是相同的逻辑，则修改 EZR 的 PEERS 和 SEEDS 连接数取值逻辑」+ 引文「括号外 PEERS/SEEDS =
+# 直接连接数而非 tracker 返回数、PEERS 列不包含 SEEDS（= 正在下载的 Leecher 数）、做种态 SEEDS 显 0
+# 而 PEERS 有数正常、未完成态 SEEDS 有数 = 正在从种子获取数据」——phase-02 v1.23，FR-02-37 v1.3/D80；
+# Inversion 阶段 1 受限退化沿 v1.45–v1.54 八轮先例，操作者指令文本即阶段 1 答案）：qBt master 取源核证
+# （transferlistmodel.cpp L386-388 TR_SEEDS = amountString(seedsCount(), totalSeedsCount()) /
+# TR_PEERS = amountString(leechsCount(), totalLeechersCount())；torrentimpl.cpp L1488-1517
+# seedsCount = num_seeds、leechsCount = num_peers − num_seeds、totalSeedsCount/totalLeechersCount =
+# tracker 报告 complete/incomplete）——操作者引文与源完全一致；EZR 对判：x1（连接种子数）已同源维持，
+# y1（D78③ conns.len() 含种子）不同源 → 修订 = 实际连接的非种子 peers 数（BtConns 快照 seeder==false
+# 连接计数，等价 conns.len() − x1）；场景 21 y1 判据修订、场景 10 做种臂注记同步；x2/y2 括号段、
+# tracker 未知括号段省略（D78②）、非活跃 -/-/-、SR/LT 形态均不变；ezr 不做旧版本兼容（沿 v1.45 钦定）。
 # v1.52 修订（操作者裁决落实 20261113「LT: http和 BT 下载任务都是做 '剩余时间→LT' 这样的改动；
 # share_ratio_gt 允许小数保留1位小数；SR 作用于做种/下载两臂同构；tracker 值未知时括号段省略」——
 # v1.51 轮合成闸门 B + D75–D79 否决窗口关闭，phase-02 v1.22，FR-02-38 v1.22/D77②、FR-02-40/D79①）：
@@ -232,7 +245,7 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
   Scenario: 09-bt-engine-10 下载完成转做种
     When 全部选中 piece 下载并通过 SHA-1 校验
     Then toast 显示 "✓ 下载完成: <name>"（demo 无校验完成文案）且任务状态转「做种中」（D45/D57）
-    And 列表信息行切做种中形态 "↑ <上传速度>  <x1(x2)/y1(y2)>/<健康度> SR <分享率>"（MAGENTA 做种/peer/健康度段，SR 数字 MAGENTA 粉红；v1.47 修订：原 "<做种>/<peer>" 两段与无分享率形态退役，FR-02-37/38/D74，细则见场景 21；v1.50 修订：原 `已上传 <x>/<总大小>` 项退役，分享率改接健康度项，FR-02-38 v1.20；v1.51 修订：seeders/peers 改 x1(x2)/y1(y2)（FR-02-37 v1.2/D78）、"分享" 标签改 "SR"（FR-02-38 v1.21/D77）、"剩余做种 <时长>" 项整项退役——v1.50"健康度/剩余做种不变"口径中剩余做种臂退役，做种退出规则归 FR-02-40，剩余时长不再展示）
+    And 列表信息行切做种中形态 "↑ <上传速度>  <x1(x2)/y1(y2)>/<健康度> SR <分享率>"（MAGENTA 做种/peer/健康度段，SR 数字 MAGENTA 粉红；v1.47 修订：原 "<做种>/<peer>" 两段与无分享率形态退役，FR-02-37/38/D74，细则见场景 21；v1.50 修订：原 `已上传 <x>/<总大小>` 项退役，分享率改接健康度项，FR-02-38 v1.20；v1.51 修订：seeders/peers 改 x1(x2)/y1(y2)（FR-02-37 v1.2/D78）、"分享" 标签改 "SR"（FR-02-38 v1.21/D77）、"剩余做种 <时长>" 项整项退役——v1.50"健康度/剩余做种不变"口径中剩余做种臂退役，做种退出规则归 FR-02-40，剩余时长不再展示；v1.53 修订：y1 = 实际连接的非种子 peers 数（排除种子，FR-02-37 v1.3/D80，细则见场景 21））
     And 产物文件字节与 seeder 原始数据逐字节一致（fixture 侧校验）
     And 引擎已对 tracker 发送 event=completed 且继续周期 announce（left=0、uploaded 真实）
 
@@ -406,7 +419,7 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
   # 列表行统计行的显示形态与数据语义层——种子健康度 = qBt General 面板 Availability
   # （libtorrent distributed_copies 同源口径），分享率 = qBt General 面板 Share Ratio
   # （realRatio 同源口径）。并发 panel 相关度列显示形态归 04-ui-conns-08 v1.47，数据语义归场景 22。
-  Scenario: 09-bt-engine-21 BT 下载列表行布局与种子健康度/分享率（v1.47 新增，v1.48 布局修订，v1.49 全类型扩面，v1.50 做种已上传对退役，v1.51 x1(x2)/y1(y2) + SR/LT + 做种剩余做种退役，v1.52 D77② 落定/D78② 追认，FR-02-37 v1.2/38 v1.21/D74/D77/D78）
+  Scenario: 09-bt-engine-21 BT 下载列表行布局与种子健康度/分享率（v1.47 新增，v1.48 布局修订，v1.49 全类型扩面，v1.50 做种已上传对退役，v1.51 x1(x2)/y1(y2) + SR/LT + 做种剩余做种退役，v1.52 D77② 落定/D78② 追认，v1.53 y1 取值改排除种子，FR-02-37 v1.2/v1.3/38 v1.21/D74/D77/D78/D80）
     Given BT 任务下载中且 tracker 已有成功 announce 应答（complete/incomplete 计入 x2/y2）
     Then 任务行「[状态]」徽标后以单空格间隔显示 "<总字节> <单位>"（fmt_size 口径、普通前景色；
       如 "[下载中] 4.19 GB"；v1.48：原明细统计行尺寸对 <已下载>/<总大小> 整项上移至此、
@@ -414,9 +427,16 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
       FR-01-116 size_known 语义；尺寸未知任务行 1 不显示尺寸、无伪造总字节）——BT 全状态含
       做种中/已完成/已失败/等待中均追加，HTTP/HTTPS 任务行同样追加）
     And 列表统计行 seeders/peers 项显示 "<x1(x2)/y1(y2)>/<健康度>"（健康度保留 3 位小数，如 12(45)/35(120)/1.675；
-      v1.51：x1 = 实际连接种子数、x2 = tracker 最新成功应答 complete 值、y1 = 实际连接 peers 数、
+      v1.51：x1 = 实际连接种子数、x2 = tracker 最新成功应答 complete 值、
       y2 = tracker 最新成功应答 incomplete 值（qBt 任务列表 SEEDS/PEERS 列取值逻辑同源，FR-02-37 v1.2/D78；
-      原 <seeders>/<peers> 两段口径退役）；tracker 值未知（无 tracker/本轮未成功应答/未带字段）→ 括号段省略
+      原 <seeders>/<peers> 两段口径退役）；v1.53：y1 = 实际连接的非种子 peers 数（leecher，排除种子；
+      FR-02-37 v1.3/D80③——操作者修订轮指令「PEERS 和 SEEDS 双列核证，不同源则修改」：BtConns 快照中
+      seeder==false 的连接计数，等价连接 peers 总数 − x1；qBt leechsCount() = num_peers − num_seeds 同源
+      （transferlistmodel.cpp TR_PEERS = amountString(leechsCount(), totalLeechersCount())，torrentimpl.cpp）；
+      v1.2「y1 = 实际连接 peers 数（含种子）」口径退役；qBt 源核证：SEEDS 括号外 = seedsCount（连接种子）、
+      PEERS 括号外 = leechsCount（排除种子）、括号内 = tracker 报告 complete/incomplete，操作者引文
+      「括号外 = 直接连接数、PEERS 不含 SEEDS、做种态 SEEDS≈0 而 PEERS 有数、未完成态 SEEDS 有数」与源一致；
+      x1 已同源维持不变）；tracker 值未知（无 tracker/本轮未成功应答/未带字段）→ 括号段省略
       显示 "x1/y1" 形态（qBt total == -1 只显计数同款，D78②；操作者 20261113 追认——v1.52）；健康度计算 = 连接 peer piece 位图估算的分布式完整副本数
       ——每 piece 持有者计数（连接的非种子 peer 持有该 piece 记 1、本端已有该 piece 记 1）取全部 piece 最小值 +
       连接种子数 + 持有者计数超出该最小值的 piece 数 ÷ 总 piece 数，qBt Availability / libtorrent distributed_copies

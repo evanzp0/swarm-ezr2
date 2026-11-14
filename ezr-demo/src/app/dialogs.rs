@@ -1145,11 +1145,12 @@ impl App {
         } else {
             trackers
         };
-        // BT 演示口径：伪生成做种人数/ peers，避免详情全为 0
+        // BT 演示口径：伪生成做种人数（x1）/连接非种子 peers 数（y1）——字段定义与产品
+        // FR-02-37 v1.3 一致（D80④ 修订，操作者钦定），避免详情全为 0
         let h = (id as u64) % 97;
         t.seeders = (3 + h % 40) as usize;
         t.tracker_seeds = Some(t.seeders + 5 + (h % 13) as usize);
-        t.peers = (t.seeders * 2 + (h % 17) as usize).max(t.seeders);
+        t.peers = (3 + h % 25) as usize;
         t.tracker_peers = Some(t.peers + 8 + (h % 29) as usize);
         t.availability = 0.350 + ((h * 37 + id as u64 * 11) % 2400) as f64 / 1000.0;
         t.sequential = seq_flag;

@@ -308,12 +308,17 @@ pub struct Task {
 
     pub chunk_done: u32,
 
+    /// 实际连接的种子数（x1，FR-02-37 v1.3；qBt seedsCount 同源，D80①）。
     pub seeders: usize,
 
+    /// tracker 报告种子数（x2，最新成功 announce complete 值；未知 None → 括号段省略）。
     pub tracker_seeds: Option<usize>,
 
+    /// tracker 报告 peers 数（y2，incomplete 值；未知 None → 括号段省略）。
     pub tracker_peers: Option<usize>,
 
+    /// 实际连接的非种子 peers 数（y1，leecher；qBt leechsCount 同源）。
+    /// D80④ 修订（操作者钦定）：demo 字段定义与产品 FR-02-37 v1.3 保持一致，显示直读无换算。
     pub peers: usize,
 
     pub availability: f64,

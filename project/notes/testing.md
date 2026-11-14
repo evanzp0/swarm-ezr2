@@ -750,3 +750,13 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 ## v1.54 复核重验轮（2026-11-14，coder）追加
 - 剥头副本漂移实测归因：`gen_fixtures_match_product_sources` 红 = fixture 侧手改 `sequential: false` 少尾逗号（src 侧经 cargo fmt 有逗号）——cargo fmt 不覆盖 include! 的 tests/gen/*.rs（根因条目见 packs/_common/notes/rust.md），双侧手改必漂；修复 = 按契约测试的剥头变换（跳过起始 `//!` 行后逐行相等）机械重生成 4 份副本，diff 预验零差异后复跑目标即绿（958P/0F）。重生成单行模板：`awk 'BEGIN{h=1} h && /^\/\/!/ {next} {h=0; print}' src.rs > fixture.rs`。
 - 总账对 ≠ 分项对：上轮 handoff 分项目标计数 6 处归属错位（928/951/797/500/16/2 六个数字在 v115/g_v147/engine_backfill/g_throttle_err/g_proxy/g_main 间错挂）而总数 8100 恒等——复核轮以逐目标实测为分项权威口径，实测对账按「总数先对、分项再核、错位修正入账不改总数」处理，分项数字必须能从逐目标日志复算。
+
+## v1.55 PEERS/SEEDS 核证修订轮（2026-11-14，specifier）追加
+- demo clippy 基线口径：历轮「clippy 零警告」疑似 bin-only 口径（--all-targets 下测试模块 needless_mut 5 处为既有）——本轮顺手修为不可变绑定后 nightly --all-targets 零警告；后续轮一律 --all-targets 口径声明。
+- verify_trackers_popup.py T2/T3 共 3F 为既有失败（git stash 前后同 3F 归因，方法沿 bug25 轮先例）：「T2 弹窗打开」「T3 修改对话框打开」，疑 v1.51 焦点环扩位/沙箱 PTY 时序漂移，与本轮 diff 无关；移交后续轮修复（判据面 verify_v153.py 28 项全过不受影响）。
+- 显示层取值减法（y1 = peers − seeders 饱和减法）的字段语义保真判据：显示面减法与数据面重定义观测等价时，选不动字段的方案（trackers 弹窗等共享字段读者零波及）——D80④ demo 承接口径实录。
+
+## v1.56 D80 裁决落实轮（2026-11-14，specifier）追加
+- 字段语义对齐替代显示层换算（D80④ 修订实录）：操作者裁定「demo SEEDS/PEERS 定义与产品一致」——上轮「显示层减法保字段语义」判据被否决回退，demo seeders=x1/peers=y1 直存直读；经验：显示面换算层是需要向每个读者解释的额外间接层，操作者偏好「字段语义即显示语义」的单层定义（D80④ 新旧口径对照存 handoff/phase-02 v1.24）。
+- 字段语义变更的共享显示面联动排查：改 seeders/peers 字段语义后逐个排查消费方——Trackers 弹窗 per-tracker 假值原锚连接值，做种态 x1=0 会退化弹窗数据，改锚 tracker 报告值（tracker_seeds/tracker_peers，fallback 连接值）；守卫测试与 verify 判据同帧同步，PTY C1 实屏复验（0(45)/35(120)/2.418）。
+- 样例数据语义化：做种臂 fixture 从「渲染样本」（任意可显示值）升级为「语义样本」（seeders=0 呈现做种态 SEEDS=0 而 PEERS 有数）——演示数据应贴合其声称模拟的真实场景语义，避免观者误读口径。

@@ -464,3 +464,10 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 ## v1.54 复核重验轮（2026-11-14，coder）追加
 - 爆盘第四形态与瘦身组合数字：default profile 全量重建（增量缓存 + debug=2）target 冲至 6.6G 爆盘（编译期 No space left，非测试失败——log 尾 "could not write output … .rcgu.o" 即此形态）；`CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0` 同项目全量（16 可执行）target 仅 1.4G 一次过，测试结果与 profile 无关。
 - 每 Bash 调用即新 shell：瘦身 env 漏带一次 → cargo 指纹翻转 → 全量 debug=2 重编 → 二次爆盘（g_supervisor exit=101 实录，log 无 test result 行 + 尾部编译错误即判此）。纪律 = env（PATH/CARGO_INCREMENTAL/PROFILE）随每条命令显式重 export，不依赖上一调用残留。
+
+## v1.55 PEERS/SEEDS 核证修订轮（2026-11-14，specifier）追加
+- rustup 镜像探针（清单文件计速）：TUNA 0.20s/2.4MB/s 与 SJTU 并列最快、USTC/NJU 0.34-0.37s、官方 8s 超时——前台装 stable 1.100.0 默认 + nightly 1.102.0-nightly (8eb778d04 2026-11-12) 双工具链。
+- 取源路径：raw.githubusercontent.com 不可达 → codeload.github.com tarball 可达（APS/qBt 实证）；codeload 分支名先查 default_branch（qBt master 404、APS main 有效——404 响应体不报 curl 错，须 file/解压探针核证）。
+- GitHub release 大资产直连 180s 仅 4.2MB → ghfast.top 前缀 + `curl -C -` 断点续传补齐 bb 28.8MB；babashka v1.13.229 资产 = tar.gz（历轮口径复证，勿按 tar.xz 下载）。
+- 全新沙箱 ~/.cargo/config.toml 随重置消失 → rsproxy sparse 重建（demo 依赖 ratatui/crossterm/tokio/arboard 一次拉齐）。
+- stable 1.100 clippy 对 demo 既有代码报 manual_is_multiple_of 3 处（dialogs.rs L63/66/69）——lint 集随工具链版本漂移实录：stable 报 is_multiple_of、nightly 1.102 报 needless_mut（ui/mod.rs 五测试 let mut app），同代码两工具链两组不同告警。

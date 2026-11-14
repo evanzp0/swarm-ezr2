@@ -40,8 +40,11 @@ fn share_ratio_text(t: &Task) -> String {
     }
 }
 
-/// seeders/peers 段（FR-02-37 v1.2/D78）：x1(x2)/y1(y2)——x1 连接种子、x2 tracker 报告种子、
-/// y1 连接 peers、y2 tracker 报告 peers；tracker 值未知 → 括号段省略（x1/y1）。
+/// seeders/peers 段（FR-02-37 v1.3/D80）：x1(x2)/y1(y2)——x1 连接种子、x2 tracker 报告种子、
+/// y1 连接的非种子 peers 数（leecher；qBt leechsCount = num_peers − num_seeds 同源）、
+/// y2 tracker 报告 peers；tracker 值未知 → 括号段省略（x1/y1）。
+/// demo Task.seeders/Task.peers 字段定义与产品对齐（D80④ 修订，操作者钦定）：
+/// seeders = x1、peers = y1 直存直读，v1.55 显示层饱和减法口径退役。
 pub(crate) fn sp_txt(t: &Task) -> String {
     let seeds = match t.tracker_seeds {
         Some(x2) => format!("{}({})", t.seeders, x2),

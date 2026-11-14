@@ -85,3 +85,10 @@
 ## v1.54 复核重验轮（2026-11-14，coder）追加
 - testing.md — 剥头副本漂移归因与机械重生成修法（cargo fmt 不覆盖 include! 副本、双侧手改必漂、awk 单行模板）/总账对≠分项对（handoff 6 处分项目标归属错位实测修正、总数恒等）（新增）
 - environment.md — 爆盘第四形态与瘦身组合数字（INC=0+DEBUG=0 全量 1.4G vs default 6.6G）/每 Bash 调用新 shell 的 env 重 export 纪律（漏带=指纹翻转重编爆盘）（新增）
+
+## v1.55 PEERS/SEEDS 核证修订轮（2026-11-14，specifier）追加
+- environment.md — rustup 清单计速 TUNA/SJTU 并列最快装 stable+nightly 双工具链/codeload 分支名先查 default_branch（qBt master 404）/ghfast.top 断点续传补大资产/stable↔nightly lint 集漂移实录（新增）
+- testing.md — demo clippy 历轮口径疑 bin-only、本轮修 5 处 needless_mut 后 --all-targets 零警告/verify_trackers_popup T2/T3 3F stash 基线归因既有失败移交后续轮/显示层减法保字段语义的读者零波及判据（新增）
+
+## v1.56 D80 裁决落实轮（2026-11-14，specifier）追加
+- testing.md — 显示层换算层被操作者否决回退、「字段语义即显示语义」单层定义判据（D80④ 新旧对照）/字段语义变更的共享显示面联动排查（Trackers 弹窗假数据锚点）/样例数据语义化（渲染样本→语义样本）（新增）

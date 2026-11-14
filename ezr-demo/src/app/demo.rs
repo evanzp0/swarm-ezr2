@@ -275,7 +275,9 @@ pub(super) fn demo_tasks() -> Vec<Task> {
 
     v[0].proxy = ProxyChoice::Named("办公网代理".to_string());
 
-    v[2].seeders = 12;
+    // 做种臂样例（FR-02-37 v1.3/D80④ 修订，操作者钦定）：真实做种形态——SEEDS 括号外 0
+    // （做种端只连下载者）、PEERS = 35 非种子直连，呈现「做种态 SEEDS=0 而 PEERS 有数」
+    v[2].seeders = 0;
     v[2].tracker_seeds = Some(45);
     v[2].peers = 35;
     v[2].tracker_peers = Some(120);
@@ -301,9 +303,10 @@ pub(super) fn demo_tasks() -> Vec<Task> {
         value: "d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f".to_string(),
     });
 
+    // 下载臂样例：peers = 连接非种子 peers 数（y1 直存，D80④ 修订；观测形态 8(14)/15(31) 不变）
     v[13].seeders = 8;
     v[13].tracker_seeds = Some(14);
-    v[13].peers = 23;
+    v[13].peers = 15;
     v[13].tracker_peers = Some(31);
     v[13].availability = 1.675;
     v[13].upload_speed = 420_000.0;
