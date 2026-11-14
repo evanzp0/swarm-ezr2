@@ -290,7 +290,7 @@ impl App {
                 if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
                     t.availability = availability;
                     t.seeders = conns.iter().filter(|c| c.seeder).count();
-                    t.peers = conns.len();
+                    t.peers = conns.iter().filter(|c| !c.seeder).count();
                 }
                 let active = self
                     .tasks
@@ -553,8 +553,51 @@ mod evt_arm_tests {
         .await;
         let t = app.tasks.iter().find(|t| t.id == 9).unwrap();
         assert_eq!(t.seeders, 1, "连接种子计数（x1）");
-        assert_eq!(t.peers, 3, "连接 peers 总数（y1，含种子）");
+        assert_eq!(
+            t.peers, 2,
+            "连接非种子 peers 计数（y1，排除种子，FR-02-37 v1.3/D80③）"
+        );
         assert_eq!(t.availability, 1.5);
+        app.on_evt(Evt::BtConns {
+            id: 9,
+            conns: vec![
+                crate::engine::BtConnView {
+                    id: 10,
+                    addr: "127.0.0.1:10".into(),
+                    protocol: "tcp".into(),
+                    down_speed: 0.0,
+                    cum_down: 0,
+                    up_speed: 0.0,
+                    cum_up: 0,
+                    client: "t".into(),
+                    seeder: true,
+                    flags: String::new(),
+                    relevance: 0.0,
+                },
+                crate::engine::BtConnView {
+                    id: 11,
+                    addr: "127.0.0.1:11".into(),
+                    protocol: "tcp".into(),
+                    down_speed: 0.0,
+                    cum_down: 0,
+                    up_speed: 0.0,
+                    cum_up: 0,
+                    client: "t".into(),
+                    seeder: true,
+                    flags: String::new(),
+                    relevance: 0.0,
+                },
+            ],
+            availability: 2.0,
+        })
+        .await;
+        let t = app.tasks.iter().find(|t| t.id == 9).unwrap();
+        assert_eq!(t.seeders, 2, "纯种子连接 x1 随事件刷新");
+        assert_eq!(
+            t.peers, 0,
+            "纯种子连接 y1=0（做种态 SEEDS 有数而 PEERS 无数同构呈现）"
+        );
+        assert_eq!(t.availability, 2.0);
     }
 
     #[tokio::test]

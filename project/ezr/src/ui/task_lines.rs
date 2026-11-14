@@ -488,7 +488,7 @@ mod tests {
 
     #[test]
     fn sp_txt_bracket_form_uses_tracker_values() {
-        // FR-02-37 v1.2/D78：x1(x2)/y1(y2)；tracker 未知省括号段。
+        // FR-02-37 v1.2/D78：x1(x2)/y1(y2)；v1.3/D80③ y1 = 非种子 peers 数由注入层直存，显示直读；tracker 未知省括号段。
         let mut t = mk(TaskState::Downloading, true);
         t.seeders = 12;
         t.peers = 35;

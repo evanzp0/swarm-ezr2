@@ -809,3 +809,6 @@ ws/webrtc 轮（2026-11-09）：TrackerUrl 三族分型（Ws 变体与 Http/Udp 
 - 结构体扩展全仓同步面：BtTaskData/BtSpec/BtTaskCmd/Cmd::ReconfigureBt/Dialog 五链加字段，字面量散布 src/tests/gen（剥头副本）三处——批量括号匹配补丁会误伤 `impl T {`/`-> T {`/`..Default::default()`（base struct 后不得补逗号），收尾必 cargo fmt + cargo check 全目标对账；gen/ 剥头副本按 test 的剥头规则重新生成而非手补。
 - ezr-demo `field_rects[trackers_focus] = trackers_rect` 覆盖复选行 rect 是潜伏 bug（trackers 焦点与复选焦点同值），产品端照抄即复刻；焦点环扩展的 mapping 要按新表重推（产品复选 7/5、trackers 8/6、按钮 9-11/7-8），不抄 demo 局部变量名。
 - help 内容行数锚点 = 80→82（SR/LT 两 entries），End 钳制断言与中间帧滚动锚随行数联动——加帮助条目要同步 grep help.rs 内所有行数硬断言。
+
+## FR-02-37 v1.3 产品实现轮（2026-11-14，coder）追加
+- BtConns 事件臂 = x1/y1/availability 三连接值唯一注入点：FR-02-37 v1.3 入口减裁决落此（y1 = seeder==false 计数直存，与 demo Task.peers 字段语义对齐），显示层 sp_txt 直读零改动；显示减备选（观测等价）退役。字段语义变更先普查消费面再动手：t.peers 无其他计算消费、产品 Trackers 弹窗无连接值 fallback、tick.rs 退出规则仅夹具用值——入口减零波及即证。

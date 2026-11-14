@@ -92,3 +92,8 @@
 
 ## v1.56 D80 裁决落实轮（2026-11-14，specifier）追加
 - testing.md — 显示层换算层被操作者否决回退、「字段语义即显示语义」单层定义判据（D80④ 新旧对照）/字段语义变更的共享显示面联动排查（Trackers 弹窗假数据锚点）/样例数据语义化（渲染样本→语义样本）（新增）
+
+## FR-02-37 v1.3 产品实现轮（2026-11-14，coder）追加
+- architecture.md — BtConns 臂三连接值唯一注入点与入口减裁决（消费面普查即证零波及）（新增）
+- testing.md — 16 目标全景与 coder 基线 13 目标口径对应（8100 吻合）/nightly 20261114 构建 unnecessary_to_owned 漂移实录与 iter().any 改写/ENOSPC build out 两层通配清理法（新增）
+- environment.md — 全新沙箱 cargo 索引卡死与 rsproxy sparse 双配置/nightly 中断残骸 missing manifest 愈法/minimal profile 组件补齐/镜像复测（新增）

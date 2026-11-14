@@ -1184,7 +1184,8 @@ mod tests {
         assert!(
             d.trackers
                 .trim_lines()
-                .contains(&"udp://seed/ann".to_string()),
+                .iter()
+                .any(|i| i == "udp://seed/ann"),
             "trackers 预填任务当前池"
         );
         assert_eq!(d.bt_counts(), (2, 2), "文件树勾选状态保留");
@@ -1349,7 +1350,7 @@ mod tests {
                     Some(&"udp://added/ann".to_string()),
                     "热更新携带确认后的新列表"
                 );
-                assert!(trackers.contains(&"udp://seed/ann".to_string()));
+                assert!(trackers.iter().any(|i| i == "udp://seed/ann"));
             }
             other => panic!("纯 tracker 修改应发 BtUpdateTrackers，实际: {other:?}"),
         }

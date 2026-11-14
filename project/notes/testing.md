@@ -760,3 +760,8 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 - 字段语义对齐替代显示层换算（D80④ 修订实录）：操作者裁定「demo SEEDS/PEERS 定义与产品一致」——上轮「显示层减法保字段语义」判据被否决回退，demo seeders=x1/peers=y1 直存直读；经验：显示面换算层是需要向每个读者解释的额外间接层，操作者偏好「字段语义即显示语义」的单层定义（D80④ 新旧口径对照存 handoff/phase-02 v1.24）。
 - 字段语义变更的共享显示面联动排查：改 seeders/peers 字段语义后逐个排查消费方——Trackers 弹窗 per-tracker 假值原锚连接值，做种态 x1=0 会退化弹窗数据，改锚 tracker 报告值（tracker_seeds/tracker_peers，fallback 连接值）；守卫测试与 verify 判据同帧同步，PTY C1 实屏复验（0(45)/35(120)/2.418）。
 - 样例数据语义化：做种臂 fixture 从「渲染样本」（任意可显示值）升级为「语义样本」（seeders=0 呈现做种态 SEEDS=0 而 PEERS 有数）——演示数据应贴合其声称模拟的真实场景语义，避免观者误读口径。
+
+## FR-02-37 v1.3 产品实现轮（2026-11-14，coder）追加
+- 测试目标口径对账：全目标 16 = 4 bin（ezr 1040 + fixture 30 + mktorrent 1 + proxy 15）+ 12 hardening 集成；coder 单测基线口径 13 目标 = ezr bin + 12 集成（本轮 8100 与历轮基线总数精确吻合），3 工具 bin 46P 不入基线——总账对账先分清口径再比数字。
+- nightly 版本带漂移 lint 新实录：2026-11-14 构建 unnecessary_to_owned 新覆盖 `.contains(&"字面".to_string())` 形态（产品仓两处既有测试代码报警，昨轮 0 警告基线的漂移源）——先归因「工具链漂移非回归」再动手，`iter().any(|i| i == "…")` 等价改写；注意 `Vec<String>::contains` 需要 `&String`，直接传 `&str` 是编译错。
+- ENOSPC 处置新面：集成测试二进制落 `target/debug/build/<pkg>/<hash>/out/`（两层通配删除已完成目标的 out 目录 + incremental，保留 deps 编译产物免全量重编，单次释放 4G+）；bash 层级 glob 少一层会静默删不到东西，删后必 `du`/`df` 复核。

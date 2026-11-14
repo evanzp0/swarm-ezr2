@@ -471,3 +471,8 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - GitHub release 大资产直连 180s 仅 4.2MB → ghfast.top 前缀 + `curl -C -` 断点续传补齐 bb 28.8MB；babashka v1.13.229 资产 = tar.gz（历轮口径复证，勿按 tar.xz 下载）。
 - 全新沙箱 ~/.cargo/config.toml 随重置消失 → rsproxy sparse 重建（demo 依赖 ratatui/crossterm/tokio/arboard 一次拉齐）。
 - stable 1.100 clippy 对 demo 既有代码报 manual_is_multiple_of 3 处（dialogs.rs L63/66/69）——lint 集随工具链版本漂移实录：stable 报 is_multiple_of、nightly 1.102 报 needless_mut（ui/mod.rs 五测试 let mut app），同代码两工具链两组不同告警。
+
+## FR-02-37 v1.3 产品实现轮（2026-11-14，coder）追加
+- 全新沙箱无 ~/.cargo/config.toml 时 cargo 卡「Updating crates.io index」数分钟不动（编译入口即挂）→ rsproxy sparse 配置一次过，与 rustup 镜像选型相互独立、两个都要配。
+- nightly 装机被中断的残骸形态：toolchain list 仍可见但 component add 报 missing manifest → uninstall 后重装即愈；`--profile minimal` 不含 rustfmt/clippy（rust-toolchain.toml 的 components 清单不会自动补装），装后须 `rustup component add rustfmt clippy --toolchain nightly`。
+- rustup 镜像复测（2026-11-14）：curl 计速 aliyun TTFB 最快但 dist 路径 404（「测速快 ≠ 能装」第 7 次实证）、rsproxy 直链 22MB/s 一次装齐 stable+nightly；TUNA/USTC dist 清单路径本轮均 404（漂移再现）。
