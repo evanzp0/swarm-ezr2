@@ -1,76 +1,83 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/coder（FR-02-37 v1.3 产品实现轮，待操作者 `bin/swarm complete` 归档）
-> 路径：specifier → coder（ws/webrtc 轮）⇒ 诊断/复验/bug28 轮 ⇒ specifier 修订轮 ⇒ coder 历轮 ⇒ cleaner/architect/QA 收敛链 ⇒ specifier 显示指标/调整/裁决/新增需求轮（v1.47–v1.53）⇒ specifier 裁决落实修订轮（v1.54）⇒ coder 产品实现/复核重验轮 ⇒ specifier PEERS/SEEDS 核证修订轮（v1.55）⇒ specifier D80 裁决落实轮（v1.56）⇒ **coder FR-02-37 v1.3 产品实现轮（本轮 2026-11-14，需求 = v1.55/v1.56 交接待办；下一步建议 six-pack/cleaner）**
-> 会话：six-pack-coder-20261114（任务 = FR-02-37 v1.3 y1 排除种子落地 + evt.rs peers 口径入口减对齐 + 单测同步；上游交接 = project/handoff.md 核证修订轮版）
-> 环境：stable 1.100.0 + nightly 1.102.0-nightly 双工具链本轮经 rsproxy 直链前台重装（rustup-init.sh 脚本路径 404，直链二进制 + DIST_SERVER/UPDATE_ROOT 双变量）；~/.cargo/config.toml rsproxy sparse 本轮新配（crates.io 索引）；磁盘 9.9G 受限，测试分批实跑（批间清 build out/incremental）。APS/bb/PMD 未装机——本轮规格与 QA 零改动（APS 双检不适用）、无度量任务，后续轮按需重建（受限项登记）。
+> 流程：six-pack　当前节点：six-pack/cleaner（FR-02-37 v1.3 收敛轮，待操作者 `bin/swarm complete` 归档）
+> 路径：specifier → coder（ws/webrtc 轮）⇒ 诊断/复验/bug28 轮 ⇒ specifier 修订轮 ⇒ coder 历轮 ⇒ cleaner/architect/QA 收敛链 ⇒ specifier 显示指标/调整/裁决/新增需求轮（v1.47–v1.53）⇒ specifier 裁决落实修订轮（v1.54）⇒ coder 产品实现/复核重验轮 ⇒ specifier PEERS/SEEDS 核证修订轮（v1.55）⇒ specifier D80 裁决落实轮（v1.56）⇒ coder FR-02-37 v1.3 产品实现轮 ⇒ **cleaner FR-02-37 v1.3 收敛轮（本轮 2026-11-14，任务 = 例行收敛；下一步建议 six-pack/architect）**
+> 会话：six-pack-cleaner-20261114（任务 = FR-02-37-v1.3-收敛轮；上游交接 = project/handoff.md coder 产品实现轮版）
+> 环境：nightly 1.102.0-nightly (8eb778d04) 本轮经 TUNA 前台装齐 minimal+rustfmt+clippy+llvm-tools-preview（rustup-init 直链 + DIST_SERVER/UPDATE_ROOT 双层路径双变量）；~/.cargo/config.toml rsproxy sparse 新配；磁盘 9.9G（INC=0 + DEBUG=0 口径全量跑通，峰值余量 1.9G）；度量三件套装机 .tools/bin（cargo-mutants 27.1.0、cargo-llvm-cov 0.9.1 经 gh-proxy 预编译直链）+ .tools/pmd（PMD 7.29.0，gh-proxy 断点续传 135MB）。APS/bb 未装机——本轮规格与 QA 零改动（APS 双检不适用）、无 Gherkin 度量任务（受限项登记）。
 
 ## 一、产物历史完成情况
 
 ### 项目与需求
-- ezr：Rust TUI 下载器（HTTP + BT 双协议，ratatui + tokio）。需求权威来源 = `mission.md`（分期模式，**v1.56**）+ `mission/` 两份 phase 详述（**phase-01 v1.53**、**phase-02 v1.24**）。
+- ezr：Rust TUI 下载器（HTTP + BT 双协议，ratatui + tokio）。需求权威来源 = `mission.md`（分期模式，**v1.56**）+ `mission/` 四份 phase 详述（现行 phase-01 v1.53、phase-02 v1.24）。ezr 不做旧版本兼容（操作者钦定沿 v1.45/FR-02-35，本轮清理同样不引入兼容层）。
 
 ### 产物总账
 | 节点 | 产物 | 完成情况 | 验证状态 |
 |---|---|---|---|
 | specifier 历轮 | features/ 全套 Gherkin + qa/ 全套规程 | 已交付 | 历轮对账在案 |
-| coder/cleaner/architect/QA 历轮（至 2026-11-13 QA 观察项清理轮） | ezr 产品实现 + 15 套件 e2e + 收敛/终验链 | 已交付 | 历轮对账在案 |
-| specifier 新增需求轮（2026-11-13，v1.53） | mission v1.53 + phase 详述 + features 六份修订 + QA 六份同步 + ezr-demo 同构落地 | 已交付 | APS 双检 6/6；demo 单测 58P/0F、PTY 29 项全过 |
-| specifier 裁决落实修订轮（2026-11-13，v1.54） | mission v1.54 + phase-01 v1.53/phase-02 v1.22 + features 三份修订 + QA 三份同步 + ezr-demo HTTP 臂 LT 同构 | 已交付 | APS 双检 3/3；demo 单测 58P/0F、PTY 28 项全过、clippy 零警告 |
-| coder 产品实现轮（2026-11-13） | 产品端五项全量落地（FR-01-118/FR-02-37 v1.2/FR-02-38 v1.21+22/FR-02-39/FR-02-40 + help SR/LT + 模型层 tracker/连接值分离） | 已交付 | 单测 8100P/0F、clippy --all-targets 0 警告、fmt 过 |
-| coder 复核重验轮（2026-11-14） | 产品端零代码新增；tests/gen 剥头副本 4 份机械重生成 + notes 沉淀 + handoff 重写 | 已交付 | 单测 8100P/0F（13 目标逐目标实测）、clippy 0 警告、fmt 全量合规 |
-| specifier PEERS/SEEDS 核证修订轮（2026-11-14，v1.55） | mission v1.55 + phase-02 v1.23（FR-02-37 v1.3、D80①–④）+ features/09-bt-engine v1.53（场景 10/21）+ QA-BE-10/21 v1.53 + ezr-demo y1 排除种子同构落地 + notes + handoff 重写 | 已交付 | APS 双检通过；demo 单测 58P/0F（nightly）、clippy --all-targets 0 警告、PTY verify_v153 28 项全过 |
-| specifier D80 裁决落实轮（2026-11-14，v1.56） | mission v1.56 + phase-02 v1.24（D80①②③ 批准结案、④ 修订结案）+ ezr-demo 字段语义对齐（seeders=x1/peers=y1 直存直读）+ 做种臂样例真实做种形态 0(45)/35(120)/2.418 + Trackers 弹窗假数据锚点 + 守卫测试 + verify_v153 判据 + docs 设计规范 v1.56 补记 + notes 两文件 + handoff 重写 | 已交付 | demo 单测 58P/0F（nightly）、clippy --all-targets 0 警告（nightly）、PTY verify_v153 28 项全过（C1 = 0(45)/35(120)/2.418、B1/B2 = 8(14)/15(31)/1.675 实屏验证） |
-| **coder FR-02-37 v1.3 产品实现轮（本轮 2026-11-14）** | **产品端入口减落地（evt.rs BtConns 臂 y1 = seeder==false 计数直存）+ 单测同步（evt.rs 判据翻转 + 纯种子 y1=0 断言；task_lines.rs sp_txt 判据注释 v1.3 口径）+ clippy 机械修复两处（nightly lint 漂移）+ notes 三文件追加 + 本 handoff 重写** | 已交付 | 单测 **8146P/0F**（16 目标逐目标实测；13 目标 coder 基线口径 **8100P** 与历轮基线总数精确吻合）、clippy **--all-targets 0 警告 0 错误**、fmt **--check 全量合规** |
+| coder/cleaner/architect/QA 历轮（至 2026-11-13 QA 收敛轮） | ezr 产品实现 + 收敛/终验链 | 已交付 | 历轮对账在案 |
+| specifier v1.53–v1.56 五轮 | mission 五版 + phase 详述 + features 修订 + QA 同步 + ezr-demo 同构落地 | 已交付 | APS 双检历轮在案；demo 单测 58P/0F、PTY 全过 |
+| coder 复核重验轮（2026-11-14） | 零代码新增；tests/gen 剥头副本机械重生成 + notes + handoff 重写 | 已交付 | 单测 8100P/0F、clippy 0、fmt 过 |
+| specifier v1.55/v1.56 两轮 | FR-02-37 v1.3 规格核证与 D80 结案 + ezr-demo 字段语义对齐 | 已交付 | APS 双检通过；demo 全绿 |
+| coder FR-02-37 v1.3 产品实现轮（2026-11-14） | evt.rs 入口减落地 + 单测同步 + clippy 机械修复 | 已交付 | 单测 8146P/0F（16 目标）、clippy 0 警告、fmt 合规 |
+| **cleaner FR-02-37 v1.3 收敛轮（本轮 2026-11-14）** | **CRAP 收敛批（scrollbar hit/render 拆分 + 三文件补测 10 条 + field_window/wrap_segments 死臂删除）+ DRY 单点化两处（supervisor/engine 测夹具）+ 变异点扫描登记 + notes 三文件 + 本 handoff 重写** | 已交付 | 全量回归 **8221P/0F**（16 目标，= 基线 8146 + 10 新测 + 65 挂载副本，分项对账自洽）、clippy --all-targets 0 警告 0 错误、fmt --check 全量合规 |
 
 ### 遗留受限项（当前有效）
-- **全新沙箱工具缓存空仓（本轮登记）**：`.tools/` APS/bb 未装机——本轮规格与 QA 零改动（FR-02-37 v1.3 条款不变），APS 双检不适用；后续涉及规格修订/度量任务的轮次按 engineering.md 重建（装机路径与口径见 notes/environment.md 历轮记录）。
-- **QA runner fixture 漂移 3 处（移交 QA/specifier 轮，coder 不维护 QA 套件——SKILL 边界）**：① `suite_modify_bt.py` 4F；② `suite_config_template.py` 5F；③ `suite_persistence_config.py` QA-PC-04 1F。沿历轮登记。
-- **verify_trackers_popup.py T2/T3 共 3F（既有失败，v1.55 轮 stash 基线归因与本轮 diff 无关）**：「T2 弹窗打开」「T3 修改对话框打开」——移交后续轮修复。
-- **verify_size_move.py 陈旧化**——v1.48 时代脚本，断言自 v1.51 起随显示格式演进失效；移交后续轮决定修复或退役。
-- demo clippy 口径：后续轮一律 --all-targets 零警告口径声明。
-- leech 专属 e2e、变异实跑（hardender 未跑）、BT engine/add-bt/anti-leech/trackers-window/cmd-window 族无专属 runner（沿历轮）；`suite_bt_engine` 等六族文件在本仓不存在（非新增缺口）。
-- PMD/llvm-cov/cargo-mutants 未装机（无度量需求）。
+- **APS/bb 未装机（沿历轮）**：本轮规格与 QA 零改动、无 Gherkin 度量任务，APS 双检不适用；后续涉规格/度量轮按 engineering.md 重建。
+- **QA runner fixture 漂移 3 处（移交 QA/specifier 轮，cleaner 不维护 QA 套件——SKILL 边界）**：① `suite_modify_bt.py` 4F；② `suite_config_template.py` 5F；③ `suite_persistence_config.py` QA-PC-04 1F。沿历轮登记不变。
+- **verify_trackers_popup.py T2/T3 共 3F（既有失败）**：移交后续轮修复，沿历轮登记。
+- **verify_size_move.py 陈旧化**：v1.48 时代脚本，移交后续轮决定修复或退役，沿历轮登记。
+- **CRAP 登记口径（本轮全量扫描基线，16 目标 lcov 并集 89.6%）**：排除 property_tests 跳跑伪影与 SF 别名重复后，产品代码 CRAP>6 且 cov<1.0 共 158 点。结构性登记分类：①TUI 分发/守卫链（keys.rs:7 comp=32、mouse.rs:178/275/395/454/532、cmd.rs:255 on_cmd_key、ui/mod.rs:113 draw、multiline.rs:24 渲染内核 comp=22/cov=1.0、textfield.rs:225 field_window comp=17/cov=0.925 残余 steps>8 病态臂、textfield.rs:334 wrap_segments comp=12/cov=0.868）——architect 轮判例「路由/守卫链=本质复杂度不拆」；②引擎异步环（bt/engine/mod.rs:289/593、peerwire.rs:251/308、supervisor/single.rs:48、pieceio.rs:435、trackpool ws_* 族）——异步核心 + 拆分属不安全类移交 hardender；③环境边界（main.rs:253/369 CLI 入口、ezr-proxy SUT、sentinel.rs:51 进程守卫、webrtc DataChannel 臂）——e2e/手动验证域。config.rs:548 配置解析核心 comp=48/cov=1.0（CRAP=comp 下限 48）随 strict 校验条款本质复杂，维持登记不硬拆。
+- **死臂登记结案（本轮已删 3 处，证据在案）**：field_window 未聚焦 pre/post 中间臂（budget.max(1) 钳制 × anchor=len 不变式证明，见 notes/architecture.md）、wrap_segments 空段防御块（非空输入必有 push 的计数论证）。field_window 残余 steps>8 回退臂（L255 区段）为病态震荡兜底，登记不硬凑（构造 9 轮震荡需人工病态宽度序列，收益不抵风险）。
+- **mktorrent bencode 跨 bin 重复（登记不并）**：`src/bin/ezr-mktorrent.rs` 自带 encode/encode_into 副本（CPD 232-token 顶级克隆对）——bin-only crate 结构下跨 bin 共享需 lib 化重构，属构建图级变更移交 architect/hardender 裁决；mktorrent 为构建工具 bin，副本短期维持。
+- demo clippy 口径：--all-targets 零警告（沿历轮）。
+- leech 专属 e2e、变异实跑（hardender 未跑）、BT engine/add-bt/anti-leech/trackers-window/cmd-window 族无专属 runner（沿历轮）。
+- PMD/jscpd 口径：CPD 双阈值 100tok=74 组 / 70tok=204 组（本轮实测基线）；PMD 7.29.0 落位 swarm/.tools/pmd（工具缓存不进归档）。
 
 ### 实现定义值登记（累计，当前有效口径）
-- **D44–D80 沿历轮登记不变（均不可回退）；D80①–④ 已全部结案（2026-11-14 操作者闸门裁定）**：
-  - **D80①（qBt 源核证结论）批准结案（不可回退）**：qBt master 任务列表 SEEDS/PEERS 列取值 = `amountString(seedsCount(), totalSeedsCount())` / `amountString(leechsCount(), totalLeechersCount())`（transferlistmodel.cpp L386-388，amountString = `"%1 (%2)"`）；`seedsCount = num_seeds`（连接种子）、`leechsCount = num_peers − num_seeds`、`totalSeedsCount = num_complete`、`totalLeechersCount = num_incomplete`（torrentimpl.cpp L1488-1517）。
-  - **D80②（EZR 对判）批准结案（不可回退）**：x1 = BtConns 快照 seeder==true 计数与 qBt seedsCount 同源维持；v1.2 条款括注 qBt 锚点 `peersCount/totalPeersCount` 系误引，更正为 `leechsCount/totalLeechersCount`。
-  - **D80③（y1 新口径）批准结案（不可回退）**：y1 = 实际连接的**非种子 peers 数**（leecher，排除种子）= BtConns 快照 seeder==false 连接计数；x2/y2 括号段、tracker 未知括号段省略（D78②）、非活跃 `-/-/-`、做种臂同构形态均不变。**本轮产品端落地（入口减）。**
-  - **D80④（demo 承接口径）修订结案（操作者钦定新版，不可回退）**：EZR-DEMO 中 SEEDS、PEERS 的字段定义与 EZR（FR-02-37 v1.3）保持一致——Task.seeders = x1、Task.peers = y1，显示层直读无换算；v1.55「含种子 + 饱和减法」口径退役。**产品实现层入口减与 demo 字段语义已对齐（本轮）。**
+- **D44–D80 沿历轮登记不变（均不可回退）；D80①–④ 已全部结案（2026-11-14 操作者闸门裁定）**——本轮 cleaner 为行为保持收敛，无新增 D 值、无规格语义改动。
 
 ## 二、当前产出情况
 
-### 本会话产物清单（coder FR-02-37 v1.3 产品实现轮）
-1. **产品端入口减落地**：`project/ezr/src/app/engine/evt.rs` Evt::BtConns 臂一行改动——`t.peers = conns.iter().filter(|c| !c.seeder).count()`（原 `conns.len()` 含种子口径退役）；与 demo Task.peers 字段语义完全对齐（D80④）。显示层 `ui/task_lines.rs` sp_txt 直读**零改动**。
-2. **单测同步（交接钦定两同步点）**：
-   - `evt.rs` `bt_conns_arm_counts_connected_seeds_and_peers`：判据翻转 y1 = 2（1 种子 + 2 leecher 混合快照，旧实现 3 实测变红）+ 新增纯种子连接二次注入断言（x1=2、y1=0——做种态 SEEDS 有数而 PEERS 无数同构呈现）；
-   - `task_lines.rs` `sp_txt_bracket_form_uses_tracker_values` 判据注释同步 v1.3/D80③ 口径（y1 = 非种子 peers 数由注入层直存、显示直读）。
-3. **clippy 机械修复**：`src/app/bt_dialog.rs` 两处测试断言（`.contains(&"…".to_string())` → `iter().any(|i| i == "…")`）——nightly 2026-11-14 构建 `unnecessary_to_owned` lint 覆盖面漂移暴露的既有代码告警，非本轮改动引入；不修复则 --all-targets 0 警告门槛失守。
-4. **经验沉淀**：`project/notes/` 三文件追加（architecture：BtConns 臂唯一注入点与消费面普查判据；testing：16 目标口径对账 / nightly lint 漂移实录 / ENOSPC build out 清理法；environment：沙箱镜像双配置 / nightly 残骸愈法 / 镜像复测）+ INDEX.md 同步；无跨项目通用条目。
-5. **本 handoff.md** 重写为本轮口径。
+### 本会话产物清单（cleaner FR-02-37 v1.3 收敛轮）
+1. **CRAP 收敛批（保持行为）**：
+   - `src/scrollbar.rs`：`Bar::hit` 拆分（along_vertical/along_horizontal/edge_hit/track_hit 四辅助，comp 17→6）+ `render` 拆分（glyph_set/min_span_ok/pressed_arrow_style/edge_glyph/track_glyph/paint 六辅助，comp 23→6）；新增 5 测（退化几何守卫/水平错行/render 不可滚零改动/render 按下箭头样式/越界面板静默）。**验证：bin 套件口径两函数从 CRAP>6 清单消失（CRAP=6）。**
+   - `src/ui/multiline.rs`：新增 2 测（wrap 跟随臂消费/空缓冲占位符 DIM2 渲染）——draw_multi_line_input cov 0.947→**1.000**（CRAP=comp=22 渲染内核登记）。
+   - `src/textfield.rs`：新增 3 测（零预算未聚焦早返回/断点+空格跳过/断点后超宽单字）+ 删除 3 处可证死臂（field_window 未聚焦中间臂 ×2、wrap_segments 空段防御块）——field_window cov 0.526→**0.925**、wrap_segments cov→0.868（残余 steps>8 病态兜底臂登记）。
+2. **DRY 单点化两处**：
+   - `src/engine/supervisor/mod.rs`：throttle_free/throttle_global_dl 双构造体收编 `test_shared_with_dl_rate(rate)`（差异面=dl 速率参数）。
+   - `src/bt/engine/mod.rs`：fake_udp_tracker/fake_udp_tracker_report_engine_port 公共 serve 循环提取 `fake_udp_tracker_serve(sock, seeder_port, Option<port_tx>)`，两夹具退化为三行委托；CPD 36-line/316-token 顶级克隆对消除。
+   - mktorrent bencode 重复登记不并（见受限项）。
+3. **变异点扫描（--list 不实跑，沿 SKILL scan/count 口径）**：本轮 coder 改动文件计数 = evt.rs 48 / task_lines.rs 75 / bt_dialog.rs 119（与 architect 轮登记 119 精确同值，文件结构未漂移）；bt_dialog 119>100 维持 architect 轮「不强拆，hardender --file 分块消费」登记。
+4. **覆盖率基建（会话级，随 .work 清理）**：llvm-cov 直采管线建立（LLVM_PROFILE_FILE 逐二进制 → llvm-profdata merge → llvm-cov export --format=lcov → crap_calc.py 并集），16 目标 lcov 并集 89.6% 基线报告； cargo-llvm-cov 自动合并不可信三坑与 profraw 组合矩阵污染实录入 notes。
+5. **经验沉淀**：`project/notes/` 三文件追加（architecture：拆分模板/死臂证明/i==start 构造/夹具单点化；testing：直采管线/污染实录/死臂验证闭环/挂载不均匀对账；environment：覆盖率构建隔离/PMD 大资产/mutants 成本口径）+ INDEX.md 同步；无跨项目通用条目（constitution 归属分流）。
+6. **本 handoff.md** 重写为本轮口径。
 
 ### 验证证据
 | 验证项 | 结果 | 命令（可复现） |
 |---|---|---|
-| 单测（ezr bin） | 1040P / 0F | cargo test --bins（含 fixture 30P/proxy 15P/mktorrent 1P） |
-| 单测（12 hardening 集成目标） | 7060P / 0F | cargo test --test <目标> 逐目标实测（hardening 247 / engine_backfill 928 / g_appcore 814 / g_engine 810 / g_main 2 / g_proxy 16 / g_slots 254 / g_supervisor 783 / g_throttle_err 500 / g_v147 797 / ui_backfill 958 / v115 951） |
-| 合计 | 8146P / 0F（16 目标）；13 目标基线口径 8100P 与历轮基线精确吻合 | 分项复算自洽 |
+| 单测（ezr bin 族 4 目标） | **1096P / 0F**（ezr 1050 = 基线 1040+10 新测、fixture 30、mktorrent 1、proxy 15） | cargo test --bins |
+| 单测（12 hardening 集成目标） | **7125P / 0F**（挂载增量 +10/+8/+8/+8/+0/+0/+0/+8/+3/+8/+10/+10，总账 8146+10+65=8221 复算自洽） | cargo test --test <目标> 逐目标实测 |
+| 合计 | **8221P / 0F（16 目标）** | 分项复算自洽 |
 | clippy | --all-targets 0 警告 0 错误 | cargo clippy --all-targets |
 | fmt | 全量合规 | cargo fmt --all -- --check |
-| TDD 红→绿 | 旧实现 y1=3 实测变红 → 入口减后 7/7 evt 臂全绿 | cargo test --bin ezr evt_arm_tests:: |
+| 覆盖率（16 目标 lcov 并集） | 89.6%（79623/88853 行） | crap_calc.py 直采管线（notes/testing.md 管线记录） |
+| CRAP 收敛 | scrollbar hit 17.6→6、render 23→6（清单除名）；multiline draw cov→1.000；textfield field_window 0.526→0.925、wrap_segments→0.868 | crap_calc.py bin 口径复扫 |
+| DRY | CPD 100tok 74 组 / 70tok 204 组（基线实测）；顶级克隆对（engine 夹具 316tok、supervisor 夹具 179tok）已消除 | pmd cpd -d src --language rust --minimum-tokens 100 |
+| 变异点扫描 | evt.rs 48 / task_lines.rs 75 / bt_dialog.rs 119（不实跑） | cargo mutants --list --file <三文件> |
 
 ### 对账口径
-- 本轮改动面 = `evt.rs`（注入臂一行 + 单测扩展）+ `task_lines.rs`（注释一行）+ `bt_dialog.rs`（两处测试断言机械改写）+ notes 三文件 + handoff；产品行为面 = BT 任务 y1 取值语义（BtConns 注入时排除种子）。
-- 观测行为对账：下载中/做种中 BT 任务的 y1（括号外 PEERS）从「连接 peers 总数（含种子）」变为「非种子连接数」；x1/x2/y2、括号省略、`-/-/-`、做种臂同构、HTTP 面零变化；`t.peers` 无其他计算消费（Trackers 弹窗产品端直用 tracker 报告行、无连接值 fallback；tick.rs 退出规则仅夹具用值）——入口减零波及。
-- 兼容口径：ezr 不做旧版本兼容（操作者钦定沿 v1.45/FR-02-35）；本轮为取值逻辑修订，不涉持久化格式。
-- 磁盘受限说明：单测 16 目标分批前台实跑（批间清理 `target/debug/build/*/*/out` 与 `debug/incremental`），批间清理仅移除已完成目标的可重建产物，不影响结果口径；debug 产物（target/）由 `bin/swarm complete` 打包前自动清理。
+- 本轮改动面 = `src/scrollbar.rs`（hit/render 拆分 + 5 测）+ `src/ui/multiline.rs`（2 测）+ `src/textfield.rs`（3 测 + 死臂删除）+ `src/engine/supervisor/mod.rs`（测夹具单点化）+ `src/bt/engine/mod.rs`（测夹具单点化）+ notes 三文件 + INDEX.md + 本 handoff；产品行为面 = 零（保持行为收敛，仅死臂删除为可证不可达代码）。
+- 测试净变化 = src 新增 10 条（scrollbar 5 / multiline 2 / textfield 3），挂载自动收编 65 副本入 12 集成套件；无测试删除、无断言翻转、无构建配置改动。
+- 死臂删除证据：field_window 未聚焦臂——`budget.max(1)` 入口钳制（L175）× 未聚焦 anchor=chars.len()（L202-206）⇒ window_for hi≡len（right_cut 恒假）且 lo=0 ⟺ total≤b≤budget<total 矛盾（left_cut 恒真）；wrap_segments 空段块——非空输入必有 push（零溢出走收尾 push L377-379，有溢出走环内 push），L384 判空恒假。行为不变性由既有 + 新增单测双重锁定。
+- 兼容口径：ezr 不做旧版本兼容（操作者钦定沿 v1.45/FR-02-35）；本轮为结构收敛，不涉持久化格式。
+- 磁盘受限说明：单测 16 目标分批前台实跑；覆盖率构建隔离 CARGO_TARGET_DIR=.work/tmp/cover-target（line-tables-only 口径 2.2G）+ profraw 直采，度量毕即删；target/debug 构建缓存由 `bin/swarm complete` 打包前自动清理。
 
 ### 待办与待批
-- **无待批项**（D80 全结案；本轮交接钦定实现完成）。
-- verify_size_move.py 陈旧化处置（修复或退役）+ QA runner 漂移 3 处 + verify_trackers_popup T2/T3 3F 移交后续轮（见受限项）。
+- **无待批项**（本轮无规格语义改动、无新增 D 值）。
+- CRAP 登记清单（158 点三分类）与 mktorrent bencode 副本归属，移交 architect 轮确认或维持登记（见受限项）。
+- verify_size_move.py 陈旧化处置 + QA runner 漂移 3 处 + verify_trackers_popup T2/T3 3F 维持移交后续轮（见受限项）。
 - 变异实跑维持移交 hardender；leech e2e 缺口沿历轮。
 
 ### 移交建议
 - 请操作者运行 `bin/swarm complete` 归档（`project/` 工作区保留；归档包按操作者指令交付 `/home/z/my-project/download/`）。
-- 下一节点建议 = `bin/swarm begin six-pack/cleaner`（收敛轮：本轮改动面小且 clippy/fmt 已零基线，cleaner 可做例行收敛或操作者直接裁定终结本轮流程）。
+- 下一节点建议 = `bin/swarm begin six-pack/architect`（架构评审轮：本轮收敛面集中 scrollbar/textfield/engine 测夹具，architect 可做依赖方向与模块边界复核；如操作者拟终结收敛链，亦可直接 QA 终验或 complete 收档）。

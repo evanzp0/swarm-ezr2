@@ -269,10 +269,8 @@ impl TextInput {
             } else {
                 chars[lo..anchor].iter().collect()
             }
-        } else if left_cut {
-            "…".to_string()
         } else {
-            String::new()
+            "…".to_string()
         };
         let post = if focused {
             if right_cut {
@@ -280,8 +278,6 @@ impl TextInput {
             } else {
                 chars[anchor..hi].iter().collect()
             }
-        } else if right_cut {
-            format!("{}…", chars[lo..hi].iter().collect::<String>())
         } else {
             chars[lo..hi].iter().collect()
         };
@@ -380,9 +376,6 @@ pub fn wrap_segments(line: &str, width: usize) -> Vec<(usize, usize)> {
     }
     if start < chars.len() {
         segs.push((start, chars.len() - start));
-    }
-    if segs.is_empty() {
-        segs.push((0, 0));
     }
     segs
 }
@@ -803,5 +796,32 @@ mod tests {
         fd.win.value_x = 40;
         assert_eq!(TextInput::click_offset(&fd.win, 43), 3);
         assert_eq!(TextInput::click_offset(&fd.win, 44), 4);
+    }
+
+    #[test]
+    fn field_window_zero_budget_unfocused_returns_empty_pre() {
+        let t = TextInput::with_value("a");
+        let fd = t.field_window("", 0, false);
+        assert_eq!(fd.pre, "", "预算 0 非聚焦 → 前缀空");
+        assert_eq!(fd.post, "a", "单字符后缀原样");
+    }
+
+    #[test]
+    fn wrap_segments_breaks_at_word_boundary_and_skips_spaces() {
+        let segs = wrap_segments("ab   c", 2);
+        let text: Vec<&str> = segs.iter().map(|(s, n)| &"ab   c"[*s..*s + *n]).collect();
+        assert_eq!(text, vec!["ab", " ", "c"], "断点臂 + 连续空格跳过");
+        let segs2 = wrap_segments("ab  中", 3);
+        assert_eq!(segs2, vec![(0, 2), (4, 1)], "断点臂：宽字符承接新段");
+    }
+
+    #[test]
+    fn wrap_segments_word_break_then_overwide_char_pushes_single() {
+        let segs = wrap_segments("a  中", 2);
+        assert_eq!(segs, vec![(0, 1), (3, 1)], "断点后超宽单字逐字成段");
+        let segs2 = wrap_segments("中文中", 2);
+        assert_eq!(segs2, vec![(0, 1), (1, 1), (2, 1)], "超宽连排逐字成段");
+        let segs3 = wrap_segments("", 4);
+        assert_eq!(segs3, vec![(0, 0)], "空行早返回");
     }
 }

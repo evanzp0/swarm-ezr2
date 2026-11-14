@@ -439,12 +439,12 @@ mod tests {
         }
     }
 
-    fn throttle_free() -> Arc<super::super::EngineShared> {
+    fn test_shared_with_dl_rate(rate: u64) -> Arc<super::super::EngineShared> {
         Arc::new(super::super::EngineShared {
             client: reqwest::Client::builder().no_proxy().build().unwrap(),
             clients: std::sync::Mutex::new(std::collections::HashMap::new()),
             throttle_dl: Arc::new(super::super::throttle::Throttle::with_params(
-                0,
+                rate,
                 crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
                 crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
             )),
@@ -466,6 +466,10 @@ mod tests {
             bt_listener_std: std::net::TcpListener::bind("127.0.0.1:0").unwrap(),
             bt_listener: std::sync::OnceLock::new(),
         })
+    }
+
+    fn throttle_free() -> Arc<super::super::EngineShared> {
+        test_shared_with_dl_rate(0)
     }
 
     fn sidecar_spec(id: u32, url: &str, dir: &std::path::Path, conc: usize) -> TaskSpec {
@@ -578,32 +582,7 @@ mod tests {
     }
 
     fn throttle_global_dl(rate: u64) -> Arc<super::super::EngineShared> {
-        Arc::new(super::super::EngineShared {
-            client: reqwest::Client::builder().no_proxy().build().unwrap(),
-            clients: std::sync::Mutex::new(std::collections::HashMap::new()),
-            throttle_dl: Arc::new(super::super::throttle::Throttle::with_params(
-                rate,
-                crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
-                crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
-            )),
-            throttle_ul: Arc::new(super::super::throttle::Throttle::with_params(
-                0,
-                crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
-                crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
-            )),
-            throttle_burst_secs: crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
-            throttle_sleep_ms: crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
-            blacklist: std::sync::Mutex::new(std::collections::HashSet::new()),
-            blacklist_file: None,
-            grace: std::time::Duration::from_millis(
-                crate::model::config::DEFAULT_DNS_RACE_GRACE_MS,
-            ),
-            upload_read_permits: Arc::new(tokio::sync::Semaphore::new(
-                crate::model::config::DEFAULT_UPLOAD_READ_CONCURRENCY,
-            )),
-            bt_listener_std: std::net::TcpListener::bind("127.0.0.1:0").unwrap(),
-            bt_listener: std::sync::OnceLock::new(),
-        })
+        test_shared_with_dl_rate(rate)
     }
 
     async fn timed_download(rx: &mut mpsc::Receiver<Evt>, deadline: std::time::Instant) -> f64 {

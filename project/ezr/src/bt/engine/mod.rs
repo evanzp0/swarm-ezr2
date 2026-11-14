@@ -941,54 +941,66 @@ mod tests {
         TorrentMeta::parse(&encode(&BValue::Dict(root))).unwrap()
     }
 
+    async fn fake_udp_tracker_serve(
+        sock: tokio::net::UdpSocket,
+        seeder_port: u16,
+        port_tx: Option<tokio::sync::mpsc::UnboundedSender<u16>>,
+    ) {
+        let mut buf = [0u8; 512];
+        loop {
+            let (n, from) = match sock.recv_from(&mut buf).await {
+                Ok(x) => x,
+                Err(_) => return,
+            };
+            let req = &buf[..n];
+            if req.len() < 16 {
+                continue;
+            }
+            let action = u32::from_be_bytes(req[8..12].try_into().unwrap());
+            let txid = u32::from_be_bytes(req[12..16].try_into().unwrap());
+            if action == 0 {
+                let magic = u64::from_be_bytes(req[0..8].try_into().unwrap());
+                if magic != 0x0417_2710_1980 {
+                    continue;
+                }
+            } else if action == 1 {
+                let conn_id = u64::from_be_bytes(req[0..8].try_into().unwrap());
+                if conn_id != 0x1234_5678_9abc_def0 {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+            if action == 0 {
+                let mut out = Vec::new();
+                out.extend_from_slice(&0u32.to_be_bytes());
+                out.extend_from_slice(&txid.to_be_bytes());
+                out.extend_from_slice(&0x1234_5678_9abc_def0u64.to_be_bytes());
+                let _ = sock.send_to(&out, from).await;
+            } else if action == 1 {
+                if let Some(tx) = port_tx.as_ref() {
+                    if req.len() >= 98 {
+                        let engine_port = u16::from_be_bytes(req[96..98].try_into().unwrap());
+                        let _ = tx.send(engine_port);
+                    }
+                }
+                let mut out = Vec::new();
+                out.extend_from_slice(&1u32.to_be_bytes());
+                out.extend_from_slice(&txid.to_be_bytes());
+                out.extend_from_slice(&60u32.to_be_bytes());
+                out.extend_from_slice(&1u32.to_be_bytes());
+                out.extend_from_slice(&1u32.to_be_bytes());
+                out.extend_from_slice(&[127, 0, 0, 1]);
+                out.extend_from_slice(&seeder_port.to_be_bytes());
+                let _ = sock.send_to(&out, from).await;
+            }
+        }
+    }
+
     async fn fake_udp_tracker(seeder_port: u16) -> u16 {
         let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let port = sock.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            let mut buf = [0u8; 512];
-            loop {
-                let (n, from) = match sock.recv_from(&mut buf).await {
-                    Ok(x) => x,
-                    Err(_) => return,
-                };
-                let req = &buf[..n];
-                if req.len() < 16 {
-                    continue;
-                }
-                let action = u32::from_be_bytes(req[8..12].try_into().unwrap());
-                let txid = u32::from_be_bytes(req[12..16].try_into().unwrap());
-                if action == 0 {
-                    let magic = u64::from_be_bytes(req[0..8].try_into().unwrap());
-                    if magic != 0x0417_2710_1980 {
-                        continue;
-                    }
-                } else if action == 1 {
-                    let conn_id = u64::from_be_bytes(req[0..8].try_into().unwrap());
-                    if conn_id != 0x1234_5678_9abc_def0 {
-                        continue;
-                    }
-                } else {
-                    continue;
-                }
-                if action == 0 {
-                    let mut out = Vec::new();
-                    out.extend_from_slice(&0u32.to_be_bytes());
-                    out.extend_from_slice(&txid.to_be_bytes());
-                    out.extend_from_slice(&0x1234_5678_9abc_def0u64.to_be_bytes());
-                    let _ = sock.send_to(&out, from).await;
-                } else if action == 1 {
-                    let mut out = Vec::new();
-                    out.extend_from_slice(&1u32.to_be_bytes());
-                    out.extend_from_slice(&txid.to_be_bytes());
-                    out.extend_from_slice(&60u32.to_be_bytes());
-                    out.extend_from_slice(&1u32.to_be_bytes());
-                    out.extend_from_slice(&1u32.to_be_bytes());
-                    out.extend_from_slice(&[127, 0, 0, 1]);
-                    out.extend_from_slice(&seeder_port.to_be_bytes());
-                    let _ = sock.send_to(&out, from).await;
-                }
-            }
-        });
+        tokio::spawn(fake_udp_tracker_serve(sock, seeder_port, None));
         port
     }
 
@@ -1058,55 +1070,7 @@ mod tests {
     ) -> u16 {
         let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let port = sock.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            let mut buf = [0u8; 512];
-            loop {
-                let (n, from) = match sock.recv_from(&mut buf).await {
-                    Ok(x) => x,
-                    Err(_) => return,
-                };
-                let req = &buf[..n];
-                if req.len() < 16 {
-                    continue;
-                }
-                let action = u32::from_be_bytes(req[8..12].try_into().unwrap());
-                let txid = u32::from_be_bytes(req[12..16].try_into().unwrap());
-                if action == 0 {
-                    let magic = u64::from_be_bytes(req[0..8].try_into().unwrap());
-                    if magic != 0x0417_2710_1980 {
-                        continue;
-                    }
-                } else if action == 1 {
-                    let conn_id = u64::from_be_bytes(req[0..8].try_into().unwrap());
-                    if conn_id != 0x1234_5678_9abc_def0 {
-                        continue;
-                    }
-                } else {
-                    continue;
-                }
-                if action == 0 {
-                    let mut out = Vec::new();
-                    out.extend_from_slice(&0u32.to_be_bytes());
-                    out.extend_from_slice(&txid.to_be_bytes());
-                    out.extend_from_slice(&0x1234_5678_9abc_def0u64.to_be_bytes());
-                    let _ = sock.send_to(&out, from).await;
-                } else if action == 1 {
-                    if req.len() >= 98 {
-                        let engine_port = u16::from_be_bytes(req[96..98].try_into().unwrap());
-                        let _ = port_tx.send(engine_port);
-                    }
-                    let mut out = Vec::new();
-                    out.extend_from_slice(&1u32.to_be_bytes());
-                    out.extend_from_slice(&txid.to_be_bytes());
-                    out.extend_from_slice(&60u32.to_be_bytes());
-                    out.extend_from_slice(&1u32.to_be_bytes());
-                    out.extend_from_slice(&1u32.to_be_bytes());
-                    out.extend_from_slice(&[127, 0, 0, 1]);
-                    out.extend_from_slice(&seeder_port.to_be_bytes());
-                    let _ = sock.send_to(&out, from).await;
-                }
-            }
-        });
+        tokio::spawn(fake_udp_tracker_serve(sock, seeder_port, Some(port_tx)));
         port
     }
 

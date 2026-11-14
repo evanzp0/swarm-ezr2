@@ -476,3 +476,8 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - 全新沙箱无 ~/.cargo/config.toml 时 cargo 卡「Updating crates.io index」数分钟不动（编译入口即挂）→ rsproxy sparse 配置一次过，与 rustup 镜像选型相互独立、两个都要配。
 - nightly 装机被中断的残骸形态：toolchain list 仍可见但 component add 报 missing manifest → uninstall 后重装即愈；`--profile minimal` 不含 rustfmt/clippy（rust-toolchain.toml 的 components 清单不会自动补装），装后须 `rustup component add rustfmt clippy --toolchain nightly`。
 - rustup 镜像复测（2026-11-14）：curl 计速 aliyun TTFB 最快但 dist 路径 404（「测速快 ≠ 能装」第 7 次实证）、rsproxy 直链 22MB/s 一次装齐 stable+nightly；TUNA/USTC dist 清单路径本轮均 404（漂移再现）。
+
+## FR-02-37 v1.3 收敛轮（2026-11-14，cleaner）追加
+- cargo-llvm-cov 0.9.1 + nightly 1.102 覆盖率构建：CARGO_TARGET_DIR 隔离落 .work/tmp + CARGO_PROFILE_DEV_DEBUG="line-tables-only"（行表级 debuginfo 够 llvm-cov 行覆盖用，盘省一半，全量 16 目标 ~2.2G）；`--no-run` 已废弃（会在合并阶段报 not found profraw 而非构建失败），预构建用 `--no-report`（构建+跑测不产报告）。
+- PMD 7.29.0 大资产下载：gh-proxy 前缀对 ~135MB bin.zip 稳定 ~100KB/s（两轮断点续传 -C - 拼齐），aliyun/maven central/huawei 均无 pmd-dist bin 包（Maven 只发 jar）——大 GitHub release 资产先查 content-length 预算时间，别在失败镜像间盲试。
+- 变异点扫描成本口径：cargo-mutants --list --file 三文件仅 ~1 分钟（纯源解析不编译），--file 多值重复旗标传入；扫描产物 mutants-target 隔离 CARGO_TARGET_DIR 用后即删。

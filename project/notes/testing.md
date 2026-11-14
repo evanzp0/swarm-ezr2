@@ -765,3 +765,9 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 - 测试目标口径对账：全目标 16 = 4 bin（ezr 1040 + fixture 30 + mktorrent 1 + proxy 15）+ 12 hardening 集成；coder 单测基线口径 13 目标 = ezr bin + 12 集成（本轮 8100 与历轮基线总数精确吻合），3 工具 bin 46P 不入基线——总账对账先分清口径再比数字。
 - nightly 版本带漂移 lint 新实录：2026-11-14 构建 unnecessary_to_owned 新覆盖 `.contains(&"字面".to_string())` 形态（产品仓两处既有测试代码报警，昨轮 0 警告基线的漂移源）——先归因「工具链漂移非回归」再动手，`iter().any(|i| i == "…")` 等价改写；注意 `Vec<String>::contains` 需要 `&String`，直接传 `&str` 是编译错。
 - ENOSPC 处置新面：集成测试二进制落 `target/debug/build/<pkg>/<hash>/out/`（两层通配删除已完成目标的 out 目录 + incremental，保留 deps 编译产物免全量重编，单次释放 4G+）；bash 层级 glob 少一层会静默删不到东西，删后必 `du`/`df` 复核。
+
+## FR-02-37 v1.3 收敛轮（2026-11-14，cleaner）追加
+- 覆盖率直采管线（cargo-llvm-cov 自动合并不可信时）：`LLVM_PROFILE_FILE=<dir>/%p-%m.profraw` 直驱每个单测二进制 → llvm-profdata merge -sparse → llvm-cov export <bin> --instr-profile --format=lcov（2026 LLVM 已弃 --lcov 单旗标）；逐二进制 lcov 交 crap_calc.py 多文件并集。cargo-llvm-cov 自动模式三坑实录：四个不同 --test 目标产出 md5 相同的 lcov（g_* 变体共享覆盖映射、profraw 名以包名前缀碰撞）、profraw 跨调用累积（--no-clean 语义）、单测二进制落在 OUT_DIR 会被后续调用清理——直采法全部规避。
+- profraw 归属与组合矩阵污染：多次直采复用同一 profraw 目录时，旧二进制（重构前）的计数与新二进制按函数名哈希碰撞合并 → llvm-cov export 对新映射产出「已覆盖臂显示未覆盖」的假缺口（本轮 L363/L275 假未覆盖实录）——复采前必须清空 profraw 目录，A/B 归因先锁 binary×profraw 组合矩阵。
+- 死臂删除的验证闭环：删后先跑目标过滤单测（行为不变），再以干净 profraw 重出 lcov 核对缺口消失；crap_calc 的 ph=N 幻影列（未覆盖 `}` 收尾行）随死臂删除自动归零，勿把幻影行当真实缺口追测。
+- 挂载套件增量对账不均匀形态：src 新增 10 测在 12 集成套件的挂载增量 = +10/+8/+8/+8/+0/+0/+0/+8/+3/+8/+10/+10（按模块归属分布，非历轮「各 +N」均匀形态）——对账以「每套件恰好收编其含模块的测试」为准，总数复算 8146+10+65=8221 自洽即过，勿强求各套件等增。

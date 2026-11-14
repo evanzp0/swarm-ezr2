@@ -144,35 +144,37 @@ impl Bar {
         ((at as f64 / travel as f64) * max as f64).round() as usize
     }
 
-    #[must_use]
-    pub fn hit(&self, col: u16, row: u16) -> Option<Hit> {
-        if self.total <= self.page || self.page == 0 || self.track_len() < 2 {
+    fn along_vertical(&self, col: u16, row: u16, a: u16, b: u16) -> Option<u16> {
+        if col != self.panel.x + self.panel.width.saturating_sub(1) {
             return None;
         }
-        let (a, b) = self.arrow_span();
-        let along = if self.vertical {
-            if col != self.panel.x + self.panel.width.saturating_sub(1) {
-                return None;
-            }
-            if row < a || row > b {
-                return None;
-            }
-            row
-        } else {
-            if row != self.panel.y + self.panel.height.saturating_sub(1) {
-                return None;
-            }
-            if col < a || col > b {
-                return None;
-            }
-            col
-        };
+        if row < a || row > b {
+            return None;
+        }
+        Some(row)
+    }
+
+    fn along_horizontal(&self, col: u16, row: u16, a: u16, b: u16) -> Option<u16> {
+        if row != self.panel.y + self.panel.height.saturating_sub(1) {
+            return None;
+        }
+        if col < a || col > b {
+            return None;
+        }
+        Some(col)
+    }
+
+    fn edge_hit(along: u16, a: u16, b: u16) -> Option<Hit> {
         if along == a {
             return Some(Hit::Head);
         }
         if along == b {
             return Some(Hit::Tail);
         }
+        None
+    }
+
+    fn track_hit(&self, along: u16) -> Option<Hit> {
         let org = self.track_origin();
         if along < org || (along - org) as usize >= self.track_len() {
             return None;
@@ -188,6 +190,20 @@ impl Bar {
     }
 
     #[must_use]
+    pub fn hit(&self, col: u16, row: u16) -> Option<Hit> {
+        if self.total <= self.page || self.page == 0 || self.track_len() < 2 {
+            return None;
+        }
+        let (a, b) = self.arrow_span();
+        let along = if self.vertical {
+            self.along_vertical(col, row, a, b)
+        } else {
+            self.along_horizontal(col, row, a, b)
+        }?;
+        Self::edge_hit(along, a, b).or_else(|| self.track_hit(along))
+    }
+
+    #[must_use]
     pub fn track_index_at(&self, col: u16, row: u16) -> usize {
         let along = if self.vertical { row } else { col };
         let len = self.track_len();
@@ -195,21 +211,106 @@ impl Bar {
     }
 }
 
+fn glyph_set(vertical: bool) -> (&'static str, &'static str, &'static str, &'static str) {
+    if vertical {
+        ("↑", "↓", "│", "║")
+    } else {
+        ("←", "→", "─", "═")
+    }
+}
+
+fn min_span_ok(bar: &Bar) -> bool {
+    let (long_ok, cross_ok) = if bar.vertical {
+        (bar.panel.height >= 2 + 2 + 2, bar.panel.width > 0)
+    } else {
+        (
+            bar.panel.width >= 2 + 2 * EDGE_PAD + 2 + 2 * ARROW_PAD + 2,
+            bar.panel.height > 0,
+        )
+    };
+    long_ok && cross_ok
+}
+
+fn pressed_arrow_style(
+    pressed: Option<Arrow>,
+    want: Arrow,
+    normal: Style,
+    pressed_s: Style,
+) -> Style {
+    if pressed == Some(want) {
+        pressed_s
+    } else {
+        normal
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn edge_glyph(
+    p: u16,
+    a: u16,
+    b: u16,
+    pressed: Option<Arrow>,
+    head: &'static str,
+    tail: &'static str,
+    arrow_style: Style,
+    pressed_s: Style,
+    blank_style: Style,
+) -> Option<(&'static str, Style)> {
+    if p < a || p > b {
+        return Some((" ", blank_style));
+    }
+    if p == a {
+        return Some((
+            head,
+            pressed_arrow_style(pressed, Arrow::Head, arrow_style, pressed_s),
+        ));
+    }
+    if p == b {
+        return Some((
+            tail,
+            pressed_arrow_style(pressed, Arrow::Tail, arrow_style, pressed_s),
+        ));
+    }
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+fn track_glyph(
+    p: u16,
+    org: u16,
+    track_end: u16,
+    tp: usize,
+    tl: usize,
+    track_glyph_c: &'static str,
+    thumb_glyph_c: &'static str,
+    track_style: Style,
+    thumb_style: Style,
+    blank_style: Style,
+) -> (&'static str, Style) {
+    if p < org || p >= track_end {
+        return (" ", blank_style);
+    }
+    let t = (p - org) as usize;
+    if t >= tp && t < tp + tl {
+        (thumb_glyph_c, thumb_style)
+    } else {
+        (track_glyph_c, track_style)
+    }
+}
+
+fn paint(f: &mut Frame, bar: &Bar, p: u16, fixed: u16, sym: &str, style: Style) {
+    let (col, row) = if bar.vertical { (fixed, p) } else { (p, fixed) };
+    if let Some(cell) = f.buffer_mut().cell_mut((col, row)) {
+        cell.set_symbol(sym);
+        cell.set_style(style);
+    }
+}
+
 pub fn render(f: &mut Frame, bar: &Bar, thumb_color: Color, pressed: Option<Arrow>) {
     if bar.page == 0 || bar.total <= bar.page {
         return;
     }
-    let min_len = if bar.vertical {
-        2 + 2 + 2
-    } else {
-        2 + 2 * EDGE_PAD + 2 + 2 * ARROW_PAD + 2
-    };
-    let span_ok = if bar.vertical {
-        bar.panel.height >= min_len && bar.panel.width > 0
-    } else {
-        bar.panel.width >= min_len && bar.panel.height > 0
-    };
-    if !span_ok {
+    if !min_span_ok(bar) {
         return;
     }
     let (a, b) = bar.arrow_span();
@@ -218,13 +319,9 @@ pub fn render(f: &mut Frame, bar: &Bar, thumb_color: Color, pressed: Option<Arro
     let thumb_style = Style::default()
         .fg(thumb_color)
         .add_modifier(Modifier::BOLD);
-    let pressed_style = thumb_style;
+    let pressed_s = thumb_style;
     let blank_style = Style::default();
-    let (head, tail, track_glyph, thumb_glyph) = if bar.vertical {
-        ("↑", "↓", "│", "║")
-    } else {
-        ("←", "→", "─", "═")
-    };
+    let (head, tail, track_glyph_c, thumb_glyph_c) = glyph_set(bar.vertical);
     let tp = bar.thumb_pos();
     let tl = bar.thumb_len();
     let fixed = if bar.vertical {
@@ -238,41 +335,32 @@ pub fn render(f: &mut Frame, bar: &Bar, thumb_color: Color, pressed: Option<Arro
     let org = bar.track_origin();
     let track_end = org + bar.track_len() as u16;
     for p in lo..=hi {
-        let (sym, style) = if p < a || p > b {
-            (" ", blank_style)
-        } else if p == a {
-            (
-                head,
-                if pressed == Some(Arrow::Head) {
-                    pressed_style
-                } else {
-                    arrow_style
-                },
+        let (sym, style) = edge_glyph(
+            p,
+            a,
+            b,
+            pressed,
+            head,
+            tail,
+            arrow_style,
+            pressed_s,
+            blank_style,
+        )
+        .unwrap_or_else(|| {
+            track_glyph(
+                p,
+                org,
+                track_end,
+                tp,
+                tl,
+                track_glyph_c,
+                thumb_glyph_c,
+                track_style,
+                thumb_style,
+                blank_style,
             )
-        } else if p == b {
-            (
-                tail,
-                if pressed == Some(Arrow::Tail) {
-                    pressed_style
-                } else {
-                    arrow_style
-                },
-            )
-        } else if p < org || p >= track_end {
-            (" ", blank_style)
-        } else {
-            let t = (p - org) as usize;
-            if t >= tp && t < tp + tl {
-                (thumb_glyph, thumb_style)
-            } else {
-                (track_glyph, track_style)
-            }
-        };
-        let (col, row) = if bar.vertical { (fixed, p) } else { (p, fixed) };
-        if let Some(cell) = f.buffer_mut().cell_mut((col, row)) {
-            cell.set_symbol(sym);
-            cell.set_style(style);
-        }
+        });
+        paint(f, bar, p, fixed, sym, style);
     }
 }
 
@@ -349,5 +437,71 @@ mod tests {
         assert_eq!(bar.hit(17, 9), Some(Hit::Tail), "右箭头");
         assert_eq!(bar.hit(18, 9), None, "外侧留白格不可点");
         assert!(matches!(bar.hit(4, 9), Some(Hit::Thumb(_))));
+    }
+
+    #[test]
+    fn degenerate_geometry_guards_return_zero() {
+        assert_eq!(vbar(2, 100, 10, 0).thumb_len(), 0, "轨道 0 → 滑块 0");
+        assert_eq!(vbar(8, 10, 10, 0).thumb_pos(), 0, "max_pos 0 → 0");
+        assert_eq!(vbar(3, 100, 2, 0).thumb_pos(), 0, "travel 0 → 0");
+        assert_eq!(vbar(8, 10, 10, 0).pos_from_thumb(3), 0, "max_pos 0 → 0");
+        assert_eq!(vbar(3, 100, 2, 0).pos_from_thumb(3), 0, "travel 0 → 0");
+    }
+
+    #[test]
+    fn horizontal_hit_wrong_row_is_none() {
+        let bar = Bar::horizontal(Rect::new(0, 0, 20, 10), 200, 20, 0);
+        assert_eq!(bar.hit(4, 3), None, "水平条非底行不可命中");
+    }
+
+    fn draw(bar: &Bar, pressed: Option<Arrow>) -> ratatui::buffer::Buffer {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let mut term = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        term.draw(|f| render(f, bar, Color::Blue, pressed)).unwrap();
+        term.backend().buffer().clone()
+    }
+
+    #[test]
+    fn render_noop_when_not_scrollable() {
+        let buf = draw(&vbar(8, 10, 10, 0), None);
+        for y in 0..12 {
+            assert_eq!(buf[(39, y)].symbol(), " ", "不可滚动时渲染零改动");
+        }
+    }
+
+    #[test]
+    fn render_pressed_arrow_takes_thumb_style() {
+        let bar = vbar(8, 100, 10, 0);
+        let none = draw(&bar, None);
+        let head = draw(&bar, Some(Arrow::Head));
+        let tail = draw(&bar, Some(Arrow::Tail));
+        assert!(
+            !none[(39, 1)].style().add_modifier.contains(Modifier::BOLD),
+            "未按下箭头无 BOLD"
+        );
+        assert!(
+            head[(39, 1)].style().add_modifier.contains(Modifier::BOLD),
+            "按下上箭头 → BOLD"
+        );
+        assert!(
+            tail[(39, 6)].style().add_modifier.contains(Modifier::BOLD),
+            "按下下箭头 → BOLD"
+        );
+        assert!(
+            !head[(39, 6)].style().add_modifier.contains(Modifier::BOLD),
+            "未按下臂仍无 BOLD"
+        );
+        assert_eq!(head[(39, 1)].symbol(), "↑");
+        assert_eq!(tail[(39, 6)].symbol(), "↓");
+    }
+
+    #[test]
+    fn render_out_of_bounds_panel_is_silent_noop() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let bar = Bar::vertical(Rect::new(0, 0, 40, 8), 100, 10, 0);
+        let mut term = Terminal::new(TestBackend::new(10, 5)).unwrap();
+        term.draw(|f| render(f, &bar, Color::Blue, None)).unwrap();
     }
 }

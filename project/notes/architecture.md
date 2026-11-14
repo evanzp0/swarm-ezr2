@@ -812,3 +812,9 @@ ws/webrtc 轮（2026-11-09）：TrackerUrl 三族分型（Ws 变体与 Http/Udp 
 
 ## FR-02-37 v1.3 产品实现轮（2026-11-14，coder）追加
 - BtConns 事件臂 = x1/y1/availability 三连接值唯一注入点：FR-02-37 v1.3 入口减裁决落此（y1 = seeder==false 计数直存，与 demo Task.peers 字段语义对齐），显示层 sp_txt 直读零改动；显示减备选（观测等价）退役。字段语义变更先普查消费面再动手：t.peers 无其他计算消费、产品 Trackers 弹窗无连接值 fallback、tick.rs 退出规则仅夹具用值——入口减零波及即证。
+
+## FR-02-37 v1.3 收敛轮（2026-11-14，cleaner）追加
+- scrollbar hit/render 保持行为拆分先例：轴投影（along_vertical/along_horizontal）+ 边判定（edge_hit）+ 轨判定（track_hit）三辅助各 comp≤5，hit 主函数 comp 17→6；render 的逐格判定抽 edge_glyph/track_glyph（track_glyph 返回空格而非 None，主循环 edge.or_else(track) 免分支链）+ min_span_ok/glyph_set/paint 单点化，comp 23→6——「垂直/水平双形态」类渲染函数的拆分模板 = 先抽轴选择器再抽格判定，行为由既有 TestBackend 断言 + 新增 pressed 样式/oob 静默用例双重锁定。
+- field_window 死臂证明模板：L175 `budget.max(1)` 钳制 + 未聚焦 anchor=len 不变式 ⇒ window_for hi≡len（right_cut 恒假）且 lo=0 ⟺ total≤b≤budget<total 矛盾（left_cut 恒真）——未聚焦 pre/post 两个 else-if 中间臂可证死码删除；「钳制在入口」是死臂证明的关键前提，跳过入口钳制单看分支会得出「budget=0 可达」的假阳性结论（本轮实测先错后证）。
+- wrap_segments i==start 臂触发构造：断点路径（brk push + 空格跳过）退出时 i=j=start 且 acc=0，下一字符 cwid>width 才落单字 push——`wrap_segments("a  中", 2)` 一个用例同时覆盖断点 push/空格跳过/单字 push 三臂；「中文中」连排超宽实际走 fallthrough push 链（i 恒 = start+1），不触发 i==start，凭直觉拼用例必落空。
+- 测夹具单点化两例：supervisor throttle_free/throttle_global_dl 双构造体 → test_shared_with_dl_rate(rate) 参数化单点（差异面=dl 速率一参）；fake_udp_tracker 与 report_engine_port 变体 → fake_udp_tracker_serve(sock, seeder_port, Option<tx>) 公共 serve 循环，变体差异=回报通道 Option 注入——「同族夹具变体」的 DRY 手法 = 把差异面收敛为一个参数/Option，两个包装函数退化为三行委托。

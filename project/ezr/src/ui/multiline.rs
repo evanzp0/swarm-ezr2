@@ -183,4 +183,56 @@ mod tests {
         assert!(!buf.follow, "跟随被渲染层消费一次后复位");
         assert_eq!(buf.max_scroll_x, 0);
     }
+
+    #[test]
+    fn wrap_follow_consumes_scroll_follow_arm() {
+        let mut term = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        let mut buf = MultiLineBuf::new();
+        buf.set_text("中文内容换行测试\n第二段文本在这里\n第三段");
+        buf.follow = true;
+        term.draw(|f| {
+            let r = draw_multi_line_input(
+                f,
+                Rect::new(1, 1, 20, 6),
+                None,
+                "",
+                true,
+                None,
+                None,
+                true,
+                false,
+                &mut buf,
+            );
+            assert!(r.cursor.is_some(), "wrap 臂同样发布光标");
+        })
+        .unwrap();
+        assert!(!buf.follow, "wrap 臂跟随消费后复位");
+        assert_eq!(buf.max_scroll, buf.wrap_rows(18).len().saturating_sub(3));
+    }
+
+    #[test]
+    fn empty_buffer_renders_placeholder_line() {
+        let mut term = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        let mut buf = MultiLineBuf::new();
+        term.draw(|f| {
+            let r = draw_multi_line_input(
+                f,
+                Rect::new(1, 1, 30, 5),
+                None,
+                "请输入链接",
+                false,
+                None,
+                None,
+                false,
+                false,
+                &mut buf,
+            );
+            assert!(r.cursor.is_none(), "空缓冲不发布光标");
+        })
+        .unwrap();
+        let row = term.backend().buffer().clone();
+        let cells: String = (2..11).step_by(2).map(|x| row[(x, 2)].symbol()).collect();
+        assert_eq!(cells, "请输入链接", "空缓冲首行渲染占位符");
+        assert_eq!(row[(2, 2)].style().fg, Some(DIM2), "占位符 DIM2 样式");
+    }
 }

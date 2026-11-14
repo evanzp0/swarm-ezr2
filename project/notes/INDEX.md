@@ -97,3 +97,8 @@
 - architecture.md — BtConns 臂三连接值唯一注入点与入口减裁决（消费面普查即证零波及）（新增）
 - testing.md — 16 目标全景与 coder 基线 13 目标口径对应（8100 吻合）/nightly 20261114 构建 unnecessary_to_owned 漂移实录与 iter().any 改写/ENOSPC build out 两层通配清理法（新增）
 - environment.md — 全新沙箱 cargo 索引卡死与 rsproxy sparse 双配置/nightly 中断残骸 missing manifest 愈法/minimal profile 组件补齐/镜像复测（新增）
+
+## FR-02-37 v1.3 收敛轮（2026-11-14，cleaner）追加
+- architecture.md — scrollbar hit/render 轴投影+格判定拆分模板（comp 17/23→6）/field_window 死臂证明模板（入口钳制 × anchor 不变式）/wrap_segments i==start 触发构造/测夹具单点化两例（差异面收敛为参数）（新增）
+- testing.md — llvm-cov 直采管线（LLVM_PROFILE_FILE 逐二进制 + --format=lcov，自动合并三坑）/profraw 组合矩阵污染假缺口实录/死臂删除验证闭环/挂载对账不均匀形态（新增）
+- environment.md — 覆盖率构建隔离与 line-tables-only 盘省口径/--no-run 废弃与 --no-report 替代/PMD 大资产镜像实测/ mutants --list 成本口径（新增）
