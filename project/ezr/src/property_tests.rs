@@ -27,7 +27,7 @@ use crate::model::retry::{backoff_secs, classify_http_status, decide};
 use crate::model::slots::{queue_pos, queue_positions};
 use crate::model::speed::SmoothedSpeed;
 use crate::model::{is_http_url, protocol_of_url, FailKind, Protocol, Task, TaskState};
-use crate::scrollbar::Bar;
+use crate::scrollbar::{Bar, Hit};
 
 proptest! {
     #[test]
@@ -2488,5 +2488,137 @@ proptest! {
         prop_assert_eq!(chars.contains(&'?'), !am_choking && !peer_interested, "? 臂语义: out={}", out);
         prop_assert_eq!(chars.contains(&'O'), optimistic == Some(conn_id), "O 臂语义: out={}", out);
         prop_assert_eq!(chars.contains(&'I'), inbound, "I 臂语义: out={}", out);
+    }
+}
+
+proptest! {
+    #[test]
+    fn prop_wrap_segments_partition_and_bounds(
+        s in field_text_full(),
+        width in 1usize..40usize,
+    ) {
+        let chars: Vec<char> = s.chars().collect();
+        let segs = crate::textfield::wrap_segments(&s, width);
+        if chars.is_empty() {
+            prop_assert_eq!(segs, vec![(0usize, 0usize)], "空输入退化为单 (0,0) 段");
+        } else {
+            let mut cursor = 0usize;
+            for (start, len) in &segs {
+                prop_assert!(
+                    *start >= cursor,
+                    "段有序不重叠: start={} cursor={}",
+                    start,
+                    cursor
+                );
+                for (idx, c) in chars.iter().enumerate().take(*start).skip(cursor) {
+                    prop_assert_eq!(*c, ' ', "跳过字符必为断点空格: idx={}", idx);
+                }
+                prop_assert!(*len >= 1, "非空输入段长 ≥ 1（零长段不存在）");
+                prop_assert!(*start + *len <= chars.len(), "段界不越字符域");
+                cursor = *start + *len;
+            }
+            for (idx, c) in chars.iter().enumerate().skip(cursor) {
+                prop_assert_eq!(*c, ' ', "未覆盖尾域必为空格: idx={}", idx);
+            }
+            for (start, len) in &segs {
+                let seg: String = chars[*start..*start + *len].iter().collect();
+                let segw = crate::textfield::w(&seg);
+                prop_assert!(
+                    segw <= width || *len == 1,
+                    "段宽 ≤ width（单字超宽豁免）: segw={} len={} width={}",
+                    segw,
+                    len,
+                    width
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn prop_scrollbar_hit_domain_classification(
+        px in 0u16..60u16,
+        py in 0u16..60u16,
+        width in 10u16..100u16,
+        height in 6u16..100u16,
+        vertical in prop::bool::ANY,
+        total in 2usize..2000usize,
+        page in 1usize..1999usize,
+        pos in 0usize..3000usize,
+    ) {
+        prop_assume!(page < total);
+        let rect = Rect {
+            x: px,
+            y: py,
+            width,
+            height,
+        };
+        let bar = if vertical {
+            Bar::vertical(rect, total, page, pos)
+        } else {
+            Bar::horizontal(rect, total, page, pos)
+        };
+        let tl = bar.track_len();
+        prop_assert!(tl >= 2, "面板下限保证轨道 ≥ 2: tl={}", tl);
+        let th = bar.thumb_len();
+        prop_assert!(th >= 1, "可滚动时 thumb ≥ 1");
+        prop_assert!(th < tl, "可滚动且轨道 ≥ 2 时 thumb < 轨道: th={} tl={}", th, tl);
+        let (a, b) = if vertical {
+            (py + 1, py + height - 2)
+        } else {
+            (px + 2, px + width - 3)
+        };
+        let bar_col = px + width - 1;
+        let bar_row = py + height - 1;
+        let mut seen_track = 0usize;
+        let mut seen_thumb = 0usize;
+        let mut line = a;
+        while line <= b {
+            let h = if vertical {
+                bar.hit(bar_col, line)
+            } else {
+                bar.hit(line, bar_row)
+            };
+            match h {
+                Some(Hit::Head) => prop_assert_eq!(line, a, "Head 仅在箭头起点: line={}", line),
+                Some(Hit::Tail) => prop_assert_eq!(line, b, "Tail 仅在箭头终点: line={}", line),
+                Some(Hit::Track(i)) => {
+                    prop_assert!(i < tl, "Track 下标不越轨道: i={} tl={}", i, tl);
+                    seen_track += 1;
+                }
+                Some(Hit::Thumb(i)) => {
+                    prop_assert!(i < th, "Thumb 下标不越 thumb: i={} th={}", i, th);
+                    seen_thumb += 1;
+                }
+                None => {}
+            }
+            line += 1;
+        }
+        prop_assert_eq!(seen_thumb, th, "轨道上 Thumb 格数 = thumb_len: seen={} th={}", seen_thumb, th);
+        prop_assert_eq!(
+            seen_track,
+            tl - th,
+            "轨道上 Track 格数 = track_len − thumb_len: seen={} tl={} th={}",
+            seen_track,
+            tl,
+            th
+        );
+        let off_line = if vertical {
+            bar.hit(bar_col + 1, a)
+        } else {
+            bar.hit(a - 1, bar_row)
+        };
+        prop_assert!(off_line.is_none(), "偏离轴线即无命中");
+        let before = if vertical {
+            bar.hit(bar_col, a - 1)
+        } else {
+            bar.hit(a - 1, bar_row - 1)
+        };
+        prop_assert!(before.is_none(), "箭头起点外侧无命中");
+        let after = if vertical {
+            bar.hit(bar_col, b + 1)
+        } else {
+            bar.hit(b + 1, bar_row)
+        };
+        prop_assert!(after.is_none(), "箭头终点外侧无命中");
     }
 }

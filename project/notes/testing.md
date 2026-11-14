@@ -771,3 +771,8 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 - profraw 归属与组合矩阵污染：多次直采复用同一 profraw 目录时，旧二进制（重构前）的计数与新二进制按函数名哈希碰撞合并 → llvm-cov export 对新映射产出「已覆盖臂显示未覆盖」的假缺口（本轮 L363/L275 假未覆盖实录）——复采前必须清空 profraw 目录，A/B 归因先锁 binary×profraw 组合矩阵。
 - 死臂删除的验证闭环：删后先跑目标过滤单测（行为不变），再以干净 profraw 重出 lcov 核对缺口消失；crap_calc 的 ph=N 幻影列（未覆盖 `}` 收尾行）随死臂删除自动归零，勿把幻影行当真实缺口追测。
 - 挂载套件增量对账不均匀形态：src 新增 10 测在 12 集成套件的挂载增量 = +10/+8/+8/+8/+0/+0/+0/+8/+3/+8/+10/+10（按模块归属分布，非历轮「各 +N」均匀形态）——对账以「每套件恰好收编其含模块的测试」为准，总数复算 8146+10+65=8221 自洽即过，勿强求各套件等增。
+
+## FR-02-37 v1.3 架构评审轮（2026-11-14，architect）追加
+- wrap_segments 属性的「分区连续」断言过界实录：首版断言"段起点连续无空洞"被 shrink 最小输入 `"一aAA0A一一A  a 一aa", width=2` 揭穿——真实契约 = 断点空格与其后空格串作为分隔符**丢弃不渲染**（cleaner「断点+空格跳过」单测正是此语义），非分区覆盖全字符域。正确形态 = 双侧空格校验：段间跳过域必为空格 + 尾部未覆盖域必为空格（`for (idx, c) in chars.iter().enumerate().take(start).skip(cursor)` / `.skip(cursor)`），配合段长 ≥1、段界不越域、段宽 ≤width（单字豁免）。写属性前先核对被测函数的「有意丢弃」语义——覆盖类断言只对"零损耗"函数（如 wrap_text）成立。
+- scrollbar hit 全域分类属性模板：面板下限保证 track≥2（垂直 height≥6 / 水平 width≥10）+ prop_assume!(page<total) 锁可滚动域 → 全线扫格 [a,b] 分类对账：Head/Tail 仅在箭头起点/终点、Thumb(i) i<th、Track(i) i<tl、计数恒等式 seen_thumb==th 与 seen_track==tl−th（ Thumb 格数=thumb_len）+ 三向越界静默（偏轴线/箭头外侧前后）——「分类器全域」属性用计数恒等式锁分类完备性，比逐点断言覆盖更紧。thumb_len 域补 th≥1 与 th<tl 两条几何界（可滚动域）。
+- prop_assert 环境的 clippy 机械修两形态：int_plus_one（`th <= tl - 1` → `th < tl`）与 needless_range_loop（`for idx in range { vec[idx] }` → `for (idx, c) in vec.iter().enumerate().take(end).skip(start)`，skip/take 链保 idx 供断言消息）——属性测试代码同样受 --all-targets 0 警告门槛约束。

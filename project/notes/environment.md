@@ -481,3 +481,8 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - cargo-llvm-cov 0.9.1 + nightly 1.102 覆盖率构建：CARGO_TARGET_DIR 隔离落 .work/tmp + CARGO_PROFILE_DEV_DEBUG="line-tables-only"（行表级 debuginfo 够 llvm-cov 行覆盖用，盘省一半，全量 16 目标 ~2.2G）；`--no-run` 已废弃（会在合并阶段报 not found profraw 而非构建失败），预构建用 `--no-report`（构建+跑测不产报告）。
 - PMD 7.29.0 大资产下载：gh-proxy 前缀对 ~135MB bin.zip 稳定 ~100KB/s（两轮断点续传 -C - 拼齐），aliyun/maven central/huawei 均无 pmd-dist bin 包（Maven 只发 jar）——大 GitHub release 资产先查 content-length 预算时间，别在失败镜像间盲试。
 - 变异点扫描成本口径：cargo-mutants --list --file 三文件仅 ~1 分钟（纯源解析不编译），--file 多值重复旗标传入；扫描产物 mutants-target 隔离 CARGO_TARGET_DIR 用后即删。
+
+## FR-02-37 v1.3 架构评审轮（2026-11-14，architect）追加
+- rustup 镜像复测（2026-11-14 全新沙箱）：TUNA 单路径探针 0.048s 断层最快，但 TUNA 的 rustup-init.sh 脚本路径 404（双层路径陷阱新变体：脚本层不在镜像）——正解 = 官方 sh.rustup.rs 取脚本 + DIST_SERVER/UPDATE_ROOT 双变量指 TUNA 前台装齐；`rustup toolchain install --component` 多组件必须逗号形态 `--component rustfmt,clippy`（空格形态第二个组件被解析为 toolchain 名报 invalid toolchain name）。
+- 600s 工具调用超时的批量测试拆批口径：12 集成目标单条命令 600s 必超（累计 ~14 分钟）——拆两批各 6 目标；中断后按日志「Running tests/<目标>」盘点已完成目标，无残留进程即单目标补跑（cargo 复用已建测试二进制，补跑 ~2.5 分钟）。
+- 小盘磁盘全程口径：INC=0 + DEV_DEBUG=0 + TEST_DEBUG=0 三环境变量每条命令重 export，全量构建+测试+clippy 峰值余量 3.4G 未爆盘；每条 Bash 调用是新 shell，漏带 env 即指纹翻转重编（历轮条款再次应验）。

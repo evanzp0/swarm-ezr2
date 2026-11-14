@@ -102,3 +102,8 @@
 - architecture.md — scrollbar hit/render 轴投影+格判定拆分模板（comp 17/23→6）/field_window 死臂证明模板（入口钳制 × anchor 不变式）/wrap_segments i==start 触发构造/测夹具单点化两例（差异面收敛为参数）（新增）
 - testing.md — llvm-cov 直采管线（LLVM_PROFILE_FILE 逐二进制 + --format=lcov，自动合并三坑）/profraw 组合矩阵污染假缺口实录/死臂删除验证闭环/挂载对账不均匀形态（新增）
 - environment.md — 覆盖率构建隔离与 line-tables-only 盘省口径/--no-run 废弃与 --no-report 替代/PMD 大资产镜像实测/ mutants --list 成本口径（新增）
+
+## FR-02-37 v1.3 架构评审轮（2026-11-14，architect）追加
+- architecture.md — 根级交互原语放置裁决（scrollbar/multiline/textfield 为 app/ui 双消费共享层，移入 ui/ 即规则 13 违规）/mktorrent bencode 维持登记取证法（bencode.rs 依赖 super::BtError 非自包含、#[path] 不可行、lib 化收益不抵风险）（新增）
+- testing.md — wrap_segments「分区连续」断言过界实例（真实契约=断点空格丢弃、双侧空格校验形态）/scrollbar hit 全域分类属性模板（计数恒等式锁分类完备性）/prop_assert 环境 clippy 机械修两形态（新增）
+- environment.md — rustup 镜像复测（TUNA 探针最快但脚本路径 404、官方脚本+双变量正解、--component 逗号形态）/600s 超时批量拆批与中断补跑口径/INC+DEV+TEST 三 DEBUG 每命令重 export 磁盘全程口径（新增）

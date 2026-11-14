@@ -818,3 +818,7 @@ ws/webrtc 轮（2026-11-09）：TrackerUrl 三族分型（Ws 变体与 Http/Udp 
 - field_window 死臂证明模板：L175 `budget.max(1)` 钳制 + 未聚焦 anchor=len 不变式 ⇒ window_for hi≡len（right_cut 恒假）且 lo=0 ⟺ total≤b≤budget<total 矛盾（left_cut 恒真）——未聚焦 pre/post 两个 else-if 中间臂可证死码删除；「钳制在入口」是死臂证明的关键前提，跳过入口钳制单看分支会得出「budget=0 可达」的假阳性结论（本轮实测先错后证）。
 - wrap_segments i==start 臂触发构造：断点路径（brk push + 空格跳过）退出时 i=j=start 且 acc=0，下一字符 cwid>width 才落单字 push——`wrap_segments("a  中", 2)` 一个用例同时覆盖断点 push/空格跳过/单字 push 三臂；「中文中」连排超宽实际走 fallthrough push 链（i 恒 = start+1），不触发 i==start，凭直觉拼用例必落空。
 - 测夹具单点化两例：supervisor throttle_free/throttle_global_dl 双构造体 → test_shared_with_dl_rate(rate) 参数化单点（差异面=dl 速率一参）；fake_udp_tracker 与 report_engine_port 变体 → fake_udp_tracker_serve(sock, seeder_port, Option<tx>) 公共 serve 循环，变体差异=回报通道 Option 注入——「同族夹具变体」的 DRY 手法 = 把差异面收敛为一个参数/Option，两个包装函数退化为三行委托。
+
+## FR-02-37 v1.3 架构评审轮（2026-11-14，architect）追加
+- 根级交互原语的放置裁决：scrollbar/multiline/textfield 位于 crate 根（非 ui/）是正确的架构位置——scrollbar::Bar 被 app（hit 命中测试/拖拽策略）与 ui（render 渲染）双消费，移入 ui/ 即制造 app→ui 导入（规则 13 反向违规）；multiline（MultiLineBuf）/textfield（TextInput）零 IO 纯状态机、被 app 层字段直接持有，根级 = 「app/ui 之间的共享交互原语层」。判别法：看消费者的层归属而非组件的"看起来像 UI"——被策略层消费的组件不属展示层目录。
+- mktorrent bencode 跨 bin 重复维持登记的取证法：src/bt/bencode.rs 首行 `use super::BtError`（依赖 bt/mod.rs 门面类型）⇒ 非自包含，`#[path]` 硬包含进 ezr-mktorrent crate 编译必失败；bin-only 结构下消除重复只有 lib 化一途（构建图级变更，全部产物搬 lib + bin 变薄壳）。裁决赛：构建工具 bin（非变异热点、hardender 未登记负担）的 232-token 克隆对收益不抵风险，维持登记移交 hardender 按需裁决——裁决前先读被克隆源的首行 use，判断「硬包含」是否存在，别凭"共享即可"直觉开工。
