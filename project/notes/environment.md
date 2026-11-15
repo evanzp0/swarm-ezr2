@@ -493,3 +493,8 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - PMD 7.29.0 与 PMD CPD 消费面：`pmd cpd --dir src --language rust --minimum-tokens 70` EXIT=4=有克隆属正常；产品/测试克隆分类按 `#[cfg(test)]` 后 5 行内 mod 起始行划界（140 行回看窗或无缩进正则会把巨型 tests mod 内的 fixture 全误判为产品克隆——本轮 197/1 → 20/178 的教训）。
 - 磁盘账（9.9G 盘）：变异持久 scratch（含 --copy-target 副本 + INC=1 缓存）约 2G，llvm-cov 插桩工件约 1.5G；变异段收尾先删 scratch 再进 llvm-cov 段可全程免爆盘；项目 target 在 llvm-cov 前删除可再生（插桩构建独立 profile 目录不依赖它）。
 - llvm-cov 17 目标分块口径：`--no-report` 逐目标前台跑（bins 一次 + 集成每调用 1-4 目标，单调用 598s 窗口内 2-3 个大目标必超时按个跑），最后 `--no-run --lcov --output-path` 出合并报告（--no-run 即报告模式，--no-report 与 --no-run 互斥）。
+
+## FR-02-37 v1.3 变异加固轮续（2026-11-15，hardender 补跑段）追加
+- IM 网关会话取消行为（zai-web 通道）：单次 Bash 调用阻塞 ≥8-10 分钟触发流空闲超时（报 failed to execute tool: context canceled），与调用内容无关、短窗调用（≤5.5 分钟）实测稳定——批量作业唯一稳态 = 前台分段 + 脚本内断点续跑（budget 参数控窗），nohup/setsid/disown 均不能逃逸「调用间全量回收」（沙箱按进程组+会话双清理，setsid 新会话实测同样被收）。
+- 中断恢复四步仪式：pkill -9 全部 run_chunk/cargo/rustc 残留 → wc -l 结果 CSV + uniq -d 查重复条目（并行实例曾存活窗口、未及写重叠条目属侥幸，必须查）→ cp pristine 单文件还原 scratch → 复跑（run_chunk 按 CSV 跳已完成条目）。残留判别先 pgrep -af "cargo|rustc|run_chunk"，本轮第 2 次中断实录：调用被取消但子进程组存活，两个 run_chunk 并行共享 scratch——幸 CSV 未重叠，若重叠须以日志时刻判定权威条目。
+- 长磨批会话节奏：308 突变体 + 79 存活体集成面复验全程前台分段约 60+ 次调用，每段尾部 echo 进度行（wc -l 结果 CSV）作断点锚；预算紧时按「先窄杀后补杀先集成」次序推进，任意中断点皆可凭交接②命令续跑。
