@@ -1,3 +1,7 @@
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-11-15T04:52:01.026295314Z","feature_name":"10-bt-anti-leech BT 自动反吸血与黑名单","feature_path":"/home/z/swarm-ezr2/project/features/10-bt-anti-leech.feature","background_hash":"5a06ace3b30e860f5db44c115acfa56c499b0b83c2378d0bae5af516636ab9ca","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   10-bt-anti-leech-01 吸血判定——只下载不上传（leech）自动封禁（下载中任务）
 #   10-bt-anti-leech-02 做种任务豁免互惠判定（做种中不按比率封禁）

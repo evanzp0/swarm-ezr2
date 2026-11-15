@@ -1,3 +1,7 @@
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-11-15T04:51:59.868334339Z","feature_name":"01-throttle-proxy 全局与任务级限速","feature_path":"/home/z/swarm-ezr2/project/features/01-throttle-proxy.feature","background_hash":"ea68af8634f29da43ee298fb3cb4da8d212da2e7b56856c59005d5b86ffde2a8","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   01-throttle-proxy-01 配置全局下载限速生效于全部任务合计速度（v1.9 修订：键改名 + BT 并入）
 #   01-throttle-proxy-02 多任务并发时限速作用于合计速度（v1.9 修订：HTTP+BT 混合合计）

@@ -1,3 +1,7 @@
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-11-15T04:52:00.061819713Z","feature_name":"01-tui-display TUI 展示与交互（基线沿用 + 真实数据）","feature_path":"/home/z/swarm-ezr2/project/features/01-tui-display.feature","background_hash":"66c2c0e287504399af9d1b02879b2e1cdb5626174588d6f0d19bb250590bd6b0","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   01-tui-display-01 三区布局与结构完整（v1.13 修订：定稿布局；v1.30 修订：页脚收敛，细则由 04-ui-conns 承接；v1.31 修订：页脚双行改版——命令图例 chips + toast 独占行）
 #   01-tui-display-02 列表行三行结构与信息行文案（v1.49 修订：全类型明细行尺寸项上移任务行「[状态]」徽标后只留 <总字节>，信息行尺寸对/尾缀尺寸整项退役，FR-02-38 v1.19；v1.51 修订：行 1 文件名 32 显示列尾部折叠，FR-01-118）

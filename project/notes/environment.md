@@ -486,3 +486,10 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - rustup 镜像复测（2026-11-14 全新沙箱）：TUNA 单路径探针 0.048s 断层最快，但 TUNA 的 rustup-init.sh 脚本路径 404（双层路径陷阱新变体：脚本层不在镜像）——正解 = 官方 sh.rustup.rs 取脚本 + DIST_SERVER/UPDATE_ROOT 双变量指 TUNA 前台装齐；`rustup toolchain install --component` 多组件必须逗号形态 `--component rustfmt,clippy`（空格形态第二个组件被解析为 toolchain 名报 invalid toolchain name）。
 - 600s 工具调用超时的批量测试拆批口径：12 集成目标单条命令 600s 必超（累计 ~14 分钟）——拆两批各 6 目标；中断后按日志「Running tests/<目标>」盘点已完成目标，无残留进程即单目标补跑（cargo 复用已建测试二进制，补跑 ~2.5 分钟）。
 - 小盘磁盘全程口径：INC=0 + DEV_DEBUG=0 + TEST_DEBUG=0 三环境变量每条命令重 export，全量构建+测试+clippy 峰值余量 3.4G 未爆盘；每条 Bash 调用是新 shell，漏带 env 即指纹翻转重编（历轮条款再次应验）。
+
+## FR-02-37 v1.3 变异加固轮（2026-11-15，hardender）追加
+- rustup 镜像复测（2026-11-15）：8MB 直链探针 aliyun 28MB/s 断层第一但 dist 清单快照停 2026-05（新鲜度排除，历轮同款）；rsproxy/USTC/TUNA 清单均新鲜（11-13/11-14），终选 rsproxy 官方双变量前台装齐 nightly 1.102.0-nightly (5f4effd57 2026-11-13)。**日期钉版清单全镜像 404（含官方 static.rust-lang.org）→ 历史 nightly commit 无法精确复装**；版本带一致 + clippy/fmt 全绿即判基线无漂移（沿 2026-11-09 文件勾选轮判例），commit 漂移一晚（8eb778d04→5f4effd57）如实登记。
+- gh-proxy 前缀本轮吞吐：PMD 134MB 2.1MB/s、bb 26MB 1.95MB/s、cargo-mutants 3.2MB 秒过；api.github.com 直连可用（mutants/llvm-cov/babashka 清单全通）。**安装链每步必须独立验证**：llvm-cov 的 cp 在早前调用链中断后静默缺失（当时 --version 报错掩盖），后段 `cargo llvm-cov` 报 no such command——装机后用最小探针（--version 或 cargo --list）确认在位再进正式流程。
+- PMD 7.29.0 与 PMD CPD 消费面：`pmd cpd --dir src --language rust --minimum-tokens 70` EXIT=4=有克隆属正常；产品/测试克隆分类按 `#[cfg(test)]` 后 5 行内 mod 起始行划界（140 行回看窗或无缩进正则会把巨型 tests mod 内的 fixture 全误判为产品克隆——本轮 197/1 → 20/178 的教训）。
+- 磁盘账（9.9G 盘）：变异持久 scratch（含 --copy-target 副本 + INC=1 缓存）约 2G，llvm-cov 插桩工件约 1.5G；变异段收尾先删 scratch 再进 llvm-cov 段可全程免爆盘；项目 target 在 llvm-cov 前删除可再生（插桩构建独立 profile 目录不依赖它）。
+- llvm-cov 17 目标分块口径：`--no-report` 逐目标前台跑（bins 一次 + 集成每调用 1-4 目标，单调用 598s 窗口内 2-3 个大目标必超时按个跑），最后 `--no-run --lcov --output-path` 出合并报告（--no-run 即报告模式，--no-report 与 --no-run 互斥）。

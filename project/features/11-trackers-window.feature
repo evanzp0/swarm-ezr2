@@ -1,3 +1,7 @@
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-11-15T04:52:01.100935666Z","feature_name":"11-trackers-window trackers 弹窗（t）","feature_path":"/home/z/swarm-ezr2/project/features/11-trackers-window.feature","background_hash":"c2e5e086db99414d7609195753fc882b5581a283befd379acbb58cf9d627b773","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   11-trackers-window-01 t 键门控与拒绝臂（未选中 / HTTP 任务）
 #   11-trackers-window-02 窗口形态与布局（94×22、qBt 式列结构、URL 换行、数据源真实 tracker 池状态）

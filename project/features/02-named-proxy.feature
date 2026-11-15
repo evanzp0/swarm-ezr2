@@ -1,3 +1,7 @@
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-11-15T04:52:00.174287654Z","feature_name":"02-named-proxy 命名代理（http/https/socks5）与任务级选择","feature_path":"/home/z/swarm-ezr2/project/features/02-named-proxy.feature","background_hash":"06dea3175cd30bb22e9170cf5f2beea3699ffd7ee3491aad837f7b8d092dfac2","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   02-named-proxy-01 多个命名代理（含认证）在添加对话框可选
 #   02-named-proxy-02 任务级代理生效：不同任务走不同代理/直连

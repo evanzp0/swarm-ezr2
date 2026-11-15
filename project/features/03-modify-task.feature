@@ -1,3 +1,7 @@
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-11-15T04:52:00.280398426Z","feature_name":"03-modify-task 任务修改对话框（并发/校验/代理热生效）","feature_path":"/home/z/swarm-ezr2/project/features/03-modify-task.feature","background_hash":"6e4875af5d237f938d0e23c355fd54873fe8093078e863a4ac956481199be330","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   03-modify-task-01 按 m 弹出修改对话框且预填当前值（v1.32 修订：标题更名；v1.36 修订：+下载限速/上传限速，74×12；v1.37 修订：「上传限速」退役——六字段→五字段，74×12→74×11）
 #   03-modify-task-02 修改并发立即生效（上调连接数上升 / 下调即时收缩，v1.16 修订）

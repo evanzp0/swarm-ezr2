@@ -1,3 +1,7 @@
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-11-15T04:52:00.487665102Z","feature_name":"05-ui-pieces P 键 pieces 分块弹窗（FR-01-106，对齐 ezr-demo 重构版 §6.5）","feature_path":"/home/z/swarm-ezr2/project/features/05-ui-pieces.feature","background_hash":"66c2c0e287504399af9d1b02879b2e1cdb5626174588d6f0d19bb250590bd6b0","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   05-ui-pieces-01 P 键打开分块弹窗与窗口形态（v1.30 修订：64×21→64×19、提示行→图例行）
 #   05-ui-pieces-02 四态色块与元信息行口径（非下载中）（v1.30 修订：图例行恒显）

@@ -1,3 +1,7 @@
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-11-15T04:52:00.578958714Z","feature_name":"06-cmd-window 命令窗口（A 键新入口）","feature_path":"/home/z/swarm-ezr2/project/features/06-cmd-window.feature","background_hash":"a1ef41f2d565c59f1fe6c0cdc03c3a9cb2c173c5b23dcda7c3ac5f89fa0635f1","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   06-cmd-window-01 命令窗口打开与布局关闭
 #   06-cmd-window-02 Enter 确认分流（http URL / 本地 torrent 路径 / 空输入 / 多行取首行）

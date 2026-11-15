@@ -1,3 +1,7 @@
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-11-15T04:51:59.532583620Z","feature_name":"01-resume-sidecar 断点续传与 sidecar 元数据","feature_path":"/home/z/swarm-ezr2/project/features/01-resume-sidecar.feature","background_hash":"ea68af8634f29da43ee298fb3cb4da8d212da2e7b56856c59005d5b86ffde2a8","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   01-resume-sidecar-01 sidecar 伴随目标文件创建且内容齐全
 #   01-resume-sidecar-02 sidecar 原子写任意时刻 kill 不损坏

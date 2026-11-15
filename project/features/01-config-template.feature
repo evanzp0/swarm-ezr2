@@ -1,3 +1,7 @@
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-11-15T04:51:58.994025202Z","feature_name":"01-config-template 配置模板自动生成","feature_path":"/home/z/swarm-ezr2/project/features/01-config-template.feature","background_hash":"583fd58b1ded1e029b95cf3df44c2806450e0bf0b0407e2a08e6b3d93bbc4c06","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   01-config-template-01 首次运行生成全注释默认模板（FR-01-85）
 #   01-config-template-02 已有配置文件不重写不覆盖

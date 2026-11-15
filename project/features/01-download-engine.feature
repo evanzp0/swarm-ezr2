@@ -1,3 +1,7 @@
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-11-15T04:51:59.113636080Z","feature_name":"01-download-engine HTTP 下载内核（探测 · 分块 · 重定向 · HTTPS · 速度）","feature_path":"/home/z/swarm-ezr2/project/features/01-download-engine.feature","background_hash":"ea68af8634f29da43ee298fb3cb4da8d212da2e7b56856c59005d5b86ffde2a8","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   01-download-engine-01 探测结果与详情如实显示（支持断点续传）
 #   01-download-engine-02 无 Content-Length 降级单并发

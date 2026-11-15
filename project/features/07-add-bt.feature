@@ -1,3 +1,7 @@
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-11-15T04:52:00.704976963Z","feature_name":"07-add-bt 添加任务：BT 对话框","feature_path":"/home/z/swarm-ezr2/project/features/07-add-bt.feature","background_hash":"c2e5e086db99414d7609195753fc882b5581a283befd379acbb58cf9d627b773","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   07-add-bt-01 对话框布局与预填（78×29；字段预填；文件树按来源解析；trackers 占位提示；v1.38：+限速两字段；v1.39：限速字段无占位；v1.51：+按顺序下载复选项）
 #   07-add-bt-02 文件树交互（目录展开收拢 / 三态勾选 / 统计联动 / [全选][全不选] / A·N·I）

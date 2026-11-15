@@ -1,3 +1,7 @@
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-11-15T04:51:59.623995027Z","feature_name":"01-retry-backoff 失败分类 · 重试计数与退避","feature_path":"/home/z/swarm-ezr2/project/features/01-retry-backoff.feature","background_hash":"ea68af8634f29da43ee298fb3cb4da8d212da2e7b56856c59005d5b86ffde2a8","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   01-retry-backoff-01 失败原因分类展示
 #   01-retry-backoff-02 有下载进展的失败计数重置为 1

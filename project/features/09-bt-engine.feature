@@ -1,3 +1,7 @@
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-11-15T04:52:00.932653523Z","feature_name":"09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文件选择）","feature_path":"/home/z/swarm-ezr2/project/features/09-bt-engine.feature","background_hash":"2165eb665c3d935ce6267bd45528be93ca4e782e9e6a78ef3af7f5a99318b9c5","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   09-bt-engine-01 .torrent 解析与任务元数据（announce-list / piece length / infohash / 单多文件）
 #   09-bt-engine-02 BEP 3 HTTP tracker 获取 peers（compact=1 / BEP 23 紧凑解析 / interval / 事件）

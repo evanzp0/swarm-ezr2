@@ -107,3 +107,6 @@
 - architecture.md — 根级交互原语放置裁决（scrollbar/multiline/textfield 为 app/ui 双消费共享层，移入 ui/ 即规则 13 违规）/mktorrent bencode 维持登记取证法（bencode.rs 依赖 super::BtError 非自包含、#[path] 不可行、lib 化收益不抵风险）（新增）
 - testing.md — wrap_segments「分区连续」断言过界实例（真实契约=断点空格丢弃、双侧空格校验形态）/scrollbar hit 全域分类属性模板（计数恒等式锁分类完备性）/prop_assert 环境 clippy 机械修两形态（新增）
 - environment.md — rustup 镜像复测（TUNA 探针最快但脚本路径 404、官方脚本+双变量正解、--component 逗号形态）/600s 超时批量拆批与中断补跑口径/INC+DEV+TEST 三 DEBUG 每命令重 export 磁盘全程口径（新增）
+## hardender 变异加固轮（2026-11-15）追加
+- testing.md — cargo-mutants 27.1 持久 scratch 单 worker + INC=1 三段式口径（窄过滤先杀/存活体全量复验/加固测试杀灭验证）/pub(super) 臂经 on_key+TestBackend+on_mouse 真实事件路径覆盖/存活体三分诚实分类（等价/覆盖缺口/待复验）/集成目标 cfg(test) 重复面口径（新增）
+- environment.md — rustup 日期钉版清单全镜像 404 与版本带判例装机/gh-proxy 吞吐与装机链独立探针纪律/PMD 产品测试克隆划界正解/变异段 llvm-cov 磁盘账与分块报告口径（新增）

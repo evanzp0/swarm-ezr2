@@ -1,3 +1,7 @@
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-11-15T04:51:59.238057453Z","feature_name":"01-integrity-check 完整性校验（七算法 · 来源优先级 · 校验行为）","feature_path":"/home/z/swarm-ezr2/project/features/01-integrity-check.feature","background_hash":"b9351676ea61a4036bf617fc0a99d8d9a78781f3b8b03760b7a580a420385829","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   01-integrity-check-01 CLI -x <算法>=<校验码> 显式覆盖七种算法
 #   01-integrity-check-02 显式校验值优先于伴随文件

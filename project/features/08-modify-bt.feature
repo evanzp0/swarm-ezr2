@@ -1,3 +1,7 @@
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-11-15T04:52:00.801066177Z","feature_name":"08-modify-bt 修改任务：BT 对话框","feature_path":"/home/z/swarm-ezr2/project/features/08-modify-bt.feature","background_hash":"dc5339d0d9148b9bfeb76d8a6d672be1875ea572b8a116fb26944e80ea0f8cdc","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   08-modify-bt-01 M 键分流与布局（BT 任务 → 修改任务：BT 78×27；HTTP 任务 → 原修改框；已完成拒绝；v1.5：+限速两字段；v1.51：+按顺序下载复选项）
 #   08-modify-bt-02 预填（任务名静态行 / 文件勾选预填 / 并发 / 限速两字段 / 代理 / 按顺序下载预填 / trackers 预填；v1.51）

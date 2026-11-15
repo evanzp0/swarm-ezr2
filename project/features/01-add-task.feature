@@ -1,3 +1,7 @@
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-11-15T04:51:58.739630125Z","feature_name":"01-add-task 任务添加（对话框与 CLI）","feature_path":"/home/z/swarm-ezr2/project/features/01-add-task.feature","background_hash":"ea68af8634f29da43ee298fb3cb4da8d212da2e7b56856c59005d5b86ffde2a8","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   01-add-task-01 对话框创建任务（v1.32 修订：标题更名、校验默认 NONE；v1.39 修订：+下载限速/上传限速两字段，74×14；v1.40 修订：「上传限速」字段退役——七字段→六字段，74×14→74×13）
 #   01-add-task-02 校验算法下拉八项含 NONE（v1.32 修订：七选一改八项、NONE 首行默认、占位提示删除）
