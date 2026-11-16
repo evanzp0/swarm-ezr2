@@ -498,3 +498,8 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - IM 网关会话取消行为（zai-web 通道）：单次 Bash 调用阻塞 ≥8-10 分钟触发流空闲超时（报 failed to execute tool: context canceled），与调用内容无关、短窗调用（≤5.5 分钟）实测稳定——批量作业唯一稳态 = 前台分段 + 脚本内断点续跑（budget 参数控窗），nohup/setsid/disown 均不能逃逸「调用间全量回收」（沙箱按进程组+会话双清理，setsid 新会话实测同样被收）。
 - 中断恢复四步仪式：pkill -9 全部 run_chunk/cargo/rustc 残留 → wc -l 结果 CSV + uniq -d 查重复条目（并行实例曾存活窗口、未及写重叠条目属侥幸，必须查）→ cp pristine 单文件还原 scratch → 复跑（run_chunk 按 CSV 跳已完成条目）。残留判别先 pgrep -af "cargo|rustc|run_chunk"，本轮第 2 次中断实录：调用被取消但子进程组存活，两个 run_chunk 并行共享 scratch——幸 CSV 未重叠，若重叠须以日志时刻判定权威条目。
 - 长磨批会话节奏：308 突变体 + 79 存活体集成面复验全程前台分段约 60+ 次调用，每段尾部 echo 进度行（wc -l 结果 CSV）作断点锚；预算紧时按「先窄杀后补杀先集成」次序推进，任意中断点皆可凭交接②命令续跑。
+
+## FR-02-37 v1.3 变异加固续轮二（2026-11-16，hardender）追加
+- 调用间后台进程全量回收第 2 例（setsid 亦不能逃逸）：setsid + nohup detached 的常驻 driver 在工具调用之间被整树回收（启动后数秒内日志停更，下次调用时进程已死）——「IM 网关流空闲超时」条目补全：不止 ≥8-10 分钟阻塞调用会被取消，**调用间后台进程组同样不存活**；批量作业唯一稳态仍是前台分段（budget 控窗 ≤5.5 分钟自终止 + 每段尾部 echo 进度锚），非交互动作循环 = 操作者/会话逐段重调（本会话 15 段实录，全程无残留无污染）。
+- .work/session 丢失恢复纪律（禁 begin 重建）：沙箱重置吞掉 .work/session 但 plan.md 与 .work/tmp 存活时，严禁 bin/swarm begin 重建会话——begin 第一步即清空 .work/tmp/（main 控脚本既定行为），会连带毁掉 mrunner/pool.json/mutants/logs 全部运行时状态；正解 = 按 begin 的写盘格式手工重建 .work/session 六字段（SESSION_SKILL/SESSION_TASK/SESSION_HANDOFF/SESSION_STARTED/EXPERIENCE_BASE/NOTES_BASE），complete 无损恢复（本会话实录）。
+- timeout 窗与裸耗时的「贴边」判据细化：撞窗是否需放大复跑，看窗口/裸耗时倍率——倍率 ≥3（本会话 bt::engine 全 73 测面裸 50-90s、窗 300s）且日志有 >60s running 行即真挂起（caught-by-timeout 杀灭，无需复跑）；倍率 ≈1（BS 双套件 253s 裸 vs 260s 窗判例）才必须放大窗口重跑。

@@ -791,3 +791,9 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 - 存活体跨 pass 去重口径：同一突变体经多 pass（轻面→重面→集成面）复验时，汇总账必须按「最新判定」取值（naive 并集会把「早期存活、后被补杀」的 18 条误计入存活，97 vs 79 实录）——判定权威 = 结果 CSV 的最后一次出现。
 - pub(super) 引擎内部件的全量单测复验替代口径：trackpool/peerwire/pieceio 三文件自身零测试、全部测试在 mod.rs 测试 mod（bt::engine::*），非 engine 单测（app/ui/http/config）经 fake/测试替身不触真实引擎内部——「存活体全量单测复验」以「bt::engine 全 73 测两阶段跑满」替代，集成链补 hardening_g_engine；非 engine 单测面豁免理由 = pub(super)/private 可达性边界（与 bt_dialog 轮「真实事件路径覆盖法」互补）。
 - 杀灭证据的 panic 位点多样性：trackpool announce_url 突变体被 conn_views 测试杀（mod.rs:2326）、peerwire handle_peer_msg 被 corrupt/illegal/unknown 三 ban 测试杀（mod.rs:4566/6330/6334）、pieceio write_piece 被 sidecar/下载测试杀（mod.rs:1243/1234/2805）——窄面过滤器的杀灭位点落在邻接模块测试是常态，过滤器组名不必与被测函数同前缀。
+
+## FR-02-37 v1.3 变异加固续轮二（2026-11-16，hardender）追加
+- runner 简化 verdict 标签的假分类陷阱与账目改判：unit_one 类脚本的三分逻辑（exit=0→存活 / 无摘要行→unviable / 其他→dead）会把 timeout（exit=124、被杀时无 libtest 摘要）误标成 UNVIABLE——账目复算必须以 exit 码 + 日志挂起证据改判，不信 runner 标签（pieceio_072 判例：300s 窗内 bt_conns_mark_full_bitfield/engine_connects_all_tracker_peers 双测试 >60s running 后被杀，与上轮 caught-by-timeout 同签名 → 改判超时杀，真 unviable 的判据是日志尾部「error: could not compile」）；另：日志头部「Blocking waiting for file lock on package cache」是并发噪音非失败信号，判读一律看尾部证据。
+- 自适应混合流的「直接 BS 结案」账目口径：登记函数内突变体可跳过单测面重推导、直接经 BS 批次实跑 record ALIVE_BS 结案（本会话 79 存活 = 56 单测面重推导 + 23 直接 BS）——缺项风险靠「重推导集覆盖登记函数全集（非 N_A 全集）+ 函数级账目闭合（登记函数 235 = 149+6+1+79）」兜底；漂移守卫只报「超」不报「缺」，账目闭合检查不可省。
+- 判定权威与 runner CSV 缺行：adaptive_resolved.csv 最新行是判定权威（同 id 多行时后者覆盖）；runner CSV（unit_runs.csv）允许缺行（同会话内另一 runner 直录或行丢失均可能，本会话 2 条 UNIT_DEAD 仅有 unit 日志无 CSV 行）——账目复算以 resolved 最新行为准、以逐突变体日志为证据底座，二者交叉核验。
+- BS 批次打包收益口径：bs_run.sh 批量打补丁（冲突检查 ±4 行 span）后单次双套件覆盖整批（23 批次 × ~260s 结案 79 突变体 ≈ 11s/条，对比单条实跑 ~270s/条），批内零杀灭 = 整批 ALIVE_BS；批失败 fail_split 整批回 POOL 重推导，不做批内二分（预期全绿场景下二分是纯浪费）。
