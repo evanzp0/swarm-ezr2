@@ -8,7 +8,7 @@
 #   （v1.4 注：config.toml 缺失时启动自动生成全注释默认模板，FR-01-85 ——
 #    判据由「允许缺失」改为「缺失时自动生成」，生成细则见 01-config-template.feature）
 #   01-persistence-config-03 配置文件缺失时全部使用默认值
-#   01-persistence-config-04 配置非法值拒绝启动并报错（v1.21 行为翻转：语义非法值 fail-fast，FR-02-35；v1.16/v1.17/v1.19 历史口径退役）
+#   01-persistence-config-04 配置非法值拒绝启动并报错（v1.21 行为翻转：语义非法值 fail-fast，FR-02-35；v1.16/v1.17/v1.19 历史口径退役；v1.24：seed_duration_secs 拒绝行改判 default_seed_duration_m = 0，FR-02-40②）
 #   01-persistence-config-05 block_size_http 可配置生效（v1.16：下限 1 MB）
 #   01-persistence-config-06 download_slots 可配置生效
 #   01-persistence-config-07 单实例保护
@@ -16,8 +16,9 @@
 #   01-persistence-config-09 Esc 主界面无动作与 Ctrl+C 优雅退出终端无花屏（操作者 20261027 裁决：Esc 不退出，退出仅 Q/Ctrl+C）
 #   01-persistence-config-10 EZR_HOME 环境变量重定位 .ezr 目录（v1.3/D16）
 #   01-persistence-config-11 kill -9 异常终止终端自恢复（v1.3/FR-01-84）
-#   01-persistence-config-12 旧格式顶层键与旧 [[proxies]] 表按未知键忽略（v1.17：config 三大标准表重构，操作者钦定不兼容旧格式）
+#   01-persistence-config-12 旧格式顶层键与旧 [[proxies]] 表按未知键忽略（v1.17：config 三大标准表重构，操作者钦定不兼容旧格式；v1.21/v1.24：退役键 http_trackers/udp_trackers/seed_duration_secs 同口径静默忽略，FR-02-35/FR-02-40②）
 #   01-persistence-config-13 全量配置键合法值生效冒烟（v1.18：bug13 轮操作者指令「所有 config.toml 中的配置项的都要测试验证是否可用」）
+#   01-persistence-config-14 活跃模板起步改值生效链（v1.19 新增，D63②：操作者 bug14 复现路径回归——清单补登，specifier 同步轮 20261116）
 Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
 
   期号 01。依据 project/mission/phase-01.md FR-01-70~73、FR-01-84 与本会话澄清决定
@@ -43,6 +44,14 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
   01-throttle-proxy v1.9 与 01-config-template v1.14）；(BT_TBL) 表新增 listen_port（0 =
   随机绑定；配置生效/占用回退随机+警告，09-bt-engine-16）。场景 13 冒烟键集同步 40 键、
   场景 14 活跃模板口径同步；新键非法值回退沿场景 04 统一回退口径。
+
+  v1.24 同步注（操作者批准 QA 终验轮待批①，specifier FR-02-40② 退役键口径同步轮 20261116；
+  FR-02-40②/FR-02-35 ③）：场景 04 Examples 残留拒绝行 bt.seed_duration_secs = 0 与
+  FR-02-40②（seed_duration_secs 按未知键口径静默废弃，不报错不生效）互斥——改判
+  bt.default_seed_duration_m = 0（新键标量非法 → 启动失败，FR-02-35 ③）；退役键静默忽略
+  正探针（seed_duration_secs 任意取值启动成功）归口场景 12 退役键同口径条目。场景 12 判据
+  面修订，场景名与稳定序号不变；runner 已按三方一致口径先行同步（suite_persistence_config.py
+  QA-PC-04 v1.24）。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
@@ -79,6 +88,10 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
     # 不变。Examples 键集合沿 v1.17/v1.19 点路径全量保留（「default」预期列剪除——翻转后
     # 各行预期一致无变异价值）；末行 udp_trackers 随键退役改写为 trackers / peer_connection_protocol
     # 数组行。未知键仍按静默忽略（FR-01-71 未知键口径不在本轮翻转面）。
+    # v1.24 同步（操作者批准 QA 终验轮待批①，specifier FR-02-40② 退役键口径同步轮 20261116；
+    # FR-02-40②/FR-02-35 ③）：seed_duration_secs 退役键按未知键口径静默废弃（不报错不生效，
+    # FR-02-40②）——其拒绝行与该口径互斥，改判 default_seed_duration_m = 0（新键标量非法）；
+    # 退役键静默忽略正探针（启动成功）归口场景 12。
     Given 配置文件设 "<key>" = "<value>"（非法）
     When 启动 ezr
     Then 启动失败并报错（错误信息含配置文件路径、键点路径 "<key>" 与非法原因；非零退出码退出；配置文件字节级不变）
@@ -115,7 +128,7 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
       | bt.tracker_backoff_cap_secs | 0    |
       | bt.udp_base_timeout_secs   | 0     |
       | bt.udp_retries             | 0     |
-      | bt.seed_duration_secs      | 0     |
+      | bt.default_seed_duration_m      | 0     |
       | bt.trackers                | ["ftp://x/ann"]（白名单外 scheme = 未知值） |
       | bt.peer_connection_protocol | ["tcp","tcp"]（重复项） |
 
@@ -194,6 +207,7 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
     And 旧 [[proxies]] 条目不出现在代理下拉（proxy 键已改名迁入 [common.proxy]，旧表不读）
     And 同文件追加新表头（[common] download_slots = 3 等）后新表键正常生效（新格式不受旧键干扰）
     And 退役键同口径（v1.21，FR-02-35）：配置含旧键 http_trackers / udp_trackers 时按未知键静默忽略——不迁移、不兼容、不并入 tracker 池、不阻塞启动（旧条目直接废弃；tracker 池只来自 [bt] trackers 键，场景见 09-bt-engine-09 v1.41）
+    And 退役键 seed_duration_secs 同口径（v1.24，FR-02-40②）：配置含旧键 [bt] seed_duration_secs（任意取值）时按未知键静默忽略——不迁移、不报错、无警告 toast、启动成功（退役键静默忽略正探针，与场景 04 拒绝行改判 default_seed_duration_m = 0 对账；runner 口径见 suite_persistence_config.py QA-PC-04 v1.24 正探针）
 
   Scenario: 01-persistence-config-13 全量配置键合法值生效冒烟（v1.18 新增，D62③）
     Given 配置文件一次性写入全部 40 键的合法非默认值（[common] 6 键 + [[common.proxy]] 双条目 + [http]] 11 键 + [bt] 21 键——v1.21：seed_duration_secs 废弃由 default_seed_duration_m 替代、键数不变，另可选子表 [bt.seed_exit_rule] 保持未配置（默认形态，default_seed_duration_m 生效）；取值均在模板注明取值范围内且非代码默认；v1.20/v1.21）

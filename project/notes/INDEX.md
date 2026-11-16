@@ -113,3 +113,7 @@
 ## QA 终验轮（2026-11-16，QA）追加
 - testing.md — 焦点环插入五表同步缺陷模式与 PTY 交叉归因/cargo test 不刷新 bin/crap_calc argv 契约/PMD 多测试区划界/退役键退役显示 runner 翻转三件套/TP 套件 QA_ONLY 分段实录
 - environment.md — 工具传输 EOF 风暴与进程存活判别/nightly 钉扎名 +1 天错位/度量四件 gh-proxy 重装链/覆盖率构建隔离与盘账
+
+## FR-02-40② 退役键口径同步轮（2026-11-16，specifier）追加
+- testing.md — 退役键同步欠账同形全查法（grep 排除词清单滤退役语义行/历史注记不回改留撤销痕/feature Examples↔runner rows 正则对账唯一分歧=已登记偏差/doc-runner 组成差异登记不越权补/清单缺行补登卫生面）（新增）
+- environment.md — rustup 镜像复测（rsproxy 吞吐 15.3MB/s 断层第一、判据=吞吐非总时、dist 清单 200 正常）（新增）

@@ -10,7 +10,7 @@
 #   09-bt-engine-05 BEP 12 多 tracker 冗余与 tracker 池三来源合并去重（v1.41：分型 = http(s)/ws(s)/udp 三族，FR-02-21 v1.15）
 #   09-bt-engine-06 peer 下载与 piece 校验（握手 / 分块请求 / SHA-1 / 多 peer 并发 / 上传统计；v1.36 修订：客户端列识别改 qBittorrent 源码口径，FR-02-08 v1.3）
 #   09-bt-engine-07 BEP 9 元数据交换（做种侧响应：ut_metadata request → data/reject）
-#   09-bt-engine-08 按文件下载语义（未选文件不落盘 / 边界 piece / 修改补下）
+#   09-bt-engine-08 按文件下载语义（未选文件不落盘 / 边界 piece / 修改补下；v1.54：回做种 seed_left 重置机制面改判，FR-02-40②④/D79⑦）
 #   09-bt-engine-09 config trackers 配置项（v1.41：统一单键 [bt] trackers，http_trackers/udp_trackers 退役废弃，FR-02-21 v1.15/FR-02-35）
 #   09-bt-engine-10 下载完成转做种（piece 全校验 → 做种中 / 产物字节一致 / tracker completed 事件）
 #   09-bt-engine-11 B 断开连接（连接移除 / 分块补完 / 下载继续；做种中可用）
@@ -87,6 +87,13 @@
 # 会话立即携新 offers 重连 shed 的 peer；http/udp 刷新候选池；尊重 tracker min_interval）+
 # 本端主动收口（缩容 shed/空闲置换）的 WebRTC peer 不记失败冷却（mark_peer_idle，区别于异常
 # 断开的惩罚性退避）——peer 重连不再等 tracker interval 周期。QA 严格检查 = QA-BE-19（观察面注记）。
+# v1.54 同步注（操作者批准 QA 终验轮待批①，specifier FR-02-40② 退役键口径同步轮 20261116；
+# phase-02 v1.24，FR-02-40②④/D79⑦ + FR-02-38 v1.21）：场景 08 判据面修订（场景名与稳定序号
+# 不变）——回做种步骤「seed_left 重置为 config seed_duration_secs 当前值（D73③）」改判：
+# seed_duration_secs 退役键按未知键口径静默废弃（FR-02-40②），时长臂来源改
+# default_seed_duration_m / [bt.seed_exit_rule]；seed_left 重置机制不可经 UI 观察（机制面由
+# 引擎级单测承载，QA 终验轮口径），exit rule 生效臂 = 做种时长累计清零（FR-02-40④/D79⑦）；
+# 与 08-modify-bt v1.52 场景 10、qa/09-bt-engine-qa.md QA-BE-08 同轮同步。
 # v1.53 修订（操作者修订轮指令 20261114「bt 下载任务：确认下 QTORRENT 源码中这个任务列表中的
 # PEERS 和 SEEDS 连接数的取值是不是这个逻辑，如果 EZR 的任务列表中进度条下方的 PEERS 和 SEEDS
 # 连接数不是相同的逻辑，则修改 EZR 的 PEERS 和 SEEDS 连接数取值逻辑」+ 引文「括号外 PEERS/SEEDS =
@@ -227,7 +234,10 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
     When 做种中任务经修改对话框补选新文件确认
     Then 任务回下载态且上传暂停（该任务上传速度 0、uploaded 与 announce uploaded 不增长、
       leecher 拉不到数据；D73②）直至再次全部完成
-    And 再次全部完成后回做种态、seed_left 重置为 config seed_duration_secs 当前值（D73③）、上传恢复
+    And 再次全部完成后回做种态、上传恢复（seed_left 重置 D73③ v1.54 改判：seed_duration_secs
+      退役键按未知键口径静默废弃 FR-02-40②，时长臂来源改 default_seed_duration_m /
+      [bt.seed_exit_rule]；机制面不可经 UI 观察、由引擎级单测承载，exit rule 生效臂 = 做种时长
+      累计清零，FR-02-40④/D79⑦）
 
     Examples:
       | selected |
