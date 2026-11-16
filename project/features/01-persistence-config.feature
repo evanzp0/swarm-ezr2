@@ -7,8 +7,8 @@
 #   01-persistence-config-02 数据与配置目录布局
 #   （v1.4 注：config.toml 缺失时启动自动生成全注释默认模板，FR-01-85 ——
 #    判据由「允许缺失」改为「缺失时自动生成」，生成细则见 01-config-template.feature）
-#   01-persistence-config-03 配置文件缺失时全部使用默认值
-#   01-persistence-config-04 配置非法值拒绝启动并报错（v1.21 行为翻转：语义非法值 fail-fast，FR-02-35；v1.16/v1.17/v1.19 历史口径退役；v1.24：seed_duration_secs 拒绝行改判 default_seed_duration_m = 0，FR-02-40②）
+#   01-persistence-config-03 配置文件缺失时全部使用默认值（v1.25：默认行为描述「max_speed 不限」改「不限速」，退役键名标签清理）
+#   01-persistence-config-04 配置非法值拒绝启动并报错（v1.21 行为翻转：语义非法值 fail-fast，FR-02-35；v1.16/v1.17/v1.19 历史口径退役；v1.24：seed_duration_secs 拒绝行改判 default_seed_duration_m = 0，FR-02-40②；v1.25：max_speed 退役键拒绝行删除——待批① 裁决 20261116，FR-01-60 v1.42）
 #   01-persistence-config-05 block_size_http 可配置生效（v1.16：下限 1 MB）
 #   01-persistence-config-06 download_slots 可配置生效
 #   01-persistence-config-07 单实例保护
@@ -16,7 +16,7 @@
 #   01-persistence-config-09 Esc 主界面无动作与 Ctrl+C 优雅退出终端无花屏（操作者 20261027 裁决：Esc 不退出，退出仅 Q/Ctrl+C）
 #   01-persistence-config-10 EZR_HOME 环境变量重定位 .ezr 目录（v1.3/D16）
 #   01-persistence-config-11 kill -9 异常终止终端自恢复（v1.3/FR-01-84）
-#   01-persistence-config-12 旧格式顶层键与旧 [[proxies]] 表按未知键忽略（v1.17：config 三大标准表重构，操作者钦定不兼容旧格式；v1.21/v1.24：退役键 http_trackers/udp_trackers/seed_duration_secs 同口径静默忽略，FR-02-35/FR-02-40②）
+#   01-persistence-config-12 旧格式顶层键与旧 [[proxies]] 表按未知键忽略（v1.17：config 三大标准表重构，操作者钦定不兼容旧格式；v1.21/v1.24：退役键 http_trackers/udp_trackers/seed_duration_secs 同口径静默忽略，FR-02-35/FR-02-40②；v1.25：默认行为描述「max_speed 不限」改「不限速」，退役键名标签清理）
 #   01-persistence-config-13 全量配置键合法值生效冒烟（v1.18：bug13 轮操作者指令「所有 config.toml 中的配置项的都要测试验证是否可用」）
 #   01-persistence-config-14 活跃模板起步改值生效链（v1.19 新增，D63②：操作者 bug14 复现路径回归——清单补登，specifier 同步轮 20261116）
 Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
@@ -53,6 +53,16 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
   面修订，场景名与稳定序号不变；runner 已按三方一致口径先行同步（suite_persistence_config.py
   QA-PC-04 v1.24）。
 
+  v1.25 修订注（操作者批准 QA 终验轮登记待批①，specifier max_speed 退役键拒绝行同步轮
+  20261116；FR-01-60 v1.42）：场景 04 Examples 拒绝行 common.max_speed = xyz 删除——
+  max_speed 为 FR-01-60 v1.42 退役键，按未知键静默忽略（场景 12 同口径，单测
+  legacy_max_speed_key_retired_as_unknown 承载），退役键不入拒绝集；替代键
+  global_max_download_speed 拒绝行不新增——拒绝集以 runner QA-PC-04 行集（32 行）为锚
+  （QA 终验轮已按三方一致口径裁定，改判 = 新增覆盖超出待批① 范围）。行为面 feature↔runner
+  行集对账 32=32 归零；runner QA-PC-04 偏差注记的结案回填归 QA 面（沿 20261112 锚点对齐轮
+  先例）。同形全查（沿退役键同步轮先例）另改判 2 处默认行为描述的退役键名标签：场景 03/12
+  「max_speed 不限」→「不限速」（与 QA-PC-03/12 对应表述同形；行为语义零变更，仅去退役键名）。
+
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
     And 本地 fixture 服务器已启动且根目录含测试文件
@@ -73,7 +83,7 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
     Given 用户主目录不存在 .ezr/config.toml
     When 按默认配置下载文件 "<file>"
     Then 行为与默认值一致：并发默认 <http_concurrency>、槽位 5、块大小 1 MB、
-      max_retries 5、auto_retry 开启、max_speed 不限、download_dir 为用户主目录下的下载目录
+      max_retries 5、auto_retry 开启、不限速、download_dir 为用户主目录下的下载目录
 
     Examples:
       | file       | http_concurrency |
@@ -92,6 +102,10 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
     # FR-02-40②/FR-02-35 ③）：seed_duration_secs 退役键按未知键口径静默废弃（不报错不生效，
     # FR-02-40②）——其拒绝行与该口径互斥，改判 default_seed_duration_m = 0（新键标量非法）；
     # 退役键静默忽略正探针（启动成功）归口场景 12。
+    # v1.25 修订（操作者批准 QA 终验轮登记待批①，specifier max_speed 退役键拒绝行同步轮
+    # 20261116；FR-01-60 v1.42）：common.max_speed = xyz 拒绝行删除——max_speed 退役键按
+    # 未知键静默忽略（场景 12 同口径、单测 legacy_max_speed_key_retired_as_unknown 承载），
+    # 退役键不入拒绝集；替代键拒绝行不新增，拒绝集以 runner QA-PC-04 行集（32 行）为锚。
     Given 配置文件设 "<key>" = "<value>"（非法）
     When 启动 ezr
     Then 启动失败并报错（错误信息含配置文件路径、键点路径 "<key>" 与非法原因；非零退出码退出；配置文件字节级不变）
@@ -102,7 +116,6 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
       | common.download_slots      | 0     |
       | http.max_retries           | -1    |
       | http.http_concurrency      | 99    |
-      | common.max_speed           | xyz   |
       | http.progress_tick_ms      | 0     |
       | http.sidecar_flush_secs    | 0     |
       | http.throttle_burst_secs   | 0     |
@@ -203,7 +216,7 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
       无任何新表头）
     When 启动 ezr 并正常使用（含添加任务与打开添加对话框代理下拉）
     Then 全部旧键按未知键静默忽略：启动不报错、无任何忽略类 toast/警告（零警告零迁移，FR-01-71 口径）
-    And 相关配置项全部按默认值生效（槽位 5、块大小 1 MB、并发默认 4、max_speed 不限）
+    And 相关配置项全部按默认值生效（槽位 5、块大小 1 MB、并发默认 4、不限速）
     And 旧 [[proxies]] 条目不出现在代理下拉（proxy 键已改名迁入 [common.proxy]，旧表不读）
     And 同文件追加新表头（[common] download_slots = 3 等）后新表键正常生效（新格式不受旧键干扰）
     And 退役键同口径（v1.21，FR-02-35）：配置含旧键 http_trackers / udp_trackers 时按未知键静默忽略——不迁移、不兼容、不并入 tracker 池、不阻塞启动（旧条目直接废弃；tracker 池只来自 [bt] trackers 键，场景见 09-bt-engine-09 v1.41）
