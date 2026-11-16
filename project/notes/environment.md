@@ -512,3 +512,9 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - rustup 镜像复测（specifier 同步轮 2026-11-16）：1MB 样本吞吐 rsproxy 15.3MB/s 断层第一（USTC 2.3/SJTU 1.5/TUNA 1.3/官方超时）；选型判据用吞吐（speed_download）而非总时长——TLS 握手计入 total 但装齐看吞吐；rsproxy dist 清单本轮 200 正常（历轮翻转序列再 +1），前台装 stable minimal 一次过。
 - aliyun dist 滞后的实际后果（01-PC 可执行化扩面轮 2026-11-16 实证）：rust-toolchain.toml 钉 nightly 时 cargo 自动取 channel 清单最新 nightly——aliyun 快照停 2026-05（1.98.0）编译即报 E0658（源码用了更新的 unstable library feature result_option_map_or_default），换 TUNA 清单（1.102.0 2026-11-13）一次过；历轮「新鲜度排除」判据的本轮补全 = 钉 nightly 的项目选 dist 镜像必须验清单日期，吞吐快而清单旧的镜像不可用。
 
+
+
+## peer_connection_protocol 裁决复验轮（2026-11-16，QA）追加
+- cargo crate 文件来源镜像选型（非 rustup dist）：[source.crates-io] replace-with 走 TUNA 的 sparse index（`sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/`）时，index 条目仍把 crate 文件下载指回 static.crates.io 官方 CDN，国内极慢（实测 ~0.06 crate/s，390 依赖跑 10 分钟仅下 237 个、零编译产物）；切 rsproxy.cn（`sparse+https://rsproxy.cn/index/`，[source.rsproxy-sparse]）后 index 把 crate 文件下载指回自家 CDN，150s 内下完剩余全量——**cargo 依赖下载镜像必须选 index + crate 文件同源的服务（rsproxy.cn），只镜像 index 的（TUNA）对 crate 文件下载无加速**。缓存按 source 分目录（`~/.cargo/registry/cache/<source-hash>/`），切 source 不复用旧缓存、整批重下。
+- pip libtorrent wheel 来源：TUNA PyPI（`pypi.tuna.tsinghua.edu.cn`）对 `libtorrent-2.1.1-cp312-cp312-manylinux2014_x86_64.whl` 返回 403 Forbidden；官方 pypi.org 直连极慢（8.2MB 跑 240s 超时）；aliyun PyPI（`mirrors.aliyun.com/pypi/simple/`）6s 下完装齐——**pip 装 libtorrent 用 aliyun 镜像，勿用 TUNA（403）勿裸连官方（超时）**；包以 `--only-binary :all:` 钉 wheel 免源码编译（libtorrent-rasterbar C++ 源码编译极慢）。
+- 全新沙箱复建 01-PC 套件复跑前置四件实测：rustup-init 直链二进制（TUNA dist 前台装 stable minimal）→ nightly 工具链（rustup toolchain install nightly，TUNA dist，1.102.0-nightly 一次过）→ cargo fetch（rsproxy source）→ cargo build 四 bin debug（2m29s）→ pip pyte/libtorrent（aliyun 镜像 wheel）；套件全量 P=14 F=0 S=0（105.6s 量级，_case_13 含 BT 下载 13.2s）。
