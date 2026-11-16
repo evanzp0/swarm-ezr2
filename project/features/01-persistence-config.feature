@@ -17,7 +17,7 @@
 #   01-persistence-config-10 EZR_HOME 环境变量重定位 .ezr 目录（v1.3/D16）
 #   01-persistence-config-11 kill -9 异常终止终端自恢复（v1.3/FR-01-84）
 #   01-persistence-config-12 旧格式顶层键与旧 [[proxies]] 表按未知键忽略（v1.17：config 三大标准表重构，操作者钦定不兼容旧格式；v1.21/v1.24：退役键 http_trackers/udp_trackers/seed_duration_secs 同口径静默忽略，FR-02-35/FR-02-40②；v1.25：默认行为描述「max_speed 不限」改「不限速」，退役键名标签清理）
-#   01-persistence-config-13 全量配置键合法值生效冒烟（v1.18：bug13 轮操作者指令「所有 config.toml 中的配置项的都要测试验证是否可用」）
+#   01-persistence-config-13 全量配置键合法值生效冒烟（v1.18：bug13 轮操作者指令「所有 config.toml 中的配置项的都要测试验证是否可用」；v1.26：BT 判据 trackers 单键口径改标 + default_seed_duration_m 写入值口径，退役键名残留清理）
 #   01-persistence-config-14 活跃模板起步改值生效链（v1.19 新增，D63②：操作者 bug14 复现路径回归——清单补登，specifier 同步轮 20261116）
 Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
 
@@ -62,6 +62,20 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
   行集对账 32=32 归零；runner QA-PC-04 偏差注记的结案回填归 QA 面（沿 20261112 锚点对齐轮
   先例）。同形全查（沿退役键同步轮先例）另改判 2 处默认行为描述的退役键名标签：场景 03/12
   「max_speed 不限」→「不限速」（与 QA-PC-03/12 对应表述同形；行为语义零变更，仅去退役键名）。
+
+  v1.26 修订注（操作者批准 B 案「规程重述 + runner 键集补齐」，specifier QA-PC-13 组成
+  算术重述轮 20261116）：场景 13 BT 判据 trackers 表述改单键口径——原「http_trackers/
+  udp_trackers = BT 对话框 trackers 预填合并来源」为 v1.21 前残留（两键已按未知键口径
+  退役、不并入池，tracker 池只来自 [bt] trackers 键，场景 12 与 09-bt-engine-09 v1.41
+  同口径），改「trackers = BT 对话框 trackers 预填（配置 trackers 与种子 announce 合并）」
+  ；default_seed_duration_m 判据补写入值口径（exit rule 未配置时其生效：全量写入按写入
+  非默认值生效、未配置默认 30 分钟——随 runner _case_13 键集补齐实写 25 对齐，QA 小轮
+  紧随落实）。行为语义零变更；QA-PC-13 组成算术重述见 01-PC QA 规程 v1.26。组成算术
+  按模板权威拨正（QA 同步轮）：40 活跃键 = [common] 6 + [http] 11 + [bt] 23（trackers/
+  peer_connection_protocol/bt_concurrency 3 核心键 + 20 调优键），[[common.proxy]] 双条目
+  为可选附加面不计入——v1.20 起沿用的「+ proxy 双条目 + [bt] 21」分解两项偏差（proxy
+  误计入 +2、[bt] 少计 2）恰好抵消合 40，本轮拨正（模板权威 = 43 活跃行逐键断言锚，
+  suite_config_template）。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
@@ -223,11 +237,11 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
     And 退役键 seed_duration_secs 同口径（v1.24，FR-02-40②）：配置含旧键 [bt] seed_duration_secs（任意取值）时按未知键静默忽略——不迁移、不报错、无警告 toast、启动成功（退役键静默忽略正探针，与场景 04 拒绝行改判 default_seed_duration_m = 0 对账；runner 口径见 suite_persistence_config.py QA-PC-04 v1.24 正探针）
 
   Scenario: 01-persistence-config-13 全量配置键合法值生效冒烟（v1.18 新增，D62③）
-    Given 配置文件一次性写入全部 40 键的合法非默认值（[common] 6 键 + [[common.proxy]] 双条目 + [http]] 11 键 + [bt] 21 键——v1.21：seed_duration_secs 废弃由 default_seed_duration_m 替代、键数不变，另可选子表 [bt.seed_exit_rule] 保持未配置（默认形态，default_seed_duration_m 生效）；取值均在模板注明取值范围内且非代码默认；v1.20/v1.21）
+    Given 配置文件一次性写入全部 40 键的合法非默认值（[common] 6 键 + [[common.proxy]] 双条目 + [http]] 11 键 + [bt] 23 键——proxy 双条目不计入 40（可选附加面）；[bt] 23 = trackers/peer_connection_protocol/bt_concurrency 3 核心键 + 20 调优键；v1.26 按模板权威对账修正 v1.20 起分表分解（原「+ proxy 双条目 + [bt] 21」两项偏差恰好抵消合 40）；v1.21：seed_duration_secs 废弃由 default_seed_duration_m 替代、键数不变，另可选子表 [bt.seed_exit_rule] 保持未配置（默认形态，default_seed_duration_m 生效）；取值均在模板注明取值范围内且非代码默认；v1.20/v1.21/v1.26）
     When 启动 ezr 并正常使用（添加 HTTP 下载、打开添加对话框与代理下拉、打开 BT 对话框）
     Then 启动不报错且无任何警告 toast（全量合法值零警告）
     And 可观察键逐项生效：download_dir = 添加对话框保存目录字段预填值；download_slots = 任务队列栏「n/<slots>」；global_max_download_speed = 下载限速生效（速度曲线封顶）、global_max_upload_speed = BT 上传限速生效、task_max_download_speed/task_max_upload_speed = 添加对话框（HTTP/BT）限速字段预填值；命名代理 = 代理下拉按配置顺序出现且可选；block_size_http = 详情分块行显示自定义块大小；http_concurrency = HTTP 对话框并发自动回填值；auto_retry/max_retries/backoff_initial/backoff_cap = 失败重试行为按配置推进（序列与上限一致）；progress_tick_ms/sidecar_flush_secs/throttle_burst_secs/throttle_sleep_ms/dns_race_grace_ms = 运行期无异常（行为不劣化，无错误 toast）
-    And BT 键逐项生效：listen_port = 实际监听端口生效（fixture announce port 可观察）;http_trackers/udp_trackers = BT 对话框 trackers 预填合并来源；bt_concurrency = BT 对话框并发预填值；peer_pipeline/upload_slots/upload_read_concurrency/idle_eviction_secs/connect_timeout_secs/handshake_timeout_secs/request_timeout_secs/requests_per_piece/rechoke_interval_secs/optimistic_interval_secs/progress_emit_min_interval_ms/tracker_numwant/peer_retry_base_secs/peer_retry_cap_secs/tracker_backoff_start_secs/tracker_backoff_cap_secs/udp_base_timeout_secs/udp_retries/default_seed_duration_m（exit rule 未配置时生效默认 30 分钟，做种倒计时正常） = BT 下载与做种全程无错误（引擎行为正常、无致命 toast；v1.21：seed_duration_secs 键退役）
+    And BT 键逐项生效：listen_port = 实际监听端口生效（fixture announce port 可观察）;trackers = BT 对话框 trackers 预填（配置 trackers 与种子 announce 合并；v1.26 改标——退役键 http_trackers/udp_trackers 不并入池，v1.21/FR-02-35）；bt_concurrency = BT 对话框并发预填值；peer_pipeline/upload_slots/upload_read_concurrency/idle_eviction_secs/connect_timeout_secs/handshake_timeout_secs/request_timeout_secs/requests_per_piece/rechoke_interval_secs/optimistic_interval_secs/progress_emit_min_interval_ms/tracker_numwant/peer_retry_base_secs/peer_retry_cap_secs/tracker_backoff_start_secs/tracker_backoff_cap_secs/udp_base_timeout_secs/udp_retries/default_seed_duration_m（exit rule 未配置时其生效：全量写入按写入非默认值生效、未配置默认 30 分钟，做种倒计时正常；v1.26 写入值口径） = BT 下载与做种全程无错误（引擎行为正常、无致命 toast；v1.21：seed_duration_secs 键退役）
     And 下载正常完成且产物完整（全量配置下核心链路不致病）
 
   Scenario: 01-persistence-config-14 活跃模板起步改值生效链（v1.19 新增，D63②：操作者 bug14 复现路径回归）

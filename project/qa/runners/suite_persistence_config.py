@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """suite_persistence_config.py — QA 套件 · 01-persistence-config 持久化配置与生命周期（期号 01）。
 
-对应规程：project/qa/01-persistence-config-qa.md（12 用例；本套件实跑 PC-01..11，PC-12 注记移交 hardening_v115）。
+对应规程：project/qa/01-persistence-config-qa.md（v1.26 规程 14 用例；本套件实注册 11 用例 = PC-01..09 + 13 + 14；PC-12 注记移交 hardening_v115，PC-10/11 规程行与 runner 用例双缺沿 handoff 待批② 登记）。
 QA-PC-12（旧格式 config 兼容口径）按 UC-08 先例注记移交：行为由
 hardening_v115.rs（锚 01-persistence-config-12）集成套件锁死，本 pty 套件不重复。
 端到端 UI 层验证：CLI 启动/退出操作 + ~/.ezr 磁盘产物观察 + TUI 状态断言 + 双实例进程操作。
@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import subprocess
 import time
 
@@ -28,6 +29,17 @@ from harness import (
 
 FIVE_M = QA_FILE_SIZES["five-m.bin"]
 THREE_M = QA_FILE_SIZES["three-m.bin"]
+
+
+def _free_listen_port() -> int:
+    for port in (41899, 41901, 41903, 41907, 41909):
+        with socket.socket() as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    raise AssertionError("listen_port 候选端口全部被占（占用回退随机+警告会破坏零警告断言）")
 
 
 def _mini_torrent(name: str) -> bytes:
@@ -202,16 +214,18 @@ class PersistenceConfigSuite(Suite):
         v1.24 QA 终验轮同步（FR-02-40②）：seed_duration_secs 已退役（按未知键口径直接废弃，
         零迁移零警告不报错不生效），拒绝行改判 default_seed_duration_m = 0（新键标量非法）；
         退役键静默忽略改为独立正探针（启动成功）。feature 场景 04 残留旧行与规程
-        QA-PC-04 旧键表述待 specifier 同步，偏差记 handoff 待批。
+        QA-PC-04 旧键表述已由 specifier 同步结案（v1.24/v1.25，待批① 裁决 20261116——
+        max_speed 退役键拒绝行删除、退役键不入拒绝集）；本注记结案回填 = v1.26 同步轮
+        （20261116，runner 面沿 20261112 锚点对齐轮先例）。
         """
         @self.case("QA-PC-04")
         def go(env: Env):
             # v1.21 修订（FR-02-35/D70）：任一键的语义非法值（0/负/越界/非法字符串值/
             # 非法单位写法/白名单外 scheme/重复项）= 启动失败并报错（错误含配置文件路径、
             # 键点路径与非法原因；非零退出码退出；配置文件字节级不变）。
-            # 已知偏差（待操作者裁决）：Examples 的 common.max_speed 行与同 feature
-            # 场景 12 及单测 legacy_max_speed_key_retired_as_unknown（退役键按未知键
-            # 静默忽略）互斥——三方一致者优先，本套件跳过该行并注记。
+            # 已知偏差已结案（v1.25，待批① 裁决 20261116）：Examples 的 common.max_speed
+            # 行已由 specifier 删除（退役键不入拒绝集，按未知键静默忽略——场景 12 与单测
+            # legacy_max_speed_key_retired_as_unknown 同口径）；本套件行集 32 行为终态锚。
             rows = (
                 ("http.block_size_http", '"256 KB"'),
                 ("common.download_slots", "0"),
@@ -434,20 +448,33 @@ class PersistenceConfigSuite(Suite):
 
 
     def _case_13(self):
-        """QA-PC-13（v1.18 新增）全量 40 键合法非默认值生效冒烟（D62③）。
+        """QA-PC-13（v1.18 新增，v1.26 键集补齐）全量 40 键合法非默认值生效冒烟（D62③）。
 
-        零警告 + 可观察键逐项生效（download_dir 预填/落盘、download_slots、
-        block_size_http、http_concurrency 回填、global_max_download_speed）+ BT 键预填生效
-        （bt_concurrency、trackers 单键，v1.21：http/udp_trackers 退役不并入）+ 下载完成产物完整。
+        零警告 + 可观察键逐项生效（download_dir 预填/落盘、download_slots、block_size_http、
+        http_concurrency 回填、global_max_download_speed、task_max_download_speed/
+        task_max_upload_speed 对话框限速预填）+ BT 键预填生效（bt_concurrency、trackers 单键
+        ——v1.21：http/udp_trackers 退役不并入，v1.26 判据改标对齐）+ 下载完成产物完整。
+        v1.26 键集补齐（规程/feature v1.26，操作者批准 B 案，QA 同步轮 20261116）：[common]
+        补 global_max_upload_speed / task_max_download_speed / task_max_upload_speed，[bt]
+        补 listen_port（空闲端口探针选值防占用回退警告），退役键 seed_duration_secs 残留改
+        default_seed_duration_m = 25；peer_connection_protocol 改写单值臂 ["webrtc"]（原写
+        模板默认值 ["tcp","webrtc"] 违反非默认口径，合法单值以单测 peer_connection_protocol_
+        validation 为锚）；listen_port 生效断言由 suite_modify_bt announce 观察
+        承载、default_seed_duration_m 生效断言由引擎级承载（规程通过准则调优键同款，套件内
+        以合法解析零警告承载）。
         """
         @self.case("QA-PC-13")
         def go(env: Env):
             cfg_dir = os.path.join(env.home, "qa13-dl")
+            listen_port = _free_listen_port()
             cfg = (
                 "[common]\n"
                 f'download_dir = "{cfg_dir}"\n'
                 "download_slots = 3\n"
                 'global_max_download_speed = "2 MiB/s"\n'
+                'global_max_upload_speed = "1 MiB/s"\n'
+                'task_max_download_speed = "512 KiB/s"\n'
+                'task_max_upload_speed = "256 KiB/s"\n'
                 "\n"
                 '[[common.proxy]]\n'
                 'name = "QA13-HTTP"\n'
@@ -478,7 +505,7 @@ class PersistenceConfigSuite(Suite):
                 "\n"
                 "[bt]\n"
                 'trackers = ["http://cfg13a/ann", "http://cfg13b/ann", "udp://cfg13u:6969/ann"]\n'
-                'peer_connection_protocol = ["tcp", "webrtc"]\n'
+                'peer_connection_protocol = ["webrtc"]\n'
                 "bt_concurrency = 61\n"
                 "peer_pipeline = 32\n"
                 "upload_slots = 5\n"
@@ -498,7 +525,8 @@ class PersistenceConfigSuite(Suite):
                 "tracker_backoff_cap_secs = 50\n"
                 "udp_base_timeout_secs = 12\n"
                 "udp_retries = 2\n"
-                "seed_duration_secs = 1500.0\n"
+                f"listen_port = {listen_port}\n"
+                "default_seed_duration_m = 25\n"
             )
             env.write_config(cfg)
             app = EzrApp(env.home, save_dir=None)
@@ -514,6 +542,8 @@ class PersistenceConfigSuite(Suite):
                 assert_in(cfg_dir[-16:], app.text(),
                           "保存目录字段应预填配置 download_dir（D62②，字段超宽左截断按尾部断言）")
                 assert_in("6", app.text(), "并发应自动回填 http_concurrency=6")
+                assert re.search(r"下载限速\s*>\s*512 KiB/s\b", app.text()), \
+                    "下载限速应预填 config task_max_download_speed（v1.26 键集补齐）"
                 app.send("enter")
                 assert app.wait_for("（无校验）", 60), "small.bin 应下载完成"
                 assert file_bytes(os.path.join(cfg_dir, "small.bin")) is not None, \
@@ -538,6 +568,10 @@ class PersistenceConfigSuite(Suite):
                 app.send("enter")
                 assert app.wait_for("添加任务：BT", 5), "应分流打开 BT 对话框"
                 assert_in("61", app.text(), "并发应预填 [bt] bt_concurrency=61")
+                assert re.search(r"下载限速\s*>\s*512 KiB/s\b", app.text()), \
+                    "BT 对话框下载限速应预填 task_max_download_speed（v1.26 键集补齐）"
+                assert re.search(r"上传限速\s*>\s*256 KiB/s\b", app.text()), \
+                    "BT 对话框上传限速应预填 task_max_upload_speed（v1.26 键集补齐）"
                 # trackers 预填断言走原始字节流：break_links 给 http(s):// 插入的
                 # VS15 使 pyte 把同 chunk 余下绘制丢弃（harness.raw_text 口径）
                 raw = app.raw_text()
