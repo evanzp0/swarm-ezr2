@@ -949,7 +949,7 @@ impl App {
             } else {
                 super::dialog::insert_limit_char(&mut d.up_limit, c);
             }
-        } else if focus == 7 {
+        } else if focus == 8 {
             self.bt_trackers_char(c);
         } else if c == ' ' {
             if focus == 6 {
@@ -974,7 +974,7 @@ impl App {
             } else {
                 super::dialog::insert_limit_char(&mut d.up_limit, c);
             }
-        } else if focus == 5 {
+        } else if focus == 6 {
             self.bt_trackers_char(c);
         } else if c == ' ' {
             if focus == 4 {

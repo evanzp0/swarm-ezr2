@@ -8,8 +8,10 @@
      （回归：旧版面板预填不入库 → 弹窗空）；47 字符 URL 在 44 列宽自动折行
      （首行 …:1337/annou + 续行 nce）；续行与首行同为 FG 色（无 DIM 续行）；
      底部无提示行（v1.11）；4 条 tracker 间 3 条细线分隔；右 padding = 左 padding
-  T3 wss:// 拒绝：修改 BT 对话框 trackers 追加 wss:// 行 → Enter → 拒绝 toast、
-     对话框不关闭、焦点移回 trackers（v1.9 FR-02-31 wss 拒绝）
+  T3 wss:// 拒绝：修改 BT 对话框 Tab×6 导航至 trackers → End+退格清空 → 键入
+     wss://bad.example 单行 → Tab×1 至「确定」→ Enter → 拒绝 toast、对话框不关闭
+     （v1.9 FR-02-31 wss 拒绝；焦点模型修复后 char/backspace/key/paste 四表统一
+     trackers_focus() 编号，键盘导航不依赖鼠标坐标）
 
 用法: python3 scripts/verify_trackers_popup.py [程序路径]
 """
@@ -69,10 +71,10 @@ def main():
         check("T0 弹窗打开（标题 Trackers）", got is not None)
         if got:
             xl, yt, xr, rows = got
-            check("T1 几何 90×22（╭╮╰╯ 四角）",
-                  xr - xl + 1 == 90
-                  and rows[yt + 21][xl] == "╰" and rows[yt + 21][xl + 89] == "╯"
-                  and rows[yt][xl] == "╭" and rows[yt][xl + 89] == "╮",
+            check("T1 几何 94×22（╭╮╰╯ 四角）",
+                  xr - xl + 1 == 94
+                  and rows[yt + 21][xl] == "╰" and rows[yt + 21][xl + 93] == "╯"
+                  and rows[yt][xl] == "╭" and rows[yt][xl + 93] == "╮",
                   f"w={xr - xl + 1} yt={yt}")
             hdr = rows[yt + 3][xl + 2:xl + 88].replace(CONT, "")
             check("T1 列 = #/URL/状态/Peers/Seeds/消息（qBt 口径）",
@@ -164,21 +166,25 @@ def main():
     print("== T3 wss:// 拒绝（FR-02-31）==")
     s = Session(program)
     try:
-        s.rd(1.5)
+        s.rd(3.0)                         # 等 neovim 后期处理 toast（~2.2s 起 3s）消退
         s.send(b"\x1b[F", 0.4)            # End → sintel
-        s.send(b"m", 0.7)                 # 修改任务：BT
+        s.send(b"m", 0.7)                 # 修改任务：BT（初始焦点 0 = 文件列表）
         rows = s.raw_rows()
         pos = locate_dialog(rows, "修改任务：BT")
         check("T3 修改 BT 对话框打开", pos is not None)
         if pos:
-            xl, yt, _xr = pos
-            tr_y = yt + 3 + 8 + 4
-            s.send(f"\x1b[<0;{xl + 31};{tr_y + 3}M".encode(), 0.15)
-            s.send(f"\x1b[<0;{xl + 31};{tr_y + 3}m".encode(), 0.3)
-            s.send(b"\x1b\r", 0.3)        # Alt+Enter 换行（光标在已有内容后）
+            # 焦点模型修复后（char/backspace/key/paste 四表统一 trackers_focus()
+            # 编号 AddBt=8/ModifyBt=6）：Tab×6 键盘导航至 trackers（focus 0→6），
+            # 不依赖鼠标坐标；End 归末行尾，退格清空既有 tracker，键入 wss 单行；
+            # Tab×1 至「确定」（6→7），Enter 确认 → tracker_reject 命中 wss → 拒绝 toast。
+            # （PTY 下 Alt+Enter 仍不被 crossterm 解析为换行键事件，故清空+单行绕开换行。）
+            for _ in range(6):
+                s.send(b"\t", 0.22)       # Tab×6: focus 0→6（trackers）
+            s.send(b"\x1b[F", 0.3)        # End → to_last（末行尾）
+            s.send(b"\x7f" * 80, 0.6)     # 退格清空 trackers 既有内容
             s.send(b"wss://bad.example", 0.5)
-            s.send(b"\r", 0.7)            # Enter = 确认 → 应拒绝
-            rows = s.raw_rows()
+            s.send(b"\t", 0.25)           # Tab focus 6→7（确定）
+            s.send(b"\r", 0.7)            # Enter = 确认 → tracker_reject 命中 wss → 拒绝
             scr = s.screen()
             check("T3 wss 行被拒绝（对话框保持打开）", "修改任务：BT" in scr)
             check("T3 拒绝 toast（不支持的 tracker 协议）",

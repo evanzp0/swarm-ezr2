@@ -219,10 +219,10 @@ def main() -> None:
     check("重试" in text, "已失败明细行保留重试信息")
     check("排队" in text or "槽位" in text, "等待中明细行保留排队/槽位提示")
     check("校验成功" in text or "无校验" in text, "已完成明细行保留校验结论")
-    check("12/35/2.418" in text, "做种明细行保留健康度三段（FR-02-37）")
-    check("分享" in text, "分享率保留（FR-02-38，做种上传量仅经分享率体现）")
-    check("8/23/1.675" in text, "BT 下载明细行健康度三段保留")
-    check("剩余" in text, "剩余时间/剩余做种保留")
+    check("0(45)/35(120)/2.418" in text, "做种明细行保留健康度三段（FR-02-37，D80④ seeders=0/tracker_seeds=45、peers=35/tracker_peers=120）")
+    check("SR" in text, "分享率缩写 SR 保留（FR-02-38 v1.21，做种上传量仅经分享率体现）")
+    check("8(14)/15(31)/1.675" in text, "BT 下载明细行健康度三段保留（D80④ seeders=8/tracker_seeds=14、peers=15/tracker_peers=31）")
+    check("LT" in text, "剩余时间缩写 LT 保留（FR-02-38 v1.21，BT/HTTP 下载预计时长）")
 
     print("== 场景 E：页签切换保留/还原列表状态（FR-01-117，帧对断言） ==")
     # 差异制造证明：切走期间页签 1 状态确实被改动（与还原值不同）

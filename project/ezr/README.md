@@ -56,7 +56,7 @@ cargo build --release --bin ezr-proxy
 
 ```sh
 ezr                              # 打开 TUI（空任务列表）
-ezr URL... [-d 保存目录] [-c 并发] [-x <算法>=<校验码>] [--max-speed 2 MB/s]
+ezr URL... [-d 保存目录] [-c 并发] [-x <算法>=<校验码>] [--max-speed 2 MiB/s]
 ```
 
 `-x` 示例：`ezr https://example.com/file.iso -x sha256=0123abcd…`（算法名 ∈
@@ -78,16 +78,18 @@ md5/sha1/sha224/sha256/sha384/sha512/adler32，大小写不敏感；位数不符
 
 首次启动时若配置文件不存在，会自动生成一份**全部行被注释**的默认值模板
 （每个参数注明用途与取值范围；保持注释状态即为全默认行为，取消注释并改值即可生效；
-已存在的配置文件不会被覆盖）。可配置键与默认值：
+已存在的配置文件不会被覆盖）。模板按 `[common]` / `[http]` / `[bt]` 三表组织；
+`max_speed` 旧键已退役（按未知键忽略），限速拆为全局/任务级下载与上传四键。
+主要可配置键与默认值（节选）：
 
 ```toml
-download_dir = "/data/downloads"   # 对话框留空时的默认目录（缺省 ~/Downloads）
-block_size_http = 1048576          # HTTP 块大小（字节，默认 1 MB）
+[common]
+download_dir = ""                  # 对话框留空时的默认目录（缺省 ~/Downloads）
 download_slots = 5                 # 全局下载槽位（默认 5）
-max_speed = "2 MB/s"               # 全局限速（0 = 不限）
-max_retries = 5                    # 自动重试上限
-auto_retry = true                  # 是否自动重试
-http_concurrency = 4               # 对话框留空时的默认并发（v1.5 自 default_concurrency 改名）
+global_max_download_speed = 0      # 全局下载限速（全部任务合计；0 = 不限；支持 "2 MiB/s" / 整数 B/s）
+global_max_upload_speed = 0        # 全局上传限速（BT 上传合计；0 = 不限）
+task_max_download_speed = 0        # 新任务默认任务级下载限速（0 = 不限）
+task_max_upload_speed = 0          # 新任务默认任务级上传限速（0 = 不限）
 
 # 命名代理（v1.5/FR-01-86；v1.9 字段重构 FR-01-86/89：条目字段 = name/type/ip/port/
 # username/password，url 键退役按未知键忽略；type 必填三值 http/https/socks5 且为唯一
@@ -95,7 +97,7 @@ http_concurrency = 4               # 对话框留空时的默认并发（v1.5 �
 # ip 自动加方括号；v1.8/FR-01-93：凭证按类型分级——socks5 型必填、http 与 https 型
 # 同级可选，凭证不写入界面与日志）：
 # 可配置多个；添加/修改对话框按名选用（任务级）；三类型均同时服务 http 与 https 下载
-[[proxies]]
+[[common.proxy]]
 name = "office"
 type = "http"                      # 代理类型：http / https / socks5（必填；缺失或未知 → 条目作废 + 警告）
 ip = "proxy.corp"                  # 代理地址：IP 字面量或主机名（非空；缺失或空白 → 作废 + 警告）
@@ -103,13 +105,28 @@ port = 8080                        # 端口：1..=65535 整数（缺失、非整
 username = ""                      # 可选：代理认证用户名（成对填写 = basic auth；都缺省 = 匿名代理）
 password = ""                      # 可选：代理认证密码（不写入界面与日志；只填其一 → 条目作废 + 警告）
 
-[[proxies]]
+[[common.proxy]]
 name = "home-socks5"
 type = "socks5"
 ip = "127.0.0.1"
 port = 1080
 username = "ezr"                   # 必填：socks5 型凭证（经 RFC 1929 user/pass 握手）
 password = "secret"                # 必填：socks5 型缺任一凭证 → 条目作废 + 警告
+
+[http]
+block_size_http = 1048576          # HTTP 块大小（字节，默认 1 MB）
+http_concurrency = 4               # 对话框留空时的默认并发（v1.5 自 default_concurrency 改名）
+max_retries = 5                    # 自动重试上限
+auto_retry = true                  # 是否自动重试
+backoff_initial = 8.0              # 自动重试退避起始秒（指数序列起点）
+backoff_cap = 60.0                 # 自动重试退避封顶秒
+
+[bt]
+bt_concurrency = 20                # BT 任务默认并发数
+peer_connection_protocol = ["tcp", "webrtc"]   # peer 传输协议全局开关（无序数组；无跨协议回退）
+trackers = []                      # BT 任务默认 tracker 池来源之一（三来源合并入池）
+listen_port = 0                    # BT 监听端口（0 = 随机绑定）
+default_seed_duration_m = 30       # 默认做种时长（分钟；[bt.seed_exit_rule] 未配置任一键时生效）
 ```
 
 ## 自动化验证

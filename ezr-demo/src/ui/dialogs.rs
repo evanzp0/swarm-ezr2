@@ -620,7 +620,7 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: Dia
     };
     let nfocus = if is_add { 12usize } else { 9usize };
     let list_focus = if is_add { 2usize } else { 0usize };
-    let trackers_focus = if is_add { 7usize } else { 5usize };
+    let trackers_focus = if is_add { 8usize } else { 6usize };
 
     let dlg = dialog_rect_at(area, app.dialog_pos, dw, dh);
     if app.dialog_pos.is_none() {

@@ -819,3 +819,18 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 - 秒传文件的中间态断言失效：small.bin 本地下载 <1s，「下载中」徽标一闪而过不可稳定观察（历轮「断言锚定最终态常驻文本」条款的用例内实例）——小文件用例一律等「已完成」终态；要观察下载中态须 fixture ?speed 门控（TP-01 口径）。
 - 跨套件基建复用的最小改动面选型：suite_modify_bt tracker driver（_Tracker/LtPeer/mktorrent/_tab_to_button/_read_driver_announces）供 01-PC 复用时直接 from suite_modify_bt import（模块级纯常量+函数、无副作用）——比上提 harness 改两个文件小一个量级，suite_modify_bt 本身零改动零重验；DRY 上提（共享基建入 harness）登记归后续 cleaner/QA 收敛轮。
 - swarm complete 清 target/ 的跨会话连锁：归档即删构建缓存——下一会话跑 PTY 套件前必须先 cargo build（rsproxy + nightly 钉扎口径 2.5 分钟分块前台），套件绿基线不跨会话成立（QA-PC 基线 P=11 在 complete 后直接跑 = ezr-fixture FileNotFound）。
+
+## ezr-demo verify 脚本陈旧化与 PTY 换行不可靠（2026-11-16，coder demo 专项轮）追加
+- **ezr-demo verify 脚本陈旧化三形态**：demo 经 41 轮变更记录演进，PTY 级 verify 脚本（verify_trackers_popup.py / verify_size_move.py）相对当前源码陈旧，失败面分三类：①硬编码几何断言（ trackers 弹窗宽 90→94，源码 TRACKERS_W 常量已改）；②标签文案换代（l3 明细行「分享」→「SR」、「剩余」→「LT」缩写化 v1.21/FR-02-38）；③数据值口径变更（健康度三段 D80④ 修订后带 tracker 括号形态「0(45)/35(120)/2.418」与「8(14)/15(31)/1.675」，旧脚本仍断言无括号「12/35/2.418」「8/23/1.675」）。修订时先跑脚本复现失败面，再对照源码（ui/popups.rs 常量、ui/list.rs l3 构造、app/demo.rs 任务数据）逐项对齐，勿凭脚本失败信息猜口径。
+- **PTY 环境下 Alt+Enter / kitty Shift+Enter 不被 crossterm 解析为 trackers 换行**：verify_trackers_popup.py T3 原经 `\x1b\r`（Alt+Enter）在 trackers MultiLineBuf 追加 wss 新行触发拒绝，当前 PTY 环境下 `\x1b\r` 与 kitty `\x1b[13;2u`（Shift+Enter）均不产生 trackers.newline() 调用（crossterm event-stream 在 PTY 下的 escape 解析时序与真终端不同）。变通：清空 trackers 既有内容（退格×80）后键入 `wss://bad.example` 作唯一行，再 Tab×2 焦点转「确定」后 Enter 确认——tracker_reject 命中 wss 行即触发拒绝 toast，绕开换行键不可达问题。
+
+## ezr-demo trackers 焦点修复后 T3 测法改键盘导航（2026-11-16e，coder 续轮）追加
+- **补记（T3 测法升级）**：焦点模型修复后（见 architecture.md 同轮补记），T3 从「鼠标点击 trackers 高列位 + Tab×2 至确定」（依赖 sequential 复选框命中区与 trackers 区的重叠、坐标脆弱且修复后点击落 sequential 不再送 trackers）改为「Tab×6 键盘导航至 trackers（focus 0→6）+ End 归末行尾 + 退格×80 清空 + 键入 wss 单行 + Tab×1 至确定（6→7）+ Enter」。键盘导航不依赖鼠标坐标、不受布局漂移影响，且焦点修复后 Tab 落 trackers 时 End/Home/退格/char 全部正确响应。PTY 下 Alt+Enter 换行键不可达问题仍在（crossterm escape 解析时序），故仍用「清空+单行」绕开换行，但焦点层面的死锁已消除。
+
+## ezr-demo 焦点修复根因更正与鼠标点击验证（2026-11-16f，coder 三轮）追加
+- **根因更正**：上轮 T3 改 Tab 键盘导航后两连绿，但鼠标点击 trackers 仍不能输入（用户实测反馈「焦点停上面复选框、tracker panel 无法输入」）。调试输出 dump `dlg_field_rects` 实证：trackers rect 带 idx=5（应 6），sequential rect 丢失——根因是 UI 层 L623 局部变量 `trackers_focus`（7/5）与 Dialog 函数（8/6）不一致（见 architecture.md 同轮条目）。修 L623 后鼠标点击 trackers 正确落 focus=6，char 进 trackers ✓（ModifyBt + AddBt 双对话框探针验证：点击 trackers 内容行 + 键入字符 → 字入 trackers 缓冲）。
+- **调试输出写文件避 PTY 污染**：PTY 下 stderr 混进 master 端会污染屏幕渲染，临时调试用 `std::fs::write("/tmp/dbg.log, prev + &new)`（read+write append 模拟，非原子但测试够用）dump 内部状态到文件，探针跑完读文件分析；调试代码验证后即回退。eprintln 在 PTY 测试里不可用（会被 MiniTerm 当终端序列喂回污染屏幕）。
+
+## PTY Alt+Enter 不可达定性收口（2026-11-16h，操作者实测确认）追加
+- **定性收口**：操作者真终端实测 ezr-demo 添加/修改 BT 对话框 Alt+Enter 换行键可用——证实「PTY 下 Alt+Enter / kitty Shift+Enter 不被 crossterm 解析为 trackers 换行」是 **PTY 测试环境限制**（crossterm event-stream 在 PTY 下的 escape 解析时序与真终端不同），非 demo/产品缺陷。verify T3 保持 Tab×6 键盘导航 + 清空 + 单行 wss 测法（PTY 环境限制仍在，Alt+Enter 测法在 PTY 里跑不了），但不再作为待修受限项登记——移出 handoff 遗留受限项列表。
+- **区分「测试环境限制」与「产品缺陷」的判据**：PTY 不可达 + 真终端可用 = 环境限制（verify 用变通测法绕开，产品不动）；PTY 不可达 + 真终端也不可达 = 产品缺陷（必须修产品）。本轮操作者真终端实测是判定关键——「PTY 测试失败」单独不构成产品缺陷结论，需真终端对照。

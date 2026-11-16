@@ -476,7 +476,7 @@ pub(super) fn text_backspace(kind: DialogKind, d: &mut Dialog, focus: usize) -> 
             true
         }
         // trackers 多行输入：退格与上一行合并由 MultiLineBuf 处理
-        (DialogKind::AddBt, 7) | (DialogKind::ModifyBt, 5) => {
+        (DialogKind::AddBt, 8) | (DialogKind::ModifyBt, 6) => {
             d.trackers.backspace();
             true
         }
