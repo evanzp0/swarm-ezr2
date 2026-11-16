@@ -117,3 +117,7 @@
 ## FR-02-40② 退役键口径同步轮（2026-11-16，specifier）追加
 - testing.md — 退役键同步欠账同形全查法（grep 排除词清单滤退役语义行/历史注记不回改留撤销痕/feature Examples↔runner rows 正则对账唯一分歧=已登记偏差/doc-runner 组成差异登记不越权补/清单缺行补登卫生面）（新增）
 - environment.md — rustup 镜像复测（rsproxy 吞吐 15.3MB/s 断层第一、判据=吞吐非总时、dist 清单 200 正常）（新增）
+
+## 01-PC 可执行化扩面轮（2026-11-16，QA）追加
+- testing.md — peer_connection_protocol 单值臂与 BT 下载流程互斥（无跨协议回退 vs libtorrent TCP seeder，端到端须 tcp 臂）/kill -9 恢复序列断言窗口（自驱 pump 等 reap、新增尾流切片锚）/秒传文件中间态断言失效（等终态）/跨套件基建直接 import 的最小改动面选型/complete 清 target 跨会话重建连锁（新增）
+- environment.md — aliyun dist 滞后后果实证（钉 nightly 项目选 dist 镜像必须验清单日期、吞吐快清单旧不可用）（新增）

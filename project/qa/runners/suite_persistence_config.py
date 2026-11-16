@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """suite_persistence_config.py — QA 套件 · 01-persistence-config 持久化配置与生命周期（期号 01）。
 
-对应规程：project/qa/01-persistence-config-qa.md（v1.26 规程 14 用例；本套件实注册 11 用例 = PC-01..09 + 13 + 14；PC-12 注记移交 hardening_v115，PC-10/11 规程行与 runner 用例双缺沿 handoff 待批② 登记）。
-QA-PC-12（旧格式 config 兼容口径）按 UC-08 先例注记移交：行为由
-hardening_v115.rs（锚 01-persistence-config-12）集成套件锁死，本 pty 套件不重复。
+对应规程：project/qa/01-persistence-config-qa.md（v1.27 规程 14 用例；本套件实注册 14 用例 = PC-01..14 全量，
+v1.27 可执行化扩面轮 20261116：PC-10/11/12 新增 + PC-13 补 BT 下载流程——待批② 与观察项均经操作者裁决）。
+QA-PC-12（旧格式 config 兼容口径）双层承载：解析行为由 hardening_v115.rs（锚
+01-persistence-config-12）集成套件锁死，本 pty 套件承载 UI 层观察面（零警告/默认值生效/
+代理下拉无旧条目/新表头追加生效），与集成锚不重复。
 端到端 UI 层验证：CLI 启动/退出操作 + ~/.ezr 磁盘产物观察 + TUI 状态断言 + 双实例进程操作。
 只经用户可达入口，不进入项目内部 API。
 
@@ -17,9 +19,23 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import time
+
+from suite_modify_bt import (
+    FILES,
+    FSIZE,
+    LtPeer,
+    _Tracker,
+    _cycle_to_visible,
+    _disk_file,
+    _make_payload,
+    _make_torrent,
+    _read_driver_announces,
+    _tab_to_button,
+)
 
 from harness import (
     EZR_BIN, Env, EzrApp, Suite, add_task_via_dialog, assert_file_content,
@@ -103,7 +119,7 @@ class PersistenceConfigSuite(Suite):
     # -- 用例 -----------------------------------------------------------------
 
     def run(self) -> list[CaseResult]:
-        for i in list(range(1, 10)) + [13, 14]:
+        for i in range(1, 15):
             getattr(self, f"_case_{i:02d}")()
         return self.results
 
@@ -447,6 +463,219 @@ class PersistenceConfigSuite(Suite):
                     app2.graceful_quit()
 
 
+    def _ezr_pids(self) -> set[int]:
+        """按 /proc/<pid>/exe 精确匹配 EZR_BIN 的进程集（主进程 + 哨兵子进程）。"""
+        pids: set[int] = set()
+        for d in os.listdir("/proc"):
+            if not d.isdigit():
+                continue
+            try:
+                if os.readlink(f"/proc/{d}/exe") == EZR_BIN:
+                    pids.add(int(d))
+            except OSError:
+                continue
+        return pids
+
+    def _case_10(self):
+        """QA-PC-10（v1.27 补行可执行化，待批② 裁决 20261116；场景 v1.3/D16）
+        EZR_HOME 环境变量重定位 .ezr 目录。
+
+        主臂：EZR_HOME 指向空目录 → 首启生成模板到 $EZR_HOME/config.toml、
+        注册表与锁写入 $EZR_HOME/state/、默认 ~/.ezr 未创建；改值生效环
+        （download_slots=2 → 队列栏 0/2）承载「配置读取自 $EZR_HOME/config.toml」
+        行为证据。空串臂：EZR_HOME="" 回退缺省 ~/.ezr（D16 缺省口径）。
+        隔离臂：A 实例运行中 B 实例（不同 EZR_HOME）可启动——各自持有
+        各自的锁与注册表（单实例保护按 EZR_HOME 隔离，互不冲突）。
+        """
+        @self.case("QA-PC-10")
+        def go(env: Env):
+            ezr_home = os.path.join(env.home, "ezrhome-a")
+            os.makedirs(ezr_home)
+            app = EzrApp(env.home, env_extra={"EZR_HOME": ezr_home},
+                         save_dir=env.save_dir)
+            try:
+                assert app.wait_for("EZR Downloader", 10), "EZR_HOME 启动应正常"
+                assert os.path.isfile(os.path.join(ezr_home, "config.toml")), \
+                    "首启应生成模板到 $EZR_HOME/config.toml（v1.4/FR-01-85）"
+                add_task_via_dialog(app, env, env.fixture.url("small.bin?r=10a"))
+                assert app.wait_for("已完成", 20), \
+                    "任务应完成（small.bin 本地秒传；注册表随添加动作写入）"
+                state = os.path.join(ezr_home, "state")
+                assert os.path.isfile(os.path.join(state, "registry.json")), \
+                    "注册表应写入 $EZR_HOME/state/registry.json"
+                assert os.path.isfile(os.path.join(state, "ezr.lock")), \
+                    "单实例锁应位于 $EZR_HOME/state/ezr.lock"
+                assert not os.path.exists(os.path.join(env.home, ".ezr")), \
+                    "主目录默认路径 .ezr/ 未被创建"
+            finally:
+                app.graceful_quit()
+            cfgp = os.path.join(ezr_home, "config.toml")
+            with open(cfgp, encoding="utf-8") as f:
+                body = f.read()
+            edited = body.replace("download_slots = 5", "download_slots = 2")
+            assert edited != body, "生成的活跃模板应含 download_slots 键"
+            with open(cfgp, "w", encoding="utf-8") as f:
+                f.write(edited)
+            app = EzrApp(env.home, env_extra={"EZR_HOME": ezr_home},
+                         save_dir=env.save_dir)
+            try:
+                assert app.wait_for("EZR Downloader", 10), "改值重启应正常"
+                assert_in("0/2", app.text(),
+                          "download_slots=2 生效（配置读取自 $EZR_HOME/config.toml）")
+            finally:
+                app.graceful_quit()
+            app = EzrApp(env.home, env_extra={"EZR_HOME": ""},
+                         save_dir=env.save_dir)
+            try:
+                assert app.wait_for("EZR Downloader", 10), "空串臂应回退缺省"
+                assert os.path.isfile(env.config_path()), \
+                    "EZR_HOME 空串应回退缺省 ~/.ezr/config.toml（D16）"
+            finally:
+                app.graceful_quit()
+            home_b = os.path.join(env.home, "ezrhome-b")
+            os.makedirs(home_b)
+            app_a = EzrApp(env.home, env_extra={"EZR_HOME": ezr_home},
+                           save_dir=env.save_dir)
+            try:
+                assert app_a.wait_for("EZR Downloader", 10), "A 实例（EZR_HOME-A）"
+                app_b = EzrApp(env.home, env_extra={"EZR_HOME": home_b},
+                               save_dir=env.save_dir)
+                try:
+                    assert app_b.wait_for("EZR Downloader", 10), \
+                        "B 实例（不同 EZR_HOME）应可启动（单实例锁按 EZR_HOME 隔离）"
+                    assert os.path.isfile(os.path.join(home_b, "state", "ezr.lock")), \
+                        "B 实例应持有自己的锁"
+                finally:
+                    app_b.graceful_quit()
+                assert os.path.isfile(
+                    os.path.join(ezr_home, "state", "ezr.lock")), \
+                    "A 实例锁不受 B 启退影响"
+            finally:
+                app_a.graceful_quit()
+
+    def _case_11(self):
+        """QA-PC-11（v1.27 补行可执行化，待批② 裁决 20261116；场景 v1.3/FR-01-84）
+        kill -9 异常终止终端自恢复。
+
+        kill 前 TUI 运行（raw mode、鼠标捕获、bracketed paste、备用屏幕）；
+        SIGKILL 主进程后哨兵子进程检测 wake 管道 EOF → 向 /dev/tty 写
+        RESTORE_SEQUENCE（?1006l/?1015l/?1003l/?1002l/?1000l/?2004l/?1049l
+        全关闭臂，sentinel.rs）并恢复 termios → 退出。断言面：主进程非零
+        终止；恢复序列全量出现在原始输出尾流（不认 pyte 显示文本——
+        序列被终端仿真消费）；cooked 回显探针（恢复后按键回显生效）；
+        主进程与哨兵均退出无残留；重启正常。「Ctrl+C 产生 SIGINT」由
+        哨兵 stty 全量恢复的 termios 承载（ISIG 在内；kill 后无前台进程
+        组可观察 SIGINT 投递，runner 面收缩为恢复序列 + 回显证据）。
+        """
+        @self.case("QA-PC-11")
+        def go(env: Env):
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            assert app.wait_for("EZR Downloader", 10), "TUI 应运行"
+            pids0 = self._ezr_pids()
+            assert app.pid in pids0, "主进程应在位"
+            assert len(pids0) >= 2, \
+                f"kill 前应主进程 + 哨兵 ≥2 个 ezr 进程，实得 {pids0}"
+            os.kill(app.pid, signal.SIGKILL)
+            base0 = len(app.raw_text())
+            deadline = time.time() + 6
+            while time.time() < deadline and app.exit_code is None:
+                app.pump(0.15)
+            assert app.exit_code is not None and app.exit_code != 0, \
+                f"SIGKILL 后主进程应非零终止，实得 {app.exit_code}"
+            raw = app.raw_text()
+            tail = raw[base0:]
+            for seq in ("?1006l", "?1015l", "?1003l", "?1002l",
+                        "?1000l", "?2004l", "?1049l"):
+                assert_in(seq, tail,
+                          f"哨兵应写终端恢复序列 {seq}（原始字节流，kill 后新增段）")
+            for seq in ("?1000h", "?1002h", "?1003h", "?1006h", "?2004h", "?1049h"):
+                assert_not_in(seq, tail,
+                              f"kill 后新增尾流不得再现开启序列 {seq}（无残影回开启）")
+            base = len(raw)
+            os.write(app.fd, b"j")
+            echoed = False
+            deadline = time.time() + 2
+            while time.time() < deadline:
+                app.pump(0.1)
+                if "j" in app.raw_text()[base:]:
+                    echoed = True
+                    break
+            assert echoed, "cooked 回显探针：termios 恢复后按键应回显"
+            deadline = time.time() + 4
+            while time.time() < deadline and self._ezr_pids():
+                time.sleep(0.2)
+                app.pump(0.1)
+            assert not self._ezr_pids(), \
+                f"主进程与哨兵均应退出（无残留）：{self._ezr_pids()}"
+            app.close()
+            app2 = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                assert app2.wait_for("EZR Downloader", 10), "kill -9 后重启应正常"
+            finally:
+                app2.graceful_quit()
+
+    def _case_12(self):
+        """QA-PC-12（v1.27 可执行化，待批② 裁决 20261116；场景 v1.17/v1.21/v1.24）
+        旧格式顶层键与旧 [[proxies]] 表按未知键忽略（UI 层观察面）。
+
+        解析行为（旧键回退默认/新表不受干扰）由 hardening_v115.rs 集成锚
+        锁死；本用例承载端到端 UI 面：旧格式启动不报错零警告零迁移 +
+        全部配置项按默认值生效（槽位 5/块 1 MB/并发 4）+ 旧 [[proxies]]
+        条目不出现在代理下拉 + 同文件追加新表头后新键生效。
+        """
+        @self.case("QA-PC-12")
+        def go(env: Env):
+            cfgp = env.config_path()
+            with open(cfgp, "w", encoding="utf-8") as f:
+                f.write(
+                    "download_slots = 2\n"
+                    "block_size_http = 4194304\n"
+                    "http_concurrency = 8\n"
+                    'max_speed = "1 MB/s"\n'
+                    "\n"
+                    "[[proxies]]\n"
+                    'name = "QA12-OLD"\n'
+                    'type = "http"\n'
+                    'ip = "127.0.0.1"\n'
+                    "port = 18801\n"
+                )
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                assert app.wait_for("EZR Downloader", 10), "旧格式不阻断启动"
+                assert_not_in("已忽略", app.text(),
+                              "未知键静默忽略：零警告零迁移（FR-01-71）")
+                assert_in("0/5", app.text(), "旧 download_slots=2 忽略 → 默认槽位 5")
+                add_task_via_dialog(
+                    app, env, env.fixture.url("five-m.bin?speed=900000&r=12"))
+                assert app.wait_for("下载中", 8)
+                assert_in("1 MB/块", detail_text(app),
+                          "旧 block_size_http 忽略 → 默认块 1 MB")
+                assert app.wait_for("并发 4", 15), \
+                    "旧 http_concurrency=8 忽略 → 默认并发 4（头部数据面）"
+                open_add_dialog_via_cmd(
+                    app, env.fixture.url("small.bin?r=12b"))
+                app.send(*(["tab"] * 6))
+                app.send("enter")
+                assert app.wait_for("选择代理", 3), "代理下拉应展开"
+                text = app.text()
+                assert_in("直连", text, "下拉含直连项（下拉本身工作）")
+                assert_not_in("QA12-OLD", text,
+                              "旧 [[proxies]] 条目不出现在代理下拉")
+                app.send("esc", "esc")
+                app.pump(0.3)
+            finally:
+                app.graceful_quit()
+            with open(cfgp, "a", encoding="utf-8") as f:
+                f.write("\n[common]\ndownload_slots = 3\n")
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                assert app.wait_for("EZR Downloader", 10), "追加后重启应正常"
+                assert_not_in("已忽略", app.text(), "新旧混合零警告")
+                assert_in("0/3", app.text(),
+                          "同文件追加新表头后 download_slots=3 生效（新格式不受旧键干扰）")
+            finally:
+                app.graceful_quit()
+
     def _case_13(self):
         """QA-PC-13（v1.18 新增，v1.26 键集补齐）全量 40 键合法非默认值生效冒烟（D62③）。
 
@@ -459,14 +688,40 @@ class PersistenceConfigSuite(Suite):
         补 listen_port（空闲端口探针选值防占用回退警告），退役键 seed_duration_secs 残留改
         default_seed_duration_m = 25；peer_connection_protocol 改写单值臂 ["webrtc"]（原写
         模板默认值 ["tcp","webrtc"] 违反非默认口径，合法单值以单测 peer_connection_protocol_
-        validation 为锚）；listen_port 生效断言由 suite_modify_bt announce 观察
-        承载、default_seed_duration_m 生效断言由引擎级承载（规程通过准则调优键同款，套件内
-        以合法解析零警告承载）。
+        validation 为锚）；listen_port 生效断言由 fixture announce port 观察
+        承载、default_seed_duration_m 生效断言由引擎级承载（规程通过准则调优键同款）。
+        v1.27 补 BT 下载流程（观察项收口，操作者裁决 20261116）：复用
+        suite_modify_bt tracker driver 基建（_Tracker/LtPeer/mktorrent）——真实
+        tracker 进 cfg trackers 首位（预填断言不变），BT 对话框确认下载 → 从
+        seeder 完成四文件字节级校验 + 自动做种态 + tracker 日志 announce port
+        = listen_port 断言（规程判据「fixture announce port 可观察」字面承载）。
+        改判披露：peer_connection_protocol 非默认单值臂由 ["webrtc"] 改
+        ["tcp"]——合法单值（白名单内）且非默认（≠ 模板默认双值）；WebRTC
+        单值臂下 ezr 无跨协议回退，无法与 libtorrent seeder（TCP only）建立
+        连接，BT 下载流程不可达成；判据「[bt] 其余键 = 下载做种全程无错误」
+        在 TCP 臂下达成。
         """
         @self.case("QA-PC-13")
         def go(env: Env):
             cfg_dir = os.path.join(env.home, "qa13-dl")
             listen_port = _free_listen_port()
+            tr_port = self._next_port()
+            seed_port = self._next_port()
+            tracker_log = os.path.join(env.fixture_root, "qa13-tracker.jsonl")
+            tracker = _Tracker(tr_port, tracker_log)
+            seeder = None
+            try:
+                assert tracker.wait_ready(), "qa13 tracker 就绪超时"
+                pay = _make_payload(env.fixture_root)
+                torrent = _make_torrent(
+                    pay, f"http://127.0.0.1:{tr_port}/announce")
+                seeder = LtPeer("seeder13", seed_port, torrent, pay)
+                assert seeder.wait_total_done(4 * FSIZE, 25), "seeder13 校验超时"
+            except Exception:
+                if seeder is not None:
+                    seeder.shutdown()
+                tracker.stop()
+                raise
             cfg = (
                 "[common]\n"
                 f'download_dir = "{cfg_dir}"\n'
@@ -504,8 +759,9 @@ class PersistenceConfigSuite(Suite):
                 "dns_race_grace_ms = 900\n"
                 "\n"
                 "[bt]\n"
-                'trackers = ["http://cfg13a/ann", "http://cfg13b/ann", "udp://cfg13u:6969/ann"]\n'
-                'peer_connection_protocol = ["webrtc"]\n'
+                f'trackers = ["http://127.0.0.1:{tr_port}/announce", "http://cfg13a/ann", '
+                '"http://cfg13b/ann", "udp://cfg13u:6969/ann"]\n'
+                'peer_connection_protocol = ["tcp"]\n'
                 "bt_concurrency = 61\n"
                 "peer_pipeline = 32\n"
                 "upload_slots = 5\n"
@@ -552,19 +808,16 @@ class PersistenceConfigSuite(Suite):
             except Exception:
                 app.graceful_quit()
                 raise
-            # BT 键生效：BT 对话框预填（bt_concurrency=61 + trackers 合并 + 目录预填）。
+            # BT 键生效 + BT 下载流程（v1.27 补，观察项收口）：BT 对话框预填
+            # （bt_concurrency=61 + trackers 合并 + 目录预填）→ 确认下载 →
+            # seeder 完成四文件字节级校验 + 自动做种 + announce port 断言。
             # 视口 rows=50：文件勾选修订轮后对话框含选择文件树，rows=34 下 trackers
             # 盒（7 行）在视口外被裁剪；高视口仍是纯用户界面层观察。
             app = EzrApp(env.home, save_dir=None, rows=50)
             try:
-                tdir = os.path.join(env.home, "qa13-torrents")
-                os.makedirs(tdir, exist_ok=True)
-                tpath = os.path.join(tdir, "qa13.torrent")
-                with open(tpath, "wb") as f:
-                    f.write(_mini_torrent("qa13"))
                 app.send("a")
                 assert app.wait_for("请输入命令或链接", 5), "命令窗口应打开"
-                app.type_text(tpath)
+                app.type_text(torrent)
                 app.send("enter")
                 assert app.wait_for("添加任务：BT", 5), "应分流打开 BT 对话框"
                 assert_in("61", app.text(), "并发应预填 [bt] bt_concurrency=61")
@@ -575,18 +828,49 @@ class PersistenceConfigSuite(Suite):
                 # trackers 预填断言走原始字节流：break_links 给 http(s):// 插入的
                 # VS15 使 pyte 把同 chunk 余下绘制丢弃（harness.raw_text 口径）
                 raw = app.raw_text()
+                assert_in(f"http://127.0.0.1:{tr_port}/announce", raw,
+                          "trackers 应预填种子 announce（配置 trackers 与种子 announce 合并）")
                 assert_in("http://cfg13a/ann", raw,
                           "trackers 应预填 [bt] trackers 键值（v1.21 单键口径，原始字节流）")
                 assert_in("udp://cfg13u:6969/ann", raw,
                           "trackers 应预填 udp 条目（udp 须带端口，实现/单测/属性测试三方口径）")
                 assert_in(cfg_dir[-16:], app.text(),
                           "保存到应预填配置 download_dir（D48，字段超宽左截断按尾部断言）")
-                app.send("esc")
-                app.pump(0.3)
+                _tab_to_button(app, "立即下载")
+                app.send("enter")
+                assert app.wait_for("已添加任务", 6), "确认应创建 BT 任务"
+                src = lambda n: os.path.join(pay, "root", "root", n)
+
+                def bt_done() -> bool:
+                    for n in FILES:
+                        disk = _disk_file(cfg_dir, n)
+                        if disk is None:
+                            return False
+                        if open(disk, "rb").read() != open(src(n), "rb").read():
+                            return False
+                    return True
+
+                deadline = time.time() + 90
+                ok = False
+                while time.time() < deadline:
+                    if bt_done():
+                        ok = True
+                        break
+                    app.pump(0.4)
+                assert ok, (
+                    "BT 下载应在 90s 内完成且四文件字节级完整"
+                    "（全量配置下核心链路不致病；v1.27 补 BT 下载流程）")
+                assert _cycle_to_visible(app, "做种", 20), \
+                    "下载完成应自动做种（D45）；default_seed_duration_m=25 生效由引擎级承载"
+            finally:
                 app.graceful_quit()
-            except Exception:
-                app.graceful_quit()
-                raise
+                if seeder is not None:
+                    seeder.shutdown()
+                tracker.stop()
+            rows = _read_driver_announces(tracker_log, listen_port)
+            assert rows, (
+                f"tracker 日志应含 ezr 以 listen_port={listen_port} 的 announce"
+                "（listen_port 生效断言，fixture announce port 可观察，v1.27）")
 
     def _case_14(self):
         """QA-PC-14（v1.19 新增，D63②）活跃模板起步改值生效链。

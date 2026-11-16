@@ -510,3 +510,5 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - 全新沙箱重建度量四件实测：rustup-init 直链二进制（rsproxy dist 16.3MB/s 拒 shell 脚本双层路径）+ llvm-tools-preview 随 component 旗标装齐；cargo-llvm-cov 0.9.1 / cargo-mutants 27.1.0 预编译经 api.github.com 清单 + gh-proxy 资产直链（mutants tar 包内无目录壳）；PMD 7.29.0 zip 经 gh-proxy + zipfile.testzip 探针；bb 1.13.229 + APS 经 gh-proxy git clone（HTTP/2 报「expected flush after ref listing」时 -c http.version=HTTP/1.1 一次过）。
 - 覆盖率构建隔离磁盘口径：CARGO_TARGET_DIR=.work/tmp/cov-target 插桩全目标一次过（~550s 内），盘 6.1G→2.3G 余——覆盖率轮前查盘并预留插桩膨胀；crap 报告产出后 cov-target 用后即删。
 - rustup 镜像复测（specifier 同步轮 2026-11-16）：1MB 样本吞吐 rsproxy 15.3MB/s 断层第一（USTC 2.3/SJTU 1.5/TUNA 1.3/官方超时）；选型判据用吞吐（speed_download）而非总时长——TLS 握手计入 total 但装齐看吞吐；rsproxy dist 清单本轮 200 正常（历轮翻转序列再 +1），前台装 stable minimal 一次过。
+- aliyun dist 滞后的实际后果（01-PC 可执行化扩面轮 2026-11-16 实证）：rust-toolchain.toml 钉 nightly 时 cargo 自动取 channel 清单最新 nightly——aliyun 快照停 2026-05（1.98.0）编译即报 E0658（源码用了更新的 unstable library feature result_option_map_or_default），换 TUNA 清单（1.102.0 2026-11-13）一次过；历轮「新鲜度排除」判据的本轮补全 = 钉 nightly 的项目选 dist 镜像必须验清单日期，吞吐快而清单旧的镜像不可用。
+
