@@ -197,7 +197,13 @@ class PersistenceConfigSuite(Suite):
                 app.graceful_quit()
 
     def _case_04(self):
-        """QA-PC-04 非法配置拒绝启动并报错（v1.21 行为翻转，FR-01-71 v1.47 回退臂退役；FR-02-35）。"""
+        """QA-PC-04 非法配置拒绝启动并报错（v1.21 行为翻转，FR-01-71 v1.47 回退臂退役；FR-02-35）。
+
+        v1.24 QA 终验轮同步（FR-02-40②）：seed_duration_secs 已退役（按未知键口径直接废弃，
+        零迁移零警告不报错不生效），拒绝行改判 default_seed_duration_m = 0（新键标量非法）；
+        退役键静默忽略改为独立正探针（启动成功）。feature 场景 04 残留旧行与规程
+        QA-PC-04 旧键表述待 specifier 同步，偏差记 handoff 待批。
+        """
         @self.case("QA-PC-04")
         def go(env: Env):
             # v1.21 修订（FR-02-35/D70）：任一键的语义非法值（0/负/越界/非法字符串值/
@@ -236,7 +242,7 @@ class PersistenceConfigSuite(Suite):
                 ("bt.tracker_backoff_cap_secs", "0"),
                 ("bt.udp_base_timeout_secs", "0"),
                 ("bt.udp_retries", "0"),
-                ("bt.seed_duration_secs", "0"),
+                ("bt.default_seed_duration_m", "0"),
                 ("bt.trackers", '["ftp://x/ann"]'),
                 ("bt.peer_connection_protocol", '["tcp","tcp"]'),
             )
@@ -265,6 +271,13 @@ class PersistenceConfigSuite(Suite):
                 finally:
                     if app.exit_code is None:
                         app.graceful_quit()
+            env.write_config("[bt]\nseed_duration_secs = 0\n")
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                assert app.wait_for("EZR Downloader", 8), \
+                    "退役键 seed_duration_secs 按未知键口径静默忽略（不报错不生效，FR-02-40②）"
+            finally:
+                app.graceful_quit()
 
     def _case_05(self):
         """QA-PC-05 block_size_http=4MB/2MB 下载 5MB：x/2·4 MB/块 与 x/3·2 MB/块。

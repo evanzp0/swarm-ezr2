@@ -110,3 +110,6 @@
 ## hardender 变异加固轮（2026-11-15）追加
 - testing.md — cargo-mutants 27.1 持久 scratch 单 worker + INC=1 三段式口径（窄过滤先杀/存活体全量复验/加固测试杀灭验证）/pub(super) 臂经 on_key+TestBackend+on_mouse 真实事件路径覆盖/存活体三分诚实分类（等价/覆盖缺口/待复验）/集成目标 cfg(test) 重复面口径（新增）
 - environment.md — rustup 日期钉版清单全镜像 404 与版本带判例装机/gh-proxy 吞吐与装机链独立探针纪律/PMD 产品测试克隆划界正解/变异段 llvm-cov 磁盘账与分块报告口径（新增）
+## QA 终验轮（2026-11-16，QA）追加
+- testing.md — 焦点环插入五表同步缺陷模式与 PTY 交叉归因/cargo test 不刷新 bin/crap_calc argv 契约/PMD 多测试区划界/退役键退役显示 runner 翻转三件套/TP 套件 QA_ONLY 分段实录
+- environment.md — 工具传输 EOF 风暴与进程存活判别/nightly 钉扎名 +1 天错位/度量四件 gh-proxy 重装链/覆盖率构建隔离与盘账

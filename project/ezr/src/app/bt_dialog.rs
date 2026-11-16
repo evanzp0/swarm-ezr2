@@ -209,11 +209,11 @@ impl App {
         if focus == 6 {
             let d = self.dialog.as_mut().unwrap();
             d.proxy_open = true;
-        } else if focus == 8 {
-            self.dlg_confirm_add_bt(false);
         } else if focus == 9 {
-            self.dlg_confirm_add_bt(true);
+            self.dlg_confirm_add_bt(false);
         } else if focus == 10 {
+            self.dlg_confirm_add_bt(true);
+        } else if focus == 11 {
             self.dialog = None;
         } else {
             self.dlg_confirm_add_bt(false);
@@ -224,9 +224,9 @@ impl App {
         if focus == 4 {
             let d = self.dialog.as_mut().unwrap();
             d.proxy_open = true;
-        } else if focus == 6 {
-            self.dlg_confirm_modify_bt();
         } else if focus == 7 {
+            self.dlg_confirm_modify_bt();
+        } else if focus == 8 {
             self.dialog = None;
         } else {
             self.dlg_confirm_modify_bt();
@@ -1687,17 +1687,30 @@ mod tests {
     #[tokio::test]
     async fn add_bt_dialog_enter_routes_focus() {
         let mut app = make_app("bt-enter-add");
-        // focus=10：取消按钮关闭对话框
-        app.dialog = Some(dialog(DialogKind::AddBt, 10));
-        app.add_bt_dialog_enter(10);
+        // focus=11：取消按钮关闭对话框
+        app.dialog = Some(dialog(DialogKind::AddBt, 11));
+        app.add_bt_dialog_enter(11);
         assert!(app.dialog.is_none(), "取消按钮关闭对话框");
         // focus=6：代理选择打开
         app.dialog = Some(dialog(DialogKind::AddBt, 6));
         app.add_bt_dialog_enter(6);
         assert!(app.dialog.as_ref().unwrap().proxy_open, "代理弹层打开");
-        // 默认臂（focus=8 确认）：已选文件 + 无效种子路径 → 读取失败 toast，对话框保留
-        let mut d = dialog(DialogKind::AddBt, 8);
+        // focus=9 立即下载：已选文件 + 无效种子路径 → 读取失败 toast，对话框保留
+        let mut d = dialog(DialogKind::AddBt, 9);
         d.torrent.set("/nonexistent/ezr-x.torrent");
+        d.bt_tree = vec![bt_node("f1", 10, true)];
+        app.dialog = Some(d);
+        app.add_bt_dialog_enter(9);
+        assert!(
+            app.toast
+                .as_deref()
+                .is_some_and(|t| t.contains("无法读取种子")),
+            "无效种子路径 → 读取失败 toast，toast={:?}",
+            app.toast
+        );
+        // focus=8 trackers 字段：else 臂快捷确认（同款 toast，对话框保留）
+        let mut d = dialog(DialogKind::AddBt, 8);
+        d.torrent.set("/nonexistent/ezr-y.torrent");
         d.bt_tree = vec![bt_node("f1", 10, true)];
         app.dialog = Some(d);
         app.add_bt_dialog_enter(8);
@@ -1705,7 +1718,7 @@ mod tests {
             app.toast
                 .as_deref()
                 .is_some_and(|t| t.contains("无法读取种子")),
-            "无效种子路径 → 读取失败 toast，toast={:?}",
+            "trackers 快捷确认同走确认链，toast={:?}",
             app.toast
         );
         app.shutdown().await;
@@ -1768,20 +1781,26 @@ mod tests {
     #[tokio::test]
     async fn modify_bt_dialog_enter_routes_focus() {
         let mut app = make_app("bt-enter-mod");
-        // focus=7：取消关闭
-        app.dialog = Some(dialog(DialogKind::ModifyBt, 7));
-        app.modify_bt_dialog_enter(7);
+        // focus=8：取消关闭
+        app.dialog = Some(dialog(DialogKind::ModifyBt, 8));
+        app.modify_bt_dialog_enter(8);
         assert!(app.dialog.is_none(), "取消按钮关闭修改对话框");
         // focus=4：代理打开
         app.dialog = Some(dialog(DialogKind::ModifyBt, 4));
         app.modify_bt_dialog_enter(4);
         assert!(app.dialog.as_ref().unwrap().proxy_open);
-        // 默认臂（focus=6 确认）：task_id 指向不存在任务 → 对话框关闭
+        // focus=7 确定：task_id 指向不存在任务 → 对话框关闭
+        let mut d = dialog(DialogKind::ModifyBt, 7);
+        d.task_id = Some(999);
+        app.dialog = Some(d);
+        app.modify_bt_dialog_enter(7);
+        assert!(app.dialog.is_none(), "幽灵 task_id → 对话框关闭");
+        // focus=6 trackers 字段：else 臂快捷确认（同款幽灵 task_id 行为）
         let mut d = dialog(DialogKind::ModifyBt, 6);
         d.task_id = Some(999);
         app.dialog = Some(d);
         app.modify_bt_dialog_enter(6);
-        assert!(app.dialog.is_none(), "幽灵 task_id → 对话框关闭");
+        assert!(app.dialog.is_none(), "trackers 快捷确认同走确认链");
         app.shutdown().await;
     }
 

@@ -503,3 +503,9 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - 调用间后台进程全量回收第 2 例（setsid 亦不能逃逸）：setsid + nohup detached 的常驻 driver 在工具调用之间被整树回收（启动后数秒内日志停更，下次调用时进程已死）——「IM 网关流空闲超时」条目补全：不止 ≥8-10 分钟阻塞调用会被取消，**调用间后台进程组同样不存活**；批量作业唯一稳态仍是前台分段（budget 控窗 ≤5.5 分钟自终止 + 每段尾部 echo 进度锚），非交互动作循环 = 操作者/会话逐段重调（本会话 15 段实录，全程无残留无污染）。
 - .work/session 丢失恢复纪律（禁 begin 重建）：沙箱重置吞掉 .work/session 但 plan.md 与 .work/tmp 存活时，严禁 bin/swarm begin 重建会话——begin 第一步即清空 .work/tmp/（main 控脚本既定行为），会连带毁掉 mrunner/pool.json/mutants/logs 全部运行时状态；正解 = 按 begin 的写盘格式手工重建 .work/session 六字段（SESSION_SKILL/SESSION_TASK/SESSION_HANDOFF/SESSION_STARTED/EXPERIENCE_BASE/NOTES_BASE），complete 无损恢复（本会话实录）。
 - timeout 窗与裸耗时的「贴边」判据细化：撞窗是否需放大复跑，看窗口/裸耗时倍率——倍率 ≥3（本会话 bt::engine 全 73 测面裸 50-90s、窗 300s）且日志有 >60s running 行即真挂起（caught-by-timeout 杀灭，无需复跑）；倍率 ≈1（BS 双套件 253s 裸 vs 260s 窗判例）才必须放大窗口重跑。
+
+## FR-02-37 v1.3 QA 终验轮（2026-11-16，QA）追加
+- 工具传输 EOF 风暴（网关层，非负载失败）：主会话 Bash 工具连续 ~35 分钟 transport EOF（failed to execute tool: Post prod-wsmgr-svc:8080/mcp: EOF），与命令内容无关；被中断调用的子进程实际存活（timeout 包裹的 retry_backoff 套件中断后跑完全绿）——「IM 网关流空闲超时」条目的工具层形态补全：判别先查进程存活与日志尾部再决定续跑，勿盲目重跑；恢复期经子代理通道执行短窗分段（同一机器、同纪律），主通道恢复后切回。
+- nightly 钉扎版本名与 rustc 版本行日期错位：基线「1.102.0-nightly (5f4effd57 2026-11-13)」的安装名是 nightly-2026-11-14（构建日 = commit 日期次日），nightly-2026-11-13 装出 (8eb778d04 2026-11-12)——按 rustc 版本行 commit 日期找工具链名时 +1 天；装前 rustup run <name> rustc --version 核验 hash 逐字一致。
+- 全新沙箱重建度量四件实测：rustup-init 直链二进制（rsproxy dist 16.3MB/s 拒 shell 脚本双层路径）+ llvm-tools-preview 随 component 旗标装齐；cargo-llvm-cov 0.9.1 / cargo-mutants 27.1.0 预编译经 api.github.com 清单 + gh-proxy 资产直链（mutants tar 包内无目录壳）；PMD 7.29.0 zip 经 gh-proxy + zipfile.testzip 探针；bb 1.13.229 + APS 经 gh-proxy git clone（HTTP/2 报「expected flush after ref listing」时 -c http.version=HTTP/1.1 一次过）。
+- 覆盖率构建隔离磁盘口径：CARGO_TARGET_DIR=.work/tmp/cov-target 插桩全目标一次过（~550s 内），盘 6.1G→2.3G 余——覆盖率轮前查盘并预留插桩膨胀；crap 报告产出后 cov-target 用后即删。

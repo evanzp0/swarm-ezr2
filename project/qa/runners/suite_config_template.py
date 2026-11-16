@@ -29,11 +29,13 @@ FIVE_M = QA_FILE_SIZES["five-m.bin"]
 
 
 def operator_template_text() -> str:
-    """从 feature 场景 01 注释块解析操作者钦定模板原文（174 行，逐字节权威）。
+    """从 feature 场景 01 注释块解析操作者钦定模板原文（206 行，逐字节权威）。
 
-    块起点 = 以「specifier v1.12）：」结尾的说明行；块终点 = 独立全角括号行
+    块起点 = 以「修订注）：」结尾的说明行；块终点 = 独立全角括号行
     「）」；内容行统一 2 空格缩进（feature 文件风格），空行即真实空行；
-    EOF 以一个换行符收尾。
+    EOF 以一个换行符收尾。总行数锚点随钦定文本修订同步（v1.14 实测 190 →
+    v1.18 实测 206，v1.45 trackers 统一键 + v1.53/v1.54 FR-02-40 做种退出
+    规则与 default_seed_duration_m 追加）。
     """
     with open(FEATURE_PATH, encoding="utf-8") as f:
         lines = f.read().split("\n")
@@ -41,7 +43,7 @@ def operator_template_text() -> str:
                  if l.rstrip().endswith("修订注）："))
     end = next(i for i, l in enumerate(lines) if i > start and l.strip() == "）")
     body = [l[2:] if l.startswith("  ") else l for l in lines[start + 1:end]]
-    assert len(body) == 190, f"钦定原文应为 190 行，解析得 {len(body)}"
+    assert len(body) == 206, f"钦定原文应为 206 行，解析得 {len(body)}"
     for sep, decl in (("# ===== 公共配置 =====", "[common]"),
                       ("# ===== HTTP 引擎配置 =====", "[http]"),
                       ("# ===== BT 引擎配置 =====", "[bt]")):
@@ -55,11 +57,16 @@ def operator_template_text() -> str:
         "v1.12：键注释首行不得再带键名前缀"
     active = [l for l in body if l.strip() and not l.startswith("#")]
     assert len(active) == 43, \
-        f"v1.14 活跃行 = 40 键值 + 3 表声明，解析得 {len(active)}"
-    assert sum(1 for l in body if l.startswith("# 取值范围")) == 40, \
-        "v1.14：40 键取值范围注释保持"
+        f"v1.18 活跃行 = 40 键值 + 3 表声明，解析得 {len(active)}"
+    assert sum(1 for l in body if l.startswith("# 取值范围")) == 43, \
+        "v1.18：40 键 + 3 注释态 seed_exit_rule 键取值范围注释保持"
     assert sum(1 for l in body if l.startswith("# [[common.proxy]]")) == 2, \
         "v1.13：proxy 双示例块保持注释（D63②）"
+    for commented in ("# [bt.seed_exit_rule]",
+                      "# share_ratio_gt = 1.5",
+                      "# seeders_count_gt = 3",
+                      "# seed_duration_m = 60"):
+        assert commented in body, f"v1.53 注释态做种退出键应保持：{commented}"
     return "\n".join(body) + "\n"
 
 
@@ -145,7 +152,7 @@ class ConfigTemplateSuite(Suite):
                                  "tracker_backoff_cap_secs = 60",
                                  "udp_base_timeout_secs = 15",
                                  "udp_retries = 3",
-                                 "seed_duration_secs = 1800",
+                                 "default_seed_duration_m = 30",
                                  "listen_port = 0",
                                  "# [[common.proxy]]"):
                     assert_in(key_line, text, f"键示例行 {key_line}")

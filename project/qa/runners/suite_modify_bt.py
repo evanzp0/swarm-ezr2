@@ -197,7 +197,6 @@ def _driver_config(env: Env, tr_port: int, listen_port: int) -> None:
         "[bt]\n"
         f'trackers = ["http://127.0.0.1:{tr_port}/announce"]\n'
         f"listen_port = {listen_port}\n"
-        "seed_duration_secs = 90.0\n"
     )
 
 
@@ -465,7 +464,12 @@ class ModifyBtSuite(Suite):
                 tracker.stop()
 
     def _case_10(self):
-        """QA-MB-10 做种中勾 2 个新文件 → 即时回「下载中」+ 上传暂停（D73②）→ 回做种 + seed_left 重置（D73③）。"""
+        """QA-MB-10 做种中勾 2 个新文件 → 即时回「下载中」+ 上传暂停（D73②）→ 回做种。
+
+        QA 终验轮 20261116 同步：①「剩余做种」展示已退役（FR-02-38 v1.21），做种中/
+        回做种断言翻转为缺席判据，倒计时数值断言退役（D73③ seed_left 重置机制不可
+        经 UI 观察，机制面由引擎级单测承载）；②_driver_config 退役键 seed_duration_secs
+        移除（FR-02-40② 静默废弃，不生效）。"""
         @self.case("QA-MB-10")
         def go(env: Env):
             tr_port = self._next_port()
@@ -491,7 +495,9 @@ class ModifyBtSuite(Suite):
                 _add_bt_task(app, torrent, keep=("a.bin", "b.bin"))
                 assert _cycle_to_visible(app, "做种中", 150), \
                     "a/b 完成后应转做种中（已完成页签）"
-                assert_in("剩余做种", app.text(), "做种中应显示倒计时")
+                assert_not_in("剩余做种", app.text(),
+                              "做种统计行「剩余做种」项已退役（FR-02-38 v1.21），"
+                              "做种上传量仅经 SR 分享率体现")
                 leecher = LtPeer("leecher", leech_port, torrent,
                                  os.path.join(env.fixture_root, "leech"),
                                  download_limit=61440, priorities=(4, 4, 0, 0))
@@ -556,13 +562,8 @@ class ModifyBtSuite(Suite):
                     f"窗内 rows={rows[-4:] if rows else '空'}）")
                 assert toast_done, "回做种应伴「✓ 下载完成」toast"
                 assert_in("做种中", app.text(), "全部完成后应回做种中")
-                assert_in("剩余做种", app.text(), "回做种应恢复倒计时显示")
-                rem = None
-                m = re.search(r"剩余做种\s+(\d{2}):(\d{2})", app.text())
-                if m:
-                    rem = int(m.group(1)) * 60 + int(m.group(2))
-                assert rem is not None, "回做种后倒计时不可解析"
-                assert rem > 75, f"回做种剩余应 ≈90s（D73③ 重置），实得 {rem}s"
+                assert_not_in("剩余做种", app.text(),
+                              "做种统计行「剩余做种」项已退役（FR-02-38 v1.21）")
                 assert leecher.wait_total_done(2 * FSIZE, 90), \
                     "上传恢复后 leecher 应拉完 a/b（driver 唯一源）"
             finally:

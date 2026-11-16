@@ -797,3 +797,11 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 - 自适应混合流的「直接 BS 结案」账目口径：登记函数内突变体可跳过单测面重推导、直接经 BS 批次实跑 record ALIVE_BS 结案（本会话 79 存活 = 56 单测面重推导 + 23 直接 BS）——缺项风险靠「重推导集覆盖登记函数全集（非 N_A 全集）+ 函数级账目闭合（登记函数 235 = 149+6+1+79）」兜底；漂移守卫只报「超」不报「缺」，账目闭合检查不可省。
 - 判定权威与 runner CSV 缺行：adaptive_resolved.csv 最新行是判定权威（同 id 多行时后者覆盖）；runner CSV（unit_runs.csv）允许缺行（同会话内另一 runner 直录或行丢失均可能，本会话 2 条 UNIT_DEAD 仅有 unit 日志无 CSV 行）——账目复算以 resolved 最新行为准、以逐突变体日志为证据底座，二者交叉核验。
 - BS 批次打包收益口径：bs_run.sh 批量打补丁（冲突检查 ±4 行 span）后单次双套件覆盖整批（23 批次 × ~260s 结案 79 突变体 ≈ 11s/条，对比单条实跑 ~270s/条），批内零杀灭 = 整批 ALIVE_BS；批失败 fail_split 整批回 POOL 重推导，不做批内二分（预期全绿场景下二分是纯浪费）。
+
+## FR-02-37 v1.3 QA 终验轮（2026-11-16，QA）追加
+- 焦点环插入的「五表同步」缺陷模式与 PTY 交叉归因法：对话框新增可聚焦节点（v1.53 按顺序下载复选）时，同步面是五张表——ui 渲染 indices（field_rects/buttons 元组）、dialog_keys nfocus、Enter 分发 arms、Char 分发 arms、路由单测的焦点常量；本轮实录 render+nfocus 已更新而 add_bt_dialog_enter/modify_bt_dialog_enter 停留旧 indices（立即下载 Enter 落暂停添加、确定 Enter 关闭不保存、取消 Enter 反而确认），单测全绿的漏网机制 = 路由单测同样编码旧 indices、行为级 walk 测试只断言「任务已建」（暂停臂同样建任务）。归因探针 = ACCENT 高亮读数与 toast 分支交叉验证（_focused_btn 显示与实际激活臂可分离，终态归因只认 toast 全文/registry state）。
+- cargo test 不刷新 target/debug/ezr：cargo test --bins/--all-targets 只构建测试 harness 二进制，套件消费的 target/debug/ezr 可执行文件保持旧版——产品源码修改后跑 PTY 套件前必须 cargo build 显式刷新，否则「修复未生效」假象（本轮实录：修复后套件原样 4F，build 后 4P）。
+- crap_calc.py argv 契约：单 lcov 输入时 sys.argv[1:-1] 为空、路径被吞作 src_root 判断位，静默 ZeroDivision——必须带 src_root 尾参（crap_calc.py <lcov...> <src_root>，单 lcov 时共 2 个路径参数）。
+- PMD CPD 产品/测试划界的多测试区形态：同文件多个 #[cfg(test)] mod（engine/mod.rs 905 与 6191 双测试区）必须收集全部 tstart 划界，只取首个会把中段（4454-5006）测试区大克隆误判为产品侧——修正实录 53/145 → 23/175（阈值 70 全量组数口径）。
+- 退役键/退役显示的 runner 翻转面三件套：①拒绝行改判（seed_duration_secs 退役后拒绝目标改 default_seed_duration_m=0，FR-02-40②）；②退役键正探针（退役键写入 → 启动成功断言，补 FR-02-35④ 静默忽略语义的观察面）；③退役展示断言翻转（剩余做种 → assert_not_in，数值断言随载体退役，机制面移交单测/fixture 观察）。规程/feature 残留旧行（08-MB-10 seed_duration_secs 表述、feature 场景 04 残留拒绝行）属 specifier 同步欠账，QA 记偏差不越权改。
+- throttle_proxy QA_ONLY 分段实录：10 案 3-202s/案，500s 单窗只容 2-3 慢案（TP-01/02/03 合计 ~506s）；四段切法 3+3+3+1 全绿，段间 pkill mini_http_tracker/ezr-fixture 清场。
