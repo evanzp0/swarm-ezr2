@@ -125,3 +125,8 @@
 ## 产品面 handler 回补轮（2026-11-17）追加
 - testing.md — 执行层双层架构（词汇面列域封闭 + 产品面 59 bespoke PTY handler）/杀灭锚六类设计（跨格、字面、拒启动、输入过滤、固定产物、块数截断）/时序归约替代窗口竞速/needle 三陷阱（页签子串、pyte 头截断、右边框提取）/规格-产品四分歧登记/等价类 17 格诚实处置（新增）
 - environment.md — llvm-tools 静默解包失败三现（整链重装唯一出路）/插桩采集须直跑测试二进制（cargo test 不透传 LLVM_PROFILE_FILE）/lcov 过滤保绝对路径（crap_calc 以 /src/ 判产品）/PMD 134MB 长超时装机/补丁文本改写走 ASCII 转义拼接并以字节级验证（新增）
+
+## 分歧裁决落地修订轮（2026-11-17，hardender 续轮）追加
+- testing.md — 显示通道改写与磁盘真值判别（字节计数）/全角括号描述格断言陷阱/双层统一（产品面格先过规格封闭校验再实跑）/CRAP 采集三坑（lcov 段级过滤、crap_calc 预过滤依赖、tokio spawn webrtc 覆盖竞速）/soft differential 跳过语义与 full 级硬证据/APS 运行时重建口径（格级 schema 键、open_int lo=0 微域、δ 确定性复现）（新增）
+- environment.md — 插桩磁盘时序纪律（先回收残缺产物+incremental 再构建，CARGO_INCREMENTAL=0，用后即删）/cargo PATH 前缀续会话（llvm-tools 定位 nightly 工具链）（新增）
+- handoff.md — 操作者四裁决落地口径（①~/ 形态+生成任务绝对路径、②URL 排除臂产品修正、③失败分类直接形态、④/mktorrent 了结登记）/trackpool:412 webrtc 竞速同源登记（新增）

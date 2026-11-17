@@ -863,3 +863,12 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 - **断言 needle 三陷阱**：①页签标签子串陷阱——「正在下载」不含「下载中」（差一个中字），「已完成 (0)」恒在场——完成判定必须用「下载完成」toast 或「[已完成]」行徽标；②pyte 头截断——超长字段显示「…尾部」，断言用 endswith；③行值提取截到对话框右边框，防右栏串扰。完成类 toast 会被后续 toast 覆盖（3 秒窗），失败现场转储要在断言内携带。
 - **规格-产品形态分歧登记（本轮产品面执行发现，待操作者裁决）**：①路径补全规格期望展开形态 /home/qa/downloads/，产品保持 tilde 形态 ~/downloads/；②URL token 规格期望不响应补全，产品 path_like 含 contains('/') → 无匹配 toast；③失败分类规格「网络错误（子类）」，产品直接形态（连接失败/连接超时/传输中断/无法创建目标文件）；④下载限速字符串写 config 必须带引号（裸 2 MiB/s 是 TOML 解析错误拒启动）。
 - **等价类突变体的诚实处置**：17 格镜像等价（retry_after/status/slots/concurrency/secs/conns/port/extra_lines——产品对这些输入值泛化，任何断言均从突变值派生，无锚可杀）。非等价存活率=0（hardender 零目标达成）；等价论证逐格登记于 handoff，回补触发=产品引入对这些输入的校验边界或规格新增区分性断言。压缩它们需 mutator 扩展项目等价突变过滤器（上游字节冻结，属操作者裁决面）。
+
+## 分歧裁决落地修订轮（2026-11-17，hardender 续轮）追加
+- **显示通道改写与磁盘真值判别**：工具回读文本里 `[http]`→`ttp]`、`#[must_use]`→`#ust_use]` 等方括号序列残缺是**显示通道改写**，磁盘字节往往完好——判真值用字节计数（`open(f,'rb').read().count(b'[http]')`），别凭显示断定文件损坏，更别"顺手修复"把好文件改坏。
+- **描述形态格的断言子串陷阱（全角括号）**：feature 描述性期望「（无 toast——…）」括号是全角，handler 用半角 `startswith("(` 判定恒假；描述形态判定用不含括号的子串（`"无 toast" in toast`）。
+- **双层统一：产品面格同样先过规格封闭校验**：「无 toast」描述格被 dither（变异落在判定子串之外的"件→x"）时，子串判定继续为真 → survived 假阴性——产品面 handler 分支必须**先跑 schema closed 校验（域外先拒）再实跑**；handler=基线产品行为验证与第二道防线，规格枚举封闭是第一道。
+- **APS 运行时重建口径**：schema 键 = `<stem>|<sidx>|<rowidx>|<col>` 格级；closed=值集封闭（含产品面格）、open_int=lo0/hi base+15（extra_lines 0 格 lo=0 使负 δ 被杀、0→2 界内幸存=等价类）；mutator δ 确定性复现上轮逐格值（10→14/60→68/90→99/120→112/403→399/404→401）。
+- **soft differential 跳过语义**：修订后未变场景（scenario_hash 同）复用 manifest killed——对账先分「执行 N + 复用 M」再合总账；硬证据用 `--level full` 全执行（忽略 stamp/manifest，两 feature 77 突变体零跳过）。
+- **CRAP 采集三坑（本轮实测）**：①llvm-cov export 后**按行 grep -v SF 会破坏 lcov 段结构**（孤儿 DA 行归属错文件，覆盖值全错位）——过滤必须按 `SF..end_of_record` 段级（`awk '/^SF:/{keep=index($0,"/project/ezr/src/")>0} keep'`）；②crap_calc 依赖预过滤的产品 lcov，全量 export 直接喂会混入 registry 依赖（32.5% 假覆盖）；③**tokio spawn 的 webrtc 任务覆盖竞速**：ws_prepare_offers 同一二进制两遍 9/105→3/79——webrtc 受限函数的 CRAP/ACT 名义值非确定，非回归对账用「行覆盖恒等（94.6%）+ 稳定函数集恒等（mouse:178=77.09 等）」，ACT 名义差异逐条归因（与遗留受限项 webrtc 同源）。
+- **CRAP 段级过滤的文件名匹配**：SF 路径含子目录（`src/bt/engine/trackpool.rs`），匹配串别写 `/src/trackpool.rs`（永假）；按目录前缀或 endswith 判。

@@ -530,3 +530,7 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - llvm-cov 导出的 lcov 过滤 SF: 前缀时保留绝对路径——crap_calc.py 以 "/src/" in sf 判产品文件，改写成相对路径 src/... 会全量漏配（行覆盖 0/0 除零）。
 - PMD 7.29 装机：gh-proxy.com 直链 pmd-dist-7.29.0-bin.zip 134MB 需 --max-time ≥540s（120s 截断产生半截 zip，PK 头在但 EOCD 缺失）；cpd 总克隆组 220 与历轮基线恒等。
 - 工具调用文本改写再现（bug16 家族）："[h" 序列（如 "[http]"）与 '"h' 序列在补丁文本中被吞——含中文/方括号的补丁必须走 ASCII 转义拼接（\uXXXX + chr(91)）或 base64 载荷，并以字节级（md5/子串存在性）验证落盘，文本回显验证不可信。
+
+## 分歧裁决落地修订轮（2026-11-17，hardender 续轮）追加
+- **磁盘时序纪律（插桩轮）**：9.9G 盘插桩前先回收——残缺 cov-target（1.5G）+ `target/debug/incremental`（1.9G）+ /tmp 杂项，97%→61% 再构建；插桩构建用 `CARGO_INCREMENTAL=0`（增量目录与插桩产物双膨胀），cov-target 用后即删。
+- **cargo 不在默认 PATH**：续会话先 `export PATH=$HOME/.cargo/bin:$PATH`（rustup 工具链健在 stable 1.100 + nightly 1.102.0；llvm-profdata/llvm-cov 在 nightly 工具链 lib/rustlib/x86_64-unknown-linux-gnu/bin/）。

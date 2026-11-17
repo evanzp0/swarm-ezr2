@@ -151,6 +151,11 @@ impl App {
         if token.is_empty() {
             return;
         }
+        if token.starts_with("http://") || token.starts_with("https://") {
+            // URL 不是文件路径，补全不响应（2026-11-17 操作者裁决②）：
+            // 输入保持原样、不弹任何提示；判定与 Enter 确认分流的 URL 臂同源。
+            return;
+        }
         let path_like = token.starts_with('/')
             || token.starts_with("./")
             || token.starts_with("../")
@@ -552,6 +557,26 @@ mod cmd_confirm_tests {
             app.toast.as_deref().unwrap_or("").starts_with("无匹配："),
             "无匹配应报无匹配 toast：{:?}",
             app.toast
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn complete_url_token_unresponded() {
+        let mut app = make_app("complete-url");
+        let token = "https://example.com/ann";
+        app.open_cmd_window();
+        app.cmd.set_text(token);
+        app.cmd_complete_path();
+        assert_eq!(
+            app.cmd.line().value,
+            token,
+            "URL 不是文件路径，补全应完全不响应（输入保持原样）"
+        );
+        let toast = app.toast.as_deref().unwrap_or("");
+        assert!(
+            !toast.starts_with("补全目录：") && !toast.starts_with("无匹配："),
+            "URL token 不应弹任何补全提示：{toast:?}"
         );
         app.shutdown().await;
     }

@@ -1,5 +1,5 @@
 # acceptance-mutation-manifest-begin
-# {"version":1,"tested_at":"2026-11-17T11:55:17.276989435Z","feature_name":"06-cmd-window 命令窗口（A 键新入口）","feature_path":"/home/z/swarm-ezr2/project/features/06-cmd-window.feature","background_hash":"a1ef41f2d565c59f1fe6c0cdc03c3a9cb2c173c5b23dcda7c3ac5f89fa0635f1","implementation_hash":"sha256:7d7d41a93c6ce0fd3f3f8b5e343cc6c57680c23368421beb47ebc8fe56cf62dc","scenarios":[{"index":4,"name":"06-cmd-window-05 Shift+Tab 本地路径补全","scenario_hash":"f7993fa658869f5667da5a2387297b58cd7790fed6007772d32d0480090c3154","mutation_count":15,"result":{"Total":15,"Killed":15,"Survived":0,"Errors":0},"tested_at":"2026-11-17T11:55:17.276989435Z"},{"index":7,"name":"06-cmd-window-08 错误窗口（非法输入与解析失败）","scenario_hash":"d77d1452a8f9e687863b6ccd9fdecd37bf83a4d2c350554f6ef3db84e550673e","mutation_count":10,"result":{"Total":10,"Killed":10,"Survived":0,"Errors":0},"tested_at":"2026-11-17T11:55:17.276989435Z"}]}
+# {"version":1,"tested_at":"2026-11-17T13:54:40.499139877Z","feature_name":"06-cmd-window 命令窗口（A 键新入口）","feature_path":"/home/z/swarm-ezr2/project/features/06-cmd-window.feature","background_hash":"a1ef41f2d565c59f1fe6c0cdc03c3a9cb2c173c5b23dcda7c3ac5f89fa0635f1","implementation_hash":"unknown","scenarios":[{"index":4,"name":"06-cmd-window-05 Shift+Tab 本地路径补全","scenario_hash":"b8a873c4983115866a7798ebb633b91e397d309043f9b0bccf2f9026623c25a9","mutation_count":15,"result":{"Total":15,"Killed":15,"Survived":0,"Errors":0},"tested_at":"2026-11-17T13:54:40.499139877Z"},{"index":7,"name":"06-cmd-window-08 错误窗口（非法输入与解析失败）","scenario_hash":"d77d1452a8f9e687863b6ccd9fdecd37bf83a4d2c350554f6ef3db84e550673e","mutation_count":10,"result":{"Total":10,"Killed":10,"Survived":0,"Errors":0},"tested_at":"2026-11-17T13:54:40.499139877Z"}]}
 # acceptance-mutation-manifest-end
 
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
@@ -88,7 +88,7 @@ Feature: 06-cmd-window 命令窗口（A 键新入口）
       | typed                              | completed                                    | toast                              |
       | /tmp/qato                          | /tmp/qatorrents/                             | 补全目录：/tmp/qatorrents/          |
       | /tmp/qatorrents/ub                 | /tmp/qatorrents/ubuntu-24.04.2-desktop-amd64.torrent | （无 toast——唯一文件候选直接补全）   |
-      | ~/down                             | /home/qa/downloads/                          | 补全目录：/home/qa/downloads/        |
+      | ~/down                             | ~/downloads/                                 | 补全目录：~/downloads/               |
       | /tmp/zzz无匹配前缀                  | /tmp/zzz无匹配前缀                            | 无匹配：/tmp/zzz无匹配前缀           |
       | https://example.com/ann            | https://example.com/ann                      | （无 toast——非 path token 不响应）  |
 
