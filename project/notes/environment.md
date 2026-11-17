@@ -518,3 +518,8 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - cargo crate 文件来源镜像选型（非 rustup dist）：[source.crates-io] replace-with 走 TUNA 的 sparse index（`sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/`）时，index 条目仍把 crate 文件下载指回 static.crates.io 官方 CDN，国内极慢（实测 ~0.06 crate/s，390 依赖跑 10 分钟仅下 237 个、零编译产物）；切 rsproxy.cn（`sparse+https://rsproxy.cn/index/`，[source.rsproxy-sparse]）后 index 把 crate 文件下载指回自家 CDN，150s 内下完剩余全量——**cargo 依赖下载镜像必须选 index + crate 文件同源的服务（rsproxy.cn），只镜像 index 的（TUNA）对 crate 文件下载无加速**。缓存按 source 分目录（`~/.cargo/registry/cache/<source-hash>/`），切 source 不复用旧缓存、整批重下。
 - pip libtorrent wheel 来源：TUNA PyPI（`pypi.tuna.tsinghua.edu.cn`）对 `libtorrent-2.1.1-cp312-cp312-manylinux2014_x86_64.whl` 返回 403 Forbidden；官方 pypi.org 直连极慢（8.2MB 跑 240s 超时）；aliyun PyPI（`mirrors.aliyun.com/pypi/simple/`）6s 下完装齐——**pip 装 libtorrent 用 aliyun 镜像，勿用 TUNA（403）勿裸连官方（超时）**；包以 `--only-binary :all:` 钉 wheel 免源码编译（libtorrent-rasterbar C++ 源码编译极慢）。
 - 全新沙箱复建 01-PC 套件复跑前置四件实测：rustup-init 直链二进制（TUNA dist 前台装 stable minimal）→ nightly 工具链（rustup toolchain install nightly，TUNA dist，1.102.0-nightly 一次过）→ cargo fetch（rsproxy source）→ cargo build 四 bin debug（2m29s）→ pip pyte/libtorrent（aliyun 镜像 wheel）；套件全量 P=14 F=0 S=0（105.6s 量级，_case_13 含 BT 下载 13.2s）。
+
+## 缺口回补与执行层轮（2026-11-16，hardender）追加
+- rustup 组件包静默解包失败形态：llvm-tools-preview 显示 downloading 且 rc=0，但二进制不落盘、组件清单已登记 installed——uninstall/add 循环无效（add 见清单跳过安装），唯一出路 = rustup toolchain uninstall + reinstall（附 --component llvm-tools-preview）。
+- PMD 7.29 zip 发行版的 bin/pmd 启动器默认无执行位（zip 权限丢失）——chmod +x 或改走 java 直接调 lib 下 jar 不行（cli jar 无 main manifest），必须 chmod 启动器。
+- 磁盘 9.9G 沙箱的 llvm-cov 直采预算：清 target（-2.9G）→ 插桩构建 +4G → 采集 +lcov 60MB，全程峰值 free ≥3.8G 可容纳；采集后立即删 profraw/profdata 可回 1.5G。

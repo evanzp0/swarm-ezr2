@@ -1,5 +1,5 @@
 # acceptance-mutation-manifest-begin
-# {"version":1,"tested_at":"2026-11-15T04:51:59.708077670Z","feature_name":"01-slots-queue 状态机 · 下载槽位与排队调度","feature_path":"/home/z/swarm-ezr2/project/features/01-slots-queue.feature","background_hash":"33da63c263d8fa2bcbdef247d02b0611a03b93238955a1ad5e34af83cd2b4dae","implementation_hash":"unknown","scenarios":[]}
+# {"version":1,"tested_at":"2026-11-16T20:15:54.032960494Z","feature_name":"01-slots-queue 状态机 · 下载槽位与排队调度","feature_path":"/home/z/swarm-ezr2/project/features/01-slots-queue.feature","background_hash":"33da63c263d8fa2bcbdef247d02b0611a03b93238955a1ad5e34af83cd2b4dae","implementation_hash":"sha256:c538cb47b193f8dca3136873ca8e8f67a3ee41a6f1cf8b8f3e844dde22bb894f","scenarios":[]}
 # acceptance-mutation-manifest-end
 
 # 场景清单（场景名 = feature 名称 + 稳定序号）：

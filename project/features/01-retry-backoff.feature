@@ -1,5 +1,5 @@
 # acceptance-mutation-manifest-begin
-# {"version":1,"tested_at":"2026-11-15T04:51:59.623995027Z","feature_name":"01-retry-backoff 失败分类 · 重试计数与退避","feature_path":"/home/z/swarm-ezr2/project/features/01-retry-backoff.feature","background_hash":"ea68af8634f29da43ee298fb3cb4da8d212da2e7b56856c59005d5b86ffde2a8","implementation_hash":"unknown","scenarios":[]}
+# {"version":1,"tested_at":"2026-11-16T20:15:53.438698366Z","feature_name":"01-retry-backoff 失败分类 · 重试计数与退避","feature_path":"/home/z/swarm-ezr2/project/features/01-retry-backoff.feature","background_hash":"ea68af8634f29da43ee298fb3cb4da8d212da2e7b56856c59005d5b86ffde2a8","implementation_hash":"sha256:510f71a5974e9f70c741a4b511a5e91a368d36f52d2836dc833d20d289fc3b4d","scenarios":[]}
 # acceptance-mutation-manifest-end
 
 # 场景清单（场景名 = feature 名称 + 稳定序号）：

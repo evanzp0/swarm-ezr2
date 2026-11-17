@@ -6189,6 +6189,1624 @@ mod tests {
 }
 
 #[cfg(test)]
+mod gap112_backfill_tests {
+    use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use sha1::{Digest, Sha1};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::sync::mpsc;
+
+    use super::*;
+    use crate::bt::bencode::{encode, BValue};
+    use crate::bt::metainfo::TorrentMeta;
+    use crate::bt::tracker::{PeerAddr, WsAnnounceResponse, WsSession, WsSignal};
+    use crate::bt::webrtc::PeerTransports;
+    use crate::model::BtFile;
+
+    const GAP112_PEER_ID: [u8; 20] = *b"GAP112PEERID00000000";
+    const GAP112_REMOTE_ID: [u8; 20] = *b"GAP112REMOTE00000000";
+
+    fn gap_meta(data: &[u8], piece_len: usize) -> TorrentMeta {
+        let mut pieces = Vec::new();
+        for chunk in data.chunks(piece_len) {
+            let mut h = Sha1::new();
+            h.update(chunk);
+            pieces.extend_from_slice(&h.finalize());
+        }
+        let mut info = BTreeMap::new();
+        info.insert(b"length".to_vec(), BValue::Int(data.len() as i64));
+        info.insert(b"name".to_vec(), BValue::Bytes(b"gap112.bin".to_vec()));
+        info.insert(b"piece length".to_vec(), BValue::Int(piece_len as i64));
+        info.insert(b"pieces".to_vec(), BValue::Bytes(pieces));
+        let mut root = BTreeMap::new();
+        root.insert(
+            b"announce".to_vec(),
+            BValue::Bytes(b"http://127.0.0.1:1/announce".to_vec()),
+        );
+        root.insert(b"info".to_vec(), BValue::Dict(info));
+        TorrentMeta::parse(&encode(&BValue::Dict(root))).unwrap()
+    }
+
+    fn gap_spec(meta: TorrentMeta, files: Vec<BtFile>, save_dir: &str) -> crate::engine::BtSpec {
+        crate::engine::BtSpec {
+            id: 1,
+            source: "gap112".into(),
+            meta,
+            save_dir: save_dir.into(),
+            name: "gap112.bin".into(),
+            files,
+            trackers: vec![],
+            concurrency: 2,
+            proxy_endpoint: None,
+            seeding: false,
+            upload_paused: false,
+            max_download_speed: 0,
+            max_upload_speed: 0,
+            tunables: BtTunables::default(),
+            sequential: false,
+        }
+    }
+
+    fn gap_ul() -> Arc<Throttle> {
+        Arc::new(Throttle::new(0))
+    }
+
+    fn gap_announce_ctx() -> AnnounceCtx {
+        AnnounceCtx {
+            infohash: [7u8; 20],
+            peer_id: [8u8; 20],
+            port: 6881,
+            client: reqwest::Client::new(),
+            numwant: 50,
+            live: Arc::new(std::sync::Mutex::new(LiveStats::default())),
+            completed_notify: Arc::new(tokio::sync::Notify::new()),
+            reannounce_notify: Arc::new(tokio::sync::Notify::new()),
+            backoff_start_secs: 8,
+            backoff_cap_secs: 60,
+            udp_base_timeout_secs: 2,
+            udp_retries: 2,
+            signals: Arc::new(std::sync::Mutex::new(SignalState::default())),
+            rtc_tx: mpsc::channel(4).0,
+            transports: PeerTransports {
+                tcp: true,
+                webrtc: false,
+            },
+            rtc_retry_base_secs: 5,
+            rtc_retry_cap_secs: 60,
+        }
+    }
+
+    fn gap_dl_flow() -> Arc<DlFlow> {
+        Arc::new(DlFlow {
+            global: Arc::new(Throttle::new(0)),
+            task: Arc::new(Throttle::new(0)),
+        })
+    }
+
+    async fn gap_ws_announce_server(count: Arc<std::sync::atomic::AtomicUsize>) -> String {
+        use futures::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let Ok((sock, _)) = listener.accept().await else {
+                return;
+            };
+            let Ok(mut ws) = tokio_tungstenite::accept_async(sock).await else {
+                return;
+            };
+            while let Some(Ok(msg)) = ws.next().await {
+                let Message::Text(t) = msg else {
+                    continue;
+                };
+                let Ok(req) = serde_json::from_str::<serde_json::Value>(&t) else {
+                    continue;
+                };
+                if req.get("action").and_then(|v| v.as_str()) != Some("announce") {
+                    continue;
+                }
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let resp = serde_json::json!({
+                    "action": "announce",
+                    "info_hash": req["info_hash"],
+                    "interval": 120,
+                    "min interval": 0,
+                    "complete": 1,
+                    "incomplete": 0,
+                    "peers": []
+                });
+                if ws.send(Message::Text(resp.to_string())).await.is_err() {
+                    break;
+                }
+            }
+        });
+        format!("ws://{addr}/announce")
+    }
+
+    async fn gap_wait_count(count: &Arc<std::sync::atomic::AtomicUsize>, n: usize) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while count.load(std::sync::atomic::Ordering::SeqCst) < n {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "gap112 announce 计数未达 {n}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    #[test]
+    fn gap112_trackpool_announce_url_passthrough_all_variants() {
+        assert_eq!(
+            announce_url(&TrackerUrl::Http("http://a/ann".into())),
+            "http://a/ann"
+        );
+        assert_eq!(
+            announce_url(&TrackerUrl::Ws("ws://b/ann".into())),
+            "ws://b/ann"
+        );
+        assert_eq!(
+            announce_url(&TrackerUrl::Udp("udp://c:80/ann".into())),
+            "udp://c:80/ann"
+        );
+    }
+
+    #[test]
+    fn gap112_trackpool_live_snapshot_reads_live_counters() {
+        let live = Arc::new(std::sync::Mutex::new(LiveStats::default()));
+        assert_eq!(live_snapshot(&live), (0, 0, 0));
+        {
+            let mut st = live.lock().unwrap();
+            st.uploaded = 11;
+            st.downloaded = 22;
+            st.left = 33;
+        }
+        assert_eq!(live_snapshot(&live), (11, 22, 33));
+    }
+
+    #[tokio::test]
+    async fn gap112_trackpool_spawn_stopped_announce_reaches_ws_server() {
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let url = gap_ws_announce_server(count.clone()).await;
+        let meta = gap_meta(&[0u8; 64], 64);
+        let files = vec![BtFile {
+            path: "gap112.bin".into(),
+            size: 64,
+            selected: true,
+        }];
+        let spec = gap_spec(meta, files, "/tmp/gap112-stopped");
+        let shared = Arc::new(EngineShared::for_test());
+        spawn_stopped_announce(
+            &[TrackerUrl::Ws(url)],
+            &spec,
+            &GAP112_PEER_ID,
+            6881,
+            &shared,
+            0,
+            0,
+            0,
+        );
+        gap_wait_count(&count, 1).await;
+    }
+
+    #[tokio::test]
+    async fn gap112_trackpool_spawn_outgoing_peer_live_endpoint_no_immediate_close() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let _accept = tokio::spawn(async move {
+            let _ = listener.accept().await;
+        });
+        let meta = gap_meta(&[0u8; 64], 64);
+        let files = vec![BtFile {
+            path: "gap112.bin".into(),
+            size: 64,
+            selected: true,
+        }];
+        let spec = gap_spec(meta, files, "/tmp/gap112-outgoing");
+        let (tx, mut rx) = mpsc::channel(8);
+        spawn_outgoing_peer(
+            7,
+            PeerAddr {
+                ip: "127.0.0.1".parse().unwrap(),
+                port,
+            },
+            &spec,
+            &GAP112_PEER_ID,
+            tx,
+            gap_dl_flow(),
+        );
+        let first = tokio::time::timeout(Duration::from_millis(2500), rx.recv()).await;
+        if let Ok(Some((_, PeerIn::Closed { reason }))) = first {
+            assert_ne!(reason, "连接失败", "活端点不得走连接失败臂");
+        }
+    }
+
+    #[tokio::test]
+    async fn gap112_trackpool_spawn_incoming_peer_emits_connected_on_handshake() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let meta = gap_meta(&[0u8; 64], 64);
+        let files = vec![BtFile {
+            path: "gap112.bin".into(),
+            size: 64,
+            selected: true,
+        }];
+        let spec = gap_spec(meta, files, "/tmp/gap112-incoming");
+        let (tx, mut rx) = mpsc::channel(8);
+        let keep = tokio::spawn(async move {
+            let mut cli = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let mut hs = Vec::new();
+            hs.push(19u8);
+            hs.extend_from_slice(b"BitTorrent protocol");
+            hs.extend_from_slice(&[0u8; 8]);
+            hs.extend_from_slice(&spec.meta.infohash);
+            hs.extend_from_slice(&GAP112_REMOTE_ID);
+            let _ = cli.write_all(&hs).await;
+            tokio::time::sleep(Duration::from_secs(4)).await;
+            drop(cli);
+        });
+        let accepted = tokio::time::timeout(Duration::from_secs(3), listener.accept())
+            .await
+            .expect("接受入连超时")
+            .expect("accept 失败");
+        spawn_incoming_peer(
+            9,
+            accepted.0,
+            accepted.1,
+            &spec,
+            &GAP112_PEER_ID,
+            tx,
+            gap_dl_flow(),
+        );
+        let got = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .expect("入连握手事件未达")
+            .expect("通道关闭");
+        let ok =
+            matches!(got, (_, PeerIn::Connected { peer_id, .. }) if peer_id == GAP112_REMOTE_ID);
+        assert!(ok, "入连握手事件应为 Connected 且对端 peer_id 回填");
+        keep.abort();
+    }
+
+    #[test]
+    fn gap112_peerwire_assemble_contiguous_boundary_table() {
+        let mut e0 = BTreeMap::new();
+        e0.insert(0u32, vec![1u8, 2, 3]);
+        assert_eq!(assemble_contiguous(&e0, 3), Some(vec![1, 2, 3]));
+        let mut e1 = BTreeMap::new();
+        e1.insert(0u32, vec![1u8, 2]);
+        e1.insert(2u32, vec![3u8]);
+        assert_eq!(assemble_contiguous(&e1, 3), Some(vec![1, 2, 3]));
+        let mut e2 = BTreeMap::new();
+        e2.insert(0u32, vec![1u8, 2]);
+        e2.insert(3u32, vec![3u8]);
+        assert_eq!(assemble_contiguous(&e2, 4), None);
+        let mut e3 = BTreeMap::new();
+        e3.insert(0u32, vec![1u8, 2, 3, 4]);
+        assert_eq!(assemble_contiguous(&e3, 3), None);
+        let mut e4 = BTreeMap::new();
+        e4.insert(0u32, vec![1u8]);
+        e4.insert(1u32, vec![2u8]);
+        assert_eq!(assemble_contiguous(&e4, 2), Some(vec![1, 2]));
+        let mut e5 = BTreeMap::new();
+        e5.insert(0u32, vec![1u8]);
+        assert_eq!(assemble_contiguous(&e5, 2), None);
+        let empty: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
+        assert_eq!(assemble_contiguous(&empty, 0), Some(Vec::new()));
+        assert_eq!(assemble_contiguous(&empty, 2), None);
+    }
+
+    #[test]
+    fn gap112_peerwire_count_invalid_request_threshold_boundary() {
+        let mut st = new_conn_stat("10.0.0.1:1".into());
+        assert_eq!(count_invalid_request(&mut st), None);
+        assert_eq!(count_invalid_request(&mut st), None);
+        assert_eq!(count_invalid_request(&mut st), Some(BanKind::Protocol));
+        assert_eq!(count_invalid_request(&mut st), Some(BanKind::Protocol));
+        let mut st2 = new_conn_stat("10.0.0.2:1".into());
+        st2.invalid_requests = u32::MAX;
+        assert_eq!(count_invalid_request(&mut st2), Some(BanKind::Protocol));
+    }
+
+    #[tokio::test]
+    async fn gap112_peerwire_send_pushes_message_to_peer_out() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut st = new_conn_stat("10.0.0.1:1".into());
+        st.peer_out = tx;
+        send(1, &mut st, peer::PeerMsg::KeepAlive).await;
+        let got = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("send 未送达 peer_out");
+        assert!(
+            matches!(got, Some(PeerOut::Send(peer::PeerMsg::KeepAlive))),
+            "send 应把消息推送入 peer_out"
+        );
+    }
+
+    #[tokio::test]
+    async fn gap112_peerwire_handle_peer_msg_have_arm_updates_state_and_interest() {
+        let meta = gap_meta(&[0u8; 64], 64);
+        let files = vec![BtFile {
+            path: "gap112.bin".into(),
+            size: 64,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 64);
+        let spec = gap_spec(meta, files, "/tmp/gap112-have");
+        let tun = BtTunables::default();
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut st = new_conn_stat("10.0.0.1:1".into());
+        st.peer_out = tx;
+        st.peer_choking = false;
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        conns.insert(3, st);
+        let mut done: HashSet<u32> = HashSet::new();
+        let mut partial: PartialPieces = HashMap::new();
+        let mut order = PieceOrderCache::new();
+        let permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let ul = gap_ul();
+        let verdict = handle_peer_msg(
+            3,
+            peer::PeerMsg::Have(0),
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits,
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        assert_eq!(verdict, None);
+        assert!(conns[&3].has.contains(&0), "Have 后 has 登记 piece 0");
+        let got = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .ok()
+            .flatten();
+        assert!(
+            matches!(got, Some(PeerOut::Send(peer::PeerMsg::Interested))),
+            "未持有且未完成 → 发送 Interested"
+        );
+        assert!(
+            !conns[&3].inflight.is_empty(),
+            "未 choke 的 Have 臂补发请求"
+        );
+    }
+
+    #[tokio::test]
+    async fn gap112_peerwire_handle_peer_msg_interested_notinterested_choke_arms() {
+        let meta = gap_meta(&[0u8; 64], 64);
+        let files = vec![BtFile {
+            path: "gap112.bin".into(),
+            size: 64,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 64);
+        let spec = gap_spec(meta, files, "/tmp/gap112-arms");
+        let tun = BtTunables::default();
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut st = new_conn_stat("10.0.0.1:1".into());
+        st.peer_out = tx;
+        st.inflight.insert((0, 0), (16, std::time::Instant::now()));
+        st.am_choking = false;
+        st.peer_choking = false;
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        conns.insert(4, st);
+        let mut done: HashSet<u32> = HashSet::new();
+        let mut partial: PartialPieces = HashMap::new();
+        let mut order = PieceOrderCache::new();
+        let permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let ul = gap_ul();
+        let verdict = handle_peer_msg(
+            4,
+            peer::PeerMsg::Interested,
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits.clone(),
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        assert_eq!(verdict, None);
+        assert!(conns[&4].peer_interested, "Interested 臂置位");
+        let verdict = handle_peer_msg(
+            4,
+            peer::PeerMsg::Choke,
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits.clone(),
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        assert_eq!(verdict, None);
+        assert!(conns[&4].peer_choking, "Choke 臂置位");
+        assert!(conns[&4].inflight.is_empty(), "Choke 臂清空在途请求");
+        let verdict = handle_peer_msg(
+            4,
+            peer::PeerMsg::NotInterested,
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits,
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        assert_eq!(verdict, None);
+        assert!(!conns[&4].peer_interested, "NotInterested 臂复位");
+        assert!(
+            conns[&4].am_choking,
+            "NotInterested 且未 choke → 主动 choke"
+        );
+        let got = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("Choke 回发未达");
+        assert!(
+            matches!(got, Some(PeerOut::Send(peer::PeerMsg::Choke))),
+            "NotInterested 未 choke → 主动 choke 回发"
+        );
+    }
+
+    #[test]
+    fn gap112_pieceio_bitfield_bytes_boundary_table() {
+        let mut done: HashSet<u32> = HashSet::new();
+        done.insert(0);
+        done.insert(1);
+        done.insert(7);
+        done.insert(8);
+        assert_eq!(bitfield_bytes(&done, 16), vec![0xC1, 0x80]);
+        assert!(bitfield_bytes(&HashSet::new(), 0).is_empty());
+        let mut oob: HashSet<u32> = HashSet::new();
+        oob.insert(99);
+        assert_eq!(bitfield_bytes(&oob, 16), vec![0, 0]);
+        assert_eq!(bitfield_bytes(&HashSet::new(), 9), vec![0, 0]);
+    }
+
+    #[test]
+    fn gap112_pieceio_save_bt_sidecar_plain_roundtrip() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-gap112-sc");
+        let path = dir.join("t.ezr");
+        let path_s = path.to_string_lossy().into_owned();
+        let mut done: HashSet<u32> = HashSet::new();
+        done.insert(1);
+        done.insert(3);
+        save_bt_sidecar(&path_s, &done);
+        let sc = crate::model::BtSidecar::load_full(&path_s).expect("sidecar 可回读");
+        let mut expect: Vec<u32> = vec![1, 3];
+        expect.sort_unstable();
+        assert_eq!(sc.done_pieces, expect);
+        let empty: HashSet<u32> = HashSet::new();
+        save_bt_sidecar(&path_s, &empty);
+        let sc2 = crate::model::BtSidecar::load_full(&path_s).expect("空 sidecar 可回读");
+        assert!(sc2.done_pieces.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gap112_pieceio_selected_bytes_of_piece_counts_selected_only() {
+        let files_full = vec![BtFile {
+            path: "a.bin".into(),
+            size: 100,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files_full, 64);
+        assert_eq!(selected_bytes_of_piece(&pmap, 0), 64);
+        assert_eq!(selected_bytes_of_piece(&pmap, 1), 36);
+        let files_mixed = vec![
+            BtFile {
+                path: "a.bin".into(),
+                size: 64,
+                selected: false,
+            },
+            BtFile {
+                path: "b.bin".into(),
+                size: 64,
+                selected: true,
+            },
+        ];
+        let pmap2 = PieceMap::new(&files_mixed, 64);
+        assert_eq!(selected_bytes_of_piece(&pmap2, 0), 0);
+        assert_eq!(selected_bytes_of_piece(&pmap2, 1), 64);
+    }
+
+    #[test]
+    fn gap112_pieceio_partial_piece_list_excludes_done_and_sorts() {
+        let mut partial: PartialPieces = HashMap::new();
+        partial.insert(3, BTreeMap::new());
+        partial.insert(1, BTreeMap::new());
+        partial.insert(2, BTreeMap::new());
+        let mut done: HashSet<u32> = HashSet::new();
+        done.insert(2);
+        assert_eq!(partial_piece_list(&partial, &done), vec![1, 3]);
+        assert_eq!(partial_piece_list(&partial, &HashSet::new()), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn gap112_pieceio_inflight_piece_list_dedup_filters_sorts() {
+        let mut c1 = new_conn_stat("10.0.0.1:1".into());
+        let mut c2 = new_conn_stat("10.0.0.2:1".into());
+        let now = std::time::Instant::now();
+        c1.inflight.insert((0, 0), (16, now));
+        c1.inflight.insert((1, 0), (16, now));
+        c2.inflight.insert((1, 0), (16, now));
+        c2.inflight.insert((2, 0), (16, now));
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        conns.insert(0, c1);
+        conns.insert(1, c2);
+        let mut done: HashSet<u32> = HashSet::new();
+        done.insert(2);
+        assert_eq!(inflight_piece_list(&conns, &done), vec![0, 1]);
+        assert_eq!(inflight_piece_list(&conns, &HashSet::new()), vec![0, 1, 2]);
+        assert_eq!(
+            inflight_piece_list(&HashMap::new(), &done),
+            Vec::<u32>::new()
+        );
+    }
+
+    #[test]
+    fn gap112_pieceio_uploaded_total_sums_all_conns() {
+        let mut c1 = new_conn_stat("10.0.0.1:1".into());
+        c1.cum_up = 5;
+        let mut c2 = new_conn_stat("10.0.0.2:1".into());
+        c2.cum_up = 7;
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        conns.insert(0, c1);
+        conns.insert(1, c2);
+        assert_eq!(uploaded_total(&conns), 12);
+        assert_eq!(uploaded_total(&HashMap::new()), 0);
+    }
+
+    #[test]
+    fn gap112_pieceio_all_selected_done_requires_coverage_and_completion() {
+        let files = vec![BtFile {
+            path: "a.bin".into(),
+            size: 128,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 64);
+        let mut done: HashSet<u32> = HashSet::new();
+        assert!(!all_selected_done(&done, &pmap));
+        done.insert(0);
+        assert!(!all_selected_done(&done, &pmap));
+        done.insert(1);
+        assert!(all_selected_done(&done, &pmap));
+        let files_none = vec![BtFile {
+            path: "a.bin".into(),
+            size: 64,
+            selected: false,
+        }];
+        let pmap_none = PieceMap::new(&files_none, 64);
+        let mut done_all: HashSet<u32> = HashSet::new();
+        done_all.insert(0);
+        assert!(!all_selected_done(&done_all, &pmap_none));
+    }
+
+    #[test]
+    fn gap112_pieceio_verify_piece_rejects_wrong_hash_and_out_of_range() {
+        let data: Vec<u8> = (0..128u32).map(|i| (i % 251) as u8).collect();
+        let meta = gap_meta(&data, 64);
+        assert!(verify_piece(&data[0..64], &meta, 0));
+        let mut bad = data[0..64].to_vec();
+        bad[0] ^= 0xFF;
+        assert!(!verify_piece(&bad, &meta, 0));
+        assert!(!verify_piece(&data[64..128], &meta, 0));
+        let n = meta.pieces.len() as u32;
+        assert!(!verify_piece(&data[0..64], &meta, n));
+    }
+
+    #[tokio::test]
+    async fn gap112_pieceio_read_verify_piece_from_disk_roundtrip() {
+        let data: Vec<u8> = (0..128u32).map(|i| (i % 251) as u8).collect();
+        let meta = gap_meta(&data, 64);
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-gap112-disk");
+        let file_path = dir.join("gap112.bin");
+        std::fs::write(&file_path, &data).unwrap();
+        let files = vec![BtFile {
+            path: "gap112.bin".into(),
+            size: 128,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 64);
+        let fh = tokio::fs::File::open(&file_path).await.unwrap();
+        let mut handles: HashMap<usize, tokio::fs::File> = HashMap::new();
+        handles.insert(0, fh);
+        let buf = read_piece_from_disk(&handles, &pmap, 0)
+            .await
+            .expect("选中覆盖的 piece 可读");
+        assert_eq!(buf, data[0..64].to_vec());
+        assert!(verify_piece_from_disk(&handles, &pmap, 0, &meta).await);
+        std::fs::write(&file_path, vec![0u8; 128]).unwrap();
+        assert!(
+            !verify_piece_from_disk(&handles, &pmap, 0, &meta).await,
+            "盘上数据损坏 → 校验失败"
+        );
+        let empty: HashMap<usize, tokio::fs::File> = HashMap::new();
+        let err = read_piece_from_disk(&empty, &pmap, 0).await;
+        assert!(err.is_err(), "无选中文件句柄 → 读盘失败");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gap112_pieceio_claimed_blocks_merges_inflight_and_partial() {
+        let mut c1 = new_conn_stat("10.0.0.1:1".into());
+        let mut c2 = new_conn_stat("10.0.0.2:1".into());
+        let now = std::time::Instant::now();
+        c1.inflight.insert((0, 0), (16, now));
+        c1.inflight.insert((1, 0), (16, now));
+        c2.inflight.insert((2, 0), (16, now));
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        conns.insert(0, c1);
+        conns.insert(1, c2);
+        let mut partial: PartialPieces = HashMap::new();
+        let mut blocks = BTreeMap::new();
+        blocks.insert(100u32, vec![9u8]);
+        partial.insert(5, blocks);
+        let claimed = claimed_blocks(&conns, &partial);
+        assert!(claimed.contains(&(0, 0)));
+        assert!(claimed.contains(&(1, 0)));
+        assert!(claimed.contains(&(2, 0)));
+        assert!(claimed.contains(&(5, 100)));
+        assert_eq!(claimed.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn gap112_pieceio_write_piece_to_files_roundtrip_multi_file() {
+        let data: Vec<u8> = (0..128u32).map(|i| (i % 251) as u8).collect();
+        let files = vec![
+            BtFile {
+                path: "a.bin".into(),
+                size: 64,
+                selected: true,
+            },
+            BtFile {
+                path: "b.bin".into(),
+                size: 64,
+                selected: true,
+            },
+        ];
+        let pmap = PieceMap::new(&files, 64);
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-gap112-wp");
+        let mut handles: HashMap<usize, tokio::fs::File> = HashMap::new();
+        for (fi, f) in files.iter().enumerate() {
+            let fh = open_selected_file_handle(&dir.to_string_lossy(), f)
+                .await
+                .expect("句柄可开");
+            handles.insert(fi, fh);
+        }
+        assert!(write_piece_to_files(&mut handles, &pmap, 0, &data[0..64]).await);
+        assert!(write_piece_to_files(&mut handles, &pmap, 1, &data[64..128]).await);
+        assert_eq!(
+            std::fs::read(dir.join("a.bin")).unwrap(),
+            data[0..64].to_vec()
+        );
+        assert_eq!(
+            std::fs::read(dir.join("b.bin")).unwrap(),
+            data[64..128].to_vec()
+        );
+        let mut empty: HashMap<usize, tokio::fs::File> = HashMap::new();
+        assert!(
+            write_piece_to_files(&mut empty, &pmap, 0, &data[0..64]).await,
+            "无句柄面为空操作返回真"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn gap112_pieceio_open_selected_file_handle_creates_parents_sets_len() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-gap112-open");
+        let f = BtFile {
+            path: "sub/dir/gap112.bin".into(),
+            size: 77,
+            selected: true,
+        };
+        let fh = open_selected_file_handle(&dir.to_string_lossy(), &f)
+            .await
+            .expect("父目录自动创建后句柄可开");
+        assert_eq!(fh.metadata().await.unwrap().len(), 77);
+        assert!(dir.join("sub/dir/gap112.bin").exists(), "父目录已创建");
+        drop(fh);
+        let f0 = BtFile {
+            path: "zero.bin".into(),
+            size: 0,
+            selected: true,
+        };
+        let fh0 = open_selected_file_handle(&dir.to_string_lossy(), &f0)
+            .await
+            .expect("零尺寸句柄可开");
+        assert_eq!(fh0.metadata().await.unwrap().len(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gap112_pieceio_recompute_downloaded_sums_selected_bytes() {
+        let files = vec![BtFile {
+            path: "a.bin".into(),
+            size: 128,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 64);
+        let mut done: HashSet<u32> = HashSet::new();
+        assert_eq!(recompute_downloaded(&done, &pmap), 0);
+        done.insert(0);
+        done.insert(1);
+        assert_eq!(recompute_downloaded(&done, &pmap), 128);
+    }
+
+    #[tokio::test]
+    async fn gap112_trackpool_ws_process_response_registers_swarm_and_skips_signals() {
+        let ctx = gap_announce_ctx();
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let url = gap_ws_announce_server(count).await;
+        let mut sess_ws = WsSession::connect(&url).await.expect("ws 会话可建立");
+        let resp = WsAnnounceResponse {
+            peer_ids: vec![[1u8; 20], [2u8; 20], ctx.peer_id],
+            answers: vec![WsSignal {
+                offer_id: "unknown-offer".into(),
+                sdp: "v=0".into(),
+                peer_id: [1u8; 20],
+            }],
+            offers_to_answer: vec![WsSignal {
+                offer_id: "unknown-offer-2".into(),
+                sdp: "v=0".into(),
+                peer_id: [2u8; 20],
+            }],
+            ..Default::default()
+        };
+        ws_process_response(&ctx, &mut sess_ws, &resp).await;
+        let st = ctx.signals.lock().unwrap();
+        assert!(
+            st.swarm_peers.contains(&[1u8; 20]) && st.swarm_peers.contains(&[2u8; 20]),
+            "响应 peer_ids 全量入 swarm 集"
+        );
+        assert!(
+            !st.swarm_peers.contains(&ctx.peer_id),
+            "自身从 swarm 集剔除"
+        );
+        assert!(st.pending_offers.is_empty(), "webrtc 关闭时捎带数组不处理");
+    }
+
+    fn gap_hs_bytes(infohash: &[u8; 20], remote_id: &[u8; 20]) -> Vec<u8> {
+        let mut hs = Vec::new();
+        hs.push(19u8);
+        hs.extend_from_slice(b"BitTorrent protocol");
+        hs.extend_from_slice(&[0u8; 8]);
+        hs.extend_from_slice(infohash);
+        hs.extend_from_slice(remote_id);
+        hs
+    }
+
+    #[tokio::test]
+    async fn gap112_trackpool_spawn_outgoing_peer_completes_handshake_connected() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let meta = gap_meta(&[0u8; 64], 64);
+        let infohash = meta.infohash;
+        let serve = tokio::spawn(async move {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                return;
+            };
+            let mut hs = [0u8; 68];
+            if sock.read_exact(&mut hs).await.is_err() {
+                return;
+            }
+            let _ = sock
+                .write_all(&gap_hs_bytes(&infohash, &GAP112_REMOTE_ID))
+                .await;
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        });
+        let files = vec![BtFile {
+            path: "gap112.bin".into(),
+            size: 64,
+            selected: true,
+        }];
+        let spec = gap_spec(meta, files, "/tmp/gap112-outgoing2");
+        let (tx, mut rx) = mpsc::channel(8);
+        spawn_outgoing_peer(
+            7,
+            PeerAddr {
+                ip: "127.0.0.1".parse().unwrap(),
+                port,
+            },
+            &spec,
+            &GAP112_PEER_ID,
+            tx,
+            gap_dl_flow(),
+        );
+        let got = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .expect("出连握手事件未达")
+            .expect("通道关闭");
+        let ok =
+            matches!(got, (_, PeerIn::Connected { peer_id, .. }) if peer_id == GAP112_REMOTE_ID);
+        assert!(ok, "出连握手完成应上报 Connected 且对端 peer_id 回填");
+        serve.abort();
+    }
+
+    #[tokio::test]
+    async fn gap112_peerwire_handle_peer_msg_bitfield_arm_exact_indices_and_coverage() {
+        let meta = gap_meta(&[0u8; 128], 64);
+        let files = vec![BtFile {
+            path: "gap112.bin".into(),
+            size: 128,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 64);
+        let spec = gap_spec(meta, files, "/tmp/gap112-bf");
+        let tun = BtTunables::default();
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut st = new_conn_stat("10.0.0.1:1".into());
+        st.peer_out = tx;
+        st.peer_choking = false;
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        conns.insert(5, st);
+        let mut done: HashSet<u32> = HashSet::new();
+        let mut partial: PartialPieces = HashMap::new();
+        let mut order = PieceOrderCache::new();
+        let permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let ul = gap_ul();
+        let bits: Vec<u8> = vec![0b1010_0000, 0b0100_0000];
+        let verdict = handle_peer_msg(
+            5,
+            peer::PeerMsg::Bitfield(bits),
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits.clone(),
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        assert_eq!(verdict, None);
+        assert!(conns[&5].has.contains(&0), "字节 0 位 0 → piece 0");
+        assert!(conns[&5].has.contains(&2), "字节 0 位 2 → piece 2");
+        assert!(
+            conns[&5].has.contains(&9),
+            "字节 1 位 1 → piece 9（索引算术）"
+        );
+        assert_eq!(conns[&5].has.len(), 3, "零位不得误报 piece");
+        assert_eq!(order.avail.get(&0), Some(&1));
+        assert!(
+            !order.avail.contains_key(&2) && !order.avail.contains_key(&9),
+            "未覆盖 piece 不进选片缓存"
+        );
+        let got = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .ok()
+            .flatten();
+        assert!(
+            matches!(got, Some(PeerOut::Send(peer::PeerMsg::Interested))),
+            "bitfield 有可下内容 → Interested"
+        );
+    }
+
+    #[tokio::test]
+    async fn gap112_peerwire_handle_peer_msg_bitfield_want_excludes_done_and_uncovered() {
+        let meta = gap_meta(&[0u8; 128], 64);
+        let files = vec![BtFile {
+            path: "gap112.bin".into(),
+            size: 128,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 64);
+        let spec = gap_spec(meta, files, "/tmp/gap112-bf2");
+        let tun = BtTunables::default();
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut st = new_conn_stat("10.0.0.1:1".into());
+        st.peer_out = tx;
+        st.has.insert(0);
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        conns.insert(6, st);
+        let mut done: HashSet<u32> = HashSet::new();
+        done.insert(0);
+        let mut partial: PartialPieces = HashMap::new();
+        let mut order = PieceOrderCache::new();
+        let permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let ul = gap_ul();
+        let verdict = handle_peer_msg(
+            6,
+            peer::PeerMsg::Bitfield(vec![0b0000_0000, 0b0100_0000]),
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits,
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        assert_eq!(verdict, None);
+        assert!(conns[&6].has.contains(&9), "piece 9 已登记");
+        let got = tokio::time::timeout(Duration::from_millis(600), rx.recv()).await;
+        assert!(
+            got.is_err(),
+            "唯一覆盖 piece 已完成且其余未覆盖 → 不得发 Interested"
+        );
+    }
+
+    #[tokio::test]
+    async fn gap112_peerwire_handle_peer_msg_have_uncovered_piece_no_gain_no_interest() {
+        let meta = gap_meta(&[0u8; 64], 64);
+        let files = vec![BtFile {
+            path: "gap112.bin".into(),
+            size: 64,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 64);
+        let spec = gap_spec(meta, files, "/tmp/gap112-have2");
+        let tun = BtTunables::default();
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut st = new_conn_stat("10.0.0.1:1".into());
+        st.peer_out = tx;
+        st.peer_choking = false;
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        conns.insert(11, st);
+        let mut done: HashSet<u32> = HashSet::new();
+        let mut partial: PartialPieces = HashMap::new();
+        let mut order = PieceOrderCache::new();
+        let permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let ul = gap_ul();
+        let verdict = handle_peer_msg(
+            11,
+            peer::PeerMsg::Have(9),
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits.clone(),
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        assert_eq!(verdict, None);
+        assert!(
+            conns[&11].has.contains(&9),
+            "Have 登记 has 集合（无论覆盖）"
+        );
+        assert!(order.avail.is_empty(), "未覆盖 piece 不得进选片缓存");
+        let got = tokio::time::timeout(Duration::from_millis(600), rx.recv()).await;
+        assert!(got.is_err(), "未覆盖 piece 不触发 Interested");
+        done.insert(0);
+        let verdict = handle_peer_msg(
+            11,
+            peer::PeerMsg::Have(0),
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits,
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        assert_eq!(verdict, None);
+        let got = tokio::time::timeout(Duration::from_millis(600), rx.recv()).await;
+        assert!(got.is_err(), "已完成 piece 不触发 Interested");
+    }
+
+    #[tokio::test]
+    async fn gap112_peerwire_handle_peer_msg_request_serve_table_and_accounting() {
+        let data: Vec<u8> = (0..25600u32).map(|i| (i % 251) as u8).collect();
+        let meta = gap_meta(&data, 32768);
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-gap112-req");
+        std::fs::write(dir.join("gap112.bin"), &data).unwrap();
+        let files = vec![BtFile {
+            path: "gap112.bin".into(),
+            size: 25600,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 32768);
+        let save_dir = dir.to_string_lossy().into_owned();
+        let spec = gap_spec(meta, files, &save_dir);
+        let tun = BtTunables::default();
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut st = new_conn_stat("10.0.0.1:1".into());
+        st.peer_out = tx;
+        st.am_choking = false;
+        st.peer_choking = false;
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        conns.insert(7, st);
+        let mut done: HashSet<u32> = HashSet::new();
+        done.insert(0);
+        let mut partial: PartialPieces = HashMap::new();
+        let mut order = PieceOrderCache::new();
+        let permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let ul = gap_ul();
+
+        let req = |index: u32, begin: u32, length: u32| peer::PeerMsg::Request {
+            index,
+            begin,
+            length,
+        };
+        let serve = handle_peer_msg(
+            7,
+            req(0, 0, UPLOAD_BLOCK as u32),
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits.clone(),
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        assert_eq!(serve, None);
+        let got = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("合法 request 未回 Block");
+        let ok = matches!(
+            got,
+            Some(PeerOut::Send(peer::PeerMsg::Block { data, .. })) if data.len() == 16 * 1024
+        );
+        assert!(ok, "合法 request 回等长 Block");
+        assert_eq!(conns[&7].cum_up, 16384, "上传计账累计");
+
+        conns.get_mut(&7).unwrap().am_choking = true;
+        let _ = handle_peer_msg(
+            7,
+            req(0, 0, UPLOAD_BLOCK as u32),
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits.clone(),
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        let quiet = tokio::time::timeout(Duration::from_millis(500), rx.recv()).await;
+        assert!(quiet.is_err(), "choke 下不得服务 request");
+        assert_eq!(conns[&7].invalid_requests, 0, "choke 静默不计违规");
+        let _ = handle_peer_msg(
+            7,
+            req(0, 0, 0),
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits.clone(),
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        assert_eq!(
+            conns[&7].invalid_requests, 0,
+            "choke 态下非法 request 也不计违规（allowed 短路）"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn gap112_peerwire_handle_peer_msg_request_rejects_paused_invalid_and_missing_have() {
+        let data: Vec<u8> = (0..25600u32).map(|i| (i % 251) as u8).collect();
+        let meta = gap_meta(&data, 32768);
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-gap112-req2");
+        std::fs::write(dir.join("gap112.bin"), &data).unwrap();
+        let files = vec![BtFile {
+            path: "gap112.bin".into(),
+            size: 25600,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 32768);
+        let save_dir = dir.to_string_lossy().into_owned();
+        let spec = gap_spec(meta, files, &save_dir);
+        let tun = BtTunables::default();
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut st = new_conn_stat("10.0.0.1:1".into());
+        st.peer_out = tx;
+        st.am_choking = false;
+        st.peer_choking = false;
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        conns.insert(8, st);
+        let mut done: HashSet<u32> = HashSet::new();
+        done.insert(0);
+        let mut partial: PartialPieces = HashMap::new();
+        let mut order = PieceOrderCache::new();
+        let permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let ul = gap_ul();
+        let ub2 = (UPLOAD_BLOCK * 2) as u32;
+
+        let verdict = handle_peer_msg(
+            8,
+            peer::PeerMsg::Request {
+                index: 0,
+                begin: 0,
+                length: 0,
+            },
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits.clone(),
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        assert_eq!(verdict, None);
+        assert_eq!(conns[&8].invalid_requests, 1, "零长度 request 计违规");
+
+        let verdict = handle_peer_msg(
+            8,
+            peer::PeerMsg::Request {
+                index: 0,
+                begin: 0,
+                length: ub2 + 1,
+            },
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits.clone(),
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        assert_eq!(verdict, None);
+        assert_eq!(conns[&8].invalid_requests, 2, "超上限 request 计违规");
+
+        let verdict = handle_peer_msg(
+            8,
+            peer::PeerMsg::Request {
+                index: 0,
+                begin: 0,
+                length: 20000,
+            },
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits.clone(),
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        assert_eq!(verdict, None);
+        let got = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("区间内 20000 字节 request 应服务");
+        assert!(
+            matches!(got, Some(PeerOut::Send(peer::PeerMsg::Block { .. }))),
+            "20000 ∈ (0, UB*2] → 服务"
+        );
+
+        let verdict = handle_peer_msg(
+            8,
+            peer::PeerMsg::Request {
+                index: 1,
+                begin: 0,
+                length: 16384,
+            },
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits.clone(),
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        assert_eq!(verdict, Some(BanKind::Protocol), "第三次违规达封禁阈值");
+        assert_eq!(
+            conns[&8].invalid_requests, 3,
+            "未持有 piece 的 request 计违规"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn gap112_peerwire_handle_peer_msg_ext_handshake_updates_client_display() {
+        let meta = gap_meta(&[0u8; 64], 64);
+        let files = vec![BtFile {
+            path: "gap112.bin".into(),
+            size: 64,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 64);
+        let spec = gap_spec(meta, files, "/tmp/gap112-ext");
+        let tun = BtTunables::default();
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut st = new_conn_stat("10.0.0.1:1".into());
+        st.peer_out = tx;
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        conns.insert(9, st);
+        let mut done: HashSet<u32> = HashSet::new();
+        let mut partial: PartialPieces = HashMap::new();
+        let mut order = PieceOrderCache::new();
+        let permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let ul = gap_ul();
+        let mut m = BTreeMap::new();
+        m.insert(b"ut_metadata".to_vec(), BValue::Int(1));
+        let mut dict = BTreeMap::new();
+        dict.insert(b"m".to_vec(), BValue::Dict(m));
+        dict.insert(b"v".to_vec(), BValue::Bytes(b"qBittorrent 5.0".to_vec()));
+        let payload = encode(&BValue::Dict(dict));
+        let verdict = handle_peer_msg(
+            9,
+            peer::PeerMsg::Extended { ext_id: 0, payload },
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits,
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        assert_eq!(verdict, None);
+        assert!(
+            !conns[&9].client.is_empty(),
+            "ext handshake v 字段更新客户端显示"
+        );
+        assert!(
+            conns[&9].client.contains("qBit"),
+            "自报版本应保留客户端名，实际 {}",
+            conns[&9].client
+        );
+        let _ = rx.try_recv();
+    }
+
+    #[tokio::test]
+    async fn gap112_peerwire_handle_peer_msg_ut_metadata_slice_math() {
+        let base_data: Vec<u8> = vec![0x5Au8; 2_600_000];
+        let mut pieces_bytes = Vec::new();
+        for chunk in base_data.chunks(1024) {
+            let mut h = Sha1::new();
+            h.update(chunk);
+            pieces_bytes.extend_from_slice(&h.finalize());
+        }
+        let mut meta: Option<TorrentMeta> = None;
+        for pad in 0..=16384u32 {
+            let mut name = b"g".to_vec();
+            name.extend(std::iter::repeat_n(b'x', pad as usize));
+            let mut info = BTreeMap::new();
+            info.insert(b"length".to_vec(), BValue::Int(base_data.len() as i64));
+            info.insert(b"name".to_vec(), BValue::Bytes(name));
+            info.insert(b"piece length".to_vec(), BValue::Int(1024));
+            info.insert(b"pieces".to_vec(), BValue::Bytes(pieces_bytes.clone()));
+            let mut root = BTreeMap::new();
+            root.insert(
+                b"announce".to_vec(),
+                BValue::Bytes(b"http://127.0.0.1:1/announce".to_vec()),
+            );
+            root.insert(b"info".to_vec(), BValue::Dict(info));
+            let m = TorrentMeta::parse(&encode(&BValue::Dict(root))).unwrap();
+            if m.info_bytes.len().is_multiple_of(16 * 1024) {
+                meta = Some(m);
+                break;
+            }
+        }
+        let meta = meta.expect("可构造整除 16KiB 的 info_bytes");
+        let info_len = meta.info_bytes.len();
+        assert!(info_len > 2 * 16 * 1024, "info_bytes 须跨两块以上");
+        assert_eq!(info_len % (16 * 1024), 0, "边界块用例须整除 16KiB");
+        let info_bytes = meta.info_bytes.clone();
+        let files = vec![BtFile {
+            path: "gap112.bin".into(),
+            size: 64,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 64);
+        let spec = gap_spec(meta, files, "/tmp/gap112-utm");
+        let tun = BtTunables::default();
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut st = new_conn_stat("10.0.0.1:1".into());
+        st.peer_out = tx;
+        let mut conns: HashMap<usize, ConnStat> = HashMap::new();
+        conns.insert(10, st);
+        let mut done: HashSet<u32> = HashSet::new();
+        let mut partial: PartialPieces = HashMap::new();
+        let mut order = PieceOrderCache::new();
+        let permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let ul = gap_ul();
+        let req1 = peer::PeerMsg::Extended {
+            ext_id: 1,
+            payload: peer::encode_ut_metadata(&peer::UtMetadata::Request(1)),
+        };
+        let verdict = handle_peer_msg(
+            10,
+            req1,
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits.clone(),
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        assert_eq!(verdict, None);
+        let got = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("ut_metadata request 未回 Data");
+        let payload = match got {
+            Some(PeerOut::Send(peer::PeerMsg::Extended { ext_id: 1, payload })) => payload,
+            Some(PeerOut::Send(_)) => panic!("期望 ut_metadata Extended 回包，实际其他消息"),
+            Some(PeerOut::Drop) => panic!("期望 ut_metadata 回包，实际 Drop"),
+            None => panic!("通道关闭"),
+        };
+        let expect = info_bytes[16384..16384 + 16 * 1024].to_vec();
+        match peer::parse_ut_metadata(&payload) {
+            Some(peer::UtMetadata::Data { piece, data, .. }) => {
+                assert_eq!(piece, 1);
+                assert_eq!(data, expect, "切片算术 = info_bytes[16384..32768] 窗口");
+            }
+            other => panic!("期望 Data 分片，实际 {other:?}"),
+        }
+        let boundary_piece = (info_len / (16 * 1024)) as u32;
+        let req_boundary = peer::PeerMsg::Extended {
+            ext_id: 1,
+            payload: peer::encode_ut_metadata(&peer::UtMetadata::Request(boundary_piece)),
+        };
+        let verdict = handle_peer_msg(
+            10,
+            req_boundary,
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits.clone(),
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        assert_eq!(verdict, None);
+        let got = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("边界 request 未回包");
+        let payload = match got {
+            Some(PeerOut::Send(peer::PeerMsg::Extended { ext_id: 1, payload })) => payload,
+            Some(PeerOut::Send(_)) => panic!("期望 ut_metadata Extended 回包，实际其他消息"),
+            Some(PeerOut::Drop) => panic!("期望 ut_metadata 回包，实际 Drop"),
+            None => panic!("通道关闭"),
+        };
+        assert!(
+            matches!(
+                peer::parse_ut_metadata(&payload),
+                Some(peer::UtMetadata::Reject(_))
+            ),
+            "start == len 边界分片请求回 Reject"
+        );
+        let req_oob = peer::PeerMsg::Extended {
+            ext_id: 1,
+            payload: peer::encode_ut_metadata(&peer::UtMetadata::Request(99)),
+        };
+        let verdict = handle_peer_msg(
+            10,
+            req_oob,
+            &mut conns,
+            &pmap,
+            &spec,
+            &tun,
+            permits,
+            &ul,
+            &ul,
+            &mut done,
+            &mut 0u64,
+            &mut HashMap::new(),
+            &mut partial,
+            &mut order,
+            false,
+        )
+        .await;
+        assert_eq!(verdict, None);
+        let got = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("越界 request 未回 Reject");
+        let payload = match got {
+            Some(PeerOut::Send(peer::PeerMsg::Extended { ext_id: 1, payload })) => payload,
+            Some(PeerOut::Send(_)) => panic!("期望 ut_metadata Extended 回包，实际其他消息"),
+            Some(PeerOut::Drop) => panic!("期望 ut_metadata 回包，实际 Drop"),
+            None => panic!("通道关闭"),
+        };
+        assert!(
+            matches!(
+                peer::parse_ut_metadata(&payload),
+                Some(peer::UtMetadata::Reject(99))
+            ),
+            "越界分片请求回 Reject"
+        );
+    }
+
+    #[test]
+    fn gap112_pieceio_bitfield_bytes_boundary_i_eq_bytes() {
+        let mut done: HashSet<u32> = HashSet::new();
+        done.insert(16);
+        assert_eq!(bitfield_bytes(&done, 16), vec![0, 0]);
+    }
+
+    #[test]
+    fn gap112_pieceio_save_bt_sidecar_full_filters_done_and_roundtrips() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-gap112-scf");
+        let path = dir.join("t.ezr");
+        let path_s = path.to_string_lossy().into_owned();
+        let mut done: HashSet<u32> = HashSet::new();
+        done.insert(1);
+        let mut partial: PartialPieces = HashMap::new();
+        let mut b1 = BTreeMap::new();
+        b1.insert(0u32, vec![1u8, 2, 3]);
+        let mut b2 = BTreeMap::new();
+        b2.insert(0u32, vec![4u8, 5, 6]);
+        partial.insert(1, b1);
+        partial.insert(2, b2);
+        save_bt_sidecar_full(&path_s, &done, &partial);
+        let sc = crate::model::BtSidecar::load_full(&path_s).expect("full sidecar 可回读");
+        assert_eq!(sc.done_pieces, vec![1]);
+        let pieces: Vec<u32> = sc.partial_pieces.iter().map(|p| p.piece).collect();
+        assert_eq!(pieces, vec![2], "已完成 piece 的 partial 项被过滤");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn gap112_pieceio_write_piece_to_files_readonly_handle_reports_false() {
+        let data: Vec<u8> = (0..128u32).map(|i| (i % 251) as u8).collect();
+        let files = vec![BtFile {
+            path: "a.bin".into(),
+            size: 128,
+            selected: true,
+        }];
+        let pmap = PieceMap::new(&files, 64);
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-gap112-ro");
+        std::fs::write(dir.join("a.bin"), &data).unwrap();
+        let fh = tokio::fs::File::open(dir.join("a.bin")).await.unwrap();
+        let mut handles: HashMap<usize, tokio::fs::File> = HashMap::new();
+        handles.insert(0, fh);
+        assert!(
+            !write_piece_to_files(&mut handles, &pmap, 0, &data[0..64]).await,
+            "只读句柄写失败 → 返回 false"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn gap112_pieceio_open_selected_file_handle_zero_size_preserves_existing() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-gap112-open2");
+        let abs = dir.join("pre.bin");
+        std::fs::write(&abs, vec![7u8; 50]).unwrap();
+        let f = BtFile {
+            path: "pre.bin".into(),
+            size: 0,
+            selected: true,
+        };
+        let fh = open_selected_file_handle(&dir.to_string_lossy(), &f)
+            .await
+            .expect("句柄可开");
+        assert_eq!(
+            fh.metadata().await.unwrap().len(),
+            50,
+            "size=0 不得截断既有文件"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gap112_peerwire_assemble_contiguous_overflow_and_gap_variants() {
+        let mut e6 = BTreeMap::new();
+        e6.insert(0u32, vec![1u8, 2, 3, 4]);
+        e6.insert(4u32, vec![5u8, 6]);
+        assert_eq!(assemble_contiguous(&e6, 6), Some(vec![1, 2, 3, 4, 5, 6]));
+        let mut e7 = BTreeMap::new();
+        e7.insert(0u32, vec![1u8, 2]);
+        e7.insert(3u32, vec![3u8]);
+        assert_eq!(assemble_contiguous(&e7, 3), None);
+    }
+}
+
+#[cfg(test)]
 mod seeding_tests {
     use std::collections::BTreeMap;
 

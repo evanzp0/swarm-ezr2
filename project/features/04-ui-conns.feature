@@ -1,5 +1,5 @@
 # acceptance-mutation-manifest-begin
-# {"version":1,"tested_at":"2026-11-15T04:52:00.391029349Z","feature_name":"04-ui-conns UI 对齐 ezr-demo 定稿（头部仪表带 + 单色面积流量图 + 并发连接面板）","feature_path":"/home/z/swarm-ezr2/project/features/04-ui-conns.feature","background_hash":"66c2c0e287504399af9d1b02879b2e1cdb5626174588d6f0d19bb250590bd6b0","implementation_hash":"unknown","scenarios":[]}
+# {"version":1,"tested_at":"2026-11-16T20:16:01.564359069Z","feature_name":"04-ui-conns UI 对齐 ezr-demo 定稿（头部仪表带 + 单色面积流量图 + 并发连接面板）","feature_path":"/home/z/swarm-ezr2/project/features/04-ui-conns.feature","background_hash":"66c2c0e287504399af9d1b02879b2e1cdb5626174588d6f0d19bb250590bd6b0","implementation_hash":"sha256:f43d40884962e8167a1e308596277845aefabc12cdef3ae8a310e28bbe309f01","scenarios":[]}
 # acceptance-mutation-manifest-end
 
 # 场景清单（场景名 = feature 名称 + 稳定序号）：

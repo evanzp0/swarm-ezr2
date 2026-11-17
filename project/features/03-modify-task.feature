@@ -1,5 +1,5 @@
 # acceptance-mutation-manifest-begin
-# {"version":1,"tested_at":"2026-11-15T04:52:00.280398426Z","feature_name":"03-modify-task 任务修改对话框（并发/校验/代理热生效）","feature_path":"/home/z/swarm-ezr2/project/features/03-modify-task.feature","background_hash":"6e4875af5d237f938d0e23c355fd54873fe8093078e863a4ac956481199be330","implementation_hash":"unknown","scenarios":[]}
+# {"version":1,"tested_at":"2026-11-16T20:16:00.308440866Z","feature_name":"03-modify-task 任务修改对话框（并发/校验/代理热生效）","feature_path":"/home/z/swarm-ezr2/project/features/03-modify-task.feature","background_hash":"6e4875af5d237f938d0e23c355fd54873fe8093078e863a4ac956481199be330","implementation_hash":"sha256:50ad27d0ee9a4c796d3a7fdab41934ac1ffb2e982b1f6127ffd93160ead4a01d","scenarios":[]}
 # acceptance-mutation-manifest-end
 
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
