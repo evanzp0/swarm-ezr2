@@ -523,3 +523,10 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - rustup 组件包静默解包失败形态：llvm-tools-preview 显示 downloading 且 rc=0，但二进制不落盘、组件清单已登记 installed——uninstall/add 循环无效（add 见清单跳过安装），唯一出路 = rustup toolchain uninstall + reinstall（附 --component llvm-tools-preview）。
 - PMD 7.29 zip 发行版的 bin/pmd 启动器默认无执行位（zip 权限丢失）——chmod +x 或改走 java 直接调 lib 下 jar 不行（cli jar 无 main manifest），必须 chmod 启动器。
 - 磁盘 9.9G 沙箱的 llvm-cov 直采预算：清 target（-2.9G）→ 插桩构建 +4G → 采集 +lcov 60MB，全程峰值 free ≥3.8G 可容纳；采集后立即删 profraw/profdata 可回 1.5G。
+
+## 产品面 handler 回补轮（2026-11-17，hardender）追加
+- rustup 镜像复测：rsproxy dist 清单 4.5MB/s 最快；llvm-tools-preview 组件静默解包失败第三次复现——唯一出路仍是整工具链 uninstall+reinstall（--component 参数在 install 时一次性带上）。
+- 插桩采集修正：`cargo test` 的测试子进程不继承 LLVM_PROFILE_FILE（落 default_*.profraw 到 cwd）——可靠口径 = 直跑测试二进制（target/debug/build/ezr/<hash>/out/ezr-<hash>），LLVM_PROFILE_FILE 显式注入，一次进程一份完整 profraw（合并后行覆盖 94.6% vs 错误采集的 8.3%）。
+- llvm-cov 导出的 lcov 过滤 SF: 前缀时保留绝对路径——crap_calc.py 以 "/src/" in sf 判产品文件，改写成相对路径 src/... 会全量漏配（行覆盖 0/0 除零）。
+- PMD 7.29 装机：gh-proxy.com 直链 pmd-dist-7.29.0-bin.zip 134MB 需 --max-time ≥540s（120s 截断产生半截 zip，PK 头在但 EOCD 缺失）；cpd 总克隆组 220 与历轮基线恒等。
+- 工具调用文本改写再现（bug16 家族）："[h" 序列（如 "[http]"）与 '"h' 序列在补丁文本中被吞——含中文/方括号的补丁必须走 ASCII 转义拼接（\uXXXX + chr(91)）或 base64 载荷，并以字节级（md5/子串存在性）验证落盘，文本回显验证不可信。

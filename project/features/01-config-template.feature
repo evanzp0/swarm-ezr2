@@ -1,6 +1,6 @@
 # mutation-stamp: sha256=3bc293c49c89daf8a0a06fc3d91f5f643ee059281ebfdfe9e67f670c6a3e0642
 # acceptance-mutation-manifest-begin
-# {"version":1,"tested_at":"2026-11-16T20:15:47.309070458Z","feature_name":"01-config-template 配置模板自动生成","feature_path":"/home/z/swarm-ezr2/project/features/01-config-template.feature","background_hash":"583fd58b1ded1e029b95cf3df44c2806450e0bf0b0407e2a08e6b3d93bbc4c06","implementation_hash":"sha256:22d0c99d723956adcd4a91cdec4fabbfd08dde1dd444d15d952406d68ca35d9f","scenarios":[{"index":0,"name":"01-config-template-01 首次运行生成全注释默认模板","scenario_hash":"da7b9543fec9c26e2aea4670a4d75420244a4977d9bd680bc513bd3279a26a43","mutation_count":164,"result":{"Total":164,"Killed":164,"Survived":0,"Errors":0},"tested_at":"2026-11-16T20:13:08.158284150Z"}]}
+# {"version":1,"tested_at":"2026-11-17T11:51:54.780704158Z","feature_name":"01-config-template 配置模板自动生成","feature_path":"/home/z/swarm-ezr2/project/features/01-config-template.feature","background_hash":"583fd58b1ded1e029b95cf3df44c2806450e0bf0b0407e2a08e6b3d93bbc4c06","implementation_hash":"sha256:4abe6745037bbe0fe4aa3f711d215e906657144573b1979be03991a98825e800","scenarios":[{"index":0,"name":"01-config-template-01 首次运行生成全注释默认模板","scenario_hash":"da7b9543fec9c26e2aea4670a4d75420244a4977d9bd680bc513bd3279a26a43","mutation_count":164,"result":{"Total":164,"Killed":164,"Survived":0,"Errors":0},"tested_at":"2026-11-17T11:51:54.780704158Z"}]}
 # acceptance-mutation-manifest-end
 
 # 场景清单（场景名 = feature 名称 + 稳定序号）：

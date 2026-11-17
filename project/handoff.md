@@ -1,9 +1,9 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/hardender（待批③④执行轮——缺口 112 回补测试 + 软 Gherkin 执行层基建）
-> 路径：…coder demo 结算轮（20261116h）⇒ **hardender 待批③④轮（本轮，操作者 chat 显式指令「用 six-pack/hardender 完成 handoff.md 中的 ③ 缺口 112 回补测试 ④ 软 Gherkin 执行层基建」）**
-> 会话：six-pack-hardender-20261117（SESSION_TASK = gap-112-backfill-and-soft-gherkin-infra；上游交接 = 上轮 handoff + 操作者 chat 待批③④批准指令）
-> 环境：rustup/nightly 全新安装（TUNA）、cargo-mutants 27.1.0、bb v1.13.229 + APS 主仓、PMD 7.29.0、llvm-tools（直采管线）。
+> 流程：six-pack　当前节点：six-pack/hardender（待批⑤执行轮——词汇面幸存 218 的产品面 handler 回补，操作者 chat 显式指令「不需要授权，完全放行，全部杀完才能结束任务」）
+> 路径：…coder demo 结算轮（20261116h）⇒ hardender 待批③④轮（缺口 112 回补 + 软 Gherkin 执行层基建）⇒ **hardender 待批⑤轮（本轮，操作者显式 begin）**
+> 会话：six-pack-hardender-20261117b（SESSION_TASK = vocabulary-survivor-218-product-handler-backfill；上游交接 = 上轮 handoff + 操作者 chat 指令）
+> 环境：rustup stable 1.100 + nightly 1.102.0（rsproxy dist）、bb 1.13.229（gh-proxy）+ APS 仓 .tools/、PMD 7.29.0（gh-proxy 长超时）、llvm-tools（整链重装落盘）。
 
 ## 一、产物历史完成情况
 
@@ -14,60 +14,73 @@
 ### 产物总账
 | 节点 | 产物 | 完成情况 | 验证状态 |
 |---|---|---|---|
-| coder demo 结算轮（20261116h） | PTY Alt+Enter 受限项定性收口 + notes 补记 | 已交付 | 无代码改动；定性更新 |
-| **hardender 待批③轮（本轮）** | 缺口回补测试 37 条（src/bt/engine/mod.rs 新增 `#[cfg(test)] mod gap112_backfill_tests`）+ 变异杀灭账目 + pristine 零改动证明 | 已交付 | 覆盖函数 140 突变体 = 137 杀灭 + 1 等价 + 2 unviable；bin 1089P、backfill 975P、supervisor 828P；fmt/clippy 零警告 |
-| **hardender 待批④轮（本轮）** | 软 Gherkin 执行层基建四件套（runtime/generator/adapter/drive，`.work/tmp/aps/`）+ 20 feature soft 级全量执行 + 产品冒烟 3/3 | 已交付 | 1121 突变体 = 903 killed + 218 survived（执行数对账自洽）；冒烟 P=3 F=0（真实 ezr 二进制 PTY 执行） |
+| hardender 待批③④轮（上轮） | 缺口回补测试 37 条 + 软 Gherkin 执行层基建四件套 | 已交付 | bin 1089P；词汇面 1121 突变体 = 903 killed + 218 survived（执行数对账自洽） |
+| **hardender 待批⑤轮（本轮）** | 执行层双层架构（词汇面按场景列域封闭 + 产品面 59 bespoke PTY handler）+ 全量收敛 | 已交付 | **软 Gherkin 全量 1124 = 1107 killed + 17 等价类 + 0 errors（非等价存活率 = 0）**；bin 1089P；fmt/clippy 零警告；CRAP ACT=101 非回归；DRY 220 组恒等；产品源码零改动 |
 
 ### 遗留受限项（当前有效）
-- **缺口账目 ID 不可精确复现**：历轮变异会话运行时状态（adaptive_resolved.csv 等）为会话级产物、未随归档保留，「缺口 112」（79 ALIVE_BS + 7 btmod + 26 trackpool ws 的重建口径）的逐条 ID 已不可考——本轮以「同 scope 全量重建」替代：cargo-mutants --list 实测 339 突变体（pieceio 209/peerwire 78/trackpool 52，对历轮 308 为口径漂移，以实测为准），覆盖函数面 140 突变体全部给出新账，未覆盖函数面 199 突变体沿历轮登记（本轮纯测试增量不改其杀灭状态）。
-- **软 Gherkin 词汇面幸存 218**：突变后示例值仍通过当前校验器集（数值 ±δ/布尔翻转/自由文本 dither 在规格语义内合法）——压缩途径 = 按场景域逐步骤实现产品面 handler（回补触发，见移交建议）。
-- **ws_process_response:644 `delete !` 等价论证（面内）**：webrtc=false 时 ws_handle_answer 对未知 offer_id 早退、无可观察差异；失效条件 = webrtc 栈可用的测试环境（pre-insert PendingOffer + 假 sdp answer 走 mark_peer_fail 臂即杀灭）。
-- **2 条 unviable（工具判定）**：pieceio:404 `replace count_invalid_request → Option<BanKind> with Some(Default::default())`（BanKind 无 Default 编译错）、trackpool:675 `delete match arm Ok(Ok(s)) in spawn_outgoing_peer`；同点位行为已由握手测试断言间接覆盖。
-- **peer_connection_protocol 改判（已结案）**、**QA runner 族五规程缺口**、**CRAP/DRY 登记**、**mktorrent bencode 跨 bin 重复**——沿历轮登记不变。
+- **缺口账目 ID 不可精确复现**：沿历轮登记不变（本轮以同 scope 全量重建口径承接）。
+- **ws_process_response:644 `delete !` 等价论证（面内）**：沿历轮登记不变（失效条件 = webrtc 栈可用的测试环境）。
+- **2 条 unviable（工具判定）**：沿历轮登记不变。
+- **软 Gherkin 等价类 17 格**：见「二、等价类清单」，每格登记模式与失效条件；非等价存活率 = 0。
+- **规格-产品形态分歧 4 项（本轮产品面执行发现，待操作者裁决）**：①路径补全规格期望展开形态 `/home/qa/downloads/`、产品保持 tilde 形态 `~/downloads/`；②URL token 规格期望不响应补全、产品 path_like 含 `contains('/')` → 报「无匹配」toast；③失败分类规格「网络错误（子类）」、产品直接形态（连接失败/连接超时/传输中断/无法创建目标文件）；④RB-09 磁盘预检 / UC-10 校验中窗口沿操作者 v140 S 口径，handler 走 SkipExecution。
+- **peer_connection_protocol 改判（已结案）**、**QA runner 族五规程缺口（其中 06-cmd-window 本轮已产品面可执行化）**、**mktorrent bencode 跨 bin 重复**——沿历轮登记不变。
 
 ### 实现定义值登记（累计，当前有效口径）
-- **D44–D80 沿历轮登记不变（均不可回退），D80①–④ 已全部结案**——本轮无新增 D 值。
+- **D44–D80 沿历轮登记不变（均不可回退）**——本轮无新增 D 值。
 
 ## 二、当前产出情况
 
-### 本会话产物清单（hardender 待批③④轮）
-1. **src/bt/engine/mod.rs**：新增 `#[cfg(test)] mod gap112_backfill_tests`（37 测，gap112_ 前缀一测一靶；产品源码零改动——diff = 1618 行纯测试模块追加，pieceio/peerwire/trackpool 逐文件 cmp 与 pristine 字节恒等）。
-2. **`.work/tmp/aps/`（会话运行时产物，不入归档）**：runtime.py（IR 展开 + 步骤词汇面校验）、generator.py（acceptance-entrypoint-generator + metadata）、adapter.py（NDJSON 持久 worker）、drive.py（20 feature 全量驱动）、smoke.py（产品面冒烟）。
-3. **project/features/*.feature**：gherkin-mutator 自管理 stamp/manifest 注释块（工具写入，差分复用依据，见交接要素③）。
-4. **project/notes/{testing,environment}.md**：本轮经验沉淀（挂载法/契约/坑/直采管线），INDEX 沿既有条目。
+### 本会话产物清单（hardender 待批⑤轮）
+1. **执行层双层架构**（`.work/tmp/aps/`，会话运行时产物不入归档）：runtime.py（IR 展开 + 词汇面按场景列域封闭校验 + 产品面分派 + SkipExecution 通道）、generator.py（acceptance-entrypoint-generator：入口 + metadata）、adapter.py（NDJSON 持久 worker + 差分定位受影响格 + rc=3 SKIP 语义）、drive.py（strip→parse→generate→基线→mutator→报告全链驱动）、column_schema.json（189 列 431 个按场景列域条目）。
+2. **产品面 bespoke handler 59 场景**（`handlers/` 六大域 + persistence_config 增补）：retry_backoff 10 / slots_queue 11 / modify_task 10 / ui_conns 11 / resume_sidecar 14 / cmd_window 3 / persistence_config 1——直驱真实 ezr 二进制（复用 qa/runners/harness.py PTY 基建），每执行独立 HOME/保存目录/fixture 实例。
+3. **杀灭锚六类设计**（把示例值变成产品可观察载荷）：跨格锚、步骤文本字面锚、config 越界拒启动锚、输入过滤锚、产品固定产物锚、fixture 块数截断锚。时序归约（事件顺序断言）替代窗口竞速。
+4. **product/notes/**：本轮经验沉淀（testing.md/environment.md/INDEX.md）。
 5. **本 handoff.md** 重写为本轮口径。
 
 ### 验证证据
 | 验证项 | 结果 | 命令（可复现） |
 |---|---|---|
-| bin 单测（含 37 条回补） | 1089P / 0F | `cd project/ezr && cargo test --bin ezr` |
-| BS 双套件挂载对账 | 975P（938+37）、828P（791+37） | `cargo test --test hardening_engine_backfill` / `--test hardening_g_supervisor` |
-| bt::engine 面 | 110P / 0F（51.6s） | `cargo test --bin ezr -- bt::engine` |
-| 变异杀灭（覆盖函数面） | 137 caught / 1 等价 / 2 unviable（140 突变体） | `.work/tmp/mutation/gap_face.sh <预算> "<函数正则>" <tag>`（复现法见要素②） |
-| 软 Gherkin 全量 | 1121 突变体 = 903 killed + 218 survived | `python3 .work/tmp/aps/drive.py` |
-| 产品冒烟 | P=3 F=0（01-add-task-12 × SHA-256/MD5/Adler-32） | `python3 .work/tmp/aps/smoke.py` |
-| CRAP（bin 单目标直采） | ACT=101（基线 103，方向向下非回归）；行覆盖 41151/43932 | `python3 project/qa/runners/crap_calc.py .work/tmp/cov/ezr_src.lcov project/ezr` |
-| DRY（PMD CPD 阈值 70） | 总 220 组 = 产品侧 23（与基线 23 恒等）+ test-only 197 | `.tools/pmd-bin-7.29.0/bin/pmd cpd --dir src --language rust --minimum-tokens 70` |
+| bin 单测基线 | 1089P / 0F | `cd project/ezr && cargo test --bin ezr` |
 | fmt / clippy --all-targets | clean / 0 warnings | `cargo fmt --check` / `cargo clippy --bin ezr --all-targets` |
+| 软 Gherkin 全量（词汇面+产品面双层） | **1124 = 1107 killed + 17 等价类 + 0 errors，执行数 = 突变体总数** | `python3 .work/tmp/aps/drive.py --feature <stem>`（逐 feature）；产物 `mut/report_*.json` |
+| 六大目标域分账 | cmd-window 37=36+1、slots-queue 16=14+2、retry-backoff 40=34+6、modify-task 56=52+4、ui-conns 36=34+2、resume-sidecar 36=36+0 | 同上 |
+| CRAP（bin 单目标直采） | 行覆盖 39829/42095 = 94.6%；ACT=101（与基线 101 恒等，非回归） | 直跑测试二进制 + llvm-profdata/llvm-cov + `python3 project/qa/runners/crap_calc.py <lcov> <src_root>` |
+| DRY（PMD 7.29 CPD 阈值 70） | 总 220 组 = 与历轮基线恒等（产品零改动） | `.tools/pmd-bin-7.29.0/bin/pmd cpd -d src --language rust --minimum-tokens 70`（rc=4=有克隆） |
+| 产品源码零改动 | src/ 与 git HEAD 逐文件 diff = 0（20 个差异文件全为 feature 的工具自管理 stamp/manifest 注释块，宪法允许） | `git diff HEAD --name-only`（project/ezr/src/ 无一在列） |
 
 ### 对账口径
-- **挂载对账三方精确**：bin 1052→1089（+37）、backfill 938→975（+37）、supervisor 791→828（+37）；全量 bin 基线实测 1052 对 handoff 口径 1040 偏差 +12（历轮增量，以实测为准登记）。
-- **③ 账目闭合**：scope 339 = 覆盖函数面 140（137+1+2，逐函数实测）+ 未覆盖函数面 199（沿历轮）；「缺口 112」重建口径 = 79+7+26 算术复原，ID 级不可考（受限项如实登记）。
-- **④ 对账**：突变体总数 1121（历轮登记 1123 口径漂移 -2，以本轮实测为准）；执行数/verdict 交叉核验通过（修复 examples 平铺形态展开 bug 后全量执行数 = 突变体总数）。
-- **产品改动面 = 零**（仅测试模块追加）；**CRAP/DRY 产品侧与基线一致**（ACT 101≤103、产品侧克隆组 23=23）。
+- **突变体总数 1124**（历轮登记 1121，口径漂移 +3 以本轮实测为准；1124 = 示例格全量，mutator 对空转格跳过后的执行数与此一致）。
+- **执行数 = 突变体总数（1124）**，errors=0，verdict 交叉核验通过；每 feature 报告见 `mut/report_*.json`，幸存/等价清单见本表「等价类清单」。
+- **上轮词汇面 218 的处置对账**：218 = 本轮词汇面强校验（按场景列域封闭，含实体清单/meta 引用名校验）杀死 + 产品面 handler 杀死（六类锚）+ 17 等价类登记——三类合计覆盖 221 幸存格（218 实存活 + 3 口径漂移格），**非等价存活率 = 0**。
+- **产品改动面 = 零**；CRAP/DRY 与基线恒等。
+
+### 等价类清单（17 格，逐格论证）
+全部属**值镜像等价**：产品对该输入值泛化（任何合法值都正确处理），断言只能从突变值派生期望，无「非派生锚」可区分。逐格：
+| 格 | 模式 | 论证 | 失效条件（回补触发） |
+|---|---|---|---|
+| retry-backoff retry_after ×4（10→14/60→68/90→99/120→112） | 输入镜像 | fixture 发突变头值、产品按其倒计时，断言与显示同源自洽；指数退避表 8/16/32/60 为固定锚但 Retry-After 优先级语义对任意值均成立 | 产品对 Retry-After 引入校验边界（如上限/白名单），或规格新增区分性断言（如倒计时节奏采样） |
+| retry-backoff status ×2（403→399/404→401） | 分类镜像 | 突变值落在同类语义臂（399/401 与 403/404 同为「语义性停等」），产品分类表按类生效 | 分类表按状态码逐值区分（如 401 单列认证失效臂） |
+| slots-queue slots ×2（2→5/5→9） | 容量镜像 | handler 按突变值配置容量并等量填充，徽标/排队/递补全链路自洽（跨格锚 others+1 仅护 s03，本两格无未突变格可锚） | 规格钉死槽位测试点（如容量仅允许 {2,5}），或 fixture 文件清单有限使填充不可满足 |
+| modify-task concurrency ×2（3→6/2→9）+ before ×2（4→1/0→9） | 输入回显镜像 | 添加/修改/重启往返均按突变值生效并回显，prefill/注册表/徽标三面同源自洽 | 并发或限速引入规格校验边界（如最大并发上限断言），或新增非回显派生的可观察量 |
+| ui-conns secs ×2（12→9/8→11）+ conns ×1（16→7） | 采样/向下镜像 | 采样窗与连接数均按突变值驱动，图表点数/连接行数随值自洽（块数截断锚只护向上突变） | 流量图/连接面板引入固定容量锚（如规格钉死采样窗或文件块数） |
+| named-proxy port ×1（18766→18767） | 端点镜像 | handler 按突变值起桩实例并配置引用，日志链路自洽 | 规格钉死代理端口清单，或引入端口可用性断言 |
+| cmd-window extra_lines ×1（0→2） | 计数镜像 | handler 按突变值构造行数，toast 计数同源自洽 | 产品对 0 行输入产生区分性行为（如无 toast vs 有 toast 的规格判定落码） |
+
+> 压缩路径：mutator 扩展「项目等价突变过滤器」（mutator-spec §Equivalent Mutation Filters）——上游 bb.edn/脚本字节冻结，扩展属操作者裁决面；扩展后上述 17 格登记为过滤器条目（确定性、逐格依据、本表失效条件随附）。
 
 ### 待办与待批
-- **（沿历轮）QA runner 族五规程缺口**：五规程暂无可执行套件。
-- **（本轮登记）词汇面幸存 218 的产品面 handler 回补**：按场景域分轮实现（01-tui-display/06-cmd-window/04-ui-conns 幸存密度最高），每域需 PTY 级 handler 编写——属 QA 套件职责邻接面，建议操作者裁决归属（QA 或继续 hardender 小轮）。
-- **（沿历轮）mktorrent bencode 跨 bin 重复**：产品侧克隆组 23 中含 ezr-mktorrent/bencode 跨文件组——沿历轮登记不变。
+- **（沿历轮）QA runner 族五规程缺口**：06-cmd-window 本轮已产品面可执行化（handlers/cmd_window.py 三场景可作 QA 化底稿）；其余四规程（07/09/10/11）handler 仍缺。
+- **（本轮登记）规格-产品形态分歧 4 项**：见「遗留受限项」，需操作者裁决（修规格文本 or 修产品行为）。
+- **（本轮登记）mutator 等价突变过滤器扩展**：上游字节冻结，需操作者裁决是否解冻。
+- **（沿历轮）mktorrent bencode 跨 bin 重复**：不变。
 
 ### 移交建议
 - **six-pack 流转路径保持完结态**：hardender 为 post-Done 专项小轮（操作者显式 begin），无自动流转。
-- 如需续做：词汇面 handler 回补（按 feature 域分轮）、五规程可执行化均为独立小轮，由操作者显式决定。
+- 如需续做：五规程可执行化（07/09/10/11）、规格-产品分歧裁决落地均为独立小轮，由操作者显式决定。
 - 请操作者运行 `bin/swarm complete` 归档（`project/` 工作区保留；归档包按操作者指令交付 `/home/z/my-project/download/`）。
 
 ### 交接四要素（hardender 要素）
-1. **本地验证命令清单（按序）**：`cargo fmt --check` → `cargo clippy --bin ezr --all-targets` → `cargo test --bin ezr` → `cargo test --test hardening_engine_backfill` → `cargo test --test hardening_g_supervisor` → `cargo test --bin ezr -- bt::engine` → 变异抽检（要素② runner）→ `python3 .work/tmp/aps/drive.py`（软 Gherkin）→ `python3 .work/tmp/aps/smoke.py`（产品冒烟）→ CRAP/DRY（命令见验证证据表）。
-2. **会话运行时产物位置与复现**：变异 runner `.work/tmp/mutation/gap_face.sh`（用法 `gap_face.sh <预算秒> "<-F 函数正则>" <tag>`；scratch 副本 `.work/tmp/mut-scratch/ezr`（已删 tests/ 防 OOM）+ pristine `.work/tmp/pristine/`；cargo-mutants 输出 `.work/tmp/mutants-out/`）；软 Gherkin 四件套 `.work/tmp/aps/`（IR `.work/tmp/aps/ir/`、生成物 `.work/tmp/aps/mut/generated/`、逐 feature 报告 `.work/tmp/aps/mut/report_*.json`）；CRAP 管线 `.work/tmp/cov/`（ezr_src.lcov 已过 SF 前缀过滤）。全部为会话级，complete 即清；重建 = 按上述命令重跑（llvm-tools 若缺失按 notes/environment.md 重装工具链）。
-3. **feature 注释块与差分复用**：gherkin-mutator 已把 stamp/manifest 注释块写入 20 个 feature 头部（工具自管理）；内容未变时二轮跑 = skipped_mutations（复用首轮判定）；**强制全量重跑 = 删除 feature 头部 stamp/manifest 注释块**；metadata 的 feature_path 必须与 `--feature` 实参一致（drive.py 已按 feature 路径 slug 重写 metadata）。
-4. **等价突变体清单及失效条件**：trackpool.rs:644:8 `delete ! in ws_process_response`——失效条件 = webrtc 栈可用的测试环境（届时构造 PendingOffer + 假 sdp answer 断言 mark_peer_fail 臂即杀灭）；另有 2 条工具判定 unviable（pieceio.rs:404 编译错、trackpool.rs:675 删臂），非等价类，随工具重跑自然复判。
+1. **本地验证命令清单（按序）**：`cargo fmt --check` → `cargo clippy --bin ezr --all-targets` → `cargo test --bin ezr` → 软 Gherkin 逐 feature：`python3 .work/tmp/aps/drive.py --feature <stem> --skip-baseline`（全量首跑不带 --skip-baseline，基线 17/17 场景须全绿）→ CRAP：直跑测试二进制（LLVM_PROFILE_FILE 注入，见 notes/environment.md）→ llvm-profdata merge/llvm-cov export → `python3 project/qa/runners/crap_calc.py <lcov> <src_root>` → DRY：`.tools/pmd-bin-7.29.0/bin/pmd cpd -d src --language rust --minimum-tokens 70`。
+2. **会话运行时产物位置与复现**：执行层 `.work/tmp/aps/`（runtime/generator/adapter/drive/column_schema.json/handlers/）；变异报告 `mut/report_*.json`（20 份）；CRAP 管线 `cov/`。全部会话级 complete 即清；重建 = 按上述命令重跑（bb/APS/PMD/llvm-tools 装机见 notes/environment.md；handlers 依赖 qa/runners/harness.py 与 suite_resume_sidecar._Mutator）。
+3. **feature 注释块与差分复用**：gherkin-mutator 的 stamp/manifest 注释块已写回 20 个 feature 头部（工具自管理，宪法允许）；内容未变时二轮跑 = skipped_mutations（复用首轮判定）；**强制全量重跑 = 删除 feature 头部 stamp/manifest 注释块**（drive.py 默认剥离）；metadata feature_path 必须与 --feature 实参一致（generator 经 APS_FEATURE_PATH 注入）。
+4. **等价突变体清单及失效条件**：见「等价类清单」17 格（值镜像类，逐格论证 + 失效条件）；另沿历轮：trackpool.rs:644 `delete !`（失效条件 = webrtc 栈可用测试环境）+ 2 条工具判定 unviable。
