@@ -551,3 +551,7 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - **镜像漂移实录（本轮）**：rsproxy dist 清单有效且最快（channel manifest 在 `/dist/channel-rust-nightly.toml`，923KB/0.36s；清单**不带 arch 段**——`/dist/<arch>/channel-*.toml` 形态 404 是路径错不是镜像死）；TUNA rust-static 本轮全 404、官方直连 20s 仅 368KB 截断不可用。RUSTUP_DIST_SERVER/UPDATE_ROOT 双变量指 rsproxy 前台一次装齐 nightly 1.102.0（minimal + rustfmt/clippy/llvm-tools-preview 一次到位，避组件后装的静默解包坑）。
 - **crap_calc.py 两参签名**：`LCOVS = argv[1:-1]`、`argv[-1] = SRC_ROOT`——单 lcov 调用必须补 src_root 参数，否则 lcov 被当 src_root、LCOVS 空 → 静默空转至 ZeroDivisionError（表象是行覆盖 0/0 崩溃，实为调用形态错）。
 - **persistent shell 跨命令 export 残留**：`RUSTFLAGS="-C instrument-coverage"` 设置后残留在后续 cargo 命令 → 插桩产物 + LLVM_PROFILE_FILE 未设时 profraw 散落 CWD（`default_*.profraw`）——长管线结束即 `unset RUSTFLAGS`，收尾 `git status` 查残留（complete 归档会把散落产物打进包）。
+
+## PMD 销项轻量轮（2026-11-18，hardender）追加
+- **大文件代理前缀吞吐同日大幅波动，必须 10s 速测择优**：同一 gh-proxy 前缀首轮探针 63KB/s（540s 仅 34MB）而隔半小时复测 2.7MB/s；ghfast.top 本轮 7.5MB/s 断层第一、direct github 269KB/s、ghproxy.net 205KB/s、mirror.ghproxy.com 死。规则：134MB 级 release 资产下载前先对候选前缀各做 10s `curl -o /dev/null -w %{speed_download}` 速测，取最快者再 `-C -` 断点续传（续传时换前缀无缝，zip 已下载段字节相同）。
+- **PMD 发行 zip 分发面实证（7.29.0）**：Maven 系镜像不可用——aliyun maven 有 pmd-dist maven-metadata（release 标 7.29.0）但二进制 404（元数据同步、zip 不入镜像），repo1.maven.org 直连 bin.zip 同 404；bin.zip 只存在于 GitHub release 资产，**装机唯一路径 = GitHub 代理前缀**（配合上条速测择优）。zip 启动器 chmod +x 与 `--max-time` 教训沿 531 行既有条目不变。

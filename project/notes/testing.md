@@ -893,3 +893,7 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 ## mktorrent bencode 合规修订轮（2026-11-18，hardender）追加
 - **错误类型重构的行为等价论证法**（「零逻辑变化」改动的验证口径）：decode 族 `BtError::Bencode(msg)` → `BencodeError(msg)` + From 升格——消息串逐条保留（Display 输出字节级不变）、消费点三类零改动（`?` 经 From 自动转换 / `.ok()?` 类型擦除 / `.is_ok()` 类型无关）、测试断言面零触碰（is_err/unwrap 与错误具体形态无关）；产品基线 1090P/0F 精确复现 = 等价实证。
 - **CRAP 直采管线全链复现**（crap_calc.py 随工作区流转于 qa/runners/，会话级丢失假设不成立）：插桩 `--no-run` 2m27s → 直跑测试二进制采 profraw → merge/export/awk 段级过滤 → 两参调用出账。本轮实测 **ACT=101 与基线精确相等**（零新增可修点）、稳定函数锚 mouse.rs:178=77.09 恒等、行覆盖 94.6%（DA 总量 42121 vs 历轮 43932——nightly 1.101→1.102 插桩行数漂移 + webrtc 覆盖非确定，按「方向非回归 + ACT 相等 + 锚恒等」三证对账）。
+
+## PMD 销项轻量轮（2026-11-18，hardender）追加
+- **cpd 销项的双扫描对账法**：受控删除克隆后，复扫不能只看总数下降——用 `git archive HEAD` 提取删除前源码态做同参数对照扫描，前态须与历轮基线组数恒等（本轮 220 恒等，同工具 7.29.0 同 min-tokens 70），再对前后报告做路径规范化（sed 归一 `project/ezr/` 前缀）后 diff：差集应恰为被删克隆组且其余组字节级恒等。本轮差集 = 唯一组 35 行/232 tokens（ezr-mktorrent.rs ↔ bencode.rs encode/encode_into），220→219 的 −1 全额归因，无新增组——比单点 rg 唯一定义点实证强一档（rg 证"定义唯一"，双扫描证"克隆账目零残余且零漂移"）。mktorrent bencode 受限项凭此销项结清。
+- **unviable 判定的人工补证法（全臂发散型编译错）**：工具判 unviable 的「删 match 非兜底臂」突变体可 scratch 副本 sed 删臂 + `cargo check` 人工复现裁决——spawn_outgoing_peer 删 `Ok(Ok(s)) => s` 臂实测 **E0599**（match 仅剩 `_` 兜底臂、全臂发散 → 表达式类型推断为 `!`，报错不落在 match 处而落在后续首个对绑定值的方法调用 `sock.set_nodelay`，"method not found in `!`"）。两条教训：①全臂发散型编译错不报 E0004 非穷尽而报 E0599 于远离变异位点的使用点——看到远处报错不要怀疑删错了臂，先看类型流；②unviable 账目可按此法从「工具判定」升格「人工实证」，报错码入账后即为终态，无需再跑测试段。
