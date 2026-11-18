@@ -461,14 +461,26 @@ class EzrApp:
     # -- 生命周期 -------------------------------------------------------------
 
     def graceful_quit(self, timeout: float = 6.0) -> int | None:
-        """Q 优雅退出，等待进程结束并回收 exit code。"""
-        os.write(self.fd, b"q")
+        """任何状态直退：先 Esc 关闭可能的模态（命令窗口/对话框/弹窗——其文本
+        焦点下 q 是普通字符，会插入缓冲污染后续观察），再 Ctrl+C 退出
+        （产品 cmd 窗口 CONTROL+Char('c') → quit，主界面同口径），q 兜底。"""
+        os.write(self.fd, b"\x1b")
+        self._pump(0.3)
+        os.write(self.fd, b"\x03")
         deadline = time.time() + timeout
         while time.time() < deadline:
             self._pump(0.1)
             self._reap()
             if self.exit_code is not None:
                 break
+        if self.exit_code is None:
+            os.write(self.fd, b"q")
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                self._pump(0.1)
+                self._reap()
+                if self.exit_code is not None:
+                    break
         self.close()
         return self.exit_code
 

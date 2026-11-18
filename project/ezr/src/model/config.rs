@@ -943,6 +943,10 @@ pub fn normalize_save_dir_with(path: &str, home: Option<&Path>, cwd: Option<&Pat
             None => expanded,
         }
     };
+    let expanded = expanded
+        .components()
+        .filter(|c| *c != std::path::Component::CurDir)
+        .collect::<PathBuf>();
     expanded.to_string_lossy().to_string()
 }
 
@@ -1920,6 +1924,11 @@ mod tests {
             normalize_save_dir_with("qadl-rel/sub", Some(home), Some(cwd)),
             "/work/dir/qadl-rel/sub",
             "相对路径按 cwd 转绝对"
+        );
+        assert_eq!(
+            normalize_save_dir_with("./qadl-rel/sub", Some(home), Some(cwd)),
+            "/work/dir/qadl-rel/sub",
+            "./ 分量剥离（QA-AB-09 归一口径，判重相等性）"
         );
         assert_eq!(
             normalize_save_dir_with("/tmp/qadl-new", Some(home), Some(cwd)),

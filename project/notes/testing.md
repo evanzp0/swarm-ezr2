@@ -872,3 +872,15 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 - **soft differential 跳过语义**：修订后未变场景（scenario_hash 同）复用 manifest killed——对账先分「执行 N + 复用 M」再合总账；硬证据用 `--level full` 全执行（忽略 stamp/manifest，两 feature 77 突变体零跳过）。
 - **CRAP 采集三坑（本轮实测）**：①llvm-cov export 后**按行 grep -v SF 会破坏 lcov 段结构**（孤儿 DA 行归属错文件，覆盖值全错位）——过滤必须按 `SF..end_of_record` 段级（`awk '/^SF:/{keep=index($0,"/project/ezr/src/")>0} keep'`）；②crap_calc 依赖预过滤的产品 lcov，全量 export 直接喂会混入 registry 依赖（32.5% 假覆盖）；③**tokio spawn 的 webrtc 任务覆盖竞速**：ws_prepare_offers 同一二进制两遍 9/105→3/79——webrtc 受限函数的 CRAP/ACT 名义值非确定，非回归对账用「行覆盖恒等（94.6%）+ 稳定函数集恒等（mouse:178=77.09 等）」，ACT 名义差异逐条归因（与遗留受限项 webrtc 同源）。
 - **CRAP 段级过滤的文件名匹配**：SF 路径含子目录（`src/bt/engine/trackpool.rs`），匹配串别写 `/src/trackpool.rs`（永假）；按目录前缀或 endswith 判。
+
+## QA 五规程可执行化轮（2026-11-17，six-pack/QA）追加
+- **graceful_quit 退出礼仪**：模态文本焦点下 q 是普通字符会插入缓冲（快照假尾迹三例归因）——先 Esc 关模态再 Ctrl+C 直退（cmd 窗口 CONTROL+Char('c') → quit 同口径），q 仅兜底。
+- **harness 按键名速查**：NAMED_KEYS 无 "backspace"（误用 = 字面文本注入字段导致校验拒绝假红）；退格键名 = "bs"。
+- **鼠标点击成对事件**：部分交互（页脚 chip、T 弹窗 [✗]、并发行选中）只认 release——mclick 后必须跟 mup 同坐标。
+- **VS15 吞字双口径**：pyte 对 break_links 注入的 U+FE0E 截断绘制 chunk——T 弹窗/对话框 http URL 断言只能走 raw 尾流（re.sub 剥 ANSI + rfind 标题区段化 + strip \uFE0E）；raw_text() 自身已剥离 VS15，VS15 存在性断言必须直读 _raw_tail 字节。
+- **折行续行拼接**：列表行折行续行带前导空格且跨行夹其他列内容——整行 join 后子串必断，须逐行 strip 后拼接或两段式（前缀 + 续行）断言。
+- **toast 3s 生存期污染**：跨用例段的 toast 断言前必须 wait_gone（stale toast 假阳性实录：补全目录/无匹配两例）。
+- **LtPeer upload_rate_limit 不限本端下载**：seeder 侧限速对 driver 下载无效（秒完），下载速率门控用 driver config task_max_download_speed（裸 B/s）。
+- **注册表落盘点**：`.ezr/state/registry.json`（非 .ezr/registry.json）；BT 条目 bt.trackers 为创建时入库值（默认池引擎侧另算），任务级限速/归一路径断言以注册表为准。
+- **做种行翻页**：做种行在「已完成」页签——断言前必须 ] 循环（沿用 suite_modify_bt._cycle_to_visible）。
+- **判重谓词与 infohash**：BT 判重按来源路径归一（v1.42），同 infohash 不同路径的种子可并存；重启用同 config 时注册表恢复旧任务，再添同源即判重——重启臂断言前先清判重面（改 config 或异源种子）。

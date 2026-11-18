@@ -534,3 +534,10 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 ## 分歧裁决落地修订轮（2026-11-17，hardender 续轮）追加
 - **磁盘时序纪律（插桩轮）**：9.9G 盘插桩前先回收——残缺 cov-target（1.5G）+ `target/debug/incremental`（1.9G）+ /tmp 杂项，97%→61% 再构建；插桩构建用 `CARGO_INCREMENTAL=0`（增量目录与插桩产物双膨胀），cov-target 用后即删。
 - **cargo 不在默认 PATH**：续会话先 `export PATH=$HOME/.cargo/bin:$PATH`（rustup 工具链健在 stable 1.100 + nightly 1.102.0；llvm-profdata/llvm-cov 在 nightly 工具链 lib/rustlib/x86_64-unknown-linux-gnu/bin/）。
+
+## QA 五规程可执行化轮（2026-11-17，six-pack/QA）追加
+- **setsid/nohup 后台进程在本沙箱不可存活**（第三例复现）——长编译/下载一律前台分块或 setsid+sh -c 立即落盘轮询。
+- **cargo clippy 首跑 = 全量重编译**（2 核 ≈10min+）——前台 Bash 600s 窗口必超时，后台落日志轮询（.work/tmp/clippy.log）。
+- **PMD 7.29.0 发行资产**：pmd-dist-7.29.0-bin.zip（github releases tag=pmd_releases/7.29.0），Java 21 直接可跑；.tools/ 落位。
+- **MiniTracker/UDP 探活口径**：pybtracker 无 TCP 监听——TCP 探活必败，UDP fixture 用进程存活 + 预热窗。
+- **qa-fix 工作目录**：EzrApp 的 ~ 展开 = env.home（app cwd = home）——~/ 与相对路径 fixture 预置进 env.home 子目录。
