@@ -14,7 +14,7 @@
 #   07-add-bt-08 小终端自适应收缩（列表框不低于 1 可视行）
 #   07-add-bt-09 种子来源路径归一（v1.37 新增，D63）
 #   07-add-bt-10 限速两字段预填 config 任务级默认值且随任务创建落库（v1.38 新增，FR-02-29；v1.39 修订：二进制单位 + 输入即规范化显示）
-#   07-add-bt-11 trackers scheme 校验与默认 trackers（v1.9.1：wss 等拒绝不落库 + 留空默认 4 条入库；v1.43 反转：ws(s) 同权放行、白名单外 ftp 等拒绝、toast 文案更新，FR-02-31 v1.15）
+#   07-add-bt-11 trackers scheme 校验与留空 trackers（v1.9.1：wss 等拒绝不落库；v1.43 反转：ws(s) 同权放行、白名单外 ftp 等拒绝、toast 文案更新，FR-02-31 v1.15；v1.52：留空臂改产品实际行为——「默认 4 条」退役，FR-02-21，操作者规格分歧①裁决）
 #   07-add-bt-12 按顺序下载复选项（v1.51 新增，FR-02-39/D76：默认不勾选 / Space·Enter·点击切换 / 确认随任务创建落库）
 # 期号 02（phase-02）。需求依据 project/mission/phase-02.md FR-02-02/04、D44/D47–D50/D55/D59。
 # UI 基线 = ezr-demo phase2 源码（specifier 逐条核证：ui/dialogs.rs draw_bt_dialog /
@@ -62,6 +62,14 @@
 # ——按顺序下载 = 焦点 7，trackers 7→8、立即下载/仅添加/取消 8/9/10 → 9/10/11；字段行 y +1、
 # trackers 框与按钮行 y +1）；②复选项形态 = 标签「按顺序下载」+ 复选框 ☑（勾选）/ ☐（默认不勾选），
 # Space/Enter 切换、点击切换；确认随任务创建落库（任务元数据持久化，09-bt-engine-24 引擎语义）。
+# v1.52 修订注（操作者规格分歧①裁决落地，specifier 裁决落实轮 20261118；QA 轮 handoff 登记
+# 「留空 trackers 默认 4 条入库」待裁决结案）：场景 11 留空臂改产品实际行为——tracker 池无
+# 「默认 4 条」注入常量（产品 = 三来源口径 config trackers/announce-list/手输合并去重，
+# FR-02-21；留空时池内容 = 种子元数据自带 announce），原「留空默认 4 条（http/https/udp）
+# 入库」口径退役（ezr-demo 演示口径，产品未实现）；场景名「默认 trackers」改「留空 trackers」
+# 随臂修订。QA-AB-11④ 同步修订（qa/07-add-bt-qa.md v1.52；suite_add_bt.py 断言本按实际
+# 行为、零改动）。注：场景 11 内容变更致 mutation manifest/stamp 场景哈希滞后，下次
+# gherkin 变异运行刷新（工程规则：清单由变异工具自更新，不手工改）。
 Feature: 07-add-bt 添加任务：BT 对话框
 
   期号 02。命令窗口分流打开（仅 .torrent 路径，D53）：种子来源 + 保存到 + 文件树勾选
@@ -206,11 +214,11 @@ Feature: 07-add-bt 添加任务：BT 对话框
 
 
   # v1.9.1 新增（操作者 bug18 追轮 UI 反馈；FR-02-31）：trackers scheme 校验与默认 trackers。
-  Scenario: 07-add-bt-11 trackers scheme 校验与默认 trackers（v1.9.1，FR-02-31；v1.43 反转：ws(s) 同权放行）
+  Scenario: 07-add-bt-11 trackers scheme 校验与留空 trackers（v1.9.1，FR-02-31；v1.43 反转：ws(s) 同权放行；v1.52：留空臂改产品实际行为，FR-02-21）
     When 经命令窗口打开「添加任务：BT」对话框，trackers 输入 <input> 后确认
     Then 含白名单外 scheme 行（http/https/ws/wss/udp 五种之外，大小写不敏感，如 ftp://）时整单拒绝：toast "⚠ 不支持的 tracker 协议（仅 http(s)/ws(s)/udp）：<url 截尾>"、焦点回 trackers、对话框保持打开、任务不创建（<url 截尾> = 首 44 显示字符硬截尾、无省略号后缀；旧文案「仅 http/https/udp」退役）
     And 输入含 ws:// 或 wss:// 行确认时同权放行（v1.43 反转，原 wss/ws 拒绝臂退役）：该行与 http(s)/udp 行一并入库，任务 tracker 池、T 弹窗、修改面板预填均含该行（scheme 大小写不敏感——WS://、Ws:// 与 ws:// 等价）
-    And trackers 留空确认时任务创建成功：按种子元数据口径预置 4 条默认 tracker（http/https/udp）入库，T 弹窗与修改面板预填一致非空（v1.9.1 回归：面板预填不入库导致弹窗空的缺陷已修）
+    And trackers 留空确认时任务创建成功：tracker 池无默认注入（v1.52 修订为产品实际行为——原「按种子元数据口径预置 4 条默认 tracker（http/https/udp）入库」为 ezr-demo 演示口径、产品未实现，退役；操作者规格分歧①裁决）：池 = 三来源（config trackers/种子 announce-list/手输）合并去重（FR-02-21），留空时池内容 = 种子元数据自带 announce，T 弹窗与修改面板预填与实际池一致非空（v1.9.1 回归口径不变：预填与池内容一致）
 
     Examples:
       | input                     |

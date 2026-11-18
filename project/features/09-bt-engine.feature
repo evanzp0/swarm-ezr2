@@ -88,6 +88,15 @@
 # 会话立即携新 offers 重连 shed 的 peer；http/udp 刷新候选池；尊重 tracker min_interval）+
 # 本端主动收口（缩容 shed/空闲置换）的 WebRTC peer 不记失败冷却（mark_peer_idle，区别于异常
 # 断开的惩罚性退避）——peer 重连不再等 tracker interval 周期。QA 严格检查 = QA-BE-19（观察面注记）。
+# v1.55 注记（操作者规格分歧②裁决落地，specifier 裁决落实轮 20261118；phase-02 v1.25，
+# FR-02-21 v1.25）：udp 必须带端口——[bt] trackers 元素为 udp:// 形态时必须携带端口
+# （udp://<host>:<port>，port 1–65535；缺端口/端口非法含 0 = 非法 URL）：config 来源 =
+# 启动失败并报错（FR-02-35 严格校验族，config 层逐条校验即拒）；announce-list/手输来源 =
+# 该行照常进入任务 tracker 列表（T 弹窗显示、随任务持久化、修改面板预填），但不进入引擎
+# announce 池（引擎建池前逐条 TrackerUrl::parse 解析、失败丢弃——不发起 announce、不参与
+# peers 获取；T 弹窗状态列按无引擎回报口径显示「待 announce」）；对话框 scheme 白名单层
+# 不拦截。场景 05/09 内容零改动（Examples udp 行均为带端口形态）；QA 套件 udp 用例按带
+# 端口形态构造（QA-BE/QA-AB/QA-TW 登记）。
 # v1.54 同步注（操作者批准 QA 终验轮待批①，specifier FR-02-40② 退役键口径同步轮 20261116；
 # phase-02 v1.24，FR-02-40②④/D79⑦ + FR-02-38 v1.21）：场景 08 判据面修订（场景名与稳定序号
 # 不变）——回做种步骤「seed_left 重置为 config seed_duration_secs 当前值（D73③）」改判：

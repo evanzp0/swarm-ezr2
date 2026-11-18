@@ -23,6 +23,11 @@
 #   键盘 ↑↓/PgUp·PgDn/Home·End 与滚轮滚动、右缘滚动条按折行后显示行计数。
 #   演示口径（ezr-demo）：新增 BT 任务未手输 trackers 时按「种子元数据自带」预置
 #   4 条默认 tracker（http/https/udp）入库，保证 T 弹窗与面板内容一致非空。
+#   澄清（v1.14 注记，操作者规格分歧①裁决 20261118）：上述「预置 4 条默认 tracker」仅属
+#   ezr-demo 演示口径（demo 保留该行为）；产品（ezr）无默认注入——tracker 池 = 三来源
+#   （config trackers/announce-list/手输）合并去重（FR-02-21），留空 trackers 时池内容 =
+#   种子元数据自带 announce（QA-AB-11④ 已按产品行为修订，qa/07-add-bt-qa.md v1.52；
+#   07-add-bt.feature 场景 11 留空臂 v1.52 同步）。本注记为注释澄清，场景内容零改动。
 # v1.11（bug20 追轮，操作者六条 UI 反馈）：
 #   ①相邻明细行之间以 ─ 通栏细线分隔（首条前/末条后不画，同条折行续行间不画）；
 #   ②URL 折行续行与首行同色（同 FG，不再降暗）；
