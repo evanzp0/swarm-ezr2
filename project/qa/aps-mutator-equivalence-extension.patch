@@ -1,0 +1,516 @@
+diff --git a/bb/src/aps/cli/gherkin_mutator.clj b/bb/src/aps/cli/gherkin_mutator.clj
+index 31daf42..cc9bbf1 100644
+--- a/bb/src/aps/cli/gherkin_mutator.clj
++++ b/bb/src/aps/cli/gherkin_mutator.clj
+@@ -4,7 +4,7 @@
+             [clojure.string :as str])
+   (:gen-class))
+ 
+-(def usage "usage: gherkin-mutator --runner-worker <command> [--feature <path>] [--work-dir <dir>] [--generated-dir <dir>] [--workers <n>] [--timeout <duration>] [--status-interval <duration>] [--level full|hard|soft] [--implementation-hash <hash>] [--json]")
++(def usage "usage: gherkin-mutator --runner-worker <command> [--feature <path>] [--work-dir <dir>] [--generated-dir <dir>] [--workers <n>] [--timeout <duration>] [--status-interval <duration>] [--level full|hard|soft] [--implementation-hash <hash>] [--equivalence-filter <file>] [--json]")
+ 
+ (defn- parse-duration-ms [text]
+   (cond
+@@ -25,6 +25,7 @@
+                :level "hard"
+                :runner-worker ""
+                :implementation-hash nil
++               :equivalence-filter nil
+                :json false}]
+     (if-let [arg (first args)]
+       (case arg
+@@ -37,22 +38,30 @@
+         "--level" (recur (nnext args) (assoc opts :level (second args)))
+         "--runner-worker" (recur (nnext args) (assoc opts :runner-worker (second args)))
+         "--implementation-hash" (recur (nnext args) (assoc opts :implementation-hash (second args)))
++        "--equivalence-filter" (recur (nnext args) (assoc opts :equivalence-filter (second args)))
+         "--json" (recur (rest args) (assoc opts :json true))
+         (throw (ex-info (str "unknown option " arg) {})))
+       opts)))
+ 
++(defn- exit! [code]
++  (flush)
++  (binding [*out* *err*] (flush))
++  (System/exit code))
++
+ (defn -main [& args]
+   (try
+     (let [opts (parse-args args)]
+       (cond
+         (not (#{"full" "hard" "soft"} (:level opts)))
+-        (do (binding [*out* *err*] (println "--level must be full, hard, or soft")) (System/exit 2))
++        (do (binding [*out* *err*] (println "--level must be full, hard, or soft")) (exit! 2))
+ 
+         (str/blank? (:runner-worker opts))
+-        (do (binding [*out* *err*] (println "--runner-worker is required")) (System/exit 2))
++        (do (binding [*out* *err*] (println "--runner-worker is required")) (exit! 2))
+ 
+         :else
+         (let [feature (gherkin/parse-file (:feature opts))
++              equivalence-filter (when (:equivalence-filter opts)
++                                   (mutation/load-equivalence-filter (:equivalence-filter opts)))
+               effective-generated-dir (or (:generated-dir opts)
+                                           (str (:work-dir opts) "/generated"))
+               implementation-hash (mutation/resolve-implementation-hash effective-generated-dir
+@@ -66,17 +75,18 @@
+                                     :level (:level opts)
+                                     :implementation-hash implementation-hash
+                                     :status-interval-ms (parse-duration-ms (:status-interval opts))
+-                                    :runner-command (str/split (:runner-worker opts) #"\s+")})
++                                    :runner-command (str/split (:runner-worker opts) #"\s+")
++                                    :equivalence-filter equivalence-filter})
+               write-stamp? (and (zero? (get-in report [:summary :Survived] 0))
+                                 (zero? (get-in report [:summary :Errors] 0)))]
+-          (mutation/write-mutation-metadata! (:feature opts) feature report implementation-hash (:level opts) write-stamp?)
++          (mutation/write-mutation-metadata! (:feature opts) feature report implementation-hash (:level opts) write-stamp? equivalence-filter)
+           (if (:json opts)
+             (mutation/write-json-report! report)
+             (mutation/write-text-report! report))
+           (when (or (pos? (get-in report [:summary :Survived] 0))
+                     (pos? (get-in report [:summary :Errors] 0)))
+-            (System/exit 1)))))
++            (exit! 1)))))
+     (catch Exception e
+       (binding [*out* *err*]
+         (println (.getMessage e)))
+-      (System/exit 1))))
++      (exit! 1))))
+diff --git a/bb/src/aps/mutation.clj b/bb/src/aps/mutation.clj
+index ad7ed01..78c1e98 100644
+--- a/bb/src/aps/mutation.clj
++++ b/bb/src/aps/mutation.clj
+@@ -193,6 +193,8 @@
+          " killed=" (:Killed summary)
+          " survived=" (:Survived summary)
+          " errors=" (:Errors summary)
++         (when (pos? (:FilteredEquivalents summary 0))
++           (str " filtered_equivalents=" (:FilteredEquivalents summary)))
+          (when (or (pos? skipped-scenarios) (pos? skipped-mutations))
+            (str " skipped_scenarios=" skipped-scenarios
+                 " skipped_mutations=" skipped-mutations)))))
+@@ -201,6 +203,66 @@
+   (let [digest (.digest (MessageDigest/getInstance "SHA-256") (utf8-bytes s))]
+     (apply str (map #(format "%02x" (bit-and % 0xff)) digest))))
+ 
++(defn load-equivalence-filter [path]
++  (let [content (slurp path)
++        data (try
++               (json/parse-string content true)
++               (catch Exception _
++                 (throw (ex-info (str "equivalence filter " path " is not valid JSON") {}))))]
++    (when-not (map? data)
++      (throw (ex-info (str "equivalence filter " path " must be a JSON object") {})))
++    (when-not (= 1 (:version data))
++      (throw (ex-info (str "equivalence filter " path " must declare version 1") {})))
++    (when-not (vector? (:equivalences data))
++      (throw (ex-info (str "equivalence filter " path " must contain an equivalences array") {})))
++    (doseq [entry (:equivalences data)]
++      (when-not (and (map? entry)
++                     (seq (str (:feature entry)))
++                     (seq (str (:path entry)))
++                     (seq (str (:original entry)))
++                     (seq (str (:mutated entry))))
++        (throw (ex-info (str "equivalence filter " path " entries require feature, path, original, and mutated") {})))
++      (when-not (re-find #"^\$\.scenarios\[\d+\]\.examples\[\d+\]\.\S+$" (str (:path entry)))
++        (throw (ex-info (str "equivalence filter " path " entry path must be $.scenarios[i].examples[j].<key>, got: " (:path entry)) {}))))
++    {:path path :data data :hash (sha256 content)}))
++
++(defn- feature-stem [feature-path]
++  (let [name (.getName (io/file feature-path))]
++    (if (str/ends-with? name ".feature")
++      (subs name 0 (- (count name) (count ".feature")))
++      name)))
++
++(defn- filter-entry-match [filter-spec feature-path mutation]
++  (when (and filter-spec feature-path)
++    (let [stem (feature-stem feature-path)]
++      (some #(when (and (= (str (:feature %)) stem)
++                        (= (str (:path %)) (:Path mutation))
++                        (= (str (:original %)) (str (:Original mutation)))
++                        (= (str (:mutated %)) (str (:Mutated mutation))))
++               %)
++            (get-in filter-spec [:data :equivalences])))))
++
++(defn- filtered-ids [filter-spec feature-path mutations]
++  (if filter-spec
++    (set (map :ID (filter #(filter-entry-match filter-spec feature-path %) mutations)))
++    #{}))
++
++(defn- equivalent-view [mutation entry]
++  (array-map :ID (:ID mutation)
++             :Path (:Path mutation)
++             :Description (:Description mutation)
++             :Original (:Original mutation)
++             :Mutated (:Mutated mutation)
++             :Class (str (:class entry))
++             :Justification (str (:justification entry))
++             :Invalidation (str (:invalidation entry))
++             :scenario (:scenario mutation)))
++
++(defn- stamp-hash [cleaned filter-hash]
++  (if filter-hash
++    (sha256 (str cleaned "\n# equivalence-filter: " filter-hash))
++    (sha256 cleaned)))
++
+ (defn- strip-mutation-metadata [content]
+   (let [state (reduce
+                (fn [{:keys [in-manifest lines] :as state} line]
+@@ -282,29 +344,35 @@
+ (defn- new-manifest [feature-path feature report implementation-hash]
+   (let [now (str (Instant/now))
+         all-mutations (discover feature)
+-        summaries (scenario-summaries feature report)]
+-    (array-map
+-     :version 1
+-     :tested_at now
+-     :feature_name (:name feature)
+-     :feature_path feature-path
+-     :background_hash (hash-json (:background feature))
+-     :implementation_hash implementation-hash
+-     :scenarios
+-     (vec
+-      (keep-indexed
+-       (fn [i scenario]
+-         (let [summary (summaries i)]
+-           (when (and summary (zero? (:Survived summary 0)) (zero? (:Errors summary 0)))
+-             (array-map :index i
+-                        :name (:name scenario)
+-                        :scenario_hash (hash-json scenario)
+-                        :mutation_count (mutation-count-for-scenario all-mutations i)
+-                        :result summary
+-                        :tested_at now))))
+-       (:scenarios feature))))))
+-
+-(defn- manifest-entry-reusable? [old current entry level feature mutations]
++        summaries (scenario-summaries feature report)
++        filtered-by-scenario (frequencies (map :scenario (:filtered report)))
++        scenarios
++        (vec
++         (keep-indexed
++          (fn [i scenario]
++            (let [summary (summaries i)
++                  filtered-count (get filtered-by-scenario i 0)]
++              (when (and summary (zero? (:Survived summary 0)) (zero? (:Errors summary 0)))
++                (array-map :index i
++                           :name (:name scenario)
++                           :scenario_hash (hash-json scenario)
++                           :mutation_count (- (mutation-count-for-scenario all-mutations i) filtered-count)
++                           :result (if (pos? filtered-count)
++                                     (assoc summary :FilteredEquivalents filtered-count)
++                                     summary)
++                           :tested_at now))))
++          (:scenarios feature)))
++        base (array-map :version 1
++                        :tested_at now
++                        :feature_name (:name feature)
++                        :feature_path feature-path
++                        :background_hash (hash-json (:background feature))
++                        :implementation_hash implementation-hash
++                        :scenarios scenarios)]
++    (cond-> base
++      (:filter-hash report) (assoc :equivalence_filter_hash (:filter-hash report)))))
++
++(defn- manifest-entry-reusable? [old current entry level feature mutations current-filtered current-filter-hash]
+   (and (= 1 (:version old))
+        (= (:feature_name old) (:feature_name current))
+        (= (:feature_path old) (:feature_path current))
+@@ -316,23 +384,31 @@
+               (= (:scenario_hash entry) (hash-json scenario))))
+        (zero? (get-in entry [:result :Survived] 0))
+        (zero? (get-in entry [:result :Errors] 0))
+-       (= (:mutation_count entry) (mutation-count-for-scenario mutations (:index entry)))))
+-
+-(defn- merge-reusable-previous-scenarios [current previous feature level]
++       (let [executable-count (count (remove #(and (= (:index entry) (:scenario %))
++                                                   (contains? current-filtered (:ID %)))
++                                             mutations))]
++         (and (= (:mutation_count entry) executable-count)
++              (or (nil? (:equivalence_filter_hash old))
++                  (= (:equivalence_filter_hash old) current-filter-hash))))))
++
++(defn- merge-reusable-previous-scenarios [current previous feature level filter-spec feature-path]
+   (let [existing (set (map :index (:scenarios current)))
+         mutations (discover feature)
++        current-filtered (filtered-ids filter-spec feature-path mutations)
++        current-filter-hash (:hash filter-spec)
+         reusable (remove #(existing (:index %))
+-                         (filter #(manifest-entry-reusable? previous current % level feature mutations)
++                         (filter #(manifest-entry-reusable? previous current % level feature mutations current-filtered current-filter-hash)
+                                  (:scenarios previous)))]
+     (update current :scenarios into reusable)))
+ 
+-(defn write-mutation-metadata! [feature-path feature report implementation-hash level write-stamp?]
++(defn write-mutation-metadata! [feature-path feature report implementation-hash level write-stamp? filter-spec]
+   (let [content (slurp feature-path)
+         previous (read-mutation-metadata feature-path)
+         cleaned (strip-mutation-metadata content)
+-        stamp (sha256 cleaned)
++        stamp (stamp-hash cleaned (:filter-hash report))
+         manifest (cond-> (new-manifest feature-path feature report implementation-hash)
+-                   previous (merge-reusable-previous-scenarios (:manifest previous) feature level))
++                   previous (merge-reusable-previous-scenarios (:manifest previous) feature level
++                                                               filter-spec feature-path))
+         manifest-json (json/generate-string manifest)
+         metadata (str (when write-stamp?
+                         (str "# mutation-stamp: sha256=" stamp "\n"))
+@@ -342,24 +418,27 @@
+                       (str/replace cleaned #"^\n+" ""))]
+     (spit feature-path metadata)))
+ 
+-(defn- feature-stamp-valid? [feature-path]
++(defn- feature-stamp-valid? [feature-path filter-hash]
+   (when-let [metadata (read-mutation-metadata feature-path)]
+     (and (seq (:stamp metadata))
+-         (= (:stamp metadata) (sha256 (strip-mutation-metadata (slurp feature-path)))))))
++         (= (:stamp metadata) (stamp-hash (strip-mutation-metadata (slurp feature-path)) filter-hash)))))
+ 
+ (defn- accepted-skips [cfg mutations]
+   (if (or (= (:level cfg) "full") (str/blank? (:feature-path cfg)))
+     #{}
+-    (if-let [metadata (read-mutation-metadata (:feature-path cfg))]
+-      (if (and (empty? (get-in metadata [:manifest :scenarios]))
+-               (feature-stamp-valid? (:feature-path cfg)))
+-        (set (range (count (get-in cfg [:feature :scenarios]))))
+-        (let [current (new-manifest (:feature-path cfg) (:feature cfg) {:summary (empty-summary) :results []}
+-                                    (:implementation-hash cfg))]
+-          (set (map :index
+-                    (filter #(manifest-entry-reusable? (:manifest metadata) current % (:level cfg) (:feature cfg) mutations)
+-                            (get-in metadata [:manifest :scenarios]))))))
+-      #{})))
++    (let [filter-spec (:equivalence-filter cfg)
++          filter-hash (:hash filter-spec)]
++      (if-let [metadata (read-mutation-metadata (:feature-path cfg))]
++        (if (and (empty? (get-in metadata [:manifest :scenarios]))
++                 (feature-stamp-valid? (:feature-path cfg) filter-hash))
++          (set (range (count (get-in cfg [:feature :scenarios]))))
++          (let [current (new-manifest (:feature-path cfg) (:feature cfg) {:summary (empty-summary) :results []}
++                                      (:implementation-hash cfg))]
++            (set (map :index
++                      (filter #(manifest-entry-reusable? (:manifest metadata) current % (:level cfg) (:feature cfg) mutations
++                                                         (filtered-ids filter-spec (:feature-path cfg) mutations) filter-hash)
++                              (get-in metadata [:manifest :scenarios]))))))
++        #{}))))
+ 
+ (defn- report-text [report]
+   (let [summary (:summary report)
+@@ -367,6 +446,8 @@
+                     " killed=" (:Killed summary)
+                     " survived=" (:Survived summary)
+                     " errors=" (:Errors summary)
++                    (when (pos? (:FilteredEquivalents summary 0))
++                      (str " filtered_equivalents=" (:FilteredEquivalents summary)))
+                     (when (or (pos? (:SkippedScenarios summary 0))
+                               (pos? (:SkippedMutations summary 0)))
+                       (str " skipped_scenarios=" (:SkippedScenarios summary 0)
+@@ -379,7 +460,12 @@
+                          (str (when (seq (:Error result))
+                                 (str "  error: " (:Error result) "\n"))
+                               (when (seq (:Output result))
+-                                (str "  output:\n" (:Output result) "\n"))))))))))
++                                (str "  output:\n" (:Output result) "\n")))))))
++         (when-let [filtered (seq (:filtered report))]
++           (str "filtered equivalents (not executed):\n"
++                (apply str
++                       (for [e filtered]
++                         (format "  %-6s %s [%s]\n" (:ID e) (:Path e) (:Class e)))))))))
+ 
+ (defn write-text-report! [report]
+   (print (report-text report)))
+@@ -421,11 +507,23 @@
+                    cfg)
+         generated-dir (or (:generated-dir cfg) (str (io/file (:work-dir cfg) "generated")))
+         mutations (discover (:feature cfg))
++        filtered (when (:equivalence-filter cfg)
++                   (vec (for [m mutations
++                              :let [entry (filter-entry-match (:equivalence-filter cfg) (:feature-path cfg) m)]
++                              :when entry]
++                          (assoc (equivalent-view m entry) :scenario (:scenario m)))))
++        filtered-ids (set (map :ID filtered))
+         skip (accepted-skips cfg mutations)
+-        executable-indexes (vec (keep-indexed (fn [i mutation] (when-not (skip (:scenario mutation)) i)) mutations))
++        executable-indexes (vec (keep-indexed (fn [i mutation] (when-not (or (skip (:scenario mutation))
++                                                                             (contains? filtered-ids (:ID mutation)))
++                                                                 i))
++                                              mutations))
+         skipped-scenarios (count skip)
+-        skipped-mutations (- (count mutations) (count executable-indexes))
+-        summary0 (assoc (empty-summary) :Total (count executable-indexes))
++        skipped-mutations (count (filter #(and (contains? skip (:scenario %))
++                                               (not (contains? filtered-ids (:ID %))))
++                                         mutations))
++        summary0 (let [s (assoc (empty-summary) :Total (count executable-indexes))]
++                   (if (seq filtered) (assoc s :FilteredEquivalents (count filtered)) s))
+         results (atom (vec (repeat (count executable-indexes) nil)))
+         summary (atom summary0)
+         running (atom 0)
+@@ -470,7 +568,8 @@
+       (let [final-summary (cond-> @summary
+                             (pos? skipped-scenarios) (assoc :SkippedScenarios skipped-scenarios)
+                             (pos? skipped-mutations) (assoc :SkippedMutations skipped-mutations))
+-            report (array-map :summary final-summary :results (vec (remove nil? @results)))]
++            report (cond-> (array-map :summary final-summary :results (vec (remove nil? @results)))
++                     (seq filtered) (assoc :filtered filtered :filter-hash (:hash (:equivalence-filter cfg))))]
+         (binding [*out* *err*]
+           (when (pos? (:status-interval-ms cfg))
+             (println (status-line started final-summary @running skipped-scenarios skipped-mutations))))
+diff --git a/bb/test/aps/mutation_test.clj b/bb/test/aps/mutation_test.clj
+index 8e32c2c..0183d1c 100644
+--- a/bb/test/aps/mutation_test.clj
++++ b/bb/test/aps/mutation_test.clj
+@@ -1,5 +1,7 @@
+ (ns aps.mutation-test
+   (:require [aps.mutation :as mutation]
++            [aps.gherkin :as gherkin]
++            [cheshire.core :as json]
+             [clojure.java.io :as io]
+             [clojure.string :as str]
+             [clojure.test :refer [deftest is testing]]))
+@@ -79,3 +81,148 @@
+     (testing "mutation JSON files are written for the worker"
+       (is (.exists (io/file dir "work" "base" "feature.json")))
+       (is (.exists (io/file dir "work" "mutations" "m1" "feature.json"))))))
++
++(defn- write-filter-file! [dir equivalences]
++  (let [path (str (io/file dir "filter.json"))]
++    (spit path (json/generate-string {:version 1 :equivalences equivalences}))
++    path))
++
++(defn- balance-filter-entry [dir]
++  (let [balance-mut (some #(when (= "$.scenarios[0].examples[0].balance" (:Path %)) %)
++                          (mutation/discover mutation-feature))]
++    {:feature "withdrawals"
++     :path (:Path balance-mut)
++     :original (:Original balance-mut)
++     :mutated (:Mutated balance-mut)
++     :class "value-mirror"
++     :justification "assertions derive from the mutated value"
++     :invalidation "product validates the value"}))
++
++(defn- gherkin-parse [path]
++  (gherkin/parse-file path))
++
++(defn- read-manifest [feature-path]
++  (let [lines (str/split-lines (slurp feature-path))
++        manifest-lines (rest (take-while #(not= (str/trim %) "# acceptance-mutation-manifest-end")
++                                         (drop-while #(not= (str/trim %) "# acceptance-mutation-manifest-begin")
++                                                     lines)))]
++    (json/parse-string (str/join "" (mapv #(subs (str/trim %) 1) manifest-lines)) true)))
++
++(deftest equivalence-filter-loader-rejects-malformed-documents
++  (let [dir (.toFile (temp-dir))
++        bad-json (str (io/file dir "bad-json.json"))
++        bad-version (str (io/file dir "bad-version.json"))
++        missing-field (str (io/file dir "missing-field.json"))
++        bad-path (str (io/file dir "bad-path.json"))]
++    (spit bad-json "{not json")
++    (spit bad-version (json/generate-string {:version 2 :equivalences []}))
++    (spit missing-field (json/generate-string {:version 1 :equivalences [{:feature "f" :path "$.scenarios[0].examples[0].k"}]}))
++    (spit bad-path (json/generate-string {:version 1 :equivalences [{:feature "f" :path "scenarios[0]" :original "1" :mutated "2"}]}))
++    (is (thrown? Exception (mutation/load-equivalence-filter bad-json)))
++    (is (thrown? Exception (mutation/load-equivalence-filter bad-version)))
++    (is (thrown? Exception (mutation/load-equivalence-filter missing-field)))
++    (is (thrown? Exception (mutation/load-equivalence-filter bad-path)))
++    (let [ok (write-filter-file! dir [(balance-filter-entry dir)])
++          loaded (mutation/load-equivalence-filter ok)]
++      (is (= 1 (count (get-in loaded [:data :equivalences]))))
++      (is (seq (:hash loaded))))))
++
++(deftest run-with-equivalence-filter-excludes-matching-mutations
++  (let [dir (.toFile (temp-dir))
++        worker (worker-script dir)
++        filter-path (write-filter-file! dir [(balance-filter-entry dir)])
++        filter-spec (mutation/load-equivalence-filter filter-path)
++        report (mutation/run {:feature mutation-feature
++                              :feature-path "/tmp/withdrawals.feature"
++                              :work-dir (str (io/file dir "work"))
++                              :workers 1
++                              :status-interval-ms 0
++                              :runner-command ["bb" worker]
++                              :equivalence-filter filter-spec})]
++    (is (= {:Total 2 :Killed 1 :Survived 0 :Errors 1 :FilteredEquivalents 1}
++           (:summary report)))
++    (is (= ["m1" "m3"] (mapv #(get-in % [:Mutation :ID]) (:results report))))
++    (is (= ["m2"] (mapv :ID (:filtered report))))
++    (is (= "$.scenarios[0].examples[0].balance" (get-in report [:filtered 0 :Path])))
++    (is (= "value-mirror" (get-in report [:filtered 0 :Class])))
++    (is (= (:hash filter-spec) (:filter-hash report)))))
++
++(deftest filtered-run-writes-filter-aware-metadata-and-reuses-only-same-filter
++  (let [dir (.toFile (temp-dir))
++        feature-path (str (io/file dir "withdrawals.feature"))
++        worker (worker-script dir)
++        kill-worker (let [path (io/file dir "kill-worker.clj")]
++                      (spit path
++                            (str "(require '[cheshire.core :as json])\n"
++                                 "(doseq [line (line-seq (java.io.BufferedReader. *in*))]\n"
++                                 "  (let [req (json/parse-string line true)]\n"
++                                 "    (println (json/generate-string {:id (:id req)\n"
++                                 "                                   :outcome \"test_failure\"\n"
++                                 "                                   :output \"\"\n"
++                                 "                                   :error \"\"\n"
++                                 "                                   :duration 1}))\n"
++                                 "    (flush)))\n"))
++                      (str path))
++        entry (balance-filter-entry dir)
++        filter-path (write-filter-file! dir [entry])
++        filter-spec (mutation/load-equivalence-filter filter-path)]
++    (spit feature-path
++          (str "Feature: Withdrawals\n"
++               "Background:\n"
++               "Given an account balance of <balance>\n"
++               "Scenario Outline: Withdraw cash\n"
++               "When the customer withdraws <amount>\n"
++               "Examples:\n"
++               "| balance | amount | remaining |\n"
++               "| 100 | 20 | 80 |\n"))
++    (let [report (mutation/run {:feature (gherkin-parse feature-path)
++                                :feature-path feature-path
++                                :work-dir (str (io/file dir "work"))
++                                :workers 1
++                                :status-interval-ms 0
++                                :runner-command ["bb" kill-worker]
++                                :equivalence-filter filter-spec})]
++      (is (= {:Total 2 :Killed 2 :Survived 0 :Errors 0 :FilteredEquivalents 1} (:summary report)))
++      (mutation/write-mutation-metadata! feature-path (gherkin-parse feature-path) report
++                                         "impl-hash" "hard" true filter-spec)
++      (let [manifest (read-manifest feature-path)
++            scenario-entry (get-in manifest [:scenarios 0])]
++        (is (= (:hash filter-spec) (:equivalence_filter_hash manifest)))
++        (is (= 2 (:mutation_count scenario-entry)))
++        (is (= 1 (get-in scenario-entry [:result :FilteredEquivalents])))
++        (is (zero? (get-in scenario-entry [:result :Survived]))))
++      (testing "same filter reuses the scenario"
++        (let [rerun (mutation/run {:feature (gherkin-parse feature-path)
++                                   :feature-path feature-path
++                                   :work-dir (str (io/file dir "work2"))
++                                   :workers 1
++                                   :status-interval-ms 0
++                                   :runner-command ["bb" kill-worker]
++                                   :implementation-hash "impl-hash"
++                                   :equivalence-filter filter-spec})]
++          (is (= {:Total 0 :Killed 0 :Survived 0 :Errors 0 :FilteredEquivalents 1
++                  :SkippedScenarios 1 :SkippedMutations 2}
++                 (:summary rerun)))))
++      (testing "changed filter hash forces re-execution"
++        (let [changed-path (str (io/file dir "changed-filter.json"))
++              _ (spit changed-path (json/generate-string {:version 1
++                                                          :equivalences [(assoc entry :justification "revised")]}))
++              changed (mutation/load-equivalence-filter changed-path)
++              rerun (mutation/run {:feature (gherkin-parse feature-path)
++                                   :feature-path feature-path
++                                   :work-dir (str (io/file dir "work3"))
++                                   :workers 1
++                                   :status-interval-ms 0
++                                   :runner-command ["bb" kill-worker]
++                                   :equivalence-filter changed})]
++          (is (= {:Total 2 :Killed 2 :Survived 0 :Errors 0 :FilteredEquivalents 1}
++                 (:summary rerun)))))
++      (testing "running without the filter re-tests the filtered cell"
++        (let [plain (mutation/run {:feature (gherkin-parse feature-path)
++                                   :feature-path feature-path
++                                   :work-dir (str (io/file dir "work4"))
++                                   :workers 1
++                                   :status-interval-ms 0
++                                   :runner-command ["bb" worker]})]
++          (is (= {:Total 3 :Killed 1 :Survived 1 :Errors 1} (:summary plain)))
++          (is (nil? (:filtered plain))))))))

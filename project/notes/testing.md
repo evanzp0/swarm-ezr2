@@ -884,3 +884,8 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 - **注册表落盘点**：`.ezr/state/registry.json`（非 .ezr/registry.json）；BT 条目 bt.trackers 为创建时入库值（默认池引擎侧另算），任务级限速/归一路径断言以注册表为准。
 - **做种行翻页**：做种行在「已完成」页签——断言前必须 ] 循环（沿用 suite_modify_bt._cycle_to_visible）。
 - **判重谓词与 infohash**：BT 判重按来源路径归一（v1.42），同 infohash 不同路径的种子可并存；重启用同 config 时注册表恢复旧任务，再添同源即判重——重启臂断言前先清判重面（改 config 或异源种子）。
+
+## mutator 等价过滤器扩展轮（2026-11-18，hardender）追加
+- **mutator 项目等价突变过滤器落地口径**：`--equivalence-filter <file>`（version 1；entry = feature stem + 突变路径 `$.scenarios[i].examples[j].<col>` + original + mutated 四元全匹配，附 class/justification/invalidation）——过滤发生在执行前：不执行、不进 total/结果列表（mutator-spec §Equivalent Mutation Filters 口径），单独 `filtered_equivalents=<n>` 汇总 + 报告尾 `filtered equivalents (not executed)` 区 + JSON `filtered` 数组与 `filter-hash`；exit 码只看幸存/错误，等价格不触发 exit 1。17 格登记于 `project/qa/equivalence-filter.json`（权威逐格登记，承接 r3 handoff 等价类清单）。
+- **manifest/stamp 过滤器感知语义**：manifest 顶层 `equivalence_filter_hash` + 场景 result.FilteredEquivalents；场景 mutation_count = 执行数（全量 − 过滤）；复用条件 = mutation_count 等于当前可执行数 且（旧条目带过滤哈希时）哈希相等——过滤器变更/移除/路径漂移 → 场景如实重执行（fail-loud）；stamp 哈希掺入过滤哈希（同过滤器可整文件跳过，跨过滤器失效）。feature 编辑致 IR 索引漂移 → 过滤失配 → 突变体回现为幸存，属诚实回退，须重建过滤器条目（discover 派生路径重对账）。
+- **机制验证四对照口径**：bb test（上游 8 测不动 + 新增 3 测 = 51 assertions 全绿）+ 合成探针（基线无过滤器行为不变 / 阳性命中过滤 / 阴性 original 错配零过滤 / killed+全过滤 exit 0）+ 同过滤器复用（skipped_scenarios=1）+ 真实数据 6 feature 副本 17/17 精确命中零过度匹配。**副本纪律**：stub/机制验证运行绝不指向真实 features（metadata 自管理写回会污染 manifest），一律 `.work/tmp/` 副本；verdict 运行须接 APS 执行层 runtime（本轮未重建，沿 QA 轮 1090P 基线登记）。

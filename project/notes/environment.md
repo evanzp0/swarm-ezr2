@@ -541,3 +541,8 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - **PMD 7.29.0 发行资产**：pmd-dist-7.29.0-bin.zip（github releases tag=pmd_releases/7.29.0），Java 21 直接可跑；.tools/ 落位。
 - **MiniTracker/UDP 探活口径**：pybtracker 无 TCP 监听——TCP 探活必败，UDP fixture 用进程存活 + 预热窗。
 - **qa-fix 工作目录**：EzrApp 的 ~ 展开 = env.home（app cwd = home）——~/ 与相对路径 fixture 预置进 env.home 子目录。
+
+## mutator 等价过滤器扩展轮（2026-11-18，hardender）追加
+- **bb System/exit 丢弃未 flush 的 stdout**（APS CLI 上游潜伏缺陷）：`print`/`println` 后直接 `System/exit` 时报告静默丢失（stderr 不缓冲不受影响，工作目录产物正常落盘）——判据：exit 非零 + stdout 零字节 + mutations/ 目录已有产出 = 先怀疑本缺陷再怀疑运行失败；修复 = CLI 统一 `exit!` 助手（flush 两路再 exit）。
+- **镜像漂移实录（本轮）**：gh-proxy.com 对 release 资产返回 404 HTML 反爬页（magic bytes `3c 21` 非 `1f 8b`——下载后先验 magic bytes 再续传，否则 HTML 壳与半截 tar 混合污染同一文件）；ghfast.top 断点续传 3 轮完成 bb 26.6MB；api.github.com 清单经 ghfast.top 不可达（非 JSON 响应）→ 沿历轮登记资产名直下。
+- **APS bb 版与 Go 版能力分叉**：mutator `--equivalence-filter` 仅 bb 版实现（Go cmd/ 未扩展）——工程规则 bb 版优先成立；若回退 Go 备用路径，过滤不生效、等价体如实回现为幸存（安全失败模式，须在 handoff 登记说明）。

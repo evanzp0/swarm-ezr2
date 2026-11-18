@@ -1,0 +1,159 @@
+{
+  "version": 1,
+  "description": "ezr 项目等价突变过滤器（mutator --equivalence-filter 数据源）——17 格值镜像等价类，登记口径承接 hardender 修订轮 handoff 等价类清单（2026-11-17）；格匹配 = feature stem + 突变路径 + original + mutated 四元全匹配，任一分量漂移（feature 编辑/δ 逻辑变化）即失配并如实回退为执行判定",
+  "equivalences": [
+    {
+      "feature": "01-retry-backoff",
+      "path": "$.scenarios[4].examples[0].retry_after",
+      "original": "10",
+      "mutated": "14",
+      "class": "input-mirror",
+      "justification": "输入镜像：fixture 发突变头值、产品按其倒计时，断言与显示同源自洽；指数退避表 8/16/32/60 为固定锚但 Retry-After 优先级语义对任意值均成立",
+      "invalidation": "产品对 Retry-After 引入校验边界，或规格新增区分性断言（如倒计时节奏采样）"
+    },
+    {
+      "feature": "01-retry-backoff",
+      "path": "$.scenarios[4].examples[1].retry_after",
+      "original": "60",
+      "mutated": "68",
+      "class": "input-mirror",
+      "justification": "输入镜像：fixture 发突变头值、产品按其倒计时，断言与显示同源自洽；指数退避表 8/16/32/60 为固定锚但 Retry-After 优先级语义对任意值均成立",
+      "invalidation": "产品对 Retry-After 引入校验边界，或规格新增区分性断言（如倒计时节奏采样）"
+    },
+    {
+      "feature": "01-retry-backoff",
+      "path": "$.scenarios[4].examples[2].retry_after",
+      "original": "90",
+      "mutated": "99",
+      "class": "input-mirror",
+      "justification": "输入镜像：fixture 发突变头值、产品按其倒计时，断言与显示同源自洽；指数退避表 8/16/32/60 为固定锚但 Retry-After 优先级语义对任意值均成立",
+      "invalidation": "产品对 Retry-After 引入校验边界，或规格新增区分性断言（如倒计时节奏采样）"
+    },
+    {
+      "feature": "01-retry-backoff",
+      "path": "$.scenarios[5].examples[0].retry_after",
+      "original": "120",
+      "mutated": "112",
+      "class": "input-mirror",
+      "justification": "输入镜像：fixture 发突变头值、产品按其倒计时，断言与显示同源自洽；指数退避表 8/16/32/60 为固定锚但 Retry-After 优先级语义对任意值均成立",
+      "invalidation": "产品对 Retry-After 引入校验边界，或规格新增区分性断言（如倒计时节奏采样）"
+    },
+    {
+      "feature": "01-retry-backoff",
+      "path": "$.scenarios[6].examples[0].status",
+      "original": "403",
+      "mutated": "399",
+      "class": "classification-mirror",
+      "justification": "分类镜像：突变值落在同类语义臂（399/401 与 403/404 同为「语义性停等」），产品分类表按类生效",
+      "invalidation": "分类表按状态码逐值区分（如 401 单列认证失效臂）"
+    },
+    {
+      "feature": "01-retry-backoff",
+      "path": "$.scenarios[6].examples[1].status",
+      "original": "404",
+      "mutated": "401",
+      "class": "classification-mirror",
+      "justification": "分类镜像：突变值落在同类语义臂（399/401 与 403/404 同为「语义性停等」），产品分类表按类生效",
+      "invalidation": "分类表按状态码逐值区分（如 401 单列认证失效臂）"
+    },
+    {
+      "feature": "01-slots-queue",
+      "path": "$.scenarios[3].examples[0].slots",
+      "original": "2",
+      "mutated": "5",
+      "class": "capacity-mirror",
+      "justification": "容量镜像：handler 按突变值配置容量并等量填充，徽标/排队/递补全链路自洽",
+      "invalidation": "规格钉死槽位测试点，或 fixture 文件清单有限使填充不可满足"
+    },
+    {
+      "feature": "01-slots-queue",
+      "path": "$.scenarios[6].examples[0].slots",
+      "original": "5",
+      "mutated": "9",
+      "class": "capacity-mirror",
+      "justification": "容量镜像：handler 按突变值配置容量并等量填充，徽标/排队/递补全链路自洽",
+      "invalidation": "规格钉死槽位测试点，或 fixture 文件清单有限使填充不可满足"
+    },
+    {
+      "feature": "03-modify-task",
+      "path": "$.scenarios[0].examples[0].concurrency",
+      "original": "3",
+      "mutated": "6",
+      "class": "echo-mirror",
+      "justification": "输入回显镜像：添加/修改/重启往返均按突变值生效并回显，prefill/注册表/徽标三面同源自洽",
+      "invalidation": "并发或限速引入规格校验边界，或新增非回显派生的可观察量"
+    },
+    {
+      "feature": "03-modify-task",
+      "path": "$.scenarios[7].examples[0].concurrency",
+      "original": "2",
+      "mutated": "9",
+      "class": "echo-mirror",
+      "justification": "输入回显镜像：添加/修改/重启往返均按突变值生效并回显，prefill/注册表/徽标三面同源自洽",
+      "invalidation": "并发或限速引入规格校验边界，或新增非回显派生的可观察量"
+    },
+    {
+      "feature": "03-modify-task",
+      "path": "$.scenarios[1].examples[1].before",
+      "original": "4",
+      "mutated": "1",
+      "class": "echo-mirror",
+      "justification": "输入回显镜像：添加/修改/重启往返均按突变值生效并回显，prefill/注册表/徽标三面同源自洽",
+      "invalidation": "并发或限速引入规格校验边界，或新增非回显派生的可观察量"
+    },
+    {
+      "feature": "03-modify-task",
+      "path": "$.scenarios[9].examples[0].before",
+      "original": "0",
+      "mutated": "9",
+      "class": "echo-mirror",
+      "justification": "输入回显镜像：添加/修改/重启往返均按突变值生效并回显，prefill/注册表/徽标三面同源自洽",
+      "invalidation": "并发或限速引入规格校验边界，或新增非回显派生的可观察量"
+    },
+    {
+      "feature": "04-ui-conns",
+      "path": "$.scenarios[4].examples[0].secs",
+      "original": "12",
+      "mutated": "9",
+      "class": "sampling-mirror",
+      "justification": "采样/向下镜像：采样窗与连接数均按突变值驱动，图表点数/连接行数随值自洽",
+      "invalidation": "流量图/连接面板引入固定容量锚"
+    },
+    {
+      "feature": "04-ui-conns",
+      "path": "$.scenarios[8].examples[0].secs",
+      "original": "8",
+      "mutated": "11",
+      "class": "sampling-mirror",
+      "justification": "采样/向下镜像：采样窗与连接数均按突变值驱动，图表点数/连接行数随值自洽",
+      "invalidation": "流量图/连接面板引入固定容量锚"
+    },
+    {
+      "feature": "04-ui-conns",
+      "path": "$.scenarios[12].examples[0].conns",
+      "original": "16",
+      "mutated": "7",
+      "class": "sampling-mirror",
+      "justification": "采样/向下镜像：采样窗与连接数均按突变值驱动，图表点数/连接行数随值自洽",
+      "invalidation": "流量图/连接面板引入固定容量锚"
+    },
+    {
+      "feature": "02-named-proxy",
+      "path": "$.scenarios[7].examples[0].port",
+      "original": "18766",
+      "mutated": "18767",
+      "class": "endpoint-mirror",
+      "justification": "端点镜像：handler 按突变值起桩实例并配置引用，日志链路自洽",
+      "invalidation": "规格钉死代理端口清单，或引入端口可用性断言"
+    },
+    {
+      "feature": "06-cmd-window",
+      "path": "$.scenarios[1].examples[1].extra_lines",
+      "original": "0",
+      "mutated": "2",
+      "class": "count-mirror",
+      "justification": "计数镜像：词汇面 open_int（lo=0）使 0→2 界内幸存、负 δ（0→-3/2→-4 实测）域外被杀；产品 toast 计数对任意行数自洽",
+      "invalidation": "产品对 0 行输入产生区分性行为，或规格钉死行数测试点"
+    }
+  ]
+}
