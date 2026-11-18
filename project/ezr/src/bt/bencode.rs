@@ -1,6 +1,19 @@
 use std::collections::BTreeMap;
 
-use super::BtError;
+/// bencode 解码错误（模块局部类型，自包含设计）。
+/// 本文件零外部依赖：产品侧经 `From<BencodeError> for BtError` 映射消费
+/// （消息串逐条保留，Display 输出不变）；工具 bin（ezr-mktorrent）
+/// `#[path]` 硬包含本文件时不触 bt 门面类型，编译自洽。
+#[derive(Clone, Debug, PartialEq)]
+pub struct BencodeError(pub String);
+
+impl std::fmt::Display for BencodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for BencodeError {}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum BValue {
@@ -59,25 +72,22 @@ impl BValue {
     }
 }
 
-pub fn decode(data: &[u8]) -> Result<(BValue, usize), BtError> {
+pub fn decode(data: &[u8]) -> Result<(BValue, usize), BencodeError> {
     let (v, n) = decode_inner(data)?;
     Ok((v, n))
 }
 
-pub fn decode_all(data: &[u8]) -> Result<BValue, BtError> {
+pub fn decode_all(data: &[u8]) -> Result<BValue, BencodeError> {
     let (v, n) = decode_inner(data)?;
     if n != data.len() {
-        return Err(BtError::Bencode(format!(
-            "尾部多余 {} 字节",
-            data.len() - n
-        )));
+        return Err(BencodeError(format!("尾部多余 {} 字节", data.len() - n)));
     }
     Ok(v)
 }
 
 pub fn decode_with_info_span(
     data: &[u8],
-) -> Result<(BValue, Option<std::ops::Range<usize>>), BtError> {
+) -> Result<(BValue, Option<std::ops::Range<usize>>), BencodeError> {
     let (v, _) = decode_inner(data)?;
     let span = find_dict_value_span(data, 0, b"info")?;
     Ok((v, span))
@@ -87,7 +97,7 @@ fn find_dict_value_span(
     data: &[u8],
     pos: usize,
     key: &[u8],
-) -> Result<Option<std::ops::Range<usize>>, BtError> {
+) -> Result<Option<std::ops::Range<usize>>, BencodeError> {
     if data.get(pos) != Some(&b'd') {
         return Ok(None);
     }
@@ -105,21 +115,21 @@ fn find_dict_value_span(
     Ok(None)
 }
 
-fn decode_inner_at(data: &[u8], pos: usize) -> Result<(BValue, usize), BtError> {
+fn decode_inner_at(data: &[u8], pos: usize) -> Result<(BValue, usize), BencodeError> {
     match data.get(pos) {
         Some(b'i') => {
             let end = data[pos..]
                 .iter()
                 .position(|&b| b == b'e')
-                .ok_or_else(|| BtError::Bencode("整数未闭合".into()))?;
+                .ok_or_else(|| BencodeError("整数未闭合".into()))?;
             let digits = std::str::from_utf8(&data[pos + 1..pos + end])
-                .map_err(|_| BtError::Bencode("整数非 UTF-8".into()))?;
+                .map_err(|_| BencodeError("整数非 UTF-8".into()))?;
             if digits.starts_with("-0") || (digits.len() > 1 && digits.starts_with('0')) {
-                return Err(BtError::Bencode(format!("整数前导零：{digits}")));
+                return Err(BencodeError(format!("整数前导零：{digits}")));
             }
             let v: i64 = digits
                 .parse()
-                .map_err(|_| BtError::Bencode(format!("整数越界：{digits}")))?;
+                .map_err(|_| BencodeError(format!("整数越界：{digits}")))?;
             Ok((BValue::Int(v), end + 1))
         }
         Some(b'l') => {
@@ -140,11 +150,11 @@ fn decode_inner_at(data: &[u8], pos: usize) -> Result<(BValue, usize), BtError> 
                 let (k, kn) = decode_inner_at(data, p)?;
                 let kb = k
                     .as_bytes()
-                    .ok_or_else(|| BtError::Bencode("字典键非字节串".into()))?
+                    .ok_or_else(|| BencodeError("字典键非字节串".into()))?
                     .to_vec();
                 if let Some(pk) = &prev_key {
                     if pk >= &kb {
-                        return Err(BtError::Bencode("字典键未按字典序".into()));
+                        return Err(BencodeError("字典键未按字典序".into()));
                     }
                 }
                 prev_key = Some(kb.clone());
@@ -159,32 +169,32 @@ fn decode_inner_at(data: &[u8], pos: usize) -> Result<(BValue, usize), BtError> 
             let colon = data[pos..]
                 .iter()
                 .position(|&b| b == b':')
-                .ok_or_else(|| BtError::Bencode("字节串缺冒号".into()))?;
+                .ok_or_else(|| BencodeError("字节串缺冒号".into()))?;
             let len_str = std::str::from_utf8(&data[pos..pos + colon])
-                .map_err(|_| BtError::Bencode("字节串长度非 UTF-8".into()))?;
+                .map_err(|_| BencodeError("字节串长度非 UTF-8".into()))?;
             let len: usize = len_str
                 .parse()
-                .map_err(|_| BtError::Bencode(format!("字节串长度非法：{len_str}")))?;
+                .map_err(|_| BencodeError(format!("字节串长度非法：{len_str}")))?;
             if len_str.len() > 1 && len_str.starts_with('0') {
-                return Err(BtError::Bencode(format!("字节串长度前导零：{len_str}")));
+                return Err(BencodeError(format!("字节串长度前导零：{len_str}")));
             }
             let start = pos + colon + 1;
             let end = start
                 .checked_add(len)
-                .ok_or_else(|| BtError::Bencode("字节串长度越界".into()))?;
+                .ok_or_else(|| BencodeError("字节串长度越界".into()))?;
             let bytes = data
                 .get(start..end)
-                .ok_or_else(|| BtError::Bencode("字节串截断".into()))?;
+                .ok_or_else(|| BencodeError("字节串截断".into()))?;
             Ok((BValue::Bytes(bytes.to_vec()), colon + 1 + len))
         }
-        _ => Err(BtError::Bencode(format!(
+        _ => Err(BencodeError(format!(
             "位置 {pos} 非法 bencode 起始字节 {:?}",
             data.get(pos).copied()
         ))),
     }
 }
 
-fn decode_inner(data: &[u8]) -> Result<(BValue, usize), BtError> {
+fn decode_inner(data: &[u8]) -> Result<(BValue, usize), BencodeError> {
     decode_inner_at(data, 0)
 }
 

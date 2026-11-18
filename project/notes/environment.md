@@ -546,3 +546,8 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - **bb System/exit 丢弃未 flush 的 stdout**（APS CLI 上游潜伏缺陷）：`print`/`println` 后直接 `System/exit` 时报告静默丢失（stderr 不缓冲不受影响，工作目录产物正常落盘）——判据：exit 非零 + stdout 零字节 + mutations/ 目录已有产出 = 先怀疑本缺陷再怀疑运行失败；修复 = CLI 统一 `exit!` 助手（flush 两路再 exit）。
 - **镜像漂移实录（本轮）**：gh-proxy.com 对 release 资产返回 404 HTML 反爬页（magic bytes `3c 21` 非 `1f 8b`——下载后先验 magic bytes 再续传，否则 HTML 壳与半截 tar 混合污染同一文件）；ghfast.top 断点续传 3 轮完成 bb 26.6MB；api.github.com 清单经 ghfast.top 不可达（非 JSON 响应）→ 沿历轮登记资产名直下。
 - **APS bb 版与 Go 版能力分叉**：mutator `--equivalence-filter` 仅 bb 版实现（Go cmd/ 未扩展）——工程规则 bb 版优先成立；若回退 Go 备用路径，过滤不生效、等价体如实回现为幸存（安全失败模式，须在 handoff 登记说明）。
+
+## mktorrent bencode 合规修订轮（2026-11-18，hardender）追加
+- **镜像漂移实录（本轮）**：rsproxy dist 清单有效且最快（channel manifest 在 `/dist/channel-rust-nightly.toml`，923KB/0.36s；清单**不带 arch 段**——`/dist/<arch>/channel-*.toml` 形态 404 是路径错不是镜像死）；TUNA rust-static 本轮全 404、官方直连 20s 仅 368KB 截断不可用。RUSTUP_DIST_SERVER/UPDATE_ROOT 双变量指 rsproxy 前台一次装齐 nightly 1.102.0（minimal + rustfmt/clippy/llvm-tools-preview 一次到位，避组件后装的静默解包坑）。
+- **crap_calc.py 两参签名**：`LCOVS = argv[1:-1]`、`argv[-1] = SRC_ROOT`——单 lcov 调用必须补 src_root 参数，否则 lcov 被当 src_root、LCOVS 空 → 静默空转至 ZeroDivisionError（表象是行覆盖 0/0 崩溃，实为调用形态错）。
+- **persistent shell 跨命令 export 残留**：`RUSTFLAGS="-C instrument-coverage"` 设置后残留在后续 cargo 命令 → 插桩产物 + LLVM_PROFILE_FILE 未设时 profraw 散落 CWD（`default_*.profraw`）——长管线结束即 `unset RUSTFLAGS`，收尾 `git status` 查残留（complete 归档会把散落产物打进包）。

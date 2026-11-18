@@ -137,53 +137,14 @@ const fn be_int(v: i64) -> bencode::BValue {
     bencode::BValue::Int(v)
 }
 
-mod bencode {
-    use std::collections::BTreeMap;
-
-    #[derive(Clone, Debug, PartialEq)]
-    pub enum BValue {
-        Int(i64),
-        Bytes(Vec<u8>),
-        List(Vec<Self>),
-        Dict(BTreeMap<Vec<u8>, Self>),
-    }
-
-    pub fn encode(v: &BValue) -> Vec<u8> {
-        let mut out = Vec::new();
-        encode_into(v, &mut out);
-        out
-    }
-
-    fn encode_into(v: &BValue, out: &mut Vec<u8>) {
-        match v {
-            BValue::Int(i) => {
-                out.push(b'i');
-                out.extend_from_slice(i.to_string().as_bytes());
-                out.push(b'e');
-            }
-            BValue::Bytes(b) => {
-                out.extend_from_slice(b.len().to_string().as_bytes());
-                out.push(b':');
-                out.extend_from_slice(b);
-            }
-            BValue::List(l) => {
-                out.push(b'l');
-                for item in l {
-                    encode_into(item, out);
-                }
-                out.push(b'e');
-            }
-            BValue::Dict(m) => {
-                out.push(b'd');
-                for (k, val) in m {
-                    encode_into(&BValue::Bytes(k.clone()), out);
-                    encode_into(val, out);
-                }
-                out.push(b'e');
-            }
-        }
-    }
-}
+// 单源共享产品侧 bencode 编解码器（src/bt/bencode.rs 已自包含化，零外部依赖）。
+// 退役内嵌 47 行克隆（mktorrent bencode 合规修订轮，操作者授权越界）——
+// 工具 bin 只消费 encode 半区；decode 半区及其单测在本 crate 属死代码，一行豁免。
+// 姿态注记：被含文件按 ezr crate 姿态编写（main.rs 允许 pedantic/nursery），
+// 本 crate 姿态较窄，故在包含点按模块作用域对齐，豁免不外溢。
+#[path = "../bt/bencode.rs"]
+#[allow(dead_code, clippy::pedantic, clippy::nursery)]
+mod bencode;
 
 #[cfg(test)]
 mod tests {

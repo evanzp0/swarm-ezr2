@@ -130,3 +130,8 @@
 - testing.md — 显示通道改写与磁盘真值判别（字节计数）/全角括号描述格断言陷阱/双层统一（产品面格先过规格封闭校验再实跑）/CRAP 采集三坑（lcov 段级过滤、crap_calc 预过滤依赖、tokio spawn webrtc 覆盖竞速）/soft differential 跳过语义与 full 级硬证据/APS 运行时重建口径（格级 schema 键、open_int lo=0 微域、δ 确定性复现）（新增）
 - environment.md — 插桩磁盘时序纪律（先回收残缺产物+incremental 再构建，CARGO_INCREMENTAL=0，用后即删）/cargo PATH 前缀续会话（llvm-tools 定位 nightly 工具链）（新增）
 - handoff.md — 操作者四裁决落地口径（①~/ 形态+生成任务绝对路径、②URL 排除臂产品修正、③失败分类直接形态、④/mktorrent 了结登记）/trackpool:412 webrtc 竞速同源登记（新增）
+
+## mktorrent bencode 合规修订轮（2026-11-18，hardender）追加
+- architecture.md — mktorrent bencode 合规解（自包含化 + #[path] 硬包含、克隆按构造消失）/「自包含」判据实操化（use 是否触达模块树外类型）/#[path] 共享三同步义务（测试桩 From 镜像、包含点姿态对齐、行号账目不同源前提）（新增）
+- testing.md — 错误类型重构行为等价论证法（消息串保留 + 消费点三类零改动 + 基线精确复现）/CRAP 管线全链复现（ACT=101 相等 + 稳定锚恒等 + 行覆盖漂移归因三证对账）（新增）
+- environment.md — 镜像漂移实录（rsproxy /dist/ 清单有效不带 arch、TUNA rust-static 本轮失效）/crap_calc 两参签名/persistent shell RUSTFLAGS 残留与 profraw 散落（新增）

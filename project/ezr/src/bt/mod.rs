@@ -38,6 +38,16 @@ impl From<std::io::Error> for BtError {
     }
 }
 
+// bencode 模块自包含化（mktorrent bencode 合规修订轮，操作者授权越界）：decode 族
+// 返回模块局部 `BencodeError`，经本映射升格为门面类型——消息串逐条保留，
+// Display 输出字节级不变；产品调用点 `?` 自动转换零改动（metainfo/tracker），
+// `.ok()`/`is_ok()` 消费点类型无关（peer.rs）。
+impl From<bencode::BencodeError> for BtError {
+    fn from(e: bencode::BencodeError) -> Self {
+        BtError::Bencode(e.0)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BtTaskCmd {
     Pause,

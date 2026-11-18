@@ -27,6 +27,14 @@ impl From<std::io::Error> for BtError {
     }
 }
 
+// 镜像产品门面 bt/mod.rs 的 bencode 自包含化映射（mktorrent bencode 合规修订轮）：
+// decode 族返回模块局部 BencodeError，经 From 升格为门面类型——本桩与产品门面同步。
+impl From<bencode::BencodeError> for BtError {
+    fn from(e: bencode::BencodeError) -> Self {
+        BtError::Bencode(e.0)
+    }
+}
+
 #[path = "../../src/bt/bencode.rs"]
 pub mod bencode;
 #[path = "../../src/bt/tracker.rs"]
