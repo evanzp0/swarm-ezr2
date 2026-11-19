@@ -897,3 +897,16 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 ## PMD 销项轻量轮（2026-11-18，hardender）追加
 - **cpd 销项的双扫描对账法**：受控删除克隆后，复扫不能只看总数下降——用 `git archive HEAD` 提取删除前源码态做同参数对照扫描，前态须与历轮基线组数恒等（本轮 220 恒等，同工具 7.29.0 同 min-tokens 70），再对前后报告做路径规范化（sed 归一 `project/ezr/` 前缀）后 diff：差集应恰为被删克隆组且其余组字节级恒等。本轮差集 = 唯一组 35 行/232 tokens（ezr-mktorrent.rs ↔ bencode.rs encode/encode_into），220→219 的 −1 全额归因，无新增组——比单点 rg 唯一定义点实证强一档（rg 证"定义唯一"，双扫描证"克隆账目零残余且零漂移"）。mktorrent bencode 受限项凭此销项结清。
 - **unviable 判定的人工补证法（全臂发散型编译错）**：工具判 unviable 的「删 match 非兜底臂」突变体可 scratch 副本 sed 删臂 + `cargo check` 人工复现裁决——spawn_outgoing_peer 删 `Ok(Ok(s)) => s` 臂实测 **E0599**（match 仅剩 `_` 兜底臂、全臂发散 → 表达式类型推断为 `!`，报错不落在 match 处而落在后续首个对绑定值的方法调用 `sock.set_nodelay`，"method not found in `!`"）。两条教训：①全臂发散型编译错不报 E0004 非穷尽而报 E0599 于远离变异位点的使用点——看到远处报错不要怀疑删错了臂，先看类型流；②unviable 账目可按此法从「工具判定」升格「人工实证」，报错码入账后即为终态，无需再跑测试段。
+
+## QA runtime 重建轮（2026-11-19，six-pack/QA）追加
+- **双层统一在调度器落地才是闭环**：「handler 分支先过 schema 域外先拒」若只在通用分支实现、handler 分支绕过，closed 格 dither 会直落 handler 且「判定子串仍在」假阳性幸存（本轮实录 s2.file verify1.bin→Verify1.bin 幸存）——修复 = run_feature 在 handler 分派前对受影响格强制 check_cell；verdict 随即 1107/17 精确闭合。教训：**防线落点必须在「所有执行路径的公共上游」，而不是某一分支内部**。
+- **schema 格级 closed 的缺省语义**：场景数据格（夹具名/枚举/期望显示/动作计数/非法输入向量/fixture 参数）缺省 closed = 该格原值单元素集——「该格规格值唯一确定」，任何突变即域外；open_int 三分登记：FILTERED（等价过滤器 17 格镜像语义）/ ANCHORED（handler 锚杀灭，界内突变放行产品面）/ LO_ONLY（纯输入域登记，本轮突变全负 δ 由 lo=0 杀灭，缺 handler 时界内突变如实幸存）。**宽松方向赋 open_int 前必须先有锚，否则幸存体回现**。
+- **产品面锚六类在本轮的实例化**：①徽标收敛锚（fixture 块数截断：badge_wait(x,y) 等活跃==并发==格值，文件块数 < 突变值即永不收敛）；②步骤字面锚（「第 6、7 个任务显示排队第 1 位」——total/slots 突变后排队行不存在）；③固定夹具锚（9 文件种子 + 统计行「已选 x 个文件」== 格值）；④产品常量锚（并发回退默认 4、重试 1/5 分母 = max_retries 格值）；⑤速度观察锚（修改限速前后 plateau 采样对照 min(limit, 聚合)）；⑥期望报错锚（CLI 非法值报错退出，突变变合法时 TUI 驻留 → 超时 killed）。
+- **非 PTY 直跑 CLI 全体假报错**：subprocess 无伪终端跑 ezr → TUI 初始化 `Os { code: 6 }`（ENXIO）exit 1 → 「期望报错」锚对任意值恒真 → 幸存体假阴性。CLI 臂探针必须 PTY 起动（EzrApp 同款 pty.fork），判「窗内退出码非零 vs TUI 驻留」。
+- **fixture ?speed 是每连接门控**：verify1.bin 8MB@500KB/s 实测 ~2.3MB/s（默认并发 4 连接聚合 ×4）——「下载 16s 窗」算成 4s 导致排队任务来不及落位。聚合速率 = rate × min(并发, 块数)，给时序窗算账必须按聚合口径。
+- **校验中窗口（~1 tick）的时序归约**：排队任务先落位（大文件+门控下载留窗）→ wait_for(校验中) 抓帧 → 同帧断言满载「下载槽位 n/n」即「占槽不释放+未递补」的可观察面（递补会破坏满载），不做跨帧竞速。
+- **限速速度观察用 plateau 采样**：EMA 爬坡期首样本假低（实测 220KB/s vs 期望 1MiB/s）——采样窗取尾段均值（后 40–50% 样本），前置 pump 2.5s。
+- **BT 树交互形态（本轮回补）**：ezr-mktorrent 恒包 root/ 目录壳、payload 共同父目录嵌套（root/root/ 双层）→ 对话框树默认收拢只剩「[x] ▸ root/」；展开序列 = tab×2 聚焦文件列表 → right（展开 L1）→ down → right（展开 L2）→ down 落首个文件行；**目录行原始名以 / 结尾**（判目录要在 rstrip("/") 之前判）；修改对话框同一统计行「已选 x 个文件」可直接当格值锚（无需展开数文件行）。
+- **按钮聚焦段文本匹配**：ACCENT（青底 00cdcd）段文本 == 目标按钮才算聚焦——整行含三个按钮文本（立即下载/仅添加/取消），整行匹配必假阳（本轮实录：误按立即下载，任务变下载中）。
+- **SkipExecution 口径在本轮的落点**：RB-09（磁盘预检）与 04-ui-conns 校验中行的格全为 closed → 突变在词汇面先拒、无 mutation job 到达 handler，SkipExecution 仅保留为 handler 侧语义（本轮未触发，errors=0 与 r3 账目相容）；若未来这些格转 open_int，须在 handler 内恢复 SkipExecution（基线 SKIP / 变异 infrastructure_error）。
+- **verdict 级对账锚**：Δ复刻（Python 复刻 mutator fnv64a/mutate-value/discover）应先与 mutator 全量对账（1107+17=1124 逐数恒等）再用于 schema 设计；verdict 后 stamp/manifest 核验用 hash-json 同算法独立复算（sha256(cheshire compact JSON)）——本轮 07-add-bt 9/9 场景哈希一致即「哈希滞后」销项的独立实证。

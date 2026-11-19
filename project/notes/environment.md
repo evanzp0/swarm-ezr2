@@ -555,3 +555,10 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 ## PMD 销项轻量轮（2026-11-18，hardender）追加
 - **大文件代理前缀吞吐同日大幅波动，必须 10s 速测择优**：同一 gh-proxy 前缀首轮探针 63KB/s（540s 仅 34MB）而隔半小时复测 2.7MB/s；ghfast.top 本轮 7.5MB/s 断层第一、direct github 269KB/s、ghproxy.net 205KB/s、mirror.ghproxy.com 死。规则：134MB 级 release 资产下载前先对候选前缀各做 10s `curl -o /dev/null -w %{speed_download}` 速测，取最快者再 `-C -` 断点续传（续传时换前缀无缝，zip 已下载段字节相同）。
 - **PMD 发行 zip 分发面实证（7.29.0）**：Maven 系镜像不可用——aliyun maven 有 pmd-dist maven-metadata（release 标 7.29.0）但二进制 404（元数据同步、zip 不入镜像），repo1.maven.org 直连 bin.zip 同 404；bin.zip 只存在于 GitHub release 资产，**装机唯一路径 = GitHub 代理前缀**（配合上条速测择优）。zip 启动器 chmod +x 与 `--max-time` 教训沿 531 行既有条目不变。
+
+## QA runtime 重建轮（2026-11-19，six-pack/QA）追加
+- **bb 子命令必须在 APS 仓库目录内调用**：bb.edn 的 `:paths ["bb/src" "bb/test"]` 相对 bb.edn 所在目录解析，`bb gherkin-mutator …` 在仓库根目录会报 "File does not exist: gherkin-mutator"（bb 把任务名当脚本文件）——先 cd `.tools/Acceptance-Pipeline-Specification` 再传绝对路径参数（历轮实录均为 APS 目录内调用，本轮复证）。
+- **bb/APS 装机复证（gh-proxy 前缀）**：bb v1.13.229 静态包 25.3MB 秒级 + APS clone 秒级；APS 打 `project/qa/aps-mutator-equivalence-extension.patch`（git apply 干净应用）后 bb test 11 测/51 assertions 0F/0E——与 hardender 过滤器扩展轮口径精确一致。rustup nightly 1.102.0 TUNA 双变量重装（rust-toolchain.toml 钉版自动拉起，minimal+rustfmt+clippy）；cargo rsproxy sparse 一把过。
+- **ezr CLI 无 TTY 直跑 = ENXIO exit 1**：`Error: Os { code: 6, "No such device or address" }`——子进程无控制终端时 TUI 初始化即败，任何 CLI 臂验证（启动报错/退出码断言）必须 PTY 起动（pty.fork / EzrApp），否则全体值同败、锚失效。
+- **BT 监听端口观察**：`ss -tlnp` 输出按 `pid=<ezr pid>,` 归属过滤即得监听端口集（[bt] listen_port 断言用）；启动后 ~2.5s 内 BT listener 绑定完成。
+- **磁盘账**：本轮 ezr/ezr-fixture/ezr-mktorrent debug 三件构建 + 20 feature 基线×2（初跑+修正后）+ verdict 全量后盘余 5.3G——.work/tmp/aps-run（handler 隔离环境）与 .work/tmp/discover（盘点副本）随 complete 清理。
