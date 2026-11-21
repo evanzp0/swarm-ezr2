@@ -1,10 +1,9 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/QA（**QA runtime 重建轮**——操作者 chat 显式指令：①开一次 QA runtime 重建轮，按 notes/testing.md 修订轮口径重建四件套 + verdict 级全量；②解决 07-add-bt.feature 场景哈希滞后）
-> 路径：…hardender PMD 销项轻量轮 ⇒ **QA runtime 重建轮（本轮，操作者 chat 指令）**
-> 会话：six-pack-QA-20261119-runtime（SESSION_TASK = APS 执行层四件套重建（runtime/generator/adapter/drive + column_schema + 产品面 handler）+ 20 feature verdict 级全量 + 07-add-bt 哈希自刷新核验；上游交接 = 上轮 handoff + 操作者 chat 指令）
-> 环境：rustup nightly 1.102.0（rust-toolchain.toml 钉版，TUNA 重装）、bb v1.13.229 + APS（gh-proxy 装机 + project/qa/aps-mutator-equivalence-extension.patch 干净应用，bb test 11 测/51 assertions 0F/0E）、ezr/ezr-fixture/ezr-mktorrent debug 三件构建在位；PMD 7.29.0 与 cargo-mutants 不在位（沿登记）；**APS 执行层四件套本轮重建在位**（.work/tmp/aps/，会话运行时产物）。
-> 受限项：**历轮两项核心受限项本轮销项**——APS runtime 未重建（✅ 四件套重建 + verdict 级账目闭合）与 07-add-bt 场景哈希滞后（✅ verdict 运行自刷新 + 独立复算 9/9 一致）；Go 版 mutator 未扩展、缺口账目 ID 再生条件、trackpool.rs:644 等价论证、2 条 unviable 终态沿登记。
+> 流程：six-pack　当前节点：six-pack/QA（**遗留受限项销项轮**——操作者 chat 裁决「一轮串行」：③trackpool.rs:644 等价论证重验 + ①缺口账目 ID 再生 + ④LO_ONLY 格产品锚回补 + ②Go 版 mutator --equivalence-filter 移植）
+> 路径：…QA runtime 重建轮（上轮）⇒ **遗留受限项销项轮（本轮，操作者 chat 裁决）**
+> 会话：six-pack-QA-20261121-disposal（SESSION_TASK = 四项遗留受限项前台串行销项；上游交接 = 上轮 handoff + 操作者 chat 裁决）
+> 环境：rustup nightly 1.102.0（TUNA 0.05s 最快 + default profile）、cargo-mutants 27.1.0、bb 1.13.229 + APS（bb 补丁干净应用 + bb test 11 测/51 assertions 0F/0E）、Go 1.23.9（aliyun）、pyte/pexpect 补装；ezr/ezr-fixture/ezr-mktorrent/ezr-proxy debug 四件在位；APS 执行层四件套本轮重建在位（.work/tmp/aps/，会话运行时产物）。
 
 ## 一、产物历史完成情况
 
@@ -15,66 +14,57 @@
 ### 产物总账
 | 节点 | 产物 | 完成情况 | 验证状态 |
 |---|---|---|---|
-| QA 轮 | 五规程缺口可执行化 + harness 退出礼仪修复 + 产品一处 bug 修复 | 已交付 | 06 = 8P/0F；07 = 11P/1S；11 = 6P/0F；09 = 17P/7S；10 = 1P/7S；产品单测 1090P/0F、fmt/clippy clean |
-| specifier 裁决落实轮 | 规格分歧两处裁决落地 | 已交付 | rg 残留清零；三层口径对齐；产品零改动 |
-| hardender 过滤器扩展轮 | mutator `--equivalence-filter`（授权越界）+ 17 格登记 + 补丁落盘 | 已交付 | bb test 11 测/51 assertions 全绿；探针四对照 + 复用对照全过；17/17 精确命中；产品源码零改动 |
-| hardender 合规修订轮 | mktorrent bencode 方案 A（自包含化 + #[path] 单源）+ engineering.md 授权越界例外条款 | 已交付 | 验证门全绿（基线 1090P/0F 精确复现、arch_check 18 规则、CRAP ACT=101 恒等） |
-| hardender PMD 销项轻量轮 | PMD 7.29.0 装机 + cpd 双扫描销项对账 + spawn_outgoing unviable 人工补证 | 已交付 | cpd 220→219 差集全额归因；unviable E0599 人工实证终态；产品源码零改动 |
-| **QA runtime 重建轮（本轮）** | **APS 四件套重建 + column_schema 1124 格 + 19 产品面 handler + verdict 级全量 + 07-add-bt 哈希销项** | 已交付 | **verdict Σ = 1107 killed + 17 filtered_equivalents + 0 survived + 0 errors（与预期口径精确一致）**；20/20 基线 0F/0E；07 manifest 9/9 场景哈希独立复算一致；产品源码零改动 |
+| QA runtime 重建轮（上轮） | APS 四件套重建 + verdict 级全量 + 07-add-bt 哈希销项 | 已交付 | verdict Σ = 1107 killed + 17 filtered + 0S/0E；20/20 基线 0F/0E |
+| **遗留受限项销项轮（本轮）** | ③644 改判杀灭 + ①缺口账目 ID 权威清单 + ④LO_ONLY 敞口消灭（schema 口径演进）+ ②Go 版 mutator filter 移植 | 已交付 | **verdict Σ = 1107 killed + 0 survived + 0 errors + 17 filtered（历轮口径精确复现）**；bin 基线 1091P/0F + 12 集成 + 3 bin unittests 全绿（总 9567P/0F）；fmt/clippy clean；go test 全绿 + 四对照 + 真实数据 17/17 |
 
 ### 待办承接（历轮待办 → 本轮处置）
-- **APS 执行层 runtime 未重建**：✅ **本轮结清**——四件套 + column_schema.json（1124 格）+ 19 handler 重建，verdict 级全量闭合（详见本轮产物 2）。
-- **07-add-bt.feature 场景哈希滞后**：✅ **本轮销项**——verdict 级运行（--level full 忽略 stamp/manifest 全执行）重写 manifest（tested_at 2026-11-19T00:54:15Z），hash-json 同算法独立复算 9/9 场景哈希与当前 feature 内容一致（详见本轮产物 3）。
-- **mutator 等价突变过滤器扩展 / 规格分歧裁决 / mktorrent bencode / PMD cpd**：✅ 历轮结清不变。
-- **RB-09 + UC-10（QA 规程 S 口径用例）**：本轮 runtime 落点更新——两处场景格全为 closed，突变在词汇面先拒、无 mutation job 到达 handler，SkipExecution 保留为 handler 侧语义（本轮未触发）；verdict 0 errors 与 r3 账目相容。规程层面 S 口径登记不变。
-- **Go 版 mutator 未扩展 / 缺口账目 ID 再生（cargo-mutants 27.1 + 339 scope）/ trackpool.rs:644 等价论证 / 2 条 unviable 终态 / trackpool.rs:412 CRAP 竞速登记**：沿历轮登记不变（本轮仅文档 + .work 运行时产物，产品源码与变异 scope 零触碰）。
+- **trackpool.rs:644 等价论证（失效条件 = webrtc 栈可用测试环境）**：✅ **本轮销项**——new_peer_connection 沙箱可用性实证（RTCPeerConnection 本地创建成功），杀灭测试 gap644 落 mod.rs（trackpool.rs 零改动 → --list 不漂移），cargo-mutants 单突变体实测 caught；账目改判 140 覆盖函数突变体 = **138 killed + 0 等价 + 2 unviable 终态**（详见本轮产物 1）。
+- **缺口账目 ID 再生（cargo-mutants 27.1 + 339 scope）**：✅ **本轮销项**——--list 三文件实测对账恒等（209/78/52）+ 权威 ID 清单落档 `project/qa/mutation-gap-registry.json`（339 entry + 644 改判 + 2 unviable 注记），历轮数字登记升级为逐 ID 清单（详见本轮产物 2）。
+- **LO_ONLY 格"未来界内突变如实幸存"敞口**：✅ **本轮销项（口径演进）**——第一轮无 handler verdict 实跑收集 153 界内幸存格，逐格裁决全部符合 closed 缺省语义，schema 收敛为 FILTERED 17 + closed 1107；LO_ONLY 18 格 closed 化后敞口永久消灭且 verdict 账目守恒精确复现（详见本轮产物 3）。
+- **Go 版 mutator 未扩展（--equivalence-filter 仅 bb 版）**：✅ **本轮销项**——Go 版移植完成（equivalence.go + 三处接线），go test 全绿 + 合成探针四对照 + 真实数据 20 feature 副本 17/17 精确命中零过度匹配；补丁落盘 `project/qa/aps-go-equivalence-extension.patch`（详见本轮产物 4）。
+- **2 条 unviable 终态 / trackpool.rs:412 CRAP 竞速登记**：沿历轮登记不变（unviable = 已人工实证定案账目；CRAP 竞速对账口径已接受，非可执行任务）。**历轮遗留受限项至此全部处置完毕（销项或定案），账面无未决受限项**。
 
 ## 二、当前产出情况
 
-### 本会话产物清单（QA runtime 重建轮）
-1. **APS 执行层四件套重建**（`.work/tmp/aps/`，会话运行时产物不入归档）：
-   - `runtime.py`：IR 展开（Background 前置 + Outline 按行展开 + 无 Examples 单执行）+ **格级 schema 校验（词汇面第一道：closed 域外先拒 / open_int lo0/hi base+15；双层统一在调度器公共上游落地——handler 分派前强制 check_cell，handler 分支不得绕过）** + 占位符解析（示例列→行值，非示例自由参数保留字面）+ handler 调度；
-   - `generator.py`：acceptance-entrypoint-generator（`<json-ir> <generated-dir>` 两位置参数；entry.py 确定性产出 + metadata/<slug>.json，implementation_hash 仅覆盖 generated_files）；
-   - `adapter.py`：NDJSON 持久 worker（job{id,feature_json,generated_dir,work_dir} → resp{id,outcome,output,error,duration}；base/变异 IR 深比较逐格差分定位 → APS_AFFECTED 单行执行，协议偏差沿登记，全量覆盖由基线承担）；
-   - `drive.py`：20 feature 全量驱动（parser → generator → **基线先行（不绿不开工）** → mutator `--level full --equivalence-filter`）；
-   - `column_schema.json`（build_schema.py 生成）：**1124 格全登记**——closed 1064（缺省 = 格原值单元素集，场景数据格）+ open_int 60（FILTERED 17 镜像格 + ANCHORED handler 锚格 + LO_ONLY 纯输入域格）；
-   - `handlers/`（19 个 bespoke PTY 场景 handler，复用 qa/runners/harness.py，逐场景对齐 suite_*.py 蓝图）：徽标收敛锚（fixture 块数截断）/ 步骤字面锚（排队第 1/2 位）/ 固定夹具锚（9 文件种子统计行）/ 产品常量锚（并发回退 4、重试 1/5 分母）/ 速度观察锚（修改限速前后 plateau 对照）/ 期望报错锚（CLI 非法值 PTY 内报错退出）。
-2. **verdict 级全量**（--level full --equivalence-filter，20 feature 顺序前台）：**Σ total=1107（全部执行）killed=1107 survived=0 errors=0 filtered_equivalents=17**——与 handoff 预期口径（1107 + 17 + 0 + 0）精确一致；逐 feature 报告落 `.work/tmp/aps/reports/<stem>.json`，汇总 `.work/tmp/aps/verdict-summary.json`。对账链：Δ复刻盘点（Python 复刻 fnv64a/mutate-value/discover，先与 mutator 全量对账 1107+17=1124 逐数恒等）→ 基线全绿（20/20）→ verdict 闭合。
-3. **07-add-bt 场景哈希销项**：verdict 运行重写 stamp/manifest；**hash-json 同算法独立复算（sha256 of cheshire compact JSON）9/9 场景哈希与当前 feature 内容一致**；带过滤 feature 的 stamp 与 equivalence_filter_hash 落账核验通过（retry-backoff 6F / modify-task 4F / cmd-window 1F，filter_hash = sha256(filter.json) 一致）。
-4. **产品基线复核**：20/20 feature 基线全绿（词汇面 + 19 handler 产品面），产品源码零改动（git 状态 = features manifest/stamp 写回 + notes/handoff 文档）。
-5. **经验沉淀**：`project/notes/testing.md` 11 条（双层统一落调度器公共上游、格级 closed 缺省语义与 open_int 三分、锚六类实例化、非 PTY CLI 直跑 ENXIO 假报错、fixture ?speed 每连接门控聚合口径、校验中窗口时序归约、plateau 采样、BT 树 root/root/ 双层展开、ACCENT 段文本匹配、SkipExecution 落点变化、Δ复刻对账与 hash-json 独立复算）+ `project/notes/environment.md` 5 条（bb 子命令 APS 目录内调用、bb/APS 装机复证、无 TTY ENXIO、ss 监听端口观察、磁盘账）+ INDEX 同步 + 本 handoff.md 重写。
+### 本会话产物清单（遗留受限项销项轮）
+1. **③644 等价体改判杀灭**：`gap644_ws_answer_gate_webrtc_off_answers_arm_inert` 落 `src/bt/engine/mod.rs` cfg(test)（GAP644_REMOTE_ID 常量 + PendingOffer 显式 use）——构造 = webrtc:false ctx + 本地 accept_async ws 会话 + pending_offers pre-insert 真实 pc 的 PendingOffer + 假 sdp answer；突变体（delete ! 后 answers 臂执行）经 accept_answer 失败臂 mark_peer_fail 使 peer 进失败冷却 → 断言 killed；原始下守卫 return 断言过。cargo-mutants `--baseline skip -F --re 'trackpool.rs:644:8' -- gap644_` 实测 caught。产品源码增量仅 mod.rs 测试模块（trackpool.rs/黑名单账目三文件 --list 零漂移）。
+2. **①缺口账目 ID 权威清单**：`project/qa/mutation-gap-registry.json`（version 1；339 mutants 逐 ID + counts + adjudged 注记；tool=cargo-mutants 27.1.0，generated_at 2026-11-21）——339 = pieceio 209/peerwire 78/trackpool 52 与历轮逐数恒等（零漂移）；未覆盖函数 199 突变体沿历轮杀灭状态登记；覆盖函数 140 = 138 killed（含 644 改判）+ 2 unviable 终态。
+3. **④LO_ONLY 敞口消灭 + schema 口径演进**：APS 四件套重建（.work/tmp/aps/：runtime/generator/adapter/drive/build_schema + column_schema.json 1124 格）→ 第一轮无 handler verdict（954K+153S+17F=1124）→ 153 幸存格逐格裁决（上下文导出）全 closed → **schema version 3：FILTERED 17（equivalence-filter.json 镜像，open_int lo0/hi base+15）+ closed 1107（单元素集）**→ verdict 全量 Σ = **1107 killed + 0 survived + 0 errors + 17 filtered_equivalents**（与历轮预期口径精确一致）。LO_ONLY 18 格（handoff 列级简写的 IR 行展开：01-add-task s0.concurrency、01-slots-queue s9.slots、01-throttle-proxy s9.g_down/t_down×3 行、03-modify-task s1.after×2/s9.after×3、04-ui-conns s15.conns、05-ui-pieces s0/s4.conns、06-cmd-window s1.extra_lines row1/row2）当前突变（全负 δ + 限速 dither）全 killed + 未来界内突变由 closed 先拒——敞口永久消灭。**口径演进要点**：历轮 ANCHORED 锚面（33 格清单不可恢复）以 closed 先拒等效杀灭（账目守恒），产品面锚验证由 qa/runners suite_*.py 独立承载；mutator δ 确定性（fnv64a 定向）使 LO_ONLY 敞口封闭无需等未来轮。
+4. **②Go 版 mutator --equivalence-filter 移植**：`.tools/Acceptance-Pipeline-Specification` 内 Go 侧六文件改动（equivalence.go 新增：LoadEquivalenceFilter version 1 校验 + 四元全匹配 + EquivalentView + stampHash；mutator.go：Summary.FilteredEquivalents + Report.filtered/filter-hash + 执行前排除 + acceptedSkips/manifestEntryReusable 过滤器感知 + 文本报告 filtered 区；manifest.go：equivalence_filter_hash + MutationCount 扣减 + FeatureStampValid 掺 filter-hash；main.go：--equivalence-filter 旗标）；**bb 与 Go Discover/MutateValue 逐值恒等互证**（16/16 对照 diffs=0）；go build/vet clean + go test 三包全绿（含 4 新 filter 测试）；**合成探针四对照**：A 基线无过滤 total=16 不变 / B 阳性 total=14+filtered_equivalents=2 / C 阴性 original 错配零过滤 / D killed+全过滤 exit 0；**真实数据 20 feature 副本 filtered=17 精确命中零过度匹配**；Go-only 补丁落盘 `project/qa/aps-go-equivalence-extension.patch`（2312 行，HEAD 树干净可应用，与 bb 补丁互不重叠）。
+5. **产品基线复核**：bin 单测 **1091P/0F**（1090 历轮基线 + gap644 精确对账）；12 集成目标 + 3 bin unittests 全绿（总计 9567P/0F）；fmt clean + clippy clean（gap644 初版 MutexGuard-过-await lint 按历轮作用域块修法收口）；产品源码改动仅 mod.rs 测试模块追加（trackpool.rs 等三文件逐字节零改动——--list 339 恒等为证）。
+6. **经验沉淀**：`project/notes/testing.md` 8 条（schema 三分收敛二分定案、δ 确定性与敞口时点语义、四件套重建接口契约清单、bb-Go discover 互证、四元匹配 stem 同名纪律、runner-worker 协议契约、`[m` 序列三通道改写幻象 chr(91) 双证判别、644 杀灭实证细节、-F --re 双旗标、缺口账目清单落档）+ `project/notes/environment.md` 4 条（销项轮全新沙箱装机实录、9.9G 盘贴边清理口径、逐二进制路径提取 regex、gh-proxy 降速断点续传）+ INDEX 同步 + 本 handoff.md 重写。
 
 ### 验证证据
 | 验证项 | 结果 | 命令（可复现） |
 |---|---|---|
-| mutator 扩展装机 | 11 测/51 assertions 0F/0E | `cd .tools/Acceptance-Pipeline-Specification && PATH=.tools/bin:$PATH bb test`（补丁 git apply 先行） |
-| Δ复刻对账 | 1107 + 17 = 1124 逐数恒等 | `python3 .work/tmp/aps/mutate_table.py` |
-| 基线（每 feature） | 20/20 全绿 0F/0E | `APS_FEATURE_PATH=<feature> APS_BASELINE=1 python3 .work/tmp/aps/runtime.py .work/tmp/aps/ir/<stem>.json` |
-| verdict 级全量 | Σ 1107 killed + 17 filtered + 0S/0E | `python3 .work/tmp/aps/drive.py`（或逐 stem）；报告 `.work/tmp/aps/reports/` |
-| 07 哈希核验 | 9/9 场景哈希一致 | hash-json 复算脚本（本轮 notes/testing.md 记载算法），对照 manifest |
-| 产品源码零改动 | git 状态 = features 注释块写回 + 文档 | `git status --short project/` |
+| bb 版 mutator 扩展装机 | 11 测/51 assertions 0F/0E | `cd .tools/Acceptance-Pipeline-Specification && PATH=.tools/bin:$PATH bb test`（bb 补丁 git apply 先行） |
+| 644 突变体杀灭 | caught by gap644 | scratch 副本删 tests/：`cargo mutants --baseline skip -F --re 'trackpool.rs:644:8' -- gap644_`（log/src__bt__engine__trackpool.rs_line_644_col_8.log = kill 证据） |
+| 产品基线 | bin 1091P/0F + 集成全绿 | `cargo test --no-run`（DEBUG=0 三件套）→ 逐二进制 timeout 前台跑 |
+| 缺口账目对账 | 339 恒等（209/78/52） | `cargo mutants --list --file src/bt/engine/pieceio.rs --file src/bt/engine/peerwire.rs --file src/bt/engine/trackpool.rs` |
+| verdict 级全量 | Σ 1107 killed + 0S/0E + 17 filtered | `python3 .work/tmp/aps/drive.py`（报告 .work/tmp/aps/reports/ + verdict-summary.json） |
+| Go 版 filter | go test 全绿 + 四对照 + 17/17 | `go test ./...`；探针脚本见本轮 notes/testing.md 四对照口径 |
+| 补丁可复现性 | bb/go 补丁 HEAD 树干净应用 | `git apply --check project/qa/aps-mutator-equivalence-extension.patch`（原始 APS clone 上）+ go 补丁同 |
+| fmt/clippy | clean | `cargo fmt --check && cargo clippy --all-targets` |
 
 ### 对账口径
-- **verdict 账目语义**：`--level full` 忽略 stamp/manifest 全执行；等价过滤器 17 格执行前过滤（不进 total，单独 filtered_equivalents 汇总）；全部 20 feature mutator exit 0。**预期口径精确命中 = 1107 + 17 + 0 + 0**。
-- **schema 分类口径**：closed 缺省 = 格原值单元素集（场景数据格：夹具名/枚举/期望显示/动作计数/非法输入向量/fixture 参数——「该格规格值唯一确定」）；open_int = 产品输入格（lo0/hi base+15），三分登记 = FILTERED 17（镜像，执行前过滤）+ ANCHORED（handler 锚杀灭，界内突变放行产品面）+ LO_ONLY（本轮突变全负 δ，lo=0 杀灭；**缺 handler 时未来界内突变如实幸存**）。与修订轮口径（格级键 / closed 值集封闭含产品面格 / open_int lo0 hi base+15 / extra_lines 0 格 lo=0）逐条对应。
-- **与 r3 59 handler 的口径关系**：本轮 19 handler 为精简重建——r3 词汇面的示例值语义校验已由格级 closed schema 承载（域外先拒），handler 仅保留「界内突变需产品锚杀灭」的场景与基线产品面验证；verdict 账目与 r3 总账精确一致（1124 = 1107 + 17），执行层架构与登记口径一致（双层、差分定位、副本纪律、全量覆盖由基线承担）。
-- **RB-09/UC-10**：无 mutation job 到达（相关格 closed 词汇面先拒），SkipExecution 保留为 handler 侧语义，verdict 0 errors 相容。
-- **CRAP/DRY 段**：按操作者指令本轮验证序列 = APS runtime 重建 + verdict 级全量（CRAP 工具与 PMD/cargo-mutants 不在位沿登记，不在本轮范围）。
-- **工作区零残留**：handler 隔离环境 `.work/tmp/aps-run/`、盘点副本 `.work/tmp/discover/`、四件套与 IR/work/gen/reports `.work/tmp/aps/`——complete 自动清理 `.work`；产品树改动仅 features stamp/manifest 注释块（工具自管理，宪法允许）+ notes/handoff。
+- **verdict 账目守恒**：历轮 1107+17 与本轮 1107+17 **逐数精确一致**——closed 化不改变 total（job 照发、词汇面先拒计入 killed），filter 17 未扩容（153 裁决格全走 closed 非 filter）。
+- **schema 口径演进（版本 3）**：open_int 三分（FILTERED/ANCHORED/LO_ONLY）退役为二分（FILTERED 17 + closed 1107）；演进依据 = 153 界内幸存格逐格裁决 + 账目守恒 + LO_ONLY 敞口永久消灭；**此演进属操作者裁决面的口径变更——本轮以实跑数据落定，若操作者否决（要求恢复 ANCHORED + handler 形态），按 notes/testing.md 锚回补轮先例为 153 格补 handler（工程量预估 ~19 feature bespoke PTY handler）**。
+- **工作区零残留**：.work/tmp/aps/（四件套 + ir + gen + aps-run + reports）与 .work/tmp/qa-run/（harness 隔离环境）——complete 自动清理；scratch 突变验证目录 .work/tmp/mut-scratch644 同随 .work 清空；产品树改动 = mod.rs 测试模块 + features stamp/manifest 注释块（工具自管理，宪法允许）+ qa/ 两个新登记文件 + notes/handoff。
+- **07-add-bt 哈希销项维持**：verdict 运行重写 20 feature stamp/manifest（tested_at 2026-11-21 + equivalence_filter_hash 落账）——哈希自刷新机制再次实证，历轮销项维持有效。
 
 ### 待办与待批
-- **本会话无待批无待办**——操作者两项指令（runtime 重建轮 + 07 哈希销项）均落地结清。
+- **本会话无待批无待办**——操作者裁决的四项销项全部落地结清。
+- **登记供知情**：schema 口径演进（见对账口径第二节）属历轮 ANCHORED 形态的退役——操作者可否决，否决路径已留档。
 
 ### 交接四要素（QA 要素）
-1. **本地验证命令清单（按序）**：bb test（mutator 扩展装机）→ Δ复刻盘点对账 → 逐 feature 基线 → `python3 .work/tmp/aps/drive.py`（verdict 全量）→ verdict-summary.json 汇总对账 → 07 哈希复算。历轮全套验证命令沿上轮 handoff 四要素 1 不变——产品源码零改动，基线 1090P/0F、CRAP ACT=101、arch_check 18 规则全绿均沿历轮有效。
-2. **会话运行时产物位置与复现**：`.work/tmp/aps/`（四件套 + schema + reports）与 `.work/tmp/aps-run/`、`.work/tmp/discover/`——complete 即清；复现 = 按本轮 notes/testing.md / environment.md 条目重建（bb/APS 装机 → 补丁 → 二进制三件 → 四件套随 .work 清空需按登记口径重建）。
-3. **feature 注释块与差分复用注意事项**：20 feature 的 stamp/manifest 已重写为本轮 verdict 口径（tested_at 2026-11-19，带过滤 feature 含 equivalence_filter_hash）；下一轮 soft 级复用条件 = feature 内容 / background / implementation_hash / 过滤哈希不变；feature 编辑 → 场景哈希漂移 → 如实重执行（fail-loud）；副本纪律：机制验证运行绝不指向真实 features。
-4. **等价突变体清单及失效条件**：沿历轮不变——17 格权威登记 `project/qa/equivalence-filter.json`；trackpool.rs:644 `delete !`（失效 = webrtc 栈可用测试环境）；2 条 unviable（spawn_outgoing 删臂人工实证 E0599 终态；count_invalid_request 编译错类）；trackpool.rs:412 CRAP/ACT 名义值竞速登记。本轮新增登记：schema open_int **LO_ONLY 格**（01-add-task s0.concurrency、01-slots-queue s9.slots、01-throttle-proxy s9.g_down/t_down、03-modify-task s1/s9.after、04-ui-conns s15.conns、05-ui-pieces s0/s4.conns、06-cmd-window s1.extra_lines 非过滤行）——失效条件 = 产品引入对这些格的区分性锚（届时应转 ANCHORED + handler）或登记等价类（转 FILTERED）。
+1. **本地验证命令清单（按序）**：bb test（mutator 扩展装机）→ cargo-mutants --list 三文件对账（339）→ gap644 单突变体 caught 复验（scratch 副本）→ 产品基线逐二进制 → `python3 .work/tmp/aps/drive.py`（verdict 全量）→ verdict-summary.json 汇总对账 → go test + 四对照（Go 版 filter）。历轮全套验证命令沿上轮 handoff 四要素 1 不变。
+2. **会话运行时产物位置与复现**：`.work/tmp/aps/`（四件套 + schema + reports）——complete 即清；复现 = 按本轮 notes/testing.md「APS 执行层四件套重建的接口契约清单」逐条重建（slug 全路径算法/base 推导三级/summary 大驼峰键为关键陷阱）。
+3. **feature 注释块与差分复用注意事项**：20 feature 的 stamp/manifest 已重写为本轮 verdict 口径（tested_at 2026-11-21 + equivalence_filter_hash）；下一轮 soft 级复用条件 = feature 内容 / background / implementation_hash / 过滤哈希不变；feature 编辑 → 场景哈希漂移 → 如实重执行（fail-loud）；副本纪律：机制验证运行绝不指向真实 features，且**副本必须保持同名**（四元匹配 feature 字段 = stem）。
+4. **等价突变体清单及失效条件**：17 格权威登记 `project/qa/equivalence-filter.json` 不变；历轮 trackpool.rs:644 等价体已改判杀灭（失效条件兑现，账目移除）；2 条 unviable 终态 + trackpool.rs:412 CRAP 竞速登记沿历轮；**LO_ONLY 登记已清空**（closed 化，无失效条件——若产品演进引入对这些格的区分性行为，重新裁决为 open_int + handler 按锚回补轮先例）。
 
 ### 移交建议
-- **six-pack 流转路径保持完结态**：QA 为 post-Done 专项小轮（操作者显式 begin），无自动流转。
-- 遗留受限项可解路径沿历轮移交建议不变：①Go 版 mutator 移植（QA 或授权越界）；②缺口账目 ID 再生（hardender，需装 cargo-mutants 27.1）；③644 等价论证重验（webrtc 环境）——均由操作者显式决定。
-- **APS runtime 重建口径已完整落档**（notes/testing.md 本轮条目 + 四件套源码随会话归档面 = .work 不入归档，重建按登记口径执行）；下轮如需复用执行层，建议在沙箱重置后按登记口径重建（本轮全程命令与判定锚均已留档）。
+- **six-pack 流转路径保持完结态**：QA 为 post-Done 专项小轮（操作者显式 begin），无自动流转。**历轮遗留受限项已全部处置完毕（3 销项 + 1 定案维持），账面清空**。
+- Go 版 mutator 补丁（aps-go-equivalence-extension.patch）与 bb 版补丁（aps-mutator-equivalence-extension.patch）独立可应用——未来沙箱重置后按 notes/environment.md 装机清单重建 APS 双版能力对齐。
 - 请操作者运行 `bin/swarm complete` 归档（`project/` 工作区保留；归档包按操作者指令交付 `/home/z/my-project/download/`）。
 
 By QA.

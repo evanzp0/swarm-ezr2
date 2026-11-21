@@ -1,0 +1,2312 @@
+diff --git a/cmd/gherkin-mutator/main.go b/cmd/gherkin-mutator/main.go
+index 87c362d..c831a91 100644
+--- a/cmd/gherkin-mutator/main.go
++++ b/cmd/gherkin-mutator/main.go
+@@ -1,164 +1,177 @@
+ package main
+ 
+ import (
+-	"context"
+-	"flag"
+-	"fmt"
+-	"os"
+-	"strings"
+-	"time"
+-
+-	"acceptance-pipeline-specification/internal/gherkin"
+-	"acceptance-pipeline-specification/internal/mutation"
++        "context"
++        "flag"
++        "fmt"
++        "os"
++        "strings"
++        "time"
++
++        "acceptance-pipeline-specification/internal/gherkin"
++        "acceptance-pipeline-specification/internal/mutation"
+ )
+ 
+ func main() {
+-	os.Exit(run())
++        os.Exit(run())
+ }
+ 
+ func run() int {
+-	var featurePath string
+-	var workDir string
+-	var generatedDir string
+-	var workers int
+-	var timeoutText string
+-	var statusIntervalText string
+-	var level string
+-	var runnerWorkerText string
+-	var implementationHash string
+-	var implementationHashSet bool
+-	var jsonReport bool
+-
+-	flags := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+-	flags.SetOutput(os.Stderr)
+-	flags.StringVar(&featurePath, "feature", "features/a-feature.feature", "Gherkin feature file to parse and mutate")
+-	flags.StringVar(&workDir, "work-dir", "build/acceptance-mutation", "directory where mutation files are written")
+-	flags.StringVar(&generatedDir, "generated-dir", "", "directory containing generated acceptance tests")
+-	flags.IntVar(&workers, "workers", 1, "maximum mutation workers")
+-	flags.StringVar(&timeoutText, "timeout", "", "timeout for the full mutation run")
+-	flags.StringVar(&statusIntervalText, "status-interval", "30s", "periodic status interval")
+-	flags.StringVar(&level, "level", "hard", "differential mutation level: full, hard, or soft")
+-	flags.StringVar(&runnerWorkerText, "runner-worker", "", "persistent runner adapter command")
+-	flags.Func("implementation-hash", "override generated metadata implementation hash", func(value string) error {
+-		implementationHash = value
+-		implementationHashSet = true
+-		return nil
+-	})
+-	flags.BoolVar(&jsonReport, "json", false, "emit JSON report")
+-	if err := flags.Parse(os.Args[1:]); err != nil {
+-		return 2
+-	}
+-	if level != "full" && level != "hard" && level != "soft" {
+-		fmt.Fprintln(os.Stderr, "--level must be full, hard, or soft")
+-		return 2
+-	}
+-	if runnerWorkerText == "" {
+-		fmt.Fprintln(os.Stderr, "--runner-worker is required")
+-		return 2
+-	}
+-
+-	file, err := os.Open(featurePath)
+-	if err != nil {
+-		fmt.Fprintln(os.Stderr, err)
+-		return 1
+-	}
+-	defer file.Close()
+-
+-	feature, err := gherkin.Parse(file)
+-	if err != nil {
+-		fmt.Fprintln(os.Stderr, err)
+-		return 1
+-	}
+-
+-	ctx := context.Background()
+-	cancel := func() {}
+-	if timeoutText != "" {
+-		timeout, err := time.ParseDuration(timeoutText)
+-		if err != nil {
+-			fmt.Fprintln(os.Stderr, err)
+-			return 2
+-		}
+-		ctx, cancel = context.WithTimeout(ctx, timeout)
+-	}
+-	defer cancel()
+-
+-	statusInterval, err := time.ParseDuration(statusIntervalText)
+-	if err != nil {
+-		fmt.Fprintln(os.Stderr, err)
+-		return 2
+-	}
+-
+-	effectiveGeneratedDir := generatedDir
+-	if effectiveGeneratedDir == "" {
+-		effectiveGeneratedDir = workDir + "/generated"
+-	}
+-	hashOverride := ""
+-	if implementationHashSet {
+-		hashOverride = implementationHash
+-	}
+-	implementationHash = mutation.ResolveImplementationHash(effectiveGeneratedDir, featurePath, hashOverride)
+-
+-	runner, err := mutation.NewWorkerPoolRunner(ctx, mutation.WorkerPoolConfig{
+-		Command: strings.Fields(runnerWorkerText),
+-		Workers: workers,
+-	})
+-	if err != nil {
+-		fmt.Fprintln(os.Stderr, err)
+-		return 1
+-	}
+-	defer runner.Close()
+-
+-	report, err := mutation.Run(ctx, mutation.Config{
+-		Feature:            feature,
+-		FeaturePath:        featurePath,
+-		WorkDir:            workDir,
+-		GeneratedDir:       generatedDir,
+-		Workers:            workers,
+-		Level:              level,
+-		ImplementationHash: implementationHash,
+-		StatusInterval:     statusInterval,
+-		Status:             writeStatus,
+-	}, runner)
+-	if err != nil {
+-		fmt.Fprintln(os.Stderr, err)
+-	}
+-
+-	writeStamp := report.Summary.Survived == 0 && report.Summary.Errors == 0 && err == nil
+-	if manifestErr := mutation.WriteMutationMetadata(featurePath, feature, report, implementationHash, level, writeStamp); manifestErr != nil {
+-		fmt.Fprintln(os.Stderr, manifestErr)
+-		err = manifestErr
+-	}
+-
+-	if jsonReport {
+-		if err := mutation.WriteJSONReport(os.Stdout, report); err != nil {
+-			fmt.Fprintln(os.Stderr, err)
+-			return 1
+-		}
+-	} else {
+-		if err := mutation.WriteTextReport(os.Stdout, report); err != nil {
+-			fmt.Fprintln(os.Stderr, err)
+-			return 1
+-		}
+-	}
+-
+-	if report.Summary.Survived > 0 || report.Summary.Errors > 0 || err != nil {
+-		return 1
+-	}
+-	return 0
++        var featurePath string
++        var workDir string
++        var generatedDir string
++        var workers int
++        var timeoutText string
++        var statusIntervalText string
++        var level string
++        var runnerWorkerText string
++        var implementationHash string
++        var implementationHashSet bool
++        var equivalenceFilterPath string
++        var jsonReport bool
++
++        flags := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
++        flags.SetOutput(os.Stderr)
++        flags.StringVar(&featurePath, "feature", "features/a-feature.feature", "Gherkin feature file to parse and mutate")
++        flags.StringVar(&workDir, "work-dir", "build/acceptance-mutation", "directory where mutation files are written")
++        flags.StringVar(&generatedDir, "generated-dir", "", "directory containing generated acceptance tests")
++        flags.IntVar(&workers, "workers", 1, "maximum mutation workers")
++        flags.StringVar(&timeoutText, "timeout", "", "timeout for the full mutation run")
++        flags.StringVar(&statusIntervalText, "status-interval", "30s", "periodic status interval")
++        flags.StringVar(&level, "level", "hard", "differential mutation level: full, hard, or soft")
++        flags.StringVar(&runnerWorkerText, "runner-worker", "", "persistent runner adapter command")
++        flags.Func("implementation-hash", "override generated metadata implementation hash", func(value string) error {
++                implementationHash = value
++                implementationHashSet = true
++                return nil
++        })
++        flags.StringVar(&equivalenceFilterPath, "equivalence-filter", "", "path to equivalence filter JSON (version 1)")
++        flags.BoolVar(&jsonReport, "json", false, "emit JSON report")
++        if err := flags.Parse(os.Args[1:]); err != nil {
++                return 2
++        }
++        if level != "full" && level != "hard" && level != "soft" {
++                fmt.Fprintln(os.Stderr, "--level must be full, hard, or soft")
++                return 2
++        }
++        if runnerWorkerText == "" {
++                fmt.Fprintln(os.Stderr, "--runner-worker is required")
++                return 2
++        }
++
++        file, err := os.Open(featurePath)
++        if err != nil {
++                fmt.Fprintln(os.Stderr, err)
++                return 1
++        }
++        defer file.Close()
++
++        feature, err := gherkin.Parse(file)
++        if err != nil {
++                fmt.Fprintln(os.Stderr, err)
++                return 1
++        }
++
++        ctx := context.Background()
++        cancel := func() {}
++        if timeoutText != "" {
++                timeout, err := time.ParseDuration(timeoutText)
++                if err != nil {
++                        fmt.Fprintln(os.Stderr, err)
++                        return 2
++                }
++                ctx, cancel = context.WithTimeout(ctx, timeout)
++        }
++        defer cancel()
++
++        statusInterval, err := time.ParseDuration(statusIntervalText)
++        if err != nil {
++                fmt.Fprintln(os.Stderr, err)
++                return 2
++        }
++
++        effectiveGeneratedDir := generatedDir
++        if effectiveGeneratedDir == "" {
++                effectiveGeneratedDir = workDir + "/generated"
++        }
++        hashOverride := ""
++        if implementationHashSet {
++                hashOverride = implementationHash
++        }
++        implementationHash = mutation.ResolveImplementationHash(effectiveGeneratedDir, featurePath, hashOverride)
++
++        var equivalenceFilter *mutation.EquivalenceFilter
++        if equivalenceFilterPath != "" {
++                filter, err := mutation.LoadEquivalenceFilter(equivalenceFilterPath)
++                if err != nil {
++                        fmt.Fprintln(os.Stderr, err)
++                        return 1
++                }
++                equivalenceFilter = filter
++        }
++
++        runner, err := mutation.NewWorkerPoolRunner(ctx, mutation.WorkerPoolConfig{
++                Command: strings.Fields(runnerWorkerText),
++                Workers: workers,
++        })
++        if err != nil {
++                fmt.Fprintln(os.Stderr, err)
++                return 1
++        }
++        defer runner.Close()
++
++        report, err := mutation.Run(ctx, mutation.Config{
++                Feature:            feature,
++                FeaturePath:        featurePath,
++                WorkDir:            workDir,
++                GeneratedDir:       generatedDir,
++                Workers:            workers,
++                Level:              level,
++                ImplementationHash: implementationHash,
++                StatusInterval:     statusInterval,
++                Status:             writeStatus,
++                EquivalenceFilter:  equivalenceFilter,
++        }, runner)
++        if err != nil {
++                fmt.Fprintln(os.Stderr, err)
++        }
++
++        writeStamp := report.Summary.Survived == 0 && report.Summary.Errors == 0 && err == nil
++        if manifestErr := mutation.WriteMutationMetadata(featurePath, feature, report, implementationHash, level, writeStamp, equivalenceFilter); manifestErr != nil {
++                fmt.Fprintln(os.Stderr, manifestErr)
++                err = manifestErr
++        }
++
++        if jsonReport {
++                if err := mutation.WriteJSONReport(os.Stdout, report); err != nil {
++                        fmt.Fprintln(os.Stderr, err)
++                        return 1
++                }
++        } else {
++                if err := mutation.WriteTextReport(os.Stdout, report); err != nil {
++                        fmt.Fprintln(os.Stderr, err)
++                        return 1
++                }
++        }
++
++        if report.Summary.Survived > 0 || report.Summary.Errors > 0 || err != nil {
++                return 1
++        }
++        return 0
+ }
+ 
+ func writeStatus(status mutation.StatusSnapshot) {
+-	fmt.Fprintf(os.Stderr, "status elapsed=%s total=%d completed=%d running=%d killed=%d survived=%d errors=%d",
+-		status.Elapsed.Round(time.Millisecond),
+-		status.Total,
+-		status.Completed,
+-		status.Running,
+-		status.Killed,
+-		status.Survived,
+-		status.Errors,
+-	)
+-	if status.SkippedScenarios > 0 || status.SkippedMutations > 0 {
+-		fmt.Fprintf(os.Stderr, " skipped_scenarios=%d skipped_mutations=%d", status.SkippedScenarios, status.SkippedMutations)
+-	}
+-	fmt.Fprintln(os.Stderr)
++        fmt.Fprintf(os.Stderr, "status elapsed=%s total=%d completed=%d running=%d killed=%d survived=%d errors=%d",
++                status.Elapsed.Round(time.Millisecond),
++                status.Total,
++                status.Completed,
++                status.Running,
++                status.Killed,
++                status.Survived,
++                status.Errors,
++        )
++        if status.SkippedScenarios > 0 || status.SkippedMutations > 0 {
++                fmt.Fprintf(os.Stderr, " skipped_scenarios=%d skipped_mutations=%d", status.SkippedScenarios, status.SkippedMutations)
++        }
++        fmt.Fprintln(os.Stderr)
+ }
+diff --git a/internal/mutation/equivalence.go b/internal/mutation/equivalence.go
+new file mode 100644
+index 0000000..fbece57
+--- /dev/null
++++ b/internal/mutation/equivalence.go
+@@ -0,0 +1,137 @@
++package mutation
++
++import (
++	"crypto/sha256"
++	"encoding/hex"
++	"encoding/json"
++	"fmt"
++	"os"
++	"regexp"
++	"strings"
++)
++
++type EquivalenceEntry struct {
++	Feature      string `json:"feature"`
++	Path         string `json:"path"`
++	Original     string `json:"original"`
++	Mutated      string `json:"mutated"`
++	Class        string `json:"class"`
++	Justification string `json:"justification"`
++	Invalidation string `json:"invalidation"`
++}
++
++type equivalenceFilterData struct {
++	Version      int                `json:"version"`
++	Equivalences []EquivalenceEntry `json:"equivalences"`
++}
++
++type EquivalenceFilter struct {
++	Path string
++	Data equivalenceFilterData
++	Hash string
++}
++
++var equivalencePathPattern = regexp.MustCompile(`^\$\.scenarios\[\d+\]\.examples\[\d+\]\.\S+$`)
++
++func LoadEquivalenceFilter(path string) (*EquivalenceFilter, error) {
++	contentBytes, err := os.ReadFile(path)
++	if err != nil {
++		return nil, fmt.Errorf("equivalence filter %s unreadable: %w", path, err)
++	}
++	content := string(contentBytes)
++	var data equivalenceFilterData
++	if err := json.Unmarshal([]byte(content), &data); err != nil {
++		return nil, fmt.Errorf("equivalence filter %s is not valid JSON: %w", path, err)
++	}
++	if data.Version != 1 {
++		return nil, fmt.Errorf("equivalence filter %s must declare version 1", path)
++	}
++	if data.Equivalences == nil {
++		return nil, fmt.Errorf("equivalence filter %s must contain an equivalences array", path)
++	}
++	for i, entry := range data.Equivalences {
++		if entry.Feature == "" || entry.Path == "" || entry.Original == "" || entry.Mutated == "" {
++			return nil, fmt.Errorf("equivalence filter %s entries require feature, path, original, and mutated (entry %d)", path, i)
++		}
++		if !equivalencePathPattern.MatchString(entry.Path) {
++			return nil, fmt.Errorf("equivalence filter %s entry path must be $.scenarios[i].examples[j].<key>, got: %s", path, entry.Path)
++		}
++	}
++	sum := sha256.Sum256([]byte(content))
++	return &EquivalenceFilter{
++		Path: path,
++		Data: data,
++		Hash: hex.EncodeToString(sum[:]),
++	}, nil
++}
++
++func featureStem(featurePath string) string {
++	name := featurePath
++	if idx := strings.LastIndexAny(name, "/\\"); idx >= 0 {
++		name = name[idx+1:]
++	}
++	return strings.TrimSuffix(name, ".feature")
++}
++
++func filterEntryMatch(filter *EquivalenceFilter, featurePath string, mutation Mutation) *EquivalenceEntry {
++	if filter == nil || featurePath == "" {
++		return nil
++	}
++	stem := featureStem(featurePath)
++	for i := range filter.Data.Equivalences {
++		entry := &filter.Data.Equivalences[i]
++		if entry.Feature == stem &&
++			entry.Path == mutation.Path &&
++			entry.Original == mutation.Original &&
++			entry.Mutated == mutation.Mutated {
++			return entry
++		}
++	}
++	return nil
++}
++
++func filteredIDs(filter *EquivalenceFilter, featurePath string, mutations []Mutation) map[string]bool {
++	ids := map[string]bool{}
++	if filter == nil {
++		return ids
++	}
++	for _, mutation := range mutations {
++		if filterEntryMatch(filter, featurePath, mutation) != nil {
++			ids[mutation.ID] = true
++		}
++	}
++	return ids
++}
++
++type EquivalentView struct {
++	ID            string `json:"ID"`
++	Path          string `json:"Path"`
++	Description   string `json:"Description"`
++	Original      string `json:"Original"`
++	Mutated       string `json:"Mutated"`
++	Class         string `json:"Class"`
++	Justification string `json:"Justification"`
++	Invalidation  string `json:"Invalidation"`
++	Scenario      int    `json:"scenario"`
++}
++
++func equivalentView(mutation Mutation, entry *EquivalenceEntry) EquivalentView {
++	return EquivalentView{
++		ID:            mutation.ID,
++		Path:          mutation.Path,
++		Description:   mutation.Description,
++		Original:      mutation.Original,
++		Mutated:       mutation.Mutated,
++		Class:         entry.Class,
++		Justification: entry.Justification,
++		Invalidation:  entry.Invalidation,
++		Scenario:      mutation.Scenario,
++	}
++}
++
++func stampHash(cleaned string, filterHash string) string {
++	if filterHash != "" {
++		return hashString(cleaned + "\n# equivalence-filter: " + filterHash)
++	}
++	return hashString(cleaned)
++}
+diff --git a/internal/mutation/equivalence_test.go b/internal/mutation/equivalence_test.go
+new file mode 100644
+index 0000000..41e754c
+--- /dev/null
++++ b/internal/mutation/equivalence_test.go
+@@ -0,0 +1,208 @@
++package mutation
++
++import (
++	"context"
++	"encoding/json"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++
++	"acceptance-pipeline-specification/internal/gherkin"
++)
++
++func writeFilterFile(t *testing.T, dir string, equivalences []EquivalenceEntry) string {
++	t.Helper()
++	path := filepath.Join(dir, "filter.json")
++	doc := map[string]interface{}{"version": 1, "equivalences": equivalences}
++	data, err := json.Marshal(doc)
++	if err != nil {
++		t.Fatalf("marshal filter: %v", err)
++	}
++	if err := os.WriteFile(path, data, 0o644); err != nil {
++		t.Fatalf("write filter: %v", err)
++	}
++	return path
++}
++
++func sampleFilterFeature() gherkin.Feature {
++	return gherkin.Feature{
++		Name: "Balance",
++		Scenarios: []gherkin.Scenario{{
++			Name: "S",
++			Steps: []gherkin.Step{{
++				Keyword:    "Then",
++				Text:       "balance is <balance>",
++				Parameters: []string{"balance"},
++			}},
++			Examples: []map[string]string{{
++				"balance": "100",
++				"amount":  "20",
++			}},
++		}},
++	}
++}
++
++func TestLoadEquivalenceFilterValidatesContract(t *testing.T) {
++	dir := t.TempDir()
++	path := writeFilterFile(t, dir, []EquivalenceEntry{{
++		Feature:  "probe",
++		Path:     "$.scenarios[0].examples[0].balance",
++		Original: "100",
++		Mutated:  "109",
++		Class:    "input-mirror",
++	}})
++	filter, err := LoadEquivalenceFilter(path)
++	if err != nil {
++		t.Fatalf("load failed: %v", err)
++	}
++	if filter.Hash == "" {
++		t.Fatalf("filter hash empty")
++	}
++	if len(filter.Data.Equivalences) != 1 {
++		t.Fatalf("equivalences = %d", len(filter.Data.Equivalences))
++	}
++
++	badPath := filepath.Join(dir, "bad.json")
++	if err := os.WriteFile(badPath, []byte(`{"version": 2, "equivalences": []}`), 0o644); err != nil {
++		t.Fatalf("write bad filter: %v", err)
++	}
++	if _, err := LoadEquivalenceFilter(badPath); err == nil {
++		t.Fatalf("version 2 accepted")
++	}
++
++	missingPath := filepath.Join(dir, "missing.json")
++	if err := os.WriteFile(missingPath, []byte(`{"version": 1, "equivalences": [{"feature": "f", "path": "$.scenarios[0].examples[0].x", "original": "1"}]}`), 0o644); err != nil {
++		t.Fatalf("write missing-field filter: %v", err)
++	}
++	if _, err := LoadEquivalenceFilter(missingPath); err == nil {
++		t.Fatalf("entry without mutated accepted")
++	}
++
++	badPathShape := filepath.Join(dir, "shape.json")
++	if err := os.WriteFile(badPathShape, []byte(`{"version": 1, "equivalences": [{"feature": "f", "path": "scenarios[0]", "original": "1", "mutated": "2"}]}`), 0o644); err != nil {
++		t.Fatalf("write bad-shape filter: %v", err)
++	}
++	if _, err := LoadEquivalenceFilter(badPathShape); err == nil {
++		t.Fatalf("non-jsonpath entry accepted")
++	}
++}
++
++func TestFilterEntryMatchRequiresFullQuadruple(t *testing.T) {
++	dir := t.TempDir()
++	path := writeFilterFile(t, dir, []EquivalenceEntry{{
++		Feature:  "probe",
++		Path:     "$.scenarios[0].examples[0].balance",
++		Original: "100",
++		Mutated:  "109",
++	}})
++	filter, err := LoadEquivalenceFilter(path)
++	if err != nil {
++		t.Fatalf("load failed: %v", err)
++	}
++	featurePath := "features/probe.feature"
++	mutations := Discover(sampleFilterFeature())
++
++	positive := mutations[0]
++	if positive.Path != "$.scenarios[0].examples[0].amount" {
++		t.Fatalf("unexpected first mutation path %s", positive.Path)
++	}
++	if filterEntryMatch(filter, featurePath, positive) != nil {
++		t.Fatalf("non-listed cell matched")
++	}
++
++	var balance Mutation
++	for _, m := range mutations {
++		if m.Key == "balance" {
++			balance = m
++		}
++	}
++	if filterEntryMatch(filter, featurePath, balance) != nil {
++		t.Fatalf("matched with wrong mutated value: %s", balance.Mutated)
++	}
++
++	balance.Mutated = "109"
++	if filterEntryMatch(filter, featurePath, balance) == nil {
++		t.Fatalf("exact quadruple not matched")
++	}
++
++	if filterEntryMatch(filter, "features/other.feature", balance) != nil {
++		t.Fatalf("wrong stem matched")
++	}
++}
++
++func TestRunWithFilterExcludesFilteredFromTotalAndExecutesRest(t *testing.T) {
++	dir := t.TempDir()
++	feature := sampleFilterFeature()
++	mutations := Discover(feature)
++	var balance Mutation
++	for _, m := range mutations {
++		if m.Key == "balance" {
++			balance = m
++		}
++	}
++	path := writeFilterFile(t, dir, []EquivalenceEntry{{
++		Feature:  "Balance",
++		Path:     balance.Path,
++		Original: balance.Original,
++		Mutated:  balance.Mutated,
++		Class:    "input-mirror",
++		Justification: "j",
++	}})
++	filter, err := LoadEquivalenceFilter(path)
++	if err != nil {
++		t.Fatalf("load failed: %v", err)
++	}
++
++	var killed []string
++	runner := RunnerFunc(func(_ context.Context, job Job) RunnerResult {
++		killed = append(killed, job.Mutation.ID)
++		return RunnerResult{Outcome: TestFailure}
++	})
++	report, err := Run(context.Background(), Config{
++		Feature:           feature,
++		FeaturePath:       "features/Balance.feature",
++		WorkDir:           filepath.Join(dir, "work"),
++		Level:             "full",
++		EquivalenceFilter: filter,
++	}, runner)
++	if err != nil {
++		t.Fatalf("run: %v", err)
++	}
++	if report.Summary.Total != 1 {
++		t.Fatalf("total = %d, want 1 (one cell filtered)", report.Summary.Total)
++	}
++	if report.Summary.FilteredEquivalents != 1 {
++		t.Fatalf("filtered = %d", report.Summary.FilteredEquivalents)
++	}
++	if report.Summary.Killed != 1 || report.Summary.Survived != 0 {
++		t.Fatalf("killed=%d survived=%d", report.Summary.Killed, report.Summary.Survived)
++	}
++	if report.FilterHash != filter.Hash {
++		t.Fatalf("filter-hash not propagated")
++	}
++	if len(report.Filtered) != 1 || report.Filtered[0].Class != "input-mirror" {
++		t.Fatalf("filtered view incomplete: %#v", report.Filtered)
++	}
++
++	text := &strings.Builder{}
++	if err := WriteTextReport(text, report); err != nil {
++		t.Fatalf("text report: %v", err)
++	}
++	if !strings.Contains(text.String(), "filtered_equivalents=1") || !strings.Contains(text.String(), "filtered equivalents (not executed):") {
++		t.Fatalf("text report missing filtered section:\n%s", text.String())
++	}
++}
++
++func TestStampHashIncorporatesFilterHash(t *testing.T) {
++	cleaned := "# content\nfeature body"
++	plain := stampHash(cleaned, "")
++	withFilter := stampHash(cleaned, "deadbeef")
++	if plain == withFilter {
++		t.Fatalf("filter hash not mixed into stamp")
++	}
++	if plain != hashString(cleaned) {
++		t.Fatalf("plain stamp drifted")
++	}
++}
++
+diff --git a/internal/mutation/manifest.go b/internal/mutation/manifest.go
+index b9d3547..05f1576 100644
+--- a/internal/mutation/manifest.go
++++ b/internal/mutation/manifest.go
+@@ -1,261 +1,296 @@
+ package mutation
+ 
+ import (
+-	"crypto/sha256"
+-	"encoding/hex"
+-	"encoding/json"
+-	"fmt"
+-	"os"
+-	"strings"
+-	"time"
++        "crypto/sha256"
++        "encoding/hex"
++        "encoding/json"
++        "fmt"
++        "os"
++        "strings"
++        "time"
+ 
+-	"acceptance-pipeline-specification/internal/gherkin"
++        "acceptance-pipeline-specification/internal/gherkin"
+ )
+ 
+ type scenarioManifest struct {
+-	Index         int     `json:"index"`
+-	Name          string  `json:"name"`
+-	ScenarioHash  string  `json:"scenario_hash"`
+-	MutationCount int     `json:"mutation_count"`
+-	Result        Summary `json:"result"`
+-	TestedAt      string  `json:"tested_at"`
++        Index         int     `json:"index"`
++        Name          string  `json:"name"`
++        ScenarioHash  string  `json:"scenario_hash"`
++        MutationCount int     `json:"mutation_count"`
++        Result        Summary `json:"result"`
++        TestedAt      string  `json:"tested_at"`
+ }
+ 
+ type manifest struct {
+-	Version            int                `json:"version"`
+-	TestedAt           string             `json:"tested_at"`
+-	FeatureName        string             `json:"feature_name"`
+-	FeaturePath        string             `json:"feature_path"`
+-	BackgroundHash     string             `json:"background_hash"`
+-	ImplementationHash string             `json:"implementation_hash"`
+-	Scenarios          []scenarioManifest `json:"scenarios"`
++        Version                  int                `json:"version"`
++        TestedAt                 string             `json:"tested_at"`
++        FeatureName              string             `json:"feature_name"`
++        FeaturePath              string             `json:"feature_path"`
++        BackgroundHash           string             `json:"background_hash"`
++        ImplementationHash       string             `json:"implementation_hash"`
++        EquivalenceFilterHash    string             `json:"equivalence_filter_hash,omitempty"`
++        Scenarios                []scenarioManifest `json:"scenarios"`
+ }
+ 
+ type MutationMetadata struct {
+-	Stamp    string
+-	Manifest manifest
++        Stamp    string
++        Manifest manifest
+ }
+ 
+ func ReadMutationMetadata(featurePath string) (MutationMetadata, bool) {
+-	contentBytes, err := os.ReadFile(featurePath)
+-	if err != nil {
+-		return MutationMetadata{}, false
+-	}
+-	return parseMutationMetadata(string(contentBytes))
++        contentBytes, err := os.ReadFile(featurePath)
++        if err != nil {
++                return MutationMetadata{}, false
++        }
++        return parseMutationMetadata(string(contentBytes))
+ }
+ 
+-func NewManifest(featurePath string, feature gherkin.Feature, report Report, implementationHash string) manifest {
+-	now := time.Now().UTC().Format(time.RFC3339)
+-	m := manifest{
+-		Version:            1,
+-		TestedAt:           now,
+-		FeatureName:        feature.Name,
+-		FeaturePath:        featurePath,
+-		BackgroundHash:     hashJSON(feature.Background),
+-		ImplementationHash: implementationHash,
+-		Scenarios:          []scenarioManifest{},
+-	}
+-	allMutations := Discover(feature)
+-	scenarioSummaries := scenarioSummaries(feature, report)
+-	for i, scenario := range feature.Scenarios {
+-		summary, ok := scenarioSummaries[i]
+-		if !ok || summary.Survived != 0 || summary.Errors != 0 {
+-			continue
+-		}
+-		m.Scenarios = append(m.Scenarios, scenarioManifest{
+-			Index:         i,
+-			Name:          scenario.Name,
+-			ScenarioHash:  hashJSON(scenario),
+-			MutationCount: mutationCountForScenario(allMutations, i),
+-			Result:        summary,
+-			TestedAt:      now,
+-		})
+-	}
+-	return m
++func NewManifest(featurePath string, feature gherkin.Feature, report Report, implementationHash string, filter *EquivalenceFilter) manifest {
++        now := time.Now().UTC().Format(time.RFC3339)
++        m := manifest{
++                Version:            1,
++                TestedAt:           now,
++                FeatureName:        feature.Name,
++                FeaturePath:        featurePath,
++                BackgroundHash:     hashJSON(feature.Background),
++                ImplementationHash: implementationHash,
++                Scenarios:          []scenarioManifest{},
++        }
++        if filter != nil {
++                m.EquivalenceFilterHash = filter.Hash
++        }
++        allMutations := Discover(feature)
++        filteredByScenario := map[int]int{}
++        if filter != nil {
++                for _, view := range report.Filtered {
++                        filteredByScenario[view.Scenario]++
++                }
++                if len(report.Filtered) == 0 {
++                        currentFiltered := filteredIDs(filter, featurePath, allMutations)
++                        for _, mut := range allMutations {
++                                if currentFiltered[mut.ID] {
++                                        filteredByScenario[mut.Scenario]++
++                                }
++                        }
++                }
++        }
++        scenarioSummaries := scenarioSummaries(feature, report)
++        for i, scenario := range feature.Scenarios {
++                summary, ok := scenarioSummaries[i]
++                if !ok || summary.Survived != 0 || summary.Errors != 0 {
++                        continue
++                }
++                filteredCount := filteredByScenario[i]
++                mutationCount := mutationCountForScenario(allMutations, i) - filteredCount
++                if filteredCount > 0 {
++                        summary.FilteredEquivalents = filteredCount
++                }
++                m.Scenarios = append(m.Scenarios, scenarioManifest{
++                        Index:         i,
++                        Name:          scenario.Name,
++                        ScenarioHash:  hashJSON(scenario),
++                        MutationCount: mutationCount,
++                        Result:        summary,
++                        TestedAt:      now,
++                })
++        }
++        return m
+ }
+ 
+ func WriteManifestAndStamp(featurePath string, feature gherkin.Feature, report Report, implementationHash string) error {
+-	return WriteMutationMetadata(featurePath, feature, report, implementationHash, "hard", report.Summary.Survived == 0 && report.Summary.Errors == 0)
++        return WriteMutationMetadata(featurePath, feature, report, implementationHash, "hard", report.Summary.Survived == 0 && report.Summary.Errors == 0, nil)
+ }
+ 
+-func WriteMutationMetadata(featurePath string, feature gherkin.Feature, report Report, implementationHash string, level string, writeStamp bool) error {
+-	contentBytes, err := os.ReadFile(featurePath)
+-	if err != nil {
+-		return err
+-	}
+-	previous, hasPrevious := parseMutationMetadata(string(contentBytes))
+-	cleaned := stripMutationMetadata(string(contentBytes))
+-	stamp := hashString(cleaned)
+-	m := NewManifest(featurePath, feature, report, implementationHash)
+-	if hasPrevious {
+-		mergeReusablePreviousScenarios(&m, previous.Manifest, feature, level)
+-	}
+-	manifestBytes, err := json.Marshal(m)
+-	if err != nil {
+-		return err
+-	}
++func WriteMutationMetadata(featurePath string, feature gherkin.Feature, report Report, implementationHash string, level string, writeStamp bool, filter *EquivalenceFilter) error {
++        contentBytes, err := os.ReadFile(featurePath)
++        if err != nil {
++                return err
++        }
++        previous, hasPrevious := parseMutationMetadata(string(contentBytes))
++        cleaned := stripMutationMetadata(string(contentBytes))
++        filterHash := ""
++        if filter != nil {
++                filterHash = filter.Hash
++        }
++        stamp := stampHash(cleaned, filterHash)
++        m := NewManifest(featurePath, feature, report, implementationHash, filter)
++        if hasPrevious {
++                mergeReusablePreviousScenarios(&m, previous.Manifest, feature, level, filter)
++        }
++        manifestBytes, err := json.Marshal(m)
++        if err != nil {
++                return err
++        }
+ 
+-	var builder strings.Builder
+-	if writeStamp {
+-		builder.WriteString("# mutation-stamp: sha256=")
+-		builder.WriteString(stamp)
+-		builder.WriteString("\n")
+-	}
+-	builder.WriteString("# acceptance-mutation-manifest-begin\n")
+-	builder.WriteString("# ")
+-	builder.Write(manifestBytes)
+-	builder.WriteString("\n")
+-	builder.WriteString("# acceptance-mutation-manifest-end\n\n")
+-	builder.WriteString(strings.TrimLeft(cleaned, "\n"))
+-	return os.WriteFile(featurePath, []byte(builder.String()), 0o644)
++        var builder strings.Builder
++        if writeStamp {
++                builder.WriteString("# mutation-stamp: sha256=")
++                builder.WriteString(stamp)
++                builder.WriteString("\n")
++        }
++        builder.WriteString("# acceptance-mutation-manifest-begin\n")
++        builder.WriteString("# ")
++        builder.Write(manifestBytes)
++        builder.WriteString("\n")
++        builder.WriteString("# acceptance-mutation-manifest-end\n\n")
++        builder.WriteString(strings.TrimLeft(cleaned, "\n"))
++        return os.WriteFile(featurePath, []byte(builder.String()), 0o644)
+ }
+ 
+-func FeatureStampValid(featurePath string) bool {
+-	contentBytes, err := os.ReadFile(featurePath)
+-	if err != nil {
+-		return false
+-	}
+-	metadata, ok := parseMutationMetadata(string(contentBytes))
+-	if !ok || metadata.Stamp == "" {
+-		return false
+-	}
+-	return metadata.Stamp == hashString(stripMutationMetadata(string(contentBytes)))
++func FeatureStampValid(featurePath string, filterHash string) bool {
++        contentBytes, err := os.ReadFile(featurePath)
++        if err != nil {
++                return false
++        }
++        metadata, ok := parseMutationMetadata(string(contentBytes))
++        if !ok || metadata.Stamp == "" {
++                return false
++        }
++        return metadata.Stamp == stampHash(stripMutationMetadata(string(contentBytes)), filterHash)
+ }
+ 
+-func mergeReusablePreviousScenarios(current *manifest, previous manifest, feature gherkin.Feature, level string) {
+-	existing := map[int]bool{}
+-	for _, entry := range current.Scenarios {
+-		existing[entry.Index] = true
+-	}
+-	allMutations := Discover(feature)
+-	for _, entry := range previous.Scenarios {
+-		if existing[entry.Index] {
+-			continue
+-		}
+-		if manifestEntryReusable(previous, *current, entry, level, feature, allMutations) {
+-			current.Scenarios = append(current.Scenarios, entry)
+-			existing[entry.Index] = true
+-		}
+-	}
++func mergeReusablePreviousScenarios(current *manifest, previous manifest, feature gherkin.Feature, level string, filter *EquivalenceFilter) {
++        existing := map[int]bool{}
++        for _, entry := range current.Scenarios {
++                existing[entry.Index] = true
++        }
++        allMutations := Discover(feature)
++        var currentFiltered map[string]bool
++        currentFilterHash := ""
++        if filter != nil {
++                currentFiltered = filteredIDs(filter, current.FeaturePath, allMutations)
++                currentFilterHash = filter.Hash
++        } else {
++                currentFiltered = map[string]bool{}
++        }
++        for _, entry := range previous.Scenarios {
++                if existing[entry.Index] {
++                        continue
++                }
++                if manifestEntryReusable(previous, *current, entry, level, feature, allMutations, currentFiltered, currentFilterHash) {
++                        current.Scenarios = append(current.Scenarios, entry)
++                        existing[entry.Index] = true
++                }
++        }
+ }
+ 
+ func parseMutationMetadata(content string) (MutationMetadata, bool) {
+-	var metadata MutationMetadata
+-	lines := strings.Split(content, "\n")
+-	var manifestLines []string
+-	inManifest := false
+-	for _, line := range lines {
+-		trimmed := strings.TrimSpace(line)
+-		if strings.HasPrefix(trimmed, "# mutation-stamp: sha256=") {
+-			metadata.Stamp = strings.TrimPrefix(trimmed, "# mutation-stamp: sha256=")
+-			continue
+-		}
+-		if trimmed == "# acceptance-mutation-manifest-begin" {
+-			inManifest = true
+-			continue
+-		}
+-		if trimmed == "# acceptance-mutation-manifest-end" {
+-			inManifest = false
+-			continue
+-		}
+-		if inManifest {
+-			manifestLines = append(manifestLines, strings.TrimSpace(strings.TrimPrefix(trimmed, "#")))
+-		}
+-	}
+-	if len(manifestLines) == 0 {
+-		return metadata, metadata.Stamp != ""
+-	}
+-	manifestJSON := strings.Join(manifestLines, "")
+-	if err := json.Unmarshal([]byte(manifestJSON), &metadata.Manifest); err != nil {
+-		return MutationMetadata{}, false
+-	}
+-	return metadata, true
++        var metadata MutationMetadata
++        lines := strings.Split(content, "\n")
++        var manifestLines []string
++        inManifest := false
++        for _, line := range lines {
++                trimmed := strings.TrimSpace(line)
++                if strings.HasPrefix(trimmed, "# mutation-stamp: sha256=") {
++                        metadata.Stamp = strings.TrimPrefix(trimmed, "# mutation-stamp: sha256=")
++                        continue
++                }
++                if trimmed == "# acceptance-mutation-manifest-begin" {
++                        inManifest = true
++                        continue
++                }
++                if trimmed == "# acceptance-mutation-manifest-end" {
++                        inManifest = false
++                        continue
++                }
++                if inManifest {
++                        manifestLines = append(manifestLines, strings.TrimSpace(strings.TrimPrefix(trimmed, "#")))
++                }
++        }
++        if len(manifestLines) == 0 {
++                return metadata, metadata.Stamp != ""
++        }
++        manifestJSON := strings.Join(manifestLines, "")
++        if err := json.Unmarshal([]byte(manifestJSON), &metadata.Manifest); err != nil {
++                return MutationMetadata{}, false
++        }
++        return metadata, true
+ }
+ 
+ func stripMutationMetadata(content string) string {
+-	lines := strings.Split(content, "\n")
+-	result := make([]string, 0, len(lines))
+-	inManifest := false
+-	for _, line := range lines {
+-		trimmed := strings.TrimSpace(line)
+-		if strings.HasPrefix(trimmed, "# mutation-stamp:") {
+-			continue
+-		}
+-		if trimmed == "# acceptance-mutation-manifest-begin" {
+-			inManifest = true
+-			continue
+-		}
+-		if trimmed == "# acceptance-mutation-manifest-end" {
+-			inManifest = false
+-			continue
+-		}
+-		if inManifest {
+-			continue
+-		}
+-		result = append(result, line)
+-	}
+-	return strings.TrimLeft(strings.Join(result, "\n"), "\n")
++        lines := strings.Split(content, "\n")
++        result := make([]string, 0, len(lines))
++        inManifest := false
++        for _, line := range lines {
++                trimmed := strings.TrimSpace(line)
++                if strings.HasPrefix(trimmed, "# mutation-stamp:") {
++                        continue
++                }
++                if trimmed == "# acceptance-mutation-manifest-begin" {
++                        inManifest = true
++                        continue
++                }
++                if trimmed == "# acceptance-mutation-manifest-end" {
++                        inManifest = false
++                        continue
++                }
++                if inManifest {
++                        continue
++                }
++                result = append(result, line)
++        }
++        return strings.TrimLeft(strings.Join(result, "\n"), "\n")
+ }
+ 
+ func hashJSON(value any) string {
+-	bytes, _ := json.Marshal(value)
+-	return hashString(string(bytes))
++        bytes, _ := json.Marshal(value)
++        return hashString(string(bytes))
+ }
+ 
+ func hashString(value string) string {
+-	sum := sha256.Sum256([]byte(value))
+-	return hex.EncodeToString(sum[:])
++        sum := sha256.Sum256([]byte(value))
++        return hex.EncodeToString(sum[:])
+ }
+ 
+ func mutationCountForScenario(mutations []Mutation, scenarioIndex int) int {
+-	count := 0
+-	for _, mutation := range mutations {
+-		if mutation.Scenario == scenarioIndex {
+-			count++
+-		}
+-	}
+-	return count
++        count := 0
++        for _, mutation := range mutations {
++                if mutation.Scenario == scenarioIndex {
++                        count++
++                }
++        }
++        return count
+ }
+ 
+ func scenarioSummaries(feature gherkin.Feature, report Report) map[int]Summary {
+-	summaries := make(map[int]Summary, len(feature.Scenarios))
+-	if len(report.Results) == 0 && len(feature.Scenarios) == 1 && report.Summary.Total > 0 {
+-		summaries[0] = report.Summary
+-		return summaries
+-	}
+-	for _, result := range report.Results {
+-		scenarioIndex, err := scenarioIndexFromPath(result.Mutation.Path)
+-		if err != nil {
+-			continue
+-		}
+-		summary := summaries[scenarioIndex]
+-		summary.Total++
+-		switch result.Status {
+-		case Killed:
+-			summary.Killed++
+-		case Survived:
+-			summary.Survived++
+-		case Error:
+-			summary.Errors++
+-		}
+-		summaries[scenarioIndex] = summary
+-	}
+-	return summaries
++        summaries := make(map[int]Summary, len(feature.Scenarios))
++        if len(report.Results) == 0 && len(feature.Scenarios) == 1 && report.Summary.Total > 0 {
++                summaries[0] = report.Summary
++                return summaries
++        }
++        for _, result := range report.Results {
++                scenarioIndex, err := scenarioIndexFromPath(result.Mutation.Path)
++                if err != nil {
++                        continue
++                }
++                summary := summaries[scenarioIndex]
++                summary.Total++
++                switch result.Status {
++                case Killed:
++                        summary.Killed++
++                case Survived:
++                        summary.Survived++
++                case Error:
++                        summary.Errors++
++                }
++                summaries[scenarioIndex] = summary
++        }
++        return summaries
+ }
+ 
+ func scenarioIndexFromPath(path string) (int, error) {
+-	const prefix = "$.scenarios["
+-	if !strings.HasPrefix(path, prefix) {
+-		return 0, fmt.Errorf("invalid mutation path %q", path)
+-	}
+-	remainder := strings.TrimPrefix(path, prefix)
+-	end := strings.Index(remainder, "]")
+-	if end < 0 {
+-		return 0, fmt.Errorf("invalid mutation path %q", path)
+-	}
+-	var index int
+-	if _, err := fmt.Sscanf(remainder[:end], "%d", &index); err != nil {
+-		return 0, err
+-	}
+-	return index, nil
++        const prefix = "$.scenarios["
++        if !strings.HasPrefix(path, prefix) {
++                return 0, fmt.Errorf("invalid mutation path %q", path)
++        }
++        remainder := strings.TrimPrefix(path, prefix)
++        end := strings.Index(remainder, "]")
++        if end < 0 {
++                return 0, fmt.Errorf("invalid mutation path %q", path)
++        }
++        var index int
++        if _, err := fmt.Sscanf(remainder[:end], "%d", &index); err != nil {
++                return 0, err
++        }
++        return index, nil
+ }
+diff --git a/internal/mutation/manifest_test.go b/internal/mutation/manifest_test.go
+index 71f4340..cf81b8f 100644
+--- a/internal/mutation/manifest_test.go
++++ b/internal/mutation/manifest_test.go
+@@ -98,7 +98,7 @@ Examples:
+ 		},
+ 	}
+ 
+-	if err := WriteMutationMetadata(path, feature, report, "impl-a", "hard", false); err != nil {
++	if err := WriteMutationMetadata(path, feature, report, "impl-a", "hard", false, nil); err != nil {
+ 		t.Fatalf("WriteMutationMetadata returned error: %v", err)
+ 	}
+ 
+@@ -147,7 +147,7 @@ Examples:
+ 			makeResult(mutations[1], RunnerResult{Outcome: TestSuccess}),
+ 		},
+ 	}
+-	if err := WriteMutationMetadata(path, feature, report, "impl-a", "hard", false); err != nil {
++	if err := WriteMutationMetadata(path, feature, report, "impl-a", "hard", false, nil); err != nil {
+ 		t.Fatal(err)
+ 	}
+ 
+diff --git a/internal/mutation/mutator.go b/internal/mutation/mutator.go
+index 6261af0..b04d962 100644
+--- a/internal/mutation/mutator.go
++++ b/internal/mutation/mutator.go
+@@ -1,565 +1,622 @@
+ package mutation
+ 
+ import (
+-	"context"
+-	"encoding/json"
+-	"fmt"
+-	"hash/fnv"
+-	"math"
+-	"os"
+-	"path/filepath"
+-	"sort"
+-	"strconv"
+-	"strings"
+-	"sync"
+-	"time"
+-
+-	"acceptance-pipeline-specification/internal/gherkin"
++        "context"
++        "encoding/json"
++        "fmt"
++        "hash/fnv"
++        "math"
++        "os"
++        "path/filepath"
++        "sort"
++        "strconv"
++        "strings"
++        "sync"
++        "time"
++
++        "acceptance-pipeline-specification/internal/gherkin"
+ )
+ 
+ type Status string
+ 
+ const (
+-	Killed   Status = "killed"
+-	Survived Status = "survived"
+-	Error    Status = "error"
++        Killed   Status = "killed"
++        Survived Status = "survived"
++        Error    Status = "error"
+ )
+ 
+ type RunnerOutcome string
+ 
+ const (
+-	TestSuccess         RunnerOutcome = "test_success"
+-	TestFailure         RunnerOutcome = "test_failure"
+-	InfrastructureError RunnerOutcome = "infrastructure_error"
++        TestSuccess         RunnerOutcome = "test_success"
++        TestFailure         RunnerOutcome = "test_failure"
++        InfrastructureError RunnerOutcome = "infrastructure_error"
+ )
+ 
+ type Mutation struct {
+-	ID          string
+-	Path        string
+-	Description string
+-	Original    string
+-	Mutated     string
+-	Scenario    int
+-	Example     int
+-	Key         string
++        ID          string
++        Path        string
++        Description string
++        Original    string
++        Mutated     string
++        Scenario    int
++        Example     int
++        Key         string
+ }
+ 
+ type Config struct {
+-	Feature            gherkin.Feature
+-	FeaturePath        string
+-	WorkDir            string
+-	GeneratedDir       string
+-	Workers            int
+-	Level              string
+-	ImplementationHash string
+-	StatusInterval     time.Duration
+-	Status             func(StatusSnapshot)
++        Feature            gherkin.Feature
++        FeaturePath        string
++        WorkDir            string
++        GeneratedDir       string
++        Workers            int
++        Level              string
++        ImplementationHash string
++        StatusInterval     time.Duration
++        Status             func(StatusSnapshot)
++        EquivalenceFilter  *EquivalenceFilter
+ }
+ 
+ type Job struct {
+-	Mutation     Mutation
+-	FeatureJSON  string
+-	GeneratedDir string
+-	WorkDir      string
++        Mutation     Mutation
++        FeatureJSON  string
++        GeneratedDir string
++        WorkDir      string
+ }
+ 
+ type Runner interface {
+-	Run(context.Context, Job) RunnerResult
++        Run(context.Context, Job) RunnerResult
+ }
+ 
+ type RunnerFunc func(context.Context, Job) RunnerResult
+ 
+ func (f RunnerFunc) Run(ctx context.Context, job Job) RunnerResult {
+-	return f(ctx, job)
++        return f(ctx, job)
+ }
+ 
+ type RunnerResult struct {
+-	Outcome  RunnerOutcome `json:"outcome"`
+-	Output   string        `json:"output"`
+-	Error    string        `json:"error"`
+-	Duration int64         `json:"duration"`
++        Outcome  RunnerOutcome `json:"outcome"`
++        Output   string        `json:"output"`
++        Error    string        `json:"error"`
++        Duration int64         `json:"duration"`
+ }
+ 
+ type Summary struct {
+-	Total            int `json:"Total"`
+-	Killed           int `json:"Killed"`
+-	Survived         int `json:"Survived"`
+-	Errors           int `json:"Errors"`
+-	SkippedScenarios int `json:"SkippedScenarios,omitempty"`
+-	SkippedMutations int `json:"SkippedMutations,omitempty"`
++        Total               int `json:"Total"`
++        Killed              int `json:"Killed"`
++        Survived            int `json:"Survived"`
++        Errors              int `json:"Errors"`
++        SkippedScenarios    int `json:"SkippedScenarios,omitempty"`
++        SkippedMutations    int `json:"SkippedMutations,omitempty"`
++        FilteredEquivalents int `json:"FilteredEquivalents,omitempty"`
+ }
+ 
+ type Report struct {
+-	Summary Summary  `json:"summary"`
+-	Results []Result `json:"results"`
++        Summary   Summary          `json:"summary"`
++        Results   []Result         `json:"results"`
++        Filtered  []EquivalentView `json:"filtered,omitempty"`
++        FilterHash string          `json:"filter-hash,omitempty"`
+ }
+ 
+ type StatusSnapshot struct {
+-	Elapsed          time.Duration
+-	Total            int
+-	Completed        int
+-	Running          int
+-	Killed           int
+-	Survived         int
+-	Errors           int
+-	SkippedScenarios int
+-	SkippedMutations int
++        Elapsed          time.Duration
++        Total            int
++        Completed        int
++        Running          int
++        Killed           int
++        Survived         int
++        Errors           int
++        SkippedScenarios int
++        SkippedMutations int
+ }
+ 
+ type Result struct {
+-	Mutation MutationView `json:"Mutation"`
+-	Status   Status       `json:"Status"`
+-	Output   string       `json:"Output"`
+-	Error    string       `json:"Error"`
+-	Duration int64        `json:"Duration"`
++        Mutation MutationView `json:"Mutation"`
++        Status   Status       `json:"Status"`
++        Output   string       `json:"Output"`
++        Error    string       `json:"Error"`
++        Duration int64        `json:"Duration"`
+ }
+ 
+ type MutationView struct {
+-	ID          string `json:"ID"`
+-	Path        string `json:"Path"`
+-	Description string `json:"Description"`
+-	Original    string `json:"Original"`
+-	Mutated     string `json:"Mutated"`
++        ID          string `json:"ID"`
++        Path        string `json:"Path"`
++        Description string `json:"Description"`
++        Original    string `json:"Original"`
++        Mutated     string `json:"Mutated"`
+ }
+ 
+ func Discover(feature gherkin.Feature) []Mutation {
+-	var mutations []Mutation
+-	for scenarioIndex, scenario := range feature.Scenarios {
+-		for exampleIndex, example := range scenario.Examples {
+-			keys := make([]string, 0, len(example))
+-			for key := range example {
+-				keys = append(keys, key)
+-			}
+-			sort.Strings(keys)
+-			for _, key := range keys {
+-				original := example[key]
+-				path := fmt.Sprintf("$.scenarios[%d].examples[%d].%s", scenarioIndex, exampleIndex, key)
+-				mutated := MutateValue(path, original)
+-				if mutated == original {
+-					continue
+-				}
+-				id := fmt.Sprintf("m%d", len(mutations)+1)
+-				mutations = append(mutations, Mutation{
+-					ID:          id,
+-					Path:        path,
+-					Description: fmt.Sprintf("%s: %s -> %s", path, original, mutated),
+-					Original:    original,
+-					Mutated:     mutated,
+-					Scenario:    scenarioIndex,
+-					Example:     exampleIndex,
+-					Key:         key,
+-				})
+-			}
+-		}
+-	}
+-	return mutations
++        var mutations []Mutation
++        for scenarioIndex, scenario := range feature.Scenarios {
++                for exampleIndex, example := range scenario.Examples {
++                        keys := make([]string, 0, len(example))
++                        for key := range example {
++                                keys = append(keys, key)
++                        }
++                        sort.Strings(keys)
++                        for _, key := range keys {
++                                original := example[key]
++                                path := fmt.Sprintf("$.scenarios[%d].examples[%d].%s", scenarioIndex, exampleIndex, key)
++                                mutated := MutateValue(path, original)
++                                if mutated == original {
++                                        continue
++                                }
++                                id := fmt.Sprintf("m%d", len(mutations)+1)
++                                mutations = append(mutations, Mutation{
++                                        ID:          id,
++                                        Path:        path,
++                                        Description: fmt.Sprintf("%s: %s -> %s", path, original, mutated),
++                                        Original:    original,
++                                        Mutated:     mutated,
++                                        Scenario:    scenarioIndex,
++                                        Example:     exampleIndex,
++                                        Key:         key,
++                                })
++                        }
++                }
++        }
++        return mutations
+ }
+ 
+ func Apply(feature gherkin.Feature, mutation Mutation) gherkin.Feature {
+-	copied := cloneFeature(feature)
+-	copied.Scenarios[mutation.Scenario].Examples[mutation.Example][mutation.Key] = mutation.Mutated
+-	return copied
++        copied := cloneFeature(feature)
++        copied.Scenarios[mutation.Scenario].Examples[mutation.Example][mutation.Key] = mutation.Mutated
++        return copied
+ }
+ 
+ func Run(ctx context.Context, cfg Config, runner Runner) (Report, error) {
+-	if cfg.Workers < 1 {
+-		cfg.Workers = 1
+-	}
+-	if cfg.WorkDir == "" {
+-		cfg.WorkDir = "build/acceptance-mutation"
+-	}
+-	if cfg.GeneratedDir == "" {
+-		cfg.GeneratedDir = filepath.Join(cfg.WorkDir, "generated")
+-	}
+-	if cfg.Level == "" {
+-		cfg.Level = "hard"
+-	}
+-
+-	mutations := Discover(cfg.Feature)
+-	skip := acceptedSkips(cfg, mutations)
+-	executableIndexes := make([]int, 0, len(mutations))
+-	for i, mutation := range mutations {
+-		if skip[mutation.Scenario] {
+-			continue
+-		}
+-		executableIndexes = append(executableIndexes, i)
+-	}
+-	report := Report{
+-		Summary: Summary{Total: len(executableIndexes)},
+-		Results: make([]Result, len(executableIndexes)),
+-	}
+-	for range skip {
+-		report.Summary.SkippedScenarios++
+-	}
+-	report.Summary.SkippedMutations = len(mutations) - len(executableIndexes)
+-	running := 0
+-	startedAt := time.Now()
+-	var mu sync.Mutex
+-	status := startStatusReporting(cfg, &mu, &report, &running, startedAt)
+-	defer status.stop()
+-
+-	if len(executableIndexes) == 0 {
+-		return report, nil
+-	}
+-
+-	if err := writeJSON(filepath.Join(cfg.WorkDir, "base", "feature.json"), cfg.Feature); err != nil {
+-		return Report{}, err
+-	}
+-
+-	jobs := make(chan int)
+-	var wg sync.WaitGroup
+-	var firstErr error
+-
+-	for worker := 0; worker < cfg.Workers; worker++ {
+-		wg.Add(1)
+-		go func() {
+-			defer wg.Done()
+-			for resultIndex := range jobs {
+-				mutation := mutations[executableIndexes[resultIndex]]
+-				mutationWorkDir := filepath.Join(cfg.WorkDir, "mutations", mutation.ID)
+-				featureJSON := filepath.Join(mutationWorkDir, "feature.json")
+-				mu.Lock()
+-				running++
+-				mu.Unlock()
+-				if err := writeJSON(featureJSON, Apply(cfg.Feature, mutation)); err != nil {
+-					mu.Lock()
+-					if firstErr == nil {
+-						firstErr = err
+-					}
+-					report.Results[resultIndex] = makeResult(mutation, RunnerResult{Outcome: InfrastructureError, Error: err.Error()})
+-					report.Summary.Errors++
+-					running--
+-					mu.Unlock()
+-					continue
+-				}
+-
+-				result := runner.Run(ctx, Job{
+-					Mutation:     mutation,
+-					FeatureJSON:  featureJSON,
+-					GeneratedDir: cfg.GeneratedDir,
+-					WorkDir:      mutationWorkDir,
+-				})
+-				classified := makeResult(mutation, result)
+-
+-				mu.Lock()
+-				report.Results[resultIndex] = classified
+-				switch classified.Status {
+-				case Killed:
+-					report.Summary.Killed++
+-				case Survived:
+-					report.Summary.Survived++
+-				case Error:
+-					report.Summary.Errors++
+-				}
+-				running--
+-				mu.Unlock()
+-			}
+-		}()
+-	}
+-
+-	for i := range executableIndexes {
+-		select {
+-		case <-ctx.Done():
+-			close(jobs)
+-			wg.Wait()
+-			return report, ctx.Err()
+-		case jobs <- i:
+-		}
+-	}
+-	close(jobs)
+-	wg.Wait()
+-
+-	return report, firstErr
++        if cfg.Workers < 1 {
++                cfg.Workers = 1
++        }
++        if cfg.WorkDir == "" {
++                cfg.WorkDir = "build/acceptance-mutation"
++        }
++        if cfg.GeneratedDir == "" {
++                cfg.GeneratedDir = filepath.Join(cfg.WorkDir, "generated")
++        }
++        if cfg.Level == "" {
++                cfg.Level = "hard"
++        }
++
++        mutations := Discover(cfg.Feature)
++        currentFiltered := filteredIDs(cfg.EquivalenceFilter, cfg.FeaturePath, mutations)
++        var filtered []EquivalentView
++        if cfg.EquivalenceFilter != nil {
++                for _, mutation := range mutations {
++                        if currentFiltered[mutation.ID] {
++                                if entry := filterEntryMatch(cfg.EquivalenceFilter, cfg.FeaturePath, mutation); entry != nil {
++                                        filtered = append(filtered, equivalentView(mutation, entry))
++                                }
++                        }
++                }
++        }
++        skip := acceptedSkips(cfg, mutations, currentFiltered)
++        executableIndexes := make([]int, 0, len(mutations))
++        for i, mutation := range mutations {
++                if skip[mutation.Scenario] || currentFiltered[mutation.ID] {
++                        continue
++                }
++                executableIndexes = append(executableIndexes, i)
++        }
++        report := Report{
++                Summary: Summary{Total: len(executableIndexes)},
++                Results: make([]Result, len(executableIndexes)),
++        }
++        if len(filtered) > 0 {
++                report.Summary.FilteredEquivalents = len(filtered)
++                report.Filtered = filtered
++                report.FilterHash = cfg.EquivalenceFilter.Hash
++        }
++        for range skip {
++                report.Summary.SkippedScenarios++
++        }
++        skippedMutations := 0
++        for _, mutation := range mutations {
++                if skip[mutation.Scenario] && !currentFiltered[mutation.ID] {
++                        skippedMutations++
++                }
++        }
++        report.Summary.SkippedMutations = skippedMutations
++        running := 0
++        startedAt := time.Now()
++        var mu sync.Mutex
++        status := startStatusReporting(cfg, &mu, &report, &running, startedAt)
++        defer status.stop()
++
++        if len(executableIndexes) == 0 {
++                return report, nil
++        }
++
++        if err := writeJSON(filepath.Join(cfg.WorkDir, "base", "feature.json"), cfg.Feature); err != nil {
++                return Report{}, err
++        }
++
++        jobs := make(chan int)
++        var wg sync.WaitGroup
++        var firstErr error
++
++        for worker := 0; worker < cfg.Workers; worker++ {
++                wg.Add(1)
++                go func() {
++                        defer wg.Done()
++                        for resultIndex := range jobs {
++                                mutation := mutations[executableIndexes[resultIndex]]
++                                mutationWorkDir := filepath.Join(cfg.WorkDir, "mutations", mutation.ID)
++                                featureJSON := filepath.Join(mutationWorkDir, "feature.json")
++                                mu.Lock()
++                                running++
++                                mu.Unlock()
++                                if err := writeJSON(featureJSON, Apply(cfg.Feature, mutation)); err != nil {
++                                        mu.Lock()
++                                        if firstErr == nil {
++                                                firstErr = err
++                                        }
++                                        report.Results[resultIndex] = makeResult(mutation, RunnerResult{Outcome: InfrastructureError, Error: err.Error()})
++                                        report.Summary.Errors++
++                                        running--
++                                        mu.Unlock()
++                                        continue
++                                }
++
++                                result := runner.Run(ctx, Job{
++                                        Mutation:     mutation,
++                                        FeatureJSON:  featureJSON,
++                                        GeneratedDir: cfg.GeneratedDir,
++                                        WorkDir:      mutationWorkDir,
++                                })
++                                classified := makeResult(mutation, result)
++
++                                mu.Lock()
++                                report.Results[resultIndex] = classified
++                                switch classified.Status {
++                                case Killed:
++                                        report.Summary.Killed++
++                                case Survived:
++                                        report.Summary.Survived++
++                                case Error:
++                                        report.Summary.Errors++
++                                }
++                                running--
++                                mu.Unlock()
++                        }
++                }()
++        }
++
++        for i := range executableIndexes {
++                select {
++                case <-ctx.Done():
++                        close(jobs)
++                        wg.Wait()
++                        return report, ctx.Err()
++                case jobs <- i:
++                }
++        }
++        close(jobs)
++        wg.Wait()
++
++        return report, firstErr
+ }
+ 
+ type statusReporter struct {
+-	done chan struct{}
+-	stop func()
++        done chan struct{}
++        stop func()
+ }
+ 
+ func startStatusReporting(cfg Config, mu *sync.Mutex, report *Report, running *int, startedAt time.Time) statusReporter {
+-	if cfg.Status == nil || cfg.StatusInterval <= 0 {
+-		return statusReporter{stop: func() {}}
+-	}
+-
+-	done := make(chan struct{})
+-	emit := func() {
+-		cfg.Status(snapshotStatus(mu, report, running, startedAt))
+-	}
+-	emit()
+-	go func() {
+-		ticker := time.NewTicker(cfg.StatusInterval)
+-		defer ticker.Stop()
+-		for {
+-			select {
+-			case <-ticker.C:
+-				emit()
+-			case <-done:
+-				return
+-			}
+-		}
+-	}()
+-
+-	return statusReporter{
+-		done: done,
+-		stop: func() {
+-			close(done)
+-			emit()
+-		},
+-	}
++        if cfg.Status == nil || cfg.StatusInterval <= 0 {
++                return statusReporter{stop: func() {}}
++        }
++
++        done := make(chan struct{})
++        emit := func() {
++                cfg.Status(snapshotStatus(mu, report, running, startedAt))
++        }
++        emit()
++        go func() {
++                ticker := time.NewTicker(cfg.StatusInterval)
++                defer ticker.Stop()
++                for {
++                        select {
++                        case <-ticker.C:
++                                emit()
++                        case <-done:
++                                return
++                        }
++                }
++        }()
++
++        return statusReporter{
++                done: done,
++                stop: func() {
++                        close(done)
++                        emit()
++                },
++        }
+ }
+ 
+ func snapshotStatus(mu *sync.Mutex, report *Report, running *int, startedAt time.Time) StatusSnapshot {
+-	mu.Lock()
+-	defer mu.Unlock()
+-	completed := report.Summary.Killed + report.Summary.Survived + report.Summary.Errors
+-	return StatusSnapshot{
+-		Elapsed:          time.Since(startedAt),
+-		Total:            report.Summary.Total,
+-		Completed:        completed,
+-		Running:          *running,
+-		Killed:           report.Summary.Killed,
+-		Survived:         report.Summary.Survived,
+-		Errors:           report.Summary.Errors,
+-		SkippedScenarios: report.Summary.SkippedScenarios,
+-		SkippedMutations: report.Summary.SkippedMutations,
+-	}
++        mu.Lock()
++        defer mu.Unlock()
++        completed := report.Summary.Killed + report.Summary.Survived + report.Summary.Errors
++        return StatusSnapshot{
++                Elapsed:          time.Since(startedAt),
++                Total:            report.Summary.Total,
++                Completed:        completed,
++                Running:          *running,
++                Killed:           report.Summary.Killed,
++                Survived:         report.Summary.Survived,
++                Errors:           report.Summary.Errors,
++                SkippedScenarios: report.Summary.SkippedScenarios,
++                SkippedMutations: report.Summary.SkippedMutations,
++        }
+ }
+ 
+-func acceptedSkips(cfg Config, mutations []Mutation) map[int]bool {
+-	if cfg.Level == "full" || cfg.FeaturePath == "" {
+-		return nil
+-	}
+-	metadata, ok := ReadMutationMetadata(cfg.FeaturePath)
+-	if !ok {
+-		return nil
+-	}
+-	if len(metadata.Manifest.Scenarios) == 0 && FeatureStampValid(cfg.FeaturePath) {
+-		skip := map[int]bool{}
+-		for i := range cfg.Feature.Scenarios {
+-			skip[i] = true
+-		}
+-		return skip
+-	}
+-	current := NewManifest(cfg.FeaturePath, cfg.Feature, Report{}, cfg.ImplementationHash)
+-	skip := map[int]bool{}
+-	for _, entry := range metadata.Manifest.Scenarios {
+-		if !manifestEntryReusable(metadata.Manifest, current, entry, cfg.Level, cfg.Feature, mutations) {
+-			continue
+-		}
+-		skip[entry.Index] = true
+-	}
+-	return skip
++func acceptedSkips(cfg Config, mutations []Mutation, currentFiltered map[string]bool) map[int]bool {
++        if cfg.Level == "full" || cfg.FeaturePath == "" {
++                return nil
++        }
++        metadata, ok := ReadMutationMetadata(cfg.FeaturePath)
++        if !ok {
++                return nil
++        }
++        if len(metadata.Manifest.Scenarios) == 0 && FeatureStampValid(cfg.FeaturePath, filterHashOf(cfg)) {
++                skip := map[int]bool{}
++                for i := range cfg.Feature.Scenarios {
++                        skip[i] = true
++                }
++                return skip
++        }
++        current := NewManifest(cfg.FeaturePath, cfg.Feature, Report{}, cfg.ImplementationHash, cfg.EquivalenceFilter)
++        skip := map[int]bool{}
++        for _, entry := range metadata.Manifest.Scenarios {
++                if !manifestEntryReusable(metadata.Manifest, current, entry, cfg.Level, cfg.Feature, mutations, currentFiltered, filterHashOf(cfg)) {
++                        continue
++                }
++                skip[entry.Index] = true
++        }
++        return skip
+ }
+ 
+-func manifestEntryReusable(old manifest, current manifest, entry scenarioManifest, level string, feature gherkin.Feature, mutations []Mutation) bool {
+-	if old.Version != 1 {
+-		return false
+-	}
+-	if old.FeatureName != current.FeatureName || old.FeaturePath != current.FeaturePath {
+-		return false
+-	}
+-	if old.BackgroundHash != current.BackgroundHash {
+-		return false
+-	}
+-	if level == "hard" && old.ImplementationHash != current.ImplementationHash {
+-		return false
+-	}
+-	if entry.Index < 0 || entry.Index >= len(feature.Scenarios) {
+-		return false
+-	}
+-	scenario := feature.Scenarios[entry.Index]
+-	if entry.Name != scenario.Name || entry.ScenarioHash != hashJSON(scenario) {
+-		return false
+-	}
+-	if entry.Result.Survived != 0 || entry.Result.Errors != 0 {
+-		return false
+-	}
+-	if entry.MutationCount != mutationCountForScenario(mutations, entry.Index) {
+-		return false
+-	}
+-	return true
++func filterHashOf(cfg Config) string {
++        if cfg.EquivalenceFilter == nil {
++                return ""
++        }
++        return cfg.EquivalenceFilter.Hash
++}
++
++func manifestEntryReusable(old manifest, current manifest, entry scenarioManifest, level string, feature gherkin.Feature, mutations []Mutation, currentFiltered map[string]bool, currentFilterHash string) bool {
++        if old.Version != 1 {
++                return false
++        }
++        if old.FeatureName != current.FeatureName || old.FeaturePath != current.FeaturePath {
++                return false
++        }
++        if old.BackgroundHash != current.BackgroundHash {
++                return false
++        }
++        if level == "hard" && old.ImplementationHash != current.ImplementationHash {
++                return false
++        }
++        if entry.Index < 0 || entry.Index >= len(feature.Scenarios) {
++                return false
++        }
++        scenario := feature.Scenarios[entry.Index]
++        if entry.Name != scenario.Name || entry.ScenarioHash != hashJSON(scenario) {
++                return false
++        }
++        if entry.Result.Survived != 0 || entry.Result.Errors != 0 {
++                return false
++        }
++        executableCount := 0
++        for _, m := range mutations {
++                if m.Scenario == entry.Index && !currentFiltered[m.ID] {
++                        executableCount++
++                }
++        }
++        if entry.MutationCount != executableCount {
++                return false
++        }
++        if old.EquivalenceFilterHash != "" && old.EquivalenceFilterHash != currentFilterHash {
++                return false
++        }
++        return true
+ }
+ 
+ func MutateValue(path string, value string) string {
+-	trimmed := strings.TrimSpace(value)
+-	lower := strings.ToLower(trimmed)
+-
+-	if strings.Contains(trimmed, ",") {
+-		parts := strings.Split(trimmed, ",")
+-		for i := range parts {
+-			parts[i] = strings.TrimSpace(parts[i])
+-		}
+-		index := int(seed(path, value) % uint64(len(parts)))
+-		parts[index] = MutateValue(path+"[]", parts[index])
+-		return strings.Join(parts, ", ")
+-	}
+-	if lower == "true" {
+-		return "false"
+-	}
+-	if lower == "false" {
+-		return "true"
+-	}
+-	if lower == "null" || lower == "nil" || lower == "none" {
+-		return "value"
+-	}
+-	if i, ok := parseInt(trimmed); ok {
+-		delta := int64(seed(path, value)%9) + 1
+-		if seed(path, value)%2 == 0 {
+-			delta = -delta
+-		}
+-		return strconv.FormatInt(i+delta, 10)
+-	}
+-	if f, ok := parseFloat(trimmed); ok {
+-		delta := float64((seed(path, value)%900)+100) / 100
+-		if seed(path, value)%2 == 0 {
+-			delta = -delta
+-		}
+-		return strconv.FormatFloat(f+delta, 'f', -1, 64)
+-	}
+-	return dither(path, value)
++        trimmed := strings.TrimSpace(value)
++        lower := strings.ToLower(trimmed)
++
++        if strings.Contains(trimmed, ",") {
++                parts := strings.Split(trimmed, ",")
++                for i := range parts {
++                        parts[i] = strings.TrimSpace(parts[i])
++                }
++                index := int(seed(path, value) % uint64(len(parts)))
++                parts[index] = MutateValue(path+"[]", parts[index])
++                return strings.Join(parts, ", ")
++        }
++        if lower == "true" {
++                return "false"
++        }
++        if lower == "false" {
++                return "true"
++        }
++        if lower == "null" || lower == "nil" || lower == "none" {
++                return "value"
++        }
++        if i, ok := parseInt(trimmed); ok {
++                delta := int64(seed(path, value)%9) + 1
++                if seed(path, value)%2 == 0 {
++                        delta = -delta
++                }
++                return strconv.FormatInt(i+delta, 10)
++        }
++        if f, ok := parseFloat(trimmed); ok {
++                delta := float64((seed(path, value)%900)+100) / 100
++                if seed(path, value)%2 == 0 {
++                        delta = -delta
++                }
++                return strconv.FormatFloat(f+delta, 'f', -1, 64)
++        }
++        return dither(path, value)
+ }
+ 
+ func makeResult(mutation Mutation, runnerResult RunnerResult) Result {
+-	status := Error
+-	switch runnerResult.Outcome {
+-	case TestFailure:
+-		status = Killed
+-	case TestSuccess:
+-		status = Survived
+-	case InfrastructureError:
+-		status = Error
+-	}
+-	return Result{
+-		Mutation: MutationView{
+-			ID:          mutation.ID,
+-			Path:        mutation.Path,
+-			Description: mutation.Description,
+-			Original:    mutation.Original,
+-			Mutated:     mutation.Mutated,
+-		},
+-		Status:   status,
+-		Output:   runnerResult.Output,
+-		Error:    runnerResult.Error,
+-		Duration: runnerResult.Duration,
+-	}
++        status := Error
++        switch runnerResult.Outcome {
++        case TestFailure:
++                status = Killed
++        case TestSuccess:
++                status = Survived
++        case InfrastructureError:
++                status = Error
++        }
++        return Result{
++                Mutation: MutationView{
++                        ID:          mutation.ID,
++                        Path:        mutation.Path,
++                        Description: mutation.Description,
++                        Original:    mutation.Original,
++                        Mutated:     mutation.Mutated,
++                },
++                Status:   status,
++                Output:   runnerResult.Output,
++                Error:    runnerResult.Error,
++                Duration: runnerResult.Duration,
++        }
+ }
+ 
+ func WriteTextReport(w interface{ Write([]byte) (int, error) }, report Report) error {
+-	if _, err := fmt.Fprintf(w, "total=%d killed=%d survived=%d errors=%d", report.Summary.Total, report.Summary.Killed, report.Summary.Survived, report.Summary.Errors); err != nil {
+-		return err
+-	}
+-	if report.Summary.SkippedScenarios > 0 || report.Summary.SkippedMutations > 0 {
+-		if _, err := fmt.Fprintf(w, " skipped_scenarios=%d skipped_mutations=%d", report.Summary.SkippedScenarios, report.Summary.SkippedMutations); err != nil {
+-			return err
+-		}
+-	}
+-	if _, err := fmt.Fprintln(w); err != nil {
+-		return err
+-	}
+-	for _, result := range report.Results {
+-		if _, err := fmt.Fprintf(w, "%-8s %s\n", result.Status, result.Mutation.Description); err != nil {
+-			return err
+-		}
+-		if result.Status == Survived || result.Status == Error {
+-			if result.Error != "" {
+-				if _, err := fmt.Fprintf(w, "  error: %s\n", result.Error); err != nil {
+-					return err
+-				}
+-			}
+-			if result.Output != "" {
+-				if _, err := fmt.Fprintf(w, "  output:\n%s\n", result.Output); err != nil {
+-					return err
+-				}
+-			}
+-		}
+-	}
+-	return nil
++        if _, err := fmt.Fprintf(w, "total=%d killed=%d survived=%d errors=%d", report.Summary.Total, report.Summary.Killed, report.Summary.Survived, report.Summary.Errors); err != nil {
++                return err
++        }
++        if report.Summary.FilteredEquivalents > 0 {
++                if _, err := fmt.Fprintf(w, " filtered_equivalents=%d", report.Summary.FilteredEquivalents); err != nil {
++                        return err
++                }
++        }
++        if report.Summary.SkippedScenarios > 0 || report.Summary.SkippedMutations > 0 {
++                if _, err := fmt.Fprintf(w, " skipped_scenarios=%d skipped_mutations=%d", report.Summary.SkippedScenarios, report.Summary.SkippedMutations); err != nil {
++                        return err
++                }
++        }
++        if _, err := fmt.Fprintln(w); err != nil {
++                return err
++        }
++        for _, result := range report.Results {
++                if _, err := fmt.Fprintf(w, "%-8s %s\n", result.Status, result.Mutation.Description); err != nil {
++                        return err
++                }
++                if result.Status == Survived || result.Status == Error {
++                        if result.Error != "" {
++                                if _, err := fmt.Fprintf(w, "  error: %s\n", result.Error); err != nil {
++                                        return err
++                                }
++                        }
++                        if result.Output != "" {
++                                if _, err := fmt.Fprintf(w, "  output:\n%s\n", result.Output); err != nil {
++                                        return err
++                                }
++                        }
++                }
++        }
++        if len(report.Filtered) > 0 {
++                if _, err := fmt.Fprintln(w, "filtered equivalents (not executed):"); err != nil {
++                        return err
++                }
++                for _, e := range report.Filtered {
++                        if _, err := fmt.Fprintf(w, "  %-6s %s [%s]\n", e.ID, e.Path, e.Class); err != nil {
++                                return err
++                        }
++                }
++        }
++        return nil
+ }
+ 
+ func WriteJSONReport(w interface{ Write([]byte) (int, error) }, report Report) error {
+-	encoder := json.NewEncoder(w)
+-	encoder.SetIndent("", "  ")
+-	return encoder.Encode(report)
++        encoder := json.NewEncoder(w)
++        encoder.SetIndent("", "  ")
++        return encoder.Encode(report)
+ }
+ 
+ func cloneFeature(feature gherkin.Feature) gherkin.Feature {
+-	copied := gherkin.Feature{
+-		Name:       feature.Name,
+-		Background: append([]gherkin.Step(nil), feature.Background...),
+-		Scenarios:  make([]gherkin.Scenario, len(feature.Scenarios)),
+-	}
+-	for i, scenario := range feature.Scenarios {
+-		copied.Scenarios[i] = gherkin.Scenario{
+-			Name:     scenario.Name,
+-			Steps:    append([]gherkin.Step(nil), scenario.Steps...),
+-			Examples: make([]map[string]string, len(scenario.Examples)),
+-		}
+-		for j, example := range scenario.Examples {
+-			copied.Scenarios[i].Examples[j] = make(map[string]string, len(example))
+-			for key, value := range example {
+-				copied.Scenarios[i].Examples[j][key] = value
+-			}
+-		}
+-	}
+-	return copied
++        copied := gherkin.Feature{
++                Name:       feature.Name,
++                Background: append([]gherkin.Step(nil), feature.Background...),
++                Scenarios:  make([]gherkin.Scenario, len(feature.Scenarios)),
++        }
++        for i, scenario := range feature.Scenarios {
++                copied.Scenarios[i] = gherkin.Scenario{
++                        Name:     scenario.Name,
++                        Steps:    append([]gherkin.Step(nil), scenario.Steps...),
++                        Examples: make([]map[string]string, len(scenario.Examples)),
++                }
++                for j, example := range scenario.Examples {
++                        copied.Scenarios[i].Examples[j] = make(map[string]string, len(example))
++                        for key, value := range example {
++                                copied.Scenarios[i].Examples[j][key] = value
++                        }
++                }
++        }
++        return copied
+ }
+ 
+ func writeJSON(path string, feature gherkin.Feature) error {
+-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+-		return err
+-	}
+-	file, err := os.Create(path)
+-	if err != nil {
+-		return err
+-	}
+-	defer file.Close()
+-	return gherkin.WriteJSON(file, feature)
++        if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
++                return err
++        }
++        file, err := os.Create(path)
++        if err != nil {
++                return err
++        }
++        defer file.Close()
++        return gherkin.WriteJSON(file, feature)
+ }
+ 
+ func parseInt(value string) (int64, bool) {
+-	if value == "" {
+-		return 0, false
+-	}
+-	i, err := strconv.ParseInt(value, 10, 64)
+-	return i, err == nil
++        if value == "" {
++                return 0, false
++        }
++        i, err := strconv.ParseInt(value, 10, 64)
++        return i, err == nil
+ }
+ 
+ func parseFloat(value string) (float64, bool) {
+-	if !strings.Contains(value, ".") {
+-		return 0, false
+-	}
+-	f, err := strconv.ParseFloat(value, 64)
+-	return f, err == nil && !math.IsInf(f, 0) && !math.IsNaN(f)
++        if !strings.Contains(value, ".") {
++                return 0, false
++        }
++        f, err := strconv.ParseFloat(value, 64)
++        return f, err == nil && !math.IsInf(f, 0) && !math.IsNaN(f)
+ }
+ 
+ func dither(path, value string) string {
+-	if value == "" {
+-		return "x"
+-	}
+-	runes := []rune(value)
+-	index := int(seed(path, value) % uint64(len(runes)))
+-	if runes[index] >= 'a' && runes[index] <= 'z' {
+-		runes[index] = runes[index] - 'a' + 'A'
+-		return string(runes)
+-	}
+-	if runes[index] >= 'A' && runes[index] <= 'Z' {
+-		runes[index] = runes[index] - 'A' + 'a'
+-		return string(runes)
+-	}
+-	runes[index] = 'x'
+-	return string(runes)
++        if value == "" {
++                return "x"
++        }
++        runes := []rune(value)
++        index := int(seed(path, value) % uint64(len(runes)))
++        if runes[index] >= 'a' && runes[index] <= 'z' {
++                runes[index] = runes[index] - 'a' + 'A'
++                return string(runes)
++        }
++        if runes[index] >= 'A' && runes[index] <= 'Z' {
++                runes[index] = runes[index] - 'A' + 'a'
++                return string(runes)
++        }
++        runes[index] = 'x'
++        return string(runes)
+ }
+ 
+ func seed(parts ...string) uint64 {
+-	h := fnv.New64a()
+-	for _, part := range parts {
+-		_, _ = h.Write([]byte(part))
+-		_, _ = h.Write([]byte{0})
+-	}
+-	return h.Sum64()
++        h := fnv.New64a()
++        for _, part := range parts {
++                _, _ = h.Write([]byte(part))
++                _, _ = h.Write([]byte{0})
++        }
++        return h.Sum64()
+ }
+ 
+ func DurationNanos(start time.Time) int64 {
+-	return int64(time.Since(start))
++        return int64(time.Since(start))
+ }

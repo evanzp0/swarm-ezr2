@@ -135,3 +135,10 @@
 - architecture.md — mktorrent bencode 合规解（自包含化 + #[path] 硬包含、克隆按构造消失）/「自包含」判据实操化（use 是否触达模块树外类型）/#[path] 共享三同步义务（测试桩 From 镜像、包含点姿态对齐、行号账目不同源前提）（新增）
 - testing.md — 错误类型重构行为等价论证法（消息串保留 + 消费点三类零改动 + 基线精确复现）/CRAP 管线全链复现（ACT=101 相等 + 稳定锚恒等 + 行覆盖漂移归因三证对账）（新增）
 - environment.md — 镜像漂移实录（rsproxy /dist/ 清单有效不带 arch、TUNA rust-static 本轮失效）/crap_calc 两参签名/persistent shell RUSTFLAGS 残留与 profraw 散落（新增）
+
+## 遗留受限项销项轮（2026-11-21，six-pack/QA）追加
+- testing.md — schema open_int 三分收敛二分（153 幸存格逐格裁决 closed 化定案 + verdict 1107+17 精确复现）/mutator δ 确定性与 LO_ONLY 敞口时点语义/APS 四件套重建接口契约清单（slug 全路径算法/summary 大驼峰键/base 推导三级/summary 键名）/bb-Go discover 逐值恒等互证/四元匹配 feature=stem 副本同名纪律/runner-worker 协议契约（/bin/false 假绿）/[m 形态序列三通道改写幻象与 chr(91) 双证判别/644 杀灭实证（new_peer_connection 沙箱可用 + gap644 测试 + ws_handle_offer 第二守卫）/cargo-mutants -F --re 双旗标/缺口账目 ID 权威清单落档（新增）
+- environment.md — 销项轮全新沙箱装机实录（TUNA 0.05s/rustup nightly 1.102.0/cargo-mutants 断点续传/bb 0.06MB/s 降速/Go 1.23.9 aliyun/pyte 探针写法）/9.9G 盘全程贴边清理口径（incremental 2.5G 死重 + 测试工件取数即删）/全量回归逐二进制路径提取 regex 口径（Executable 括号列，timeout 假绿看 log）/gh-proxy 大资产降速 -C - 标准动作（新增）
+- qa/mutation-gap-registry.json — 缺口账目 ID 权威清单（339 entry + 644 改判杀灭 + 2 unviable 终态；cargo-mutants 27.1.0 实测扫描）（新增）
+- qa/aps-go-equivalence-extension.patch — Go 版 mutator --equivalence-filter 移植补丁（equivalence.go + mutator/manifest/main 接线；HEAD 树干净可应用；四对照 + 真实数据 17/17 命中）（新增）
+- handoff.md — 操作者裁决「一轮串行」四销项落地（③644 改判杀灭/①ID 再生/④LO_ONLY 敞口消灭 + schema 口径演进/②Go 版 filter 移植）（新增）

@@ -1,0 +1,2401 @@
+{
+ "version": 1,
+ "generated_at": "2026-11-21",
+ "tool": "cargo-mutants 27.1.0",
+ "scope": [
+  "src/bt/engine/pieceio.rs",
+  "src/bt/engine/peerwire.rs",
+  "src/bt/engine/trackpool.rs"
+ ],
+ "counts": {
+  "src/bt/engine/peerwire.rs": 78,
+  "src/bt/engine/pieceio.rs": 209,
+  "src/bt/engine/trackpool.rs": 52
+ },
+ "total": 339,
+ "adjudged": {
+  "killed": [
+   "src/bt/engine/trackpool.rs:644:8: delete ! in ws_process_response"
+  ],
+  "unviable": [
+   "count_invalid_request->Some(Default) 编译错类（历轮 unviable 终态）",
+   "spawn_outgoing 删 Ok(Ok(s)) 臂 E0599 人工实证终态（历轮 unviable 终态）"
+  ]
+ },
+ "note": "缺口账目 ID 权威清单（遗留受限项销项轮再生）；未覆盖函数突变体沿历轮登记（杀灭状态不变），覆盖函数 140 = 138 killed（含 644 本轮改判）+ 2 unviable 终态；trackpool.rs 零改动 → 与历轮 209/78/52 逐数恒等",
+ "mutants": [
+  {
+   "id": "src/bt/engine/peerwire.rs:18:43: replace * with +",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 18,
+   "col": 43,
+   "mutation": "replace * with +"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:18:43: replace * with /",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 18,
+   "col": 43,
+   "mutation": "replace * with /"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:43:5: replace run_peer_loop with ()",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 43,
+   "col": 5,
+   "mutation": "replace run_peer_loop with ()"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:55:27: replace == with != in run_peer_loop",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 55,
+   "col": 27,
+   "mutation": "replace == with != in run_peer_loop"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:68:54: replace != with == in run_peer_loop",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 68,
+   "col": 54,
+   "mutation": "replace != with == in run_peer_loop"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:68:47: replace & with | in run_peer_loop",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 68,
+   "col": 47,
+   "mutation": "replace & with | in run_peer_loop"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:68:47: replace & with ^ in run_peer_loop",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 68,
+   "col": 47,
+   "mutation": "replace & with ^ in run_peer_loop"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:108:5: replace peer_pump with ()",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 108,
+   "col": 5,
+   "mutation": "replace peer_pump with ()"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:213:5: replace graceful_close with ()",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 213,
+   "col": 5,
+   "mutation": "replace graceful_close with ()"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:238:5: replace handle_peer_msg -> Option<BanKind> with None",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 238,
+   "col": 5,
+   "mutation": "replace handle_peer_msg -> Option<BanKind> with None"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:238:5: replace handle_peer_msg -> Option<BanKind> with Some(Default::default())",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 238,
+   "col": 5,
+   "mutation": "replace handle_peer_msg -> Option<BanKind> with Some(Default::default())"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:243:42: replace != with == in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 243,
+   "col": 42,
+   "mutation": "replace != with == in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:243:26: replace & with | in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 243,
+   "col": 26,
+   "mutation": "replace & with | in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:243:26: replace & with ^ in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 243,
+   "col": 26,
+   "mutation": "replace & with ^ in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:243:34: replace >> with << in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 243,
+   "col": 34,
+   "mutation": "replace >> with << in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:244:48: replace + with - in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 244,
+   "col": 48,
+   "mutation": "replace + with - in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:244:48: replace + with * in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 244,
+   "col": 48,
+   "mutation": "replace + with * in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:244:44: replace * with + in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 244,
+   "col": 44,
+   "mutation": "replace * with + in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:244:44: replace * with / in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 244,
+   "col": 44,
+   "mutation": "replace * with / in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:245:45: replace && with || in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 245,
+   "col": 45,
+   "mutation": "replace && with || in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:251:64: replace && with || in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 251,
+   "col": 64,
+   "mutation": "replace && with || in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:251:46: delete ! in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 251,
+   "col": 46,
+   "mutation": "delete ! in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:257:33: replace && with || in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 257,
+   "col": 33,
+   "mutation": "replace && with || in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:260:43: replace && with || in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 260,
+   "col": 43,
+   "mutation": "replace && with || in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:260:24: delete ! in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 260,
+   "col": 24,
+   "mutation": "delete ! in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:263:20: delete ! in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 263,
+   "col": 20,
+   "mutation": "delete ! in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:297:42: replace && with || in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 297,
+   "col": 42,
+   "mutation": "replace && with || in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:297:27: delete ! in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 297,
+   "col": 27,
+   "mutation": "delete ! in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:297:45: delete ! in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 297,
+   "col": 45,
+   "mutation": "delete ! in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:299:40: replace && with || in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 299,
+   "col": 40,
+   "mutation": "replace && with || in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:299:36: replace > with == in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 299,
+   "col": 36,
+   "mutation": "replace > with == in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:299:36: replace > with < in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 299,
+   "col": 36,
+   "mutation": "replace > with < in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:299:36: replace > with >= in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 299,
+   "col": 36,
+   "mutation": "replace > with >= in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:299:59: replace <= with > in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 299,
+   "col": 59,
+   "mutation": "replace <= with > in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:299:75: replace * with + in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 299,
+   "col": 75,
+   "mutation": "replace * with + in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:299:75: replace * with / in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 299,
+   "col": 75,
+   "mutation": "replace * with / in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:300:32: replace && with || in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 300,
+   "col": 32,
+   "mutation": "replace && with || in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:300:24: replace && with || in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 300,
+   "col": 24,
+   "mutation": "replace && with || in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:304:31: replace += with -= in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 304,
+   "col": 31,
+   "mutation": "replace += with -= in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:304:31: replace += with *= in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 304,
+   "col": 31,
+   "mutation": "replace += with *= in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:324:31: replace && with || in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 324,
+   "col": 31,
+   "mutation": "replace && with || in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:324:41: replace || with && in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 324,
+   "col": 41,
+   "mutation": "replace || with && in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:324:35: delete ! in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 324,
+   "col": 35,
+   "mutation": "delete ! in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:324:44: delete ! in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 324,
+   "col": 44,
+   "mutation": "delete ! in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:334:16: delete ! in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 334,
+   "col": 16,
+   "mutation": "delete ! in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:342:23: replace == with != in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 342,
+   "col": 23,
+   "mutation": "replace == with != in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:349:38: replace != with == in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 349,
+   "col": 38,
+   "mutation": "replace != with == in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:354:30: replace == with != in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 354,
+   "col": 30,
+   "mutation": "replace == with != in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:359:61: replace * with + in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 359,
+   "col": 61,
+   "mutation": "replace * with + in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:359:61: replace * with / in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 359,
+   "col": 61,
+   "mutation": "replace * with / in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:359:56: replace * with + in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 359,
+   "col": 56,
+   "mutation": "replace * with + in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:359:56: replace * with / in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 359,
+   "col": 56,
+   "mutation": "replace * with / in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:360:38: replace < with == in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 360,
+   "col": 38,
+   "mutation": "replace < with == in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:360:38: replace < with > in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 360,
+   "col": 38,
+   "mutation": "replace < with > in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:360:38: replace < with <= in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 360,
+   "col": 38,
+   "mutation": "replace < with <= in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:361:50: replace + with - in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 361,
+   "col": 50,
+   "mutation": "replace + with - in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:361:50: replace + with * in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 361,
+   "col": 50,
+   "mutation": "replace + with * in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:361:55: replace * with + in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 361,
+   "col": 55,
+   "mutation": "replace * with + in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:361:55: replace * with / in handle_peer_msg",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 361,
+   "col": 55,
+   "mutation": "replace * with / in handle_peer_msg"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:404:5: replace count_invalid_request -> Option<BanKind> with None",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 404,
+   "col": 5,
+   "mutation": "replace count_invalid_request -> Option<BanKind> with None"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:404:5: replace count_invalid_request -> Option<BanKind> with Some(Default::default())",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 404,
+   "col": 5,
+   "mutation": "replace count_invalid_request -> Option<BanKind> with Some(Default::default())"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:405:26: replace >= with < in count_invalid_request",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 405,
+   "col": 26,
+   "mutation": "replace >= with < in count_invalid_request"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:418:5: replace ban_and_drop with ()",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 418,
+   "col": 5,
+   "mutation": "replace ban_and_drop with ()"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:450:5: replace send with ()",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 450,
+   "col": 5,
+   "mutation": "replace send with ()"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:454:5: replace assemble_contiguous -> Option<Vec<u8>> with None",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 454,
+   "col": 5,
+   "mutation": "replace assemble_contiguous -> Option<Vec<u8>> with None"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:454:5: replace assemble_contiguous -> Option<Vec<u8>> with Some(vec![])",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 454,
+   "col": 5,
+   "mutation": "replace assemble_contiguous -> Option<Vec<u8>> with Some(vec![])"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:454:5: replace assemble_contiguous -> Option<Vec<u8>> with Some(vec![0])",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 454,
+   "col": 5,
+   "mutation": "replace assemble_contiguous -> Option<Vec<u8>> with Some(vec![0])"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:454:5: replace assemble_contiguous -> Option<Vec<u8>> with Some(vec![1])",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 454,
+   "col": 5,
+   "mutation": "replace assemble_contiguous -> Option<Vec<u8>> with Some(vec![1])"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:457:36: replace || with && in assemble_contiguous",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 457,
+   "col": 36,
+   "mutation": "replace || with && in assemble_contiguous"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:457:26: replace != with == in assemble_contiguous",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 457,
+   "col": 26,
+   "mutation": "replace != with == in assemble_contiguous"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:457:58: replace > with == in assemble_contiguous",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 457,
+   "col": 58,
+   "mutation": "replace > with == in assemble_contiguous"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:457:58: replace > with < in assemble_contiguous",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 457,
+   "col": 58,
+   "mutation": "replace > with < in assemble_contiguous"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:457:58: replace > with >= in assemble_contiguous",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 457,
+   "col": 58,
+   "mutation": "replace > with >= in assemble_contiguous"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:457:46: replace + with - in assemble_contiguous",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 457,
+   "col": 46,
+   "mutation": "replace + with - in assemble_contiguous"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:457:46: replace + with * in assemble_contiguous",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 457,
+   "col": 46,
+   "mutation": "replace + with * in assemble_contiguous"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:461:16: replace += with -= in assemble_contiguous",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 461,
+   "col": 16,
+   "mutation": "replace += with -= in assemble_contiguous"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:461:16: replace += with *= in assemble_contiguous",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 461,
+   "col": 16,
+   "mutation": "replace += with *= in assemble_contiguous"
+  },
+  {
+   "id": "src/bt/engine/peerwire.rs:463:15: replace == with != in assemble_contiguous",
+   "file": "src/bt/engine/peerwire.rs",
+   "line": 463,
+   "col": 15,
+   "mutation": "replace == with != in assemble_contiguous"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:29:5: replace write_piece_to_files -> bool with true",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 29,
+   "col": 5,
+   "mutation": "replace write_piece_to_files -> bool with true"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:29:5: replace write_piece_to_files -> bool with false",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 29,
+   "col": 5,
+   "mutation": "replace write_piece_to_files -> bool with false"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:34:17: replace && with || in write_piece_to_files",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 34,
+   "col": 17,
+   "mutation": "replace && with || in write_piece_to_files"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:35:74: replace + with - in write_piece_to_files",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 35,
+   "col": 74,
+   "mutation": "replace + with - in write_piece_to_files"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:35:74: replace + with * in write_piece_to_files",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 35,
+   "col": 74,
+   "mutation": "replace + with * in write_piece_to_files"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:38:37: replace && with || in write_piece_to_files",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 38,
+   "col": 37,
+   "mutation": "replace && with || in write_piece_to_files"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:39:16: delete ! in write_piece_to_files",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 39,
+   "col": 16,
+   "mutation": "delete ! in write_piece_to_files"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:56:5: replace restore_sidecar_partial with ()",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 56,
+   "col": 5,
+   "mutation": "replace restore_sidecar_partial with ()"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:58:34: replace || with && in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 58,
+   "col": 34,
+   "mutation": "replace || with && in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:58:37: delete ! in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 58,
+   "col": 37,
+   "mutation": "delete ! in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:72:17: replace || with && in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 72,
+   "col": 17,
+   "mutation": "replace || with && in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:71:17: replace || with && in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 71,
+   "col": 17,
+   "mutation": "replace || with && in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:70:17: replace || with && in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 70,
+   "col": 17,
+   "mutation": "replace || with && in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:70:57: replace != with == in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 70,
+   "col": 57,
+   "mutation": "replace != with == in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:70:26: replace % with / in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 70,
+   "col": 26,
+   "mutation": "replace % with / in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:70:26: replace % with + in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 70,
+   "col": 26,
+   "mutation": "replace % with + in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:71:26: replace < with == in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 71,
+   "col": 26,
+   "mutation": "replace < with == in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:71:26: replace < with > in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 71,
+   "col": 26,
+   "mutation": "replace < with > in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:71:26: replace < with <= in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 71,
+   "col": 26,
+   "mutation": "replace < with <= in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:72:46: replace > with == in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 72,
+   "col": 46,
+   "mutation": "replace > with == in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:72:46: replace > with < in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 72,
+   "col": 46,
+   "mutation": "replace > with < in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:72:46: replace > with >= in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 72,
+   "col": 46,
+   "mutation": "replace > with >= in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:72:26: replace + with - in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 72,
+   "col": 26,
+   "mutation": "replace + with - in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:72:26: replace + with * in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 72,
+   "col": 26,
+   "mutation": "replace + with * in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:76:32: replace + with - in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 76,
+   "col": 32,
+   "mutation": "replace + with - in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:76:32: replace + with * in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 76,
+   "col": 32,
+   "mutation": "replace + with * in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:84:17: replace && with || in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 84,
+   "col": 17,
+   "mutation": "replace && with || in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:87:29: replace += with -= in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 87,
+   "col": 29,
+   "mutation": "replace += with -= in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:87:29: replace += with *= in restore_sidecar_partial",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 87,
+   "col": 29,
+   "mutation": "replace += with *= in restore_sidecar_partial"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:99:5: replace claimed_blocks -> HashSet<(u32, u32)> with HashSet::new()",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 99,
+   "col": 5,
+   "mutation": "replace claimed_blocks -> HashSet<(u32, u32)> with HashSet::new()"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:99:5: replace claimed_blocks -> HashSet<(u32, u32)> with HashSet::from_iter([(0, 0)])",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 99,
+   "col": 5,
+   "mutation": "replace claimed_blocks -> HashSet<(u32, u32)> with HashSet::from_iter([(0, 0)])"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:99:5: replace claimed_blocks -> HashSet<(u32, u32)> with HashSet::from_iter([(0, 1)])",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 99,
+   "col": 5,
+   "mutation": "replace claimed_blocks -> HashSet<(u32, u32)> with HashSet::from_iter([(0, 1)])"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:99:5: replace claimed_blocks -> HashSet<(u32, u32)> with HashSet::from_iter([(1, 0)])",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 99,
+   "col": 5,
+   "mutation": "replace claimed_blocks -> HashSet<(u32, u32)> with HashSet::from_iter([(1, 0)])"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:99:5: replace claimed_blocks -> HashSet<(u32, u32)> with HashSet::from_iter([(1, 1)])",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 99,
+   "col": 5,
+   "mutation": "replace claimed_blocks -> HashSet<(u32, u32)> with HashSet::from_iter([(1, 1)])"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:116:5: replace endgame_active -> bool with true",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 116,
+   "col": 5,
+   "mutation": "replace endgame_active -> bool with true"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:116:5: replace endgame_active -> bool with false",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 116,
+   "col": 5,
+   "mutation": "replace endgame_active -> bool with false"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:116:19: replace >= with < in endgame_active",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 116,
+   "col": 19,
+   "mutation": "replace >= with < in endgame_active"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:125:21: replace < with == in endgame_active",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 125,
+   "col": 21,
+   "mutation": "replace < with == in endgame_active"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:125:21: replace < with > in endgame_active",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 125,
+   "col": 21,
+   "mutation": "replace < with > in endgame_active"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:125:21: replace < with <= in endgame_active",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 125,
+   "col": 21,
+   "mutation": "replace < with <= in endgame_active"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:126:16: delete ! in endgame_active",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 126,
+   "col": 16,
+   "mutation": "delete ! in endgame_active"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:129:19: replace += with -= in endgame_active",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 129,
+   "col": 19,
+   "mutation": "replace += with -= in endgame_active"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:129:19: replace += with *= in endgame_active",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 129,
+   "col": 19,
+   "mutation": "replace += with *= in endgame_active"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:145:5: replace issue_requests with ()",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 145,
+   "col": 5,
+   "mutation": "replace issue_requests with ()"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:146:24: replace || with && in issue_requests",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 146,
+   "col": 24,
+   "mutation": "replace || with && in issue_requests"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:146:45: replace >= with < in issue_requests",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 146,
+   "col": 45,
+   "mutation": "replace >= with < in issue_requests"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:158:16: replace += with -= in issue_requests",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 158,
+   "col": 16,
+   "mutation": "replace += with -= in issue_requests"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:158:16: replace += with *= in issue_requests",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 158,
+   "col": 16,
+   "mutation": "replace += with *= in issue_requests"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:162:30: replace >= with < in issue_requests",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 162,
+   "col": 30,
+   "mutation": "replace >= with < in issue_requests"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:166:20: replace && with || in issue_requests",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 166,
+   "col": 20,
+   "mutation": "replace && with || in issue_requests"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:166:15: replace == with != in issue_requests",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 166,
+   "col": 15,
+   "mutation": "replace == with != in issue_requests"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:172:34: replace >= with < in issue_requests",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 172,
+   "col": 34,
+   "mutation": "replace >= with < in issue_requests"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:190:5: replace request_blocks_of_piece -> usize with 0",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 190,
+   "col": 5,
+   "mutation": "replace request_blocks_of_piece -> usize with 0"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:190:5: replace request_blocks_of_piece -> usize with 1",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 190,
+   "col": 5,
+   "mutation": "replace request_blocks_of_piece -> usize with 1"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:193:58: replace && with || in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 193,
+   "col": 58,
+   "mutation": "replace && with || in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:193:24: replace && with || in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 193,
+   "col": 24,
+   "mutation": "replace && with || in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:193:17: replace < with == in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 193,
+   "col": 17,
+   "mutation": "replace < with == in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:193:17: replace < with > in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 193,
+   "col": 17,
+   "mutation": "replace < with > in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:193:17: replace < with <= in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 193,
+   "col": 17,
+   "mutation": "replace < with <= in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:193:33: replace < with == in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 193,
+   "col": 33,
+   "mutation": "replace < with == in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:193:33: replace < with > in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 193,
+   "col": 33,
+   "mutation": "replace < with > in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:193:33: replace < with <= in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 193,
+   "col": 33,
+   "mutation": "replace < with <= in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:193:79: replace < with == in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 193,
+   "col": 79,
+   "mutation": "replace < with == in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:193:79: replace < with > in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 193,
+   "col": 79,
+   "mutation": "replace < with > in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:193:79: replace < with <= in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 193,
+   "col": 79,
+   "mutation": "replace < with <= in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:200:13: replace || with && in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 200,
+   "col": 13,
+   "mutation": "replace || with && in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:199:13: replace || with && in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 199,
+   "col": 13,
+   "mutation": "replace || with && in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:199:26: replace && with || in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 199,
+   "col": 26,
+   "mutation": "replace && with || in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:199:17: delete ! in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 199,
+   "col": 17,
+   "mutation": "delete ! in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:200:25: replace && with || in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 200,
+   "col": 25,
+   "mutation": "replace && with || in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:202:19: replace += with -= in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 202,
+   "col": 19,
+   "mutation": "replace += with -= in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:202:19: replace += with *= in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 202,
+   "col": 19,
+   "mutation": "replace += with *= in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:205:25: replace - with + in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 205,
+   "col": 25,
+   "mutation": "replace - with + in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:205:25: replace - with / in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 205,
+   "col": 25,
+   "mutation": "replace - with / in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:217:15: replace += with -= in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 217,
+   "col": 15,
+   "mutation": "replace += with -= in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:217:15: replace += with *= in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 217,
+   "col": 15,
+   "mutation": "replace += with *= in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:218:15: replace += with -= in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 218,
+   "col": 15,
+   "mutation": "replace += with -= in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:218:15: replace += with *= in request_blocks_of_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 218,
+   "col": 15,
+   "mutation": "replace += with *= in request_blocks_of_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:224:5: replace shed_excess_conns -> Vec<usize> with vec![]",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 224,
+   "col": 5,
+   "mutation": "replace shed_excess_conns -> Vec<usize> with vec![]"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:224:5: replace shed_excess_conns -> Vec<usize> with vec![0]",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 224,
+   "col": 5,
+   "mutation": "replace shed_excess_conns -> Vec<usize> with vec![0]"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:224:5: replace shed_excess_conns -> Vec<usize> with vec![1]",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 224,
+   "col": 5,
+   "mutation": "replace shed_excess_conns -> Vec<usize> with vec![1]"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:225:15: replace == with != in shed_excess_conns",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 225,
+   "col": 15,
+   "mutation": "replace == with != in shed_excess_conns"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:245:5: replace cancel_inflight_not_covered with ()",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 245,
+   "col": 5,
+   "mutation": "replace cancel_inflight_not_covered with ()"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:249:26: delete ! in cancel_inflight_not_covered",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 249,
+   "col": 26,
+   "mutation": "delete ! in cancel_inflight_not_covered"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:264:5: replace recompute_downloaded -> u64 with 0",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 264,
+   "col": 5,
+   "mutation": "replace recompute_downloaded -> u64 with 0"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:264:5: replace recompute_downloaded -> u64 with 1",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 264,
+   "col": 5,
+   "mutation": "replace recompute_downloaded -> u64 with 1"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:271:5: replace open_selected_file_handle -> Result<tokio::fs::File, String> with Ok(Default::default())",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 271,
+   "col": 5,
+   "mutation": "replace open_selected_file_handle -> Result<tokio::fs::File, String> with Ok(Default::default())"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:283:15: replace > with == in open_selected_file_handle",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 283,
+   "col": 15,
+   "mutation": "replace > with == in open_selected_file_handle"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:283:15: replace > with < in open_selected_file_handle",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 283,
+   "col": 15,
+   "mutation": "replace > with < in open_selected_file_handle"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:283:15: replace > with >= in open_selected_file_handle",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 283,
+   "col": 15,
+   "mutation": "replace > with >= in open_selected_file_handle"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:299:5: replace fill_peer_slots with ()",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 299,
+   "col": 5,
+   "mutation": "replace fill_peer_slots with ()"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:299:8: delete ! in fill_peer_slots",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 299,
+   "col": 8,
+   "mutation": "delete ! in fill_peer_slots"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:324:23: replace < with == in fill_peer_slots",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 324,
+   "col": 23,
+   "mutation": "replace < with == in fill_peer_slots"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:324:23: replace < with > in fill_peer_slots",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 324,
+   "col": 23,
+   "mutation": "replace < with > in fill_peer_slots"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:324:23: replace < with <= in fill_peer_slots",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 324,
+   "col": 23,
+   "mutation": "replace < with <= in fill_peer_slots"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:330:21: replace && with || in fill_peer_slots",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 330,
+   "col": 21,
+   "mutation": "replace && with || in fill_peer_slots"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:329:21: replace && with || in fill_peer_slots",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 329,
+   "col": 21,
+   "mutation": "replace && with || in fill_peer_slots"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:328:17: delete ! in fill_peer_slots",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 328,
+   "col": 17,
+   "mutation": "delete ! in fill_peer_slots"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:329:24: delete ! in fill_peer_slots",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 329,
+   "col": 24,
+   "mutation": "delete ! in fill_peer_slots"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:350:20: replace += with -= in fill_peer_slots",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 350,
+   "col": 20,
+   "mutation": "replace += with -= in fill_peer_slots"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:350:20: replace += with *= in fill_peer_slots",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 350,
+   "col": 20,
+   "mutation": "replace += with *= in fill_peer_slots"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:362:5: replace apply_choker -> Option<usize> with None",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 362,
+   "col": 5,
+   "mutation": "replace apply_choker -> Option<usize> with None"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:362:5: replace apply_choker -> Option<usize> with Some(0)",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 362,
+   "col": 5,
+   "mutation": "replace apply_choker -> Option<usize> with Some(0)"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:362:5: replace apply_choker -> Option<usize> with Some(1)",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 362,
+   "col": 5,
+   "mutation": "replace apply_choker -> Option<usize> with Some(1)"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:378:26: replace > with == in apply_choker",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 378,
+   "col": 26,
+   "mutation": "replace > with == in apply_choker"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:378:26: replace > with < in apply_choker",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 378,
+   "col": 26,
+   "mutation": "replace > with < in apply_choker"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:378:26: replace > with >= in apply_choker",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 378,
+   "col": 26,
+   "mutation": "replace > with >= in apply_choker"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:379:62: replace / with % in apply_choker",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 379,
+   "col": 62,
+   "mutation": "replace / with % in apply_choker"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:379:62: replace / with * in apply_choker",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 379,
+   "col": 62,
+   "mutation": "replace / with * in apply_choker"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:397:23: delete ! in apply_choker",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 397,
+   "col": 23,
+   "mutation": "delete ! in apply_choker"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:401:33: replace || with && in apply_choker",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 401,
+   "col": 33,
+   "mutation": "replace || with && in apply_choker"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:401:36: delete ! in apply_choker",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 401,
+   "col": 36,
+   "mutation": "delete ! in apply_choker"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:402:56: replace % with / in apply_choker",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 402,
+   "col": 56,
+   "mutation": "replace % with / in apply_choker"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:402:56: replace % with + in apply_choker",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 402,
+   "col": 56,
+   "mutation": "replace % with + in apply_choker"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:406:41: replace || with && in apply_choker",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 406,
+   "col": 41,
+   "mutation": "replace || with && in apply_choker"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:406:60: replace == with != in apply_choker",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 406,
+   "col": 60,
+   "mutation": "replace == with != in apply_choker"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:407:17: replace && with || in apply_choker",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 407,
+   "col": 17,
+   "mutation": "replace && with || in apply_choker"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:413:25: replace && with || in apply_choker",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 413,
+   "col": 25,
+   "mutation": "replace && with || in apply_choker"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:413:19: delete ! in apply_choker",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 413,
+   "col": 19,
+   "mutation": "delete ! in apply_choker"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:413:28: delete ! in apply_choker",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 413,
+   "col": 28,
+   "mutation": "delete ! in apply_choker"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:436:5: replace on_block -> Option<BanKind> with None",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 436,
+   "col": 5,
+   "mutation": "replace on_block -> Option<BanKind> with None"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:436:5: replace on_block -> Option<BanKind> with Some(Default::default())",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 436,
+   "col": 5,
+   "mutation": "replace on_block -> Option<BanKind> with Some(Default::default())"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:447:8: delete ! in on_block",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 447,
+   "col": 8,
+   "mutation": "delete ! in on_block"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:465:17: replace += with -= in on_block",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 465,
+   "col": 17,
+   "mutation": "replace += with -= in on_block"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:465:17: replace += with *= in on_block",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 465,
+   "col": 17,
+   "mutation": "replace += with *= in on_block"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:507:16: delete ! in on_block",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 507,
+   "col": 16,
+   "mutation": "delete ! in on_block"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:512:25: replace += with -= in on_block",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 512,
+   "col": 25,
+   "mutation": "replace += with -= in on_block"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:512:25: replace += with *= in on_block",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 512,
+   "col": 25,
+   "mutation": "replace += with *= in on_block"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:523:30: replace >= with < in on_block",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 523,
+   "col": 30,
+   "mutation": "replace >= with < in on_block"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:566:5: replace file_abs_path -> String with String::new()",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 566,
+   "col": 5,
+   "mutation": "replace file_abs_path -> String with String::new()"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:566:5: replace file_abs_path -> String with \"xyzzy\".into()",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 566,
+   "col": 5,
+   "mutation": "replace file_abs_path -> String with \"xyzzy\".into()"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:578:5: replace verify_piece_from_disk -> bool with true",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 578,
+   "col": 5,
+   "mutation": "replace verify_piece_from_disk -> bool with true"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:578:5: replace verify_piece_from_disk -> bool with false",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 578,
+   "col": 5,
+   "mutation": "replace verify_piece_from_disk -> bool with false"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:589:5: replace read_piece_from_disk -> Result<Vec<u8>, BtError> with Ok(vec![])",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 589,
+   "col": 5,
+   "mutation": "replace read_piece_from_disk -> Result<Vec<u8>, BtError> with Ok(vec![])"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:589:5: replace read_piece_from_disk -> Result<Vec<u8>, BtError> with Ok(vec![0])",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 589,
+   "col": 5,
+   "mutation": "replace read_piece_from_disk -> Result<Vec<u8>, BtError> with Ok(vec![0])"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:589:5: replace read_piece_from_disk -> Result<Vec<u8>, BtError> with Ok(vec![1])",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 589,
+   "col": 5,
+   "mutation": "replace read_piece_from_disk -> Result<Vec<u8>, BtError> with Ok(vec![1])"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:602:73: replace + with - in read_piece_from_disk",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 602,
+   "col": 73,
+   "mutation": "replace + with - in read_piece_from_disk"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:602:73: replace + with * in read_piece_from_disk",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 602,
+   "col": 73,
+   "mutation": "replace + with * in read_piece_from_disk"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:616:5: replace save_bt_sidecar with ()",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 616,
+   "col": 5,
+   "mutation": "replace save_bt_sidecar with ()"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:621:5: replace save_bt_sidecar_full with ()",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 621,
+   "col": 5,
+   "mutation": "replace save_bt_sidecar_full with ()"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:623:26: delete ! in save_bt_sidecar_full",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 623,
+   "col": 26,
+   "mutation": "delete ! in save_bt_sidecar_full"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:637:5: replace bitfield_bytes -> Vec<u8> with vec![]",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 637,
+   "col": 5,
+   "mutation": "replace bitfield_bytes -> Vec<u8> with vec![]"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:637:5: replace bitfield_bytes -> Vec<u8> with vec![0]",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 637,
+   "col": 5,
+   "mutation": "replace bitfield_bytes -> Vec<u8> with vec![0]"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:637:5: replace bitfield_bytes -> Vec<u8> with vec![1]",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 637,
+   "col": 5,
+   "mutation": "replace bitfield_bytes -> Vec<u8> with vec![1]"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:637:19: replace == with != in bitfield_bytes",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 637,
+   "col": 19,
+   "mutation": "replace == with != in bitfield_bytes"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:643:27: replace / with % in bitfield_bytes",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 643,
+   "col": 27,
+   "mutation": "replace / with % in bitfield_bytes"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:643:27: replace / with * in bitfield_bytes",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 643,
+   "col": 27,
+   "mutation": "replace / with * in bitfield_bytes"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:643:34: replace % with / in bitfield_bytes",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 643,
+   "col": 34,
+   "mutation": "replace % with / in bitfield_bytes"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:643:34: replace % with + in bitfield_bytes",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 643,
+   "col": 34,
+   "mutation": "replace % with + in bitfield_bytes"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:644:25: replace < with == in bitfield_bytes",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 644,
+   "col": 25,
+   "mutation": "replace < with == in bitfield_bytes"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:644:25: replace < with > in bitfield_bytes",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 644,
+   "col": 25,
+   "mutation": "replace < with > in bitfield_bytes"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:644:25: replace < with <= in bitfield_bytes",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 644,
+   "col": 25,
+   "mutation": "replace < with <= in bitfield_bytes"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:645:27: replace |= with &= in bitfield_bytes",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 645,
+   "col": 27,
+   "mutation": "replace |= with &= in bitfield_bytes"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:645:35: replace >> with << in bitfield_bytes",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 645,
+   "col": 35,
+   "mutation": "replace >> with << in bitfield_bytes"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:660:5: replace upload_read_plan -> Option<Vec<UploadSeg>> with None",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 660,
+   "col": 5,
+   "mutation": "replace upload_read_plan -> Option<Vec<UploadSeg>> with None"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:660:5: replace upload_read_plan -> Option<Vec<UploadSeg>> with Some(vec![])",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 660,
+   "col": 5,
+   "mutation": "replace upload_read_plan -> Option<Vec<UploadSeg>> with Some(vec![])"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:660:5: replace upload_read_plan -> Option<Vec<UploadSeg>> with Some(vec![Default::default()])",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 660,
+   "col": 5,
+   "mutation": "replace upload_read_plan -> Option<Vec<UploadSeg>> with Some(vec![Default::default()])"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:662:20: replace > with == in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 662,
+   "col": 20,
+   "mutation": "replace > with == in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:662:20: replace > with < in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 662,
+   "col": 20,
+   "mutation": "replace > with < in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:662:20: replace > with >= in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 662,
+   "col": 20,
+   "mutation": "replace > with >= in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:662:14: replace + with - in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 662,
+   "col": 14,
+   "mutation": "replace + with - in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:662:14: replace + with * in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 662,
+   "col": 14,
+   "mutation": "replace + with * in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:665:36: replace * with + in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 665,
+   "col": 36,
+   "mutation": "replace * with + in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:665:36: replace * with / in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 665,
+   "col": 36,
+   "mutation": "replace * with / in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:666:22: replace + with - in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 666,
+   "col": 22,
+   "mutation": "replace + with - in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:666:22: replace + with * in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 666,
+   "col": 22,
+   "mutation": "replace + with * in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:667:17: replace + with - in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 667,
+   "col": 17,
+   "mutation": "replace + with - in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:667:17: replace + with * in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 667,
+   "col": 17,
+   "mutation": "replace + with * in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:670:30: replace + with - in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 670,
+   "col": 30,
+   "mutation": "replace + with - in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:670:30: replace + with * in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 670,
+   "col": 30,
+   "mutation": "replace + with * in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:671:29: replace + with - in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 671,
+   "col": 29,
+   "mutation": "replace + with - in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:671:29: replace + with * in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 671,
+   "col": 29,
+   "mutation": "replace + with * in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:674:17: replace >= with < in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 674,
+   "col": 17,
+   "mutation": "replace >= with < in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:677:25: replace - with + in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 677,
+   "col": 25,
+   "mutation": "replace - with + in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:677:25: replace - with / in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 677,
+   "col": 25,
+   "mutation": "replace - with / in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:678:23: replace - with + in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 678,
+   "col": 23,
+   "mutation": "replace - with + in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:678:23: replace - with / in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 678,
+   "col": 23,
+   "mutation": "replace - with / in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:682:25: replace + with - in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 682,
+   "col": 25,
+   "mutation": "replace + with - in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:682:25: replace + with * in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 682,
+   "col": 25,
+   "mutation": "replace + with * in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:682:33: replace - with + in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 682,
+   "col": 33,
+   "mutation": "replace - with + in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:682:33: replace - with / in upload_read_plan",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 682,
+   "col": 33,
+   "mutation": "replace - with / in upload_read_plan"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:691:5: replace read_upload_blocks -> Option<Vec<u8>> with None",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 691,
+   "col": 5,
+   "mutation": "replace read_upload_blocks -> Option<Vec<u8>> with None"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:691:5: replace read_upload_blocks -> Option<Vec<u8>> with Some(vec![])",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 691,
+   "col": 5,
+   "mutation": "replace read_upload_blocks -> Option<Vec<u8>> with Some(vec![])"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:691:5: replace read_upload_blocks -> Option<Vec<u8>> with Some(vec![0])",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 691,
+   "col": 5,
+   "mutation": "replace read_upload_blocks -> Option<Vec<u8>> with Some(vec![0])"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:691:5: replace read_upload_blocks -> Option<Vec<u8>> with Some(vec![1])",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 691,
+   "col": 5,
+   "mutation": "replace read_upload_blocks -> Option<Vec<u8>> with Some(vec![1])"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:697:41: replace + with - in read_upload_blocks",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 697,
+   "col": 41,
+   "mutation": "replace + with - in read_upload_blocks"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:697:41: replace + with * in read_upload_blocks",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 697,
+   "col": 41,
+   "mutation": "replace + with * in read_upload_blocks"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:698:16: replace += with -= in read_upload_blocks",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 698,
+   "col": 16,
+   "mutation": "replace += with -= in read_upload_blocks"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:698:16: replace += with *= in read_upload_blocks",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 698,
+   "col": 16,
+   "mutation": "replace += with *= in read_upload_blocks"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:700:15: replace == with != in read_upload_blocks",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 700,
+   "col": 15,
+   "mutation": "replace == with != in read_upload_blocks"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:708:5: replace verify_piece -> bool with true",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 708,
+   "col": 5,
+   "mutation": "replace verify_piece -> bool with true"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:708:5: replace verify_piece -> bool with false",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 708,
+   "col": 5,
+   "mutation": "replace verify_piece -> bool with false"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:711:33: replace == with != in verify_piece",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 711,
+   "col": 33,
+   "mutation": "replace == with != in verify_piece"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:716:5: replace selected_bytes_of_piece -> u64 with 0",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 716,
+   "col": 5,
+   "mutation": "replace selected_bytes_of_piece -> u64 with 0"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:716:5: replace selected_bytes_of_piece -> u64 with 1",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 716,
+   "col": 5,
+   "mutation": "replace selected_bytes_of_piece -> u64 with 1"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:721:5: replace partial_piece_list -> Vec<u32> with vec![]",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 721,
+   "col": 5,
+   "mutation": "replace partial_piece_list -> Vec<u32> with vec![]"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:721:5: replace partial_piece_list -> Vec<u32> with vec![0]",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 721,
+   "col": 5,
+   "mutation": "replace partial_piece_list -> Vec<u32> with vec![0]"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:721:5: replace partial_piece_list -> Vec<u32> with vec![1]",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 721,
+   "col": 5,
+   "mutation": "replace partial_piece_list -> Vec<u32> with vec![1]"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:723:21: delete ! in partial_piece_list",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 723,
+   "col": 21,
+   "mutation": "delete ! in partial_piece_list"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:735:5: replace inflight_piece_list -> Vec<u32> with vec![]",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 735,
+   "col": 5,
+   "mutation": "replace inflight_piece_list -> Vec<u32> with vec![]"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:735:5: replace inflight_piece_list -> Vec<u32> with vec![0]",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 735,
+   "col": 5,
+   "mutation": "replace inflight_piece_list -> Vec<u32> with vec![0]"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:735:5: replace inflight_piece_list -> Vec<u32> with vec![1]",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 735,
+   "col": 5,
+   "mutation": "replace inflight_piece_list -> Vec<u32> with vec![1]"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:738:16: delete ! in inflight_piece_list",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 738,
+   "col": 16,
+   "mutation": "delete ! in inflight_piece_list"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:749:5: replace uploaded_total -> u64 with 0",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 749,
+   "col": 5,
+   "mutation": "replace uploaded_total -> u64 with 0"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:749:5: replace uploaded_total -> u64 with 1",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 749,
+   "col": 5,
+   "mutation": "replace uploaded_total -> u64 with 1"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:753:5: replace all_selected_done -> bool with true",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 753,
+   "col": 5,
+   "mutation": "replace all_selected_done -> bool with true"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:753:5: replace all_selected_done -> bool with false",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 753,
+   "col": 5,
+   "mutation": "replace all_selected_done -> bool with false"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:753:39: replace && with || in all_selected_done",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 753,
+   "col": 39,
+   "mutation": "replace && with || in all_selected_done"
+  },
+  {
+   "id": "src/bt/engine/pieceio.rs:753:5: delete ! in all_selected_done",
+   "file": "src/bt/engine/pieceio.rs",
+   "line": 753,
+   "col": 5,
+   "mutation": "delete ! in all_selected_done"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:70:5: replace spawn_tracker -> tokio::task::AbortHandle with Default::default()",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 70,
+   "col": 5,
+   "mutation": "replace spawn_tracker -> tokio::task::AbortHandle with Default::default()"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:95:33: replace && with || in spawn_tracker",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 95,
+   "col": 33,
+   "mutation": "replace && with || in spawn_tracker"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:95:36: delete ! in spawn_tracker",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 95,
+   "col": 36,
+   "mutation": "delete ! in spawn_tracker"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:198:5: replace start_tracker_pool -> (Vec<Arc<tokio::sync::Notify>>, Vec<tokio::task::AbortHandle>) with (vec![], vec![])",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 198,
+   "col": 5,
+   "mutation": "replace start_tracker_pool -> (Vec<Arc<tokio::sync::Notify>>, Vec<tokio::task::AbortHandle>) with (vec![], vec![])"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:198:5: replace start_tracker_pool -> (Vec<Arc<tokio::sync::Notify>>, Vec<tokio::task::AbortHandle>) with (vec![], vec![Default::default()])",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 198,
+   "col": 5,
+   "mutation": "replace start_tracker_pool -> (Vec<Arc<tokio::sync::Notify>>, Vec<tokio::task::AbortHandle>) with (vec![], vec![Default::default()])"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:198:5: replace start_tracker_pool -> (Vec<Arc<tokio::sync::Notify>>, Vec<tokio::task::AbortHandle>) with (vec![Arc::new(Default::default())], vec![])",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 198,
+   "col": 5,
+   "mutation": "replace start_tracker_pool -> (Vec<Arc<tokio::sync::Notify>>, Vec<tokio::task::AbortHandle>) with (vec![Arc::new(Default::default())], vec![])"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:198:5: replace start_tracker_pool -> (Vec<Arc<tokio::sync::Notify>>, Vec<tokio::task::AbortHandle>) with (vec![Arc::new(Default::default())], vec![Default::default()])",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 198,
+   "col": 5,
+   "mutation": "replace start_tracker_pool -> (Vec<Arc<tokio::sync::Notify>>, Vec<tokio::task::AbortHandle>) with (vec![Arc::new(Default::default())], vec![Default::default()])"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:237:5: replace spawn_stopped_announce with ()",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 237,
+   "col": 5,
+   "mutation": "replace spawn_stopped_announce with ()"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:276:5: replace live_snapshot -> (u64, u64, u64) with (0, 0, 0)",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 276,
+   "col": 5,
+   "mutation": "replace live_snapshot -> (u64, u64, u64) with (0, 0, 0)"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:276:5: replace live_snapshot -> (u64, u64, u64) with (0, 0, 1)",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 276,
+   "col": 5,
+   "mutation": "replace live_snapshot -> (u64, u64, u64) with (0, 0, 1)"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:276:5: replace live_snapshot -> (u64, u64, u64) with (0, 1, 0)",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 276,
+   "col": 5,
+   "mutation": "replace live_snapshot -> (u64, u64, u64) with (0, 1, 0)"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:276:5: replace live_snapshot -> (u64, u64, u64) with (0, 1, 1)",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 276,
+   "col": 5,
+   "mutation": "replace live_snapshot -> (u64, u64, u64) with (0, 1, 1)"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:276:5: replace live_snapshot -> (u64, u64, u64) with (1, 0, 0)",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 276,
+   "col": 5,
+   "mutation": "replace live_snapshot -> (u64, u64, u64) with (1, 0, 0)"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:276:5: replace live_snapshot -> (u64, u64, u64) with (1, 0, 1)",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 276,
+   "col": 5,
+   "mutation": "replace live_snapshot -> (u64, u64, u64) with (1, 0, 1)"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:276:5: replace live_snapshot -> (u64, u64, u64) with (1, 1, 0)",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 276,
+   "col": 5,
+   "mutation": "replace live_snapshot -> (u64, u64, u64) with (1, 1, 0)"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:276:5: replace live_snapshot -> (u64, u64, u64) with (1, 1, 1)",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 276,
+   "col": 5,
+   "mutation": "replace live_snapshot -> (u64, u64, u64) with (1, 1, 1)"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:290:5: replace ws_tracker_session -> Result<(), BtError> with Ok(())",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 290,
+   "col": 5,
+   "mutation": "replace ws_tracker_session -> Result<(), BtError> with Ok(())"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:304:29: replace && with || in ws_tracker_session",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 304,
+   "col": 29,
+   "mutation": "replace && with || in ws_tracker_session"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:304:32: delete ! in ws_tracker_session",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 304,
+   "col": 32,
+   "mutation": "delete ! in ws_tracker_session"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:329:28: replace == with != in ws_tracker_session",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 329,
+   "col": 28,
+   "mutation": "replace == with != in ws_tracker_session"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:337:47: replace + with - in ws_tracker_session",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 337,
+   "col": 47,
+   "mutation": "replace + with - in ws_tracker_session"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:337:47: replace + with * in ws_tracker_session",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 337,
+   "col": 47,
+   "mutation": "replace + with * in ws_tracker_session"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:413:5: replace ws_prepare_offers -> Vec<WsOffer> with vec![]",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 413,
+   "col": 5,
+   "mutation": "replace ws_prepare_offers -> Vec<WsOffer> with vec![]"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:413:5: replace ws_prepare_offers -> Vec<WsOffer> with vec![Default::default()]",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 413,
+   "col": 5,
+   "mutation": "replace ws_prepare_offers -> Vec<WsOffer> with vec![Default::default()]"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:413:8: delete ! in ws_prepare_offers",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 413,
+   "col": 8,
+   "mutation": "delete ! in ws_prepare_offers"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:457:69: replace && with || in ws_prepare_offers",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 457,
+   "col": 69,
+   "mutation": "replace && with || in ws_prepare_offers"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:457:49: replace < with == in ws_prepare_offers",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 457,
+   "col": 49,
+   "mutation": "replace < with == in ws_prepare_offers"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:457:49: replace < with > in ws_prepare_offers",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 457,
+   "col": 49,
+   "mutation": "replace < with > in ws_prepare_offers"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:457:49: replace < with <= in ws_prepare_offers",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 457,
+   "col": 49,
+   "mutation": "replace < with <= in ws_prepare_offers"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:457:72: delete ! in ws_prepare_offers",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 457,
+   "col": 72,
+   "mutation": "delete ! in ws_prepare_offers"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:493:28: replace < with == in ws_prepare_offers",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 493,
+   "col": 28,
+   "mutation": "replace < with == in ws_prepare_offers"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:493:28: replace < with > in ws_prepare_offers",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 493,
+   "col": 28,
+   "mutation": "replace < with > in ws_prepare_offers"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:493:28: replace < with <= in ws_prepare_offers",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 493,
+   "col": 28,
+   "mutation": "replace < with <= in ws_prepare_offers"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:496:41: replace < with == in ws_prepare_offers",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 496,
+   "col": 41,
+   "mutation": "replace < with == in ws_prepare_offers"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:496:41: replace < with > in ws_prepare_offers",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 496,
+   "col": 41,
+   "mutation": "replace < with > in ws_prepare_offers"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:496:41: replace < with <= in ws_prepare_offers",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 496,
+   "col": 41,
+   "mutation": "replace < with <= in ws_prepare_offers"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:498:16: delete ! in ws_prepare_offers",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 498,
+   "col": 16,
+   "mutation": "delete ! in ws_prepare_offers"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:516:58: replace < with == in ws_prepare_offers",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 516,
+   "col": 58,
+   "mutation": "replace < with == in ws_prepare_offers"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:516:58: replace < with > in ws_prepare_offers",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 516,
+   "col": 58,
+   "mutation": "replace < with > in ws_prepare_offers"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:516:58: replace < with <= in ws_prepare_offers",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 516,
+   "col": 58,
+   "mutation": "replace < with <= in ws_prepare_offers"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:556:5: replace ws_handle_offer with ()",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 556,
+   "col": 5,
+   "mutation": "replace ws_handle_offer with ()"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:556:8: delete ! in ws_handle_offer",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 556,
+   "col": 8,
+   "mutation": "delete ! in ws_handle_offer"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:564:13: replace || with && in ws_handle_offer",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 564,
+   "col": 13,
+   "mutation": "replace || with && in ws_handle_offer"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:564:28: replace == with != in ws_handle_offer",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 564,
+   "col": 28,
+   "mutation": "replace == with != in ws_handle_offer"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:593:5: replace ws_handle_answer with ()",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 593,
+   "col": 5,
+   "mutation": "replace ws_handle_answer with ()"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:637:5: replace ws_process_response with ()",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 637,
+   "col": 5,
+   "mutation": "replace ws_process_response with ()"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:644:8: delete ! in ws_process_response",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 644,
+   "col": 8,
+   "mutation": "delete ! in ws_process_response"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:663:5: replace spawn_outgoing_peer with ()",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 663,
+   "col": 5,
+   "mutation": "replace spawn_outgoing_peer with ()"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:675:13: delete match arm Ok(Ok(s)) in spawn_outgoing_peer",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 675,
+   "col": 13,
+   "mutation": "delete match arm Ok(Ok(s)) in spawn_outgoing_peer"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:712:5: replace spawn_incoming_peer with ()",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 712,
+   "col": 5,
+   "mutation": "replace spawn_incoming_peer with ()"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:733:5: replace announce_url -> String with String::new()",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 733,
+   "col": 5,
+   "mutation": "replace announce_url -> String with String::new()"
+  },
+  {
+   "id": "src/bt/engine/trackpool.rs:733:5: replace announce_url -> String with \"xyzzy\".into()",
+   "file": "src/bt/engine/trackpool.rs",
+   "line": 733,
+   "col": 5,
+   "mutation": "replace announce_url -> String with \"xyzzy\".into()"
+  }
+ ]
+}

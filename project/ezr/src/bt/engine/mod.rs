@@ -6202,11 +6202,12 @@ mod gap112_backfill_tests {
     use crate::bt::bencode::{encode, BValue};
     use crate::bt::metainfo::TorrentMeta;
     use crate::bt::tracker::{PeerAddr, WsAnnounceResponse, WsSession, WsSignal};
-    use crate::bt::webrtc::PeerTransports;
+    use crate::bt::webrtc::{PeerTransports, PendingOffer};
     use crate::model::BtFile;
 
     const GAP112_PEER_ID: [u8; 20] = *b"GAP112PEERID00000000";
     const GAP112_REMOTE_ID: [u8; 20] = *b"GAP112REMOTE00000000";
+    const GAP644_REMOTE_ID: [u8; 20] = *b"GAP644REMOTE00000000";
 
     fn gap_meta(data: &[u8], piece_len: usize) -> TorrentMeta {
         let mut pieces = Vec::new();
@@ -6994,6 +6995,46 @@ mod gap112_backfill_tests {
             "自身从 swarm 集剔除"
         );
         assert!(st.pending_offers.is_empty(), "webrtc 关闭时捎带数组不处理");
+    }
+
+    #[tokio::test]
+    async fn gap644_ws_answer_gate_webrtc_off_answers_arm_inert() {
+        let ctx = gap_announce_ctx();
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let url = gap_ws_announce_server(count).await;
+        let mut sess_ws = WsSession::connect(&url).await.expect("ws 会话可建立");
+        let remote = GAP644_REMOTE_ID;
+        let offer_id = "gap644-offer".to_string();
+        let pc = crate::bt::webrtc::new_peer_connection()
+            .await
+            .expect("webrtc pc 沙箱可创建");
+        ctx.signals.lock().unwrap().pending_offers.insert(
+            offer_id.clone(),
+            PendingOffer {
+                to_peer_id: remote,
+                pc: Arc::clone(&pc),
+                answered: false,
+                created: std::time::Instant::now(),
+                remote_slot: Arc::new(std::sync::Mutex::new(None)),
+            },
+        );
+        let resp = WsAnnounceResponse {
+            answers: vec![WsSignal {
+                offer_id,
+                sdp: "v=0-not-a-valid-answer".into(),
+                peer_id: remote,
+            }],
+            ..Default::default()
+        };
+        ws_process_response(&ctx, &mut sess_ws, &resp).await;
+        {
+            let st = ctx.signals.lock().unwrap();
+            assert!(
+                !st.candidates.contains_key(&remote),
+                "webrtc=false 守卫（trackpool 644 delete ! 突变体）：answers 臂不得执行——突变体下假 answer 经 accept_answer 失败臂 mark_peer_fail，peer 进入失败冷却"
+            );
+        }
+        let _ = pc.close().await;
     }
 
     fn gap_hs_bytes(infohash: &[u8; 20], remote_id: &[u8; 20]) -> Vec<u8> {
