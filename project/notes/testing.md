@@ -925,3 +925,7 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 ## 竞态销项轮（2026-11-22，six-pack/coder）追加
 - **worker 级 WorkerDeps 夹具的 stop watch sender 必须保活到断言之后**：`watch::channel(false).1` 只取接收端、sender 当场 drop → block_worker 的 `stop_rx.changed()` 返回 Err → select! 臂 `changed.is_err()` 判 aborted → worker 无声中止下载（failure 恒空、块未完成）——表象是「open 已恢复却完不成块」的断言错位。生产路径 stop_tx 由 download.rs 持有活到任务收尾，夹具必须同构：worker_deps_for 返回 (deps, stop_tx)，测试用 `let (deps, _stop_tx)` 绑定保活（`let _ =` 会立即 drop，下划线前缀绑定才保活到作用域尾）。
 - **TDD 红灯归因要 panic 文本逐行比对，夹具修正与行为修复两步分账**：本轮红灯→绿灯经历两步——真正的行为红灯文本是「交错重建窗内 ENOENT 不得误 Fatal」（open 路径单发 fatal）；夹具 sender 修正后红灯文本变为「应完成唯一块」（断言链后移、open 修复已生效）。只看失败测试名或截断的 tail 输出会把两步混为一谈。恢复测与守卫测必须配对：恢复测（窗内文件出现 → 恢复并完成下载、字节数与内容模式断言）防「误 Fatal」，守卫测（恒缺位 → 窗耗尽仍 fatal 原文案）防「有界重试吞掉永久错误」——缺一即测试网有洞。
+
+## 竞态销项后续清理轮（2026-11-22，six-pack/cleaner）追加
+- **#[path] 双载体的测试计数传导对账公式**：集成目标经 `#[path = "../src/..."]` 再纳入 src 模块时，bin 测试模块（cfg(test)）的增删会按「含该模块的集成目标数」放大进集成计数——本轮 bins +3 → 集成 +27（engine_backfill/ui_backfill/g_appcore/g_engine/g_supervisor/g_throttle_err/g_v147/mutation/v115 九个目标各 +3；hardening/g_main/g_proxy/g_slots 四目标不含 supervisor 模块零变化）。对账公式 = 集成差值 ÷ bin 差值 = 携带目标数（9），对不上即另有改动面未清点。编译域白名单核验用 `rg 'path = "\.\./src' tests/<目标>.rs`（沿用 mtime 时序校验法条目的白名单口径）。
+- **worker 级测试的目标文件必须先预建**（`OpenOptions::write+create` + `set_len` 先于 spawn）：漏建文件时 open_target_file 的 ENOENT 有界重试窗会把「漏建」演成 1s 窗耗尽 fatal（failure=无法写入目标文件），与被测行为（requeue 跳过已完成块）完全无关——表象是断言"不得误报失败"反而收到 fatal。归因探针 = 临时 eprintln failure Debug（产物删除），读 kind/reason 即定位；产物探针必须随修复删除，不留调试残渣。

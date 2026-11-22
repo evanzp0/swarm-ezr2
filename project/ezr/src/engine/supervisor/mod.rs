@@ -2032,4 +2032,119 @@ mod tests {
         );
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[tokio::test]
+    async fn worker_open_non_notfound_absence_is_immediate_fatal() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-open-nonenoent");
+        let total: u64 = 8192;
+        let target = dir.join("sub");
+        tokio::fs::create_dir(&target).await.unwrap();
+        let blocks_shared = Arc::new(tokio::sync::Mutex::new(Blocks::new(total, total)));
+        let shared = throttle_free();
+        let (deps, _stop_tx) = worker_deps_for("http://127.0.0.1:1/", target, blocks_shared);
+        let started = std::time::Instant::now();
+        let handle = deps.spawn(1, Arc::clone(&shared));
+        tokio::time::timeout(std::time::Duration::from_secs(10), handle)
+            .await
+            .expect("worker 应返回")
+            .unwrap();
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(500),
+            "非 NotFound 打开失败必须即时返回，不得进入重试窗（窗耗尽路径需 ≥1s）"
+        );
+        let f = deps
+            .failure
+            .lock()
+            .await
+            .clone()
+            .expect("目录目标打开失败应 fatal");
+        assert_eq!(f.kind, FailKind::Fatal);
+        assert_eq!(f.reason, "无法写入目标文件");
+        assert_eq!(deps.blocks.lock().await.completed(), 0);
+        assert_eq!(deps.total_written.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn worker_request_error_sets_failure_without_writes() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-worker-reqfail");
+        let total: u64 = 8192;
+        let path = dir.join("f.bin");
+        let f0 = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .await
+            .unwrap();
+        f0.set_len(total).await.unwrap();
+        let blocks_shared = Arc::new(tokio::sync::Mutex::new(Blocks::new(total, total)));
+        let shared = throttle_free();
+        let (deps, _stop_tx) = worker_deps_for("http://127.0.0.1:1/", path, blocks_shared);
+        let handle = deps.spawn(1, Arc::clone(&shared));
+        tokio::time::timeout(std::time::Duration::from_secs(10), handle)
+            .await
+            .expect("worker 应在请求失败后返回")
+            .unwrap();
+        assert!(
+            deps.failure.lock().await.is_some(),
+            "请求失败必须落 failure 并返回"
+        );
+        assert_eq!(deps.blocks.lock().await.completed(), 0);
+        assert_eq!(deps.total_written.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn worker_requeue_scan_skips_done_blocks_and_resumes() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-requeue-skip");
+        let total: u64 = 8192;
+        let piece: u64 = 4096;
+        let url = mock_server(total, vec![]);
+        let path = dir.join("f.bin");
+        let f0 = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .await
+            .unwrap();
+        f0.set_len(total).await.unwrap();
+        let blocks_shared = Arc::new(tokio::sync::Mutex::new(Blocks::new(total, piece)));
+        blocks_shared.lock().await.mark_done(0);
+        let shared = throttle_free();
+        let (deps, _stop_tx) = worker_deps_for(&url, path, blocks_shared.clone());
+        deps.requeue.lock().await.push(0);
+        deps.requeue.lock().await.push(1);
+        let handle = deps.spawn(1, Arc::clone(&shared));
+        tokio::time::timeout(std::time::Duration::from_secs(10), handle)
+            .await
+            .expect("worker 应跳过已完成块并续传未完成块")
+            .unwrap();
+        assert!(
+            deps.failure.lock().await.is_none(),
+            "跳过已完成块不得误报失败"
+        );
+        assert_eq!(
+            deps.blocks.lock().await.completed(),
+            2,
+            "块 0 已完成 + 块 1 续传完成"
+        );
+        assert_eq!(
+            deps.total_written.load(Ordering::Relaxed),
+            piece,
+            "仅未完成块的字节计入本轮写入"
+        );
+        let bytes = tokio::fs::read(&deps.file_path).await.unwrap();
+        assert_eq!(bytes.len() as u64, total);
+        assert!(
+            bytes[..piece as usize].iter().all(|v| *v == 0),
+            "已完成块 0 不应由 worker 重写（保持断点零字节）"
+        );
+        let mut expect = vec![0u8; piece as usize];
+        fill(&mut expect, piece);
+        assert_eq!(
+            &bytes[piece as usize..],
+            &expect[..],
+            "块 1 续传字节与内容模式一致"
+        );
+    }
 }
