@@ -76,7 +76,7 @@ index 31daf42..cc9bbf1 100644
 -      (System/exit 1))))
 +      (exit! 1))))
 diff --git a/bb/src/aps/mutation.clj b/bb/src/aps/mutation.clj
-index ad7ed01..78c1e98 100644
+index ad7ed01..6039a4f 100644
 --- a/bb/src/aps/mutation.clj
 +++ b/bb/src/aps/mutation.clj
 @@ -193,6 +193,8 @@
@@ -221,8 +221,8 @@ index ad7ed01..78c1e98 100644
 -       (= (:mutation_count entry) (mutation-count-for-scenario mutations (:index entry)))))
 -
 -(defn- merge-reusable-previous-scenarios [current previous feature level]
-+       (let [executable-count (count (remove #(and (= (:index entry) (:scenario %))
-+                                                   (contains? current-filtered (:ID %)))
++       (let [executable-count (count (filter #(and (= (:index entry) (:scenario %))
++                                                   (not (contains? current-filtered (:ID %))))
 +                                             mutations))]
 +         (and (= (:mutation_count entry) executable-count)
 +              (or (nil? (:equivalence_filter_hash old))

@@ -50,3 +50,19 @@
   peer（只绑不答的 listener）——拨入成功、握手 reply 无超时挂起，worker 必活至
   kill9，stop 确定性胜出；Given 收尾再重武装真 seeder。凡「构造无 peer 停止态」
   的 fixture 均适用，不要依赖空 peer/死 peer 让任务「稳定停留 downloading」。
+
+## 等价过滤器扩展与差分复用（20261122 hardender 轮实录追加）
+
+- **对已 patch 工具的差分复用修复必须重生成 patch 交付件**：等价过滤器扩展以 patch 形态
+  随工作区流转、新沙箱重建工具链时先 clone 后 apply——发现并修复 patch 内的缺陷后，
+  patch 文件必须同步从修复后的工作树重新生成（`git diff bb/`），否则下一会话按旧 patch
+  重建会把缺陷原样带回；修复记录（缺陷形态 + 判据）写入 handoff 供操作者核阅。
+- **复用判据与 stamp 口径必须逐项实测对齐后再采信全量复用**：manifest 复用判据含
+  feature_name/feature_path（整路径逐字）/background_hash/scenario_hash/mutation_count
+  （= 当 level 的可执行数，即滤选后）/equivalence_filter_hash（nil 或同 hash）多项，任一
+  失配即整场景重执行；对全复用的预期结论先用单 feature 探针验证（SkippedScenarios=全部、
+  executed=0）再放量——探针的 runner-worker 在零执行预期下才可用占位命令，预期外执行
+  会以 infrastructure_error 全灭并在 feature 文件上写入降级 manifest（先 git 恢复再排查）。
+- **soft 级复用不校验 implementation_hash（仅 hard 校验）**：产品代码演进（词表迁移等）
+  后的 soft 差分运行合法复用历轮 killed 账目，这是工具设计语义（hard 级才要求实现同源）；
+  交接写明复用口径与守恒数字，需要重执行证据时用 `--level full`。

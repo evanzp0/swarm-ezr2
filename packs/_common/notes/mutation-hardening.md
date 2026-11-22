@@ -149,3 +149,26 @@
   2. 会话运行时产物位置与复现方法（不进工作区产物，交接时写明复现方法）；
   3. feature 注释块与差分复用注意事项；
   4. 等价突变体清单及其失效条件（回补触发）。
+
+## 7. 分块前台运行的续跑与恢复（cargo-mutants 27.1.0 实录，协议语言无关）
+
+- **单调用时长受限时的分块协议**：工具无 `--resume` 时，用 `--iterate`（跳过已 caught/unviable）
+  + 固定 `--output` 目录做跨调用续跑；每块开始前把被测源恢复为 pristine 再续，块内每场景
+  apply→test→revert 自洽。outcomes.json 与 caught.txt 等账目文件**每轮重写**，跨轮累计
+  账目以「Iteration excludes N / Found M」行 + 各轮 outcome 合并重建，勿以单轮文件为准。
+- **恢复源文件后必须 touch**：用 `cp -a`（保留旧 mtime）恢复被变异的源文件会让 cargo 指纹
+  误判"仍新鲜"，陈旧的**突变体二进制**被复用进基线/后续判定（表象：未变异树跑出变异行为）。
+  恢复后对被恢复文件 `touch` 强制指纹失效；首次续跑先跑一条已变异 scenario 的构建日志确认
+  "Dirty … file has changed"。零改动重建会静默跳过编译，环境残缺与陈旧产物只有强制重做才能暴露。
+- **工具子进程的工具链解析自启动进程**：经 rustup 代理启动变异工具时，工具给子 cargo 的
+  `$CARGO` 是**启动时按启动 cwd 解析**的工具链二进制（钉定文件在启动 cwd 之外时不生效）。
+  需要钉定工具链时直接以 `$CARGO=<工具链 bin 绝对路径>` 启动变异工具本体，或从钉定目录内启动。
+- **限定 Build 阶段编译范围**：变异工具默认 Build 阶段构建全部测试目标（每变异体数十秒到
+  数分钟的纯编译浪费）。用「对所有 cargo 调用追加参数」的开关（如 `--cargo-arg=--bin <名>`）
+  把 Build/Test 统一限到能杀灭清单突变体的最小目标集，Test 名滤选串放 `--` 之后（多滤选串
+  是 libtest 参数，cargo 只接受一个位置参数）。
+- **unviable 的类型级人工实证法（Default 替换型）**：`replace fn -> T with Default::default()`
+  突变体 unviable 时，检查 T 是否 `#[derive(Default)]`/手实现——无实现即 E0277 编译失败，
+  在副本上对代表性位点做一次活体 `cargo check` 取得报错码即为终态，无需逐个重跑。
+- **变异账目文件不进归档**：mutants.out（outcomes/caught/logs/diff）是会话运行时产物；
+  归档与交接只带账目数字与复现命令。

@@ -575,3 +575,15 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - `rustup toolchain install <tc> --component rustfmt clippy` 多组件要逐个 `-c` 旗标（`-c rustfmt -c clippy`）；单 `--component a b` 会把第二个当工具链名报 `invalid toolchain name`。
 - GitHub release 直连超时时走 ghfast.top 加速（`https://ghfast.top/https://github.com/<owner>/<repo>/releases/download/...`），实测 ~70KB/s 且支持 `-C -` 断点续传——大资产（如 PMD zip 134MB）按 content-length 分多次续传完成；mirror.ghproxy.com 超时、gh-proxy.com 403，选型时逐个探针。
 - proptest `prop_assert_eq!` 消息参数不能隐式捕获外层变量（`s={s:?}` 编译错），也不能在断言后继续使用被消息参数按值吃掉的变量——显式 `&s` 传参，format! 按值使用放全部借用之后。
+
+## rustup dist 镜像选型按当期沙箱实测更新（2026-11-22 实测）
+- 本沙箱（2026-11-22）实测 rsproxy.cn 全面快于 TUNA：rustup-init 二进制下载 26MB/s vs TUNA 4KB/s；
+  dist channel 文件路径结构为 `RUSTUP_DIST_SERVER=https://rsproxy.cn`（+ `/dist/...`）与
+  `RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup`（注意 UPDATE_ROOT 已含 /rustup，再拼一层
+  /rustup 会 404——rustup-init.sh 报 "installer for platform not found" 时先查这两个变量的
+  拼接，不要换镜像盲试）。stable + nightly 1.102 全组件经 rsproxy 安装 ~1 分钟。
+- 选型纪律：镜像速度按当期沙箱实测排序（channel toml 延迟 + 真实二进制吞吐两项），
+  旧沙箱结论（TUNA 优）不跨沙箱沿用；cargo registry 仍走 rsproxy sparse 不变。
+- 磁盘口径补充：cargo-mutants worker 副本构建目录 ~2.7G（deps+bins+1 集成目标、debug=0），
+  变异轮结束即删（账目与日志已提取）；~/.cargo/registry/src 删除后 cargo 会按需从 cache
+  重新解包（cache 完好即可，删除 src 不破坏重建）。

@@ -20,6 +20,8 @@
 mod blocks_hard;
 #[path = "hardening/bt.rs"]
 mod bt;
+#[path = "hardening/bt_vocab_hard.rs"]
+mod bt_vocab_hard;
 #[path = "hardening/checksum_hard.rs"]
 mod checksum_hard;
 #[path = "hardening/config_fallback.rs"]
