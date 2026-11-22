@@ -74,6 +74,29 @@ impl WorkerDeps {
     }
 }
 
+const OPEN_RETRY_WINDOW: std::time::Duration = std::time::Duration::from_millis(1000);
+const OPEN_RETRY_POLL: std::time::Duration = std::time::Duration::from_millis(25);
+
+async fn open_target_file(file_path: &std::path::Path) -> std::io::Result<tokio::fs::File> {
+    let deadline = tokio::time::Instant::now() + OPEN_RETRY_WINDOW;
+    loop {
+        match tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(file_path)
+            .await
+        {
+            Ok(f) => return Ok(f),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(e);
+                }
+            }
+            Err(e) => return Err(e),
+        }
+        tokio::time::sleep(OPEN_RETRY_POLL).await;
+    }
+}
+
 async fn block_worker(wid: usize, shared: Arc<super::super::EngineShared>, deps: WorkerDeps) {
     let WorkerDeps {
         url,
@@ -90,11 +113,7 @@ async fn block_worker(wid: usize, shared: Arc<super::super::EngineShared>, deps:
         failure,
         conns,
     } = deps;
-    let mut file = match tokio::fs::OpenOptions::new()
-        .write(true)
-        .open(&file_path)
-        .await
-    {
+    let mut file = match open_target_file(&file_path).await {
         Ok(f) => f,
         Err(_) => {
             *failure.lock().await = Some(EngineFailure::fatal("无法写入目标文件"));

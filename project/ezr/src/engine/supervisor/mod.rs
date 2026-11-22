@@ -511,6 +511,97 @@ mod tests {
         false
     }
 
+    fn worker_deps_for(
+        url: &str,
+        file_path: std::path::PathBuf,
+        blocks: Arc<tokio::sync::Mutex<Blocks>>,
+    ) -> (super::workers::WorkerDeps, tokio::sync::watch::Sender<bool>) {
+        let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+        let deps = super::workers::WorkerDeps {
+            url: url.to_string(),
+            file_path,
+            blocks,
+            lease_next: Arc::new(AtomicU32::new(0)),
+            requeue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            stop_rx,
+            quota_rx: tokio::sync::watch::channel(1usize).1,
+            ep_rx: tokio::sync::watch::channel(Arc::new(None)).1,
+            task_dl: Arc::new(super::super::throttle::Throttle::with_params(
+                0,
+                crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
+                crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
+            )),
+            speed_rx: tokio::sync::watch::channel(0u64).1,
+            total_written: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            failure: Arc::new(tokio::sync::Mutex::new(None)),
+            conns: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        };
+        (deps, stop_tx)
+    }
+
+    #[tokio::test]
+    async fn worker_open_retry_recovers_from_interleaved_rebuild() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-open-retry");
+        let total: u64 = 8192;
+        let url = mock_server(total, vec![]);
+        let path = dir.join("f.bin");
+        let blocks_shared = Arc::new(tokio::sync::Mutex::new(Blocks::new(total, total)));
+        let shared = throttle_free();
+        let (deps, _stop_tx) = worker_deps_for(&url, path.clone(), blocks_shared.clone());
+        let handle = deps.spawn(1, Arc::clone(&shared));
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let f = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&path)
+                .await
+                .unwrap();
+            f.set_len(total).await.unwrap();
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), handle)
+            .await
+            .expect("worker 应在有界重试窗内恢复并完成")
+            .unwrap();
+        assert!(
+            deps.failure.lock().await.is_none(),
+            "交错重建窗内 ENOENT 不得误 Fatal"
+        );
+        let b = deps.blocks.lock().await;
+        assert_eq!(b.completed(), 1, "应完成唯一块");
+        assert_eq!(deps.total_written.load(Ordering::Relaxed), total);
+        drop(b);
+        let bytes = tokio::fs::read(&deps.file_path).await.unwrap();
+        assert_eq!(bytes.len() as u64, total);
+        assert!(bytes.iter().enumerate().all(|(i, v)| *v == (i % 251) as u8));
+    }
+
+    #[tokio::test]
+    async fn worker_open_permanent_absence_still_fatal_after_window() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-open-fatal");
+        let total: u64 = 8192;
+        let url = mock_server(total, vec![]);
+        let blocks_shared = Arc::new(tokio::sync::Mutex::new(Blocks::new(total, total)));
+        let shared = throttle_free();
+        let (deps, _stop_tx) = worker_deps_for(&url, dir.join("f.bin"), blocks_shared);
+        let handle = deps.spawn(1, Arc::clone(&shared));
+        tokio::time::timeout(std::time::Duration::from_secs(10), handle)
+            .await
+            .expect("worker 应在有界窗耗尽后返回")
+            .unwrap();
+        let f = deps
+            .failure
+            .lock()
+            .await
+            .clone()
+            .expect("文件恒缺位应在窗耗尽后 fatal");
+        assert_eq!(f.kind, FailKind::Fatal);
+        assert_eq!(f.reason, "无法写入目标文件");
+        assert_eq!(deps.blocks.lock().await.completed(), 0);
+        assert_eq!(deps.total_written.load(Ordering::Relaxed), 0);
+    }
+
     #[tokio::test]
     async fn reconfigure_hot_adjusts_concurrency_and_completes() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-hot");

@@ -389,8 +389,15 @@
 - supervisor block_worker 的「无法写入目标文件」fatal（`OpenOptions::write(true).open` 失败）
   与重试路径存在理论竞态：resume 作废重建目标文件与 worker（重）开文件交错时 ENOENT →
   任务 Fatal。QA-PC-06 全量套件语境下低频复现（隔离 11 连跑零复现；慢速逐键清场把任务添加
-  窗口拉长 ~0.5s 后暴露率上升，清场提速后 3 连跑稳定）。本轮未改引擎，登记为 QA/引擎轮
-  观察项：worker 打开失败可考虑有界重试窗（文件由 supervisor 先 touch 再派 worker 即根治）。
+  窗口拉长 ~0.5s 后暴露率上升，清场提速后 3 连跑稳定）。已销项（coder 竞态销项轮）：打开
+  失败改有界重试窗——open_target_file 仅对 NotFound（ENOENT）在 1s 窗内 25ms 轮询重开，
+  窗内覆盖重建/重试交错的文件短暂缺位（含 fill_workers 运行中 re-spawn 臂）；非 NotFound
+  （权限等永久错误）立即原样致命不吃重试延迟；窗耗尽保持原 fatal 语义与文案「无法写入
+  目标文件」（有界不吞永久错）。supervisor 先建文件再派 worker 本就是既有事实（download.rs
+  create+set_len 先于 spawn，登记时「先 touch 再派 worker 根治」已成立），worker 级重试窗
+  补的是文件短暂缺位窗的残余时序。行为锁定双测：worker_open_retry_recovers_from_
+  interleaved_rebuild（派生后 100ms 才出现的目标文件 → 窗内恢复并完成下载）+
+  worker_open_permanent_absence_still_fatal_after_window（恒缺位 → 窗耗尽仍 fatal）。
 ## bug14 轮（specifier）
 - 「协议」表头只显示「协」的根因：视口右缘恰好落在末列宽字（议）的中缝，ratatui 渲染层对跨界宽字整字丢弃（不渲染半个字），视觉上=表头被截断；v1.34 的「+1 放宽」只保证滚到最右完整，不保证默认视图/中间偏移。探针实证矩阵（TestBackend buffer 直读）：面板宽 98（视口 92）默认视图、面板宽 50 + hscroll 48/49 均复现「协」；hscroll≥50 或视口≥94 完整。修法=客户端列自适应收缩（内容>视口时客户端 34→max(12, 视口宽−60)，整表无滚动可见）+ 末列完整可见吸附（右缘 ∈ (内容宽−4, 内容宽) 时偏移吸附到最大）。ezr-demo 同构同现（同列宽同 head_cell），属设计基线级现象非 ezr 实现独有。
 - 并发速度合计不一致的协议差异：BT 任务速度=Σ per-conn EMA（bug12 已同源）；HTTP 任务速度走独立任务级窗口 EMA 链（tick_speed_and_session 的 speed_display），与并发行 SmoothedSpeed 结构性不同源。v1.39 统一为两协议 Σ per-conn EMA；源不变式严格成立、显示层各自 fmt 的亚 0.1 KB/s 舍入差登记为实现定义值。

@@ -142,3 +142,8 @@
 - qa/mutation-gap-registry.json — 缺口账目 ID 权威清单（339 entry + 644 改判杀灭 + 2 unviable 终态；cargo-mutants 27.1.0 实测扫描）（新增）
 - qa/aps-go-equivalence-extension.patch — Go 版 mutator --equivalence-filter 移植补丁（equivalence.go + mutator/manifest/main 接线；HEAD 树干净可应用；四对照 + 真实数据 17/17 命中）（新增）
 - handoff.md — 操作者裁决「一轮串行」四销项落地（③644 改判杀灭/①ID 再生/④LO_ONLY 敞口消灭 + schema 口径演进/②Go 版 filter 移植）（新增）
+
+## 竞态销项轮（2026-11-22，six-pack/coder）追加
+- architecture.md — supervisor block_worker 打开失败竞态销项定案（architecture:389 观察项结清：open_target_file 仅 ENOENT 走 1s 有界重试窗 25ms 轮询、非 NotFound 即时致命、窗耗尽保持原 fatal 语义文案；supervisor 先建文件再派 worker 既有事实确认，重试窗补的是文件短暂缺位窗残余时序）（新增）
+- testing.md — worker 级 WorkerDeps 夹具 stop watch sender 保活纪律（drop 即 changed() Err 被当停止信号无声中止、下划线前缀绑定才保活）+ TDD 红灯归因 panic 文本逐行比对（夹具修正/行为修复两步分账）+ 恢复测与守卫测配对（防有界重试吞永久错误）（新增）
+- handoff.md — architecture:389 观察项销项（workers.rs 有界重试窗 + 两行为锁定单测 + 全量回归 9587P/0F）（新增）
