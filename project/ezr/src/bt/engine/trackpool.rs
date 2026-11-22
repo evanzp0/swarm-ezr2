@@ -8,14 +8,15 @@ use super::conn::{DlFlow, PeerIn};
 use super::peerwire::run_peer_loop;
 use crate::bt::tracker::{
     announce_http, announce_udp, announce_ws, build_announce_json, build_answer_announce_json,
-    classify_ws_message, udp_host_port, AnnounceParams, PeerAddr, TrackerEvent, TrackerUrl,
-    WsAnnounceResponse, WsInbound, WsOffer, WsSession, WsSignal,
+    classify_ws_message, AnnounceParams, PeerAddr, TrackerEvent, WsAnnounceResponse, WsInbound,
+    WsOffer, WsSession, WsSignal,
 };
 use crate::bt::webrtc::{
-    PeerTransports, PendingOffer, RtcReady, SignalState, OFFERS_PER_ANNOUNCE, PENDING_OFFER_CAP,
+    PendingOffer, RtcReady, SignalState, OFFERS_PER_ANNOUNCE, PENDING_OFFER_CAP,
 };
 use crate::bt::BtError;
 use crate::engine::{BtTunables, EngineShared};
+use crate::model::bt::{udp_host_port, PeerTransports, TrackerUrl};
 
 pub(super) const FIRST_ANNOUNCE_DELAY: u64 = 2;
 

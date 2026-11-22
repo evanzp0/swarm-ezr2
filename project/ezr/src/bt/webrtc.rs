@@ -18,57 +18,8 @@ use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 
 use super::tracker::{hex_lower, WsAnswer, WsSignal};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum PeerTransport {
-    Tcp,
-    WebRtc,
-}
-
-impl PeerTransport {
-    #[must_use]
-    pub fn parse(s: &str) -> Option<PeerTransport> {
-        let lower = s.trim().to_ascii_lowercase();
-        match lower.as_str() {
-            "tcp" => Some(PeerTransport::Tcp),
-            "webrtc" => Some(PeerTransport::WebRtc),
-            _ => None,
-        }
-    }
-
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            PeerTransport::Tcp => "TCP",
-            PeerTransport::WebRtc => "WebRTC",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PeerTransports {
-    pub tcp: bool,
-    pub webrtc: bool,
-}
-
-impl Default for PeerTransports {
-    fn default() -> Self {
-        Self {
-            tcp: true,
-            webrtc: true,
-        }
-    }
-}
-
-impl PeerTransports {
-    #[must_use]
-    pub fn allows(self, t: PeerTransport) -> bool {
-        match t {
-            PeerTransport::Tcp => self.tcp,
-            PeerTransport::WebRtc => self.webrtc,
-        }
-    }
-}
+#[cfg(test)]
+use crate::model::bt::{PeerTransport, PeerTransports};
 
 const OUTBOUND_QUEUE_CAP: usize = 64;
 const OFFER_TIMEOUT_SECS: u64 = 45;

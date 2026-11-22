@@ -7,9 +7,9 @@ use tokio::sync::mpsc;
 
 use super::{addr_sock, PartialPieces};
 use crate::bt::pieces::PieceMap;
-use crate::bt::webrtc::PeerTransport;
 use crate::bt::{peer, REQUEST_BLOCK_LEN};
 use crate::engine::{BtConnView, Throttle};
+use crate::model::bt::PeerTransport;
 
 pub(super) const PIPELINE_QUEUE_TIME_SECS: u64 = 3;
 

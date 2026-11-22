@@ -22,5 +22,13 @@ impl Connection {
 
 pub mod chunk;
 
+#[path = "../../../src/model/bt.rs"]
+pub mod bt;
+
+#[path = "../../../src/model/persist.rs"]
+pub mod persist;
+
+pub(crate) use persist::{remove_missing_ok, save_json_atomic};
+
 #[path = "../../../src/model/config.rs"]
 pub mod config;

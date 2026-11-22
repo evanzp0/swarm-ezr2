@@ -6,10 +6,10 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use super::pieces::PieceMap;
-use super::tracker::TrackerUrl;
-use super::webrtc::{PeerTransport, RtcReady, SignalState};
+use super::webrtc::{RtcReady, SignalState};
 use super::{peer, BtError, BtTaskCmd};
 use crate::engine::{BtTunables, EngineShared, Evt, Throttle};
+use crate::model::bt::{PeerTransport, TrackerUrl};
 
 mod conn;
 mod peerwire;
@@ -916,8 +916,8 @@ mod tests {
     use super::*;
     use crate::bt::bencode::{encode, BValue};
     use crate::bt::metainfo::TorrentMeta;
-    use crate::bt::webrtc::PeerTransports;
     use crate::bt::REQUEST_BLOCK_LEN;
+    use crate::model::bt::PeerTransports;
     use crate::model::BtFile;
 
     pub(crate) fn make_meta(data: &[u8], piece_len: usize, tracker: &str) -> TorrentMeta {
@@ -6202,7 +6202,8 @@ mod gap112_backfill_tests {
     use crate::bt::bencode::{encode, BValue};
     use crate::bt::metainfo::TorrentMeta;
     use crate::bt::tracker::{PeerAddr, WsAnnounceResponse, WsSession, WsSignal};
-    use crate::bt::webrtc::{PeerTransports, PendingOffer};
+    use crate::bt::webrtc::PendingOffer;
+    use crate::model::bt::PeerTransports;
     use crate::model::BtFile;
 
     const GAP112_PEER_ID: [u8; 20] = *b"GAP112PEERID00000000";

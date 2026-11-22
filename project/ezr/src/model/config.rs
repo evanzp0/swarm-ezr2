@@ -419,7 +419,7 @@ fn trackers_val(raw: Option<&toml::Value>, key: &str) -> Result<Vec<String>, Str
     let mut seen: HashSet<String> = HashSet::new();
     for e in entries {
         let t = e.trim();
-        if crate::bt::tracker::TrackerUrl::parse(t).is_none() {
+        if crate::model::bt::TrackerUrl::parse(t).is_none() {
             return Err(format!(
                 "键 {key}：{t:?}（未知 tracker scheme，应为 http(s)://、ws(s):// 或 udp://，拒绝启动）"
             ));
@@ -447,14 +447,14 @@ fn peer_connection_protocol_val(
     let mut seen: HashSet<String> = HashSet::new();
     for e in &entries {
         let t = e.trim();
-        let Some(norm) = crate::bt::webrtc::PeerTransport::parse(t) else {
+        let Some(norm) = crate::model::bt::PeerTransport::parse(t) else {
             return Err(format!(
                 "键 {key}：{t:?}（未知值，应为 tcp / webrtc，拒绝启动）"
             ));
         };
         let norm = match norm {
-            crate::bt::webrtc::PeerTransport::Tcp => "tcp".to_string(),
-            crate::bt::webrtc::PeerTransport::WebRtc => "webrtc".to_string(),
+            crate::model::bt::PeerTransport::Tcp => "tcp".to_string(),
+            crate::model::bt::PeerTransport::WebRtc => "webrtc".to_string(),
         };
         if !seen.insert(norm.clone()) {
             return Err(format!("键 {key}：{t:?}（重复项，拒绝启动）"));

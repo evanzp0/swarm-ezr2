@@ -16,9 +16,9 @@ use super::{addr_sock, PartialPieces};
 use crate::bt::metainfo::TorrentMeta;
 use crate::bt::pieces::PieceMap;
 use crate::bt::tracker::PeerAddr;
-use crate::bt::webrtc::PeerTransport;
 use crate::bt::{peer, BtError, REQUEST_BLOCK_LEN};
 use crate::engine::{BtTunables, EngineShared};
+use crate::model::bt::PeerTransport;
 
 pub(super) async fn write_piece_to_files(
     files: &mut HashMap<usize, tokio::fs::File>,

@@ -9,37 +9,8 @@ use tokio_tungstenite::tungstenite::Message;
 
 use super::bencode::{self, BValue};
 use super::BtError;
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum TrackerUrl {
-    Http(String),
-    Ws(String),
-    Udp(String),
-}
-
-impl TrackerUrl {
-    #[must_use]
-    pub fn parse(s: &str) -> Option<TrackerUrl> {
-        let lower = s.to_ascii_lowercase();
-        let rest = lower
-            .strip_prefix("https://")
-            .or_else(|| lower.strip_prefix("http://"))
-            .or_else(|| lower.strip_prefix("wss://"))
-            .or_else(|| lower.strip_prefix("ws://"))
-            .or_else(|| lower.strip_prefix("udp://"))?;
-        if rest.is_empty() {
-            return None;
-        }
-        if lower.starts_with("udp://") {
-            udp_host_port(s)?;
-            Some(TrackerUrl::Udp(s.to_string()))
-        } else if lower.starts_with("ws://") || lower.starts_with("wss://") {
-            Some(TrackerUrl::Ws(s.to_string()))
-        } else {
-            Some(TrackerUrl::Http(s.to_string()))
-        }
-    }
-}
+#[cfg(test)]
+use crate::model::bt::{udp_host_port, TrackerUrl};
 
 #[must_use]
 pub fn hex_lower(bytes: &[u8]) -> String {
@@ -113,37 +84,6 @@ pub struct WsAnnounceResponse {
     pub peer_ids: Vec<[u8; 20]>,
     pub offers_to_answer: Vec<WsSignal>,
     pub answers: Vec<WsSignal>,
-}
-
-#[must_use]
-pub fn udp_host_port(url: &str) -> Option<(String, u16)> {
-    const SCHEME: &str = "udp://";
-    if !url
-        .get(..SCHEME.len())
-        .is_some_and(|head| head.eq_ignore_ascii_case(SCHEME))
-    {
-        return None;
-    }
-    let authority = url[SCHEME.len()..].split(['/', '?']).next()?;
-    if authority.is_empty() {
-        return None;
-    }
-    let (host, port_str) = if let Some(bracketed) = authority.strip_prefix('[') {
-        let close = bracketed.find(']')?;
-        let after = &bracketed[close + 1..];
-        (&bracketed[..close], after.strip_prefix(':')?)
-    } else {
-        let colon = authority.rfind(':')?;
-        (&authority[..colon], &authority[colon + 1..])
-    };
-    if host.is_empty() {
-        return None;
-    }
-    let port: u16 = port_str.parse().ok()?;
-    if port == 0 {
-        return None;
-    }
-    Some((host.to_string(), port))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

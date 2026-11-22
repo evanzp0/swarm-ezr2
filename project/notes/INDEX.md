@@ -147,3 +147,9 @@
 - architecture.md — supervisor block_worker 打开失败竞态销项定案（architecture:389 观察项结清：open_target_file 仅 ENOENT 走 1s 有界重试窗 25ms 轮询、非 NotFound 即时致命、窗耗尽保持原 fatal 语义文案；supervisor 先建文件再派 worker 既有事实确认，重试窗补的是文件短暂缺位窗残余时序）（新增）
 - testing.md — worker 级 WorkerDeps 夹具 stop watch sender 保活纪律（drop 即 changed() Err 被当停止信号无声中止、下划线前缀绑定才保活）+ TDD 红灯归因 panic 文本逐行比对（夹具修正/行为修复两步分账）+ 恢复测与守卫测配对（防有界重试吞永久错误）（新增）
 - handoff.md — architecture:389 观察项销项（workers.rs 有界重试窗 + 两行为锁定单测 + 全量回归 9587P/0F）（新增）
+
+## 架构评审轮（2026-11-22，six-pack/architect）追加
+- architecture.md — model↔bt 模块环销项（config 校验词表 TrackerUrl/udp_host_port/PeerTransport/PeerTransports 归属 model/bt.rs 的判据与迁移法）+ pub(crate) 根辅助提取 persist.rs + 根 re-export（super:: 调用点零改动）+ 双载体计数传导第二形态（被包含文件自带测试模块随树进账 +12 归因公式）+ 迁入定义必须置于既有 tests 模块之前（clippy items_after_test_module 全视角报数）（新增）
+- testing.md — PeerTransport 属性测试补缺口（casefold/trim 判定稳定性 + label 右逆往返 + allows 字段投影；proptest 消息参数显式借用与 format! 按值使用先后次序）（新增）
+- environment.md — 新沙箱开工顺序（钉定 nightly 项目目录内首跑 cargo 触发 rustup 静默自动安装致超时假象，先装链再进目录）+ rustup 多组件逐个 -c + ghfast.top release 大资产断点续传选型（新增）
+- handoff.md — model↔bt 环销项与规则 1 扩域（词表迁 model/bt.rs + persist 提取 + PeerTransport 属性补缺 + 全量回归 9631P/0F）（新增）

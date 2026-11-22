@@ -569,3 +569,9 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - **全量回归逐二进制口径的执行细节**：norun.log 的 Executable 行提取二进制路径用 regex `Executable (.+?) \((.+)\)` 取括号内第二列（awk '{print $2}' 会拿到 src/main.rs 相对路径 → timeout Permission denied 假绿 exit=0——**timeout 对不可执行命令的退出码在 bash $() 捕获下显示 0，必须看 log 内容**）；unittests(main) 1091 测 185s（timeout 120 不够，550 稳）；12 集成目标 + 3 bin unittests 前台串行分 3-4 批（每批 ≤550s 会话窗）。
 - **bb release 大资产下载降速常态**：gh-proxy.com 对 babashka 26.6MB 本轮 0.06-0.09MB/s（300s 超时两次断点）——curl -C - 断点续传为标准动作；api.github.com 清单直连仍可用（mutants 资产名无漂移 cargo-mutants-x86_64-unknown-linux-gnu.tar.gz）。
 - cleaner 清理轮镜像复测（2026-11-22）：gh-proxy.com 本轮 403、ghfast.top 前缀可用（PMD 134MB 分两段 curl -C - 断点续传拉满——大资产直连超时后用 `-C -` 续传，不整段重下）；git clone 直连 GnuTLS -110 复现、`-c http.version=HTTP/1.1` 一次过。rustup 本轮 rsproxy 全链路有效：注意其路径结构与常见记载不同——`RUSTUP_DIST_SERVER=https://rsproxy.cn`（清单在 /dist/）+ `RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup`（init 在 /rustup/dist/）；TUNA/USTC 的 /rustup/dist/ 双双 404。PMD 版本纪律实例：初装 7.16.0 后发现历轮基线为 7.29.0 → 重装对齐后重扫（组数口径随 tokenizer 版本漂移，「度量口径与上游可比」条款的 DRY 维度实例，min-tokens 70 不变）。
+
+## 新沙箱开工顺序：先装钉定工具链再进项目目录跑 cargo（2026-11-22 实测）
+- rust-toolchain.toml 钉 nightly 的项目，在只装 stable 的全新沙箱里**在项目目录内**首次跑任何 cargo 命令，rustup 会静默开始自动安装 nightly（数百 MB）——表象是命令超时零产出（60s 工具超时被杀），不是构建卡死。开工顺序：先 `export PATH=$HOME/.cargo/bin:$PATH` + TUNA 镜像变量后前台 `rustup toolchain install nightly --profile minimal -c rustfmt -c clippy`，装完再进项目目录。
+- `rustup toolchain install <tc> --component rustfmt clippy` 多组件要逐个 `-c` 旗标（`-c rustfmt -c clippy`）；单 `--component a b` 会把第二个当工具链名报 `invalid toolchain name`。
+- GitHub release 直连超时时走 ghfast.top 加速（`https://ghfast.top/https://github.com/<owner>/<repo>/releases/download/...`），实测 ~70KB/s 且支持 `-C -` 断点续传——大资产（如 PMD zip 134MB）按 content-length 分多次续传完成；mirror.ghproxy.com 超时、gh-proxy.com 403，选型时逐个探针。
+- proptest `prop_assert_eq!` 消息参数不能隐式捕获外层变量（`s={s:?}` 编译错），也不能在断言后继续使用被消息参数按值吃掉的变量——显式 `&s` 传参，format! 按值使用放全部借用之后。

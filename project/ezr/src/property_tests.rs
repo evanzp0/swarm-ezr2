@@ -8,9 +8,9 @@ use crate::app::DialogKind;
 use crate::bt::bencode::{decode, decode_all, encode, BValue};
 use crate::bt::peer_id::session_peer_id;
 use crate::bt::pieces::PieceMap;
-use crate::bt::tracker::{bin_string, hex_lower, id20, TrackerUrl};
+use crate::bt::tracker::{bin_string, hex_lower, id20};
 use crate::engine::{merge_answers, parse_retry_after_header, HostsFile};
-use crate::model::bt::BtFile;
+use crate::model::bt::{BtFile, PeerTransport, PeerTransports, TrackerUrl};
 use crate::model::checksum::{
     algo_index_exact_or_default, parse_companion_content, CHECKSUM_ALGOS,
 };
@@ -2236,7 +2236,7 @@ proptest! {
         }
         if scheme == "udp" && with_port {
             prop_assert_eq!(
-                crate::bt::tracker::udp_host_port(&url),
+                crate::model::bt::udp_host_port(&url),
                 Some((host.clone(), port)),
                 "udp 主机端口对齐: url={}",
                 url
@@ -2249,6 +2249,61 @@ proptest! {
         prop_assert!(
             TrackerUrl::parse(&format!("{scheme}://")).is_none(),
             "空 authority 拒绝"
+        );
+    }
+
+    #[test]
+    fn prop_peer_transport_case_fold_stability_and_round_trip(
+        s in ".*",
+        variant in prop::sample::select(&[PeerTransport::Tcp, PeerTransport::WebRtc]),
+        pad_left in prop::bool::ANY,
+        pad_right in prop::bool::ANY,
+    ) {
+        let folded = PeerTransport::parse(&s);
+        let upper = PeerTransport::parse(&s.to_uppercase());
+        let lower = PeerTransport::parse(&s.to_lowercase());
+        prop_assert_eq!(
+            (folded, upper, lower),
+            (folded, folded, folded),
+            "parse 仅依赖 casefold+trim：大小写变换不影响判定: s={}",
+            &s
+        );
+        prop_assert_eq!(
+            PeerTransport::parse(variant.label()),
+            Some(variant),
+            "label 是 parse 的右逆: label={}",
+            variant.label()
+        );
+        prop_assert_eq!(
+            folded.is_some(),
+            matches!(s.trim().to_lowercase().as_str(), "tcp" | "webrtc"),
+            "接受域精确：当且仅当 casefold+trim 后为 tcp/webrtc: s={}",
+            &s
+        );
+        let padded = format!(
+            "{}{}{}",
+            if pad_left { "  \t" } else { "" },
+            s,
+            if pad_right { " \t " } else { "" }
+        );
+        prop_assert_eq!(
+            PeerTransport::parse(&padded),
+            folded,
+            "首尾空白不改变判定: padded={}",
+            &padded
+        );
+    }
+
+    #[test]
+    fn prop_peer_transports_allows_is_field_projection(
+        tcp in prop::bool::ANY,
+        webrtc in prop::bool::ANY,
+    ) {
+        let pt = PeerTransports { tcp, webrtc };
+        prop_assert_eq!(
+            (pt.allows(PeerTransport::Tcp), pt.allows(PeerTransport::WebRtc)),
+            (tcp, webrtc),
+            "allows 是字段投影"
         );
     }
 

@@ -168,7 +168,7 @@ impl App {
                 udp_base_timeout_secs: self.cfg.udp_base_timeout_secs,
                 udp_retries: self.cfg.udp_retries,
                 transports: {
-                    use crate::bt::webrtc::PeerTransport;
+                    use crate::model::bt::PeerTransport;
                     let tcp = self
                         .cfg
                         .peer_connection_protocol
@@ -179,7 +179,7 @@ impl App {
                         .peer_connection_protocol
                         .iter()
                         .any(|s| PeerTransport::parse(s) == Some(PeerTransport::WebRtc));
-                    crate::bt::webrtc::PeerTransports { tcp, webrtc }
+                    crate::model::bt::PeerTransports { tcp, webrtc }
                 },
             },
             sequential: bt.is_some_and(|b| b.sequential),

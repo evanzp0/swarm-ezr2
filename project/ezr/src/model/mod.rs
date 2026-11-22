@@ -85,13 +85,7 @@ pub fn is_http_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
 }
 
-pub(crate) fn remove_missing_ok(path: &str) -> std::io::Result<()> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e),
-    }
-}
+pub(crate) use persist::{remove_missing_ok, save_json_atomic};
 
 #[must_use]
 pub fn protocol_of_url(s: &str) -> Protocol {
@@ -115,6 +109,7 @@ pub struct Checksum {
     pub value: String,
 }
 
+mod persist;
 mod task;
 mod timefmt;
 
@@ -128,18 +123,6 @@ pub use task::{ConnPhase, Connection, PieceState, Task};
 #[allow(unused_imports)]
 pub use timefmt::fmt_created;
 pub use timefmt::unix_now;
-
-pub(crate) fn save_json_atomic<T: serde::Serialize>(value: &T, path: &str) -> std::io::Result<()> {
-    let json = serde_json::to_string_pretty(value)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    if std::fs::read_to_string(path).is_ok_and(|old| old == json) {
-        return Ok(());
-    }
-    let tmp = format!("{path}.tmp");
-    std::fs::write(&tmp, json)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
-}
 
 #[cfg(test)]
 pub(crate) fn sample_task() -> Task {

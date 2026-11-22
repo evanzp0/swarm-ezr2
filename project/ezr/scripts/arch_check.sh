@@ -24,12 +24,15 @@ cd "$(dirname "$0")/.." || exit 1   # 固定到 crate 根（路径确定性，en
 
 fails=0
 
-# 规则 1【依赖方向】model 为最内层：不得引用 app/ui/engine（否则分层倒置/环）
-hit=$(grep -rnE '^[[:space:]]*use[[:space:]]+crate::(app|ui|engine)' src/model/ --include='*.rs' || true)
+# 规则 1【依赖方向】model 为最内层：不得引用 app/ui/engine/bt（否则分层倒置/环；
+# architect 本轮 2026-11-22 扫描域扩至 crate::bt——评审实测并销除 model↔bt 产品级
+# 模块环：model/config.rs 曾反向依赖 bt::tracker::TrackerUrl / bt::webrtc::PeerTransport
+# 做键校验，两类型纯语法词表已迁入 model/bt.rs，bt 单向依赖 model）
+hit=$(grep -rnE '^[[:space:]]*use[[:space:]]+crate::(app|ui|engine|bt)' src/model/ --include='*.rs' || true)
 if [ -n "$hit" ]; then
-  echo "[FAIL] model 层出现对 app/ui/engine 的依赖（内层不得依赖外层）:"; echo "$hit"; fails=$((fails+1))
+  echo "[FAIL] model 层出现对 app/ui/engine/bt 的依赖（内层不得依赖外层）:"; echo "$hit"; fails=$((fails+1))
 else
-  echo "[ OK ] model 层零外层依赖"
+  echo "[ OK ] model 层零外层依赖（含 bt）"
 fi
 
 # 规则 2【依赖方向】engine 不得引用 app/ui（engine 是被 app 消费的低层机制）
@@ -280,6 +283,12 @@ if [ "$fails" -gt 0 ]; then
   echo "arch_check: ${fails} 条规则未过"; exit 1
 fi
 echo "arch_check: 全部边界规则通过"
+
+# architect 本轮（2026-11-22）规则 1 扩域阳性对照（本轮会话实测）：
+#   向 src/model/config.rs 顶部临时插入真实 use 语句 `use crate::bt::peer_id::session_peer_id;`
+#   → 规则 1 扩域后命中并非零退出（model 层 bt 依赖禁令生效）；移除后全过。
+#   另：修复前 model/config.rs 的 crate::bt::tracker::TrackerUrl 真实引用使扩域规则
+#   即红（真阳性），随词表迁入 model/bt.rs 转绿——规则扩域与修复同轮互证。
 
 # ---- POSITIVE-CONTROL（一次性验证记录，非运行时步骤）------------------
 # 首轮交付时已做阳性对照：向 src/engine/mod.rs 临时插入
