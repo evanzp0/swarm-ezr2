@@ -846,10 +846,14 @@ class BtEngineSuite(Suite):
                 assert app.wait_for("添加任务：HTTP(S)", 5)
                 app.send("enter")
                 assert app.wait_for("已添加任务", 6)
+                # 等待中（探测未完成）会命中「当前状态无可断开」臂——等任务
+                # 进入下载中（占槽、shows_conns）再按 b，断言 HTTP 拒绝臂
+                assert app.wait_for("下载中", 30), \
+                    "HTTP 任务应进入下载中（占槽）"
+                app.pump(0.3)
                 app.send("b")
-                app.pump(0.6)
-                assert_in("仅 BT 任务支持断开并发连接（B）", app.text(),
-                          "HTTP 任务 B 应拒绝")
+                assert app.wait_for("仅 BT 任务支持断开并发连接（B）", 5), \
+                    "HTTP 任务 B 应拒绝"
             finally:
                 self._quit(app)
                 if seeder:

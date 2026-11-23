@@ -937,3 +937,29 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 - **等价体的失效条件（回补触发）**：span_sum_over_selected_files 的 lo==hi 分支加 0 等价依赖「sum += 为纯数值累加」——若未来该累加引入副作用（日志/计数）或改用饱和/panic 算术使 lo==hi 可观察，bt.rs:79:19 等价论证失效，须回补边界测试（新增文件使 hi==lo 边界可观察即触发回补）。
 - **DRY 几何再登记残留**：CPD 双扫描（worktree vs git archive HEAD，min-tokens 70，同 PMD 7.29.0）逐字节恒等 221 组；vs cleaner 轮基线 219 的 +2 为 architect 纯移动轮的几何再登记残留（无克隆组涉 model/bt.rs/model/persist.rs，克隆面集中在 bt/engine/mod.rs 148 组与 supervisor 22 组的既有账），本轮零漂移。
 - **CRAP 无回归判定按历轮口径复验**：行覆盖 39828/42084=94.6% 与 QA 轮登记恒等；mouse.rs:178=77.09 稳定锚恒等；ACTIONABLE_COUNT=101 全部为历轮既定账（受限项 5 处 cov=0 登记在列：mouse:516/main:303/metainfo:52 等；trackpool 竞速对账条目现存行号 413，历轮登记 412 为 FN 行漂移）；本轮零新增 ACTIONABLE（src 零改动 + 覆盖集不变）。
+
+## QA 轮（20261123）：runner 时序加固 / hover 残留 / 弹窗内容锚 / CPD 对账 / llvm-cov 漂移
+- **「等待中」状态的先臂遮蔽（BE-11 型 runner 时序）**：B 键断开的 HTTP 拒绝臂断言前，任务若
+  处于等待中（探测未完成）会命中更早的「当前状态无可断开的并发连接」臂——多臂 toast 断言
+  必须先等前置状态到位（wait_for 下载中/占槽）再断言专用臂，pump 固定等待撑不过负载抖动。
+- **✗ hot 渲染的 hover 残留不是按压粘滞**：SGR 点击后 pointer 停位若落在 [✗] 热区，✗ 呈
+  红+粗是悬停渲染（btn.rs hot = x_press || hovered，pressed 在 Up 分支无条件清除、无粘滞）——
+  套件断言常态配色前先点外部移出 pointer 再抓帧；「按压态跨弹窗实例残留」的误判要先排除
+  hover 语义再怀疑状态机。
+- **字段值弹窗的套件定位锚**：弹窗标题与详情面板字段名同串冲突（panel_span 首
+  命中落在详情行）——用内容锚（完整值的前 32 位等单行内唯一子串）向上找 ╭ 提取几何；
+  wrap 断点 = 内容区 42 列（46 内框 − 2×2 阅读内边距），64 位码 42/20 分断；
+  弹窗体文本提取必须裁剪列范围（l..r），右侧重叠区的详情面板 tick 刷新会污染全文 diff。
+- **CPD A/B 对账的 strip 前缀陷阱**：PMD CPD 输出绝对路径——双扫描逐位置对账时
+  strip_prefix 必须与 PMD 实际输出的绝对路径根逐字对齐（相对前缀静默不截取 → 路径残留
+  差异 → 恒等误判 False）；对账脚本先用一个已知组验证截取非空再采信结论。
+- **llvm-cov 行覆盖随 nightly build 漂移**：分母（LF 插桩行数）随 rustc coverage mapping
+  微版本变化（本轮 42084→43940，+4.4%，nightly c7d5ba59d-20261120 vs 基线 bdf712ee8-20261121），
+  行覆盖百分比不可跨 nightly build 直接对账；CRAP 回归判定锚 = ACTIONABLE_COUNT 与
+  具体函数 CRAP 锚（mouse.rs:178=77.09）恒等，行覆盖仅在口径注记中登记。
+- **QA 套件覆盖欠账的检测与补齐口径**：md 表格用例集（`^\| QA-XX-NN \|`）与 suite 用例集
+  diff——md 独有 = 可执行化欠账（补实现）；py 独有 = 跨文档引用噪声（甄别后放行）；
+  规程钦定等价覆盖（头部注记「≡ 其他 suite 实跑 / 单测锁」）不算欠账。补齐时 suite 头部
+  「N 用例」声明同步改写，防止声明数与注册数继续漂移。
+- **IC-07 块首竞速假 FAIL 三证复判再证**：完成瞬态「校验中占槽」观察窗单点 FAIL，原样复跑
+  全量即绿——块首竞速三证判别法（engineering.md）在沙箱回收重建后的首次全量再证有效。

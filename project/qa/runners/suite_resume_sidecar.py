@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """suite_resume_sidecar.py — QA 套件 · 01-resume-sidecar 断点续传与 sidecar（期号 01）。
 
-对应规程：project/qa/01-resume-sidecar-qa.md（14 用例）。
+对应规程：project/qa/01-resume-sidecar-qa.md（15 用例 = QA-RS-01…15；v1.45 补齐 RS-15 可执行化）。
 端到端 UI 层验证：TUI 状态 + 磁盘产物（目标文件/.ezr sidecar/注册表）+ kill/重启操作
 + fixture 不变量控制。只经用户可达入口（TUI 按键 / CLI 参数 / 磁盘文件），不进入项目内部 API。
 
@@ -186,7 +186,7 @@ class ResumeSidecarSuite(Suite):
     # -- 用例 -----------------------------------------------------------------
 
     def run(self) -> list[CaseResult]:
-        for i in range(1, 15):
+        for i in range(1, 16):
             getattr(self, f"_case_{i:02d}")()
         return self.results
 
@@ -733,6 +733,83 @@ class ResumeSidecarSuite(Suite):
                     "完成后 <名>.1.ezr 应随完成删除"
             finally:
                 app.graceful_quit()
+
+    def _case_15(self):
+        """QA-RS-15 存活任务占用守卫（v1.45/FR-01-26）：异 URL 同推导名序号改道静默。
+
+        原任务存活（下载中 ≥30%，不删除）时重加同推导名异 URL 任务：占用守卫
+        触发 = 接续臂不生效，新任务按 FR-01-02 序号链落 `<名>.1` 从头全新下载
+        且静默（无接续提示）；既有任务文件/sidecar/断点不变且继续原下载。
+        改道静默性锚定：添加 toast 到达后的观察窗内无「发现有效断点」+ `<名>.1`
+        独立 sidecar 生成（.1 慢速 100000 令 2MB ≈10s ≫ sidecar 2s 首刷，
+        避开 RS-14 已登记的「快路径首刷前即完成不可观察形态」）。
+        CLI 同口径抽测（单实例锁约束下串行会话）：.1 保持未完成存活（慢速）时
+        退出首会话，CLI 启动新会话（registry 恢复 .1 未完成 = 占用在列）加第三
+        URL 同推导名 → `<名>.2` 全新下载；.1/old 完成内容断言在新会话内收口。
+        异路径同推导名文件由用例自足写入 fixture 根（内容模式 i%251 同口径）。
+        """
+        @self.case("QA-RS-15")
+        def go(env: Env):
+            old_rel, new_rel = "files/guard.bin", "other/guard.bin"
+            old_size, new_size = 3_000_000, 2_000_000
+            old_p = os.path.join(env.fixture_root, *old_rel.split("/"))
+            new_p = os.path.join(env.fixture_root, *new_rel.split("/"))
+            os.makedirs(os.path.dirname(old_p), exist_ok=True)
+            os.makedirs(os.path.dirname(new_p), exist_ok=True)
+            with open(old_p, "wb") as f:
+                f.write(expected_content(old_size))
+            with open(new_p, "wb") as f:
+                f.write(expected_content(new_size))
+            name = "guard.bin"
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            try:
+                add_task_via_dialog(app, env, env.fixture.url(f"{old_rel}?speed=800000"))
+                self._pause_at_progress(app, min_pct=30.0)
+                app.send("space")
+                assert app.wait_for("下载中", 8), "原任务应恢复下载中（存活占用）"
+                open_add_dialog_via_cmd(app, env.fixture.url(f"{new_rel}?speed=100000"))
+                app.send("tab")
+                clear_dir_prefill(app)
+                app.type_text(env.save_dir)
+                app.send("enter")
+                app.pump(0.5)
+                assert app.wait_for(f"{name}.1 [HTTP]", 8), \
+                    "守卫触发：新任务应按序号链改道 <名>.1（v1.45/FR-01-26）"
+                assert app.wait_for("已添加任务", 4), "改道添加应照常 toast 已添加"
+                deadline = time.time() + 3.0
+                while time.time() < deadline:
+                    app.pump(0.1)
+                    assert_not_in("发现有效断点", app.text(), "改道应静默（无接续提示）")
+                self._wait_sidecar(env, f"{name}.1", timeout=10, app=app)
+                wait_file_size(os.path.join(env.save_dir, name), old_size, 120, app=app)
+            finally:
+                app.graceful_quit()
+            third_rel = "third/guard.bin"
+            third_size = 1_000_000
+            third_p = os.path.join(env.fixture_root, *third_rel.split("/"))
+            os.makedirs(os.path.dirname(third_p), exist_ok=True)
+            with open(third_p, "wb") as f:
+                f.write(expected_content(third_size))
+            app2 = EzrApp(env.home, save_dir=env.save_dir,
+                          args=[env.fixture.url(f"{third_rel}?speed=400000"),
+                                "-d", env.save_dir])
+            try:
+                assert app2.wait_for(f"{name}.2 [HTTP]", 8), \
+                    "CLI 同口径：.1 未完成占用在列应改道 <名>.2"
+                assert app2.wait_for("已添加任务", 4)
+                deadline = time.time() + 3.0
+                while time.time() < deadline:
+                    app2.pump(0.1)
+                    assert_not_in("发现有效断点", app2.text(), "CLI 改道应静默")
+                wait_file_size(os.path.join(env.save_dir, f"{name}.2"),
+                               third_size, 120, app=app2)
+                wait_file_size(os.path.join(env.save_dir, f"{name}.1"),
+                               new_size, 180, app=app2)
+                assert_file_content(os.path.join(env.save_dir, name), old_size)
+                assert_file_content(os.path.join(env.save_dir, f"{name}.1"), new_size)
+                assert_file_content(os.path.join(env.save_dir, f"{name}.2"), third_size)
+            finally:
+                app2.graceful_quit()
 
 
 if __name__ == "__main__":

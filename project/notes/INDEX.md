@@ -153,3 +153,5 @@
 - testing.md — PeerTransport 属性测试补缺口（casefold/trim 判定稳定性 + label 右逆往返 + allows 字段投影；proptest 消息参数显式借用与 format! 按值使用先后次序）（新增）
 - environment.md — 新沙箱开工顺序（钉定 nightly 项目目录内首跑 cargo 触发 rustup 静默自动安装致超时假象，先装链再进目录）+ rustup 多组件逐个 -c + ghfast.top release 大资产断点续传选型（新增）
 - handoff.md — model↔bt 环销项与规则 1 扩域（词表迁 model/bt.rs + persist 提取 + PeerTransport 属性补缺 + 全量回归 9631P/0F）（新增）
+- QA 轮（20261123）补记（testing.md 尾）：BE-11 型等待中先臂遮蔽（多臂 toast 断言先等前置状态）、✗ hot 渲染的 hover 残留判定（先移 pointer 再抓常态）、字段值弹窗内容锚（标题冲突用值子串向上找 ╭ + 列范围裁剪）、CPD 对账 strip 前缀陷阱（绝对路径根逐字对齐）、llvm-cov 行覆盖跨 nightly build 不可直比（锚 ACTIONABLE 与函数锚）、QA 覆盖欠账检测口径（md/py 用例集 diff + 钦定等价覆盖）、IC-07 块首竞速三证再证。
+- 沙箱整机回收恢复纪律（environment.md 尾，20261123 实证）：持久区策略 + 环境重装顺序 ~15 分钟 + E0658 = nightly 过旧信号 + libtorrent 套件依赖；镜像当期实测（阿里云 dist 滞后 2026-05-29、TUNA/USTC 2026-11-21、PyPI 阿里云可用、ghfast.top 续传）。

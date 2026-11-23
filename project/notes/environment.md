@@ -587,3 +587,18 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - 磁盘口径补充：cargo-mutants worker 副本构建目录 ~2.7G（deps+bins+1 集成目标、debug=0），
   变异轮结束即删（账目与日志已提取）；~/.cargo/registry/src 删除后 cargo 会按需从 cache
   重新解包（cache 完好即可，删除 src 不破坏重建）。
+
+## 沙箱整机回收恢复纪律（20261123 实证）与镜像当期实测
+- **/home/z 下非持久挂载会整机丢失**（仓库、~/.cargo、~/.rustup、.tools 全没），
+  /home/z/my-project 为持久挂载。工作仓库应 clone 到持久区（如 /home/z/my-project/swarm-ezr2），
+  里程碑产物（归档 tar.gz）完成后立即复制持久区交付目录，沙箱回收只重装环境不重做工作。
+- **恢复顺序（本轮实测 ~15 分钟）**：clone 持久区 → rustup（阿里云镜像，rustup-init 直链
+  秒下）→ nightly 经 TUNA（当期快照 2026-11-21，rustc 1.102.0-nightly c7d5ba59d 与上轮
+  基线同快照日期）→ cargo-llvm-cov 0.9.2（cargo install 1m14s）→ PMD 7.29.0（ghfast.top
+  下载 128MB，断点续传 `curl -C -` 分两次 ~10 分钟）→ pyte + libtorrent 经阿里云 PyPI
+  （6.2MB/s，秒级——默认 PyPI 直连 300s 超时装不动）。
+- **nightly 版本过旧的编译信号**：E0658 `result_option_map_or_default` 类未稳定库 feature
+  = nightly 落后于代码基线，先验镜像清单 date（阿里云当期滞后在 2026-05-29、TUNA/USTC
+  2026-11-21），升 nightly 再排查代码，不要改代码迁就旧编译器。
+- **libtorrent 套件依赖**：QA-PC-13 等用例 import libtorrent——新沙箱必装（PyPI wheel
+  2.1.1 可用），缺失表象 = persistence_config 单点 ModuleNotFoundError。

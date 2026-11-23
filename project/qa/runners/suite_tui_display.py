@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """suite_tui_display.py — QA 套件 · 01-tui-display TUI 展示与交互（期号 01）。
 
-对应规程：project/qa/01-tui-display-qa.md（14 用例）。
+对应规程：project/qa/01-tui-display-qa.md（25 用例 = QA-TD-01…28 缺 04/14/16；v1.34 补齐 25–28 可执行化）。
 端到端 UI 层验证：伪终端画面/配色单元格断言 + 按键/鼠标（SGR）注入 + fixture 驱动真实状态。
 配色断言与 NO_COLOR 无关（产品强制彩色）。环境判据：SGR 鼠标序列由 PTY 直接注入，
 无真实鼠标也可验证（产品侧只依赖终端转义序列）。
@@ -22,6 +22,8 @@ from harness import (
 )
 
 FIVE_M = QA_FILE_SIZES["five-m.bin"]
+LIGHT_BLUE = "7ab9f2"   # RGB(122,185,242) 链接字段名淡蓝（FR-01-101，UC-17 同源）
+DIM = "7e8d93"          # 字段名暗灰（FR-01-101 UC-17 同源）
 
 
 class TuiDisplaySuite(Suite):
@@ -41,9 +43,15 @@ class TuiDisplaySuite(Suite):
         # v1.16 新增 QA-TD-17（任务速度实时口径，FR-01-105）；
         # QA-TD-14 退役（v1.32/FR-01-94① 头部标题栏版本号移除，序号留空不重排）；
         # v1.30–v1.32 新增 QA-TD-18..24（焦点模型/帮助/滚动条/删除框/页脚 chips/
-        # 对话框拖拽/关于窗口），QA v148 轮按规程可执行化补齐
+        # 对话框拖拽/关于窗口），QA v148 轮按规程可执行化补齐；
+        # v1.34 新增 QA-TD-25..28（复制扩展/字段值弹窗/[✗]/未知尺寸），QA 20261122
+        # 轮按规程可执行化补齐
+        only = os.environ.get("QA_TD_ONLY", "").strip()
+        if only:
+            getattr(self, f"_case_{int(only):02d}")()
+            return self.results
         for i in (1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 17,
-                  18, 19, 20, 21, 22, 23, 24):
+                  18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28):
             getattr(self, f"_case_{i:02d}")()
         return self.results
 
@@ -1380,6 +1388,563 @@ class TuiDisplaySuite(Suite):
                 app.pump(0.3)
             finally:
                 app.graceful_quit()
+    @staticmethod
+    def _detail_row_span(app: EzrApp, label: str):
+        """详情面板字段行 (row, label_col)：面板界「任务详情」→「并发连接」内定位。"""
+        start = end = None
+        for y in range(app.screen.lines):
+            t = app.screen.display[y]
+            if start is None and "任务详情" in t:
+                start = y
+            elif start is not None and "并发连接" in t:
+                end = y
+                break
+        if start is None:
+            return None
+        hi = end if end is not None else app.screen.lines
+        for y in range(start, hi):
+            x = TuiDisplaySuite._find_col(app, y, label, start=64)
+            if x is not None:
+                return y, x
+        return None
+
+    @staticmethod
+    def _click(app: EzrApp, row: int, col: int) -> None:
+        app.send(f"mclick:{col + 1}:{row + 1}")
+
+    @staticmethod
+    def _cell_ul(app: EzrApp, row: int, col: int) -> bool:
+        return bool(app.screen.buffer[row][col].underscore)
+
+    @staticmethod
+    def _cell_bg_red(app: EzrApp, row: int, col: int) -> bool:
+        bg = app.screen.buffer[row][col].bg
+        return bg in ("red", "cd0000", "800000") or (
+            bg is not None and "cd0000" in str(bg))
+
+    @staticmethod
+    def _label_cells_styled(app: EzrApp, label: str, expect_ul: bool,
+                            expect_fg: str | None = None) -> None:
+        y, x = TuiDisplaySuite._detail_row_span(app, label)
+        assert y is not None, f"字段名 {label} 应可见"
+        import wcwidth as _ww
+        xi = x
+        for ch in label:
+            cell = app.screen.buffer[y][xi]
+            assert cell.data == ch, f"{label} 列位还原失败: {cell.data!r}"
+            if expect_fg is not None:
+                assert cell.fg == expect_fg, \
+                    f"{label} 字段名配色应 {expect_fg}: {cell.fg}@{xi}"
+            assert TuiDisplaySuite._cell_ul(app, y, xi) == expect_ul, \
+                f"{label} 字段名下划线应 {expect_ul}@{xi}"
+            w = _ww.wcwidth(ch)
+            xi += w if w and w > 0 else 1
+        pad_end = x + 9
+        while xi < pad_end:
+            assert not TuiDisplaySuite._cell_ul(app, y, xi), \
+                f"{label} 填充空格不应有下划线@{xi}"
+            xi += 1
+
+    def _click_value_of(self, app: EzrApp, label: str, value_head: str) -> None:
+        """点详情面板字段「值」文本（同 row、label 后列空间定位）开字段值弹窗。"""
+        pos = self._detail_row_span(app, label)
+        assert pos is not None, f"{label} 字段名应可见"
+        vx = TuiDisplaySuite._find_col(app, pos[0], value_head, start=pos[1] + 1)
+        assert vx is not None, f"{label} 值文本应可见"
+        self._click(app, pos[0], vx)
+
+    @staticmethod
+    def _popup_span_from_content(app: EzrApp, needle: str):
+        """字段值弹窗几何：按内容 needle 定位弹体行，向上找 ╭ 顶边框行。
+
+        （弹窗标题文本与详情面板字段名同串冲突——panel_span 的 needle 首
+        命中不可用；字段值弹窗体含完整值后半段，为唯一内容锚。）
+        """
+        for i in range(app.screen.lines):
+            if TuiDisplaySuite._find_col(app, i, needle) is None:
+                continue
+            ty = None
+            for yy in range(i, -1, -1):
+                for xx in range(app.screen.columns):
+                    if app.screen.buffer[yy][xx].data == "╭":
+                        ty = yy
+                        break
+                if ty is not None:
+                    break
+            if ty is None:
+                continue
+            left = right = None
+            for xx in range(app.screen.columns):
+                if app.screen.buffer[ty][xx].data == "╭":
+                    left = xx
+                    break
+            for xx in range(app.screen.columns - 1,
+                            left if left is not None else 0, -1):
+                if app.screen.buffer[ty][xx].data == "╮":
+                    right = xx
+                    break
+            if left is None or right is None:
+                continue
+            bot = None
+            for yy in range(ty + 1, app.screen.lines):
+                if "╰" in app.screen.display[yy]:
+                    bot = yy
+                    break
+            return ty, left, right, bot
+        return None
+
+    @staticmethod
+    def _marquee_first_col(track_row: str) -> int | None:
+        """进度条行走马灯填充段首列（非 ░ 填充字符首列；纯空轨 None）。"""
+        import wcwidth as _ww
+        x = 0
+        first = None
+        for ch in track_row:
+            if ch != "░" and ch.strip() and ch not in ("│", "║", "┤", "├"):
+                if first is None:
+                    first = x
+            x += _ww.wcwidth(ch) if _ww.wcwidth(ch) > 0 else 1
+        return first
+
+    def _case_25(self):
+        """QA-TD-25 失败任务详情复制扩展（FR-01-101/D42）：字段名样式 + 失败/路径复制。
+
+        已失败+提供校验码任务：字段名 = ID/创建/失败/路径（旧名退役）；校验/
+        URL/失败/路径 四字段名淡蓝下划线，排队/ID/创建/类型/大小/分块 暗灰无
+        下划线；点「失败」复制完整错误文案 + toast `已复制 失败原因`；点「路径」
+        复制完整保存路径 + toast `已复制 保存路径`；URL/校验 同 QA-UC-18 口径；
+        URL 值悬停无双下划线（break_links VS15 断链——静态单元格无叠加下划线）。
+        失败路径 = fixture redirect=20 链：产品 reqwest Policy::limited(10) →
+        「重定向次数超限」Fatal 即时失败（秒级，不涉 503 类 176s 重试链）。
+        """
+        @self.case("QA-TD-25")
+        def go(env: Env):
+            CK = "e3b0c44298fc1c149afbf4c8996fb924" \
+                 "27ae41e4649b934ca495991b7852b855"
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            self._cur_app = app
+            try:
+                add_task_via_dialog(
+                    app, env, env.fixture.url("three-m.bin?redirect=20"),
+                    ck_value=CK)
+                assert app.wait_for("已失败", 20), "重定向超限应秒级失败"
+                assert_not_in("任务 ID", app.text(), "旧「任务 ID」名退役")
+                assert_not_in("创建时间", app.text(), "旧「创建时间」名退役")
+                assert_not_in("失败原因", app.text(), "旧「失败原因」名退役")
+                for label in ("校验", "URL", "失败", "路径"):
+                    self._label_cells_styled(app, label, expect_ul=True,
+                                             expect_fg=LIGHT_BLUE)
+                for label in ("ID", "创建", "类型", "大小", "分块"):
+                    pos = self._detail_row_span(app, label)
+                    if pos is None:
+                        continue
+                    y, x = pos
+                    assert app.cell_fg(y, x) == DIM, \
+                        f"{label} 字段名应暗灰: {app.cell_fg(y, x)}"
+                    assert not self._cell_ul(app, y, x), \
+                        f"{label} 字段名不应有下划线"
+                pos = self._detail_row_span(app, "URL")
+                assert pos is not None
+                vx = self._find_col(app, pos[0], "http", start=pos[1] + 1)
+                assert vx is not None, "URL 值应可见"
+                for x2 in range(vx, min(vx + 32, app.screen.columns)):
+                    assert not self._cell_ul(app, pos[0], x2), \
+                        f"URL 值不应叠加链接下划线@{x2}"
+                pos = self._detail_row_span(app, "失败")
+                assert pos is not None
+                self._click(app, pos[0], pos[1])
+                assert app.wait_for("已复制 失败原因", 5), "点失败应 toast 复制"
+                payloads = app.osc52_payloads()
+                assert payloads and payloads[-1] == "重定向次数超限", \
+                    f"OSC52 应为完整失败文案: {payloads[-1:] if payloads else '[]'}"
+                assert app.wait_gone("已复制 失败原因", 8)
+                pos = self._detail_row_span(app, "路径")
+                assert pos is not None
+                self._click(app, pos[0], pos[1])
+                assert app.wait_for("已复制 保存路径", 5), "点路径应 toast 复制"
+                payloads = app.osc52_payloads()
+                assert payloads and payloads[-1] == os.path.join(
+                    env.save_dir, "three-m.bin"), \
+                    f"OSC52 应为完整路径: {payloads[-1:] if payloads else '[]'}"
+                assert app.wait_gone("已复制 保存路径", 8)
+                pos = self._detail_row_span(app, "URL")
+                assert pos is not None
+                self._click(app, pos[0], pos[1])
+                assert app.wait_for("已复制 url", 5)
+                payloads = app.osc52_payloads()
+                assert payloads and payloads[-1] == env.fixture.url(
+                    "three-m.bin?redirect=20"), \
+                    f"OSC52 应为详情展示 URL: {payloads[-1:] if payloads else '[]'}"
+                assert app.wait_gone("已复制 url", 8)
+                pos = self._detail_row_span(app, "校验")
+                assert pos is not None
+                self._click(app, pos[0], pos[1])
+                assert app.wait_for("已复制 校验码", 5)
+                payloads = app.osc52_payloads()
+                assert payloads and payloads[-1] == CK, \
+                    f"OSC52 应为完整校验码: {payloads[-1:] if payloads else '[]'}"
+            finally:
+                app.graceful_quit()
+
+    def _case_26(self):
+        """QA-TD-26 字段值弹窗（FR-01-101/D42）：48×12 快照 wrap/Y 复制/滚动/关闭通道。
+
+        点「校验」字段值开弹窗：48×12 圆角浮层、打开时快照完整值 wrap 折行
+        无截断、Y 复制 + toast、短快照滚动键位钳制、Esc/[✗]/q 关闭且应用存活、
+        点击外部无操作、拖拽随动 + 关闭即清（重开居中）、URL/失败/路径 同形态、
+        无校验任务无校验字段行（字段不可用不打开）、弹窗内 A 消费为无动作、
+        Ctrl+C 直接退出。
+        """
+        @self.case("QA-TD-26")
+        def go(env: Env):
+            CK = "e3b0c44298fc1c149afbf4c8996fb924" \
+                 "27ae41e4649b934ca495991b7852b855"
+            CKA = CK[:32]
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            self._cur_app = app
+            try:
+                add_task_via_dialog(
+                    app, env, self._slow(env, "three-m.bin", 26), ck_value=CK)
+                assert app.wait_for("下载中", 8)
+                self._click_value_of(app, "校验", "SHA-256")
+                assert app.wait_for(CKA, 4), "点校验值应开字段值弹窗"
+                g = self._popup_span_from_content(app, CKA)
+                assert g is not None, "字段值弹窗几何应在位"
+                ty, l, r, bot = g
+                assert r - l == 47, f"字段值弹窗应 48 列（实测 {r - l + 1}）"
+                assert bot is not None and bot - ty == 11, \
+                    f"字段值弹窗应 12 行（实测 {bot - ty + 1}）"
+                body = "\n".join(
+                    app.screen.display[i][l:r + 1]
+                    for i in range(ty + 1, bot))
+                body_flat = body.replace(" ", "")
+                assert CK[:42] in body_flat and CK[42:] in body_flat, \
+                    "64 位校验码应完整呈现（wrap 折行无截断，内容区 42 列分断）"
+                app.send("Y")
+                assert app.wait_for("已复制 校验码", 5), "Y 应复制弹窗全部内容"
+                payloads = app.osc52_payloads()
+                assert payloads and payloads[-1] == CK, \
+                    f"Y OSC52 应为完整校验码: {payloads[-1:] if payloads else '[]'}"
+                assert app.wait_gone("已复制 校验码", 8)
+                for k in ("pgdn", "end", "home", "pgup", "up", "down"):
+                    app.send(k)
+                    app.pump(0.2)
+                body_after = "\n".join(
+                    app.screen.display[i][l:r + 1]
+                    for i in range(ty + 1, bot)).replace(" ", "")
+                assert body_after == body_flat, \
+                    "短快照（2 行）滚动键位应钳制内容不变"
+                app.send(f"mclick:{l + 3}:{ty + 1}",
+                         f"mdrag:{l + 5}:{ty + 2}")
+                app.pump(0.2)
+                app.send(f"mup:{l + 5}:{ty + 2}")
+                app.pump(0.4)
+                g1 = self._popup_span_from_content(app, CKA)
+                assert g1 is not None and g1[0] == ty + 1, \
+                    f"弹窗标题栏拖拽应随动: {g1[0] if g1 else None} ≠ {ty + 1}"
+                app.send("esc")
+                app.pump(0.4)
+                assert self._popup_span_from_content(app, CKA) is None, \
+                    "Esc 应关闭弹窗"
+                self._click_value_of(app, "校验", "SHA-256")
+                assert app.wait_for(CKA, 4)
+                g2 = self._popup_span_from_content(app, CKA)
+                assert g2 is not None and g2[0] == ty, "重开应重新居中"
+                ty2, l2, r2, bot2 = g2
+                app.send("mclick:2:2")
+                app.pump(0.15)
+                app.send("mup:2:2")
+                app.pump(0.4)
+                assert_in(CKA, app.text(), "点外应无动作")
+                app.send(f"mclick:{r2 - 1}:{ty2 + 1}")
+                app.pump(0.15)
+                app.send(f"mup:{r2 - 1}:{ty2 + 1}")
+                app.pump(0.5)
+                assert self._popup_span_from_content(app, CKA) is None, \
+                    "[✗] 应关闭弹窗"
+                self._click_value_of(app, "校验", "SHA-256")
+                assert app.wait_for(CKA, 4)
+                app.send("q")
+                app.pump(0.4)
+                assert self._popup_span_from_content(app, CKA) is None, \
+                    "q 应关闭弹窗"
+                self._click_value_of(app, "URL", "http")
+                assert app.wait_for("http", 4), "点 URL 值应开 URL 弹窗"
+                gu = self._popup_span_from_content(app, "http")
+                assert gu is not None, "URL 弹窗几何应在位"
+                assert gu[2] - gu[1] == 47, "URL 弹窗应 48 列"
+                for k in ("pgdn", "end", "home", "up"):
+                    app.send(k)
+                    app.pump(0.2)
+                assert_in("http", app.text(), "滚动后弹窗应存活")
+                app.send("A")
+                app.pump(0.3)
+                assert self._popup_span_from_content(app, "http") is not None, \
+                    "弹窗内 A 应被消费（弹窗不关不叠层）"
+                app.send("esc")
+                app.pump(0.4)
+                add_task_via_dialog(app, env, self._slow(env, "two-m.bin", 26))
+                assert app.wait_for("下载中", 8)
+                assert self._detail_row_span(app, "校验") is None, \
+                    "无校验任务不应有校验字段行"
+                app.send("ctrl_c")
+                deadline = time.time() + 6
+                while time.time() < deadline and app.exit_code is None:
+                    app.pump(0.1)
+                assert app.exit_code == 0, "弹窗内 Ctrl+C 应直接退出"
+                app = None
+            finally:
+                if app is not None:
+                    app.graceful_quit()
+
+    def _case_27(self):
+        """QA-TD-27 七弹窗统一 [✗]（FR-01-114/D41）：几何/配色/按压/拖出/误触防护。
+
+        添加/修改/删除/pieces/帮助/关于/字段值 七弹窗逐个：[✗] 3 列宽（U+2717、
+        右角符内侧 1 列 + 左侧 padding、不覆盖边框线）；中括号与弹窗边框线同色
+        （绿+粗）；✗ 常态 DIM2、按压仅前景红+粗（无背景反色）；原地松开 =
+        关闭对应弹窗（对话框 = 取消不创建不改动）；拖出热区松开 = 取消不关闭；
+        padding 列点击无动作不误触；下拉展开期点 [✗] 位置先收起下拉；
+        弹窗过窄/与标题重叠时放弃绘制（P7，负几何注入不做）。
+        """
+        @self.case("QA-TD-27")
+        def go(env: Env):
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            self._cur_app = app
+            try:
+                open_add_dialog_via_cmd(app, DUMMY_URL)
+                self._close_x_assert(app, "添加任务：HTTP(S)", "对话框")
+                app.pump(0.3)
+                for key, probe, span_probe, tag in (
+                        ("h", "【全局】", "帮助", "帮助"),
+                        ("o", "EZR Download v1.0.0", "About", "关于")):
+                    app.send(key)
+                    assert app.wait_for(probe, 4), f"{tag} 应打开"
+                    self._close_x_assert(app, span_probe, tag,
+                                         close_probe=probe)
+                    app.pump(0.3)
+                CK = "ab" * 32
+                add_task_via_dialog(app, env, self._slow(env, "two-m.bin", 27),
+                                    ck_value=CK)
+                assert app.wait_for("下载中", 8)
+                app.send("D")
+                assert app.wait_for("删除任务", 4), "删除框应打开"
+                self._close_x_assert(app, "删除任务", "删除框")
+                app.pump(0.3)
+                app.send("P")
+                app.pump(0.6)
+                if "分块状态" in app.text():
+                    self._close_x_assert(app, "分块状态", "pieces",
+                                         close_probe="分块状态")
+                    app.pump(0.3)
+                pos = self._detail_row_span(app, "校验")
+                assert pos is not None
+                self._click_value_of(app, "校验", "SHA-256")
+                assert app.wait_for(CK[:32], 4)
+                self._close_x_assert(
+                    app, "校验", "字段值",
+                    close_probe=CK[:32],
+                    span=self._popup_span_from_content(app, CK[:32]))
+                app.pump(0.3)
+                app.send("M")
+                app.pump(0.6)
+                assert_in("修改任务", app.text(), "修改框应打开")
+                gm = self._panel_span(app, "修改任务")
+                assert gm is not None
+                tym, lm, rm = gm
+                app.send("tab", "tab")
+                app.send("enter")
+                app.pump(0.3)
+                assert_in("NONE", app.text(), "校验下拉应展开")
+                app.send(f"mclick:{rm - 1}:{tym + 1}")
+                app.pump(0.15)
+                app.send(f"mup:{rm - 1}:{tym + 1}")
+                app.pump(0.4)
+                assert_not_in("NONE", app.text(), "下拉展开期点 ✗ 应先收起下拉")
+                assert_in("修改任务", app.text(), "对话框应保持打开")
+                app.send("mclick:2:2")
+                app.pump(0.15)
+                app.send("mup:2:2")
+                app.pump(0.4)
+                app.send("esc")
+                app.pump(0.4)
+                app.send("M")
+                app.pump(0.8)
+                assert_in("修改任务", app.text(), "修改框重开应在位")
+                self._close_x_assert(app, "修改任务", "修改框")
+            finally:
+                app.graceful_quit()
+
+    def _close_x_assert(self, app: EzrApp, probe: str, tag: str,
+                        close_probe: str | None = None,
+                        span: tuple | None = None) -> None:
+        """单弹窗 [✗]：几何/配色 + padding 无误触 + 拖出不关 + 按压态 + 原地松开。
+
+        close_probe = 关闭后应消失的窗口体特有文本（帮助/关于等标题与页脚
+        chips 同串时用内容组标题判关闭；缺省 = probe）。
+        """
+        close_probe = close_probe or probe
+        app.send("mclick:2:2")
+        app.pump(0.15)
+        app.send("mup:2:2")
+        app.pump(0.4)
+        g = span if span is not None else self._panel_span(app, probe)
+        assert g is not None, f"{tag} 弹窗几何应在位"
+        ty, l, r = g[0], g[1], g[2]
+        xc = r - 3
+        cell = app.screen.buffer[ty][xc]
+        assert cell.data == "✗", f"{tag} [✗] 应为 U+2717: {cell.data!r}"
+        assert app.screen.buffer[ty][r - 4].data == "[", \
+            f"{tag} [✗] 左括号应在位"
+        assert app.screen.buffer[ty][r - 2].data == "]", \
+            f"{tag} [✗] 右括号应在位"
+        assert app.screen.buffer[ty][r - 1].data == "─", \
+            f"{tag} [✗] 右侧应有 1 列边框线 padding（不覆盖边框）"
+        border_fg = app.screen.buffer[ty][l].fg
+        for bx in (r - 4, r - 2):
+            bcell = app.screen.buffer[ty][bx]
+            assert bcell.fg == border_fg, \
+                f"{tag} 中括号应与边框线同色: {bcell.fg} ≠ {border_fg}"
+            assert bcell.bold, f"{tag} 中括号应粗体"
+        assert cell.fg != border_fg, \
+            f"{tag} ✗ 常态应 DIM2 区分于边框绿: {cell.fg}"
+        assert not cell.bold, f"{tag} ✗ 常态不应粗体"
+        assert not self._cell_bg_red(app, ty, xc), \
+            f"{tag} [✗] 常态无背景色"
+        app.send(f"mclick:{r - 5 + 1}:{ty + 1}")
+        app.pump(0.15)
+        app.send(f"mup:{r - 5 + 1}:{ty + 1}")
+        app.pump(0.4)
+        assert_in(probe, app.text(), f"{tag} padding 列点击应无动作")
+        app.send(f"mclick:{xc + 1}:{ty + 1}",
+                 f"mdrag:{xc - 8}:{ty + 2}")
+        app.pump(0.2)
+        app.send(f"mup:{xc - 8}:{ty + 2}")
+        app.pump(0.4)
+        assert_in(probe, app.text(), f"{tag} 拖出热区松开不应关闭")
+        app.send(f"mclick:{xc + 1}:{ty + 1}")
+        app.pump(0.3)
+        pcell = app.screen.buffer[ty][xc]
+        assert pcell.data == "✗", f"{tag} 按压态 ✗ 应仍在位"
+        assert pcell.fg in ("red", "cd0000", "e25c54"), \
+            f"{tag} 按压态 ✗ 应前景红: {pcell.fg}"
+        assert pcell.bold, f"{tag} 按压态 ✗ 应粗体"
+        assert not self._cell_bg_red(app, ty, xc), \
+            f"{tag} 按压态无背景反色"
+        app.send(f"mup:{xc + 1}:{ty + 1}")
+        app.pump(0.5)
+        assert_not_in(close_probe, app.text(), f"{tag} 原地松开应关闭")
+        assert_in("EZR Downloader", app.text(), f"{tag} 关闭后应用存活")
+
+    def _case_28(self):
+        """QA-TD-28 未知尺寸（无 Content-Length）：?%/走马灯/LT -/? B 与流结束恢复。
+
+        fixture `streamy*` 文件名 = chunked 无 Content-Length（size_known=false）：
+        下载中百分比 `?%`（右对齐）、进度条走马灯循环色块（连续采样 ≥2 相位
+        确认循环）、任务行/统计行无尺寸项、剩余 `LT -`（v1.52 标签缩写）、
+        详情大小行 `<已下载> / ? B`、分块行恒 `-`；已暂停进度条空轨道（全 ░）
+        + `LT -`；流结束后详情大小行恢复实际大小、`?` 占位退役；支持续传对照
+        任务百分比/进度条/ETA 不受影响。
+        """
+        @self.case("QA-TD-28")
+        def go(env: Env):
+            streamy = os.path.join(env.fixture_root, "streamy-five-m.bin")
+            os.makedirs(env.fixture_root, exist_ok=True)
+            if file_bytes(streamy) is None:
+                with open(streamy, "wb") as f:
+                    f.write(expected_content(QA_FILE_SIZES["five-m.bin"]))
+            app = EzrApp(env.home, save_dir=env.save_dir)
+            self._cur_app = app
+            try:
+                add_task_via_dialog(
+                    app, env, env.fixture.url("streamy-five-m.bin?speed=200000"))
+                assert app.wait_for("下载中", 8)
+                rows = app.display_rows()
+                lrow = next(r for r in rows if "streamy-five-m.bin" in r)
+                assert "?%" in lrow, f"未知尺寸应显示 ?%: {lrow}"
+                lidx = next(i for i, r in enumerate(rows)
+                            if "streamy-five-m.bin" in r)
+                block = "\n".join(rows[lidx:lidx + 4])
+                assert "LT -" in block, \
+                    f"任务块明细行剩余应显示 LT -: {block[:200]}"
+                assert " MB" not in lrow.replace("five-m.bin", ""), \
+                    f"行 1 不应显示尺寸项: {lrow}"
+                pidx = lidx + 1
+                track = rows[pidx]
+                assert "░" in track, f"进度条行应有空轨道底: {track!r}"
+                seq = []
+                for _ in range(15):
+                    app.pump(0.25)
+                    rows = app.display_rows()
+                    seg = self._marquee_first_col(rows[pidx])
+                    if seg is not None:
+                        seq.append(seg)
+                assert len(set(seq)) >= 2, \
+                    f"走马灯色块应随帧移动: {seq}"
+                wraps = any(b < a for a, b in zip(seq, seq[1:]))
+                assert wraps, f"走马灯应循环回绕（滑出后重新滑入）: {seq}"
+                d = detail_text(app)
+                assert "/ ? B" in d, "详情大小行应 <已下载> / ? B"
+                pb = self._detail_row_span(app, "分块")
+                assert pb is not None, "详情应有分块行"
+                prow = app.screen.display[pb[0]]
+                after_label = prow[pb[1] + 4:].strip()
+                assert after_label.startswith("-"), \
+                    f"未知尺寸任务分块行应恒 -: {after_label!r}"
+                app.send("space")
+                assert app.wait_for("已暂停", 5)
+                rows = app.display_rows()
+                lidx = next(i for i, r in enumerate(rows)
+                            if "streamy-five-m.bin" in r)
+                pblock = rows[lidx:lidx + 4]
+                ptrack = next((r for r in pblock if "░" in r), None)
+                assert ptrack is not None, \
+                    f"暂停态应有进度条空轨道行: {pblock}"
+                assert "█" not in ptrack and "▓" not in ptrack, \
+                    f"暂停态进度条应空轨道: {ptrack!r}"
+                assert "LT -" in "\n".join(pblock), \
+                    f"暂停态剩余应 LT -: {pblock}"
+                app.send("space")
+                assert app.wait_for("下载中", 8)
+                assert app.wait_gone("streamy-five-m.bin", 120), \
+                    "streamy 任务应完成移出下载页签（120s）"
+                app.send("]")
+                app.pump(0.6)
+                rows = app.display_rows()
+                srows = [r for r in rows if "streamy-five-m.bin" in r]
+                assert srows and "[已完成]" in srows[0], \
+                    f"已完成页签应有 streamy 任务行: {srows[:1]}"
+                d = detail_text(app)
+                assert "/ ? B" not in d, "完成后 ? 占位应退役"
+                assert "5.0 MB" in d, \
+                    f"完成后大小行应恢复实际大小（详情尺寸十进制 MB 口径）: {[l for l in d.splitlines() if '大小' in l][:1]}"
+                assert "?%" not in app.text(), "完成后 ?% 应退役"
+                add_task_via_dialog(
+                    app, env, env.fixture.url("two-m.bin?speed=400000"))
+                assert app.wait_for("下载中", 8)
+                eta_ok = False
+                block2 = ""
+                lrow = ""
+                deadline = time.time() + 20
+                while time.time() < deadline:
+                    app.pump(0.5)
+                    rows = app.display_rows()
+                    lidx2 = next((i for i, r in enumerate(rows)
+                                  if "two-m.bin" in r), None)
+                    if lidx2 is None:
+                        continue
+                    block2 = "\n".join(rows[lidx2:lidx2 + 4])
+                    if re.search(r"LT [0-9]", block2):
+                        eta_ok = True
+                        break
+                lrow = next((r for r in rows if "two-m.bin" in r), "")
+                assert eta_ok, f"对照任务 ETA 应有值（LT 后数字）: {block2[:200]}"
+                assert "?%" not in block2, f"对照任务应数值百分比: {block2[:200]}"
+                assert "%" in lrow, f"对照任务应有百分比: {lrow}"
+                assert "LT" in block2, f"对照任务应显示 LT: {block2[:200]}"
+            finally:
+                app.graceful_quit()
+
 
 if __name__ == "__main__":
     suite = TuiDisplaySuite()

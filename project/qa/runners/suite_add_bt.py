@@ -702,7 +702,7 @@ class AddBtSuite(Suite):
                 env.write_config("")
 
     def _case_11(self):
-        """QA-AB-11 tracker 协议白名单：ftp 拒绝截尾 / wss 同权 / 大写等价 / 留空默认 4 条。"""
+        """QA-AB-11 tracker 协议白名单：ftp 拒绝截尾 / wss 同权 / 大写等价 / 留空 trackers（v1.52 产品口径：池 = 三来源合并去重，留空时池内容 = 种子元数据自带 announce）。"""
         @self.case("QA-AB-11")
         def go(env: Env):
             fx = self._make_fixtures(env)

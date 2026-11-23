@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """suite_add_task.py — QA 套件 · 01-add-task 任务添加（期号 01）。
 
-对应规程：project/qa/01-add-task-qa.md（18 用例）。
+对应规程：project/qa/01-add-task-qa.md（22 用例 = QA-01-01…21 + QA-01-16a；v1.43 补齐 16a 可执行化）。
 端到端 UI 层验证：只用用户可达入口（TUI 按键/鼠标、CLI 参数、磁盘产物观察），
 不进入项目内部 API。fixture 校验伴随文件按用例预置/清空。
 
@@ -61,10 +61,15 @@ class AddTaskSuite(Suite):
         # QA_AT_ONLY=20 → 只跑 _case_20。沙箱前台单命令 10min 上限对策
         # （v141 QA_TP_ONLY 同款）；缺省全量，结果仅含所跑用例。
         only = os.environ.get("QA_AT_ONLY", "").strip()
+        if only == "16a":
+            self._case_16a()
+            return self.results
         idxs = ([int(x) for x in only.split(",") if x.strip().isdigit()]
                 if only else range(1, 22))
         for i in idxs:
             getattr(self, f"_case_{i:02d}")()
+        if not only:
+            self._case_16a()
         return self.results
 
     def _case_01(self):
@@ -598,6 +603,43 @@ class AddTaskSuite(Suite):
                 assert n2 == 1, f"列表数量应不变: {n1}→{n2}"
             finally:
                 app.graceful_quit()
+
+    def _case_16a(self):
+        """QA-01-16a CLI 同 URL 二次添加（bug27 判重 CLI 臂）：toast ⚠ 已存在、不创建。
+
+        v1.43/bug27：判重谓词 = 同 URL（与保存目录无关）；CLI 无对话框/错误窗口
+        载体，toast 语义沿 FR-01-80 ⚠ 前缀（src/app/cli.rs add_cli_task 判重臂）。
+        """
+        @self.case("QA-01-16a")
+        def go(env: Env):
+            url = env.fixture.url("five-m.bin?speed=500000")
+            app = EzrApp(env.home, save_dir=env.save_dir, args=[url, "-d", env.save_dir])
+            try:
+                assert app.wait_for("已添加任务", 6), "CLI 首次添加应成功"
+                n1 = self._task_count(app)
+                assert n1 == 1, f"首次添加后任务数应为 1: {n1}"
+            finally:
+                app.graceful_quit()
+            app2 = EzrApp(env.home, save_dir=env.save_dir,
+                          args=[url, "-d", env.save_dir])
+            try:
+                assert app2.wait_for("该链接的任务已存在", 6), "CLI 同 URL 应 toast 判重"
+                assert_in("⚠ 该链接的任务已存在", app2.text(),
+                          "CLI toast 沿 FR-01-80 ⚠ 前缀")
+                n2 = self._task_count(app2)
+                assert n2 == 1, f"同目录判重后列表数量应不变: {n2}"
+                assert_not_in("已添加任务", app2.text(), "不应出现已添加 toast")
+            finally:
+                app2.graceful_quit()
+            app3 = EzrApp(env.home, save_dir=env.save_dir,
+                          args=[url, "-d", os.path.join(env.save_dir, "other")])
+            try:
+                assert app3.wait_for("该链接的任务已存在", 6), \
+                    "异目录同 URL 同样判重命中（bug27 与目录无关）"
+                n3 = self._task_count(app3)
+                assert n3 == 1, f"异目录判重后列表数量应不变: {n3}"
+            finally:
+                app3.graceful_quit()
 
     def _case_17(self):
         """QA-01-17 bracketed paste 粘贴 200 字符 URL：完整显示；确认创建成功。"""
