@@ -963,3 +963,9 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
   「N 用例」声明同步改写，防止声明数与注册数继续漂移。
 - **IC-07 块首竞速假 FAIL 三证复判再证**：完成瞬态「校验中占槽」观察窗单点 FAIL，原样复跑
   全量即绿——块首竞速三证判别法（engineering.md）在沙箱回收重建后的首次全量再证有效。
+- **新建 feature 的 dry-check 基线对照口径**：新文件无 `git show HEAD:` 基线可 diff 时，
+  以既有同风格 feature 的 findings 类型分布为对照（01-resize 量级：near-duplicate ~49/
+  possible-synonym ~59）——near-duplicate/possible-synonym 属中文步骤风格的顾问性发现
+  （medium/low 置信），不是必改项；**high 置信的 duplicate-in-scenario（同场景逐字重复步）
+  与 placeholder-variant（同动作仅占位符名不同）才是本轮必改项**（措辞区分/占位符统一即可
+  清零）。

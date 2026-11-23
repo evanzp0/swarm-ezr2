@@ -1,0 +1,186 @@
+# 场景清单（场景名 = feature 名称 + 稳定序号）：
+#   12-reload-config-01 Ctrl+R 全局可达且成功热加载即时生效
+#   12-reload-config-02 A 类全局限速热切运行中任务即时重定目标
+#   12-reload-config-03 A 类 download_slots 热调不抢占不补位
+#   12-reload-config-04 A 类 auto_retry 热切下次失败判定生效
+#   12-reload-config-05 A 类代理端点变更运行任务热切存量连接不打断
+#   12-reload-config-06 命名代理删除运行任务降级直连汇总提示与下拉回退
+#   12-reload-config-07 B 类快照键仅影响后续新任务
+#   12-reload-config-08 C 类键变化提示需重启生效且监听端口维持启动绑定
+#   12-reload-config-09 任一键非法整体拒绝旧配置原样保留
+#   12-reload-config-10 CLI max-speed 覆盖热加载后保持
+#   12-reload-config-11 配置文件被删除热加载回默认配置
+#   12-reload-config-12 无主目录环境热加载提示无配置文件
+#   12-reload-config-13 帮助窗口全局节 Ctrl+R 条目
+# 期号 01（phase-01，操作者 20261123 修订轮指令「根据 ezr-reload-cfg.md 中的方案，实现
+# ezr Ctrl+R 配置热加载改动方案」）。
+# 需求依据 project/mission/phase-01.md FR-01-119 与 D81（操作者 ezr-reload-cfg.md 改动方案
+# 为权威输入：交互定义 / 6 改动点 / A·B·C·D 四类键语义 / 明确不做清单）。
+# Inversion 阶段 1 受限退化沿 v1.45–v1.57 轮先例：操作者指令文本 + ezr-reload-cfg.md 全文
+# 即阶段 1 答案；残余微口径 5 项（缺失文件臂 / 成功 toast 组成 / C 类提示触发 / 失败
+# toast 形态 / 代理切换计数口径）按源裁决登记 D81①–⑤ 可回退，handoff 待批登记。
+# 操作者疑虑核查：ezr-reload-cfg.md 与全仓库 0 处 EZR_DIR，代码/文档统一 EZR_HOME——
+# 本 feature 全部配置路径表述按 EZR_HOME 口径（D16）。
+# ezr 不做旧版本兼容（操作者钦定沿 v1.45/FR-02-35）；本轮不改注册表与 sidecar 格式、
+# 快捷键说明只进帮助窗口。
+Feature: 12-reload-config 配置热加载（Ctrl+R）
+
+  期号 01。按 Ctrl+R 重新读取 config 文件（EZR_HOME/config.toml，D16）并热加载，无需重启
+  ezr（FR-01-119）。主界面与全部浮层内均响应（与 Ctrl+C 同级处理）；任一键非法整体拒绝、
+  旧配置原样保留（原子性）；成功后单条汇总 toast 反馈可选段（代理切换 / 需重启生效 /
+  代理删除降直连）。配置键按四类生效语义：A 类立即全局、B 类快照仅影响后续新任务、
+  C 类需重启（成功 toast 提示）、D 类失败保护；CLI --max-speed 覆盖贯穿热加载保持。
+
+  Scenario: 12-reload-config-01 Ctrl+R 全局可达且成功热加载即时生效
+    Given ezr 以独立 EZR_HOME 启动且 config.toml 预置 [common] download_slots = <slots_before> 与一条命名代理 p1（http 127.0.0.1:18081）
+    And 添加 fixture 文件任务并开始下载
+    When 修改 $EZR_HOME/config.toml 将 download_slots 改为 <slots_after> 并按 Ctrl+R
+    Then toast 显示 "✓ 配置已热加载"
+    And 队列栏显示 0/<slots_after>（download_slots 即时生效，无需重启）
+    And 运行中任务不中断（进度持续推进）
+    When 依次在 添加对话框打开时、帮助窗口打开时、命令窗口打开时 各改写 download_slots 为递异值并按 Ctrl+R
+    Then 各浮层内 Ctrl+R 均触发热加载（toast "✓ 配置已热加载"、队列栏槽位数逐次变化）
+    And 浮层不因热加载关闭（对话框/帮助/命令窗口保持打开，Esc 原语义不变）
+
+    Examples:
+      | slots_before | slots_after |
+      | 5            | 3           |
+
+  Scenario: 12-reload-config-02 A 类全局限速热切运行中任务即时重定目标
+    Given ezr 以独立 EZR_HOME 启动且 config.toml 预置 [common] global_max_download_speed = <limit_before>
+    And fixture 提供慢速文件（限速下速度可观察）
+    And 添加该文件任务并开始下载
+    When 修改 config.toml 将 global_max_download_speed 改为 <limit_after> 并按 Ctrl+R
+    Then toast 显示 "✓ 配置已热加载"
+    And 运行中任务的下载速度立即按 <limit_after> 重定目标（限速粒度内速度显示随之变化）
+    And 任务不中断（进度持续推进、并发连接保持、无失败无重试）
+
+    Examples:
+      | limit_before | limit_after |
+      | 0            | 512 KiB/s   |
+
+  Scenario: 12-reload-config-03 A 类 download_slots 热调不抢占不补位
+    Given ezr 以独立 EZR_HOME 启动且 config.toml 预置 [common] download_slots = 1
+    And fixture 提供三个慢速文件
+    And 添加三个任务（第 1 个下载中，其余等待中，队列栏 0/1）
+    When 修改 config.toml 将 download_slots 改为 3 并按 Ctrl+R
+    Then toast 显示 "✓ 配置已热加载"
+    And 等待中任务立即按列表顺序依次拿到槽位启动（队列栏 0/3）
+    When 修改 config.toml 将 download_slots 改为 1 并按 Ctrl+R
+    Then toast 再次显示 "✓ 配置已热加载"
+    And 运行中的 3 个任务均不被抢占（继续下载，队列栏仍 0/3）
+    And 任一任务结束后空出的槽位不再补位（等待中任务不自动启动，allocate 只授予不回收）
+
+  Scenario: 12-reload-config-04 A 类 auto_retry 热切下次失败判定生效
+    Given ezr 以独立 EZR_HOME 启动且 config.toml 预置 [http] auto_retry = <auto_retry_before>
+    And fixture 对文件 "<file>" 在传输约 30% 时模拟断连（可重试形态失败，可重复触发）
+    And 添加该文件任务并开始下载
+    Then 首次失败判定按 <auto_retry_before> 语义呈现（true = 自动重试倒计时进入重试；false = 直接已失败且无自动重试倒计时）
+    When 修改 config.toml 将 auto_retry 改为 <auto_retry_after> 并按 Ctrl+R
+    Then toast 显示 "✓ 配置已热加载"
+    And 下一次失败判定采用新值（再次触发同形失败时按 <auto_retry_after> 语义呈现）
+
+    Examples:
+      | auto_retry_before | auto_retry_after |
+      | true              | false            |
+      | false             | true             |
+
+  Scenario: 12-reload-config-05 A 类代理端点变更运行任务热切存量连接不打断
+    Given ezr 以独立 EZR_HOME 启动且 config.toml 含命名代理 p1（http <proxy_before>）
+    And 代理 fixture 记录每次连接的来源端点（直连 / p1 旧端点 / p1 新端点）
+    And 添加 HTTP 任务（代理 = p1）并开始下载
+    When 修改 config.toml 将 p1 的 ip/port 改为 <proxy_after> 并按 Ctrl+R
+    Then toast 显示 "✓ 配置已热加载；代理切换：1 个任务"
+    And 存量连接不打断（当前块跑完、进度不回退、无失败）
+    And 后续新发起的连接经 <proxy_after>（fixture 代理日志出现新端点来源）
+    And 任务最终下载完成且文件字节完整
+
+    Examples:
+      | proxy_before      | proxy_after       |
+      | 127.0.0.1:18081   | 127.0.0.1:18082   |
+
+  Scenario: 12-reload-config-06 命名代理删除运行任务降级直连汇总提示与下拉回退
+    Given ezr 以独立 EZR_HOME 启动且 config.toml 含命名代理 p1 与 p2（各指向独立代理 fixture 端点）
+    And 代理 fixture 记录每次连接的来源端点
+    And 添加两个 HTTP 任务分别引用 p1 与 p2 并开始下载
+    When 修改 config.toml 删除 p1（保留 p2）并按 Ctrl+R
+    Then toast 单条汇总显示 "✓ 配置已热加载；1 个任务引用的代理已删除，按直连"
+    And 引用 p1 的任务按直连继续下载（fixture 直连来源记录出现该任务的新连接，不中断不失败）
+    And 引用 p2 的任务不变（无切换命令、速度继续、代理日志无新端点）
+    And 添加对话框代理下拉选项重建为 直连 + p2（p1 不再出现）
+    And 再次按 Ctrl+R 不再重复代理删除提示（配置未再变化时 toast 仅 "✓ 配置已热加载"）
+
+  Scenario: 12-reload-config-07 B 类快照键仅影响后续新任务
+    Given ezr 以独立 EZR_HOME 启动且 config.toml 预置 [http] block_size_http = 1 MB、http_concurrency = 4、max_retries = 5
+    And 添加 HTTP 任务 a 并开始下载
+    When 修改 config.toml 将 block_size_http 改为 2 MB、http_concurrency 改为 8、max_retries 改为 9 并按 Ctrl+R
+    Then toast 显示 "✓ 配置已热加载"
+    And 运行中任务 a 的块大小/并发/重试上限维持添加时烘焙值（分块口径与并发面板连接数不变）
+    When 添加新 HTTP 任务 b（同 fixture 文件族）并开始下载
+    Then 任务 b 按新值烘焙（块大小 2 MB、并发 8、重试上限 9）
+    And 添加对话框并发字段预填 8（http_concurrency 新默认进入对话框预填）
+
+  Scenario: 12-reload-config-08 C 类键变化提示需重启生效且监听端口维持启动绑定
+    Given ezr 以独立 EZR_HOME 启动且 config.toml 预置 [http] throttle_burst_secs = 0.5 与 [bt] listen_port = <port>
+    And BT fixture（tracker + seeder）已启动
+    And 添加 BT 任务 t1 并开始下载（tracker fixture 记录 announce 来源端口 = <port>）
+    When 修改 config.toml 将 throttle_burst_secs 改为 1.5（listen_port 不变）并按 Ctrl+R
+    Then toast 显示 "✓ 配置已热加载；1 项需重启生效"
+    And 运行中任务 t1 传输行为无异常（限速桶参数维持、进度持续推进）
+    When 修改 config.toml 将 listen_port 改为 <port2> 并按 Ctrl+R
+    Then toast 显示 "✓ 配置已热加载；1 项需重启生效"（本次仅 listen_port 变化，burst 相对运行配置无变化不计数）
+    And BT 监听端口仍为 <port>（新添加 BT 任务的 tracker announce 来源端口 = <port>，listen_port 引擎启动绑定一次）
+    When config.toml 未再改动再次按 Ctrl+R
+    Then toast 显示 "✓ 配置已热加载"（无可选段，C 类无变化不再提示重启）
+
+    Examples:
+      | port  | port2 |
+      | 51444 | 51555 |
+
+  Scenario: 12-reload-config-09 任一键非法整体拒绝旧配置原样保留
+    Given ezr 以独立 EZR_HOME 启动且 config.toml 预置 [common] download_slots = 5、global_max_download_speed = 1 MiB/s
+    And 添加慢速 fixture 文件任务并开始下载（限速 1 MiB/s 生效中）
+    When 修改 config.toml 写入非法值（[common] download_slots = "abc"）并按 Ctrl+R
+    Then toast 显示 "⚠ 配置热加载失败：…"（含 try_load 逐键报错文案「键 common.download_slots」语义，单行显示无换行）
+    And 旧配置原样保留（队列栏仍 0/5、运行中任务限速仍 1 MiB/s、无半新半旧状态）
+    And 任务不中断（进度持续推进）
+    When 修改 config.toml 同时写入一个合法新值与一个非法值（global_max_download_speed = 2 MiB/s 与 download_slots = "abc"）并按 Ctrl+R
+    Then 整体拒绝（toast 同上报错，合法键 global_max_download_speed 也不生效，仍 1 MiB/s）
+    When 修正全部非法值后按 Ctrl+R
+    Then toast 显示 "✓ 配置已热加载"（全部合法后热加载成功，新值生效）
+
+  Scenario: 12-reload-config-10 CLI max-speed 覆盖热加载后保持
+    Given ezr 以 --max-speed <cli_limit> 启动且 config.toml 预置 [common] global_max_download_speed = <file_limit>（与 <cli_limit> 不同值）
+    And fixture 提供慢速文件
+    And 添加该文件任务并开始下载（速度受 <cli_limit> 限制）
+    When 修改 config.toml 将 global_max_download_speed 改为 <limit_after> 并按 Ctrl+R
+    Then toast 显示 "✓ 配置已热加载"
+    And 生效全局限速仍为 <cli_limit>（CLI 覆盖贯穿热加载重应用，不被文件值冲掉）
+    And 运行中任务速度与头部仪表按 <cli_limit> 呈现
+
+    Examples:
+      | cli_limit  | file_limit | limit_after |
+      | 256 KiB/s  | 1 MiB/s    | 2 MiB/s     |
+
+  Scenario: 12-reload-config-11 配置文件被删除热加载回默认配置
+    Given ezr 以独立 EZR_HOME 启动且 config.toml 预置 [common] download_slots = 2 与一条命名代理 p1
+    And 队列栏显示 0/2
+    When 删除 $EZR_HOME/config.toml 并按 Ctrl+R
+    Then toast 显示 "✓ 配置已热加载"
+    And 默认配置整体生效（队列栏 0/5——download_slots 回默认 5、全局限速回默认不限速）
+    And $EZR_HOME/config.toml 未被重新生成（模板生成属启动逻辑 FR-01-85，热加载不重生成）
+    And 添加对话框代理下拉仅剩 直连（命名代理池随默认配置清空）
+
+  Scenario: 12-reload-config-12 无主目录环境热加载提示无配置文件
+    Given 以 HOME、USERPROFILE 与 EZR_HOME 全部未设置的环境启动 ezr（实例锁回退 <系统临时目录>/ezr.lock，FR-01-72 v1.4 注记；配置按默认加载）
+    And 应用正常进入主界面（任务列表可正常操作）
+    When 按 Ctrl+R
+    Then toast 显示 "无配置文件"
+    And 应用不退出、配置保持默认（任务列表可继续操作）
+
+  Scenario: 12-reload-config-13 帮助窗口全局节 Ctrl+R 条目
+    Given ezr 以独立 EZR_HOME 启动
+    When 按 H 打开帮助窗口
+    Then 【全局】组含条目 "Ctrl+R 重新加载配置文件（热加载，无需重启）"
+    And 帮助窗口可滚动容纳新增条目（窗口尺寸不变，内容行数增加走滚动）
+    And 帮助内按 Ctrl+R 仍触发热加载且帮助窗口不关闭（全局可达，场景 01 同口径）

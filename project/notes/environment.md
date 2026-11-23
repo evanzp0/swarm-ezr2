@@ -602,3 +602,15 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
   2026-11-21），升 nightly 再排查代码，不要改代码迁就旧编译器。
 - **libtorrent 套件依赖**：QA-PC-13 等用例 import libtorrent——新沙箱必装（PyPI wheel
   2.1.1 可用），缺失表象 = persistence_config 单点 ModuleNotFoundError。
+
+## 镜像当期复测（20261123 specifier 轮）与 .tools 重建
+- **GitHub release 直连慢速可用**（~15KB/s 持续但不可接受量级）；ghfast.top 前缀镜像本轮最快
+  （~480KB/s，26.5MB bb 静态包 55s 一次过）；mirror.ghproxy.com 与 github.moeyy.xyz 本轮不通。
+  各轮可达性漂移纪律持续有效：逐个探针（12s range 探针 4MB），不跨沙箱沿用旧结论。
+- **rustup dist 四镜复测**（channel-rust-stable.toml 2MB range 探针）：TUNA 0.08s 拉完最快、
+  USTC 0.27s 次之、SJTU 0 字节死、BFSU 153 字节异常页——本轮经 TUNA 前台安装 rustup
+  stable（rustc/cargo 1.100.0）一次成。
+- **沙箱回收后 .tools 重建（specifier 口径）**：bb v1.13.230（api.github.com 清单先查资产名
+  `babashka-1.13.230-linux-amd64-static.tar.gz`）+ APS 仓库 clone 落 `.tools/`；APS dry-check
+  流水线两步式：`gherkin-parser <feature> <ir>.json` → `gherkin-ir-dry-checker <ir>.json
+  <out>.dry.json`（dry-checker 输入是 parser 的 IR JSON，直接喂 feature 文件会报 JSON 解析错）。
