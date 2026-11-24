@@ -897,8 +897,8 @@ mod conns_flags_tests {
         app.on_key(KeyCode::Char('r'), KeyModifiers::CONTROL);
         assert_eq!(
             app.toast.as_deref(),
-            Some("✓ 配置已热加载（演示）"),
-            "Ctrl+R → toast（FR-01-119 demo 同构，D81② 主干 + 演示标记）"
+            Some("✓ 配置已重新加载（演示）"),
+            "Ctrl+R → toast（FR-01-119 demo 同构，D81② 固定文案 + 演示标记）"
         );
         assert!(!app.quit, "Ctrl+R 不退出");
     }
@@ -913,7 +913,7 @@ mod conns_flags_tests {
         app.on_key(KeyCode::Char('r'), KeyModifiers::CONTROL);
         assert_eq!(
             app.toast.as_deref(),
-            Some("✓ 配置已热加载（演示）"),
+            Some("✓ 配置已重新加载（演示）"),
             "帮助窗口内 Ctrl+R 仍达（全局可达，CONTROL 分支先于浮层分发）"
         );
         assert!(app.help_open, "Ctrl+R 不改变浮层状态");
@@ -924,7 +924,7 @@ mod conns_flags_tests {
         app.on_key(KeyCode::Char('r'), KeyModifiers::CONTROL);
         assert_eq!(
             app.toast.as_deref(),
-            Some("✓ 配置已热加载（演示）"),
+            Some("✓ 配置已重新加载（演示）"),
             "对话框内 Ctrl+R 仍达"
         );
         assert!(app.dialog.is_some(), "对话框状态不变");
@@ -937,7 +937,7 @@ mod conns_flags_tests {
         );
         assert_eq!(
             app.toast.as_deref(),
-            Some("✓ 配置已热加载（演示）"),
+            Some("✓ 配置已重新加载（演示）"),
             "Ctrl+Shift+R 同臂（kitty 协议修饰上报形态）"
         );
     }
@@ -952,7 +952,7 @@ mod conns_flags_tests {
         app.on_key(KeyCode::Char('r'), KeyModifiers::empty());
         assert_ne!(
             app.toast.as_deref(),
-            Some("✓ 配置已热加载（演示）"),
+            Some("✓ 配置已重新加载（演示）"),
             "裸 r 仍走 retry 臂，不串台 Ctrl+R toast"
         );
     }

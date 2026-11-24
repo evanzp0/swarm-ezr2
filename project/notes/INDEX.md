@@ -155,3 +155,8 @@
 - handoff.md — model↔bt 环销项与规则 1 扩域（词表迁 model/bt.rs + persist 提取 + PeerTransport 属性补缺 + 全量回归 9631P/0F）（新增）
 - QA 轮（20261123）补记（testing.md 尾）：BE-11 型等待中先臂遮蔽（多臂 toast 断言先等前置状态）、✗ hot 渲染的 hover 残留判定（先移 pointer 再抓常态）、字段值弹窗内容锚（标题冲突用值子串向上找 ╭ + 列范围裁剪）、CPD 对账 strip 前缀陷阱（绝对路径根逐字对齐）、llvm-cov 行覆盖跨 nightly build 不可直比（锚 ACTIONABLE 与函数锚）、QA 覆盖欠账检测口径（md/py 用例集 diff + 钦定等价覆盖）、IC-07 块首竞速三证再证。
 - 沙箱整机回收恢复纪律（environment.md 尾，20261123 实证）：持久区策略 + 环境重装顺序 ~15 分钟 + E0658 = nightly 过旧信号 + libtorrent 套件依赖；镜像当期实测（阿里云 dist 滞后 2026-05-29、TUNA/USTC 2026-11-21、PyPI 阿里云可用、ghfast.top 续传）。
+
+## reload-toast-unify 轮（2026-11-24，specifier）追加
+- architecture.md — 统一口径改判的第七同步面 = ezr-demo 镜像引用面四处形态（源码演示键/守卫测试断言/docs 现行表/README 升号条目，历史块原文保留）+ bin/ 预编译二进制不属 git 树免重建（新增）
+- environment.md — cargo 官方 crates.io 下载超时假象定性（target 空 = 卡下载）与 aliyun sparse registry 配置秒级 fetch（新增）
+- handoff.md — D81②③⑤ v1.57 改判轮修订面与验证证据（新增）

@@ -10,7 +10,7 @@ impl App {
                 return;
             }
             if code == KeyCode::Char('r') || code == KeyCode::Char('R') {
-                self.set_toast("✓ 配置已热加载（演示）");
+                self.set_toast("✓ 配置已重新加载（演示）");
                 return;
             }
             // 命令窗口确认键放行：Ctrl+J（\n 字节，普通终端的 Ctrl+Enter）与
