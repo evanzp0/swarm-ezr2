@@ -614,3 +614,4 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
   `babashka-1.13.230-linux-amd64-static.tar.gz`）+ APS 仓库 clone 落 `.tools/`；APS dry-check
   流水线两步式：`gherkin-parser <feature> <ir>.json` → `gherkin-ir-dry-checker <ir>.json
   <out>.dry.json`（dry-checker 输入是 parser 的 IR JSON，直接喂 feature 文件会报 JSON 解析错）。
+- **specifier 引用消失轮（20261124）**：aliyun rustup 镜像（RUSTUP_DIST_SERVER/RUSTUP_UPDATE_ROOT 双变量指 https://mirrors.aliyun.com/rustup）本轮全链路最快且一次装齐 stable（dist dated tarball 43MB/s、rustup-init 同源 /rustup/dist/<arch>/、channel 清单含镜像重写绝对 URL）——「aliyun 快照停 2026-05」第 3 次复证（stable manifest date 2026-05-28 = 1.96.0，与 bug25/architect 轮观测一致）：新鲜度敏感轮沿 TUNA/rsproxy 先例选镜，对版本无要求的轮 aliyun 可作最快默认；ghfast.top 本轮 426KB/s 最快（gh-proxy 124KB/s、ghproxy.net 24KB/s，各轮漂移口径再证）；bb v1.13.230（非 static 资产名 `babashka-1.13.230-linux-amd64.tar.gz` 亦存在且可用）+ APS clone 重建沿既有口径零新增坑。

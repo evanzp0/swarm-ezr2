@@ -4,7 +4,7 @@
 #   12-reload-config-03 A 类 download_slots 热调不抢占不补位
 #   12-reload-config-04 A 类 auto_retry 热切下次失败判定生效
 #   12-reload-config-05 A 类代理端点变更运行任务热切存量连接不打断
-#   12-reload-config-06 命名代理删除运行任务降级直连汇总提示与下拉回退
+#   12-reload-config-06 命名代理删除引用任务落库转直连与添加修改下拉重建
 #   12-reload-config-07 B 类快照键仅影响后续新任务
 #   12-reload-config-08 C 类键变化提示需重启生效且监听端口维持启动绑定
 #   12-reload-config-09 任一键非法整体拒绝旧配置原样保留
@@ -12,6 +12,7 @@
 #   12-reload-config-11 配置文件被删除热加载回默认配置
 #   12-reload-config-12 无主目录环境热加载提示无配置文件
 #   12-reload-config-13 帮助窗口全局节 Ctrl+R 条目
+#   12-reload-config-14 命名代理改名引用任务落库转直连且新名入池不迁移引用
 # 期号 01（phase-01，操作者 20261123 修订轮指令「根据 ezr-reload-cfg.md 中的方案，实现
 # ezr Ctrl+R 配置热加载改动方案」）。
 # 需求依据 project/mission/phase-01.md FR-01-119 与 D81（操作者 ezr-reload-cfg.md 改动方案
@@ -23,13 +24,31 @@
 # 本 feature 全部配置路径表述按 EZR_HOME 口径（D16）。
 # ezr 不做旧版本兼容（操作者钦定沿 v1.45/FR-02-35）；本轮不改注册表与 sidecar 格式、
 # 快捷键说明只进帮助窗口。
+# v1.56 修订（操作者 D82 闸门裁定，specifier 闸门落实轮 20261124；v1.55 轮合成确认闸门 = B
+# 基本准确需局部修改——操作者 chat 裁决「② M 口径：热加载改代理不需要单独的消息提示，统一用
+# reload config 的 toast 就行了；① 切换落库 和 ③ 改名臂——保持」）：D82② 改判结案、D82①③
+# 追认保持——引用消失（删除/改名）不追加专属提示段，成功反馈统一 reload config 标准 toast
+# `✓ 配置已热加载`（可选段仅按 D81②③⑤：代理切换 N / C 类需重启 K，M 段退役）：场景 06/14
+# toast 断言改判（无 M 段）+ 场景 06 改名去「汇总提示」+ Feature 描述可选段清单同步。
+# v1.55 修订（操作者 bug 修复轮 20261124「执行 six-pack/specifier, 修复需求 bug：把一个引用的
+# [[common.proxy]] 中定义的命名代理改名或删除，ezr中热重载 config 后，添加和修改任务时仍旧
+# 出现原有命名代理。应该是原来使用该代理的任务，自动变成直连。添加和修改任务的代理中删除
+# 该命名代理」；Inversion 受限退化沿 v1.45–v1.58 九轮先例，操作者指令文本即阶段 1 答案）：
+# FR-01-119 ⑤ 引用消失臂（删除/改名统一，v1.54「沿用 missing 语义悬挂引用」口径退役）——
+# 场景 06 扩面（修改对话框下拉不注入旧名、引用任务落库转直连、重启不复活旧名、重加同名不复挂）
+# + 场景 14 新增（改名臂：旧名消失任务转直连、新名入池不迁移引用、浮层内同步重建）；
+# 残余微口径 3 项登记 D82①–③ 可回退（切换落库 / M 全状态口径 / 改名不迁移；②已由操作者
+# 20261124 闸门裁定改判结案、①③追认保持——见 v1.56 修订块）。
+# 代码实证：dialogs.rs open_modify 旧名注入形态与 resolve_proxy missing 悬挂引用为 bug 机制，
+# 修复语义以落库转直连为锚（specifier 20261124 源码核证，产品端实现归下一 coder 轮）。
 Feature: 12-reload-config 配置热加载（Ctrl+R）
 
   期号 01。按 Ctrl+R 重新读取 config 文件（EZR_HOME/config.toml，D16）并热加载，无需重启
   ezr（FR-01-119）。主界面与全部浮层内均响应（与 Ctrl+C 同级处理）；任一键非法整体拒绝、
-  旧配置原样保留（原子性）；成功后单条汇总 toast 反馈可选段（代理切换 / 需重启生效 /
-  代理删除降直连）。配置键按四类生效语义：A 类立即全局、B 类快照仅影响后续新任务、
+  旧配置原样保留（原子性）；成功后单条汇总 toast 反馈可选段（代理切换 / 需重启生效）。配置键按四类生效语义：A 类立即全局、B 类快照仅影响后续新任务、
   C 类需重启（成功 toast 提示）、D 类失败保护；CLI --max-speed 覆盖贯穿热加载保持。
+  命名代理引用消失（删除或改名，v1.55/D82）= 引用任务自动转直连并落库、添加与修改任务
+  对话框代理下拉重建且旧名不再出现（场景 06/14）。
 
   Scenario: 12-reload-config-01 Ctrl+R 全局可达且成功热加载即时生效
     Given ezr 以独立 EZR_HOME 启动且 config.toml 预置 [common] download_slots = <slots_before> 与一条命名代理 p1（http 127.0.0.1:18081）
@@ -99,16 +118,21 @@ Feature: 12-reload-config 配置热加载（Ctrl+R）
       | proxy_before      | proxy_after       |
       | 127.0.0.1:18081   | 127.0.0.1:18082   |
 
-  Scenario: 12-reload-config-06 命名代理删除运行任务降级直连汇总提示与下拉回退
+  Scenario: 12-reload-config-06 命名代理删除引用任务落库转直连与添加修改下拉重建
     Given ezr 以独立 EZR_HOME 启动且 config.toml 含命名代理 p1 与 p2（各指向独立代理 fixture 端点）
     And 代理 fixture 记录每次连接的来源端点
     And 添加两个 HTTP 任务分别引用 p1 与 p2 并开始下载
     When 修改 config.toml 删除 p1（保留 p2）并按 Ctrl+R
-    Then toast 单条汇总显示 "✓ 配置已热加载；1 个任务引用的代理已删除，按直连"
+    Then toast 显示 "✓ 配置已热加载"（引用消失不追加专属提示段，统一 reload toast，D82②）
     And 引用 p1 的任务按直连继续下载（fixture 直连来源记录出现该任务的新连接，不中断不失败）
     And 引用 p2 的任务不变（无切换命令、速度继续、代理日志无新端点）
     And 添加对话框代理下拉选项重建为 直连 + p2（p1 不再出现）
-    And 再次按 Ctrl+R 不再重复代理删除提示（配置未再变化时 toast 仅 "✓ 配置已热加载"）
+    And 打开引用 p1 任务的修改对话框：代理下拉预填 直连 且选项 = 直连 + p2（p1 不被重新注入，D82①）
+    And 重启 ezr 后引用 p1 任务的代理仍为 直连（任务级代理选择已随注册表落库，旧名不复活）
+    When 重加 p1 到 config.toml（同 type/ip/port）并按 Ctrl+R
+    Then p1 重新出现在添加与修改对话框代理下拉（池条目恢复正常）
+    And 引用 p1 的任务保持直连不复挂（其选择已落库直连，不随重加自动迁移，无代理切换计数段）
+    And 再次按 Ctrl+R toast 仍仅 "✓ 配置已热加载"（配置未再变化，无任何可选段）
 
   Scenario: 12-reload-config-07 B 类快照键仅影响后续新任务
     Given ezr 以独立 EZR_HOME 启动且 config.toml 预置 [http] block_size_http = 1 MB、http_concurrency = 4、max_retries = 5
@@ -184,3 +208,19 @@ Feature: 12-reload-config 配置热加载（Ctrl+R）
     Then 【全局】组含条目 "Ctrl+R 重新加载配置文件（热加载，无需重启）"
     And 帮助窗口可滚动容纳新增条目（窗口尺寸不变，内容行数增加走滚动）
     And 帮助内按 Ctrl+R 仍触发热加载且帮助窗口不关闭（全局可达，场景 01 同口径）
+
+  Scenario: 12-reload-config-14 命名代理改名引用任务落库转直连且新名入池不迁移引用
+    Given ezr 以独立 EZR_HOME 启动且 config.toml 含命名代理 p1 与 p2（各指向独立代理 fixture 端点）
+    And 代理 fixture 记录每次连接的来源端点
+    And 添加两个 HTTP 任务分别引用 p1 与 p2 并开始下载
+    When 修改 config.toml 将 p1 改名为 p1x（type/ip/port/认证不变）并按 Ctrl+R
+    Then toast 显示 "✓ 配置已热加载"（旧名消失不追加专属提示段，统一 reload toast，D82②③）
+    And 引用 p1 的任务按直连继续下载（fixture 直连来源记录出现该任务的新连接，不中断不失败）
+    And 引用 p2 的任务不变（无切换命令、速度继续、代理日志无新端点）
+    And 添加对话框代理下拉选项重建为 直连 + p1x + p2（旧名 p1 不再出现，新名 p1x 按配置顺序出现）
+    And 引用 p1 任务的修改对话框代理预填 直连 且选项 = 直连 + p1x + p2（无旧名，D82①）
+    When 在引用 p1 任务的修改对话框保持打开时改写 config.toml 将 p1x 改名回 p1 并按 Ctrl+R
+    Then toast 显示 "✓ 配置已热加载"（无任务引用 p1x，无任何可选段）
+    And 修改对话框不关闭且代理下拉选项即时重建为 直连 + p1 + p2（浮层内同步，场景 01 同口径）
+    And 受影响任务代理预填仍为 直连（不自动复挂回 p1，引用不自动迁移，D82③）
+    And 关闭浮层后重启 ezr：该任务代理仍为 直连（落库持久化，旧名不复活）
