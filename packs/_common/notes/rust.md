@@ -232,6 +232,12 @@ group_imports = "StdExternalCrate"
   会报 E0364（re-export 不可超越项自身可见性），以及非测试构建报 unused import——
   `#[cfg(test)]` 门控一并解决。零外部 API 面增量的测试基建手法。
 
+- **proptest! 属性 fn 必须显式 `#[test]`，漏写即「编译通过但不注册测试」**：proptest!
+  宏生成的 `fn` 不自带 `#[test]`——只重发用户写在属性 fn 前的 `$(#[$meta])*` 元属性
+  （官方 README 同款显式形态）。漏写表象：`cargo test` 对该名过滤 0 命中、`--list`
+  计数不变，而 fn 体内放编译错误探针仍报错（体被展开但非测试）。判别手法：块尾追加
+  普通 `#[test]` 探针对比 `--list` 计数，即可定位「块内死区」是标注缺失而非模块未编译。
+  变异点分桶同理可用 mutants `--list` 输出按行号区间统计（`src/x.rs:<line>:<col>` 格式）。
 - **`proptest::sample::select` 需要借用或 `Cow<'static, [T]>`**：`select([a, b])`
   会因数组不是 `Cow` 而编译失败；正确形态 `select(&[a, b])`（借用切片）或
   `select(vec![a, b])`（`Vec` 实现 `Into<Cow>`）。自定义枚举类型需 `Clone + Debug + 'static`。

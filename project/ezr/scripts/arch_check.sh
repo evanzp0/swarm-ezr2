@@ -279,6 +279,21 @@ else
   echo "[ OK ] 反链接 VS15 工具族单源 src/ui/text.rs（break_links/fg_shadow/link_break_spans）"
 fi
 
+
+# 规则 19【单源】会话恢复适配器单源（architect 本轮 2026-11-24：restore 自
+# app/mod.rs 拆出为独立会话恢复适配器模块 src/app/restore.rs——注册表装载与
+# 任务态/sidecar 映射单点化；Registry::load 的产品区调用点再出现第二处即
+# 会话恢复边界破坏。产品区口径与规则 14 对齐：各文件首个 #[cfg(test)] 之前
+# 为产品区，测试区直呼属合法豁免形态（app/engine/mod.rs tick_tests 在案））
+hit=$(for f in $(grep -rlE 'Registry::load' src/ --include='*.rs' | grep -v 'src/app/restore.rs'); do
+  awk '/#\[cfg\(test\)\]/{exit} {print FILENAME":"FNR":"$0}' "$f"
+done | grep 'Registry::load' || true)
+if [ -n "$hit" ]; then
+  echo "[FAIL] Registry::load 产品区第二调用点（会话恢复单源 src/app/restore.rs）:"; echo "$hit"; fails=$((fails+1))
+else
+  echo "[ OK ] 会话恢复适配器单源 src/app/restore.rs（Registry::load 产品区唯一调用点）"
+fi
+
 if [ "$fails" -gt 0 ]; then
   echo "arch_check: ${fails} 条规则未过"; exit 1
 fi

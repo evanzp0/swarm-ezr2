@@ -5,10 +5,10 @@ use ratatui::layout::Rect;
 
 use crate::engine::{EngineHandle, Evt};
 use crate::model::config::Config;
+#[cfg(test)]
 use crate::model::registry::Registry;
-use crate::model::sidecar::Sidecar;
 use crate::model::speed::{SmoothedSpeed, SpeedWindow};
-use crate::model::{slots, Connection, Task};
+use crate::model::{slots, Task};
 use crate::textfield::TextInput;
 
 mod bt_dialog;
@@ -25,7 +25,9 @@ mod paste;
 mod pieces;
 mod popups;
 mod reload;
+mod restore;
 mod scrollbar;
+mod stats;
 mod tasks;
 
 pub use scrollbar::{SbHold, SbKey};
@@ -501,57 +503,6 @@ impl App {
         app
     }
 
-    fn restore(path: &str) -> Vec<Task> {
-        let Some(reg) = Registry::load(path) else {
-            return Vec::new();
-        };
-        let mut tasks = reg.restore_tasks();
-        for t in &mut tasks {
-            let sc = Sidecar::load(&t.sidecar_path());
-            if let Some(sc) = sc {
-                t.downloaded = t.downloaded.max(sc.downloaded);
-                t.resumable = !sc.non_resumable;
-                // HTTP 分块还原：sidecar.blocks 记录逐块字节进度，
-                // 满块 → 🟩 Done，零头块 → 🟨 Partial（否则重启后全白）。
-                if t.done_blocks.is_empty() && !sc.blocks.is_empty() {
-                    let mut done: Vec<u32> = Vec::new();
-                    let mut part: Vec<u32> = Vec::new();
-                    for (i, &w) in sc.blocks.iter().enumerate() {
-                        let i = i as u32;
-                        let full = crate::model::chunk::block_range(sc.size, sc.block_size, i)
-                            .map_or(0, |(s, e)| e - s);
-                        if full > 0 && w >= full {
-                            done.push(i);
-                        } else if w > 0 {
-                            part.push(i);
-                        }
-                    }
-                    t.chunk_done = t.chunk_done.max(done.len() as u32);
-                    t.done_blocks = done;
-                    t.partial_blocks = part;
-                }
-            }
-            if t.protocol.is_bt() {
-                if let Some(bt) = t.bt.clone() {
-                    let bt_path = crate::model::namegen::sidecar_path_of(&t.save_dir, &t.name);
-                    if let Some(pieces) = crate::model::BtSidecar::load_done(&bt_path) {
-                        let pieces: Vec<u32> = pieces
-                            .into_iter()
-                            .filter(|p| {
-                                u64::from(*p) * u64::from(bt.piece_length.max(1))
-                                    < bt.files.iter().map(|f| f.size).sum::<u64>()
-                            })
-                            .collect();
-                        t.downloaded = t.downloaded.max(bt.selected_bytes_of_pieces(&pieces));
-                        t.chunk_done = pieces.len() as u32;
-                        t.done_blocks = pieces;
-                    }
-                }
-            }
-        }
-        tasks
-    }
-
     #[must_use]
     pub fn alloc_task_id(&self) -> u32 {
         crate::model::idgen::alloc_task_id(|cand| self.tasks.iter().any(|t| t.id == cand))
@@ -721,129 +672,6 @@ impl App {
         if self.up_hist.len() > 180 {
             self.up_hist.remove(0);
         }
-    }
-
-    pub(crate) fn conn_speed_of(&self, task_id: u32, conn_id: usize) -> f64 {
-        self.conn_speed
-            .get(&(task_id, conn_id))
-            .map_or(0.0, SmoothedSpeed::value)
-    }
-
-    pub(crate) fn bt_conn_speeds_of(&self, task_id: u32, conn_id: usize) -> (f64, f64) {
-        self.bt_conn_stats
-            .get(&(task_id, conn_id))
-            .map_or((0.0, 0.0), |s| (s.down_ema.value(), s.up_ema.value()))
-    }
-
-    pub(crate) fn conn_cum_of(&self, task_id: u32, conn_id: usize) -> u64 {
-        self.conn_cum.get(&(task_id, conn_id)).copied().unwrap_or(0)
-    }
-
-    #[must_use]
-    pub fn global_dl_speed(&self) -> f64 {
-        self.tasks
-            .iter()
-            .filter(|t| t.state == crate::model::TaskState::Downloading)
-            .map(|t| t.speed)
-            .sum()
-    }
-
-    #[must_use]
-    pub fn global_ul_speed(&self) -> f64 {
-        self.tasks
-            .iter()
-            .filter(|t| t.upload_speed > 0.0)
-            .map(|t| t.upload_speed)
-            .sum()
-    }
-
-    #[must_use]
-    pub fn conns_display_total(&self) -> usize {
-        self.tasks
-            .iter()
-            .filter(|t| t.state.shows_conns())
-            .map(|t| self.conns_actual_of(t))
-            .sum()
-    }
-
-    /// 单任务的「实际并发连接数」（并发面板行数同口径）：
-    /// BT = 引擎回报的已建立 peer 连接（握手完成；connections 恒空），
-    /// HTTP = 当前活跃的分块连接。
-    #[must_use]
-    pub fn conns_actual_of(&self, t: &Task) -> usize {
-        if !t.state.shows_conns() {
-            return 0;
-        }
-        if t.protocol.is_bt() {
-            // BT 的真实并发 = 引擎回报的 peer 连接，
-            // 不用 HTTP lease 快照（BT 任务 connections 恒空）。
-            self.bt_conns.get(&t.id).map_or(0, Vec::len)
-        } else {
-            t.connections
-                .iter()
-                .filter(|c| self.conn_is_active(t.id, c))
-                .count()
-        }
-    }
-
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn active_conn_count(&self, t: &Task) -> usize {
-        if !t.state.shows_conns() {
-            return 0;
-        }
-        t.connections
-            .iter()
-            .filter(|c| self.conn_is_active(t.id, c))
-            .count()
-    }
-
-    pub(crate) fn conn_is_active(&self, task_id: u32, c: &Connection) -> bool {
-        let cum = self.conn_cum.get(&(task_id, c.id)).copied().unwrap_or(0);
-        c.conn_phase(cum).is_active()
-    }
-
-    pub(crate) fn active_conn_ids(&self) -> Vec<usize> {
-        self.sel_task()
-            .filter(|t| t.state.shows_conns())
-            .map(|t| {
-                let mut ids: Vec<usize> = t
-                    .connections
-                    .iter()
-                    .filter(|c| self.conn_is_active(t.id, c))
-                    .map(|c| c.id)
-                    .collect();
-                ids.sort_unstable();
-                ids
-            })
-            .unwrap_or_default()
-    }
-
-    #[must_use]
-    pub fn tab_counts(&self) -> [usize; 2] {
-        let doing = self.tasks.iter().filter(|t| !t.state.is_done()).count();
-        [doing, self.tasks.len() - doing]
-    }
-
-    #[must_use]
-    pub fn peak_dl_speed(&self) -> f64 {
-        self.speed_hist.iter().copied().max().unwrap_or(0) as f64 * 1024.0
-    }
-
-    #[must_use]
-    pub fn peak_ul_speed(&self) -> f64 {
-        self.up_hist.iter().copied().max().unwrap_or(0) as f64 * 1024.0
-    }
-
-    pub(super) fn clear_conn_stats(&mut self, task_id: u32) {
-        self.conn_prev.retain(|(tid, _), _| *tid != task_id);
-        self.conn_cum.retain(|(tid, _), _| *tid != task_id);
-        self.conn_speed.retain(|(tid, _), _| *tid != task_id);
-        self.conn_windows.retain(|(tid, _), _| *tid != task_id);
-    }
-
-    pub(super) fn clear_bt_conn_stats(&mut self, task_id: u32) {
-        self.bt_conn_stats.retain(|(tid, _), _| *tid != task_id);
     }
 }
 

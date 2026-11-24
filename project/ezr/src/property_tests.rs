@@ -2677,3 +2677,53 @@ proptest! {
         prop_assert!(after.is_none(), "箭头终点外侧无命中");
     }
 }
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn prop_bt_partial_block_round_trip(
+        begin in 0u32..(1u32 << 30),
+        data in prop::collection::vec(any::<u8>(), 0..128),
+    ) {
+        use crate::model::bt::BtPartialBlock;
+        let blk = BtPartialBlock::encode_block(begin, &data);
+        prop_assert_eq!(blk.begin, begin, "begin 字段保真");
+        let dec = blk.decode_data();
+        prop_assert_eq!(dec.as_deref(), Some(data.as_slice()), "编码→解码往返保真");
+        let text = serde_json::to_string(&blk).unwrap();
+        let loaded: BtPartialBlock = serde_json::from_str(&text).unwrap();
+        prop_assert_eq!(loaded.begin, begin, "JSON 往返 begin 保真");
+        let dec = loaded.decode_data();
+        prop_assert_eq!(dec.as_deref(), Some(data.as_slice()), "JSON 往返数据保真");
+    }
+
+    #[test]
+    fn prop_bt_selected_bytes_invariants(
+        files in prop::collection::vec(arb_btfile(), 0..6),
+        pl in 1u32..=4096u32,
+        pieces in prop::collection::vec(0u32..8192u32, 0..40),
+    ) {
+        use crate::model::bt::BtTaskData;
+        let data = BtTaskData {
+            piece_length: pl,
+            files: files.clone(),
+            ..Default::default()
+        };
+        let f = |ps: &[u32]| data.selected_bytes_of_pieces(ps);
+        let selected_total = files.iter().filter(|x| x.selected).map(|x| x.size).sum::<u64>();
+
+        let v = f(&pieces);
+        prop_assert!(v <= selected_total, "和不得超过已勾选文件总字节: v={} total={}", v, selected_total);
+        let reversed: Vec<u32> = pieces.iter().rev().copied().collect();
+        prop_assert_eq!(f(&reversed), v, "逐片累加与次序无关");
+
+        let total: u64 = files.iter().map(|x| x.size).sum();
+        let npieces = usize::try_from(total.div_ceil(u64::from(pl))).unwrap_or(usize::MAX);
+        let all: Vec<u32> = (0u32..).take(npieces).collect();
+        prop_assert_eq!(f(&all), selected_total, "全片覆盖时恰为已勾选文件总字节");
+
+        let beyond: Vec<u32> = all.iter().copied().chain(std::iter::once(u32::MAX)).collect();
+        prop_assert_eq!(f(&beyond), f(&all), "越界片号贡献为零");
+    }
+}

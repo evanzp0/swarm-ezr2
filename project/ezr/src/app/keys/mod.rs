@@ -1,7 +1,9 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use super::{App, Panel, SbKey};
-use crate::engine::Cmd;
+
+mod conns;
+mod overlays;
 
 impl App {
     pub fn on_key(&mut self, code: KeyCode, mods: KeyModifiers) {
@@ -26,22 +28,7 @@ impl App {
             return;
         }
         if self.val_open {
-            match code {
-                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => self.close_val_popup(),
-                KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    let label = self.val_field.copy_label();
-                    let text = self.val_text.clone();
-                    self.copy_to_clipboard(&text);
-                    self.set_toast(format!("已复制 {label}"));
-                }
-                KeyCode::Up => self.sb_scroll(SbKey::Val, -1),
-                KeyCode::Down => self.sb_scroll(SbKey::Val, 1),
-                KeyCode::PageUp => self.sb_scroll(SbKey::Val, -8),
-                KeyCode::PageDown => self.sb_scroll(SbKey::Val, 8),
-                KeyCode::Home => self.sb_set(SbKey::Val, 0),
-                KeyCode::End => self.sb_set(SbKey::Val, usize::MAX),
-                _ => {}
-            }
+            self.on_val_key(code);
             return;
         }
         if self.err_open {
@@ -53,66 +40,19 @@ impl App {
             return;
         }
         if self.about_open {
-            match code {
-                KeyCode::Esc
-                | KeyCode::Char('o')
-                | KeyCode::Char('O')
-                | KeyCode::Char('q')
-                | KeyCode::Char('Q') => self.close_about(),
-                _ => {}
-            }
+            self.on_about_key(code);
             return;
         }
         if self.pieces_open {
-            match code {
-                KeyCode::Esc
-                | KeyCode::Char('p')
-                | KeyCode::Char('P')
-                | KeyCode::Char('q')
-                | KeyCode::Char('Q') => self.close_pieces(),
-                KeyCode::Up => self.pieces_scroll_by(-1),
-                KeyCode::Down => self.pieces_scroll_by(1),
-                KeyCode::PageUp => self.pieces_scroll_by(-8),
-                KeyCode::PageDown => self.pieces_scroll_by(8),
-                KeyCode::Home => self.pieces_scroll = 0,
-                KeyCode::End => self.pieces_scroll = usize::MAX,
-                _ => {}
-            }
+            self.on_pieces_key(code);
             return;
         }
         if self.trackers_open {
-            match code {
-                KeyCode::Esc
-                | KeyCode::Char('t')
-                | KeyCode::Char('T')
-                | KeyCode::Char('q')
-                | KeyCode::Char('Q') => self.close_trackers_popup(),
-                KeyCode::Up => self.trackers_scroll_by(-1),
-                KeyCode::Down => self.trackers_scroll_by(1),
-                KeyCode::PageUp => self.trackers_scroll_by(-8),
-                KeyCode::PageDown => self.trackers_scroll_by(8),
-                KeyCode::Home => self.trackers_scroll = 0,
-                KeyCode::End => self.trackers_scroll = usize::MAX,
-                _ => {}
-            }
+            self.on_trackers_key(code);
             return;
         }
         if self.help_open {
-            match code {
-                KeyCode::Esc
-                | KeyCode::Char('h')
-                | KeyCode::Char('H')
-                | KeyCode::Char('q')
-                | KeyCode::Char('Q') => self.help_open = false,
-                KeyCode::Char('o') | KeyCode::Char('O') => self.open_about(),
-                KeyCode::Up => self.help_scroll = self.help_scroll.saturating_sub(1),
-                KeyCode::Down => self.help_scroll += 1,
-                KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(8),
-                KeyCode::PageDown => self.help_scroll += 8,
-                KeyCode::Home => self.help_scroll = 0,
-                KeyCode::End => self.help_scroll = usize::MAX,
-                _ => {}
-            }
+            self.on_help_key(code);
             return;
         }
         match code {
@@ -198,68 +138,6 @@ impl App {
         }
     }
 
-    pub(crate) fn conn_count(&self) -> usize {
-        if let Some(t) = self.sel_task().filter(|t| t.protocol.is_bt()) {
-            return self.bt_conns.get(&t.id).map_or(0, Vec::len);
-        }
-        self.active_conn_ids().len()
-    }
-
-    pub(crate) fn move_conn_sel(&mut self, delta: i32) {
-        let Some(idx) = self.sel_idx() else {
-            return;
-        };
-        if !self.tasks[idx].state.shows_conns() {
-            self.set_toast("当前状态无并发明细（仅下载中/做种中可选）");
-            return;
-        }
-        let n = self.conn_count();
-        if n == 0 {
-            self.set_toast("当前任务没有并发连接明细");
-            return;
-        }
-        let new = (self.conns_sel as i32 + delta).clamp(0, n as i32 - 1) as usize;
-        self.conns_sel = new;
-        let vis = self.visible_conns_rows.max(1);
-        if new < self.conns_scroll {
-            self.conns_scroll = new;
-        } else if new >= self.conns_scroll + vis {
-            self.conns_scroll = new + 1 - vis;
-        }
-    }
-
-    pub(crate) fn disconnect_conn(&mut self) {
-        let Some(idx) = self.sel_idx() else {
-            return;
-        };
-        if !self.tasks[idx].state.shows_conns() {
-            self.set_toast("当前状态无可断开的并发连接（仅下载中/做种中）");
-            return;
-        }
-        if !self.tasks[idx].protocol.is_bt() {
-            self.set_toast("仅 BT 任务支持断开并发连接（B）");
-            return;
-        }
-        let id = self.tasks[idx].id;
-        let rows = self.bt_conns.get(&id).cloned().unwrap_or_default();
-        if self.conns_sel >= rows.len() {
-            self.set_toast("当前任务没有可断开的并发连接");
-            return;
-        }
-        self.conns_sel = self.conns_sel.min(rows.len() - 1);
-        let conn = rows[self.conns_sel].id;
-        let ip = rows[self.conns_sel]
-            .addr
-            .rsplit_once(':')
-            .map_or(rows[self.conns_sel].addr.as_str(), |(ip, _)| ip);
-        let left = rows.len() - 1;
-        let engine = self.engine.clone();
-        tokio::spawn(async move {
-            engine.send(Cmd::BtDisconnect { id, conn }).await;
-        });
-        self.set_toast(format!("✂ 已断开 {ip} 并加入黑名单（剩余 {left} 条）"));
-    }
-
     fn move_sel(&mut self, delta: i32) {
         let flen = self.filtered().len();
         if flen == 0 {
@@ -318,7 +196,6 @@ impl App {
         ));
     }
 }
-
 #[cfg(test)]
 mod pieces_key_tests {
 
