@@ -22,6 +22,20 @@ chmod +x bin/ezr-tui-demo
 
 ## 变更记录（相对上游）
 
+42. **Ctrl+R 快捷键演示 + 帮助窗口条目（操作者 20261123 chat 指令；FR-01-119 demo 同构）**
+    - 新增全局快捷键 **Ctrl+R**：keys.rs CONTROL 分支（与 Ctrl+C 同级、先于浮层分发）
+      按下即 toast「✓ 配置已热加载（演示）」——FR-01-119 配置热加载成功反馈（D81②）
+      demo 同构：demo 无真实 config，仅 toast 演示；主界面与全部浮层内可达
+      （Ctrl+Shift+R kitty 修饰形态同臂），不改变任何浮层状态、不退出
+    - 帮助窗口【全局】组新增 **Ctrl+R** 条目（FR-01-119 ⑧ 钦定文案「重新加载配置文件
+      （热加载，无需重启）」，70 列窗口内完整可见；帮助内容 83→84 行，ui/mod.rs
+      帮助行数守卫同步）
+    - 守卫测试 4 项：toast 文案 / 浮层内全局可达（帮助 + 对话框）/ Ctrl+Shift+R 同臂 /
+      裸 r 仍走 retry 臂不串台；capture.py 注入键补 c-r（0x12）；PTY 实证 toast 出现
+      与帮助条目完整可见；全套 61P/0F、clippy 零警告
+    - 工具链漂移基线恢复（非行为改动）：rustc 1.100 clippy manual_is_multiple_of
+      命中 dialogs.rs format_speed_limit 三处，`v % N == 0` → `v.is_multiple_of(N)`
+
 41. **页签切换保留/还原列表控件状态（操作者调整轮）**
     - 修复页签往返缺陷：切走再切回后滚动条位置丢失、选中任务漂移（v1.49 旧行为 =
       两页签共享 selected/scroll + 切页签夹紧/视口跟随，切回时无法回到原状态）

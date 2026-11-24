@@ -867,8 +867,12 @@ mod conns_flags_tests {
             .join("\n");
         assert_eq!(
             lines.len(),
-            83,
-            "帮助内容 83 行（源码实测基线 81 = 76 + 5 标志缩写条目，v1.51 + 2 SR/LT 条目，FR-02-38 v1.21/D77）"
+            84,
+            "帮助内容 84 行（源码实测基线 83 = 81 + 2 SR/LT 条目，本轮 +1 Ctrl+R 条目 FR-01-119 ⑧ demo 同构）"
+        );
+        assert!(
+            text.contains("Ctrl+R") && text.contains("重新加载配置文件"),
+            "帮助【全局】组含 Ctrl+R 条目（FR-01-119 ⑧ 钦定文案）"
         );
         for needle in [
             "D=正在下载 · d=欲下被 choke",
@@ -882,6 +886,75 @@ mod conns_flags_tests {
                 "帮助【并发连接】组标志缩写条目缺失: {needle}"
             );
         }
+    }
+
+    #[test]
+    fn ctrl_r_shows_toast_on_main_screen() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.toast = None;
+        app.on_key(KeyCode::Char('r'), KeyModifiers::CONTROL);
+        assert_eq!(
+            app.toast.as_deref(),
+            Some("✓ 配置已热加载（演示）"),
+            "Ctrl+R → toast（FR-01-119 demo 同构，D81② 主干 + 演示标记）"
+        );
+        assert!(!app.quit, "Ctrl+R 不退出");
+    }
+
+    #[test]
+    fn ctrl_r_reaches_inside_overlays() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.toast = None;
+        app.help_open = true;
+        app.on_key(KeyCode::Char('r'), KeyModifiers::CONTROL);
+        assert_eq!(
+            app.toast.as_deref(),
+            Some("✓ 配置已热加载（演示）"),
+            "帮助窗口内 Ctrl+R 仍达（全局可达，CONTROL 分支先于浮层分发）"
+        );
+        assert!(app.help_open, "Ctrl+R 不改变浮层状态");
+
+        app.toast = None;
+        app.help_open = false;
+        app.open_add_dialog();
+        app.on_key(KeyCode::Char('r'), KeyModifiers::CONTROL);
+        assert_eq!(
+            app.toast.as_deref(),
+            Some("✓ 配置已热加载（演示）"),
+            "对话框内 Ctrl+R 仍达"
+        );
+        assert!(app.dialog.is_some(), "对话框状态不变");
+
+        app.toast = None;
+        app.dialog = None;
+        app.on_key(
+            KeyCode::Char('R'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(
+            app.toast.as_deref(),
+            Some("✓ 配置已热加载（演示）"),
+            "Ctrl+Shift+R 同臂（kitty 协议修饰上报形态）"
+        );
+    }
+
+    #[test]
+    fn plain_r_keeps_retry_semantics() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.selected = 0;
+        app.toast = None;
+        app.on_key(KeyCode::Char('r'), KeyModifiers::empty());
+        assert_ne!(
+            app.toast.as_deref(),
+            Some("✓ 配置已热加载（演示）"),
+            "裸 r 仍走 retry 臂，不串台 Ctrl+R toast"
+        );
     }
 
     fn flatten(lines: &[ratatui::text::Line<'static>]) -> Vec<String> {

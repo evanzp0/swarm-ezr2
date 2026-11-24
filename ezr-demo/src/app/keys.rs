@@ -9,6 +9,10 @@ impl App {
                 self.quit = true;
                 return;
             }
+            if code == KeyCode::Char('r') || code == KeyCode::Char('R') {
+                self.set_toast("✓ 配置已热加载（演示）");
+                return;
+            }
             // 命令窗口确认键放行：Ctrl+J（\n 字节，普通终端的 Ctrl+Enter）与
             // kitty 协议的 Ctrl+Enter（CSI 13;5u → Enter+CONTROL）
             if self.cmd_open && (code == KeyCode::Char('j') || code == KeyCode::Enter) {

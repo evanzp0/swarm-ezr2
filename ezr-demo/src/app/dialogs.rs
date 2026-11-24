@@ -60,13 +60,13 @@ pub(super) fn format_speed_limit(v: u64) -> String {
     if v == 0 {
         return "0".to_string();
     }
-    if v % 1_073_741_824 == 0 {
+    if v.is_multiple_of(1_073_741_824) {
         return format!("{} GiB/s", v / 1_073_741_824);
     }
-    if v % 1_048_576 == 0 {
+    if v.is_multiple_of(1_048_576) {
         return format!("{} MiB/s", v / 1_048_576);
     }
-    if v % 1024 == 0 {
+    if v.is_multiple_of(1024) {
         return format!("{} KiB/s", v / 1024);
     }
     format!("{} B/s", v)

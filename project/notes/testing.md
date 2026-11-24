@@ -969,3 +969,9 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
   （medium/low 置信），不是必改项；**high 置信的 duplicate-in-scenario（同场景逐字重复步）
   与 placeholder-variant（同动作仅占位符名不同）才是本轮必改项**（措辞区分/占位符统一即可
   清零）。
+- **demo PTY toast 验证须逐帧捕获（capture.py 末帧假阴性）**：ezr-demo 模拟器周期性产生
+  事件 toast（如「后期处理完成」），"一次只显示最新一条"口径下按键触发的 toast 会被覆盖——
+  capture.py 只报最终帧，toast 落在窗口中段即假阴性 MISS。正解 = 逐帧捕获：每次
+  stream.feed 后立即断言当前 screen.display（帧级 HIT 任一即过），时长取 键注入时刻 +
+  toast 存活窗（3s）内即可；另注意 needle 逐字匹配无正则（传 `Ctrl\+R` 反斜杠即字面量
+  必 MISS）。（two-pack/coder Ctrl+R toast 轮实证：末帧法 MISS、逐帧法 66 帧 HIT）
