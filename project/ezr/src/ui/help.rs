@@ -42,6 +42,7 @@ fn help_lines() -> Vec<Line<'static>> {
         kd("G", "收起/展开 任务详情 + 并发连接面板"),
         kd("Esc", "关闭弹窗"),
         kd("Q", "退出程序（主界面；弹窗内先关窗）"),
+        kd("Ctrl+R", "重新加载配置文件（热加载，无需重启）"),
         sec("页签"),
         kd("] / [", "右/左切换页签（正在下载 ⇄ 已完成）"),
         kd("鼠标点击页签", "切换到该页签"),
@@ -211,6 +212,10 @@ mod tests {
             "全局 O 条目（v1.32 新增）: {s}"
         );
         assert!(
+            s.contains("重新加载配置文件（热加载，无需重启）"),
+            "全局 Ctrl+R 条目（FR-01-119）: {s}"
+        );
+        assert!(
             s.contains("右/左切换页签（正在下载 ⇄ 已完成）"),
             "页签条目: {s}"
         );
@@ -276,7 +281,10 @@ mod tests {
         let mut term2 = Terminal::new(TestBackend::new(120, 40)).unwrap();
         term2.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         let s2 = term2.backend().to_string();
-        assert_eq!(app.help_scroll, 62, "End 钳制 = 82 − 20（末页视窗 62..81）");
+        assert_eq!(
+            app.help_scroll, 63,
+            "End 钳制 = 83 − 20（末页视窗 63..82；v1.54 全局节新增 Ctrl+R 条目 81→83）"
+        );
         for sec in [
             "【滚动条（通用组件）】",
             "【trackers 弹窗（T）】",
@@ -319,8 +327,8 @@ mod tests {
         let mut app = testfx::make_app_in("ezr-help", "scroll");
         let total = super::help_lines_len();
         assert_eq!(
-            total, 82,
-            "phase-02 内容 82 行（十二组；v1.44 标志缩写 5 条目 + v1.51 SR/LT 两条目，FR-02-33/38/D77）"
+            total, 83,
+            "phase-02 内容 83 行（十二组；v1.44 标志缩写 5 条目 + v1.51 SR/LT 两条目，FR-02-33/38/D77；v1.54 全局节新增 Ctrl+R 条目 FR-01-119）"
         );
         app.help_scroll = usize::MAX;
         let term = render_help(&mut app, 120, 40);

@@ -73,6 +73,12 @@ pub enum Cmd {
         id: u32,
         conn: usize,
     },
+    ApplyGlobals {
+        max_download_speed: u64,
+        max_upload_speed: u64,
+        throttle_burst_secs: f64,
+        throttle_sleep_ms: u64,
+    },
     Shutdown,
 }
 
@@ -219,8 +225,8 @@ pub(crate) struct EngineShared {
     clients: std::sync::Mutex<HashMap<String, reqwest::Client>>,
     throttle_dl: Arc<throttle::Throttle>,
     throttle_ul: Arc<throttle::Throttle>,
-    throttle_burst_secs: f64,
-    throttle_sleep_ms: u64,
+    throttle_burst_secs: std::sync::atomic::AtomicU64,
+    throttle_sleep_ms: std::sync::atomic::AtomicU64,
     blacklist: std::sync::Mutex<HashSet<IpAddr>>,
     blacklist_file: Option<std::path::PathBuf>,
     grace: std::time::Duration,
@@ -239,11 +245,24 @@ impl EngineShared {
     }
 
     pub(crate) fn throttle_burst_secs(&self) -> f64 {
-        self.throttle_burst_secs
+        f64::from_bits(
+            self.throttle_burst_secs
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 
     pub(crate) fn throttle_sleep_ms(&self) -> u64 {
         self.throttle_sleep_ms
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 热加载原子更新桶参数（FR-01-119 C 类）：新启动任务经 with_params
+    /// 读取新值，运行中任务的桶实例保持构造时参数不被触及。
+    pub(crate) fn set_throttle_params(&self, burst_secs: f64, sleep_ms: u64) {
+        self.throttle_burst_secs
+            .store(burst_secs.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        self.throttle_sleep_ms
+            .store(sleep_ms, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub(crate) fn bt_listener(&self) -> Arc<tokio::net::TcpListener> {
@@ -311,8 +330,12 @@ impl EngineShared {
             clients: std::sync::Mutex::new(std::collections::HashMap::new()),
             throttle_dl: Arc::new(throttle::Throttle::new(0)),
             throttle_ul: Arc::new(throttle::Throttle::new(0)),
-            throttle_burst_secs: crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
-            throttle_sleep_ms: crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
+            throttle_burst_secs: std::sync::atomic::AtomicU64::new(
+                crate::model::config::DEFAULT_THROTTLE_BURST_SECS.to_bits(),
+            ),
+            throttle_sleep_ms: std::sync::atomic::AtomicU64::new(
+                crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
+            ),
             blacklist: std::sync::Mutex::new(std::collections::HashSet::new()),
             blacklist_file: None,
             grace: std::time::Duration::from_millis(
@@ -414,8 +437,10 @@ impl EngineHandle {
                 cfg.throttle_burst_secs,
                 cfg.throttle_sleep_ms,
             )),
-            throttle_burst_secs: cfg.throttle_burst_secs,
-            throttle_sleep_ms: cfg.throttle_sleep_ms,
+            throttle_burst_secs: std::sync::atomic::AtomicU64::new(
+                cfg.throttle_burst_secs.to_bits(),
+            ),
+            throttle_sleep_ms: std::sync::atomic::AtomicU64::new(cfg.throttle_sleep_ms),
             blacklist: std::sync::Mutex::new(seed),
             blacklist_file: crate::model::config::ezr_dir().map(|d| d.join("blacklist.yaml")),
             grace,
@@ -581,6 +606,17 @@ async fn handle_cmd(
             bt_send(bt_tasks, id, crate::bt::BtTaskCmd::Disconnect(conn));
             false
         }
+        Cmd::ApplyGlobals {
+            max_download_speed,
+            max_upload_speed,
+            throttle_burst_secs,
+            throttle_sleep_ms,
+        } => {
+            shared.dl_throttle().set_rate(max_download_speed);
+            shared.ul_throttle().set_rate(max_upload_speed);
+            shared.set_throttle_params(throttle_burst_secs, throttle_sleep_ms);
+            false
+        }
         Cmd::Shutdown => {
             shutdown_all(tasks).await;
             shutdown_all_bt(bt_tasks).await;
@@ -738,8 +774,12 @@ pub(crate) fn shared_for_tests() -> Arc<EngineShared> {
         clients: std::sync::Mutex::new(HashMap::new()),
         throttle_dl: Arc::new(throttle::Throttle::new(0)),
         throttle_ul: Arc::new(throttle::Throttle::new(0)),
-        throttle_burst_secs: crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
-        throttle_sleep_ms: crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
+        throttle_burst_secs: std::sync::atomic::AtomicU64::new(
+            crate::model::config::DEFAULT_THROTTLE_BURST_SECS.to_bits(),
+        ),
+        throttle_sleep_ms: std::sync::atomic::AtomicU64::new(
+            crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
+        ),
         blacklist: std::sync::Mutex::new(HashSet::new()),
         blacklist_file: None,
         grace: dns::GRACE,
@@ -802,8 +842,12 @@ mod main_loop_tests {
             clients: std::sync::Mutex::new(HashMap::new()),
             throttle_dl: Arc::new(throttle::Throttle::new(0)),
             throttle_ul: Arc::new(throttle::Throttle::new(0)),
-            throttle_burst_secs: crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
-            throttle_sleep_ms: crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
+            throttle_burst_secs: std::sync::atomic::AtomicU64::new(
+                crate::model::config::DEFAULT_THROTTLE_BURST_SECS.to_bits(),
+            ),
+            throttle_sleep_ms: std::sync::atomic::AtomicU64::new(
+                crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
+            ),
             blacklist: std::sync::Mutex::new(HashSet::new()),
             blacklist_file: None,
             grace: dns::GRACE,
@@ -1244,5 +1288,50 @@ mod supervisor_tests {
                 "干净退出不得报 BtFailed: {evt:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod apply_globals_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn apply_globals_retargets_rates_and_params() {
+        let shared = Arc::new(EngineShared::for_test());
+        let mut tasks = HashMap::new();
+        let mut bt_tasks = HashMap::new();
+        let (tx, _rx) = mpsc::channel(8);
+        let again = handle_cmd(
+            &mut tasks,
+            &mut bt_tasks,
+            Cmd::ApplyGlobals {
+                max_download_speed: 1024,
+                max_upload_speed: 512,
+                throttle_burst_secs: 1.25,
+                throttle_sleep_ms: 33,
+            },
+            &shared,
+            &tx,
+        )
+        .await;
+        assert!(!again, "ApplyGlobals 不退出主循环");
+        assert!(
+            (shared.throttle_burst_secs() - 1.25).abs() < f64::EPSILON,
+            "burst 原子更新（新启动任务读取新值）"
+        );
+        assert_eq!(shared.throttle_sleep_ms(), 33, "sleep 原子更新");
+        tokio::time::timeout(
+            std::time::Duration::from_millis(150),
+            shared.dl_throttle().acquire(10_000_000),
+        )
+        .await
+        .expect_err("限速 1024 B/s 生效（10MB 不应在 150ms 内取完）");
+        shared.dl_throttle().set_rate(0);
+        let start = std::time::Instant::now();
+        shared.dl_throttle().acquire(10_000_000).await;
+        assert!(
+            start.elapsed().as_millis() < 100,
+            "set_rate(0) 即时（不限速）"
+        );
     }
 }

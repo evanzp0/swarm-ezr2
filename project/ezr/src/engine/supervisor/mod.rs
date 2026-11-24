@@ -453,8 +453,12 @@ mod tests {
                 crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
                 crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
             )),
-            throttle_burst_secs: crate::model::config::DEFAULT_THROTTLE_BURST_SECS,
-            throttle_sleep_ms: crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
+            throttle_burst_secs: std::sync::atomic::AtomicU64::new(
+                crate::model::config::DEFAULT_THROTTLE_BURST_SECS.to_bits(),
+            ),
+            throttle_sleep_ms: std::sync::atomic::AtomicU64::new(
+                crate::model::config::DEFAULT_THROTTLE_SLEEP_MS,
+            ),
             blacklist: std::sync::Mutex::new(std::collections::HashSet::new()),
             blacklist_file: None,
             grace: std::time::Duration::from_millis(

@@ -49,8 +49,6 @@ pub const MAX_DOWNLOAD_SLOTS: usize = 5;
 
 pub const TASK_LIMIT_DEFAULTS: (u64, u64) = (0, 0);
 
-const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
 pub struct App {
     pub tasks: Vec<Task>,
 
@@ -463,10 +461,6 @@ impl App {
             default_proxy_sel: 0,
             clipboard: None,
         }
-    }
-
-    pub fn spinner(&self) -> char {
-        SPINNER[(self.frame as usize) % SPINNER.len()]
     }
 
     pub fn used_slots(&self) -> usize {

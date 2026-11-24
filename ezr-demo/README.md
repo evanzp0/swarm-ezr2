@@ -22,6 +22,22 @@ chmod +x bin/ezr-tui-demo
 
 ## 变更记录（相对上游）
 
+44. **进度条行尾恒空——校验中/后期处理中行尾提示整臂退役（操作者 20261124 bug 轮指令；产品端 ezr 同构修复）**
+    - 操作者报告：HTTP 任务填写 SHA-512 校验码，下载完成校验（失败）期间，任务列表
+      进度条末尾出现 `SH` 字符——「进度条末尾不应该出现任何内容！」
+    - 根因 = 进度条行宽预算与提示文字不符：行 = 2 前导 + bar(width−4) + 2 间隔 =
+      width−2 列，校验中/后期处理中行尾提示恰好只露前 2 列（SHA-512 → `SH`、
+      MD5 → `MD`、后期处理中 → `后期`），与「行尾追加提示」设计意图相悖
+    - 修复：行尾提示臂（`SHA-256 分块校验 ⠋`/`后期处理中 ⠋`）整臂退役——进度条行 =
+      2 列前导 + bar(width−4)，**行尾恒无任何内容**（各状态同口径）；校验中/后期处理中
+      状态由行 1 `[校验中]`/`[后期处理中]` 状态徽标承载；走马灯滑块动画不受影响
+    - demo 源码：ui/list.rs task_lines 去尾臂 + spinner 参数退役、render_task/draw_list
+      同步、app/mod.rs SPINNER 常量与 App::spinner() 删除、ui/mod.rs 测试调用点 6 处
+      同步；docs 设计规范 v1.62 同步补记 + §4.4 动画条目退役注记 + §5.2 行 2 规格改判
+    - 守卫：产品端 ezr 新增 progress_row_tail_always_empty（五状态 × SHA-512 全算法名
+      断言）+ progress_row_tail_empty_at_narrow_width（窄宽度行宽恒等）；demo 全套
+      61P/0F、clippy 零警告
+
 43. **Ctrl+R 演示 toast 文案改判（操作者 20261124 chat 指令；FR-01-119 v1.57/D81② demo 同构）**
     - 操作者钦定「config 中任何配置项的被改动，热加载config 后都不需要单独的生成 toast
       消息，统一用一个 '配置已重新加载' 的toast 消息就可以了」——产品成功 toast 恒为

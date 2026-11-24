@@ -15,14 +15,12 @@ pub(super) fn render_task(
     t: &Task,
     area: Rect,
     sel: bool,
-    spinner: char,
     queue_pos: usize,
     anim: u64,
 ) {
     let text = task_lines(
         t,
         sel,
-        spinner,
         (area.width as usize).saturating_sub(2),
         queue_pos,
         anim,
@@ -76,7 +74,6 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let spinner = app.spinner();
     if app.selected >= idxs.len() {
         app.selected = idxs.len() - 1;
         app.scroll_to_selection();
@@ -96,15 +93,7 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             width: inner.width,
             height: ITEM_HEIGHT,
         };
-        render_task(
-            f,
-            t,
-            row_area,
-            ti == app.selected,
-            spinner,
-            qpos[ti],
-            app.frame,
-        );
+        render_task(f, t, row_area, ti == app.selected, qpos[ti], app.frame);
     }
 
     app.visible_rows = max_items;

@@ -258,22 +258,6 @@ async fn restore_merges_nonresumable_sidecar() {
 }
 
 #[tokio::test]
-async fn spinner_cycles_braille_table() {
-    let mut a = mkapp("spinner");
-    a.frame = 0;
-    assert_eq!(a.spinner(), '⠋');
-    a.frame = 10;
-    assert_eq!(
-        a.spinner(),
-        '⠋',
-        "frame 10 % 10 = 0（`%→/` 变异体给出表[1]）"
-    );
-    a.frame = 3;
-    assert_eq!(a.spinner(), '⠸');
-    shutdown(a).await;
-}
-
-#[tokio::test]
 async fn used_slots_counts_active_tasks() {
     let mut a = mkapp("slots");
     push_tasks(&mut a, 3);

@@ -24,6 +24,7 @@ mod mouse;
 mod paste;
 mod pieces;
 mod popups;
+mod reload;
 mod scrollbar;
 mod tasks;
 
@@ -109,8 +110,6 @@ impl DetailField {
         }
     }
 }
-
-const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 pub use crate::model::checksum::CHECKSUM_ALGOS;
 
@@ -296,6 +295,9 @@ pub struct App {
     /// sidecar，进度互相回退。登记在暂停时写入、BtStopped/BtFailed 时清除；
     /// 槽位调度见正在停止的任务先不启动（带兜底超时，见 tick_housekeeping）。
     pub(crate) bt_stopping: HashMap<u32, Instant>,
+    /// 启动期 CLI `--max-speed` 覆盖值（FR-01-119⑥）：每次热加载后重应用，
+    /// CLI > config 文件优先级贯穿运行期。
+    pub(crate) cli_max_speed_override: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -490,6 +492,7 @@ impl App {
             bt_conns: HashMap::new(),
             bt_conn_stats: HashMap::new(),
             bt_stopping: HashMap::new(),
+            cli_max_speed_override: None,
         };
         if !app.cfg.warnings.is_empty() {
             let msg = app.cfg.warnings.join("；");
@@ -552,11 +555,6 @@ impl App {
     #[must_use]
     pub fn alloc_task_id(&self) -> u32 {
         crate::model::idgen::alloc_task_id(|cand| self.tasks.iter().any(|t| t.id == cand))
-    }
-
-    #[must_use]
-    pub fn spinner(&self) -> char {
-        SPINNER[(self.frame as usize) % SPINNER.len()]
     }
 
     #[must_use]
@@ -705,6 +703,13 @@ impl App {
     pub(crate) fn set_toast(&mut self, msg: impl Into<String>) {
         self.toast = Some(msg.into());
         self.toast_until = Some(Instant::now() + std::time::Duration::from_secs(3));
+    }
+
+    /// 登记启动期 CLI `--max-speed` 覆盖（main.rs 启动链调用一次），
+    /// 使每次热加载后覆盖被重应用（FR-01-119⑥）。
+    pub fn set_cli_max_speed_override(&mut self, speed_bps: u64) {
+        self.cli_max_speed_override = Some(speed_bps);
+        self.cfg.global_max_download_speed = speed_bps;
     }
 
     pub(super) fn push_hist(&mut self, global_dl: f64, global_ul: f64) {

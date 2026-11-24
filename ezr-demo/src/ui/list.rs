@@ -70,7 +70,6 @@ fn share_spans(t: &Task) -> Vec<Span<'static>> {
 pub(crate) fn task_lines(
     t: &Task,
     sel: bool,
-    spinner: char,
     width: usize,
     queue_pos: usize,
     anim: u64,
@@ -137,25 +136,10 @@ pub(crate) fn task_lines(
     } else {
         l2.extend(plain_bar(bar_w, 0.0, state_c));
     }
-
-    match t.state {
-        TaskState::Verifying => {
-            l2.push(Span::raw("  "));
-            let algo = t.checksum.as_ref().map(|c| c.algo).unwrap_or("SHA-256");
-            l2.push(Span::styled(
-                format!("{} 分块校验 {}", algo, spinner),
-                Style::default().fg(LIGHT_BLUE),
-            ));
-        }
-        TaskState::PostProcessing => {
-            l2.push(Span::raw("  "));
-            l2.push(Span::styled(
-                format!("后期处理中 {}", spinner),
-                Style::default().fg(LIGHT_BLUE),
-            ));
-        }
-        _ => {}
-    }
+    // 进度条行 = 2 列前导 + bar(width-4)，**行尾恒无任何内容**（操作者 bug 轮
+    // 指令，与产品端 ezr 同构：校验中/后期处理中行尾提示文字与行宽预算不符
+    // ——提示溢出仅露 2 列，SHA-512 任务恰显 `SH`——整臂退役；状态由行 1
+    // 状态徽标承载）。
 
     let dash = Span::styled("-", Style::default().fg(DIM));
     let mut l3: Vec<Span<'static>> = vec![Span::raw("  ")];
@@ -278,19 +262,10 @@ pub(crate) fn task_lines(
     ]
 }
 
-fn render_task(
-    f: &mut Frame,
-    t: &Task,
-    area: Rect,
-    sel: bool,
-    spinner: char,
-    queue_pos: usize,
-    anim: u64,
-) {
+fn render_task(f: &mut Frame, t: &Task, area: Rect, sel: bool, queue_pos: usize, anim: u64) {
     let text = task_lines(
         t,
         sel,
-        spinner,
         area.width.saturating_sub(2) as usize,
         queue_pos,
         anim,
@@ -345,7 +320,6 @@ pub(crate) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let spinner = app.spinner();
     // 集合收缩自愈（切页签 / 模拟迁移状态 / 清理已完成）：
     //   1) 选中项越界 → 夹紧到最后，并让滚动窗口重新覆盖选中行；
     //   2) 滚动越界（残留 scroll > 可渲染上限）→ 夹紧到 len-rows，
@@ -383,15 +357,7 @@ pub(crate) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             width: inner.width,
             height: (ih as u16).min(inner.bottom().saturating_sub(y)),
         };
-        render_task(
-            f,
-            t,
-            row_area,
-            ti == app.selected,
-            spinner,
-            qpos[ti],
-            app.frame,
-        );
+        render_task(f, t, row_area, ti == app.selected, qpos[ti], app.frame);
     }
 
     sb.vertical(idxs.len(), rows, app.scroll);

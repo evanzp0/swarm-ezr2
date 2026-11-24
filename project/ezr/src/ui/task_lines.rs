@@ -2,13 +2,12 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::text::{fmt_eta, fmt_size, fmt_speed, fold_name_dots, plain_bar, w};
-use super::{state_color, ACCENT, DIM, FG, GREEN, LIGHT_BLUE, MAGENTA, RED, YELLOW};
+use super::{state_color, ACCENT, DIM, FG, GREEN, MAGENTA, RED, YELLOW};
 use crate::model::{FailKind, Task, TaskState};
 
 pub(super) fn task_lines(
     t: &Task,
     sel: bool,
-    spinner: char,
     width: usize,
     queue_pos: usize,
     anim: u64,
@@ -17,7 +16,7 @@ pub(super) fn task_lines(
     let state_c = state_color(t.state);
     vec![
         Line::from(title_row(t, sel, width)),
-        Line::from(progress_row(t, width, state_c, spinner, anim)),
+        Line::from(progress_row(t, width, state_c, anim)),
         Line::from(stat_row(t, queue_pos)),
         Line::from(vec![Span::raw("")]),
     ]
@@ -124,13 +123,10 @@ pub(super) fn sp_txt(t: &Task) -> String {
     format!("{}/{}", seeds, peers)
 }
 
-fn progress_row(
-    t: &Task,
-    width: usize,
-    state_c: Color,
-    spinner: char,
-    anim: u64,
-) -> Vec<Span<'static>> {
+/// 进度条行 = 2 列前导 + bar(width-4)，**行尾恒无任何内容**（操作者 bug 轮
+/// 指令：校验中/后期处理中行尾提示文字与行宽预算不符——提示溢出仅露 2 列，
+/// SHA-512 任务恰显 `SH`——整臂退役；校验/后期状态由行 1 状态徽标承载）。
+fn progress_row(t: &Task, width: usize, state_c: Color, anim: u64) -> Vec<Span<'static>> {
     let bar_w = width.saturating_sub(4);
     let mut l2 = vec![Span::raw("  ")];
     if !t.size_known() && t.state == TaskState::Downloading {
@@ -139,24 +135,6 @@ fn progress_row(
         l2.extend(plain_bar(bar_w, t.progress(), state_c));
     } else {
         l2.extend(plain_bar(bar_w, 0.0, state_c));
-    }
-    match t.state {
-        TaskState::Verifying => {
-            l2.push(Span::raw("  "));
-            let algo = t.checksum.as_ref().map(|c| c.algo).unwrap_or("SHA-256");
-            l2.push(Span::styled(
-                format!("{} 分块校验 {}", algo, spinner),
-                Style::default().fg(LIGHT_BLUE),
-            ));
-        }
-        TaskState::PostProcessing => {
-            l2.push(Span::raw("  "));
-            l2.push(Span::styled(
-                format!("后期处理中 {}", spinner),
-                Style::default().fg(LIGHT_BLUE),
-            ));
-        }
-        _ => {}
     }
     l2
 }
@@ -379,17 +357,42 @@ mod tests {
     }
 
     #[test]
-    fn progress_row_activity_hints() {
-        let t = mk(TaskState::Verifying, false);
-        let row = progress_row(&t, 60, state_color(t.state), '⠋', 0);
-        let s = text_of(&row);
-        assert!(s.contains("分块校验"), "校验提示: {s}");
-        let t = mk(TaskState::PostProcessing, false);
-        let row = progress_row(&t, 60, state_color(t.state), '⠋', 0);
-        assert!(text_of(&row).contains("后期处理中"));
-        let t = mk(TaskState::Downloading, false);
-        let row = progress_row(&t, 60, state_color(t.state), '⠋', 0);
-        assert!(!text_of(&row).contains("校验"));
+    fn progress_row_tail_always_empty() {
+        // 操作者 bug 轮指令：进度条行尾不出现任何内容——校验中/后期处理中
+        // 行尾提示溢出恰露 2 列（SHA-512 → `SH`），整臂退役。
+        for st in [
+            TaskState::Verifying,
+            TaskState::PostProcessing,
+            TaskState::Downloading,
+            TaskState::Failed,
+            TaskState::Completed,
+        ] {
+            let mut t = mk(st, false);
+            t.checksum = Some(Checksum {
+                algo: "SHA-512",
+                value: "ab".repeat(64),
+            });
+            let row = progress_row(&t, 60, state_color(t.state), 0);
+            let s = text_of(&row);
+            assert!(!s.contains("分块校验"), "{st:?} 行尾无校验提示: {s}");
+            assert!(!s.contains("后期处理中"), "{st:?} 行尾无后期提示: {s}");
+            assert!(!s.contains("SH"), "{st:?} 行尾无算法名溢出: {s}");
+            let total: usize = row.iter().map(|sp| w(sp.content.as_ref())).sum();
+            assert_eq!(total, 58, "{st:?} 行宽恒 = 2 前导 + bar(56)，行尾无内容");
+        }
+    }
+
+    #[test]
+    fn progress_row_tail_empty_at_narrow_width() {
+        // 窄宽度下同样成立：行宽恒 = 2 前导 + bar(width-4)，无溢出内容。
+        for width in [20usize, 24, 31, 40] {
+            let t = mk(TaskState::Verifying, false);
+            let row = progress_row(&t, width, state_color(t.state), 0);
+            let total: usize = row.iter().map(|sp| w(sp.content.as_ref())).sum();
+            assert_eq!(total, width - 2, "width={width} 行尾无内容");
+            let s = text_of(&row);
+            assert!(!s.contains("SHA"), "width={width} 无算法名: {s}");
+        }
     }
 
     fn mk_streaming(state: TaskState) -> Task {
@@ -412,18 +415,18 @@ mod tests {
     #[test]
     fn unknown_size_marquee_when_downloading_else_empty_track() {
         let t = mk_streaming(TaskState::Downloading);
-        let a0 = text_of(&progress_row(&t, 60, state_color(t.state), '⠋', 4));
-        let a5 = text_of(&progress_row(&t, 60, state_color(t.state), '⠋', 9));
+        let a0 = text_of(&progress_row(&t, 60, state_color(t.state), 4));
+        let a5 = text_of(&progress_row(&t, 60, state_color(t.state), 9));
         assert!(a0.contains('█'), "下载中走马灯色块: {a0}");
         assert_ne!(a0, a5, "滑块随帧移动");
         for st in [TaskState::Paused, TaskState::Queued, TaskState::Failed] {
             let t = mk_streaming(st);
-            let s = text_of(&progress_row(&t, 60, state_color(t.state), '⠋', 3));
+            let s = text_of(&progress_row(&t, 60, state_color(t.state), 3));
             assert!(!s.contains('█'), "{st:?} 空轨道无色块: {s}");
             assert!(s.contains('░'), "{st:?} 空轨道 ░: {s}");
         }
         let t2 = mk(TaskState::Downloading, false);
-        assert!(text_of(&progress_row(&t2, 60, state_color(t.state), '⠋', 0)).contains('█'));
+        assert!(text_of(&progress_row(&t2, 60, state_color(t.state), 0)).contains('█'));
     }
 
     #[test]
@@ -525,7 +528,7 @@ mod tests {
     #[test]
     fn task_lines_anim_threading() {
         let t = mk_streaming(TaskState::Downloading);
-        let l = task_lines(&t, false, '⠋', 60, 0, 4);
+        let l = task_lines(&t, false, 60, 0, 4);
         let joined: String = l[1].spans.iter().map(|x| x.content.as_ref()).collect();
         assert!(joined.contains('█'));
     }
@@ -775,7 +778,7 @@ mod tests {
     #[test]
     fn task_lines_width_floor_is_20() {
         let x = mk(TaskState::Downloading, false);
-        let lines = task_lines(&x, false, '⠋', 1, 0, 0);
+        let lines = task_lines(&x, false, 1, 0, 0);
         assert_eq!(lines.len(), 4);
     }
 }

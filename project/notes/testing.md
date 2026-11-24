@@ -975,3 +975,15 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
   stream.feed 后立即断言当前 screen.display（帧级 HIT 任一即过），时长取 键注入时刻 +
   toast 存活窗（3s）内即可；另注意 needle 逐字匹配无正则（传 `Ctrl\+R` 反斜杠即字面量
   必 MISS）。（two-pack/coder Ctrl+R toast 轮实证：末帧法 MISS、逐帧法 66 帧 HIT）
+
+## Ctrl+R 配置热加载实现轮（2026-11-24，coder）追加
+- **reload_config_from(Option<&Path>) 参数化注入口避 env 竞态**：App 级 reload 测试全部走显式路径注入，`config_path()` 读 env 的 glue 保持零测试——不重蹈 config.rs 既有 set_var/remove_var 跨测试并行竞态面（EZR_HOME 是进程级全局，并行测试互相改写）。App::new 的测试实例用 testutil::make_app_in（隔离 registry），reload 路径用 uniq_tmp_dir 手写 config.toml。
+- **引擎 spy 下 reload 命令序固定可断言**：ApplyGlobals 恒为首条 + reconfigs 按任务序——`recv_all(n)` 收满计数 + `timeout(150ms).expect_err` 断言「不应有第二条命令」（无变化臂/暂停臂的负向单发断言）。timeout abort 的 acquire/receive 取消安全，无状态残留。
+- **帮助行数守卫是双断言面**：help_window_geometry 的 End 钳制值（62→63）与 help_scroll_clamps 的总行数守卫（82→83）两处独立断言同源同步——加一条目漏改一处 = 单跑绿全量红（本轮实录第二处即全量跑出）。改帮助内容先 `rg -n "82|62" src/ui/help.rs` 找齐守卫点。
+- **注册表落库断言用 pretty JSON 形态**：save_json_atomic 走 to_string_pretty，`"proxy": "direct"` 带空格——字面 contains 断言按实际序列化形态写，不看 serde 默认假设。
+- **网关取消调用 ≠ 测试进程死亡**：集成套件串行轮询中工具调用被 context canceled，timeout 包装的 cargo test 进程可能存活继续跑完——恢复时先 pgrep 探针 + 日志尾部核对，进程在则继续轮询采信落盘结果（g_engine 实录：canceled 后进程跑完 882P/0F 落盘）。
+
+## 进度条行尾恒空 bug 修复轮（2026-11-24，coder）追加
+- **行尾恒空的守卫测试形态**：两条断言正交缺一不可——①内容断言：五状态（Verifying/PostProcessing/Downloading/Failed/Completed）× 携带 SHA-512 checksum 的 progress_row 输出不含「分块校验/后期处理中/SH」任何残字（直接钉住操作者报告的观测形态）；②预算断言：行 spans 显示宽度恒 = 2 + bar(width−4)（`w()` 累加求和），任何未来「往行尾再加点什么」的改动立即被预算断言击穿；③窄宽度参数化（20/24/31/40）防「只在典型宽度测过」盲区。
+- **旧断言反转而非删除**：progress_row_activity_hints（断言提示在场）改判为 progress_row_tail_always_empty（断言提示缺席）——测试名与断言同步反转保留测试点位，git 历史可溯「同一显示面的语义翻转」；全部 progress_row 调用点同步去 spinner 参数（编译器兜底找全）。
+- **变异测试随宿主代码退役**：spinner 表的变异测试（hardening_g_appcore）在宿主方法删除后必须同步退役——变异测试的生命周期绑定其宿主实现，宿主亡则测试亡；集成套件计数因此 -1（886→885）属预期位移，非回归。

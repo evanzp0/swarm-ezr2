@@ -10,6 +10,12 @@ impl App {
                 self.quit = true;
                 return;
             }
+            if code == KeyCode::Char('r') {
+                // Ctrl+R 配置热加载（FR-01-119）：与 Ctrl+C 同级先于浮层分派，
+                // 主界面与全部浮层内可达，浮层不因热加载关闭。
+                self.reload_config();
+                return;
+            }
             if self.cmd_open && (code == KeyCode::Char('j') || code == KeyCode::Enter) {
                 self.on_cmd_key(code, mods);
             }
@@ -851,6 +857,95 @@ mod bt_key_tests {
             app.conns_sel, 1,
             "越界选择仍钳制到末行（行数同源口径的守卫臂保持）"
         );
+        app.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+mod reload_key_tests {
+    use super::*;
+    use crate::model::TaskState;
+
+    fn make_app(tag: &str) -> App {
+        crate::app::testutil::make_app_in("ezr-rkey", tag)
+    }
+
+    fn press_ctrl_r(app: &mut App) {
+        app.on_key(KeyCode::Char('r'), KeyModifiers::CONTROL);
+    }
+
+    #[tokio::test]
+    async fn ctrl_r_fires_on_main_ui_and_every_overlay_stays_open() {
+        let mut app = make_app("sweep");
+        app.tasks.push(crate::app::testutil::dl_task(1, "r.bin"));
+        app.selected = 0;
+
+        press_ctrl_r(&mut app);
+        assert!(app.toast.is_some(), "主界面 Ctrl+R 触发热加载");
+        assert!(!app.quit, "不退出");
+
+        app.on_key(KeyCode::Char('h'), KeyModifiers::NONE);
+        assert!(app.help_open);
+        press_ctrl_r(&mut app);
+        assert!(app.help_open, "帮助窗口不因热加载关闭");
+        assert!(app.toast.is_some(), "帮助窗口内 Ctrl+R 仍触发热加载");
+
+        app.on_key(KeyCode::Esc, KeyModifiers::NONE);
+        app.on_key(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert!(app.cmd_open, "A 打开命令窗口");
+        app.cmd.set_text("https://example.com/r.bin");
+        app.cmd_confirm();
+        assert!(app.dialog.is_some(), "命令分流打开添加对话框");
+        press_ctrl_r(&mut app);
+        assert!(app.dialog.is_some(), "对话框不因热加载关闭");
+        assert!(app.toast.is_some());
+
+        app.dialog = None;
+        app.on_key(KeyCode::Char('p'), KeyModifiers::NONE);
+        assert!(app.pieces_open);
+        press_ctrl_r(&mut app);
+        assert!(app.pieces_open, "分块弹窗内 Ctrl+R 可达且弹窗不关闭");
+
+        app.pieces_open = false;
+        app.err_open = true;
+        app.err_msg = "测试错误".to_string();
+        press_ctrl_r(&mut app);
+        assert!(app.err_open, "错误窗口内 Ctrl+R 可达且不关闭");
+
+        app.err_open = false;
+        app.val_open = true;
+        press_ctrl_r(&mut app);
+        assert!(app.val_open, "值弹窗内 Ctrl+R 可达且不关闭");
+
+        app.val_open = false;
+        app.about_open = true;
+        press_ctrl_r(&mut app);
+        assert!(app.about_open, "关于窗口内 Ctrl+R 可达且不关闭");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn ctrl_r_in_cmd_window_does_not_swallow_cmd_keys() {
+        let mut app = make_app("cmdkey");
+        app.open_cmd_window();
+        press_ctrl_r(&mut app);
+        assert!(app.cmd_open, "命令窗口不因热加载关闭");
+        assert!(app.toast.is_some(), "命令窗口内 Ctrl+R 触发热加载");
+        press_ctrl_r(&mut app);
+        assert!(app.cmd_open, "连续 Ctrl+R 幂等");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn plain_r_keeps_retry_semantics_and_ctrl_r_only_with_control_mod() {
+        let mut app = make_app("modsep");
+        app.tasks.push(crate::app::testutil::dl_task(1, "m.bin"));
+        app.tasks[0].state = TaskState::Failed;
+        app.selected = 0;
+        app.on_key(KeyCode::Char('r'), KeyModifiers::NONE);
+        assert_eq!(app.tasks[0].state, TaskState::Queued, "裸 R 仍走重试语义");
+        press_ctrl_r(&mut app);
+        assert!(app.toast.is_some(), "Ctrl 修饰键才进热加载");
         app.shutdown().await;
     }
 }

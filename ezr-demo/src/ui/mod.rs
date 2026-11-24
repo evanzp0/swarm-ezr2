@@ -831,7 +831,7 @@ mod conns_flags_tests {
             t.availability = 2.418;
             t.uploaded = 1_712_000_000;
         }
-        let lines = list::task_lines(&app.tasks[seeding], false, ' ', 160, 0, 0);
+        let lines = list::task_lines(&app.tasks[seeding], false, 160, 0, 0);
         let text = lines
             .iter()
             .map(|l| {
@@ -998,7 +998,7 @@ mod conns_flags_tests {
             .expect("演示数据含下载中 BT 任务");
         let t = &app.tasks[bt];
         let total_txt = fmt_size(t.total);
-        let rows = flatten(&list::task_lines(t, false, ' ', 160, 0, 0));
+        let rows = flatten(&list::task_lines(t, false, 160, 0, 0));
         let l1 = &rows[0];
         let l3 = &rows[2];
         assert!(
@@ -1027,7 +1027,7 @@ mod conns_flags_tests {
             .expect("演示数据含尺寸已知的下载中 HTTP(S) 任务");
         let t = &app.tasks[http];
         let total_txt = fmt_size(t.total);
-        let rows = flatten(&list::task_lines(t, false, ' ', 160, 0, 0));
+        let rows = flatten(&list::task_lines(t, false, 160, 0, 0));
         let l1 = &rows[0];
         let l3 = &rows[2];
         assert!(
@@ -1053,7 +1053,7 @@ mod conns_flags_tests {
             .position(|t| t.state == TaskState::Downloading && !t.protocol.is_bt() && !t.size_known())
             .expect("演示数据含尺寸未知的下载中 HTTP 任务");
         let t = &app.tasks[unk];
-        let rows = flatten(&list::task_lines(t, false, ' ', 160, 0, 0));
+        let rows = flatten(&list::task_lines(t, false, 160, 0, 0));
         let l1 = &rows[0];
         let l3 = &rows[2];
         assert!(
@@ -1076,7 +1076,7 @@ mod conns_flags_tests {
             .position(|t| t.state == TaskState::Failed)
             .expect("演示数据含已失败任务");
         let tf = &app.tasks[f];
-        let rows = flatten(&list::task_lines(tf, false, ' ', 160, 0, 0));
+        let rows = flatten(&list::task_lines(tf, false, 160, 0, 0));
         assert!(
             rows[0].contains(&format!("[已失败] {}", fmt_size(tf.total))),
             "已失败任务行状态徽标后显示 <总字节>: {:?}",
@@ -1095,7 +1095,7 @@ mod conns_flags_tests {
             .position(|t| t.state == TaskState::Queued)
             .expect("演示数据含等待中任务");
         let tq = &app.tasks[q];
-        let rows = flatten(&list::task_lines(tq, false, ' ', 160, 2, 0));
+        let rows = flatten(&list::task_lines(tq, false, 160, 2, 0));
         assert!(
             rows[0].contains(&format!("[等待中] {}", fmt_size(tq.total))),
             "等待中任务行状态徽标后显示 <总字节>: {:?}",
@@ -1118,7 +1118,7 @@ mod conns_flags_tests {
             .position(|t| t.state == TaskState::Completed)
             .expect("演示数据含已完成任务");
         let tc = &app.tasks[c];
-        let rows = flatten(&list::task_lines(tc, false, ' ', 160, 0, 0));
+        let rows = flatten(&list::task_lines(tc, false, 160, 0, 0));
         assert!(
             rows[0].contains(&format!("[已完成] {}", fmt_size(tc.total))),
             "已完成任务行状态徽标后显示 <总字节>: {:?}",
@@ -1146,7 +1146,7 @@ mod conns_flags_tests {
             .expect("演示数据含做种中 BT 任务");
         let t = &app.tasks[seeding];
         let total_txt = fmt_size(t.total);
-        let rows = flatten(&list::task_lines(t, false, ' ', 160, 0, 0));
+        let rows = flatten(&list::task_lines(t, false, 160, 0, 0));
         let l1 = &rows[0];
         let l3 = &rows[2];
         assert!(

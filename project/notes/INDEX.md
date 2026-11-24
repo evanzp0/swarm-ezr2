@@ -160,3 +160,13 @@
 - architecture.md — 统一口径改判的第七同步面 = ezr-demo 镜像引用面四处形态（源码演示键/守卫测试断言/docs 现行表/README 升号条目，历史块原文保留）+ bin/ 预编译二进制不属 git 树免重建（新增）
 - environment.md — cargo 官方 crates.io 下载超时假象定性（target 空 = 卡下载）与 aliyun sparse registry 配置秒级 fetch（新增）
 - handoff.md — D81②③⑤ v1.57 改判轮修订面与验证证据（新增）
+
+## Ctrl+R 配置热加载实现轮（2026-11-24，coder）追加
+- architecture.md — 运行端点不变式免新增状态（Task.running_proxy 裁掉的理由与三入口同源论证）+ ApplyGlobals 单命令原子下发（to_bits AtomicU64，C 类免 RwLock）+ 下拉重建捕获-重建-重映射三步序 + CLI 覆盖单一权威登记点 + Ctrl+R CONTROL 分支全局可达锚 + reload 臂序全图（新增）
+- testing.md — reload_config_from(Option<&Path>) 参数化注入避 env 竞态 + 引擎 spy 命令序断言（recv_all 收满 + 负向 expect_err 单发）+ 帮助行数守卫双断言面（漏一处 = 单跑绿全量红）+ 注册表 pretty JSON 断言形态 + 网关取消调用后进程存活采信协议（新增）
+- environment.md — 20261124 镜像复测（USTC rustup 全链路新鲜 + aliyun sparse registry + ghfast.top/gh-proxy 装机三件）+ 13 套件串行节奏与 df 峰值（新增）
+
+## 进度条行尾恒空 bug 修复轮（2026-11-24，coder）追加
+- architecture.md — 行尾追加文本与行宽预算不符 = 定宽溢出残字缺陷（溢出量算术与 2 列残字形态）+ 「行尾恒空」改判的连带退役面五层清单（提示臂/参数链/SPINNER 常量/变异测试/demo docs 行为行）+ 状态可观测性由行 1 徽标承载（新增）
+- testing.md — 行尾恒空守卫测试三断言形态（残字内容 × 行宽预算恒等 × 窄宽度参数化）+ 旧断言反转保留测试点位 + 变异测试随宿主代码退役原则（新增）
+- handoff.md — bug 修复轮（progressbar-tail）产物总账/改动面/验证证据并入 + 实现定义值登记新增行尾恒空条（更新）
