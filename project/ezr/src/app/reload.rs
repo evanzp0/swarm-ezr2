@@ -185,6 +185,29 @@ mod reload_tests {
         out
     }
 
+    fn cfg_app(tag: &str, body: &str) -> (PathBuf, App) {
+        let dir = crate::model::testenv::uniq_tmp_dir(tag);
+        let p = write_cfg(&dir, body);
+        let reg = dir.join("registry.json").to_string_lossy().into_owned();
+        let app = App::new(Config::try_load(&p).unwrap(), reg);
+        (dir, app)
+    }
+
+    fn assign_named_p1(app: &mut App) {
+        app.tasks[0].proxy = ProxyChoice::Named("p1".into());
+    }
+
+    fn seed_named_dl(app: &mut App, id: u32) {
+        app.tasks.push(crate::app::testutil::dl_task(id, "a.bin"));
+        assign_named_p1(app);
+    }
+
+    fn spy_engine(app: &mut App) -> tokio::sync::mpsc::Receiver<Cmd> {
+        let (spy_tx, spy_rx) = tokio::sync::mpsc::channel::<Cmd>(16);
+        app.engine = EngineHandle::from_sender(spy_tx);
+        spy_rx
+    }
+
     #[tokio::test]
     async fn no_config_path_toasts_no_config_file_and_keeps_cfg() {
         let mut app = make_app("none");
@@ -329,12 +352,11 @@ mod reload_tests {
 
     #[tokio::test]
     async fn rename_arm_new_name_enters_pool_without_migrating_refs() {
-        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reload-rename");
-        let p = write_cfg(&dir, &with_proxies(&[("p1", 18081), ("p2", 18082)]));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        let mut app = App::new(Config::try_load(&p).unwrap(), reg);
-        app.tasks.push(crate::app::testutil::dl_task(1, "a.bin"));
-        app.tasks[0].proxy = ProxyChoice::Named("p1".into());
+        let (dir, mut app) = cfg_app(
+            "ezr-reload-rename",
+            &with_proxies(&[("p1", 18081), ("p2", 18082)]),
+        );
+        seed_named_dl(&mut app, 1);
 
         let p2 = write_cfg(&dir, &with_proxies(&[("p1x", 18081), ("p2", 18082)]));
         app.reload_config_from(Some(&p2));
@@ -356,12 +378,8 @@ mod reload_tests {
 
     #[tokio::test]
     async fn readd_same_name_does_not_rehook_rewritten_task() {
-        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reload-readd");
-        let p = write_cfg(&dir, &with_proxies(&[("p1", 18081)]));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        let mut app = App::new(Config::try_load(&p).unwrap(), reg);
-        app.tasks.push(crate::app::testutil::dl_task(1, "a.bin"));
-        app.tasks[0].proxy = ProxyChoice::Named("p1".into());
+        let (dir, mut app) = cfg_app("ezr-reload-readd", &with_proxies(&[("p1", 18081)]));
+        seed_named_dl(&mut app, 1);
 
         let p2 = write_cfg(&dir, "[common]\ndownload_slots = 5\n");
         app.reload_config_from(Some(&p2));
@@ -380,10 +398,10 @@ mod reload_tests {
 
     #[tokio::test]
     async fn open_add_dialog_dropdown_rebuilds_in_place() {
-        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reload-dlg");
-        let p = write_cfg(&dir, &with_proxies(&[("p1", 18081), ("p2", 18082)]));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        let mut app = App::new(Config::try_load(&p).unwrap(), reg);
+        let (dir, mut app) = cfg_app(
+            "ezr-reload-dlg",
+            &with_proxies(&[("p1", 18081), ("p2", 18082)]),
+        );
         app.open_add_dialog();
         {
             let d = app.dialog.as_mut().unwrap();
@@ -410,12 +428,8 @@ mod reload_tests {
 
     #[tokio::test]
     async fn open_modify_dialog_remaps_selection_and_drops_vanished_name() {
-        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reload-mdlg");
-        let p = write_cfg(&dir, &with_proxies(&[("p1", 18081)]));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        let mut app = App::new(Config::try_load(&p).unwrap(), reg);
-        app.tasks.push(crate::app::testutil::dl_task(1, "a.bin"));
-        app.tasks[0].proxy = ProxyChoice::Named("p1".into());
+        let (dir, mut app) = cfg_app("ezr-reload-mdlg", &with_proxies(&[("p1", 18081)]));
+        seed_named_dl(&mut app, 1);
         app.tasks[0].state = TaskState::Paused;
         app.selected = 0;
         app.open_modify_dialog();
@@ -432,17 +446,11 @@ mod reload_tests {
 
     #[tokio::test]
     async fn endpoint_change_on_running_http_task_sends_reconfigure() {
-        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reload-ep");
-        let p = write_cfg(&dir, &with_proxies(&[("p1", 18081)]));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        let mut app = App::new(Config::try_load(&p).unwrap(), reg);
-        app.tasks.push(crate::app::testutil::dl_task(1, "a.bin"));
-        app.tasks[0].proxy = ProxyChoice::Named("p1".into());
+        let (dir, mut app) = cfg_app("ezr-reload-ep", &with_proxies(&[("p1", 18081)]));
+        seed_named_dl(&mut app, 1);
         app.tasks[0].concurrency = 7;
         app.tasks[0].max_download_speed = 1234;
-
-        let (spy_tx, mut spy_rx) = tokio::sync::mpsc::channel::<Cmd>(16);
-        app.engine = EngineHandle::from_sender(spy_tx);
+        let mut spy_rx = spy_engine(&mut app);
 
         let p2 = write_cfg(&dir, &with_proxies(&[("p1", 18082)]));
         app.reload_config_from(Some(&p2));
@@ -472,16 +480,10 @@ mod reload_tests {
 
     #[tokio::test]
     async fn unchanged_endpoint_sends_no_reconfigure_and_toast_still_fixed() {
-        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reload-noep");
-        let p = write_cfg(&dir, &with_proxies(&[("p1", 18081)]));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        let mut app = App::new(Config::try_load(&p).unwrap(), reg);
-        app.tasks.push(crate::app::testutil::dl_task(1, "a.bin"));
-        app.tasks[0].proxy = ProxyChoice::Named("p1".into());
+        let (dir, mut app) = cfg_app("ezr-reload-noep", &with_proxies(&[("p1", 18081)]));
+        seed_named_dl(&mut app, 1);
         app.tasks[0].state = TaskState::Downloading;
-
-        let (spy_tx, mut spy_rx) = tokio::sync::mpsc::channel::<Cmd>(16);
-        app.engine = EngineHandle::from_sender(spy_tx);
+        let mut spy_rx = spy_engine(&mut app);
 
         let p2 = write_cfg(&dir, "[common]\ndownload_slots = 5\n\n[[common.proxy]]\nname = \"p1\"\ntype = \"http\"\nip = \"127.0.0.1\"\nport = 18081\n");
         app.reload_config_from(Some(&p2));
@@ -500,16 +502,10 @@ mod reload_tests {
 
     #[tokio::test]
     async fn paused_task_with_changed_endpoint_gets_no_command_until_start() {
-        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reload-paused");
-        let p = write_cfg(&dir, &with_proxies(&[("p1", 18081)]));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        let mut app = App::new(Config::try_load(&p).unwrap(), reg);
-        app.tasks.push(crate::app::testutil::dl_task(1, "a.bin"));
-        app.tasks[0].proxy = ProxyChoice::Named("p1".into());
+        let (dir, mut app) = cfg_app("ezr-reload-paused", &with_proxies(&[("p1", 18081)]));
+        seed_named_dl(&mut app, 1);
         app.tasks[0].state = TaskState::Paused;
-
-        let (spy_tx, mut spy_rx) = tokio::sync::mpsc::channel::<Cmd>(16);
-        app.engine = EngineHandle::from_sender(spy_tx);
+        let mut spy_rx = spy_engine(&mut app);
 
         let p2 = write_cfg(&dir, &with_proxies(&[("p1", 18082)]));
         app.reload_config_from(Some(&p2));
@@ -527,16 +523,11 @@ mod reload_tests {
 
     #[tokio::test]
     async fn running_bt_vanished_proxy_reconfigures_to_direct() {
-        let dir = crate::model::testenv::uniq_tmp_dir("ezr-reload-bt");
-        let p = write_cfg(&dir, &with_proxies(&[("p1", 18081)]));
-        let reg = dir.join("registry.json").to_string_lossy().into_owned();
-        let mut app = App::new(Config::try_load(&p).unwrap(), reg);
+        let (dir, mut app) = cfg_app("ezr-reload-bt", &with_proxies(&[("p1", 18081)]));
         app.tasks
             .push(crate::app::testutil::bt_task(1, TaskState::Seeding));
-        app.tasks[0].proxy = ProxyChoice::Named("p1".into());
-
-        let (spy_tx, mut spy_rx) = tokio::sync::mpsc::channel::<Cmd>(16);
-        app.engine = EngineHandle::from_sender(spy_tx);
+        assign_named_p1(&mut app);
+        let mut spy_rx = spy_engine(&mut app);
 
         let p2 = write_cfg(&dir, "[common]\ndownload_slots = 5\n");
         app.reload_config_from(Some(&p2));

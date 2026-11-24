@@ -8,18 +8,15 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 #[cfg(test)]
-#[allow(unused_imports)]
 pub(crate) use dns::{merge_answers, HostsFile};
 #[cfg(test)]
 #[allow(unused_imports)]
 pub use error::classify_reqwest;
 #[cfg(test)]
-#[allow(unused_imports)]
 pub use error::parse_retry_after_header;
 pub use supervisor::{BtSpec, BtTunables, TaskSpec, VerifySpec};
 pub(crate) use throttle::Throttle;
 #[cfg(test)]
-#[allow(unused_imports)]
 pub use throttle::{bucket_step, BURST_SECS, SLEEP_MS};
 use tokio::sync::mpsc;
 
@@ -1332,6 +1329,66 @@ mod apply_globals_tests {
         assert!(
             start.elapsed().as_millis() < 100,
             "set_rate(0) 即时（不限速）"
+        );
+    }
+}
+
+#[cfg(test)]
+mod client_for_tests {
+    use super::*;
+    use crate::model::config::{ProxyEndpoint, ProxyKind};
+
+    fn ep(url: &str, user: Option<&str>) -> ProxyEndpoint {
+        ProxyEndpoint {
+            url: url.to_string(),
+            kind: ProxyKind::Socks5,
+            username: user.map(String::from),
+            password: user.map(|_| "pw".to_string()),
+        }
+    }
+
+    #[test]
+    fn client_for_caches_by_fingerprint_and_falls_back_to_direct() {
+        let shared = EngineShared::for_test();
+        let a = ep("socks5://127.0.0.1:1080", None);
+        assert_eq!(shared.clients.lock().unwrap().len(), 0, "前置：池为空");
+
+        let _first = shared.client_for(Some(&a));
+        assert_eq!(shared.clients.lock().unwrap().len(), 1, "首次构建入池");
+
+        let _hit = shared.client_for(Some(&a));
+        assert_eq!(
+            shared.clients.lock().unwrap().len(),
+            1,
+            "同指纹（url+user+pass 四元组）命中缓存不重建"
+        );
+
+        let b = ep("socks5://127.0.0.1:1081", None);
+        let _other = shared.client_for(Some(&b));
+        assert_eq!(shared.clients.lock().unwrap().len(), 2, "不同指纹独立入池");
+
+        let _direct = shared.client_for(None);
+        assert_eq!(
+            shared.clients.lock().unwrap().len(),
+            2,
+            "直连臂不经过代理池"
+        );
+    }
+
+    #[test]
+    fn proxy_fingerprint_distinguishes_url_user_and_password() {
+        let base = ep("socks5://127.0.0.1:1080", None);
+        let with_user = ep("socks5://127.0.0.1:1080", Some("u1"));
+        let other_user = ep("socks5://127.0.0.1:1080", Some("u2"));
+        let other_url = ep("socks5://127.0.0.1:1082", None);
+        let f = |e: &ProxyEndpoint| proxy_fingerprint(e);
+        assert_ne!(f(&base), f(&with_user), "无凭据与有凭据指纹不同");
+        assert_ne!(f(&with_user), f(&other_user), "不同用户指纹不同");
+        assert_ne!(f(&base), f(&other_url), "不同地址指纹不同");
+        assert_eq!(
+            f(&base),
+            f(&ep("socks5://127.0.0.1:1080", None)),
+            "同构指纹稳定"
         );
     }
 }

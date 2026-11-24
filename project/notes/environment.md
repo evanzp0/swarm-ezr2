@@ -620,3 +620,9 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 ## Ctrl+R 配置热加载实现轮（2026-11-24，coder）追加
 - 全新沙箱镜像复测（当日）：rustup 走 USTC 单路径整链路（stable 1.100.0 + nightly 1.102.0 minimal+rustfmt+clippy 一次装齐，dist 清单 date 2026-11-23 新鲜——USTC 本轮 0.099s 延迟最快且新鲜，上轮 aliyun 快照停 2026-05 的新鲜度排除口径再次成立）；cargo registry aliyun sparse（沿 reload-toast-unify 轮口径）cargo fetch 秒级 exit 0；swarm-ezr2 clone 走 ghfast.top（GitHub 直连超时）、bb v1.13.230 静态包 gh-proxy.com 一次成（tar.gz 形态 26.5MB）、APS gh-proxy clone 秒级。镜像逐轮漂移规律不变：每轮开工先探针（清单新鲜度 + 延迟 + 实装三步）。
 - 集成套件串行节奏实测：13 套件逐个前台跑（单套件 80–150s），两个套件之间查一次 df；本沙箱 9.9G 盘全量跑完峰值 76%（2.4G 余量），未触清理线。
+
+## 清理轮镜像复测与持久区迁移（2026-11-24，cleaner）追加
+- **rustup 当期复测**：rustup-init 三镜探针 USTC 12.9MB/s 最快（SJTU 9.8/TUNA 3.6/官方 9.4KB/s 超时）、dist 清单 date 2026-11-23 新鲜，双变量（DIST_SERVER/UPDATE_ROOT = mirrors.ustc.edu.cn/rust-static[/rustup]）前台一次装齐 nightly 1.102.0 minimal + rustfmt + clippy + llvm-tools-preview（llvm-tools-preview 随装避开 llvm-cov 首跑交互挂死陷阱；多组件逐个 `-c`）；cargo registry aliyun sparse fetch 秒级（windows_x86_64_gnu 等新包亦在列，历轮 TUNA 404 面无复现）。
+- **GitHub 代理当期实测**：ghfast.top 273KB/s > gh-proxy.com 85KB/s > 直连 17KB/s；bb v1.13.230（26.5MB）与 PMD 7.29.0 bin.zip（134MB，两段 `-C -` 断点续传 + zipfile.testzip 完整性探针）均经 ghfast.top 一次过；cargo-mutants 27.1.0 / cargo-llvm-cov 0.9.2 预编译资产名与历轮一致零漂移（**cargo-mutants 仓库归属 sourcefrog**——sourcegraph 名下 api.github.com 直接 Not Found，属查证信号非网络抖动）。
+- **工作区持久区迁移纪律落地**：clone 即迁 `/home/z/my-project/swarm-ezr2`（20261123 沙箱回收纪律：/home/z 下非持久挂载整机丢失、my-project 为持久区）——begin 后迁移无损（bin/swarm 按 BASH_SOURCE 自定位，status 复核即可），本轮全程持久区工作，归档后产物直接落 download/ 交付目录。
+- **磁盘账**：工具装机 + 基线（bin+13 套件+demo）+ llvm-cov ×2 + 全量复验 ×1 后盘余 1.9G（81%）——llvm-cov 插桩工件为主增量大头；CARGO_INCREMENTAL=0 全程维持，无爆盘处置需求。

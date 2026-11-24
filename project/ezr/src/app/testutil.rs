@@ -111,6 +111,22 @@ pub(crate) fn task_with_conns(
     t
 }
 
+pub(crate) fn bt_conn_row(id: usize, addr: &str) -> crate::app::BtConnRow {
+    crate::app::BtConnRow {
+        id,
+        addr: addr.to_string(),
+        protocol: "TCP".into(),
+        down_speed: 0.0,
+        cum_down: 0,
+        up_speed: 0.0,
+        cum_up: 0,
+        client: "QB".to_string(),
+        seeder: false,
+        flags: "-".to_string(),
+        relevance: 0.0,
+    }
+}
+
 pub(crate) fn bt_task(id: u32, state: crate::model::TaskState) -> crate::model::Task {
     let mut t = crate::model::sample_task();
     t.id = id;

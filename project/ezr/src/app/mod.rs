@@ -1155,4 +1155,126 @@ mod interaction_tests {
         assert!(app.dialog.is_some(), "对话框保持打开（规格口径）");
         app.shutdown().await;
     }
+
+    #[test]
+    fn detail_field_labels_cover_all_variants() {
+        use DetailField::{Checksum, Failed, SavePath, Url};
+        assert_eq!(Checksum.title(), "校验");
+        assert_eq!(Url.title(), "URL");
+        assert_eq!(Failed.title(), "失败");
+        assert_eq!(SavePath.title(), "路径");
+        assert_eq!(Checksum.copy_label(), "校验码");
+        assert_eq!(Url.copy_label(), "url");
+        assert_eq!(Failed.copy_label(), "失败原因");
+        assert_eq!(SavePath.copy_label(), "保存路径");
+    }
+
+    #[tokio::test]
+    async fn open_val_popup_field_arms_and_guards() {
+        let mut app = make_app("valarms");
+        app.open_val_popup(DetailField::Url);
+        assert!(!app.val_open, "无任务打开值弹窗是 no-op");
+
+        let mut t = crate::app::testutil::dl_task(21, "v.bin");
+        t.error = Some("磁盘已满".to_string());
+        app.tasks.push(t);
+        app.selected = 0;
+
+        app.open_val_popup(DetailField::Failed);
+        assert!(app.val_open, "失败原因臂打开弹窗");
+        assert_eq!(app.val_text, "磁盘已满", "Failed 臂取任务错误");
+        assert_eq!(app.focus, Panel::Detail, "打开后焦点进明细面板");
+        app.close_val_popup();
+
+        let save_path = app.tasks[0].target_path();
+        app.open_val_popup(DetailField::SavePath);
+        assert!(app.val_open, "保存路径臂打开弹窗");
+        assert_eq!(app.val_text, save_path, "SavePath 臂取目标路径");
+        app.close_val_popup();
+
+        app.open_val_popup(DetailField::Checksum);
+        assert!(!app.val_open, "无校验和任务 Checksum 臂守卫返回");
+
+        let mut ck = crate::app::testutil::dl_task(22, "c.bin");
+        ck.checksum = Some(crate::model::Checksum {
+            algo: crate::model::checksum::CHECKSUM_ALGOS[0].0,
+            value: "abcd".to_string(),
+        });
+        app.tasks.push(ck);
+        app.selected = 1;
+        app.open_val_popup(DetailField::Checksum);
+        assert!(app.val_open, "有校验和 Checksum 臂打开弹窗");
+        assert_eq!(app.val_text, "abcd", "Checksum 臂取校验值");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn run_footer_cmd_delete_modify_quit_help_arms() {
+        let mut app = make_app("footcmd");
+        app.tasks.push(crate::app::testutil::dl_task(31, "f.bin"));
+        app.selected = 0;
+
+        app.run_footer_cmd(1);
+        assert!(
+            matches!(
+                app.dialog.as_ref().map(|d| d.kind),
+                Some(DialogKind::Delete)
+            ),
+            "页脚 1 打开删除对话框"
+        );
+        app.dialog = None;
+
+        app.run_footer_cmd(2);
+        assert!(
+            matches!(
+                app.dialog.as_ref().map(|d| d.kind),
+                Some(DialogKind::Modify)
+            ),
+            "页脚 2 打开修改对话框"
+        );
+        app.dialog = None;
+
+        app.run_footer_cmd(3);
+        assert!(app.quit, "页脚 3 退出");
+
+        app.run_footer_cmd(4);
+        assert!(
+            app.help_open && app.help_scroll == 0,
+            "页脚 4 打开帮助并复位滚动"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn global_ul_speed_sums_only_uploading_tasks() {
+        let mut app = make_app("ulspeed");
+        let mut a = crate::app::testutil::dl_task(41, "a.bin");
+        a.upload_speed = 100.0;
+        let mut b = crate::app::testutil::dl_task(42, "b.bin");
+        b.upload_speed = 50.5;
+        let c = crate::app::testutil::dl_task(43, "c.bin");
+        app.tasks.extend([a, b, c]);
+        assert!(
+            (app.global_ul_speed() - 150.5).abs() < 1e-9,
+            "全局上传速度只累加上传中任务"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn app_new_surfaces_config_warnings_as_startup_toast() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-warn-toast");
+        let cfg = crate::model::config::Config {
+            warnings: vec!["未知键 foo 已忽略".to_string()],
+            ..crate::model::config::Config::default()
+        };
+        let reg = dir.join("registry.json").to_string_lossy().into_owned();
+        let mut app = App::new(cfg, reg);
+        let toast = app.toast.clone().expect("启动期配置警告应以 toast 呈现");
+        assert!(
+            toast.contains("⚠") && toast.contains("未知键 foo 已忽略"),
+            "toast 汇总配置警告: {toast}"
+        );
+        app.shutdown().await;
+    }
 }

@@ -987,3 +987,9 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 - **行尾恒空的守卫测试形态**：两条断言正交缺一不可——①内容断言：五状态（Verifying/PostProcessing/Downloading/Failed/Completed）× 携带 SHA-512 checksum 的 progress_row 输出不含「分块校验/后期处理中/SH」任何残字（直接钉住操作者报告的观测形态）；②预算断言：行 spans 显示宽度恒 = 2 + bar(width−4)（`w()` 累加求和），任何未来「往行尾再加点什么」的改动立即被预算断言击穿；③窄宽度参数化（20/24/31/40）防「只在典型宽度测过」盲区。
 - **旧断言反转而非删除**：progress_row_activity_hints（断言提示在场）改判为 progress_row_tail_always_empty（断言提示缺席）——测试名与断言同步反转保留测试点位，git 历史可溯「同一显示面的语义翻转」；全部 progress_row 调用点同步去 spinner 参数（编译器兜底找全）。
 - **变异测试随宿主代码退役**：spinner 表的变异测试（hardening_g_appcore）在宿主方法删除后必须同步退役——变异测试的生命周期绑定其宿主实现，宿主亡则测试亡；集成套件计数因此 -1（886→885）属预期位移，非回归。
+
+## 清理轮（2026-11-24，cleaner）追加
+- **bin 侧新增测试经 include! 树复制进集成套件，对账按每套件差值登记**：本轮新增 16 个 bin 侧测试（app/keys/engine/list），集成合计 8646→8768（+122）——增量 = 各套件 include 树所含新测之和（含 app/mod.rs+keys.rs+engine/mod.rs 的套件各 +14、仅含 engine 的 +2、含 list 的 ui/engine_backfill/v115/mutation 各 +16），逐套件差值精确自洽；对账不做「全局 +16」单值推断，以每套件实测差值入账。
+- **一切构造 App 的测试必须 #[tokio::test]**：App::new 内嵌引擎 main_loop 的 tokio::spawn（engine/mod.rs），同步 #[test] 下构造即 panic「there is no reactor running」——TestBackend 纯渲染断言测试同样中招（draw_list 不触引擎也无济于事），收尾统一 shutdown().await。
+- **cfg(test) re-export 的 #[allow(unused_imports)] 是 include! 集成测试服务路径，删前先查引用面**：bin 编译口径看不到 include! 树里的使用（engine::classify_reqwest 被 hardening_g_throttle_err 直接调用），删 allow 即 bin 口径报 unused——但同组其余 3 个 re-export（HostsFile/parse_retry_after_header/bucket_step 组）确属死抑制器，删除后 clippy --all-targets 0 警告裁决。判据：rg tests/ 里 include! 树对该符号的调用，有调用 = allow 必需，无调用 = 删。
+- **clippy field_reassign_with_default 在测试代码同样算数**：Config::default() 构造后字段赋值改 struct update 语法（`Config { warnings: vec![…], ..Config::default() }`），与 lint 清零纪律同口径。

@@ -731,19 +731,7 @@ mod bt_key_tests {
     }
 
     fn row(id: usize, addr: &str) -> BtConnRow {
-        BtConnRow {
-            id,
-            addr: addr.to_string(),
-            protocol: "TCP".into(),
-            down_speed: 0.0,
-            cum_down: 0,
-            up_speed: 0.0,
-            cum_up: 0,
-            client: "QB".to_string(),
-            seeder: false,
-            flags: "-".to_string(),
-            relevance: 0.0,
-        }
+        crate::app::testutil::bt_conn_row(id, addr)
     }
 
     #[tokio::test]
@@ -946,6 +934,205 @@ mod reload_key_tests {
         assert_eq!(app.tasks[0].state, TaskState::Queued, "裸 R 仍走重试语义");
         press_ctrl_r(&mut app);
         assert!(app.toast.is_some(), "Ctrl 修饰键才进热加载");
+        app.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+mod overlay_key_nav_tests {
+    use super::*;
+    use crate::app::testutil::{bt_task, dl_task};
+    use crate::app::DetailField;
+    use crate::model::TaskState;
+
+    fn make_app(tag: &str) -> App {
+        crate::app::testutil::make_app_in("ezr-okey", tag)
+    }
+
+    fn row(id: usize, addr: &str) -> crate::app::BtConnRow {
+        crate::app::testutil::bt_conn_row(id, addr)
+    }
+
+    #[tokio::test]
+    async fn val_popup_scroll_copy_and_close_keys() {
+        let mut app = make_app("valnav");
+        app.tasks.push(dl_task(1, "v.bin"));
+        app.selected = 0;
+        app.open_val_popup(DetailField::Url);
+        assert!(app.val_open, "前置：值弹窗打开");
+        app.val_max_scroll = 40;
+
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.val_scroll, 2, "↓ 逐行下滚");
+        app.on_key(KeyCode::PageDown, KeyModifiers::NONE);
+        assert_eq!(app.val_scroll, 10, "PgDn 按页 8 行");
+        app.on_key(KeyCode::PageUp, KeyModifiers::NONE);
+        assert_eq!(app.val_scroll, 2, "PgUp 按页 8 行");
+        app.on_key(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.val_scroll, 1, "↑ 逐行上滚");
+        app.on_key(KeyCode::Up, KeyModifiers::NONE);
+        app.on_key(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.val_scroll, 0, "↑ 顶部钳制");
+        app.on_key(KeyCode::End, KeyModifiers::NONE);
+        assert_eq!(app.val_scroll, 40, "End 钳制到滚动上限");
+        app.on_key(KeyCode::Home, KeyModifiers::NONE);
+        assert_eq!(app.val_scroll, 0, "Home 回首页");
+
+        app.on_key(KeyCode::Char('y'), KeyModifiers::NONE);
+        assert_eq!(
+            app.last_copied.as_deref(),
+            Some(app.tasks[0].url.as_str()),
+            "y 复制弹窗值"
+        );
+        assert!(
+            app.toast.as_deref().unwrap_or_default().contains("已复制"),
+            "y 弹出已复制 toast，toast={:?}",
+            app.toast
+        );
+        assert!(app.val_open, "y 不关闭弹窗");
+
+        app.on_key(KeyCode::Char('q'), KeyModifiers::NONE);
+        assert!(!app.val_open, "q 关闭弹窗");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn val_popup_q_y_uppercase_and_esc_close() {
+        let mut app = make_app("valclose");
+        app.tasks.push(dl_task(2, "v2.bin"));
+        app.selected = 0;
+        app.open_val_popup(DetailField::Url);
+        app.on_key(KeyCode::Char('Y'), KeyModifiers::NONE);
+        assert!(app.val_open, "Y 复制不关闭");
+        assert!(app.last_copied.is_some(), "Y 同样复制");
+        app.on_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(!app.val_open, "Esc 关闭弹窗");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn err_window_only_close_keys_reach_handler() {
+        let mut app = make_app("errnav");
+        app.open_error_window("boom");
+        app.on_key(KeyCode::Char('x'), KeyModifiers::NONE);
+        assert!(app.err_open, "非关闭键不动作");
+        app.on_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(!app.err_open, "Esc 经 on_err_key 关闭");
+        app.open_error_window("boom2");
+        app.on_key(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(!app.err_open, "Enter 关闭");
+        app.open_error_window("boom3");
+        app.on_key(KeyCode::Char('q'), KeyModifiers::NONE);
+        assert!(!app.err_open, "q 关闭");
+        app.open_error_window("boom4");
+        app.on_key(KeyCode::Char('Q'), KeyModifiers::NONE);
+        assert!(!app.err_open && !app.quit, "Q 关闭不退出");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn trackers_popup_scroll_and_close_keys() {
+        let mut app = make_app("trknav");
+        app.tasks.push(bt_task(3, TaskState::Downloading));
+        app.selected = 0;
+        app.trackers_max_scroll = 30;
+
+        app.on_key(KeyCode::Char('t'), KeyModifiers::NONE);
+        assert!(app.trackers_open, "t 打开 tracker 弹窗");
+
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.trackers_scroll, 2, "↓ 逐行下滚");
+        app.on_key(KeyCode::PageDown, KeyModifiers::NONE);
+        assert_eq!(app.trackers_scroll, 10, "PgDn 按页 8 行");
+        app.on_key(KeyCode::PageUp, KeyModifiers::NONE);
+        assert_eq!(app.trackers_scroll, 2, "PgUp 按页 8 行");
+        app.on_key(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.trackers_scroll, 1, "↑ 逐行上滚");
+        app.on_key(KeyCode::End, KeyModifiers::NONE);
+        assert_eq!(app.trackers_scroll, usize::MAX, "End 交给渲染层钳制");
+        app.on_key(KeyCode::Home, KeyModifiers::NONE);
+        assert_eq!(app.trackers_scroll, 0, "Home 回首页");
+
+        app.on_key(KeyCode::Char('t'), KeyModifiers::NONE);
+        assert!(!app.trackers_open, "t 关闭弹窗");
+        app.on_key(KeyCode::Char('t'), KeyModifiers::NONE);
+        app.on_key(KeyCode::Char('T'), KeyModifiers::NONE);
+        assert!(!app.trackers_open, "T 关闭弹窗");
+        app.on_key(KeyCode::Char('t'), KeyModifiers::NONE);
+        app.on_key(KeyCode::Char('q'), KeyModifiers::NONE);
+        assert!(!app.trackers_open && !app.quit, "q 关闭不退出");
+        app.on_key(KeyCode::Char('t'), KeyModifiers::NONE);
+        app.on_key(KeyCode::Char('Q'), KeyModifiers::NONE);
+        assert!(!app.trackers_open && !app.quit, "Q 关闭不退出");
+        app.on_key(KeyCode::Char('t'), KeyModifiers::NONE);
+        app.on_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(!app.trackers_open, "Esc 关闭不退出");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn conns_panel_navigate_page_home_end_and_hscroll() {
+        let mut app = make_app("connav");
+        app.tasks.push(bt_task(4, TaskState::Downloading));
+        app.selected = 0;
+        app.bt_conns.insert(
+            4,
+            vec![
+                row(1, "1.1.1.1:51000"),
+                row(2, "2.2.2.2:51001"),
+                row(3, "3.3.3.3:51002"),
+            ],
+        );
+        app.focus = Panel::Conns;
+        app.conns_max_hscroll = 20;
+
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.conns_sel, 1, "↓ 并发明细下移");
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.conns_sel, 2, "↓ 末行钳制");
+        app.on_key(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.conns_sel, 1, "↑ 上移");
+        app.on_key(KeyCode::PageDown, KeyModifiers::NONE);
+        assert_eq!(app.conns_sel, 2, "PgDn 页移并钳制末行");
+        app.on_key(KeyCode::PageUp, KeyModifiers::NONE);
+        assert_eq!(app.conns_sel, 0, "PgUp 页移钳制首行");
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        app.on_key(KeyCode::End, KeyModifiers::NONE);
+        assert_eq!(app.conns_sel, 2, "End 跳末行");
+        app.on_key(KeyCode::Home, KeyModifiers::NONE);
+        assert_eq!(app.conns_sel, 0, "Home 跳首行");
+
+        app.on_key(KeyCode::Right, KeyModifiers::NONE);
+        assert!(app.conns_hscroll > 0, "右滚水平滚动条");
+        let before = app.conns_hscroll;
+        app.on_key(KeyCode::Left, KeyModifiers::NONE);
+        assert!(app.conns_hscroll < before, "左滚水平滚动条");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn detail_focus_up_down_are_noops() {
+        let mut app = make_app("detaillno");
+        app.tasks.push(dl_task(5, "d.bin"));
+        app.selected = 0;
+        app.focus = Panel::Detail;
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        app.on_key(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.focus, Panel::Detail, "焦点不动");
+        assert_eq!(app.selected, 0, "选择不动");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn ctrl_j_in_cmd_window_confirms_and_closes_empty_window() {
+        let mut app = make_app("ctrlj");
+        app.open_cmd_window();
+        app.on_key(KeyCode::Char('j'), KeyModifiers::CONTROL);
+        assert!(!app.cmd_open, "空输入 Ctrl+J 确认即关闭命令窗口");
+        assert!(!app.quit, "确认不退出");
         app.shutdown().await;
     }
 }

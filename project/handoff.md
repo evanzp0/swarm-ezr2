@@ -1,78 +1,78 @@
 # 交接（handoff）
 
-> 流程：six-pack　当前节点：six-pack/coder（Ctrl+R 配置热加载产品端实现轮 + 进度条行尾溢出 bug 修复轮）
-> 路径：…six-pack/specifier 修订轮 reload-toast-unify（上轮）⇒ **six-pack/coder（本轮，按 FR-01-119 v1.57 固定文案口径 + D82 引用消失落库转直连实现产品端；并同步修复操作者 bug 轮报告的进度条行尾 `SH` 溢出缺陷——ezr + ezr-demo 同构；完成后 complete 归档）**
-> 会话：six-pack-coder-20261124-reload-hotload-impl（上游交接 = 上轮 handoff；ezr 不做旧版本兼容——操作者钦定沿 v1.45，本轮纯产品端实现，无持久化格式变化）
-> 环境：rustup nightly 1.102.0（rust-toolchain.toml 钉 nightly，USTC 镜像，本轮全新沙箱装机）+ cargo registry aliyun sparse + bb v1.13.230（.tools/bin）+ APS 仓库 .tools/Acceptance-Pipeline-Specification（gherkin-parser / gherkin-ir-dry-checker 复证可用）。
-> 受限项：QA 套件 runner 可执行化与端到端 UI 层验证归 six-pack/QA 轮（coder 不实现 QA 套件，SKILL.md 边界）；其余无新增受限项。
+> 流程：six-pack　当前节点：six-pack/cleaner（reload-hotload-impl + progressbar-tail 触碰面清理轮）
+> 路径：…six-pack/coder（上轮 reload-hotload-impl + progressbar-tail）⇒ **six-pack/cleaner（本轮：触碰面覆盖率/CRAP/DRY/变异点扫描 + 保持行为清理，ezr 不做旧版本兼容沿袭，无持久化格式变化；完成后 complete 归档）**
+> 会话：six-pack-cleaner-20261124-reload-clean（上游交接 = 上轮 handoff）
+> 环境：nightly 1.102.0（rust-toolchain.toml 钉版，USTC 镜像 2026-11-23 快照，含 llvm-tools-preview）+ cargo registry aliyun sparse + bb v1.13.230（.tools/bin）+ APS 仓库 .tools/Acceptance-Pipeline-Specification（含等价扩展 patch；parser/dry-checker 复证 exit 0）+ cargo-mutants 27.1.0 / cargo-llvm-cov 0.9.2（~/.local/bin 预编译）+ PMD 7.29.0（.tools/pmd，java 21）。工作区已迁持久区 /home/z/my-project/swarm-ezr2（bin/swarm 会话无损，沙箱回收只重装环境不重做工作）。
+> 受限项：bb test 11 测 0F/3E——3 个 error 全在 gherkin-mutator worker 测试面（mutation_test.clj），parser/dry-checker 与本轮全部验证不受影响；mutator 非 cleaner 范围，交 QA/hardender 轮按需归因。其余无新增受限项。
 
 ## 一、产物历史完成情况
 
 ### 项目与需求
 - ezr：Rust TUI 下载器（HTTP + BT 双协议）。需求权威来源 = `mission.md`（分期模式，**v1.61**）；phase-01/02 为现行详述（03/04 计划登记稿）。
-- ezr-demo：仓库内独立子项目（演示口径与产品行为有意不同）；上轮已四面同步（v1.57 演示 toast）；**本轮随操作者 bug 轮指令同步同构修复（v1.62 同步补记 + README 变更记录 44，进度条行尾恒空）**。
+- ezr-demo：仓库内独立子项目（演示口径与产品行为有意不同）；上轮已同构修复（v1.62）；本轮同步其 rustfmt 存量漂移销项（12 处换行风格，nightly fmt 后 check 转绿）。
 
 ### 产物总账
 | 节点 | 产物 | 完成情况 | 验证状态 |
 |---|---|---|---|
 | （历轮）phase-01/02 全功能实现与加固 | features 01–12 + qa 规程 20 份 + runners + APS 四件套 | 已交付（沿上轮账） | 历轮全绿（上轮账口径） |
-| specifier 修订轮 reload-toast-unify（20261124，v1.61/v1.57） | mission v1.61 + phase-01 v1.57 + features/12-reload-config.feature v1.57（14 场景）+ qa/12-reload-config-qa.md v1.57 + ezr-demo 四面同步 | 已交付 | APS parser exit 0 + dry-checker exit 0 + rg 残留核验 + demo cargo test 61P/0F |
-| **coder 实现轮 reload-hotload-impl（20261124，本轮）** | 产品端 Ctrl+R 配置热加载（FR-01-119 全量）：src/app/reload.rs（新增）+ engine Cmd::ApplyGlobals + EngineShared burst/sleep 原子化 + keys.rs CONTROL 分支 + App.cli_max_speed_override + main.rs CLI 覆盖登记 + ui/help.rs Ctrl+R 条目（帮助 83 行）+ 单测 20 新增 | 已交付 | bin 1119P/0F + 集成 13 套件 8646P/0F + fmt/clippy 零警告 + APS parser/dry-checker exit 0（IR 14 场景） |
-| **coder bug 修复轮 progressbar-tail（20261124，本轮追加）** | 操作者 bug 轮报告「HTTP 任务 SHA-512 校验失败，进度条末尾出现 `SH`」修复：行尾提示臂整臂退役、行尾恒空（ezr task_lines/list/app + demo list/app/docs/README 五面同步 + spinner 链路退役 + 守卫测试 2 新增） | 已交付 | ezr bin 1119P/0F + 集成 8646P/0F + demo 61P/0F + 两项目 fmt/clippy 零警告 |
+| coder 实现轮 reload-hotload-impl + bug 轮 progressbar-tail（20261124，上轮） | Ctrl+R 热加载全链路（reload.rs 新增 + engine ApplyGlobals + keys/mod/main/help）+ 进度条行尾恒空修复（task_lines/list/app + demo 五面）+ 单测 20 新增 | 已交付 | 上轮账：bin 1119P/0F + 集成 8646P/0F + demo 61P/0F + fmt/clippy 零警告 + APS exit 0 |
+| **cleaner 清理轮（20261124，本轮）** | 触碰面覆盖率/CRAP/DRY/变异点扫描 + 纯追加 16 测 + reload 测试夹具提取 4 助手 + testutil::bt_conn_row 共享 + 3 处死抑制器删除 + demo 树 fmt 漂移销项 | 已交付 | bin 1135P/0F + 集成 13 套件 8768P/0F + demo 61P/0F + fmt/clippy 双项目零警告 + APS 42/42 |
 
 ### 遗留受限项（当前有效）
-- 上轮验证面受限项全部沿袭有效（workers.rs 错误臂保留、bin 口径 cov=0 五处、2 条 unviable、bt/mod.rs pub mod 面、CPD 残留、CRAP nightly 口径漂移，详见历轮归档与 `qa/mutation-gap-registry.json`）。
-- **QA-RC-01–14 的端到端 UI 层验证（按键注入 + 画面断言 + fixture 日志对账）与 suite runner 可执行化未执行**——归 six-pack/QA 轮职责；本轮以单元/集成/引擎级测试覆盖行为契约（reload 16 测 + keys 路由 3 测 + ApplyGlobals 1 测 + 全量回归），场景级真机判据（代理 fixture 来源日志、tracker announce 端口、PTY toast 捕获）待 QA 轮。
+- **变异点 >100 登记移交（rust.md 口径）**：keys.rs=155、app/mod.rs=147（交互层分发/胶水文件）——拆分依赖 architect 模块边界裁决，登记 handoff 移交 hardender 全量变异前先收边界；触碰面其余：engine/mod.rs=63、task_lines.rs=73、main.rs=38、list.rs=22、reload.rs=17、help.rs=7（全仓 6301）。
+- **CRAP 残余口径**：keys.rs:7 分发器 cov=0.946 / CRAP=33.18（comp=33 的口径下限=comp，再压需拆分）；main.rs 适配器外壳（进程/TTY 绑定，历轮登记不硬凑）；全仓 ACTIONABLE 99 项（bt/* 等遗留面沿历轮受限项，非本轮批次）。行覆盖 95.0%（bin 口径）。
+- **CPD 残留沿袭**：全仓 222 组（min-tokens 70；bt/engine/mod.rs 362 处等）——历轮登记残留，本轮触碰面（reload.rs/keys.rs）已清零。
+- 历轮验证面受限项沿袭有效（workers.rs 错误臂保留、2 条 unviable、bt/mod.rs pub mod 面、CRAP nightly 口径漂移，详见历轮归档与 `qa/mutation-gap-registry.json`）。
+- QA-RC-01–14 的端到端 UI 层验证与 suite runner 可执行化归 six-pack/QA 轮（沿袭）。
 - chat 选择题面板不可用（IM 通道）沿袭——本轮无决策闸门，不受影响。
-- ezr-demo 树 rustfmt 存量漂移沿袭（demo 轮遗留）；`bin/ezr-tui-demo` 预编译二进制不属 git 树，本轮免重建。
 
 ### 实现定义值登记
-- **D81①–⑤ / D82①–③（v1.57 落定版）全部按规格实现**：固定文案 toast `✓ 配置已重新加载`（常量 TOAST_RELOADED 单点）；失败 toast `⚠ 配置热加载失败：<明细>`（try_load 逐键文案，\n→；单行化）；无配置文件臂 toast「无配置文件」；缺失文件臂 = 默认配置整体热加载且不重生成模板；引用消失（删除/改名统一）= Task.proxy 改写 Direct + save_registry 落库 + 双对话框下拉重建（已选名仍在池保持、消失回退直连）+ 运行任务端点比较发重配命令。
-- **新增实现定义（规格「有变化才发命令」的判定口径）**：运行端点 = 当前 cfg.resolve_proxy(task.proxy)（三入口同源不变式，无独立记录状态）；比较 = old_cfg.resolve(旧 choice) vs new_cfg.resolve(新 choice) 的 ProxyEndpoint 全等（url/kind/username/password 四元组）；运行态判定 = Downloading | Seeding（与 shows_conns 同源）；重配命令 = Reconfigure/ReconfigureBt 仅换端点，concurrency/files/限速/sequential 原值不变。
-- **新增实现定义（ApplyGlobals 命令面）**：engine 新增 `Cmd::ApplyGlobals { max_download_speed, max_upload_speed, throttle_burst_secs, throttle_sleep_ms }`——限速 set_rate 即时重定目标（A 类）+ burst/sleep AtomicU64 位存储原子更新（C 类新启动任务生效、运行中桶参数不触）；单命令原子下发避免半新半旧窗。
-- **新增实现定义（CLI 覆盖登记）**：App 新增 `cli_max_speed_override: Option<u64>` + `set_cli_max_speed_override()`（main.rs 在 App::new 后登记）；每次热加载重应用，CLI > config 文件优先级贯穿运行期。
-- **新增实现定义（bug 轮：进度条行尾恒空）**：进度条行 = 2 列前导 + bar(width−4)，**行尾恒无任何内容**（全状态同口径）——校验中/后期处理中行尾提示臂（`<算法> 分块校验 ⠋`/`后期处理中 ⠋`）整臂退役；根因 = 提示与行宽预算不符溢出恰露 2 列（SHA-512 → `SH`）；校验/后期状态由行 1 `[校验中]`/`[后期处理中]` 状态徽标承载；braille 转轮显示面（App.spinner()/SPINNER/task_lines spinner 参数）随之整体退役；走马灯滑块（anim 驱动）不受影响；守卫测试 progress_row_tail_always_empty（五状态 × SHA-512）+ progress_row_tail_empty_at_narrow_width（窄宽度行宽恒等）。
+- **D81①–⑤ / D82①–③（v1.57 落定版）**：固定文案 toast `✓ 配置已重新加载`（常量 TOAST_RELOADED 单点）；失败 toast `⚠ 配置热加载失败：<明细>`（try_load 逐键文案，\n→；单行化）；无配置文件臂 toast「无配置文件」；缺失文件臂 = 默认配置整体热加载且不重生成模板；引用消失（删除/改名统一）= Task.proxy 改写 Direct + save_registry 落库 + 双对话框下拉重建 + 运行任务端点比较发重配命令。
+- **运行端点判定口径**：运行端点 = 当前 cfg.resolve_proxy(task.proxy)（三入口同源不变式，无独立记录状态）；比较 = old_cfg.resolve(旧 choice) vs new_cfg.resolve(新 choice) 的 ProxyEndpoint 全等（url/kind/username/password 四元组）；运行态判定 = Downloading | Seeding；重配命令 = Reconfigure/ReconfigureBt 仅换端点，原值不变。
+- **ApplyGlobals 命令面**：engine `Cmd::ApplyGlobals { max_download_speed, max_upload_speed, throttle_burst_secs, throttle_sleep_ms }`——限速 set_rate 即时重定目标 + burst/sleep AtomicU64 原子更新；单命令原子下发。
+- **CLI 覆盖登记**：App.cli_max_speed_override + set_cli_max_speed_override()（main.rs 登记）；每次热加载重应用，CLI > config 文件优先级贯穿运行期。
+- **进度条行尾恒空**：行 = 2 列前导 + bar(width−4)，行尾恒无内容（全状态同口径）；校验/后期状态由行 1 状态徽标承载；braille 转轮显示面整体退役。
 
 ## 二、当前产出情况
 
-### 本会话产物清单（coder 实现轮 reload-hotload-impl + bug 修复轮 progressbar-tail）
-1. **`project/ezr/src/app/reload.rs`（新增）**：App::reload_config（Ctrl+R 入口 glue）+ reload_config_from（路径缺失臂 / try_load 失败臂单行化 / apply_reloaded 成功臂：CLI 覆盖重应用 → max_slots → 引用消失落库转直连 → 运行任务端点比较重配 → 下拉重建三步序 → ApplyGlobals 下发 → 固定文案 toast）+ 16 个单测（全臂覆盖 + 引擎 spy 命令序断言）。
-2. **`project/ezr/src/engine/mod.rs`**：Cmd::ApplyGlobals 新增 + handle_cmd 臂（set_rate × 2 + set_throttle_params）+ EngineShared.throttle_burst_secs/throttle_sleep_ms 改 AtomicU64（f64::to_bits）+ getter/setter + 4 处构造点同步（start/for_test/shared_for_tests/supervisor test_shared）+ ApplyGlobals 引擎级测试。
-3. **`project/ezr/src/app/keys.rs`**：CONTROL 分支 Ctrl+R（先于浮层分派，与 Ctrl+C 同级）+ 3 个路由测试（主界面与七类浮层可达且不关闭、命令窗口幂等、裸 R 语义不受扰）。
-4. **`project/ezr/src/app/mod.rs`**：App.cli_max_speed_override 字段 + set_cli_max_speed_override 方法 + `mod reload;` 注册。
-5. **`project/ezr/src/main.rs`**：CLI --max-speed 从 App::new 前改 cfg 迁到 App::new 后 set_cli_max_speed_override（登记 + 应用一体）。
-6. **`project/ezr/src/ui/help.rs`**：全局节新增 `Ctrl+R 重新加载配置文件（热加载，无需重启）` 条目（帮助 82→83 行）；两处行数守卫测试同步（End 钳制 62→63、总行数 82→83）。
-7. **notes 沉淀**：architecture.md（运行端点不变式免新增状态 / ApplyGlobals 原子下发 / 下拉重建三步序 / CLI 覆盖登记点 / CONTROL 分支锚 / reload 臂序）+ testing.md（reload_config_from 注入口避 env 竞态 / spy 命令序断言 / 帮助双守卫面 / pretty JSON 断言形态 / 网关取消进程存活采信）+ environment.md（USTC/aliyun/ghfast.top 镜像复测 + 套件节奏）+ INDEX.md 追加段。
-8. **bug 修复轮（progressbar-tail，ezr）**：`src/ui/task_lines.rs` progress_row 尾臂删除 + spinner 参数退役 + 行尾恒空注释 + 守卫测试 2 新增（五状态 × SHA-512 全算法名 + 窄宽度行宽恒等）+ 原 progress_row_activity_hints 改判；`src/ui/list.rs` render_task/draw_list spinner 链退役；`src/app/mod.rs` SPINNER 常量与 App::spinner() 删除；`tests/hardening_g_appcore.rs` spinner 变异测试随代码退役。
-9. **bug 修复轮（progressbar-tail，ezr-demo 同构）**：`src/ui/list.rs` task_lines 尾臂删除 + spinner 退役 + `src/app/mod.rs` SPINNER/spinner() 删除 + `src/ui/mod.rs` 测试调用点 6 处同步 + docs 设计规范 v1.62 同步补记/§4.4 动画条目退役注记/§5.2 行 2 规格改判 + README 变更记录 44。
+### 本会话产物清单（cleaner 清理轮）
+1. **纯追加测试 16 个（bin 侧，1119→1135）**：
+   - `src/app/keys.rs` +7（overlay_key_nav_tests）：val 弹窗全键位（滚动/复制/关闭）、err 窗口键路由、trackers 弹窗全键位、Conns 面板导航（方向/翻页/Home/End/水平滚动）、Detail 焦点 no-op、Ctrl+J 命令窗口确认；
+   - `src/app/mod.rs` +5：DetailField 四变体标签、open_val_popup 各字段臂与守卫、run_footer_cmd 四臂、global_ul_speed 求和口径、启动期配置警告 toast；
+   - `src/engine/mod.rs` +2（client_for_tests）：client_for 指纹缓存/直连回退、proxy_fingerprint 区分度；
+   - `src/ui/list.rs` +2（draw_list_tests）：区域过小提示臂、selected 越界钳制臂（TestBackend）。
+2. **DRY 提取（测试侧，行为不变）**：`src/app/reload.rs` 测试夹具 4 助手（cfg_app/assign_named_p1/seed_named_dl/spy_engine，8 处测试改写）；`src/app/testutil.rs` 新增 bt_conn_row，keys.rs 两模块 row() 改委托——触碰面克隆组 7→0（PMD CPD 7.29.0，min-tokens 70）。
+3. **死抑制器证据化清理**：`src/engine/mod.rs` cfg(test) re-export 组 4 处 allow(unused_imports) 裁决——classify_reqwest 为 include! 集成测试服务路径保留 allow，其余 3 处（HostsFile/parse_retry_after_header/throttle 组）删除后 clippy 0 警告验证。
+4. **ezr-demo 树 fmt 存量漂移销项**：12 处换行风格（conns/dialogs/list/mod），nightly fmt 后 fmt --check 转绿（受限项销项）。
+5. **notes 沉淀**：testing.md（include! 树复制对账口径 / App 构造必须 tokio::test / cfg(test) re-export allow 判据 / field_reassign_with_default）+ environment.md（USTC 整链路 + aliyun sparse + ghfast.top + sourcefrog 归属 + 持久区迁移纪律）+ INDEX.md 两行摘要同步。
 
 ### 验证证据
-| 验证项 | 结果 | 命令（可复现，cwd = /home/z/swarm-ezr2/project/ezr） |
+| 验证项 | 结果 | 命令（可复现，cwd = /home/z/my-project/swarm-ezr2/project/ezr） |
 |---|---|---|
-| reload 单测 | 16P/0F | `cargo test --bin ezr reload_tests` |
-| keys 路由测试 | 3P/0F | `cargo test --bin ezr reload_key` |
-| 引擎 ApplyGlobals | 1P/0F | `cargo test --bin ezr apply_globals` |
-| 行尾恒空守卫（bug 轮新增） | 2P/0F | `cargo test --bin ezr progress_row_tail` |
-| bin 全量（含属性 90P） | 1119P/0F（195s） | `cargo test --bin ezr` |
-| demo 全量 | 61P/0F | `cargo test`（cwd = /home/z/swarm-ezr2/ezr-demo） |
-| 集成套件 | 13 套件 8646P/0F：g_appcore 885 / g_slots 254 / g_proxy 16 / g_engine 882 / g_supervisor 855 / g_throttle_err 547 / g_main 2 / g_v147 869 / hardening 262 / engine_backfill 1003 / ui_backfill 1033 / v115 1026 / mutation 1012 | `cargo test --test <名>`（串行前台，日志 .work/tmp/*.log） |
-| fmt / clippy | 两项目 fmt --check 干净（ezr）；clippy --all-targets 零警告（demo 树存里 nightly-fmt 漂移沿袭、clippy 零警告） | `cargo fmt --check` / `cargo clippy --all-targets` |
-| APS parser | exit 0，IR 14 场景/122 步齐序 | `(cd ../../.tools/Acceptance-Pipeline-Specification && ../bin/bb gherkin-parser ../../project/features/12-reload-config.feature /tmp/aps/12-reload-config.json)` |
-| APS dry-checker | exit 0 | `(cd ../../.tools/Acceptance-Pipeline-Specification && ../bin/bb gherkin-ir-dry-checker /tmp/aps/12-reload-config.json /tmp/aps/12-reload-config-dry.json)` |
+| bin 全量（含属性 90P） | 1135P/0F（196s） | `cargo test --bin ezr` |
+| 集成套件 | 13 套件 8768P/0F：g_appcore 899 / g_slots 254 / g_proxy 16 / g_engine 896 / g_supervisor 869 / g_throttle_err 549 / g_main 2 / g_v147 883 / hardening 262 / engine_backfill 1019 / ui_backfill 1049 / v115 1042 / mutation 1028 | `cargo test --test <名>`（串行前台，日志 /tmp/f-*.log） |
+| demo 全量 | 61P/0F | `cargo test`（cwd = /home/z/my-project/swarm-ezr2/ezr-demo） |
+| fmt / clippy | 双项目 fmt --check 干净 + clippy --all-targets 零警告 | `cargo fmt --check` / `cargo clippy --all-targets` |
+| 覆盖率（bin 口径） | 行覆盖 40812/42966 = 95.0%（基线 94.7%）；reload.rs 418/423（余=测试守卫 panic 臂+幻影括号）、help/task_lines/list 满覆盖、keys 887/913、app/mod 772/783 | `cargo llvm-cov --bin ezr --lcov --output-path .work/tmp/ezr-bin2.lcov` |
+| CRAP（受限近似） | keys.rs:7 CRAP 58.40→33.18（cov 0.714→0.946）；ACTIONABLE 100→99 | `python3 ../qa/runners/crap_calc.py .work/tmp/ezr-bin2.lcov <src_root>`（两参签名，尾参 src_root 必填） |
+| DRY（PMD CPD） | 触碰面克隆组 7→0；全仓 229→222（余为历轮残留） | `.tools/pmd/pmd-bin-*/bin/pmd cpd --dir src --language rust --minimum-tokens 70 --format text`（EXIT=4=有克隆属正常） |
+| 变异点扫描 | 全仓 6301；触碰面 keys 155 / app/mod 147 / engine 63 / task_lines 73 / main 38 / list 22 / reload 17 / help 7（scan 模式未跑变异） | `cargo mutants --list` |
+| APS 结构验收 | 21 feature × parser + dry-checker = 42/42 exit 0 | `(cd .tools/Acceptance-Pipeline-Specification && ../bin/bb gherkin-parser <feature> <ir>.json && ../bin/bb gherkin-ir-dry-checker <ir>.json <out>.dry.json)` |
 
 ### 对账口径
-- **改动面（实现轮）**：产品端 ezr 六文件（reload.rs 新增 + engine/mod.rs + app/keys.rs + app/mod.rs + main.rs + ui/help.rs）；测试新增 20（reload 16 + keys 3 + engine 1）；帮助守卫 2 处同步改判。
-- **改动面（bug 修复轮）**：ezr 四文件（ui/task_lines.rs + ui/list.rs + app/mod.rs + tests/hardening_g_appcore.rs——spinner 变异测试随代码退役）+ 守卫测试 2 新增/1 改判；ezr-demo 五文件（ui/list.rs + app/mod.rs + ui/mod.rs + docs 设计规范 + README 变更记录 44）；mission/、features/、qa/、runners/ 零改动（features 无行尾提示断言面，规格零改动）。
-- **测试计数**：bin 套件 1098 → 1119（实现轮 +20、bug 轮 +1 净：守卫 2 新增 − activity_hints 1 改判）；集成 13 套件全绿 8646（g_appcore 886→885：spinner 变异测试随代码退役）；demo 61 全绿。
-- **行为变化面**：①新增 Ctrl+R 热加载链路（既有快捷键语义零改动）；②**进度条行尾恒空（bug 轮）**——校验中/后期处理中行尾提示臂退役，全状态行宽恒 = 2 前导 + bar(width−4)；braille 转轮显示面随之退役（App.spinner()/SPINNER 删除）；engine 新命令 ApplyGlobals 不触既有命令面；Throttle 桶语义不变。
-- **上轮建议实现要点核对**：keys.rs CONTROL 分支 ✓ / App::reload_config ✓ / Cmd::ApplyGlobals ✓ / EngineShared burst·sleep 原子化 ✓ / help.rs 条目 ✓ / 固定文案 toast ✓ / 引用消失落库转直连 + 注册表持久化 ✓ / proxy_options/proxy_labels 重建双对话框面（含浮层内同步与已选名回退直连）✓；**Task.running_proxy 未落地**——以「运行端点 = cfg.resolve_proxy(task.proxy)」不变式等价替代（无需新增状态，实现定义值已登记，architecture.md 有裁掉理由）。
+- **bin 侧**：1119 → 1135（+16 = keys 7 + app 5 + engine 2 + list 2，纯追加，产品代码零改动）。
+- **集成侧**：8646 → 8768（+122 = 16 新测在各套件 include! 树中的复制运行，逐套件差值精确自洽：含 app+keys+engine 树的 4 套件各 +14、仅 engine 树 +2、含 list 树的 4 套件各 +16，其余 +0）。
+- **行为变化面**：零——本轮全部改动为测试追加、测试夹具提取、lint 抑制器裁决与 demo 换行风格；产品运行时行为与上轮完全一致（fmt/clippy 双清 + 全量三面复验背书）。
+- **产品源文件改动面**：engine/mod.rs 仅删 3 个 allow 属性行（代码零改动）；testutil.rs/keys.rs/reload.rs/app/mod.rs/list.rs 改动均在 #[cfg(test)] 区内。
 
 ### 待办与待批（未决项）
-- 无待批项——本轮按 FR-01-119 v1.57 既有口径实现，无新登记定义值争议；无阻塞项，验证全绿。
+- 无待批项——本轮无决策闸门，验证全绿。
+- 登记移交（非阻塞）：keys.rs/app/mod.rs 变异点 >100 与 keys.rs:7 分发器拆分，待 architect 轮收模块边界后由 hardender 兑现（rust.md 口径，不属 cleaner 职权）。
 
 ### 移交建议
-- **下一步运行 `six-pack/cleaner`**：对本轮触碰面做保持行为不变的清理、覆盖率提升、CRAP/DRY 审查与变异点扫描（coder 不做这些检查，SKILL.md 边界）；reload.rs 为新增文件，变异点扫描与 CRAP 口径按既有 nightly 流程接手。
-- 或按操作者计划直接进入 `six-pack/architect` / `six-pack/QA`（QA 轮承接 QA-RC-01–14 的端到端 UI 层验证与 suite runner 可执行化）。
-- 归档：请操作者运行 `bin/swarm complete`（产物复制 /home/z/my-project/download/ 由操作者执行）。
+- **下一步运行 `six-pack/architect`**：收 keys.rs/app/mod.rs 模块边界（变异点 155/147 拆分裁决）+ 属性测试覆盖率评审（cleaner SKILL 移交建议链口）。
+- 或按操作者计划直接进入 `six-pack/QA`（承接 QA-RC-01–14 端到端 UI 验证与 suite runner 可执行化）；如需变异加固则 architect 后运行 `six-pack/hardender`（可选节点，显式 begin）。
+- 归档：`bin/swarm complete`（产物已按操作者指令复制 /home/z/my-project/download/ 交付）。
 
-By coder.
+By cleaner.

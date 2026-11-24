@@ -774,7 +774,10 @@ mod conns_flags_tests {
         let cl = head.find("客户端").unwrap();
         let rel = head.find("相关度").unwrap();
         let p = head.find("协议").unwrap();
-        assert!(cl < rel && rel < p, "相关度列位于客户端与协议之间（v1.47）: {head:?}");
+        assert!(
+            cl < rel && rel < p,
+            "相关度列位于客户端与协议之间（v1.47）: {head:?}"
+        );
         let row = text
             .lines()
             .find(|l| l.contains("TCP"))
@@ -1023,7 +1026,9 @@ mod conns_flags_tests {
         let http = app
             .tasks
             .iter()
-            .position(|t| t.state == TaskState::Downloading && !t.protocol.is_bt() && t.size_known())
+            .position(|t| {
+                t.state == TaskState::Downloading && !t.protocol.is_bt() && t.size_known()
+            })
             .expect("演示数据含尺寸已知的下载中 HTTP(S) 任务");
         let t = &app.tasks[http];
         let total_txt = fmt_size(t.total);
@@ -1050,7 +1055,9 @@ mod conns_flags_tests {
         let unk = app
             .tasks
             .iter()
-            .position(|t| t.state == TaskState::Downloading && !t.protocol.is_bt() && !t.size_known())
+            .position(|t| {
+                t.state == TaskState::Downloading && !t.protocol.is_bt() && !t.size_known()
+            })
             .expect("演示数据含尺寸未知的下载中 HTTP 任务");
         let t = &app.tasks[unk];
         let rows = flatten(&list::task_lines(t, false, 160, 0, 0));
@@ -1087,7 +1094,11 @@ mod conns_flags_tests {
             "已失败明细行不再含尺寸对: {:?}",
             rows[2]
         );
-        assert!(rows[2].contains("重试"), "已失败明细行保留重试信息: {:?}", rows[2]);
+        assert!(
+            rows[2].contains("重试"),
+            "已失败明细行保留重试信息: {:?}",
+            rows[2]
+        );
         // 等待中：明细只剩排队/槽位提示
         let q = app
             .tasks
@@ -1226,8 +1237,7 @@ mod conns_flags_tests {
             Span::raw(" "),
             Span::raw(pad_right("TCP", 8)),
         ];
-        let proto_start =
-            18 + 1 + 4 + 1 + 12 + 1 + 12 + 1 + 10 + 1 + 10 + 1 + cw + 1 + 7 + 1;
+        let proto_start = 18 + 1 + 4 + 1 + 12 + 1 + 12 + 1 + 10 + 1 + 10 + 1 + cw + 1 + 7 + 1;
         let pos_of = |spans: &[Span<'static>], token: &str| -> Option<usize> {
             let mut acc = 0usize;
             for s in spans {
@@ -1404,55 +1414,59 @@ mod fmt_speed_binary_tests {
     }
 }
 
-    #[test]
-    fn fold_name_dots_caps_at_32_display_widths() {
-        // 32 ASCII 列恰好原样（FR-01-118/D75）
-        let exact = "a".repeat(32);
-        assert_eq!(fold_name_dots(&exact, 32), exact);
-        // 33 ASCII 列 → 前 29 列 + "..."（三个 ASCII 句点，共 32 列）
-        let long = "a".repeat(33);
-        let folded = fold_name_dots(&long, 32);
-        assert_eq!(folded, format!("{}...", "a".repeat(29)));
-        assert_eq!(w(&folded), 32);
-        // 16 个汉字 = 32 显示列，恰好不折叠
-        let cjk16 = "汉".repeat(16);
-        assert_eq!(fold_name_dots(&cjk16, 32), cjk16);
-        // 17 个汉字 = 34 列 → 折叠到 29 列内完整汉字 + "..."（不劈半）
-        let cjk17 = "汉".repeat(17);
-        let folded_cjk = fold_name_dots(&cjk17, 32);
-        assert!(folded_cjk.ends_with("..."));
-        assert!(w(&folded_cjk) <= 32, "折叠后总长恒 ≤ 32（FR-01-118 上限）");
-        assert_eq!(w(&folded_cjk), 31, "CJK 粒度边界：预算 29 列容纳 14 个完整汉字（28 列）+ 3 点 = 31 ≤ 32");
-        assert!(folded_cjk.starts_with(&"汉".repeat(14)));
-        assert!(!folded_cjk.contains('\u{FFFD}'));
-        // 预算 < 32（窄面板）继续按预算折叠
-        let folded20 = fold_name_dots(&long, 20);
-        assert_eq!(w(&folded20), 20);
-    }
+#[test]
+fn fold_name_dots_caps_at_32_display_widths() {
+    // 32 ASCII 列恰好原样（FR-01-118/D75）
+    let exact = "a".repeat(32);
+    assert_eq!(fold_name_dots(&exact, 32), exact);
+    // 33 ASCII 列 → 前 29 列 + "..."（三个 ASCII 句点，共 32 列）
+    let long = "a".repeat(33);
+    let folded = fold_name_dots(&long, 32);
+    assert_eq!(folded, format!("{}...", "a".repeat(29)));
+    assert_eq!(w(&folded), 32);
+    // 16 个汉字 = 32 显示列，恰好不折叠
+    let cjk16 = "汉".repeat(16);
+    assert_eq!(fold_name_dots(&cjk16, 32), cjk16);
+    // 17 个汉字 = 34 列 → 折叠到 29 列内完整汉字 + "..."（不劈半）
+    let cjk17 = "汉".repeat(17);
+    let folded_cjk = fold_name_dots(&cjk17, 32);
+    assert!(folded_cjk.ends_with("..."));
+    assert!(w(&folded_cjk) <= 32, "折叠后总长恒 ≤ 32（FR-01-118 上限）");
+    assert_eq!(
+        w(&folded_cjk),
+        31,
+        "CJK 粒度边界：预算 29 列容纳 14 个完整汉字（28 列）+ 3 点 = 31 ≤ 32"
+    );
+    assert!(folded_cjk.starts_with(&"汉".repeat(14)));
+    assert!(!folded_cjk.contains('\u{FFFD}'));
+    // 预算 < 32（窄面板）继续按预算折叠
+    let folded20 = fold_name_dots(&long, 20);
+    assert_eq!(w(&folded20), 20);
+}
 
-    #[test]
-    fn sp_txt_omits_parens_when_tracker_unknown() {
-        let app = App::new();
-        let bt = app
-            .tasks
-            .iter()
-            .position(|t| t.protocol.is_bt() && t.tracker_seeds.is_some())
-            .expect("演示数据含带 tracker 值的 BT 任务");
-        let t = &app.tasks[bt];
-        let x2 = t.tracker_seeds.unwrap();
-        let y2 = t.tracker_peers.unwrap();
-        let y1 = t.peers;
-        assert_eq!(
-            list::sp_txt(t),
-            format!("{}({})/{}({})", t.seeders, x2, y1, y2),
-            "y1 = 连接的非种子 peers 数（Task.peers 与产品口径一致直读，FR-02-37 v1.3/D80④）"
-        );
-        let mut t2 = t.clone();
-        t2.tracker_seeds = None;
-        t2.tracker_peers = None;
-        assert_eq!(
-            list::sp_txt(&t2),
-            format!("{}/{}", t.seeders, y1),
-            "tracker 值未知 → 括号段省略（D78②，qBt total == -1 同款）"
-        );
-    }
+#[test]
+fn sp_txt_omits_parens_when_tracker_unknown() {
+    let app = App::new();
+    let bt = app
+        .tasks
+        .iter()
+        .position(|t| t.protocol.is_bt() && t.tracker_seeds.is_some())
+        .expect("演示数据含带 tracker 值的 BT 任务");
+    let t = &app.tasks[bt];
+    let x2 = t.tracker_seeds.unwrap();
+    let y2 = t.tracker_peers.unwrap();
+    let y1 = t.peers;
+    assert_eq!(
+        list::sp_txt(t),
+        format!("{}({})/{}({})", t.seeders, x2, y1, y2),
+        "y1 = 连接的非种子 peers 数（Task.peers 与产品口径一致直读，FR-02-37 v1.3/D80④）"
+    );
+    let mut t2 = t.clone();
+    t2.tracker_seeds = None;
+    t2.tracker_peers = None;
+    assert_eq!(
+        list::sp_txt(&t2),
+        format!("{}/{}", t.seeders, y1),
+        "tracker 值未知 → 括号段省略（D78②，qBt total == -1 同款）"
+    );
+}

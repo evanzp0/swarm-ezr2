@@ -204,11 +204,7 @@ pub(crate) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().fg(DIM).bg(bg),
                 ),
                 Span::styled(" ", Style::default().bg(bg)),
-                cell(
-                    format!("{:.1}%", c.relevance * 100.0),
-                    colw[7],
-                    FG,
-                ),
+                cell(format!("{:.1}%", c.relevance * 100.0), colw[7], FG),
                 Span::styled(" ", Style::default().bg(bg)),
                 Span::styled(
                     pad_right(c.transport.label(), 8),

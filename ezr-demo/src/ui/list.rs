@@ -171,19 +171,17 @@ pub(crate) fn task_lines(
                 ));
             }
         }
-        TaskState::Completed => {
-            match (&t.checksum, t.verify_ok) {
-                (Some(ck), Some(true)) => l3.push(Span::styled(
-                    format!("{} 校验成功", ck.algo),
-                    Style::default().fg(GREEN),
-                )),
-                (Some(ck), Some(false)) => l3.push(Span::styled(
-                    format!("{} 校验失败", ck.algo),
-                    Style::default().fg(RED),
-                )),
-                _ => l3.push(Span::styled("无校验".to_string(), Style::default().fg(DIM))),
-            }
-        }
+        TaskState::Completed => match (&t.checksum, t.verify_ok) {
+            (Some(ck), Some(true)) => l3.push(Span::styled(
+                format!("{} 校验成功", ck.algo),
+                Style::default().fg(GREEN),
+            )),
+            (Some(ck), Some(false)) => l3.push(Span::styled(
+                format!("{} 校验失败", ck.algo),
+                Style::default().fg(RED),
+            )),
+            _ => l3.push(Span::styled("无校验".to_string(), Style::default().fg(DIM))),
+        },
         TaskState::Seeding => {
             l3.push(Span::styled(
                 format!("↑ {}", fmt_speed(t.upload_speed)),

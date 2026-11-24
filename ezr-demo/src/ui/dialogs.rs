@@ -546,7 +546,14 @@ fn bt_text_row(
 }
 
 /// BT 下拉行渲染（代理）：黄色值 + ▾。
-fn bt_checkbox_row(f: &mut Frame, focus: usize, idx: usize, label: &str, checked: bool, rect: Rect) {
+fn bt_checkbox_row(
+    f: &mut Frame,
+    focus: usize,
+    idx: usize,
+    label: &str,
+    checked: bool,
+    rect: Rect,
+) {
     let focused = focus == idx;
     let spans = vec![
         Span::styled(
@@ -558,7 +565,11 @@ fn bt_checkbox_row(f: &mut Frame, focus: usize, idx: usize, label: &str, checked
             if checked { "☑" } else { "☐" }.to_string(),
             Style::default()
                 .fg(if checked { GREEN } else { DIM })
-                .add_modifier(if focused { Modifier::BOLD } else { Modifier::empty() }),
+                .add_modifier(if focused {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
         ),
     ];
     f.render_widget(Paragraph::new(Line::from(spans)), rect);
@@ -857,7 +868,14 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: Dia
         field_rects[6] = Some(row_rect(fields_y + 3));
         bt_dropdown_row(f, focus, 6, "代理", &proxy_label, row_rect(fields_y + 3));
         field_rects[7] = Some(row_rect(fields_y + 4));
-        bt_checkbox_row(f, focus, 7, "按顺序下载", seq_checked, row_rect(fields_y + 4));
+        bt_checkbox_row(
+            f,
+            focus,
+            7,
+            "按顺序下载",
+            seq_checked,
+            row_rect(fields_y + 4),
+        );
     } else {
         // 任务名行（静态；顶 padding 1 行）
         let name_rect = Rect {
@@ -918,7 +936,14 @@ pub(crate) fn draw_bt_dialog(f: &mut Frame, app: &mut App, area: Rect, kind: Dia
         field_rects[4] = Some(row_rect(fields_y + 3));
         bt_dropdown_row(f, focus, 4, "代理", &proxy_label, row_rect(fields_y + 3));
         field_rects[5] = Some(row_rect(fields_y + 4));
-        bt_checkbox_row(f, focus, 5, "按顺序下载", seq_checked, row_rect(fields_y + 4));
+        bt_checkbox_row(
+            f,
+            focus,
+            5,
+            "按顺序下载",
+            seq_checked,
+            row_rect(fields_y + 4),
+        );
     }
 
     // ---------- trackers 多行输入框（可复用组件，无 wrap 模式） ----------
