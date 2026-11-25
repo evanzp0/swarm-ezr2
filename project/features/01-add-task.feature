@@ -9,7 +9,7 @@
 #   01-add-task-03 校验码含非十六进制字符确认报错（v1.32 修订：空提交拒绝臂入本场景）
 #   01-add-task-04 校验码位数与算法不符确认报错
 #   01-add-task-05 校验码必填与 NONE 臂（v1.32 重写：非 NONE 算法留空提交拒绝；NONE = 不校验；大写统一小写）
-#   01-add-task-06 并发数留空或非法回退默认 4
+#   01-add-task-06 并发数留空或非法回退默认 8（v1.51：默认 4 → 8，FR-05-05）
 #   01-add-task-07 URL 仅接受 http(s)（含无协议前缀拒绝）
 #   01-add-task-08 文件名推导优先级
 #   01-add-task-09 文件名无法推导回退 download-<时间戳>
@@ -155,17 +155,17 @@ Feature: 01-add-task 任务添加（对话框与 CLI）
     When 在校验码字段输入 "D869DB7FE62FB06D1C488A04D5E68E93" 后按 Enter 确认
     Then 任务创建成功且详情校验行显示校验码前缀 "d869db7f"（确认时统一小写）
 
-  Scenario: 01-add-task-06 并发数留空或非法回退默认 4
+  Scenario: 01-add-task-06 并发数留空或非法回退默认 8（v1.51：默认 4 → 8，FR-05-05）
     When 按 A 打开「添加任务：HTTP(S)」对话框
     And 输入合法 URL 且并发数字段输入 "<concurrency_input>"
     And 按 Enter 确认
-    Then 任务创建成功且详情显示并发数 4
+    Then 任务创建成功且详情显示并发数 8
 
     Examples:
       | concurrency_input |
       | （留空）           |
       | 0                 |
-      | 65                |
+      | 129               |
       | abc               |
 
   Scenario: 01-add-task-07 URL 仅接受 http(s)（含无协议前缀拒绝）
@@ -253,7 +253,7 @@ Feature: 01-add-task 任务添加（对话框与 CLI）
     Examples:
       | url                              | concurrency |
       | http://fixture.local/files/a.bin | 0           |
-      | http://fixture.local/files/a.bin | 65          |
+      | http://fixture.local/files/a.bin | 129         |
       | http://fixture.local/files/a.bin | abc         |
 
   Scenario: 01-add-task-15 CLI 多 URL 部分非法全部拒绝

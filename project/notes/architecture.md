@@ -876,3 +876,11 @@ ws/webrtc 轮（2026-11-09）：TrackerUrl 三族分型（Ws 变体与 Http/Udp 
 ## architect 边界收口轮（2026-11-24）追加
 - **#[path] 挂载套件对模块目录化天然免疫，但 pub(super) 可见性语义随文件位置改变**：keys.rs 目录化为 keys/{mod,overlays,conns} 后 13 个 #[path] 套件零副本同步（mod 声明按挂载文件的真实目录解析子模块）；但 clear_conn_stats/clear_bt_conn_stats 随统计段迁入 src/app/stats.rs 后，pub(super) 语义从「app/mod.rs 内 = crate 根可见」收窄为「stats.rs 内 = app 模块内可见」，tests/hardening_engine_backfill.rs 直呼即 E0624。迁移判据：移动 pub(super) 项前先 grep tests/ 直呼点；存在跨根消费时改 pub(crate)——bin 内 app 恰居 crate 根，pub(super) ≡ pub(crate)，套件内 pub(crate) 恢复原可见面（1019P 复绿实证）。同类陷阱面：所有自 app/mod.rs 迁出的 pub(super) 项（restore.rs 的 restore 同款已升 pub(super)→留在 app 子树内则无需再宽）。
 - **app 层交互胶水的职责分片实测口径（keys/mod 双 >100 变异点收口）**：以 mutants --list 按行号区间分桶取逐段精确点数再设计切面，拆分对账 = 各新文件点数之和 ≈ 原文件点数（keys 155 → 87+46+27；mod 147 → 68+59+20；全仓 6301→6306 的 +5 来自守卫链委托化的形态变化）；on_key 浮层 match 体委托为 on_*_key 子分派器与既有 on_cmd/on_err/on_dialog 家族对齐，守卫链保持字面在位（分发顺序单点可见，不做 handled-flag 改形）。
+
+**phase-05 规格轮（2026-11-25，specifier）**：引擎默认切换轮的规格 **mode-aware 钉定模式**——
+①旧行为断言不删不改语义，Given 显式钉定回退开关（config scheduler = "blocks"）保稳定序号与
+既有变异清单/runner 行集锚；②新行为独立新 feature 承载（13-http-turbo，15+2 场景）；
+③AC-1 类「默认配置端到端」用例必须跟随默认改判——默认值变更的必然连带面全链同步（默认并发
+4→8：add-task 对话框回退断言/CLI 边界 65→129/PC-03 默认口径；块模型默认：download-engine
+分块行断言钉 blocks；模板键 40→42；退避触发面：retry-backoff-02 fixture 口径）；④调度模式
+B 类快照（任务启动烘焙、sidecar 格式即引擎 D89）使 mode 断言可跨热加载稳定。

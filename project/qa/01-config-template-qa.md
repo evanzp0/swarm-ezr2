@@ -30,21 +30,27 @@
 > 不敏感去重；未知值或重复项拒绝启动）；键总数不变（40 键、191 行行集结构不变）；全文取值
 > 范围注释随 FR-02-35 fail-fast 翻转（「0 或非法值回退默认 / 越界钳制」→「拒绝启动」）；
 > QA-CT-01 整文本逐字节比对与解析等价断言随 v1.16 版钦定文本同步。
+> **v1.51 同步（phase-05 引擎提速轮 20261125，FR-05-05/12、D84/D85）**：钦定文本整体替换为
+> v1.51 版（180 行 = 174 + scheduler/min_split_kib 两键×3 行，插于 [http] 表声明行之后）；
+> QA-CT-01 判据同步：42 个键值行为活跃 TOML（v1.51：40 → 42 键）、解析值断言补
+> scheduler="dynamic"/min_split_kib=256、http_concurrency 默认 4 → 8、throttle_burst_secs
+> 默认 0.5 → 1.0、block_size_http 注记（仅 blocks 回退模式适用、下限 256 KiB）；启动行为
+> 断言同步（并发 8/动态分段默认引擎）。runner 逐字节基线与键集断言（40 → 42 键）由 QA 轮同步。
 
 ## 环境前置
 
 - fixture 服务器（默认行为断言用简单下载即可）。
 - 独立 HOME（每用例独立沙箱目录）；进程管理工具（pgrep/pkill）。
 - `chmod`（目录只读场景）；字节级文件对比（`sha256sum`/`cmp`）。
-- 模板内容契约基线（v1.13）：**操作者钦定模板文本整文本**（174 行，权威原文
-  见规格 `01-config-template.feature` 内嵌原文，QA 会话脚本化时将其落盘为基线文件供
+- 模板内容契约基线（v1.13）：**操作者钦定模板文本整文本**（180 行，权威原文
+  见规格 `01-config-template.feature` 内嵌原文，v1.51：40 → 42 键整体替换，QA 会话脚本化时将其落盘为基线文件供
   `cmp` 逐字节比对）；另备 TOML 解析器（python3 tomllib）作活跃键值解析等价断言用。
 
 ## 用例
 
 | 用例 | 场景 | 操作 | 通过判据 |
 |---|---|---|---|
-| QA-CT-01 | 01-config-template-01 | 干净 HOME 启动 ezr（无 config.toml）后退出 | `<HOME>/.ezr/config.toml` 已生成；文件内容与钦定文本**逐字节一致**（整文本 `cmp` 比对，v1.13）；**v1.13 活跃模板判据**：3 个表声明行 `[common]`/`[http]`/`[bt]` 与 40 个键值行为活跃 TOML（无 `#` 前缀，v1.14：36 → 40 键），注释行（用途/取值范围注释、3 条 `# ===== … =====` 分隔头、`# 命名代理列表（可配置多个）` 一句头、双 `# [[common.proxy]]` 示例块、**[bt.seed_exit_rule] 做种退出条件子表注释块——含子表声明行整块 `#` 注释（v1.21/FR-02-40：share_ratio_gt/seeders_count_gt/seed_duration_m 三键全注释；v1.18：share_ratio_gt 取值范围注释含「保留 1 位小数」——D79① 细化；任一键取消注释 → default_seed_duration_m 失效）**）保持 `#` 注释；`tomllib` 解析生成的 config.toml 成功且解析值 = 代码常量默认逐键一致（download_slots=5、bt_concurrency=20、http_concurrency=4、block_size_http=1048576、idle_eviction_secs=60 等全 40 键，含 global/task_max_* 四限速键与 listen_port、default_seed_duration_m（v1.21 替代 seed_duration_secs））⇒ 解析结果与文件缺失一致；proxy 表不存在（示例块未激活，D63②）；启动行为与缺失文件一致（并发 4/槽位 5/块 1 MB/重试 5/auto_retry 开/不限速/默认目录=用户下载目录） |
+| QA-CT-01 | 01-config-template-01 | 干净 HOME 启动 ezr（无 config.toml）后退出 | `<HOME>/.ezr/config.toml` 已生成；文件内容与钦定文本**逐字节一致**（整文本 `cmp` 比对，v1.13）；**v1.13 活跃模板判据**：3 个表声明行 `[common]`/`[http]`/`[bt]` 与 42 个键值行为活跃 TOML（无 `#` 前缀，v1.14：36 → 40 键；v1.51：40 → 42 键），注释行（用途/取值范围注释、3 条 `# ===== … =====` 分隔头、`# 命名代理列表（可配置多个）` 一句头、双 `# [[common.proxy]]` 示例块、**[bt.seed_exit_rule] 做种退出条件子表注释块——含子表声明行整块 `#` 注释（v1.21/FR-02-40：share_ratio_gt/seeders_count_gt/seed_duration_m 三键全注释；v1.18：share_ratio_gt 取值范围注释含「保留 1 位小数」——D79① 细化；任一键取消注释 → default_seed_duration_m 失效）**）保持 `#` 注释；`tomllib` 解析生成的 config.toml 成功且解析值 = 代码常量默认逐键一致（download_slots=5、bt_concurrency=20、http_concurrency=8（v1.51）、block_size_http=1048576、scheduler="dynamic"（v1.51）、min_split_kib=256（v1.51）、throttle_burst_secs=1.0（v1.51）、idle_eviction_secs=60 等全 42 键，含 global/task_max_* 四限速键与 listen_port、default_seed_duration_m（v1.21 替代 seed_duration_secs））⇒ 解析结果与文件缺失一致；proxy 表不存在（示例块未激活，D63②）；启动行为与缺失文件一致（并发 8（v1.51）/槽位 5/动态分段默认引擎（v1.51）/重试 5/auto_retry 开/不限速/默认目录=用户下载目录） |
 | QA-CT-02 | 01-config-template-02 | 预置 `[common]` 表 + `download_slots = 2` 的合法 config.toml → 记录字节与 mtime → 启动 ezr 添加 3 任务 | 文件字节级不变（cmp 一致）；槽位按 2 生效（队列栏「下载槽位 n/2」，第 3 个任务排队） |
 | QA-CT-03 | 01-config-template-03 | 预置损坏 config.toml（非法 TOML）→ 记录字节 → 启动 ezr（v1.13 行为翻转，FR-01-71 v1.39/D63①） | **ezr 拒绝启动**：进程以非零退出码退出、TUI 不进入；报错输出含配置文件路径与解析失败原因（含 TOML 错误位置/描述）；文件字节级不变（cmp 一致，不被重写不被模板覆盖）；将文件修复为合法 TOML 后再次启动正常进入 |
 | QA-CT-04 | 01-config-template-04 | 干净 HOME 预建 `~/.ezr` 目录并 `chmod 555` → 启动 ezr | 启动正常不报错；无 config.toml 生成（或生成失败不留半截文件）；行为全默认；退出后 `chmod 755` 清理 |

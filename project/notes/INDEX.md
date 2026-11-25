@@ -170,3 +170,8 @@
 - architecture.md — 行尾追加文本与行宽预算不符 = 定宽溢出残字缺陷（溢出量算术与 2 列残字形态）+ 「行尾恒空」改判的连带退役面五层清单（提示臂/参数链/SPINNER 常量/变异测试/demo docs 行为行）+ 状态可观测性由行 1 徽标承载（新增）
 - testing.md — 行尾恒空守卫测试三断言形态（残字内容 × 行宽预算恒等 × 窄宽度参数化）+ 旧断言反转保留测试点位 + 变异测试随宿主代码退役原则（新增）
 - handoff.md — bug 修复轮（progressbar-tail）产物总账/改动面/验证证据并入 + 实现定义值登记新增行尾恒空条（更新）
+
+## phase-05 HTTP 引擎提速规格轮（2026-11-25，specifier）追加
+- environment.md — rustup 镜像复测（stable 1.100.0、manifest url 字段判别 dist 组件路径、TUNA 10.4MB/s 胜出）+ `[h` 吞噬显示伪象扩族与负向前瞻判别口径（真缺陷存量清点与修复分界）（新增）
+- testing.md — gherkin-ir-dry-checker findings 建议性口径与基线对照判读（未改动 feature 117–215 条）+ 高置信度逐条核对纪律（新增）
+- architecture.md — 引擎默认切换轮的 mode-aware 钉定模式（旧行为 Given 钉回退开关 / 新行为独立 feature / AC-1 随默认改判 / B 类快照锚）（新增）

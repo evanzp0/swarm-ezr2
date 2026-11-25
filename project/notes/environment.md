@@ -636,3 +636,15 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - **workspace 持久区迁移复证**：clone 即迁 /home/z/my-project/swarm-ezr2 后 begin 会话无损（bin/swarm BASH_SOURCE 自定位，status 复核通过）；符号链接 /home/z/swarm-ezr2 → 持久区可作 APS manifest 钉死路径的兼容桥（feature_path 逐字一致 → 20 feature 全复用守恒）。
 
 **QA reload 轮环境重建（2026-11-25，全新沙箱）**：①镜像复测再漂移——本轮 rsproxy 21.4MB/s 独通，TUNA/USTC/SJTU/npmmirror/官方 static 全部阻断（153–312 字节异常响应）即判不可用；**DIST_SERVER 基址坑**：rustup-init 二进制在 `<镜>/rustup/dist/<三元组>/` 可下、而 channel manifest 在 `<镜>/dist/`（`/rustup/dist/channel-*.toml` 404）→ `RUSTUP_DIST_SERVER` 必须指顶层域 `https://rsproxy.cn`（NOT `/rustup` 路径），否则 `no release found for 'stable'`；UPDATE_ROOT 指 `/rustup`。②nightly 1.102.0-nightly（739adecd4 2026-11-24）minimal + rustfmt/clippy/llvm-tools-preview 一次装齐；cargo registry rsproxy sparse。③**nightly cargo 新布局**：`target/debug/` 直落产物（无 `deps/` 子目录），bin 测试二进制路径以构建日志 `Executable unittests` 行为准（`build/ezr/<hash>/out/`）；llvm-profdata/llvm-cov 仍在工具链 bin。④磁盘时序纪律实例：插桩 cov-target（1.2G）+ 集成增量缓存（incremental 3.6G）先后逼近 9.9G 盘上限（ENOSPC 链接失败假象）——CRAP 管线完成即清 cov-target，套件跑完即清 incremental，`df` 门槛 <1.5G 先清（rust.md 条款同源）。⑤PMD 7.29.0 gh-proxy.com 直链 838KB/s 一次到位（-C - 续传就绪）、unzip 到 .tools；pip 一次装齐 pyte/wcwidth/libtorrent（libtorrent 2.1.3 wheel 直装，下载慢需 420s 超时预算）。
+
+**phase-05 规格轮（2026-11-25）**：①rustup 镜像复测（stable 1.100.0 装机）：dist 组件 URL 判别
+先抓 manifest 的 url 字段再拼镜像前缀（v2 manifest 结构 = `dist/{date}/{组件}-{版本}-{target}.tar.xz`，
+无 target 子目录、date 前缀来自 manifest date 字段）；本轮 TUNA 10.4MB/s 最快（rsproxy 8.1、NJU 7.5、
+官方 13KB/s 通但慢），直链 rustup-init 二进制 + DIST_SERVER/UPDATE_ROOT 指 TUNA 前台装齐 + cargo
+registry TUNA sparse 双写 ~/.cargo/config.toml。②`[h` 形态序列显示吞噬实证扩族（bug18 `[/]` 同族）：
+rg/sed/python-repr 的 Bash 输出层均吞 `[h`（[http] 显示为 ttp] 的三处伪象），Write/Edit/MultiEdit
+入参本轮实测无损（7 文件 [http] 全量落盘正确）；磁盘真缺陷唯一判别口径 = python read_text +
+负向前瞻 `(?<!\[h)ttp\]` 计数；本轮真缺陷存量清点：历史会话遗留 features 2 处 + qa 6 处
+（persistence-qa 5 处已随本轮修订归一）+ 本轮自伤 2 处（v1.51 注记模仿显示伪象误写 ttp]，已修）；
+notes 内现存 ttp] 均为对改写形态的刻意描述（bug18 判别法条目），不修；qa/09-bt-engine-qa.md:70
+余 1 处真缺陷（`ttp] 调优键` 应为 `[http] 调优键`）登记 handoff 待办归下一 QA 轮。

@@ -1005,3 +1005,10 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 - **小盘磁盘时序（变异+插桩同轮）**：mutants 场景 INC=1 缓存把 scratch target 推到 3.3G——变异收尾先删 scratch 再进插桩段；插桩 cov-target ~1.3G 用后即删；中途爆盘先删可再生大头再跑（cp -a 项目树务必显式排除 target/，整树 cp 会把 1.6G target 拷爆盘）。
 
 **reload 套件轮（2026-11-25，QA）**：12-reload-config 可执行化十四坑沉淀——①**reload/完成 toast 单槽竞态**：BT 任务的完成 toast 会顶掉 reload toast（3s 窗），reload 断言必须锚定在无完成事件的观察窗；BT 用 `task_max_download_speed = 200000` 钉任务生命周期（bt 套件 _driver_config(rate) 同款），HTTP 用 fixture 门控拉长（seeder upload_rate_limit 实测不收敛，勿依赖）。②**长周期与块周转双约束**：reload 后「重拨直连/新端点」观察依赖块翻转会重拨（每块一次请求），1MB 块下限 `MIN_HTTP_BLOCK_SIZE` 钳制使小块方案不可行——组合公式 = 大文件（big-100m）× 中速门控（300K/s×4 连接 ≈83s 生命周期、~3.4s 块周转），20K/s×1MB 块 = 51s/块（重拨窗 30s 恒空）。③**auto_retry 两相位的失败确定性**：disconnect ≥ 残余片长时截断落在响应体末尾，请求完成与对端重置竞速、失败判定非确定（disconnect=1000000 重试轮静默完成）——两相位用块内中截 `disconnect=65536`（< 残余片长恒为网络错误，有进展重置计数不触上限）。④**修改框时序约束**：'m' 对已完成任务不开修改框（实测 20261125）——规程的修改框检查须在任务下载中打开；完成任务从「正在下载」移入「已完成」页签，选任务助手需两页签回退（harness.select_task_by_needle）。⑤**窄终端长 toast 渲染截断**：120 列页脚只呈现失败 toast 前 ~95 字符（含路径后「键 common」即断），完整键点路径判据（逐键文案）须 160 列启动（产品支持 90–190 列，其余用例仍 120×44）。⑥**BT announce 落账 ~2s**：announce 断言用带泵轮询窗（20s），不即时断言；driver peer_id = -EZ2000- 前缀、announce port 字段即 listen_port（t2 新增 started 行 + port 断言 = listen_port 启动绑定一次的持久证据）。
+
+**phase-05 规格轮（2026-11-25，specifier）**：gherkin-ir-dry-checker findings 为**建议性口径**——
+未改动 feature 基线 117–215 条（near-duplicate/possible-synonym medium 为主，09-bt-engine 117/
+12-reload-config 206/01-tui-display 215 对照实测）；判读 = 基线对照 + 高置信度
+（duplicate-in-scenario/high）逐条人工核对（本轮 01-add-task 唯一 high = 场景 05 有意重复
+「按 Enter 确认」两臂，既有非本轮引入）；bb v1.13.230 静态包 gh-proxy 直连快（GitHub 直连
+120s 超时再证）+ APS clone 直连可用，7 个涉改 feature parser/dry-check 全绿。

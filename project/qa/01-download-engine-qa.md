@@ -3,6 +3,10 @@
 > 对应规格：`project/features/01-download-engine.feature`（16 场景）。
 > 端到端 UI 层验证：TUI 可观察状态 + fixture 请求记录（fixture 属 QA 工具入口，允许）+ 磁盘产物。
 > **v1.49 锚点对齐（specifier 遗留项处理轮 20261112，QA 终验轮移交待批项②）**：QA-DE-15 判据修订——原「等待行显示『未知』」为 v1.28 期观察锚，v1.49（FR-02-38 v1.19）尾随尺寸/未知项整项退役后改「等待行不显示尺寸（尺寸未知不显示、无预取，以 fixture 请求日志为准）」，与 runner suite_download_engine.py QA-DE-15 现行断言一致。
+> **v1.51 同步（phase-05 引擎提速轮 20261125，FR-05-01~07、D83/D84）**：默认引擎改动态分段
+> 调度——QA-DE-04/05/06/07 块模型断言钉定 blocks 回退模式（config scheduler="blocks"）；
+> QA-DE-16（AC-1）随新默认改判（默认并发 8、动态分段口径 D83）；动态分段/裸 GET/抢占/
+> 原地重试等新行为由 `qa/13-http-turbo-qa.md` 承载。
 
 ## 环境前置
 
@@ -18,10 +22,10 @@
 | QA-DE-01 | 01-download-engine-01 | 添加 5MB 支持续传文件并开始 | 详情显示大小、HTTP、「支持断点续传」 |
 | QA-DE-02 | 01-download-engine-02 | 添加无 Content-Length 下载项 | 详情「不支持断点续传」；仅 1 活跃连接；最终字节完整 |
 | QA-DE-03 | 01-download-engine-03 | Range 关闭文件下到 30%→Space 暂停→Space 继续 | fixture 新请求为从头全量（无 Range）；详情「不支持断点续传」；最终完整（AC-4） |
-| QA-DE-04 | 01-download-engine-04 | 分别添加 2.5MB/1MB/512KB/10MB | 分块行 `0/3`·`0/1`·`0/1`·`0/10` · 1 MB/块 |
-| QA-DE-05 | 01-download-engine-05 | 12MB 并发 4 / 3MB 并发 8 下载 | 完成分块行 `12/12`·`3/3` · 1 MB/块；请求日志多路不同起始 Range（动态领块、乱序完成） |
-| QA-DE-06 | 01-download-engine-06 | 2MB（2 块）并发 4 | 任务级分块行 2/2 · 1 MB/块；详情无连接级明细、画面无「待命」（FR-01-81 修订二：明细表整体移除）；最终完成 |
-| QA-DE-07 | 01-download-engine-07 | 8MB 下到 40% 暂停→继续（区间日志） | 续传请求区间与已完成块零交集；最终字节完整 |
+| QA-DE-04 | 01-download-engine-04 | scheduler = "blocks"（v1.51 钉定）下分别添加 2.5MB/1MB/512KB/10MB | 分块行 `0/3`·`0/1`·`0/1`·`0/10` · 1 MB/块 |
+| QA-DE-05 | 01-download-engine-05 | scheduler = "blocks"（v1.51 钉定）下 12MB 并发 4 / 3MB 并发 8 下载 | 完成分块行 `12/12`·`3/3` · 1 MB/块；请求日志多路不同起始 Range（动态领块、乱序完成） |
+| QA-DE-06 | 01-download-engine-06 | scheduler = "blocks"（v1.51 钉定）下 2MB（2 块）并发 4 | 任务级分块行 2/2 · 1 MB/块；详情无连接级明细、画面无「待命」（FR-01-81 修订二：明细表整体移除）；最终完成 |
+| QA-DE-07 | 01-download-engine-07 | scheduler = "blocks"（v1.51 钉定）下 8MB 下到 40% 暂停→继续（区间日志） | 续传请求区间与已完成块零交集；最终字节完整 |
 | QA-DE-08 | 01-download-engine-08 | 添加 2 跳重定向 URL（请求日志开） | 经重定向完成；详情 URL 为原始 URL（v1.28/FR-01-14）；fixture 日志显示每个分块请求均从原始 URL 独立发起并跟跳转（无共享探测落点） |
 | QA-DE-09 | 01-download-engine-09 | 添加 11 跳重定向 URL | 失败「重定向次数超限」；「不自动重试」；不占槽 |
 | QA-DE-10 | 01-download-engine-10 | 添加重定向至 ftp:// 的 URL | 失败「不支持的重定向协议」；「不自动重试」 |
@@ -30,7 +34,7 @@
 | QA-DE-13 | 01-download-engine-13 | 下载 5MB（请求头记录） | 全部分块请求 `Accept-Encoding: identity` |
 | QA-DE-14 | 01-download-engine-14 | 下载中观察列表/头部/头部右侧内嵌流量图（v1.13 布局） | 三处速度每秒真实更新；完成后归零/完成态 |
 | QA-DE-15 | 01-download-engine-15 | 槽位占满时添加 5MB 观察等待行（fixture 请求日志无探测）；获槽开始后再观察详情 | 等待行不显示尺寸（尺寸未知不显示、无预取，以 fixture 请求日志为准）；获槽后详情显示 5.0 MB |
-| QA-DE-16 | 01-download-engine-16 | 默认并发 4 下载 big-100m.bin（含 .sha256） | 分块行 x/100 · 1 MB/块；活跃连接 4；乱序完成；「SHA-256 校验成功」；字节数 104857600（AC-1） |
+| QA-DE-16 | 01-download-engine-16 | 默认配置（动态分段 · 并发 8，v1.51）下载 big-100m.bin（含 .sha256） | 分块行动态分段口径（随 <已下载>/<总字节> 推进，v1.51/D83）；实际并发 ≤ 8（并发面板观察）；多连接乱序交付；「SHA-256 校验成功」；字节数 104857600（AC-1） |
 
 ## 通过准则
 

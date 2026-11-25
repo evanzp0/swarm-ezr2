@@ -37,6 +37,12 @@
 # 「目标文件」删除 = 该目录树整删（remove_dir_all）；单文件（HTTP/单文件 BT）仍为文件删除；
 # sidecar（如仍在）与任务记录删除口径不变。缺陷 = 旧实现仅 remove_file，对目录静默无效
 # （bug28②，D72 登记 handoff）。
+# v1.51 修订注（phase-05 引擎提速轮 20261125，FR-05-04/07/08、D87/D89）：默认引擎改动态分段
+# 调度后三处口径 mode-aware 化——①场景 01 sidecar 进度状态按调度模式记载（blocks = 块字段；
+# dynamic = scheduler 字段 + (start, cursor) 分段列表，格式即引擎 D89）；②场景 03 续传请求
+# 形态按模式断言（blocks 封闭区间不含已下载块区间；dynamic 开区间认领不覆盖已提交字节，
+# 磁盘不回退）；③场景 04 任务级失败触发 = 原地重试耗尽（6 次连接尝试，FR-05-04）——单次
+# 中途断连由原地重试吸收不再触发任务级失败。
 Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
 
   期号 01。依据 project/mission/phase-01.md FR-01-20~26 与 D10/D11 定案。sidecar 文件为
@@ -55,8 +61,7 @@ Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
   Scenario: 01-resume-sidecar-01 sidecar 伴随目标文件创建且内容齐全
     When 添加支持续传的文件 "<file>" 并开始下载
     Then 目标文件旁存在 sidecar 文件 "<file>.ezr"
-    And sidecar 内容涵盖：文件大小、ETag、Last-Modified、块大小、总块数、
-      各块状态（含部分下载块块内字节）、已下载字节、校验期望值（如有）与任务元信息
+    And sidecar 内容涵盖：文件大小、ETag、Last-Modified、已下载字节、校验期望值（如有）与任务元信息，并按调度模式记载进度状态（blocks 模式 = 块大小/总块数/各块状态含部分块内字节；dynamic 模式 = scheduler 字段 + (start, cursor) 分段列表，v1.51/D89）
     And sidecar 不含任何 URL 字段（原始/最终 URL 键退役，持久化 URL 仅任务注册表中的原始 URL，v1.28/FR-01-20）
 
     Examples:
@@ -77,7 +82,7 @@ Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
     Given 文件 <file_size> 支持断点续传且请求区间可被记录
     When 下载至进度 ≥ <progress> 后按 Space 暂停
     And 按 Space 继续任务
-    Then 任务从断点续传且 fixture 请求不含已下载块区间
+    Then 任务从断点续传且已提交字节零重复写入（blocks 模式：fixture 请求不含已下载块区间；dynamic 模式：续传请求从首个未提交字节开区间、认领不覆盖已提交字节，v1.51/D87）
     And 已下载块的字节保持有效（最终文件字节完整）
 
     Examples:
@@ -85,7 +90,7 @@ Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
       | 8 MB      | 40%      |
 
   Scenario: 01-resume-sidecar-04 失败重试从断点续传
-    Given fixture 在文件 "<file>" 传输至约 <progress> 时模拟断连
+    Given fixture 在文件 "<file>" 传输至约 <progress> 时持续断连至原地重试耗尽（累计 6 次连接尝试均失败方升级任务级失败，v1.51/FR-05-04）
     When 下载触发失败并等待自动重试
     Then 重试从断点续传且列表行进度不回退
     And 下载最终完成且文件字节完整
@@ -99,7 +104,7 @@ Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
     And 发送 kill -9 终止进程
     And 重新启动 ezr
     Then 任务列表完整恢复且该任务回到「等待中」按序排队
-    And 获得槽位后从断点续传（已下载块不重传）
+    And 获得槽位后从断点续传（已下载字节不重传，进度从 sidecar 声称值继续，v1.51）
     And 下载最终完成且文件字节完整
 
     Examples:

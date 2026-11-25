@@ -9,6 +9,13 @@
 #   01-config-template-03 损坏配置文件不触发重写且不阻塞启动
 #   01-config-template-04 生成失败静默跳过不阻塞启动
 #   01-config-template-05 EZR_HOME 重定位协同生成
+# v1.51 修订注（phase-05 引擎提速轮 20261125，FR-05-05/12、D84/D85）：模板 40 键 → 42 键——
+# [http] 表新增 scheduler（dynamic 动态分段 | blocks 块模型回退，默认 dynamic，大小写不敏感，
+# 其他值拒绝启动，任务启动烘焙 B 类快照）与 min_split_kib（动态切分粒度下限 KiB，默认 256，
+# 仅 dynamic 模式适用）两键（各 3 行，插于 [http] 表声明行之后）；既有键注记同步：
+# block_size_http（仅 blocks 回退模式适用；下限 1 MB → 256 KiB）、http_concurrency（默认
+# 4 → 8；范围 1–64 → 1–128）、throttle_burst_secs（默认 0.5 → 1.0）。钦定原文整体替换为
+# v1.51 版（180 行，行集结构不变、仅 [http] 表增两键三行式并改三处键值/注释行）。
 Feature: 01-config-template 配置模板自动生成
 
   期号 01。依据 project/mission/phase-01.md FR-01-85（v1.4 操作者指令）与 D17：
@@ -117,9 +124,9 @@ Feature: 01-config-template 配置模板自动生成
     Given 不存在配置文件 <config_path>
     When 启动 ezr 并正常使用
     Then 配置文件 <config_path> 已生成
-    And 3 个表声明行（[common]/[http]/[bt]）与 40 个键值行为活跃 TOML（v1.13 取消注释：无 # 前缀；v1.14：36 → 40 键；v1.17：seed_duration_secs → default_seed_duration_m 键数不变）且其余行（用途/取值范围注释、3 条分隔头注释、proxy 一句头注释、双示例块、[bt.seed_exit_rule] 做种退出条件子表注释块——含子表声明行整块 # 注释）保持 # 注释
+    And 3 个表声明行（[common]/[http]/[bt]）与 42 个键值行为活跃 TOML（v1.13 取消注释：无 # 前缀；v1.14：36 → 40 键；v1.17：seed_duration_secs → default_seed_duration_m 键数不变；v1.51：40 → 42 键，新增 scheduler/min_split_kib）且其余行（用途/取值范围注释、3 条分隔头注释、proxy 一句头注释、双示例块、[bt.seed_exit_rule] 做种退出条件子表注释块——含子表声明行整块 # 注释）保持 # 注释
     And 生成的文件可解析且解析结果与文件缺失一致（示例值 = 代码常量默认逐键一致，全部默认值生效；活跃模板不改变默认行为）
-    And 模板内容与操作者钦定文本逐字节一致（钦定原文行集内嵌于本场景下方注释块：标题行、3 组「分隔头注释 + 空行 + 表声明行（活跃）」、40 键三行式（首行注释无键名前缀、键值行活跃）、[[common.proxy]] 一句头注释 + 双示例块、空行位置与行序、EOF 单换行收尾全部一致，v1.13）
+    And 模板内容与操作者钦定文本逐字节一致（钦定原文行集内嵌于本场景下方注释块：标题行、3 组「分隔头注释 + 空行 + 表声明行（活跃）」、42 键三行式（首行注释无键名前缀、键值行活跃；v1.51：40 → 42 键）、[[common.proxy]] 一句头注释 + 双示例块、空行位置与行序、EOF 单换行收尾全部一致，v1.13）
     And 键 "<key>" 以注释形式给出默认值 "<default_line>"
     And 键 "<key>" 的注释说明含用途要点 "<purpose>" 与取值范围要点 "<range>"
 
@@ -131,15 +138,17 @@ Feature: 01-config-template 配置模板自动生成
       | global_max_upload_speed      | global_max_upload_speed = 0             | 全局上传限速（BT 上传合计）                      | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
       | task_max_download_speed      | task_max_download_speed = 0             | 新任务默认任务级下载限速                         | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
       | task_max_upload_speed        | task_max_upload_speed = 0               | 新任务默认任务级上传限速                         | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
-      | block_size_http              | block_size_http = 1048576               | HTTP 分块块大小（字节）                          | 正整数（≥1）；0 或非法值拒绝启动            |
-      | http_concurrency             | http_concurrency = 4                    | 默认并发数                                       | 1–64 的整数；0 或越界拒绝启动                 |
+      | scheduler                    | scheduler = "dynamic"                   | HTTP 下载引擎调度模式（v1.51 新增）              | dynamic / blocks（大小写不敏感）；其他值拒绝启动；任务启动烘焙（B 类快照） |
+      | min_split_kib                | min_split_kib = 256                     | 动态分段调度初始切分粒度下限（KiB，v1.51 新增）  | 正整数（≥1）；0 或非法值拒绝启动；仅 dynamic 模式适用 |
+      | block_size_http              | block_size_http = 1048576               | HTTP 分块块大小（字节；仅 blocks 回退模式适用）  | 正整数（≥262144 即 256 KiB 下限）；0 或非法值拒绝启动（v1.51：下限 1 MB → 256 KiB） |
+      | http_concurrency             | http_concurrency = 8                    | 默认并发数（v1.51：默认 4 → 8）                  | 1–128 的整数；0 或越界拒绝启动（v1.51：上限 64 → 128） |
       | max_retries                  | max_retries = 5                         | 自动重试上限次数                                 | ≥1 的整数；0 或非法值拒绝启动               |
       | auto_retry                   | auto_retry = true                       | 失败后是否自动重试                               | true / false                                |
       | backoff_initial              | backoff_initial = 8.0                   | 自动重试退避初始秒                               | >0 的有限数；非法值拒绝启动                 |
       | backoff_cap                  | backoff_cap = 60.0                      | 自动重试退避封顶秒                               | >0 的有限数；非法值拒绝启动                 |
       | progress_tick_ms             | progress_tick_ms = 100                  | HTTP 下载进度事件节拍（毫秒）                    | 正整数（≥1）；0 或非法值拒绝启动            |
       | sidecar_flush_secs           | sidecar_flush_secs = 2                  | 断点 sidecar 落盘间隔（秒）                      | 正整数（≥1）；0 或非法值拒绝启动            |
-      | throttle_burst_secs          | throttle_burst_secs = 0.5               | 限速令牌桶突发窗（秒）                           | >0 的有限数；非法值拒绝启动                 |
+      | throttle_burst_secs          | throttle_burst_secs = 1.0               | 限速令牌桶突发窗（秒）                           | >0 的有限数；非法值拒绝启动                 |
       | throttle_sleep_ms            | throttle_sleep_ms = 20                  | 限速循环步进睡眠（毫秒）                         | 正整数（≥1）；0 或非法值拒绝启动            |
       | dns_race_grace_ms            | dns_race_grace_ms = 1000                | DNS 双腿竞速宽限（毫秒）                         | 正整数（≥1）；0 或非法值拒绝启动            |
       | trackers                     | trackers = []                           | BT 任务默认 tracker 池（默认池来源之一，三来源合并） | 字符串数组；元素限 http(s)/ws(s)/udp scheme（大小写不敏感）；未知 scheme 或重复项拒绝启动 |
@@ -168,8 +177,8 @@ Feature: 01-config-template 配置模板自动生成
       | listen_port                  | listen_port = 0                         | BT 监听端口（0 = 随机绑定）                      | 0 = 随机；1–65535 = 指定（占用回退随机+警告）；负/非法回退随机 |
 
   （v1.13 操作者钦定模板原文——default_template() 输出与其逐字节一致，coder 不得增删改
-  任何字符/空行；钦定原文共 174 行 = 标题行 + 3 组「分隔头注释 + 空行 + 表声明行（活跃）」+
-  40 键×3 行三行式（首行注释无键名前缀、键值行活跃）+ [[common.proxy]] 一句头注释 +
+  任何字符/空行；钦定原文共 180 行 = 标题行 + 3 组「分隔头注释 + 空行 + 表声明行（活跃）」+（v1.51：174 → 180 行，新增 scheduler/min_split_kib 两键×3 行）
+  42 键×3 行三行式（首行注释无键名前缀、键值行活跃；v1.51：40 → 42 键）+ [[common.proxy]] 一句头注释 +
   双示例块（各 7 行 = 1 表头行 + 6 字段行）+ 空行分隔（空行总数以内嵌原文实测为准），
   EOF 以一个换行符收尾。下为权威原文逐字节内嵌（空行即真实空行；示例值与代码常量
   默认逐键比对 40/40 一致，specifier v1.14；总行数 v1.14 实测见修订注）：
@@ -224,13 +233,21 @@ Feature: 01-config-template 配置模板自动生成
   
   [http]
   
-  # HTTP 分块块大小（字节）
-  # 取值范围：正整数（≥1）；0 或非法值拒绝启动（1 MB）
+  # HTTP 下载引擎调度模式（dynamic 动态分段 | blocks 块模型回退）
+  # 取值范围：dynamic / blocks（大小写不敏感）；其他值拒绝启动；任务启动时烘焙（B 类快照）
+  scheduler = "dynamic"
+  
+  # 动态分段调度初始切分粒度下限（KiB；仅 dynamic 模式适用）
+  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
+  min_split_kib = 256
+  
+  # HTTP 分块块大小（字节；仅 blocks 回退模式适用）
+  # 取值范围：正整数（≥262144 即 256 KiB 下限）；0 或非法值拒绝启动
   block_size_http = 1048576
   
   # 默认并发数
-  # 取值范围：1–64 的整数；0 或越界拒绝启动
-  http_concurrency = 4
+  # 取值范围：1–128 的整数；0 或越界拒绝启动
+  http_concurrency = 8
   
   # 自动重试上限次数（达上限转停等，可按 R 手动重试）
   # 取值范围：≥1 的整数；0 或非法值拒绝启动
@@ -258,7 +275,7 @@ Feature: 01-config-template 配置模板自动生成
   
   # 限速令牌桶突发窗（秒）
   # 取值范围：>0 的有限数；非法值拒绝启动
-  throttle_burst_secs = 0.5
+  throttle_burst_secs = 1.0
   
   # 限速循环步进睡眠（毫秒）
   # 取值范围：正整数（≥1）；0 或非法值拒绝启动

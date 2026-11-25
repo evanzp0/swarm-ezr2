@@ -31,6 +31,11 @@ Feature: 01-download-engine HTTP 下载内核（探测 · 分块 · 重定向 ·
   THEN-1「等待行大小显示『未知』」为 v1.28 期观察锚，随 v1.49（FR-02-38 v1.19）明细行
   尺寸/未知项整项退役改「等待行不显示尺寸（尺寸未知不显示、无预取，以 fixture 请求
   日志为准）」——不预取语义自始未变，仅观察载体对齐。
+  v1.51 修订（phase-05 引擎提速轮 20261125，FR-05-01~07/D83/D84）：默认引擎改动态分段调度
+  （scheduler 默认 dynamic）——块计数/块大小断言（场景 04/05/06/07）钉定 blocks 回退模式
+  （Given 显式 scheduler = "blocks"），动态分段行为由 features/13-http-turbo.feature 承载；
+  场景 16（AC-1）随新默认改判：默认并发 4→8（FR-05-05）、分块行动态分段口径（D83）。
+  probe 连接复用（探测即数据流）语义由 13-http-turbo-01 承载（FR-05-07/D87）。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
@@ -70,7 +75,8 @@ Feature: 01-download-engine HTTP 下载内核（探测 · 分块 · 重定向 ·
       | three-m.bin | 30%      |
 
   Scenario: 01-download-engine-04 分块总数按 1 MB 块计算且末块吸收余数
-    Given fixture 文件大小 <file_size>
+    Given 配置文件设 [http] 表 scheduler = "blocks"（块模型规格钉定 blocks 回退模式，v1.51）
+    And fixture 文件大小 <file_size>
     When 添加该文件并等待开始
     Then 详情分块行显示 "<expected_chunks> · 1 MB/块"
 
@@ -82,7 +88,8 @@ Feature: 01-download-engine HTTP 下载内核（探测 · 分块 · 重定向 ·
       | 10 MB     | 0/10            |
 
   Scenario: 01-download-engine-05 多连接动态领块乱序完成
-    Given fixture 文件 <file_size> 且支持 Range 请求
+    Given 配置文件设 [http] 表 scheduler = "blocks"（块模型规格钉定 blocks 回退模式，v1.51）
+    And fixture 文件 <file_size> 且支持 Range 请求
     When 以并发数 <concurrency> 添加并开始下载
     Then 分块明细表同时显示最多 <concurrency> 个连接各自持有块号
     And 各连接完成一块立即领取下一块且块完成顺序为乱序
@@ -94,13 +101,15 @@ Feature: 01-download-engine HTTP 下载内核（探测 · 分块 · 重定向 ·
       | 3 MB      | 8           | 3/3         |
 
   Scenario: 01-download-engine-06 队列临近结束多余连接转待命
-    Given fixture 文件大小 2 MB（共 2 块）
+    Given 配置文件设 [http] 表 scheduler = "blocks"（块模型规格钉定 blocks 回退模式，v1.51）
+    And fixture 文件大小 2 MB（共 2 块）
     When 以并发数 4 添加并开始下载
     Then 实际并发不超过 4 且下载完成后详情分块行显示 "2/2 · 1 MB/块"（无连接级明细——并发分块明细表已随 FR-01-81 v1.34 修订二移除）
     And 下载最终完成
 
   Scenario: 01-download-engine-07 续传不重写已下载块
-    Given fixture 文件 <file_size> 支持断点续传且请求区间可被记录
+    Given 配置文件设 [http] 表 scheduler = "blocks"（封闭区间续传断言钉定 blocks 回退模式，v1.51）
+    And fixture 文件 <file_size> 支持断点续传且请求区间可被记录
     When 下载至进度 ≥ <progress> 后按 Space 暂停
     And 按 Space 继续任务
     Then fixture 记录的续传请求仅覆盖未完成块的区间（已下载块区间零重复请求）
@@ -188,8 +197,8 @@ Feature: 01-download-engine HTTP 下载内核（探测 · 分块 · 重定向 ·
   Scenario: 01-download-engine-16 默认配置下载 100 MB 文件端到端（AC-1）
     Given fixture 文件 "big-100m.bin" 大小 100 MB（稀疏构造）且支持 Range 请求
     And 源文件的正确 SHA-256 摘要已预置为伴随文件 "big-100m.bin.sha256"
-    When 以默认并发 4 与默认块大小添加并下载该文件
-    Then 详情分块行显示 "x/100 · 1 MB/块"（x 随进度推进至 100）且实际并发不超过 4（无连接级明细——并发分块明细表已随 FR-01-81 v1.34 修订二移除，活跃连接经并发连接面板观察）
-    And 分块完成顺序为乱序
+    When 以默认配置（动态分段调度 · 默认并发 8，v1.51/FR-05-05）添加并下载该文件
+    Then 详情分块行显示动态分段口径（随 <已下载>/<总字节> 推进，v1.51/D83）且实际并发不超过 8（无连接级明细——并发分块明细表已随 FR-01-81 v1.34 修订二移除，活跃连接经并发连接面板观察）
+    And 分段交付为多连接乱序形态
     And 完成后任务转「已完成」且显示「SHA-256 校验成功」（源与目标校验值一致）
     And 目标文件字节数为 104857600

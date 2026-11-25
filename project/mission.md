@@ -1,4 +1,4 @@
-# project/mission.md — EZR Downloader（ezr download）需求大纲 (v1.61)
+# project/mission.md — EZR Downloader（ezr download）需求大纲 (v1.62)
 
 > **需求存放模式：分期模式**（宪法第一章「需求存放两模式」，操作者明确指定）。
 > 本文件只存放需求大纲：项目目标、范围、约束、验收期望与分期索引；
@@ -29,6 +29,7 @@
 > v1.59：操作者修订轮指令（specifier 规格轮 20261124「执行 six-pack/specifier, 修复需求 bug：把一个引用的 [[common.proxy]] 中定义的命名代理改名或删除，ezr中热重载 config 后，添加和修改任务时仍旧出现原有命名代理。应该是原来使用该代理的任务，自动变成直连。添加和修改任务的代理中删除该命名代理」；Inversion 阶段 1 受限退化沿 v1.45–v1.58 九轮先例——操作者指令文本即阶段 1 答案，残余微口径 3 项按源裁决登记 D82①–③ 可回退，选择题清单与受限项登记 handoff 待批，阶段 2 无遗留歧义未触发）：**FR-01-119 ⑤ 代理热切语义修订——命名代理引用消失臂（删除/改名统一）**——旧配置池中存在、新配置池中不存在的命名代理名（删除；或改名：旧名消失 + 新名出现，同属引用消失）：①引用任务自动变直连（任务级代理选择改写为直连并随注册表持久化、重启不复活旧名，D82①；原「沿用既有 missing 语义悬挂引用运行期兜底」口径退役——悬挂引用使修改对话框预填旧名（dialogs.rs open_modify 注入形态）、重加同名代理静默复挂，均违背钦定语义）；②添加与修改任务对话框代理下拉均重建 = 直连 + 新池（配置顺序），已消失旧名不再出现（浮层打开时热加载同步重建、不关浮层，已选名消失回退直连选中）；③改名新名按普通条目入池呈现，不自动迁移任务引用（引用按名字标识，D82③）；④汇总 toast 沿用 `；M 个任务引用的代理已删除，按直连` 段，M = 引用已消失名字的任务总数（全状态计，D82②）。详见 phase-01 v1.55 注记（FR-01-119 ⑤ v1.55 修订、D82）；规格 features/12-reload-config.feature（场景 06 扩面 + 场景 14 新增，14 场景）、QA 套件 qa/12-reload-config-qa.md（QA-RC-06 扩面 + QA-RC-14）。产品端实现归下一 coder 轮。
 > v1.60：操作者 D82 闸门裁定落实（specifier 闸门落实轮 20261124；v1.59 轮合成确认闸门 = **B 基本准确需局部修改**——操作者 chat 裁决「② M 口径：热加载改代理不需要单独的消息提示，统一用 reload config 的 toast 就行了；① 切换落库 和 ③ 改名臂——保持」）：**D82② 改判结案、D82①③ 追认保持**——FR-01-119 ⑤ 引用消失臂 toast 修订：v1.59 ④「汇总 toast 沿用 `；M 个任务引用的代理已删除，按直连` 段（M = 引用已消失名字的任务总数全状态计）」口径**退役**——引用消失（删除/改名）不追加专属提示段，成功反馈统一为 reload config 标准 toast `✓ 配置已热加载`（可选段仅按 D81②③⑤ 既有触发条件：代理切换 N / C 类需重启 K；D81② 可选段清单同步去 M 段）。详见 phase-01 v1.56 注记（FR-01-119 ⑤ v1.56 修订、D82② 改判）；规格 features/12-reload-config.feature v1.56（场景 06/14 toast 断言修订、场景 06 改名去「汇总提示」）、QA 套件 qa/12-reload-config-qa.md v1.56（QA-RC-06/14 判据 + 通过准则同步）。产品端实现归下一 coder 轮。
 > v1.61：操作者修订轮指令（specifier 规格轮 20261124「检查并修改下：config 中任何配置项的被改动，热加载config 后都不需要单独的生成 toast 消息，统一用一个 '配置已重新加载' 的toast 消息就可以了」；Inversion 受限退化沿 v1.45–v1.60 十轮先例——操作者指令文本即阶段 1 答案）：**FR-01-119 ③ 成功反馈改判——固定文案 toast**——config 中**任何**配置项被改动，热加载成功后 toast **恒为单条固定文案 `✓ 配置已重新加载`**、不追加任何可选段：代理切换 N 段退役（re-resolve 有变化仍发 Reconfigure/ReconfigureBt 命令，D81⑤ 命令口径不变——仅提示面收窄）、C 类「需重启生效」K 段退役（C 类键生效语义不变仍需重启，仅不再 toast 提示）、M 段沿 v1.56 已退役；失败 toast `⚠ 配置热加载失败：<明细>`（D81④）与「无配置文件」臂不变。D81② 改判（固定文案）、D81③ 退役、D81⑤ 收窄（N 仅存于发命令逻辑不入 toast）；D82② 同步（可选段引用面清零）。详见 phase-01 v1.57 注记（FR-01-119 ③ v1.57 修订、D81/D82 同步）；规格 features/12-reload-config.feature v1.57（全部成功 toast 断言改判、场景 05 去 N 段、场景 08 去 K 段并改名去「提示」字样）、QA 套件 qa/12-reload-config-qa.md v1.57（QA-RC-01–14 判据 + 通过准则同步）；ezr-demo 演示 toast 同构改 `✓ 配置已重新加载（演示）`（操作者指令直接涉及其镜像文案）。产品端实现归下一 coder 轮。
+> v1.62：操作者修订轮指令（specifier 规格轮 20261125「执行 six-pack/specifier, 实现 ezr-http-dw-tunning.md 中的 P0、P1、P2 的设计。默认 4 MB去除，直接 下限 256 KiB，其他的都根据 ezr-http-dw-tunning.md 中的方案来，原则是能提高下载速度作为判断依据」+「ezr 不需要兼容旧的版本」沿 v1.45/FR-02-35；Inversion 受限退化沿 v1.45–v1.61 先例——操作者指令文本 + ezr-http-dw-tunning.md 全文即阶段 1 答案，残余微口径 7 项按源裁决登记 D83–D89 可回退，选择题清单与受限项登记 handoff）：**HTTP 引擎提速改造（P0–P2）**——新建 phase-05（补丁层修复 + 动态分段调度器 + 磁盘流水线；P3 增益层本轮不实现）。①P0：写合并（256 KiB 聚合缓冲，syscall 降 30–50 倍，FR-05-01）+ throttle 20 ms 睡眠下限改按差额比例（限速贴住设定值，FR-05-02）+ probe 连接复用（probe 响应体即 worker #0 数据流，FR-05-03）+ MIN_HTTP_BLOCK_SIZE 1 MB→256 KiB（DEFAULT_BLOCK_SIZE_HTTP 维持 1 MB，方案中「提到 4 MB」按操作者裁决②去除）+ 失败粒度（worker 网络错误原地重试 5 次上限，仅磁盘错误/URL 失效升级任务级失败，FR-05-04）+ 默认参数（并发默认 4→8、范围 1–64→1–128 全链同步、throttle_burst_secs 0.5→1.0，FR-05-05）；②P1：动态分段调度器 planner（assign/claim/commit/release/absorb，min_split 默认 256 KiB 尾段自适应降、align 4096、preempt_after = 2×TTFB 下限 20 ms，FR-05-06）+ 启动收尾（probe 改裸 GET + absorb_next 消除启动空窗、完成判定改聚合游标，FR-05-07）+ sidecar 动态模式 O(段数) (start,cursor) 段列表（D89，FR-05-08）；③P2：writer 写流水线（256 KiB batch 合并 ≤4 MiB 定位写、HOLD_MAX 256 MiB 在途跑道、缓冲回收池，FR-05-09）+ 稀疏文件预分配（FSCTL_SET_SPARSE / ntfs3 xattr / fallocate KEEP_SIZE，失败静默回退 D88，FR-05-10）+ sidecar 保存前条件 sync_data（≥ max(1 MiB, size/16) 或 ≥30 s，FR-05-11）；④config 新增 [http] scheduler（dynamic 默认 | blocks 回退开关）与 min_split_kib（默认 256），非法拒绝启动（FR-02-35），均 B 类快照（FR-05-12/D84/D85）+ 模板 40→42 键；⑤UI 最小变化：动态模式详情分块行改 `<已下载>/<总字节> · 动态分段`（D83），并发面板列结构不变（FR-05-13）。规格 features/13-http-turbo.feature（13 场景）+ QA 套件 qa/13-http-turbo-qa.md；既有 01-download-engine/01-resume-sidecar/01-persistence-config/01-config-template/01-retry-backoff/01-add-task 六规格与 QA 文档按新默认值与新引擎语义最小同步修订。详见 mission/phase-05.md（FR-05-01–13、D83–D89）。
 > 历史逐轮修订注记已按操作者 20261027 指令清理；各期现行需求以 `mission/phase-0*.md` 为准。
 
 ---
@@ -82,10 +83,11 @@ ezr-tui-demo 的 README 与历次修改记录，本大纲与各期详述保持�
 - **UI 基线**：ezr-tui-demo 定稿的布局、状态机、颜色规范（暂停=白 / 等待=黄 /
   下载/校验/后期处理=淡蓝 / 失败=红 / 完成=绿 / 做种=粉，协议徽标统一黄色）、
   快捷键全集与中文文案。
-- **核心参数已定案**（不随实现漂移）：
-  - AIR2 分块：块大小按协议默认且与并发数解耦——HTTP 默认 1 MB/块（可配置 block_size_http）、BT 256 KB/块；
-    总块数 = ⌈文件大小 / 块大小⌉（末块吸收余数）；连接动态领块、乱序完成；
-  - 默认并发：HTTP 4 / BT 20，可设 1–64；
+- **核心参数已定案**（不随实现漂移；v1.62 起以 phase-05 修订为准）：
+  - AIR2 分块：块大小按协议默认且与并发数解耦——HTTP 默认 1 MB/块（可配置 block_size_http，
+    v1.62：仅 blocks 回退模式适用，合法下限放宽至 256 KiB；动态分段调度模式块大小由调度器取代，FR-05-03/06）、BT 256 KB/块；
+    总块数 = ⌈文件大小 / 块大小⌉（末块吸收余数）；连接动态领块、乱序完成（blocks 模式）；
+  - 默认并发：HTTP 8（v1.62，FR-05-05）/ BT 20，可设 1–128（HTTP，v1.62）/ 1–64（BT）；
   - 全局下载槽位默认 5 个（可配置 download_slots）；等待任务按列表顺序（从上往下）依次占用。
 - **交付形态**：单二进制；首发平台 Linux x86_64；终端建议 ≥120×34，80 列可用（降级布局）。
 - **界面语言**：中文为主。
@@ -108,6 +110,7 @@ ezr-tui-demo 的 README 与历次修改记录，本大纲与各期详述保持�
 | **phase-02** | `mission/phase-02.md` | **BT 下载内核、做种上传与 BT 任务管理**——「命令窗口」A 键新入口（三分流 + 错误窗口）+「添加/修改任务：BT」对话框（文件树勾选/trackers 多行输入）+ BT 引擎（tokio；BEP 3/15/23/7/12/9/20；.torrent 解析，磁力链 phase-03）+ 按文件下载 + **下载完成自动做种/上传真实统计（D45）** + config trackers（v1.45：统一单键，http_trackers/udp_trackers 退役）+ [bt] peer_connection_protocol（v1.45，FR-02-34）+ 全局/任务级上传下载限速（FR-02-28/29，v1.38）+ BT 自动反吸血 blacklist.yaml（FR-02-30）+ 't' trackers 弹窗（FR-02-31）+ [bt] listen_port（FR-02-32） |
 | phase-03 | `mission/phase-03.md`（v0.1 计划登记稿） | BT 效率与发现扩展：DHT（BEP 5/32/51）、BEP 10/6/11/14、命令窗口磁力+40 位 infohash、config `dht_entry`（phase2 不处理） |
 | phase-04 | `mission/phase-04.md`（v0.1 计划登记稿） | 传输优化：BEP 29 uTP（先试 UDP 回退 TCP）+ BEP 47 padding files（phase2 不处理） |
+| **phase-05** | `mission/phase-05.md` | **HTTP 引擎提速改造（P0–P2）**——补丁层修复（写合并 / throttle 比例等待 / probe 复用 / 失败粒度 / 默认并发 8 与 1–128 / burst 1.0）+ 动态分段调度器 planner（assign/claim/commit/absorb，`scheduler=dynamic` 默认、blocks 回退开关、裸 GET 消除启动空窗、聚合游标完成判定）+ 磁盘流水线 writer（≤4 MiB 合并定位写 / 256 MiB 在途跑道 / 稀疏预分配 / 条件 sync）（v1.62 新建；P3 增益层本轮不实现） |
 
 > 注 1：分期文件命名按宪法命名 `phase-<期号>[-<主题>].md`。
 > 注 2：phase-03/phase-04 为操作者钦定计划登记稿，详述条款由首角色在当期开工前的会话中依操作者输入补写定稿（宪法第一章）。

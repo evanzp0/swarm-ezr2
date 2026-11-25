@@ -10,7 +10,7 @@
 #    判据由「允许缺失」改为「缺失时自动生成」，生成细则见 01-config-template.feature）
 #   01-persistence-config-03 配置文件缺失时全部使用默认值（v1.25：默认行为描述「max_speed 不限」改「不限速」，退役键名标签清理）
 #   01-persistence-config-04 配置非法值拒绝启动并报错（v1.21 行为翻转：语义非法值 fail-fast，FR-02-35；v1.16/v1.17/v1.19 历史口径退役；v1.24：seed_duration_secs 拒绝行改判 default_seed_duration_m = 0，FR-02-40②；v1.25：max_speed 退役键拒绝行删除——待批① 裁决 20261116，FR-01-60 v1.42）
-#   01-persistence-config-05 block_size_http 可配置生效（v1.16：下限 1 MB）
+#   01-persistence-config-05 block_size_http 可配置生效（v1.16：下限 1 MB；v1.17：迁入 [http]；v1.51：下限放宽 256 KiB 且仅 blocks 回退模式适用）
 #   01-persistence-config-06 download_slots 可配置生效
 #   01-persistence-config-07 单实例保护
 #   01-persistence-config-08 Q 优雅退出断点保留重启恢复
@@ -161,7 +161,7 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
       | bt.peer_connection_protocol | ["tcp","tcp"]（重复项） |
 
   Scenario: 01-persistence-config-05 block_size_http 可配置生效（v1.16：下限 1 MB；v1.17：迁入 [http]）
-    Given 配置文件设 [http] 表 block_size_http = "<block_size>"
+    Given 配置文件设 [http] 表 scheduler = "blocks" 与 block_size_http = "<block_size>"（块模型断言钉定 blocks 回退模式，v1.51）
     When 下载文件 "<file>"
     Then 详情分块行显示 "x/<chunks> · <display>/块"
 
@@ -169,6 +169,7 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
       | file       | block_size | chunks | display  |
       | five-m.bin | 4 MB       | 2      | 4 MB     |
       | five-m.bin | 2 MB       | 3      | 2 MB     |
+      | five-m.bin | 256 KiB    | 20     | 256 KB   |
 
   Scenario: 01-persistence-config-06 download_slots 可配置生效（v1.17：迁入 [common]）
     Given 配置文件设 [common] 表 download_slots = <slots>
