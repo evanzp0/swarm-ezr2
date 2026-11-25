@@ -288,7 +288,7 @@ class EzrApp:
     """在 PTY 中驱动 ezr TUI：按键注入 + pyte 画面捕获 + 进程生命周期管理。"""
 
     def __init__(self, home: str, args: list[str] | None = None, cols: int = 120,
-                 rows: int = 34, env_extra: dict[str, str] | None = None,
+                 rows: int = 34, env_extra: dict[str, str | None] | None = None,
                  save_dir: str | None = None):
         self.home = home
         self.cols, self.rows = cols, rows
@@ -303,8 +303,17 @@ class EzrApp:
             "http_proxy": "", "https_proxy": "", "HTTP_PROXY": "", "HTTPS_PROXY": "",
             "NO_PROXY": "*",
         }
+        # env_extra 值为 None = 在子进程环境中卸载该键（QA-RC-12 无主目录启动：
+        # HOME/USERPROFILE/EZR_HOME 全部未设置）；fork 后子进程继承父环境，
+        # 必须显式 pop 才是真「未设置」（置空串是 Ok("") 不是 var_os None）。
+        unset_keys: list[str] = []
         if env_extra:
-            env.update(env_extra)
+            for k, v in env_extra.items():
+                if v is None:
+                    env.pop(k, None)
+                    unset_keys.append(k)
+                else:
+                    env[k] = v
         self.env = env
         argv = [EZR_BIN] + (args or [])
         self.save_dir = save_dir
@@ -314,6 +323,8 @@ class EzrApp:
             try:
                 os.chdir(home)
                 os.environ.update(env)
+                for k in unset_keys:
+                    os.environ.pop(k, None)
                 if save_dir:
                     os.makedirs(save_dir, exist_ok=True)
                 os.execvp(argv[0], argv)
@@ -610,6 +621,91 @@ def stop_proxy(handle: dict) -> None:
     except subprocess.TimeoutExpired:
         handle["proc"].kill()
         handle["proc"].wait(timeout=3)
+
+
+# ---------------------------------------------------------------------------
+# 命名代理共享操作（02-named-proxy / 12-reload-config 跨套件共享，DRY 上提；
+# suite_named_proxy 保留同构本地副本，收敛归后续 cleaner 轮）
+# ---------------------------------------------------------------------------
+
+
+def proxies_toml(entries: list[dict]) -> str:
+    """[[common.proxy]] 条目转 TOML（缺键即省略行；port 可为 int 或 str）。"""
+    out = "[common]\n\n"
+    for e in entries:
+        out += "[[common.proxy]]\n"
+        for k in ("name", "type", "ip", "port", "username", "password"):
+            if k not in e or e[k] is None:
+                continue
+            v = e[k]
+            out += f'{k} = "{v}"\n' if isinstance(v, str) else f"{k} = {v}\n"
+    return out
+
+
+def proxy_dropdown_options(app: "EzrApp") -> str:
+    """展开添加对话框代理下拉并返回全画面文本（选项行内嵌其中）。"""
+    open_add_dialog_via_cmd(app, DUMMY_URL)
+    app.send(*(["tab"] * 6))  # URL→目录→并发→下载限速→校验→校验码→代理（v1.38 限速字段插入）
+    app.send("enter")         # 展开代理下拉
+    assert app.wait_for("选择代理", 3), "代理下拉未展开"
+    text = app.text()
+    app.send("esc")           # 收起
+    app.send("esc")           # 关闭对话框
+    app.pump(0.3)
+    return text
+
+
+def add_task_via_proxy(app: "EzrApp", env: "Env", url: str, option_index: int,
+                       save_dir: str | None = None) -> None:
+    """添加任务并选中代理下拉第 option_index 项（0 = 直连）。"""
+    open_add_dialog_via_cmd(app, url)
+    app.send("tab")                                  # URL(0)→目录(1)
+    if save_dir is None or save_dir:
+        clear_dir_prefill(app)
+    app.type_text(env.save_dir if save_dir is None else save_dir)
+    app.send(*(["tab"] * 3))                         # 目录→并发→下载限速→校验
+    app.send(*(["tab"] * 2))                         # 校验(4)→校验码(5)→代理(6)（v1.38 限速字段插入）
+    app.send("enter")                                # 展开代理下拉
+    assert app.wait_for("选择代理", 3), "代理下拉未展开"
+    app.send("home")
+    for _ in range(option_index):
+        app.send("down")
+    app.send("enter")                                # 选中
+    app.pump(0.2)
+    app.send("tab")                                  # 代理(6)→立即下载(7)（v1.38 限速字段插入）
+    app.send("enter")
+    app.pump(0.3)
+
+
+def select_task_by_needle(app: "EzrApp", needle: str, max_moves: int = 10) -> None:
+    """选中详情含 needle 的任务行（当前页签起步，未命中切换页签再试）。
+
+    任务完成会从「正在下载」页签移入「已完成」页签——完成态复查（12-reload
+    等）在产物断言之后才选任务，任务可能已在另一页签；先当前页签 Home 起步
+    逐个下移，未命中按 ] 切换页签重试一轮（] 在两页签间循环，试完等价还原）。
+    """
+    for extra_switch in (0, 1):
+        if extra_switch:
+            app.send("]")
+            app.pump(0.4)
+        app.send("home")
+        app.pump(0.3)
+        for _ in range(max_moves + 1):
+            if needle in detail_text(app):
+                return
+            app.send("down")
+            app.pump(0.2)
+    raise AssertionError(f"两页签均未找到详情含「{needle}」的任务行")
+
+
+def registry_tasks(home: str) -> list[dict]:
+    """读 $HOME/.ezr/state/registry.json 任务快照列表（落库断言用）。"""
+    path = os.path.join(home, ".ezr", "state", "registry.json")
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    if isinstance(data, dict):
+        return data.get("tasks", [])
+    return data
 
 
 # ---------------------------------------------------------------------------

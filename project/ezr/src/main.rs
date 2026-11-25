@@ -285,7 +285,7 @@ async fn ezr_main() -> std::io::Result<()> {
         let _ = ensure_default_config(&p);
     }
 
-    let cfg = match config_path() {
+    let mut cfg = match config_path() {
         Some(p) => match Config::try_load(&p) {
             Ok(c) => c,
             Err(msg) => {
@@ -295,6 +295,9 @@ async fn ezr_main() -> std::io::Result<()> {
         },
         None => Config::default(),
     };
+    if let Some(ms) = cli.max_speed {
+        cfg.global_max_download_speed = ms;
+    }
     let registry_path: String = state_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("registry.json")
