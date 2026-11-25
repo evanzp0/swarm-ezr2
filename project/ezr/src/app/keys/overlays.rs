@@ -85,3 +85,37 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod overlay_hardening {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    use super::App;
+
+    fn make_app(tag: &str) -> App {
+        crate::app::testutil::make_app_in("ezr-oh", tag)
+    }
+
+    #[tokio::test]
+    async fn pieces_up_scrolls_back_from_positive() {
+        let mut app = make_app("ohp");
+        app.pieces_open = true;
+        app.pieces_scroll = 1;
+        app.on_key(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.pieces_scroll, 0, "Up 必须从正值上滚一行");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn help_up_scrolls_back_from_positive() {
+        let mut app = make_app("ohh");
+        app.on_key(KeyCode::Char('h'), KeyModifiers::NONE);
+        assert!(app.help_open);
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.help_scroll, 2, "Down ×2 → 滚动 2 行");
+        app.on_key(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.help_scroll, 1, "Up 必须从正值回滚一行");
+        app.shutdown().await;
+    }
+}

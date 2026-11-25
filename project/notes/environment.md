@@ -626,3 +626,11 @@ ws/webrtc 轮复测（2026-11-09）：沙箱重置后全新环境——64KB 单�
 - **GitHub 代理当期实测**：ghfast.top 273KB/s > gh-proxy.com 85KB/s > 直连 17KB/s；bb v1.13.230（26.5MB）与 PMD 7.29.0 bin.zip（134MB，两段 `-C -` 断点续传 + zipfile.testzip 完整性探针）均经 ghfast.top 一次过；cargo-mutants 27.1.0 / cargo-llvm-cov 0.9.2 预编译资产名与历轮一致零漂移（**cargo-mutants 仓库归属 sourcefrog**——sourcegraph 名下 api.github.com 直接 Not Found，属查证信号非网络抖动）。
 - **工作区持久区迁移纪律落地**：clone 即迁 `/home/z/my-project/swarm-ezr2`（20261123 沙箱回收纪律：/home/z 下非持久挂载整机丢失、my-project 为持久区）——begin 后迁移无损（bin/swarm 按 BASH_SOURCE 自定位，status 复核即可），本轮全程持久区工作，归档后产物直接落 download/ 交付目录。
 - **磁盘账**：工具装机 + 基线（bin+13 套件+demo）+ llvm-cov ×2 + 全量复验 ×1 后盘余 1.9G（81%）——llvm-cov 插桩工件为主增量大头；CARGO_INCREMENTAL=0 全程维持，无爆盘处置需求。
+
+## 变异加固轮（2026-11-25，hardender）追加
+- **镜像当期实测（本轮开工）**：rustup dist 前台装链 TUNA 双变量整链路一次成（nightly 1.102.0-nightly c7d5ba59d 2026-11-20 minimal+rustfmt+clippy+llvm-tools-preview 一段装齐，llvm-tools 随装避开 llvm-cov 首跑交互挂死）；cargo registry aliyun sparse fetch 3.2s 全量 rc=0；gh 前缀漂移实录：ghfast.top 对 bb 资产首查 403 半小时后整段可用再转 403，gh-proxy.com 对 PMD 资产范围探针报 404 但整段 `-C -` 续传可用（54KB/s）——**代理资产探针 403/404 ≠ 续传不可用，直接 -C - 试传一段再下结论**。
+- **PMD 7.29.0 装机实录**：bin.zip 只存 GitHub release（Maven 系不可用口径再证）；直连 12KB/s 停滞 + ghfast 403 窗口期，gh-proxy.com 续传一段补齐 134MB；zipfile.testzip 探针 + chmod 启动器 + Java 21 直跑正常。
+- **cargo-mutants 27.1.0 装机**：api.github.com 直查 tag 资产清单（release tag v27.1.0，资产 cargo-mutants-x86_64-unknown-linux-gnu.tar.gz 3.2MB），tar 无目录壳解包到 .tools/bin，须 `cargo mutants` 子命令形态调用（直接 ./cargo-mutants --version 会落进 cargo 代理报 Usage: cargo <COMMAND>）。
+- **bb/APS 重建**：bb 1.13.230 静态包 ghfast.top 续传段拼接完成；APS clone HTTP/1.1 + qa/aps-mutator-equivalence-extension.patch 干净应用；bb test 11 测 51 断言 0F/0E 精确一致——**bb 不在 PATH 时 worker 测试面 3E（Exec ENOENT），bb 入 PATH 即全绿**（历轮「11 测 0F/3E」受限项的真实根因 = PATH 注入，非测试面缺陷）。
+- **IM 网关长串行循环窗口**：单调用内 for 循环串行多套件（~10min）超窗被取消——timeout 包裹的 cargo test 子进程存活续跑完并落盘（复证「调用取消 ≠ 进程死亡」判据：先查日志 result 行 + pgrep 再决定补跑）；落盘轮询 sleep 循环单次调用 ≤5min 稳定。
+- **workspace 持久区迁移复证**：clone 即迁 /home/z/my-project/swarm-ezr2 后 begin 会话无损（bin/swarm BASH_SOURCE 自定位，status 复核通过）；符号链接 /home/z/swarm-ezr2 → 持久区可作 APS manifest 钉死路径的兼容桥（feature_path 逐字一致 → 20 feature 全复用守恒）。

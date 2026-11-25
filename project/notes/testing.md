@@ -993,3 +993,13 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 - **一切构造 App 的测试必须 #[tokio::test]**：App::new 内嵌引擎 main_loop 的 tokio::spawn（engine/mod.rs），同步 #[test] 下构造即 panic「there is no reactor running」——TestBackend 纯渲染断言测试同样中招（draw_list 不触引擎也无济于事），收尾统一 shutdown().await。
 - **cfg(test) re-export 的 #[allow(unused_imports)] 是 include! 集成测试服务路径，删前先查引用面**：bin 编译口径看不到 include! 树里的使用（engine::classify_reqwest 被 hardening_g_throttle_err 直接调用），删 allow 即 bin 口径报 unused——但同组其余 3 个 re-export（HostsFile/parse_retry_after_header/bucket_step 组）确属死抑制器，删除后 clippy --all-targets 0 警告裁决。判据：rg tests/ 里 include! 树对该符号的调用，有调用 = allow 必需，无调用 = 删。
 - **clippy field_reassign_with_default 在测试代码同样算数**：Config::default() 构造后字段赋值改 struct update 语法（`Config { warnings: vec![…], ..Config::default() }`），与 lint 清零纪律同口径。
+
+## 变异加固轮（2026-11-25，hardender）追加
+- **cargo-mutants 真实仓库 = sourcefrog/cargo-mutants**（sourcegraph 路径 404；crates.io 直连被沙箱拦、sparse index 路径探测亦不可靠——GitHub 搜索 API 找仓最稳）。`--in-place` 与 `-j` 互斥复证（单 worker 稳态）。
+- **CARGO_TEST_ARGS 是 cargo test 的直接参数**：工具把 `--` 后参数原样追加到 cargo test 命令（无分隔符），cargo test 只收一个 TESTNAME 位置参数——多滤选串必须写成 `-- -- f1 f2`（第一个 `--` 归 mutants、第二个归 cargo，libtest 多滤选 = OR 子串、无匹配滤串为空操作）。libtest 滤选语义实证：`-- --list -- f1 f2` 列出的是 OR 并集。
+- **基线闸门的超时假死形态**：`--timeout` 低于滤选面裸耗时（宽面 480 测 ≈62s < timeout 60）→ 工具把基线判 Timeout 直接拒跑（表象与 OOM/编译错同形）。宽面跑变异一律 timeout ≥ 3× 裸耗时（180s）。
+- **三角复判协议（窄面快跑 + 补面定真伪）**：发现面按击杀密度裁剪（省 40-50% 墙钟）→ 每个幸存体用「被裁模块 + ui::」补面复判——补面被杀 = 伪幸存（既有测试他面击杀，记 killed）；补面仍 MISSED = 真缺口 → 一测一靶补杀。本轮 97 幸存体 → 56 真缺口 + 12 伪幸存（keys/mod 12 + stats 13 + app/mod 7）+ 12 等价 + 17 直接击杀面外。
+- **--iterate 只跳 caught，MISSED 每轮重测**：幸存体 >9 个时每块全预算被重测吃光 → 用 `-E 'file\.rs:(行号列表):'` 排除已判行（行粒度无法分选同行多突变体，同行含等价体时整行重测）。`-F '^path:行号:'` 行号段推进绕开重测区。
+- **追加式加固测试的收敛捷径**：测试只追加在文件尾/测试模块尾 → 产品码突变体位置零位移，`cargo mutants --list` 计数恒等（87/46/27/68/59/20 实测恒等）→ 既有 killed/unviable 判定保持有效，仅需定向复验幸存体（无需删会话状态全量重跑）。--list 计数恒等 = 零新增突变体证明。
+- **等价体高频模式新增三类**（承接 mutation-hardening.md 模式库）：①**mod-2 环同余**：FILTERS.len()==2 时 cycle_filter 的 ±delta rem_euclid(2) 恒等（失效条件：FILTERS 扩至 >2）；②**双层卫语句嵌套冗余**：外层 `if n > 0` 与被调函数内层 `n==0` 早退嵌套，外层比较符翻转不可观察（失效条件：内层守卫移除/改动）；③**死函数**：#[allow(dead_code)] 全仓零调用点函数的任何突变不可观察（失效条件：出现任何调用点）。死钳位（卫语句先行子类）：早退卫语句保证 min(x, len-1) 恒等 x。
+- **小盘磁盘时序（变异+插桩同轮）**：mutants 场景 INC=1 缓存把 scratch target 推到 3.3G——变异收尾先删 scratch 再进插桩段；插桩 cov-target ~1.3G 用后即删；中途爆盘先删可再生大头再跑（cp -a 项目树务必显式排除 target/，整树 cp 会把 1.6G target 拷爆盘）。

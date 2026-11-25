@@ -126,3 +126,128 @@ impl App {
         self.bt_conn_stats.retain(|(tid, _), _| *tid != task_id);
     }
 }
+
+#[cfg(test)]
+mod stats_hardening {
+    use super::{App, Connection};
+    use crate::model::TaskState;
+
+    fn make_app(tag: &str) -> App {
+        crate::app::testutil::make_app_in("ezr-sh", tag)
+    }
+
+    fn conn(id: usize, start: u64, end: u64, done: u64) -> Connection {
+        Connection {
+            id,
+            start,
+            end,
+            done,
+        }
+    }
+
+    fn task_with_conns_at(id: u32, name: &str, conns: Vec<Connection>) -> crate::model::Task {
+        let mut t = crate::model::sample_task();
+        t.id = id;
+        t.protocol = crate::model::Protocol::Http;
+        t.name = name.to_string();
+        t.state = TaskState::Downloading;
+        t.connections = conns;
+        t
+    }
+
+    #[tokio::test]
+    async fn global_dl_speed_sums_downloading_tasks_only() {
+        let mut app = make_app("gdl");
+        let mut dl = crate::model::sample_task();
+        dl.id = 1;
+        dl.state = TaskState::Downloading;
+        dl.speed = 100.0;
+        let mut paused = crate::model::sample_task();
+        paused.id = 2;
+        paused.state = TaskState::Paused;
+        paused.speed = 50.0;
+        app.tasks.push(dl);
+        app.tasks.push(paused);
+        assert_eq!(
+            app.global_dl_speed(),
+            100.0,
+            "全局下载速度 = 仅下载中任务速度之和"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn conns_display_total_counts_active_http_conns() {
+        let mut app = make_app("cdt");
+        let t1 = task_with_conns_at(
+            1,
+            "a.bin",
+            vec![conn(0, 0, 100, 0), conn(1, 0, 0, 0), conn(2, 100, 200, 0)],
+        );
+        let t2 = task_with_conns_at(2, "b.bin", vec![conn(0, 0, 50, 0)]);
+        app.tasks.push(t1);
+        app.tasks.push(t2);
+        assert_eq!(
+            app.conns_display_total(),
+            3,
+            "display 总数 = 活跃连接（cap>0 未完成）计数，Closed 不计"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn conn_is_active_rejects_closed_phase() {
+        let mut app = make_app("cia");
+        let t = task_with_conns_at(1, "a.bin", vec![conn(0, 0, 100, 0), conn(1, 0, 0, 0)]);
+        app.tasks.push(t);
+        let tref = &app.tasks[0];
+        let c_active = tref.connections[0].clone();
+        let c_closed = tref.connections[1].clone();
+        assert!(
+            app.conn_is_active(1, &c_active),
+            "cap>0 且零进度 → Connecting 活跃"
+        );
+        assert!(
+            !app.conn_is_active(1, &c_closed),
+            "cap==0 且零进度 → Closed 非活跃"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn peak_ul_speed_is_hist_max_scaled() {
+        let mut app = make_app("pul");
+        app.up_hist = vec![1, 5, 3];
+        assert_eq!(app.peak_ul_speed(), 5120.0, "峰值上传 = 历史最大 × 1024");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn clear_conn_stats_retains_other_tasks_entries() {
+        let mut app = make_app("ccs");
+        app.conn_cum.insert((1, 0), 7);
+        app.conn_cum.insert((2, 0), 9);
+        app.conn_speed
+            .insert((1, 0), crate::model::speed::SmoothedSpeed::default());
+        app.conn_speed
+            .insert((2, 0), crate::model::speed::SmoothedSpeed::default());
+        app.conn_windows
+            .insert((1, 0), crate::model::speed::SpeedWindow::new());
+        app.conn_windows
+            .insert((2, 0), crate::model::speed::SpeedWindow::new());
+        app.clear_conn_stats(1);
+        assert!(!app.conn_cum.contains_key(&(1, 0)), "任务 1 的 cum 被清");
+        assert!(app.conn_cum.contains_key(&(2, 0)), "任务 2 的 cum 必须保留");
+        assert!(!app.conn_speed.contains_key(&(1, 0)), "任务 1 的速度被清");
+        assert!(
+            app.conn_speed.contains_key(&(2, 0)),
+            "任务 2 的速度必须保留"
+        );
+        assert!(!app.conn_windows.contains_key(&(1, 0)), "任务 1 的窗口被清");
+        assert!(
+            app.conn_windows.contains_key(&(2, 0)),
+            "任务 2 的窗口必须保留"
+        );
+        app.shutdown().await;
+    }
+}

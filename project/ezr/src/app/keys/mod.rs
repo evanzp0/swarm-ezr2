@@ -1013,3 +1013,233 @@ mod overlay_key_nav_tests {
         app.shutdown().await;
     }
 }
+
+#[cfg(test)]
+mod keys_hardening {
+    use super::*;
+    use crate::app::testutil::task_with_conns;
+    use crate::model::TaskState;
+
+    fn make_app(tag: &str) -> App {
+        crate::app::testutil::make_app_in("ezr-kh", tag)
+    }
+
+    fn plain_tasks(n: usize) -> Vec<crate::model::Task> {
+        (0..n)
+            .map(|i| {
+                let mut t = crate::model::sample_task();
+                t.id = i as u32 + 1;
+                t.name = format!("t{}", i + 1);
+                t.state = TaskState::Downloading;
+                t
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn conn_scroll_up_follows_selection_above_viewport() {
+        let mut app = make_app("khsu");
+        app.tasks
+            .push(task_with_conns(1, "up.bin", TaskState::Downloading, 4));
+        app.selected = 0;
+        app.focus = Panel::Conns;
+        app.visible_conns_rows = 2;
+        for _ in 0..3 {
+            app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        }
+        assert_eq!(app.conns_sel, 3);
+        assert_eq!(app.conns_scroll, 2);
+        app.on_key(KeyCode::Up, KeyModifiers::NONE);
+        app.on_key(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.conns_sel, 1);
+        assert_eq!(app.conns_scroll, 1, "选中越出视口顶 → 滚动跟随到选中行");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn conn_scroll_down_follow_intermediate_step() {
+        let mut app = make_app("khsd");
+        app.tasks
+            .push(task_with_conns(1, "dn.bin", TaskState::Downloading, 4));
+        app.selected = 0;
+        app.focus = Panel::Conns;
+        app.visible_conns_rows = 2;
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.conns_sel, 2);
+        assert_eq!(app.conns_scroll, 1, "第二步下移 → 滚动窗恰随到 1（非 2）");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn ctrl_j_with_cmd_closed_must_not_reach_cmd_handler() {
+        let mut app = make_app("khjc");
+        app.cmd.follow = false;
+        app.on_key(KeyCode::Char('j'), KeyModifiers::CONTROL);
+        assert!(
+            !app.cmd.follow,
+            "命令窗关闭时 Ctrl+J 不得进入 cmd 处理器（不得重挂 follow）"
+        );
+        assert!(!app.cmd_open);
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn ctrl_j_with_cmd_open_confirms_and_closes() {
+        let mut app = make_app("khjo");
+        app.on_key(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert!(app.cmd_open);
+        app.on_key(KeyCode::Char('j'), KeyModifiers::CONTROL);
+        assert!(!app.cmd_open, "空输入确认 → 仅关闭命令窗");
+        app.on_key(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert!(app.cmd_open);
+        app.on_key(KeyCode::Enter, KeyModifiers::CONTROL);
+        assert!(
+            !app.cmd_open,
+            "Ctrl+Enter 同为确认键：空输入确认后命令窗关闭"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn space_toggles_pause_on_selected_task() {
+        let mut app = make_app("khsp");
+        app.tasks = plain_tasks(1);
+        app.selected = 0;
+        app.on_key(KeyCode::Char(' '), KeyModifiers::NONE);
+        assert_eq!(
+            app.tasks[0].state,
+            TaskState::Paused,
+            "空格必须暂停选中任务"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn d_opens_delete_dialog_for_selected_task() {
+        let mut app = make_app("khd");
+        app.tasks = plain_tasks(1);
+        app.selected = 0;
+        app.on_key(KeyCode::Char('d'), KeyModifiers::NONE);
+        assert!(app.dialog.is_some(), "d 必须为选中任务打开删除对话框");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn c_clears_completed_tasks() {
+        let mut app = make_app("khc");
+        let mut done = crate::model::sample_task();
+        done.id = 1;
+        done.name = "done.bin".to_string();
+        done.state = TaskState::Completed;
+        app.tasks.push(done);
+        app.tasks.push(plain_tasks(1).remove(0));
+        app.on_key(KeyCode::Char('c'), KeyModifiers::NONE);
+        assert_eq!(app.tasks.len(), 1, "c 清理后仅剩未完成任务");
+        let toast = app.toast.clone().unwrap_or_default();
+        assert!(
+            toast.contains("已清理 1 个已完成任务"),
+            "实际 toast: {toast}"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn g_hides_panes_and_second_g_restores_focus_untouched() {
+        let mut app = make_app("khg");
+        assert!(app.show_panes);
+        app.on_key(KeyCode::Tab, KeyModifiers::NONE);
+        let focus_after_tab = app.focus;
+        assert_ne!(focus_after_tab, Panel::List);
+        app.on_key(KeyCode::Char('g'), KeyModifiers::NONE);
+        assert!(!app.show_panes, "第一次 g 关闭全景窗格");
+        assert_eq!(app.focus, Panel::List, "窗格关闭时焦点收回任务列表");
+        app.on_key(KeyCode::Tab, KeyModifiers::NONE);
+        let focus_moved = app.focus;
+        app.on_key(KeyCode::Char('g'), KeyModifiers::NONE);
+        assert!(app.show_panes, "第二次 g 恢复窗格");
+        assert_eq!(app.focus, focus_moved, "窗格恢复时不得强行改焦点");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn u_moves_task_up_with_up_toast() {
+        let mut app = make_app("khu");
+        app.tasks = plain_tasks(3);
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.selected, 1);
+        app.on_key(KeyCode::Char('u'), KeyModifiers::NONE);
+        let toast = app.toast.clone().unwrap_or_default();
+        assert!(
+            toast.contains("已上移"),
+            "u 必须上移并给出上移 toast（实际: {toast}）"
+        );
+        assert_eq!(app.tasks[0].name, "t2", "上移后 t2 换到队首");
+        assert_eq!(app.selected, 0);
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn j_moves_task_down_with_down_toast() {
+        let mut app = make_app("khj");
+        app.tasks = plain_tasks(3);
+        app.on_key(KeyCode::Char('j'), KeyModifiers::NONE);
+        let toast = app.toast.clone().unwrap_or_default();
+        assert!(
+            toast.contains("已下移"),
+            "j 必须下移并给出下移 toast（实际: {toast}）"
+        );
+        assert_eq!(app.tasks[1].name, "t1", "下移后 t1 落到第二位");
+        assert_eq!(app.selected, 1);
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn list_up_moves_selection_up() {
+        let mut app = make_app("khlu");
+        app.tasks = plain_tasks(3);
+        app.visible_rows = 2;
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.selected, 2);
+        app.on_key(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.selected, 1, "↑ 在任务列表必须上移选中");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn list_pageup_jumps_four_up() {
+        let mut app = make_app("khpu");
+        app.tasks = plain_tasks(6);
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.selected, 2);
+        app.on_key(KeyCode::PageUp, KeyModifiers::NONE);
+        assert_eq!(app.selected, 0, "PageUp 必须上跳 4 行（钳制到首行）");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn list_end_jumps_to_last_and_safe_on_empty() {
+        let mut app = make_app("khen");
+        app.on_key(KeyCode::End, KeyModifiers::NONE);
+        assert_eq!(app.selected, 0, "空列表 End 不得 panic、不得越界");
+        app.tasks = plain_tasks(3);
+        app.on_key(KeyCode::End, KeyModifiers::NONE);
+        assert_eq!(app.selected, 2, "End 跳到最后一行（flen-1）");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn tasklist_scroll_follows_selection_intermediate() {
+        let mut app = make_app("khsf");
+        app.tasks = plain_tasks(3);
+        app.visible_rows = 2;
+        assert_eq!(app.scroll, 0);
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        app.on_key(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.selected, 2);
+        assert_eq!(app.scroll, 1, "第二行选中越出 2 行视口 → 滚动恰随到 1");
+        app.shutdown().await;
+    }
+}

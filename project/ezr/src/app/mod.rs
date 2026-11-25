@@ -1106,3 +1106,120 @@ mod interaction_tests {
         app.shutdown().await;
     }
 }
+
+#[cfg(test)]
+mod hardening_app_core {
+    use super::*;
+    use crate::model::TaskState;
+
+    fn make_app(tag: &str) -> App {
+        crate::app::testutil::make_app_in("ezr-ah", tag)
+    }
+
+    fn mk(id: u32, name: &str, state: TaskState) -> crate::model::Task {
+        let mut t = crate::model::sample_task();
+        t.id = id;
+        t.name = name.to_string();
+        t.state = state;
+        t
+    }
+
+    #[tokio::test]
+    async fn used_slots_counts_downloading_failed_retry_and_slotted_queue() {
+        let mut app = make_app("ahus");
+        let mut failed = mk(3, "f.bin", TaskState::Failed);
+        failed.retry_in = Some(8.0);
+        let mut slotted = mk(4, "q.bin", TaskState::Queued);
+        slotted.has_slot = true;
+        app.tasks = vec![
+            mk(1, "d.bin", TaskState::Downloading),
+            mk(2, "w.bin", TaskState::Queued),
+            failed,
+            slotted,
+        ];
+        assert_eq!(
+            app.used_slots(),
+            3,
+            "占用 = 下载中(1) + 失败待自动重试(1) + 持槽排队(1)；无槽排队不计"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn queue_pos_counts_undecorated_waiting_tasks() {
+        let mut app = make_app("ahqp");
+        let mut slotted = mk(4, "q0.bin", TaskState::Queued);
+        slotted.has_slot = true;
+        app.tasks = vec![
+            mk(1, "d.bin", TaskState::Downloading),
+            mk(2, "q1.bin", TaskState::Queued),
+            mk(3, "q2.bin", TaskState::Queued),
+            slotted,
+        ];
+        assert_eq!(app.queue_pos_of(2), Some(1), "第一顺位等待");
+        assert_eq!(app.queue_pos_of(3), Some(2), "第二顺位等待");
+        assert_eq!(app.queue_pos_of(1), None, "下载中任务无排队位");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn overlay_open_true_for_each_single_overlay() {
+        let mut app = make_app("ahov");
+        assert!(!app.overlay_open());
+        app.pieces_open = true;
+        assert!(app.overlay_open(), "仅 pieces 开 → 谓词为真");
+        app.pieces_open = false;
+        app.trackers_open = true;
+        assert!(app.overlay_open(), "仅 trackers 开 → 谓词为真");
+        app.trackers_open = false;
+        app.about_open = true;
+        assert!(app.overlay_open(), "仅 about 开 → 谓词为真");
+        app.about_open = false;
+        app.cmd_open = true;
+        assert!(app.overlay_open(), "仅 cmd 开 → 谓词为真");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn set_filter_ignores_out_of_range_index() {
+        let mut app = make_app("ahsf");
+        app.tasks = vec![mk(1, "d.bin", TaskState::Downloading)];
+        app.set_filter(2);
+        assert_eq!(app.filter, 0, "越界索引必须被卫语句拒绝");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn set_toast_window_lies_in_future() {
+        let mut app = make_app("ahst");
+        app.set_toast("x");
+        let until = app.toast_until.expect("toast 窗口必须存在");
+        assert!(until > Instant::now(), "toast 存活窗必须落在未来（now+3s）");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn cli_max_speed_override_registers_and_applies() {
+        let mut app = make_app("ahcli");
+        app.set_cli_max_speed_override(12345);
+        assert_eq!(app.cli_max_speed_override, Some(12345));
+        assert_eq!(app.cfg.global_max_download_speed, 12345);
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn push_hist_appends_scaled_samples_and_caps_at_180() {
+        let mut app = make_app("ahph");
+        app.speed_hist = vec![0; 179];
+        app.up_hist = vec![0; 179];
+        app.push_hist(1024.0, 2048.0);
+        assert_eq!(app.speed_hist.len(), 180, "首推不触顶");
+        assert_eq!(app.speed_hist.last(), Some(&1), "1024/1024 = 1 KB/s");
+        assert_eq!(app.up_hist.len(), 180, "首推不触顶（上行）");
+        assert_eq!(app.up_hist.last(), Some(&2), "2048/1024 = 2 KB/s");
+        app.push_hist(0.0, 0.0);
+        assert_eq!(app.speed_hist.len(), 180, "触顶后淘汰最旧样本");
+        assert_eq!(app.up_hist.len(), 180, "触顶后淘汰最旧样本（上行）");
+        app.shutdown().await;
+    }
+}

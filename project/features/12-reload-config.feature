@@ -1,3 +1,7 @@
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-11-25T03:30:30.155446619Z","feature_name":"12-reload-config 配置热加载（Ctrl+R）","feature_path":"/home/z/swarm-ezr2/project/features/12-reload-config.feature","background_hash":"74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b","implementation_hash":"unknown","scenarios":[{"index":4,"name":"12-reload-config-05 A 类代理端点变更运行任务热切存量连接不打断","scenario_hash":"f19f2eed66830433893b5d209d89a341582af36116e3055e3f4bab29e062d8e0","mutation_count":2,"result":{"Total":2,"Killed":2,"Survived":0,"Errors":0},"tested_at":"2026-11-25T03:26:51.663221825Z"},{"index":9,"name":"12-reload-config-10 CLI max-speed 覆盖热加载后保持","scenario_hash":"c1ec1d3c11c2132bec280cb813837d5c72111947eebb2b6b47d51be57486a865","mutation_count":3,"result":{"Total":3,"Killed":3,"Survived":0,"Errors":0},"tested_at":"2026-11-25T03:26:51.663221825Z"}]}
+# acceptance-mutation-manifest-end
+
 # 场景清单（场景名 = feature 名称 + 稳定序号）：
 #   12-reload-config-01 Ctrl+R 全局可达且成功热加载即时生效
 #   12-reload-config-02 A 类全局限速热切运行中任务即时重定目标
