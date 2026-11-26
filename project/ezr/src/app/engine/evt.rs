@@ -40,6 +40,13 @@ impl App {
                     t.total = total;
                     t.resumable = resumable;
                     t.dynamic = dynamic;
+                    if dynamic && t.protocol != crate::model::Protocol::Bt {
+                        t.block_size = crate::model::chunk::refine_http_grid(
+                            total,
+                            t.block_size,
+                            t.concurrency,
+                        );
+                    }
                     t.probed = true;
                     t.etag = etag;
                     t.last_modified = last_modified;
@@ -89,12 +96,14 @@ impl App {
                 id,
                 downloaded,
                 chunk_done,
+                done_blocks,
                 partial_blocks,
             } => {
                 if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
                     t.downloaded = downloaded.max(t.downloaded);
                     t.speed = 0.0;
                     t.has_slot = false;
+                    t.done_blocks = done_blocks;
                     t.partial_blocks = partial_blocks;
                     t.apply_chunk_snapshot(downloaded, chunk_done);
                 }
@@ -107,6 +116,7 @@ impl App {
                 made_progress,
                 downloaded,
                 chunk_done,
+                done_blocks,
                 partial_blocks,
             } => {
                 self.handle_failure(
@@ -117,6 +127,7 @@ impl App {
                     made_progress,
                     downloaded,
                     chunk_done,
+                    Some(done_blocks),
                     partial_blocks,
                 );
             }
@@ -191,6 +202,10 @@ impl App {
                 t.downloaded = total;
                 t.total = total;
                 t.speed = 0.0;
+                let all_blocks = crate::model::chunk::chunk_total(t.total, t.block_size);
+                t.chunk_done = all_blocks;
+                t.done_blocks = (0..all_blocks).collect();
+                t.partial_blocks.clear();
                 let name = t.name.clone();
                 let verify_now = t.checksum.is_some();
                 if verify_now {
@@ -415,6 +430,7 @@ impl App {
         made_progress: bool,
         downloaded: u64,
         chunk_done: u32,
+        done_blocks: Option<Vec<u32>>,
         partial_blocks: Vec<u32>,
     ) {
         let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else {
@@ -427,6 +443,9 @@ impl App {
             t.downloaded = downloaded.max(t.downloaded);
         }
         t.speed = 0.0;
+        if let Some(db) = done_blocks {
+            t.done_blocks = db;
+        }
         t.partial_blocks = partial_blocks;
         let (auto_retry, max_retries) = (self.cfg.auto_retry, t.max_retries);
         let (new_retries, decision) = crate::model::retry::decide(
@@ -726,5 +745,46 @@ mod evt_arm_tests {
         let t = app.tasks.iter().find(|t| t.id == 5).unwrap();
         assert_eq!(t.state, TaskState::Failed, "Fatal → Failed");
         assert_eq!(t.error.as_deref(), Some("boom"));
+    }
+
+    #[tokio::test]
+    async fn failed_arm_lands_sidecar_projection_sets() {
+        let mut app = make_app("failed-projection");
+        let mut t = testutil::dl_task_mb(1, "f.bin");
+        t.done_blocks = vec![9];
+        app.tasks.push(t);
+        app.handle_failure(
+            1,
+            FailKind::Transient,
+            "连接被重置".to_string(),
+            None,
+            true,
+            500,
+            2,
+            Some(vec![0, 1]),
+            vec![2],
+        );
+        let t = &app.tasks[0];
+        assert_eq!(t.done_blocks, vec![0, 1], "失败落地 sidecar 投影绿集合");
+        assert_eq!(t.partial_blocks, vec![2], "失败落地部分集合");
+        assert_eq!(t.state, TaskState::Failed);
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn bt_failed_arm_keeps_engine_done_blocks() {
+        let mut app = make_app("bt-failed-keep");
+        let mut t = testutil::bt_task(5, TaskState::Downloading);
+        t.done_blocks = vec![0, 3];
+        app.tasks.push(t);
+        app.on_bt_failed(5, FailKind::Fatal, "tracker 全失败".into());
+        let t = &app.tasks[0];
+        assert_eq!(
+            t.done_blocks,
+            vec![0, 3],
+            "BT 失败不携带投影 → 保留引擎既有绿集合"
+        );
+        assert!(t.partial_blocks.is_empty());
+        app.shutdown().await;
     }
 }

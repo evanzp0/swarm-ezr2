@@ -13,7 +13,9 @@ use super::planner::{Claim, Planner, MIN_PREEMPT};
 use super::single::single_stream;
 use super::writer::Writer;
 use super::{emit, Evt, Flow, PausedState, TaskCmd, TaskSpec};
-use crate::model::chunk::{project_ranges, Blocks, MIN_HTTP_BLOCK_SIZE};
+use crate::model::chunk::{
+    merge_byte_ranges, project_ranges, refine_http_grid, Blocks, MIN_HTTP_BLOCK_SIZE,
+};
 use crate::model::config::ProxyEndpoint;
 use crate::model::consistency::{self, Consistency, ServerStamp};
 use crate::model::namegen::DOWNLOADING_EXT;
@@ -224,6 +226,7 @@ async fn dynamic_worker(
             }
         };
         let mut at = a.from;
+        let mut carry: Vec<u8> = Vec::new();
         let mut aborted = false;
         let mut quota_aborted = false;
         let mut retry_wait: Option<Duration> = None;
@@ -254,11 +257,18 @@ async fn dynamic_worker(
                         Ok(Some(bytes)) => {
                             shared.dl_throttle().acquire(bytes.len() as u64).await;
                             task_dl.acquire(bytes.len() as u64).await;
-                            let claim = planner.lock().await.claim(wid, at, bytes.len() as u64);
+                            let data = if carry.is_empty() {
+                                bytes
+                            } else {
+                                let mut buf = std::mem::take(&mut carry);
+                                buf.extend_from_slice(&bytes);
+                                bytes::Bytes::from(buf)
+                            };
+                            let claim = planner.lock().await.claim(wid, at, data.len() as u64);
                             match claim {
                                 Claim::Granted { n, seg_end } => {
                                     if n > 0 {
-                                        if writer.push(at, &bytes[..n as usize]).is_err() {
+                                        if writer.push(at, &data[..n as usize]).is_err() {
                                             *failure.lock().await = Some(EngineFailure::fatal("磁盘写入失败"));
                                             aborted = true;
                                             break;
@@ -270,13 +280,19 @@ async fn dynamic_worker(
                                             break;
                                         }
                                         at += n;
+                                    }
+                                    let granted = n as usize;
+                                    if granted < data.len() {
+                                        carry.extend_from_slice(&data[granted..]);
+                                    }
+                                    let exhausted = planner.lock().await.commit(wid, at);
+                                    if n > 0 {
                                         if let Some(cv) = conns.lock().await.iter_mut().find(|c| c.id == wid) {
                                             cv.start = cur_start;
                                             cv.end = seg_end;
                                             cv.done = at - cur_start;
                                         }
                                     }
-                                    let exhausted = planner.lock().await.commit(wid, at);
                                     if let Some(end) = exhausted {
                                         match planner.lock().await.absorb_next(wid, end) {
                                             Some(new_end) => {
@@ -404,26 +420,23 @@ fn sidecar_task(spec: &TaskSpec) -> SidecarTask {
 fn dynamic_sidecar_snapshot(
     spec: &TaskSpec,
     stamp: &ServerStamp,
-    planner: &Planner,
+    base_ranges: &[(u64, u64)],
     writer: &Writer,
     total: u64,
 ) -> Sidecar {
-    let segs: Vec<(u64, u64)> = planner
-        .sidecar_segments()
-        .into_iter()
-        .map(|(s, c)| (s, writer.flushed_extent_from(s).min(c)))
-        .filter(|(s, c)| c > s)
-        .collect();
+    let mut ranges: Vec<(u64, u64)> = base_ranges.to_vec();
+    ranges.extend(writer.flushed_ranges());
+    merge_byte_ranges(&mut ranges);
     Sidecar::build_dynamic(
         stamp,
         total,
-        &segs,
+        &ranges,
         expected_checksum(spec).as_ref(),
         sidecar_task(spec),
     )
 }
 
-async fn stop_dyn_workers(
+fn stop_dyn_workers(
     stop: &std::sync::atomic::AtomicBool,
     stop_tx: &watch::Sender<bool>,
     handles: &mut Vec<(usize, tokio::task::JoinHandle<()>)>,
@@ -431,7 +444,7 @@ async fn stop_dyn_workers(
     stop.store(true, Ordering::Relaxed);
     let _ = stop_tx.send(true);
     for (_, h) in handles.drain(..) {
-        let _ = h.await;
+        h.abort();
     }
 }
 
@@ -629,13 +642,19 @@ pub(super) async fn download_dynamic(
         MIN_PREEMPT,
     );
     let min_split = spec.min_split.max(1);
+    let cut_align = refine_http_grid(total, spec.block_size, spec.concurrency);
     let planner = match sc.as_ref() {
         Some(sidecar) if sidecar.is_dynamic() => {
             let gaps = gaps_of(&sidecar.resume_segments(), sidecar.size);
-            Planner::from_gaps(total, &gaps, min_split, preempt_after)
+            Planner::from_gaps(total, &gaps, min_split, cut_align, preempt_after)
         }
-        _ => Planner::new(total, min_split, preempt_after),
+        _ => Planner::new(total, min_split, cut_align, preempt_after),
     };
+    let resume_ranges: Vec<(u64, u64)> = sc
+        .as_ref()
+        .filter(|s| s.is_dynamic())
+        .map(|s| s.resume_segments())
+        .unwrap_or_default();
     let base_flushed = sc
         .as_ref()
         .filter(|s| s.is_dynamic())
@@ -670,7 +689,8 @@ pub(super) async fn download_dynamic(
             let _ = tokio::fs::rename(&dl_path, &final_path).await;
             let _ = Sidecar::remove(&sc_path);
         } else {
-            let sidecar = dynamic_sidecar_snapshot(spec, &probed_stamp, &planner, &writer, total);
+            let sidecar =
+                dynamic_sidecar_snapshot(spec, &probed_stamp, &resume_ranges, &writer, total);
             let _ = Sidecar::save(&sidecar, &sc_path);
         }
         let _ = emit(evt_tx, Evt::DownloadDone { id: spec.id, total }).await;
@@ -720,12 +740,6 @@ pub(super) async fn download_dynamic(
 
     let progress_tick = Duration::from_millis(spec.progress_tick_ms.max(1));
     let sidecar_flush = Duration::from_secs(spec.sidecar_flush_secs.max(1));
-    // 断点续传已收字节区间：pieces 投影基数（本会话落盘区间之外的历史进度）。
-    let resume_ranges: Vec<(u64, u64)> = sc
-        .as_ref()
-        .filter(|s| s.is_dynamic())
-        .map(|s| s.resume_segments())
-        .unwrap_or_default();
     let mut flush_deadline = tokio::time::Instant::now() + sidecar_flush;
     let mut last_sync = Instant::now();
     let mut last_sync_flushed = 0u64;
@@ -749,28 +763,23 @@ pub(super) async fn download_dynamic(
                 }
                 Some(TaskCmd::Pause) | Some(TaskCmd::Cancel) => {
                     let cancelled = cmd == Some(TaskCmd::Cancel);
-                    stop_dyn_workers(&stop, &stop_tx, &mut handles).await;
+                    stop_dyn_workers(&stop, &stop_tx, &mut handles);
                     let finish_res = writer.finish().await;
                     if cancelled {
                         return Flow::Cancelled;
                     }
                     if let Err(e) = finish_res {
-                        let planner_now = planner.lock().await;
                         let sidecar =
-                            dynamic_sidecar_snapshot(spec, &probed_stamp, &planner_now, &writer, total);
-                        drop(planner_now);
+                            dynamic_sidecar_snapshot(spec, &probed_stamp, &resume_ranges, &writer, total);
                         return Flow::Failed(
                             EngineFailure::fatal(format!("磁盘写入失败（{e}）")),
                             writer.total_pushed() > 0,
                             Some((sidecar, sc_path.clone())),
                         );
                     }
-                    let planner_now = planner.lock().await;
                     let sidecar =
-                        dynamic_sidecar_snapshot(spec, &probed_stamp, &planner_now, &writer, total);
-                    drop(planner_now);
+                        dynamic_sidecar_snapshot(spec, &probed_stamp, &resume_ranges, &writer, total);
                     return Flow::Paused(PausedState {
-                        blocks: Blocks::new(0, 1),
                         downloaded: flushed_total(),
                         sidecar,
                         sidecar_path: sc_path.clone(),
@@ -797,11 +806,11 @@ pub(super) async fn download_dynamic(
                 }
                 if !rescue_done && !deps.resume && range_ignored.load(Ordering::Relaxed) {
                     rescue_done = true;
-                    stop_dyn_workers(&stop, &stop_tx, &mut handles).await;
+                    stop_dyn_workers(&stop, &stop_tx, &mut handles);
                     let _ = writer.finish().await;
                     stop.store(false, Ordering::Relaxed);
                     let _ = stop_tx.send(false);
-                    *planner.lock().await = Planner::new(total, min_split, preempt_rescue);
+                    *planner.lock().await = Planner::new(total, min_split, cut_align, preempt_rescue);
                     let _ = quota_tx.send(1);
                     let rescue_client = shared.client_for(spec.proxy_endpoint.as_ref());
                     let rescue_resp = match req_with_identity(&rescue_client, &spec.url, None).send().await {
@@ -843,29 +852,36 @@ pub(super) async fn download_dynamic(
                     handles.push((1, deps.spawn(1, Arc::clone(shared), rescue_resp)));
                 }
                 if failure.lock().await.is_some() {
-                    stop_dyn_workers(&stop, &stop_tx, &mut handles).await;
+                    stop_dyn_workers(&stop, &stop_tx, &mut handles);
                     let _ = writer.finish().await;
                     let f = failure.lock().await.clone().unwrap_or_else(|| {
                         EngineFailure::network("传输中断")
                     });
-                    let planner_now = planner.lock().await;
                     let sidecar =
-                        dynamic_sidecar_snapshot(spec, &probed_stamp, &planner_now, &writer, total);
-                    drop(planner_now);
+                        dynamic_sidecar_snapshot(spec, &probed_stamp, &resume_ranges, &writer, total);
                     return Flow::Failed(
                         f,
                         base_flushed + writer.total_pushed() > 0,
                         Some((sidecar, sc_path.clone())),
                     );
                 }
-                let completed = planner.lock().await.completed_bytes();
+                let (completed, committed) = {
+                    let p = planner.lock().await;
+                    (p.completed_bytes(), p.committed_ranges())
+                };
                 let conns_now = conns.lock().await.clone();
                 let downloaded = completed;
-                // pieces 网格投影：resume 区间 ∪ 本会话落盘区间 → Done/Partial 集合。
+                // pieces 网格投影：resume 区间 ∪ 本会话落盘区间 ∪ 本会话已提交区间
+                // → Done/Partial 集合。刷盘回收由 chunk 步进驱动（absorb 只在
+                // step/finish），停包期间滞留队列与在途作业不回收，落盘区间滞后于
+                // 聚合游标：worker 移出块后其字节已全部提交，若只投影落盘区间，
+                // 已收满的块会被误判部分覆盖（🟨）——与列表 downloaded 口径脱节。
+                // 已提交区间与 downloaded 同源，保证网格绿块与百分比一致。
                 let mut ranges = resume_ranges.clone();
                 ranges.extend(writer.flushed_ranges());
+                ranges.extend(committed);
                 let (chunk_done_proj, done_blocks, partial_blocks) =
-                    project_ranges(total, spec.block_size, &ranges);
+                    project_ranges(total, cut_align, &ranges);
                 if !emit(evt_tx, Evt::Progress {
                     id: spec.id,
                     downloaded,
@@ -877,12 +893,15 @@ pub(super) async fn download_dynamic(
                     return Flow::Cancelled;
                 }
                 if completed >= total && total > 0 {
-                    stop_dyn_workers(&stop, &stop_tx, &mut handles).await;
+                    stop_dyn_workers(&stop, &stop_tx, &mut handles);
                     if let Err(e) = writer.finish().await {
-                        let planner_now = planner.lock().await;
-                        let sidecar =
-                            dynamic_sidecar_snapshot(spec, &probed_stamp, &planner_now, &writer, total);
-                        drop(planner_now);
+                        let sidecar = dynamic_sidecar_snapshot(
+                            spec,
+                            &probed_stamp,
+                            &resume_ranges,
+                            &writer,
+                            total,
+                        );
                         return Flow::Failed(
                             EngineFailure::fatal(format!("磁盘写入失败（{e}）")),
                             true,
@@ -898,10 +917,13 @@ pub(super) async fn download_dynamic(
                             ),
                             retry_after: None,
                         };
-                        let planner_now = planner.lock().await;
-                        let sidecar =
-                            dynamic_sidecar_snapshot(spec, &probed_stamp, &planner_now, &writer, total);
-                        drop(planner_now);
+                        let sidecar = dynamic_sidecar_snapshot(
+                            spec,
+                            &probed_stamp,
+                            &resume_ranges,
+                            &writer,
+                            total,
+                        );
                         return Flow::Failed(f, true, Some((sidecar, sc_path.clone())));
                     }
                     let has_checksum = spec.expected_algo.is_some();
@@ -909,10 +931,13 @@ pub(super) async fn download_dynamic(
                         let _ = tokio::fs::rename(&dl_path, &final_path).await;
                         let _ = Sidecar::remove(&sc_path);
                     } else {
-                        let planner_now = planner.lock().await;
-                        let sidecar =
-                            dynamic_sidecar_snapshot(spec, &probed_stamp, &planner_now, &writer, total);
-                        drop(planner_now);
+                        let sidecar = dynamic_sidecar_snapshot(
+                            spec,
+                            &probed_stamp,
+                            &resume_ranges,
+                            &writer,
+                            total,
+                        );
                         let _ = Sidecar::save(&sidecar, &sc_path);
                     }
                     let _ = emit(evt_tx, Evt::DownloadDone {
@@ -936,10 +961,8 @@ pub(super) async fn download_dynamic(
                         last_sync = Instant::now();
                         last_sync_flushed = flushed_now;
                     }
-                    let planner_now = planner.lock().await;
                     let sidecar =
-                        dynamic_sidecar_snapshot(spec, &probed_stamp, &planner_now, &writer, total);
-                    drop(planner_now);
+                        dynamic_sidecar_snapshot(spec, &probed_stamp, &resume_ranges, &writer, total);
                     let _ = Sidecar::save(&sidecar, &sc_path);
                 }
             }
@@ -984,6 +1007,7 @@ mod e2e_tests {
     use super::*;
     use crate::engine::supervisor::Flow;
     use crate::engine::EngineShared;
+    use crate::model::chunk::block_range;
     use crate::model::Protocol;
 
     fn fill(buf: &mut [u8], pos: u64) {
@@ -1016,6 +1040,44 @@ mod e2e_tests {
                     );
                     let _ = c.write_all(head.as_bytes());
                     let _ = c.write_all(&data);
+                    let _ = c.flush();
+                });
+            }
+        });
+        format!("http://{addr}/f.bin")
+    }
+
+    fn burst_server(total: u64, burst: usize, pause_ms: u64) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let data: Vec<u8> = (0..total as usize).map(|i| (i % 251) as u8).collect();
+            for conn in listener.incoming().flatten() {
+                let data = data.clone();
+                std::thread::spawn(move || {
+                    let mut c = conn;
+                    let mut r = BufReader::new(c.try_clone().unwrap());
+                    let mut line = String::new();
+                    while r.read_line(&mut line).unwrap_or(0) > 0 {
+                        if line == "\r\n" {
+                            break;
+                        }
+                        line.clear();
+                    }
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nAccept-Ranges: bytes\r\nContent-Length: {total}\r\nETag: \"mock-{total}\"\r\nLast-Modified: Mon, 09 Feb 2026 08:00:00 GMT\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = c.write_all(head.as_bytes());
+                    let mut pos = 0usize;
+                    while pos < data.len() {
+                        let n = burst.min(data.len() - pos);
+                        let _ = c.write_all(&data[pos..pos + n]);
+                        let _ = c.flush();
+                        pos += n;
+                        if pos < data.len() {
+                            std::thread::sleep(std::time::Duration::from_millis(pause_ms));
+                        }
+                    }
                     let _ = c.flush();
                 });
             }
@@ -1332,6 +1394,436 @@ mod e2e_tests {
         assert!(completed, "限速动态任务应完成");
         assert!(saw_done_growth, "下载过程中应观察到 done 块增长（🟩）");
         assert!(saw_partial, "下载过程中应观察到部分块（🟨）");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dynamic_done_blocks_track_committed_prefix_when_worker_advances() {
+        // 操作者报告回归：蓝块移入下一块后，原蓝块闪 🟨（部分下载）而非 🟩。
+        // 根因：Progress 投影只并集落盘区间（flushed），而刷盘回收由 chunk 步进驱动
+        // （absorb 只在 step/finish），停包期间滞留队列与在途作业不回收 →
+        // 聚合游标（= 列表 downloaded 同源口径）已覆盖整块，投影却仍判部分覆盖。
+        // 口径（conc=1 时 downloaded = 已提交前缀）：downloaded 覆盖的整块
+        // 必须当场 ∈ done_blocks 且 ∉ partial_blocks——worker 移出块的瞬间原块即 🟩。
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dyn-committed");
+        let total: u64 = 4 * 1024 * 1024;
+        let block = 1024 * 1024u64;
+        let url = burst_server(total, 1024 * 1024, 120);
+        let mut spec = dyn_spec(1, &url, &dir, 1);
+        spec.block_size = block;
+        let (_cmd_tx, mut rx, deadline) = launch(spec).await;
+        let y = 4u32;
+        let mut saw_meaningful = false;
+        let mut completed = false;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::Progress {
+                    downloaded,
+                    done_blocks,
+                    partial_blocks,
+                    ..
+                })) => {
+                    if downloaded >= block {
+                        saw_meaningful = true;
+                    }
+                    for b in 0..y {
+                        let bend = ((u64::from(b) + 1) * block).min(total);
+                        if bend <= downloaded {
+                            assert!(
+                                done_blocks.contains(&b),
+                                "downloaded={downloaded} 已提交覆盖整块 {b}，必须当场 🟩（done={done_blocks:?} partial={partial_blocks:?}）"
+                            );
+                            assert!(
+                                !partial_blocks.contains(&b),
+                                "downloaded={downloaded} 已提交覆盖整块 {b}，不得 🟨（partial={partial_blocks:?}）"
+                            );
+                        }
+                    }
+                }
+                Ok(Some(Evt::DownloadDone { .. })) => {
+                    completed = true;
+                    break;
+                }
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("突发服务器动态下载失败: {reason}"),
+                _ => {}
+            }
+        }
+        assert!(completed, "突发服务器任务应完成");
+        assert!(
+            saw_meaningful,
+            "应观察到 downloaded ≥ 1 块的 Progress 帧（不变式断言非空转）"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dynamic_vacated_blocks_turn_green_when_frontier_moves_on() {
+        // 操作者报告回归：并发下载中蓝色“正在下载”块移入下一块后，原块显示 🟨
+        // 而非 🟩。根因：try_split 切分点只按 4096 对齐，后继租约从块中间起步，
+        // 块头字节仍在前任租约未完成区域——后继移过该块时投影判部分覆盖。
+        // 修复口径：切分点落在块边界；任一连接租约内已移过的整块必须当场
+        // ∈ done_blocks 且 ∉ partial_blocks。
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dyn-vacated");
+        let total: u64 = 8 * 1024 * 1024;
+        let block: u64 = 1024 * 1024;
+        let url = burst_server(total, 64 * 1024, 5);
+        let mut spec = dyn_spec(1, &url, &dir, 2);
+        spec.block_size = block;
+        spec.task_max_download_speed = 2 * 1024 * 1024;
+        let (_cmd_tx, mut rx, deadline) = launch(spec).await;
+        let mut saw_vacated = false;
+        let mut completed = false;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::Progress {
+                    conns,
+                    done_blocks,
+                    partial_blocks,
+                    ..
+                })) => {
+                    for c in &conns {
+                        if c.end <= c.start {
+                            continue;
+                        }
+                        let pos = c.start + c.done;
+                        let mut b = c.start / block;
+                        while let Some((_, be)) = block_range(total, block, b as u32) {
+                            if be > pos {
+                                break;
+                            }
+                            saw_vacated = true;
+                            assert!(
+                                done_blocks.contains(&(b as u32)),
+                                "连接 lease_start={} pos={pos} 已移过块 {b}，必须当场 🟩（done={done_blocks:?} partial={partial_blocks:?}）",
+                                c.start
+                            );
+                            assert!(
+                                !partial_blocks.contains(&(b as u32)),
+                                "连接已移过块 {b} 不得 🟨（partial={partial_blocks:?}）"
+                            );
+                            b += 1;
+                        }
+                    }
+                }
+                Ok(Some(Evt::DownloadDone { .. })) => {
+                    completed = true;
+                    break;
+                }
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("并发动态下载失败: {reason}"),
+                _ => {}
+            }
+        }
+        assert!(completed, "并发动态任务应完成");
+        assert!(
+            saw_vacated,
+            "应观察到连接移过整块的前沿推进（不变式断言非空转）"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dynamic_straddling_chunk_across_absorbed_segment_keeps_stream_aligned() {
+        // 潜在 bug 回归：chunk 跨越段边界时 claim 只授予到段尾，剩余字节若被丢弃，
+        // absorb 接续同一条 HTTP 流后下一 chunk 会写到错误偏移（字节丢失/错位）。
+        // 修复口径：跨段剩余字节进 carry 缓冲，absorb 续流后先认领 carry。
+        // 服务器按 100 KiB 步进发送，250 KiB 切分点（非 16 KiB 对齐）必被某 chunk 跨越。
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dyn-straddle");
+        let total: u64 = 600 * 1024;
+        let url = burst_server(total, 100 * 1024, 30);
+        let mut spec = dyn_spec(1, &url, &dir, 2);
+        spec.block_size = 250 * 1024;
+        let (cmd_tx, mut rx, deadline) = launch(spec).await;
+        cmd_tx
+            .send(TaskCmd::Reconfigure {
+                concurrency: 1,
+                endpoint: None,
+                max_download_speed: 0,
+            })
+            .await
+            .unwrap();
+        let mut completed = false;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::DownloadDone { total: t, .. })) => {
+                    assert_eq!(t, total);
+                    completed = true;
+                    break;
+                }
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("跨段续流下载失败: {reason}"),
+                _ => {}
+            }
+        }
+        assert!(completed, "跨段续流任务应完成");
+        let data = std::fs::read(dir.join("f.bin")).unwrap();
+        assert_eq!(data.len() as u64, total, "文件长度完整");
+        let mut expect = vec![0u8; total as usize];
+        fill(&mut expect, 0);
+        let diffs: Vec<usize> = data
+            .iter()
+            .zip(expect.iter())
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            diffs.is_empty(),
+            "跨段字节流必须对齐: diffs={} first={} got={:?} want={:?}",
+            diffs.len(),
+            diffs.first().unwrap_or(&0),
+            diffs.first().map(|i| &data[*i..(*i + 8).min(data.len())]),
+            diffs
+                .first()
+                .map(|i| &expect[*i..(*i + 8).min(expect.len())])
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dynamic_refined_grid_restores_full_concurrency() {
+        // 速度回退回归：块对齐切分把并行度封顶在 UI 网格块数上（2 MiB 文件 1 MiB 网格
+        // 只能 2 连接）。修复 = refine_http_grid 收细网格保证块数 ≥ 并发；本例 2 MiB +
+        // 并发 4 → 512 KiB 网格 4 块 → 4 条块对齐并行连接。
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dyn-conc");
+        let total: u64 = 2 * 1024 * 1024;
+        let url = super::super::tests::mock_server(total, vec![("slow".into(), String::new())]);
+        let mut spec = dyn_spec(1, &url, &dir, 4);
+        spec.block_size = 1024 * 1024;
+        spec.task_max_download_speed = 512 * 1024;
+        let (_cmd_tx, mut rx, deadline) = launch(spec).await;
+        let mut peak_conns = 0usize;
+        let mut completed = false;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::Progress { conns, .. })) => {
+                    peak_conns = peak_conns.max(conns.len());
+                }
+                Ok(Some(Evt::DownloadDone { .. })) => {
+                    completed = true;
+                    break;
+                }
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("细化网格下载失败: {reason}"),
+                _ => {}
+            }
+        }
+        assert!(completed, "细化网格任务应完成");
+        assert!(
+            peak_conns >= 4,
+            "块数收细后必须达到满并发: peak={peak_conns}（切分封锁并行度回归）"
+        );
+        let data = std::fs::read(dir.join("f.bin")).unwrap();
+        assert_eq!(data.len() as u64, total, "文件长度完整");
+        let mut expect = vec![0u8; total as usize];
+        fill(&mut expect, 0);
+        assert!(data == expect, "细化网格并行下载字节完整");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dynamic_refined_grid_vacated_blocks_turn_green() {
+        // bug9 绿块不变式在细化网格场景的守护：2.8 MB + 并发 4 → 网格收细 512 KiB，
+        // 租约起点仍块对齐，任一连接移过的整块必当场 🟩 且不落 🟨。
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dyn-vacated-refined");
+        let total: u64 = 2_800_000;
+        let block = refine_http_grid(total, 1024 * 1024, 4);
+        assert_eq!(block, 512 * 1024, "2.8 MB + 并发 4 → 512 KiB 网格");
+        let url = super::super::tests::mock_server(total, vec![("slow".into(), String::new())]);
+        let mut spec = dyn_spec(1, &url, &dir, 4);
+        spec.block_size = 1024 * 1024;
+        spec.task_max_download_speed = 512 * 1024;
+        let (_cmd_tx, mut rx, deadline) = launch(spec).await;
+        let mut saw_spanning = false;
+        let mut frames = 0usize;
+        let mut completed = false;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::Progress {
+                    conns,
+                    done_blocks,
+                    partial_blocks,
+                    ..
+                })) => {
+                    frames += 1;
+                    for c in &conns {
+                        if c.end <= c.start {
+                            continue;
+                        }
+                        if c.end - c.start > block {
+                            saw_spanning = true;
+                        }
+                        let pos = c.start + c.done;
+                        let mut b = c.start / block;
+                        while let Some((_, be)) = block_range(total, block, b as u32) {
+                            if be > pos {
+                                break;
+                            }
+                            assert!(
+                                done_blocks.contains(&(b as u32)),
+                                "连接 lease_start={} pos={pos} 已移过块 {b}（512 KiB 网格），必须当场 🟩（done={done_blocks:?} partial={partial_blocks:?}）",
+                                c.start
+                            );
+                            assert!(
+                                !partial_blocks.contains(&(b as u32)),
+                                "连接已移过块 {b} 不得 🟨（partial={partial_blocks:?}）"
+                            );
+                            b += 1;
+                        }
+                    }
+                }
+                Ok(Some(Evt::DownloadDone { .. })) => {
+                    completed = true;
+                    break;
+                }
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("细化网格限速下载失败: {reason}"),
+                _ => {}
+            }
+        }
+        assert!(completed, "细化网格任务应完成");
+        assert!(
+            saw_spanning,
+            "细化网格下应存在跨块租约（鸽笼：块数 > 并发数）——布局未达可测前提"
+        );
+        assert!(
+            frames >= 10,
+            "进度帧采样不足（frames={frames}），不变式校验空转"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn dynamic_sidecar_snapshot_covers_gc_retired_ranges() {
+        // pieces 暂停→续传蓝块 bug 根因回归：gc 退役的完全落盘段必须进快照。
+        // 丢失时暂停 sidecar 缺已下载字节区间 → 续传把已下载块重下（🟦"正在下载"）
+        // 且 Progress 投影丢绿块（🟩→⬜）。
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dyn-snap");
+        let fp = dir.join("snap.bin");
+        std::fs::File::create(&fp).unwrap();
+        let w = Writer::open(&fp).unwrap();
+        let total: u64 = 2 * 1024 * 1024;
+        let mut p = Planner::new(total, 256 * 1024, 4096, MIN_PREEMPT);
+        p.assign(1, None).unwrap();
+        p.assign(2, None).unwrap();
+        let cut = p.segments()[1].start;
+        assert!(matches!(p.claim(1, 0, cut), Claim::Granted { .. }));
+        p.commit(1, cut);
+        assert!(matches!(p.claim(2, cut, 512 * 1024), Claim::Granted { .. }));
+        p.commit(2, cut + 512 * 1024);
+        w.push(0, &vec![0u8; cut as usize]).unwrap();
+        w.push(cut, &vec![0u8; 512 * 1024]).unwrap();
+        w.finish().await.unwrap();
+        assert_eq!(
+            p.gc(|s, e| w.flushed_extent_from(s).min(e)),
+            1,
+            "完全落盘段被 gc 退役"
+        );
+        p.check_invariants().unwrap();
+        let flushed_end = cut + 512 * 1024;
+
+        let spec = dyn_spec(1, "http://127.0.0.1/f.bin", &dir, 4);
+        let stamp = ServerStamp {
+            etag: None,
+            last_modified: None,
+            size: Some(total),
+        };
+        let sc = dynamic_sidecar_snapshot(&spec, &stamp, &[], &w, total);
+        assert_eq!(
+            sc.resume_segments(),
+            vec![(0, flushed_end)],
+            "快照必须覆盖 gc 退役区间（与 pieces 投影同源口径）"
+        );
+        assert_eq!(sc.downloaded, flushed_end, "sidecar 字节 = 真实落盘字节");
+        let (chunk_done, done_blocks, _) =
+            project_ranges(total, 1024 * 1024, &sc.resume_segments());
+        assert_eq!(chunk_done, 1, "退役段整块应投影为 Done（🟩）");
+        assert_eq!(done_blocks, vec![0], "续传投影不得丢已下载块");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn dynamic_resume_keeps_done_blocks_from_before_pause() {
+        // 操作者报告回归：HTTP 任务暂停→继续后 pieces 窗口已下载块变 🟦/⬜。
+        // 口径：sidecar 字节 = PausedDone 真实落盘字节；续传后任一 Progress 的
+        // done_blocks ⊇ 暂停前集合（已下载块恒 🟩）、downloaded 不回退。
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dyn-resume-pieces");
+        let total: u64 = 8 * 1024 * 1024;
+        let url = super::super::tests::mock_server(total, vec![("slow".into(), String::new())]);
+        let mut spec = dyn_spec(1, &url, &dir, 4);
+        spec.task_max_download_speed = 2 * 1024 * 1024;
+        let (cmd_tx, mut rx, deadline) = launch(spec).await;
+        let mut pre_done: Vec<u32> = Vec::new();
+        let mut paused_downloaded = 0u64;
+        let mut pause_sent = false;
+        let mut paused = false;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(300), rx.recv()).await {
+                Ok(Some(Evt::Progress { done_blocks, .. })) => {
+                    if done_blocks.len() >= 2 && !pause_sent {
+                        pause_sent = true;
+                        pre_done = done_blocks.clone();
+                        cmd_tx.send(TaskCmd::Pause).await.unwrap();
+                    }
+                }
+                Ok(Some(Evt::PausedDone { downloaded, .. })) => {
+                    paused_downloaded = downloaded;
+                    paused = true;
+                    break;
+                }
+                Ok(Some(Evt::DownloadDone { .. })) => panic!("应在暂停前截停"),
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("暂停前失败: {reason}"),
+                _ => {}
+            }
+        }
+        assert!(paused, "应收到 PausedDone");
+        assert!(pre_done.len() >= 2, "暂停前应观察到 ≥2 个绿块");
+        let sc_path = dir.join("f.bin.ezr");
+        let sc = Sidecar::load(sc_path.to_str().unwrap()).expect("暂停台账落盘");
+        assert_eq!(
+            sc.downloaded, paused_downloaded,
+            "暂停 sidecar 字节必须等于真实落盘字节（{} ≠ {}）",
+            sc.downloaded, paused_downloaded
+        );
+
+        let mut spec2 = dyn_spec(1, &url, &dir, 4);
+        spec2.sidecar = Some(sc);
+        spec2.sidecar_path = Some(sc_path.to_string_lossy().into_owned());
+        spec2.keep_name = true;
+        let (_cmd_tx2, mut rx2, deadline2) = launch(spec2).await;
+        let mut done = false;
+        let mut checked = false;
+        while std::time::Instant::now() < deadline2 {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx2.recv()).await {
+                Ok(Some(Evt::Progress {
+                    downloaded,
+                    done_blocks,
+                    ..
+                })) => {
+                    assert!(
+                        downloaded >= paused_downloaded,
+                        "续传 downloaded 不得回退（{downloaded} < {paused_downloaded}）"
+                    );
+                    if !done_blocks.is_empty() {
+                        let missing: Vec<u32> = pre_done
+                            .iter()
+                            .filter(|b| !done_blocks.contains(b))
+                            .copied()
+                            .collect();
+                        assert!(
+                            missing.is_empty(),
+                            "暂停前已下载块续传后必须仍为 Done（🟩），丢失: {missing:?}"
+                        );
+                        checked = true;
+                    }
+                }
+                Ok(Some(Evt::DownloadDone { .. })) => {
+                    done = true;
+                    break;
+                }
+                Ok(Some(Evt::Invalidated { .. })) => panic!("一致动态台账不应作废"),
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("动态续传失败: {reason}"),
+                _ => {}
+            }
+        }
+        assert!(done, "动态续传应完成");
+        assert!(checked, "续传过程应观察到 done 集合");
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -318,40 +318,42 @@ mod tick_tests {
         let addr = listener.local_addr().unwrap();
         std::thread::spawn(move || {
             for c in listener.incoming().flatten() {
-                let mut c = c;
-                let mut r = BufReader::new(c.try_clone().unwrap());
-                let mut line = String::new();
-                let mut range_start: u64 = 0;
-                while r.read_line(&mut line).unwrap_or(0) > 0 {
-                    if let Some(rest) = line.strip_prefix("Range: bytes=") {
-                        range_start = rest
-                            .split('-')
-                            .next()
-                            .and_then(|v| v.trim().parse().ok())
-                            .unwrap_or(0);
+                std::thread::spawn(move || {
+                    let mut c = c;
+                    let mut r = BufReader::new(c.try_clone().unwrap());
+                    let mut line = String::new();
+                    let mut range_start: u64 = 0;
+                    while r.read_line(&mut line).unwrap_or(0) > 0 {
+                        if let Some(rest) = line.strip_prefix("Range: bytes=") {
+                            range_start = rest
+                                .split('-')
+                                .next()
+                                .and_then(|v| v.trim().parse().ok())
+                                .unwrap_or(0);
+                        }
+                        if line == "\r\n" {
+                            break;
+                        }
+                        line.clear();
                     }
-                    if line == "\r\n" {
-                        break;
-                    }
-                    line.clear();
-                }
-                let remain = total.saturating_sub(range_start);
-                let head = format!(
-                    "HTTP/1.1 206 Partial Content\r\nContent-Length: {remain}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n"
-                );
-                let _ = c.write_all(head.as_bytes());
-                let _ = c.flush();
-                let mut sent: u64 = 0;
-                while sent < remain {
-                    let n = 4096usize.min((remain - sent) as usize);
-                    if c.write_all(&vec![7u8; n]).is_err() {
-                        break;
-                    }
+                    let remain = total.saturating_sub(range_start);
+                    let head = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Length: {remain}\r\nContent-Range: bytes {range_start}-{end}/{total}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
+                        end = total.saturating_sub(1)
+                    );
+                    let _ = c.write_all(head.as_bytes());
                     let _ = c.flush();
-                    sent += n as u64;
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                }
-                drop(c);
+                    let mut sent: u64 = 0;
+                    while sent < remain {
+                        let n = 4096usize.min((remain - sent) as usize);
+                        if c.write_all(&vec![7u8; n]).is_err() {
+                            break;
+                        }
+                        let _ = c.flush();
+                        sent += n as u64;
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                });
             }
         });
         addr
@@ -444,6 +446,122 @@ mod tick_tests {
             app.tasks[0].state == TaskState::Downloading,
             "缩容不打断下载"
         );
+        app.shutdown().await;
+        std::fs::remove_dir_all(&save).ok();
+    }
+
+    #[tokio::test]
+    async fn resume_download_shows_active_blocks_and_four_states() {
+        let addr = stub_206_range_trickle(8_000_000);
+        let mut app = make_app("resume-blue");
+        let save = crate::model::testenv::uniq_tmp_dir("ezr-tick-save-rb");
+        app.add_cli_task(
+            format!("http://{addr}/stub-rb.bin"),
+            Some(save.to_string_lossy().into_owned()),
+            Some(4),
+            None,
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        pump_until(&mut app, deadline, |a| {
+            a.tasks[0].state == TaskState::Downloading
+        })
+        .await;
+        let mut pre_done: Vec<u32> = Vec::new();
+        let mut blue_before_pause = false;
+        while std::time::Instant::now() < deadline
+            && (pre_done.is_empty() || app.tasks[0].partial_blocks.is_empty())
+        {
+            app.tick().await;
+            let v = app.tasks[0].pieces();
+            if v.contains(&crate::model::PieceState::Active) {
+                blue_before_pause = true;
+            }
+            if v.iter()
+                .filter(|s| **s == crate::model::PieceState::Done)
+                .count()
+                >= 1
+            {
+                pre_done = app.tasks[0].done_blocks.clone();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+        assert!(blue_before_pause, "首段下载应出现 🟦 下载中块");
+        assert!(!pre_done.is_empty(), "暂停前应观察到 ≥1 绿块");
+        app.toggle_pause();
+        pump_until(&mut app, deadline, |a| {
+            a.tasks[0].state == TaskState::Paused
+        })
+        .await;
+        for _ in 0..20 {
+            app.tick().await;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let v = app.tasks[0].pieces();
+        let lost: Vec<u32> = pre_done
+            .iter()
+            .filter(|b| v.get(**b as usize) != Some(&crate::model::PieceState::Done))
+            .copied()
+            .collect();
+        assert!(lost.is_empty(), "暂停后绿块不得丢失: {lost:?}");
+        assert!(
+            !v.contains(&crate::model::PieceState::Active),
+            "暂停后不得有 🟦（下载中）"
+        );
+        let frontier_has_tail = app.tasks[0]
+            .connections
+            .iter()
+            .any(|c| c.cap() > 0 && c.done > 0);
+        assert!(
+            !frontier_has_tail || v.contains(&crate::model::PieceState::Partial),
+            "暂停后零头块应显示 🟨 部分下载"
+        );
+        let untouched_at_pause = v
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| **s == crate::model::PieceState::Empty)
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>();
+        app.toggle_pause();
+        pump_until(&mut app, deadline, |a| {
+            a.tasks[0].state == TaskState::Downloading
+        })
+        .await;
+        let paused_bytes = app.tasks[0].downloaded;
+        let mut saw_blue = false;
+        let mut saw_green = false;
+        let mut saw_empty = false;
+        let mut min_downloaded = u64::MAX;
+        while std::time::Instant::now() < deadline {
+            app.tick().await;
+            if app.tasks[0].state == TaskState::Completed {
+                break;
+            }
+            min_downloaded = min_downloaded.min(app.tasks[0].downloaded);
+            let v = app.tasks[0].pieces();
+            if v.contains(&crate::model::PieceState::Active) {
+                saw_blue = true;
+            }
+            if v.contains(&crate::model::PieceState::Done) {
+                saw_green = true;
+            }
+            if v.contains(&crate::model::PieceState::Empty) {
+                saw_empty = true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+        assert_eq!(app.tasks[0].state, TaskState::Completed, "续传应完成");
+        assert!(
+            min_downloaded >= paused_bytes,
+            "续传不得作废重下（downloaded 回退到 {min_downloaded} < {paused_bytes}）"
+        );
+        assert!(saw_blue, "续传过程应出现 🟦 下载中块（操作者报告回归）");
+        assert!(saw_green, "续传过程应保留 🟩 已下载块");
+        if !untouched_at_pause.is_empty() {
+            assert!(
+                saw_empty,
+                "暂停时存在未触碰块 {untouched_at_pause:?}，续传过程应存在 ⬜"
+            );
+        }
         app.shutdown().await;
         std::fs::remove_dir_all(&save).ok();
     }
@@ -554,6 +672,7 @@ mod tick_tests {
             made_progress: false,
             downloaded: 999_999,
             chunk_done: 0,
+            done_blocks: Vec::new(),
             partial_blocks: Vec::new(),
         })
         .await;
@@ -678,6 +797,55 @@ mod evt_tests {
         })
         .await;
         assert!(app.tasks.is_empty(), "未知 id：无任务被创建或修改");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn probed_dynamic_refines_block_grid_to_fit_concurrency() {
+        let mut app = make_app("probe-refine");
+        let mut t = seed_task(1, "f.bin");
+        t.concurrency = 4;
+        t.block_size = 1_048_576;
+        app.tasks.push(t);
+        app.on_evt(Evt::Probed {
+            id: 1,
+            name: "f.bin".to_string(),
+            total: 2 * 1024 * 1024,
+            resumable: true,
+            etag: None,
+            last_modified: None,
+            dynamic: true,
+        })
+        .await;
+        let t = &app.tasks[0];
+        assert_eq!(
+            t.block_size,
+            512 * 1024,
+            "2 MiB + 并发 4 → 动态网格收细 512 KiB（引擎切分网格同源）"
+        );
+        assert_eq!(t.total, 2 * 1024 * 1024);
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn probed_blocks_mode_keeps_configured_block_size() {
+        let mut app = make_app("probe-keep");
+        let mut t = seed_task(1, "f.bin");
+        t.concurrency = 4;
+        t.block_size = 1_048_576;
+        app.tasks.push(t);
+        app.on_evt(Evt::Probed {
+            id: 1,
+            name: "f.bin".to_string(),
+            total: 2 * 1024 * 1024,
+            resumable: true,
+            etag: None,
+            last_modified: None,
+            dynamic: false,
+        })
+        .await;
+        let t = &app.tasks[0];
+        assert_eq!(t.block_size, 1_048_576, "blocks 模式块模型不变（FR-05-03）");
         app.shutdown().await;
     }
 
@@ -994,6 +1162,7 @@ mod evt_tests {
             id: 1,
             downloaded: 500,
             chunk_done: 1,
+            done_blocks: vec![0],
             partial_blocks: vec![1, 3, 4],
         })
         .await;
@@ -1011,6 +1180,7 @@ mod evt_tests {
             made_progress: false,
             downloaded: 500,
             chunk_done: 1,
+            done_blocks: vec![0],
             partial_blocks: vec![1, 4],
         })
         .await;
@@ -1041,6 +1211,7 @@ mod evt_tests {
             id: 1,
             downloaded: 50,
             chunk_done: 2,
+            done_blocks: vec![0, 1],
             partial_blocks: Vec::new(),
         })
         .await;
@@ -1066,6 +1237,7 @@ mod evt_tests {
             id: 1,
             downloaded: 50,
             chunk_done: 0,
+            done_blocks: Vec::new(),
             partial_blocks: Vec::new(),
         })
         .await;
@@ -1092,6 +1264,7 @@ mod evt_tests {
             made_progress: false,
             downloaded: 400,
             chunk_done: 1,
+            done_blocks: Vec::new(),
             partial_blocks: Vec::new(),
         })
         .await;
@@ -1126,6 +1299,7 @@ mod evt_tests {
             made_progress: true,
             downloaded: 0,
             chunk_done: 0,
+            done_blocks: Vec::new(),
             partial_blocks: Vec::new(),
         })
         .await;
@@ -1153,6 +1327,7 @@ mod evt_tests {
             made_progress: false,
             downloaded: 0,
             chunk_done: 0,
+            done_blocks: Vec::new(),
             partial_blocks: Vec::new(),
         })
         .await;
@@ -1261,6 +1436,41 @@ mod evt_tests {
         assert!(
             std::path::Path::new(&app.registry_path).exists(),
             "完成态即时落盘注册表"
+        );
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn download_done_normalizes_pieces_to_all_green() {
+        let mut app = make_app("done-green");
+        let mut t = seed_task(1, "f.bin");
+        t.state = TaskState::Downloading;
+        t.has_slot = true;
+        t.total = 4_000_000;
+        t.block_size = 1_000_000;
+        t.downloaded = 3_000_000;
+        t.chunk_done = 2;
+        t.done_blocks = vec![0, 1];
+        t.partial_blocks = vec![1, 2, 3];
+        app.tasks.push(t);
+        app.on_evt(Evt::DownloadDone {
+            id: 1,
+            total: 4_000_000,
+        })
+        .await;
+        let t = &app.tasks[0];
+        assert_eq!(t.state, TaskState::Completed, "无校验值直接完成");
+        assert_eq!(t.chunk_done, 4, "完成态块数 = 全块");
+        assert_eq!(
+            t.done_blocks,
+            vec![0, 1, 2, 3],
+            "DownloadDone 落地全绿集合（100% 黄块残留修复）"
+        );
+        assert!(t.partial_blocks.is_empty(), "完成态不得残留部分下载集合");
+        let v = t.pieces();
+        assert!(
+            v.iter().all(|s| *s == crate::model::PieceState::Done),
+            "完成态 pieces 全绿: {v:?}"
         );
         app.shutdown().await;
     }
@@ -1562,6 +1772,7 @@ mod evt_tests {
             made_progress: false,
             downloaded: 100,
             chunk_done: 1,
+            done_blocks: Vec::new(),
             partial_blocks: Vec::new(),
         })
         .await;

@@ -131,7 +131,6 @@ pub(super) async fn single_stream(
                     let downloaded = ledger.downloaded();
                     let sidecar = build_sidecar(spec, stamp, &ledger, !multi_ok);
                     return Flow::Paused(PausedState {
-                        blocks: ledger,
                         downloaded,
                         sidecar,
                         sidecar_path: sc_path.to_string(),

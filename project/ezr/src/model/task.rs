@@ -329,7 +329,11 @@ impl Task {
                 if c.cap() == 0 {
                     continue;
                 }
-                let idx = (c.start / self.block_size) as usize;
+                let idx = if downloading && c.done < c.cap() {
+                    ((c.start + c.done) / self.block_size) as usize
+                } else {
+                    (c.start / self.block_size) as usize
+                };
                 if idx >= y {
                     continue;
                 }
@@ -518,6 +522,57 @@ mod tests {
         assert_eq!(v[1], PieceState::Empty, "块 1 无连接持有（跳过）");
         assert_eq!(v[2], PieceState::Done, "块 2 乱序写满 → 🟩");
         assert_eq!(v[3], PieceState::Empty);
+    }
+
+    #[test]
+    fn pieces_active_marks_current_position_block_on_long_lease() {
+        let mut t = crate::model::sample_task();
+        t.total = 8_000_000;
+        t.block_size = 1_000_000;
+        t.state = TaskState::Downloading;
+        t.probed = true;
+        t.resumable = true;
+        t.done_blocks = vec![0, 1];
+        t.chunk_done = 2;
+        t.connections = vec![Connection {
+            id: 1,
+            start: 1_500_000,
+            end: 8_000_000,
+            done: 500_000,
+        }];
+        let v = t.pieces();
+        assert_eq!(v[0], PieceState::Done);
+        assert_eq!(v[1], PieceState::Done, "租约起始块已整块落盘 → 保持 🟩");
+        assert_eq!(
+            v[2],
+            PieceState::Active,
+            "写入位置 2.0MB 在块 2 → 🟦 画在当前块（旧口径画在租约起点块 1 被绿压制 → 全窗无 🟦）"
+        );
+    }
+
+    #[test]
+    fn pieces_active_position_block_at_exact_boundary_moves_forward() {
+        let mut t = crate::model::sample_task();
+        t.total = 8_000_000;
+        t.block_size = 1_000_000;
+        t.state = TaskState::Downloading;
+        t.probed = true;
+        t.resumable = true;
+        t.done_blocks = vec![0, 1, 2, 3];
+        t.chunk_done = 4;
+        t.connections = vec![Connection {
+            id: 1,
+            start: 1_500_000,
+            end: 8_000_000,
+            done: 2_500_000,
+        }];
+        let v = t.pieces();
+        assert_eq!(v[3], PieceState::Done, "块 3 已整块落盘");
+        assert_eq!(
+            v[4],
+            PieceState::Active,
+            "写入位置恰在 4.0MB 块边界 → 🟦 落在新块 4"
+        );
     }
 
     #[test]

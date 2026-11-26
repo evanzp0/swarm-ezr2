@@ -1016,3 +1016,65 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 ## 动态引擎测试（2026-11-25，coder phase-05）追加
 - e2e 竞速与暂停触发：全速 mock 下 2 MiB 秒完，「进度>256 KiB 即 Pause」的暂停触发会输给下载完成——暂停类测试用 slow mock（8 KiB/15ms）把窗口拉到秒级；测字节完整性用确定性 fill(pos) 内容（跨服务器实例续传也成立）。
 - cargo test 超时误判：大 crate 增量编译 60-90s，杀掉编译后再跑会反复触发重编——长时间编译单独跑一次（build --tests），测试运行与编译分开限时；被杀的编译留下脏状态是「测试挂死」假象的主因之一。
+
+## 集成套件既有失败的基线对照纪律（2026-11-26，coder 蓝块轮）
+- **现象**：全量集成实跑发现 10 个失败（hardening_g_engine 2、g_v147 5、v115 2、ui_backfill 1），其中失败断言信息直指"突变体被放行"等历史加固语义，与当轮改动面（dynamic.rs sidecar 快照）无文件交集。
+- **处置**：`git stash push` → 同命令复跑失败用例 → `git stash pop`，三条家族代表用例在基线上逐一复现失败 → 判定既有失败，登记 handoff 遗留项并按族归因，不顺手越权修复；对照必须 stash 前后同语境（同命令、同环境）。
+- **根因（三族）**：①phase-05 D84 把默认 scheduler 改 dynamic 后，blocks sidecar 也被路由进 download_dynamic，其一致性/孤儿裁决只包在 `if resume`（dynamic sidecar）臂内 → 作废/改道臂失效；②动态引擎 D87 降级 rescue（Range 失效改单流）与旧失败语义预期冲突（403 块请求被 rescue 完成、body EOF 分类 Transient）；③gen 剥头副本在 phase-05 改 src/ui/detail.rs 后未重新生成。教训：默认开关翻转轮（mode-flip）必须全量实跑集成套件而不是子集，"上轮账全绿"只对其实跑过的子集有效。
+
+## HTTP 续传 e2e 桩服务两条纪律：206 必带 Content-Range + 逐连接线程
+- **现象**：app 层暂停→继续 e2e 两族假象——①桩 206 不带 Content-Range → 续传探测
+  `head.total` 落到 Content-Length（剩余长度）→ consistency 失效作废断点 → 静默从头
+  重下，断言全绿但根本没测续传；②桩 accept 循环单线程逐个服务连接 → 多 worker 只有
+  一个在传，其余饿死并触发 preempt 抖动（60s 不完成假红）。
+- **处置**：①stub 206 响应必带 `Content-Range: bytes {start}-{end}/{total}`（产品
+  `probe_head` 的 content_range_total 优先于 Content-Length，缺头时 total=剩余长度）；
+  ②桩 accept 循环逐连接 `thread::spawn`；e2e 加「downloaded 不得回退」断言锁死作废
+  重下路径（回退即作废，静默污染无所遁形）。
+- **根因**：桩服务的协议完备度决定被测路径的真实性——产品按 RFC 把「206 缺
+  Content-Range」当无法核验总长处理是正确行为；测试污染的表象是「测试通过」而非报错，
+  判别探针 = 引擎 Progress 的 conns 数与 done 增长（饿死 = 多数 conn done 恒 0）。
+
+## coder 轮复现操作者 TUI 报告：harness.EzrApp + Fixture 一次性探针（.work/tmp）
+- **处置**：PTY 驱动真实 TUI 的诊断探针脚本放 `.work/tmp/`（会话级，不入 project/）：
+  `sys.path.insert` 引 `qa/runners/harness.py`，EzrApp（按键注入 + pyte 画面）+
+  Fixture（`?speed=` 门控稳定观察窗）+ screen buffer 逐格计数四色块；引擎侧探针用
+  「feature 门控 + 文件落盘」而非 eprintln——PTY 会把 stderr 混进画面污染 pyte；
+  交付前删除探针代码与 feature。
+- **根因**：操作者报告的 TUI 显示缺陷在单元/app e2e 层可能根本不复现（本轮 app 层
+  四态 e2e 全绿、真实 TUI 却 🟦=0 全程）——端到端 PTY 逐帧采样是 TUI 投影类报告的
+  唯一可信复现层，也是修复效果的最终验收层。
+
+## 四态 e2e 断言必须以暂停形状为条件（2026-11-26，coder 续传残留轮）
+- **现象**：续传 e2e「续传过程应存在 ⬜」断言偶发失败——暂停时 4 个 worker 各自跨过块
+  边界，全部块已被触碰（done∪partial=全块），续传期间合法地没有 ⬜；旧代码却长期
+  通过，因为旧暂停显示滞后最后一次 Progress（白块残影），断言靠假象通过。
+- **处置**：先在暂停采样点记录 `untouched_at_pause`（pieces 为 Empty 的块），续传断言
+  改为「暂停时存在未触碰块 ⇒ 续传过程必须出现 ⬜」；并把暂停触发提前到首块绿
+  （pre_done ≥1）使白块在续传窗口内稳定存在。
+- **根因**：暂停快照的块形状由 worker 写入位置决定（对齐分段下每 worker 跨 2 块 =
+  全触碰），显示修复（陈旧→精确）会把旧断言的运气翻转成失败——**四态 e2e 的状态
+  存在性断言必须以被测时刻的真实集合形状为前提，不能用上一版渲染缺陷当期望值**。
+
+## 分配顺序的外部证据法：fixture JSONL Range 日志（2026-11-26，coder 续传残留轮）
+- **处置**：验证「续传是否优先续下部分块」无需引擎插桩——Fixture `--log` 落 JSONL
+  （ts/method/path/range），续传批次的 Range 起点即 worker 分配点；全部命中部分段
+  终点（如 bytes=246000- / 1294576-）即证明 planner 从黄块残留字节续下。配套单元
+  特征测试：`from_gaps_resume_starts_inside_partial_block_residues`（注意 from_gaps
+  入参是缺口=已下载区间的补集，不是已下载区间本身）。
+- **根因**：分配顺序属引擎内部时序，UI 断言只能看结果色块；请求日志是无侵入的外部
+  真值源，把「分配语义」验证从推理变成逐字节对账。
+
+## 速度回退修复轮（20261126）追加
+- burst_server 夹具不解析 Range 头：非 primed worker 的 `bytes=N-` 请求收 200 → range_ignored
+  退出，只剩 primed 单连接——并行度类 e2e 必须用 mock_server（206 + Content-Range + slow 模式），
+  服务器侧并行实证走 fixture JSONL 日志（Range 请求条数 + 起点 = 并行数 + 对齐双证据）。
+- 细化网格 vacated 不变式 e2e 的哨兵选型：跨块租约会被空闲 worker 在首个内部块边界切走
+  （限速桶 burst=rate×burst_secs 让首 worker 提前完成是触发器），前沿越界瞬间恰逢租约旋转时
+  50ms 进度帧采样抓不到越界帧 → saw_vacated「必须观测到越界」哨兵间歇假失败；换 saw_spanning
+  （鸽笼：块数 > 并发数 ⟹ 必存在跨块租约）+ frames ≥ 10 采样充足哨兵，不变式断言本体保持
+  逐帧全检。哨兵断言必须区分「性质验证」（可确定性保证）与「事件观测」（依赖时序窗口）。
+- 负载敏感 e2e 三连判据沿用：单跑绿 + 全量复跑绿 + 探针帧模式取证（临时 EZR_PROBE eprintln
+  注入 → 跑 6 次 → 对比失败样本帧序列）定性根因后撤探针。
+- app 侧 Probed 细化接线测试注意：全部既有 app Probed 测试均 dynamic:false——新增 dynamic:true
+  用例才覆盖 t.block_size 回写链；blocks 模式不变式需独立反例用例钉住。

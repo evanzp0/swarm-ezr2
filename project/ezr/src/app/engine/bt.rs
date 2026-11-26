@@ -121,7 +121,7 @@ impl App {
 
     pub(super) fn on_bt_failed(&mut self, id: u32, kind: FailKind, reason: String) {
         self.bt_stopping.remove(&id);
-        self.handle_failure(id, kind, reason, None, true, 0, 0, Vec::new());
+        self.handle_failure(id, kind, reason, None, true, 0, 0, None, Vec::new());
     }
 }
 

@@ -9,5 +9,6 @@ pub(crate) use lease::spread_bytes;
 #[allow(unused_imports)]
 pub use plan::BT_CHUNK_SIZE;
 pub use plan::{
-    block_range, chunk_total, fmt_block_size, project_ranges, HTTP_CHUNK_SIZE, MIN_HTTP_BLOCK_SIZE,
+    block_range, chunk_total, fmt_block_size, merge_byte_ranges, project_ranges, refine_http_grid,
+    HTTP_CHUNK_SIZE, MIN_HTTP_BLOCK_SIZE,
 };

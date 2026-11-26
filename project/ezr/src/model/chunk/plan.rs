@@ -61,6 +61,18 @@ pub fn merge_byte_ranges(ranges: &mut Vec<(u64, u64)>) {
     }
 }
 
+/// 动态模式切分与 pieces 网格粒度：保证网格块数 ≥ 并发连接数。
+pub fn refine_http_grid(total: u64, block: u64, concurrency: usize) -> u64 {
+    let block = block.max(1);
+    let conc = u64::try_from(concurrency.max(1)).unwrap_or(u64::MAX);
+    if total == 0 || u64::from(chunk_total(total, block)) >= conc {
+        return block;
+    }
+    let target = (total / conc).max(1);
+    let refined = target / MIN_HTTP_BLOCK_SIZE * MIN_HTTP_BLOCK_SIZE;
+    refined.max(MIN_HTTP_BLOCK_SIZE).min(block)
+}
+
 /// 把已收字节区间投影到分块网格（piece 与 pieces 窗口同口径）：
 /// 返回 (chunk_done, done_blocks, partial_blocks)。
 /// 整块被覆盖 → Done；部分覆盖 → Partial；零覆盖 → 不入集合（Empty）。
@@ -189,5 +201,60 @@ mod tests {
         let mb = 1_048_576u64;
         let (x, done, part) = project_ranges(5 * mb, mb, &[]);
         assert_eq!((x, done, part), (0, Vec::new(), Vec::new()), "无区间全空");
+    }
+
+    #[test]
+    fn refine_keeps_block_when_blocks_cover_concurrency() {
+        let mb = 1_048_576u64;
+        assert_eq!(
+            refine_http_grid(12 * mb, mb, 8),
+            mb,
+            "12 块 ≥ 8 并发原样返回"
+        );
+        assert_eq!(refine_http_grid(100 * mb, mb, 8), mb);
+        assert_eq!(refine_http_grid(2 * mb, mb, 2), mb, "2 块 ≥ 2 并发不收细");
+    }
+
+    #[test]
+    fn refine_shrinks_grid_to_fit_concurrency() {
+        let mb = 1_048_576u64;
+        let g = refine_http_grid(2 * mb, mb, 8);
+        assert_eq!(g, 256 * 1024, "2 MiB / 8 并发 → 256 KiB 网格");
+        assert!(u64::from(chunk_total(2 * mb, g)) >= 8, "细化后块数 ≥ 并发");
+        let g = refine_http_grid(2 * mb, mb, 4);
+        assert_eq!(g, 512 * 1024, "2 MiB / 4 并发 → 512 KiB 网格");
+        assert_eq!(chunk_total(2 * mb, g), 4);
+        let g = refine_http_grid(5_600_000, mb, 8);
+        assert_eq!(g, 512 * 1024, "target 700 KiB 向下对齐 256 KiB 倍数");
+        assert!(u64::from(chunk_total(5_600_000, g)) >= 8);
+    }
+
+    #[test]
+    fn refine_floors_at_min_block_when_target_below() {
+        let mb = 1_048_576u64;
+        let g = refine_http_grid(mb, mb, 8);
+        assert_eq!(g, MIN_HTTP_BLOCK_SIZE, "1 MiB / 8 并发 → 下限 256 KiB");
+        assert!(chunk_total(mb, g) >= 2, "13-http-turbo-02 one-m ≥ 2 连接");
+        assert_eq!(refine_http_grid(600 * 1024, mb, 8), MIN_HTTP_BLOCK_SIZE);
+    }
+
+    #[test]
+    fn refine_is_idempotent_and_never_exceeds_configured_block() {
+        let mb = 1_048_576u64;
+        let g = refine_http_grid(2 * mb, mb, 8);
+        assert_eq!(refine_http_grid(2 * mb, g, 8), g, "细化值再细化不变");
+        assert_eq!(refine_http_grid(2 * mb, g, 4), g, "已足块数不回粗");
+        assert_eq!(
+            refine_http_grid(600 * 1024, MIN_HTTP_BLOCK_SIZE, 8),
+            MIN_HTTP_BLOCK_SIZE
+        );
+    }
+
+    #[test]
+    fn refine_zero_total_and_single_concurrency_untouched() {
+        let mb = 1_048_576u64;
+        assert_eq!(refine_http_grid(0, mb, 8), mb);
+        assert_eq!(refine_http_grid(10 * mb, mb, 1), mb, "并发 1 永不收细");
+        assert_eq!(refine_http_grid(10 * mb, mb, 0), mb, "并发 0 视为 1");
     }
 }

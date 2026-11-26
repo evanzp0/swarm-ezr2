@@ -22,11 +22,21 @@ pub(super) fn task_lines(
     ]
 }
 
+/// 列表百分比：未收满一律地板到 0.1%（99.96% 四舍五入会显示成 100.0%，
+/// 伴随尾部传输被读作「100% 后还在继续下载」）；收满即精确 100.0%。
+fn display_percent(t: &Task) -> f64 {
+    if t.downloaded < t.total {
+        (t.progress() * 1000.0).floor() / 10.0
+    } else {
+        t.progress() * 100.0
+    }
+}
+
 fn title_row(t: &Task, sel: bool, width: usize) -> Vec<Span<'static>> {
     let state_c = state_color(t.state);
     let known = t.size_known();
     let pct_txt = if known {
-        format!("{:>5.1}%", t.progress() * 100.0)
+        format!("{:>5.1}%", display_percent(t))
     } else {
         "    ?%".to_string()
     };
@@ -328,6 +338,24 @@ mod tests {
         assert!(s.contains("33.3%"), "百分比: {s}");
         let row = title_row(&t, false, 60);
         assert!(text_of(&row).starts_with("  "));
+    }
+
+    #[test]
+    fn percent_floors_below_full_and_shows_exact_at_full() {
+        let mut t = mk(TaskState::Downloading, false);
+        t.total = 1_000_000;
+        t.downloaded = 999_600;
+        let s = text_of(&title_row(&t, false, 80));
+        assert!(s.contains("99.9%"), "99.96% 应地板到 99.9%: {s}");
+        assert!(!s.contains("100.0%"), "未收满不得显示 100.0%: {s}");
+        t.downloaded = 1_000_000;
+        let s = text_of(&title_row(&t, false, 80));
+        assert!(s.contains("100.0%"), "收满即 100.0%: {s}");
+        let mut t2 = mk(TaskState::Paused, false);
+        t2.total = 1_000_000;
+        t2.downloaded = 999_600;
+        let s = text_of(&title_row(&t2, false, 80));
+        assert!(!s.contains("100.0%"), "暂停未收满同样不得显示 100.0%: {s}");
     }
 
     #[test]

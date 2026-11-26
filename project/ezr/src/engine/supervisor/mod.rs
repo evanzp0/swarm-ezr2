@@ -6,7 +6,9 @@ use tokio::sync::mpsc;
 
 use super::error::EngineFailure;
 use super::{Evt, TaskCmd};
-use crate::model::chunk::{block_range, Blocks};
+use crate::model::chunk::block_range;
+#[cfg(test)]
+use crate::model::chunk::Blocks;
 use crate::model::config::ProxyEndpoint;
 #[cfg(test)]
 use crate::model::consistency::ServerStamp;
@@ -141,12 +143,15 @@ pub(crate) async fn run(
         Flow::Completed => {}
         Flow::Paused(state) => {
             let _ = Sidecar::save(&state.sidecar, &state.sidecar_path);
+            let (chunk_done, done_blocks, partial_blocks) =
+                projection_of(&state.sidecar, spec.block_size, spec.concurrency);
             let _ = evt_tx
                 .send(Evt::PausedDone {
                     id: spec.id,
                     downloaded: state.downloaded,
-                    chunk_done: state.blocks.completed(),
-                    partial_blocks: state.blocks.partial_indices(),
+                    chunk_done,
+                    done_blocks,
+                    partial_blocks,
                 })
                 .await;
         }
@@ -157,9 +162,12 @@ pub(crate) async fn run(
             if let Some((sc, sc_path)) = &sidecar {
                 let _ = Sidecar::save(sc, sc_path);
             }
-            let (downloaded, chunk_done, partial_blocks) = match &sidecar {
-                Some((sc, _)) => (sc.downloaded, completed_of(sc), partial_of(sc)),
-                None => (0, 0, Vec::new()),
+            let (downloaded, chunk_done, done_blocks, partial_blocks) = match &sidecar {
+                Some((sc, _)) => {
+                    let (cd, db, pb) = projection_of(sc, spec.block_size, spec.concurrency);
+                    (sc.downloaded, cd, db, pb)
+                }
+                None => (0, 0, Vec::new(), Vec::new()),
             };
             let _ = evt_tx
                 .send(Evt::Failed {
@@ -170,6 +178,7 @@ pub(crate) async fn run(
                     made_progress,
                     downloaded,
                     chunk_done,
+                    done_blocks,
                     partial_blocks,
                 })
                 .await;
@@ -186,23 +195,27 @@ pub(crate) async fn run(
     }
 }
 
-fn completed_of(sc: &Sidecar) -> u32 {
-    sc.blocks
-        .iter()
-        .zip(0u32..)
-        .filter(|(w, i)| block_range(sc.size, sc.block_size, *i).is_some_and(|(s, e)| **w >= e - s))
-        .count() as u32
-}
-
-fn partial_of(sc: &Sidecar) -> Vec<u32> {
-    sc.blocks
-        .iter()
-        .zip(0u32..)
-        .filter(|(w, i)| {
-            block_range(sc.size, sc.block_size, *i).is_some_and(|(s, e)| **w > 0 && **w < e - s)
-        })
-        .map(|(_, i)| i)
-        .collect()
+fn projection_of(sc: &Sidecar, spec_block: u64, concurrency: usize) -> (u32, Vec<u32>, Vec<u32>) {
+    if sc.is_dynamic() {
+        crate::model::chunk::project_ranges(
+            sc.size,
+            crate::model::chunk::refine_http_grid(sc.size, spec_block, concurrency),
+            &sc.resume_segments(),
+        )
+    } else {
+        let mut done = Vec::new();
+        let mut partial = Vec::new();
+        for (w, i) in sc.blocks.iter().zip(0u32..) {
+            if let Some((s, e)) = block_range(sc.size, sc.block_size, i) {
+                if *w >= e - s {
+                    done.push(i);
+                } else if *w > 0 {
+                    partial.push(i);
+                }
+            }
+        }
+        (done.len() as u32, done, partial)
+    }
 }
 
 fn sidecar_path(save_dir: &str, name: &str) -> String {
@@ -219,7 +232,6 @@ enum Flow {
 }
 
 struct PausedState {
-    blocks: Blocks,
     downloaded: u64,
     sidecar: Sidecar,
     sidecar_path: String,
@@ -1571,7 +1583,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn completed_of_counts_full_blocks_only() {
+    fn projection_of_blocks_sidecar_counts_full_and_partial() {
         let stamp = ServerStamp {
             etag: None,
             last_modified: None,
@@ -1594,7 +1606,37 @@ pub(super) mod tests {
                 protocol: Protocol::Http,
             },
         );
-        assert_eq!(completed_of(&sc), 2, "部分写块与零块不计入完成");
+        let (cd, done, partial) = projection_of(&sc, 4096, 2);
+        assert_eq!(cd, 2, "部分写块与零块不计入完成");
+        assert_eq!(done, vec![0, 1]);
+        assert_eq!(partial, vec![2], "部分写块入 partial 集合");
+    }
+
+    #[test]
+    fn projection_of_dynamic_sidecar_projects_residue_partial() {
+        let mb = 1_048_576u64;
+        let stamp = ServerStamp {
+            etag: None,
+            last_modified: None,
+            size: Some(3 * mb),
+        };
+        let sc = Sidecar::build_dynamic(
+            &stamp,
+            3 * mb,
+            &[(0, mb), (mb, mb + 246_000)],
+            None,
+            SidecarTask {
+                id: 1,
+                added_at: 0,
+                save_dir: "/d".to_string(),
+                concurrency: 4,
+                protocol: Protocol::Http,
+            },
+        );
+        let (cd, done, partial) = projection_of(&sc, mb, 4);
+        assert_eq!(cd, 1, "动态 sidecar 按区间投影（3MB/4 并发收细 768K 网格）");
+        assert_eq!(done, vec![0]);
+        assert_eq!(partial, vec![1], "块内残留 → 部分下载");
     }
 
     fn seed_sidecar(dir: &std::path::Path, _url: &str, total: u64, piece: u64, written: &[u64]) {

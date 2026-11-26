@@ -250,7 +250,6 @@ pub(super) async fn download(
                     let sidecar =
                         build_sidecar(spec, &probed_stamp, &blocks, false);
                     return Flow::Paused(PausedState {
-                        blocks,
                         downloaded,
                         sidecar,
                         sidecar_path: sc_path.clone(),

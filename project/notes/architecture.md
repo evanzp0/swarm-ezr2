@@ -896,6 +896,121 @@ B 类快照（任务启动烘焙、sidecar 格式即引擎 D89）使 mode 断言
 ## pieces 窗口投影口径（2026-11-26，coder 追加轮）追加
 - 事件层数据源缺失型 bug 的定位法：渲染与消费端全绿（pieces.rs/draw 逻辑、evt.rs Progress 落地、Blocks done_indices 均未改动）时，优先核对**新路径是否还在发旧占位数据**——动态调度器 Progress 恒发 chunk_done:0/done_blocks:[]/partial_blocks:[]，而 UI 的 pieces() 采取 done_blocks 非空即忽略 chunk_done 前缀的权威口径，两相叠加 = 已下载块永不点亮（只剩 🟦 在途与 ⬜ 未下载）。教训：新增引擎路径接 UI 事件时，事件载荷的每个字段都要有真实数据源，占位空集合等于关闭该 UI 功能。
 - 字节区间→块网格投影口径（model::chunk::project_ranges）：动态模式无逐块台账（planner 只存字节段），UI 分块窗口的 Done/Partial 由「已落盘区间 ∪ 续传区间」投影得出——整块覆盖→Done、部分覆盖→Partial、零覆盖不入集合（Empty）；区间先 merge_byte_ranges 求并（重叠区间按和计会虚增覆盖，1/2+1/2 误判整块），块边界覆盖用 block_range 尾块吸收口径。投影 piece 必须取 spec.block_size（= Task.block_size = UI chunk_total 同源），双口径分叉会把 Done 块投到错误索引或整体滤空（idx ≥ y 全被 filter 掉时恰好呈现「只有蓝和白」的本轮 bug 形态）。
-- 绿色 = 落盘（flushed）而非 received：投影数据源取 writer.flushed_ranges()（前缀 flushed_prefix ∪ 水洼 written，升序不相交）而非 planner.completed_bytes()（received 口径）——received-but-unflushed 的在途内存由连接行 🟦 表达，绿块滞后 ≤ 256 KiB batch 可接受；两口径混用会让「绿块数 × 块大小」与 downloaded 字节暂时不等，属预期非缺陷。
+- 绿色 = 已提交（committed ∪ flushed），不再取纯落盘（2026-11-26 黄块轮修订，旧口径「绿=flushed、滞后 ≤256 KiB 可接受」作废）：投影数据源 = resume_ranges ∪ writer.flushed_ranges() ∪ planner.committed_ranges()（各段 [start, cursor)，与列表 downloaded 聚合游标同源）——worker 移出块瞬间 cursor 已越过块界，纯 flushed 投影会把已收满的块误判部分覆盖（🟨）；received-but-uncommitted 的在途内存（claim 后 commit 前，≤一个 chunk）仍由连接行 🟦 表达。刷盘滞后非小量：absorb 只在 step/finish 回收（chunk 步进驱动），停包期间滞留队列与在途作业不回收，滞后可达 HOLD_MAX/n_workers。
 - 续传场景的投影基数：download_dynamic 循环前捕获 resume_ranges = sidecar.resume_segments()（已收区间），与 writer.flushed_ranges()（仅本会话落盘）并集后投影——writer 前缀账只追踪本运行句柄，漏掉 resume 基数会让续传任务的已收块在首轮 tick 全部回白。
 - 对称面：restore.rs 的动态 sidecar 还原同样走 project_ranges（sidecar 只有字节段无逐块台账），暂停/重启后的分块窗口显示才不回白；恢复口径 chunk_done = 投影 Done 数（max 合并，防回退）。
+- sidecar 快照与投影必须同源（20261126 蓝块轮根因）：dynamic_sidecar_snapshot 曾从 planner.sidecar_segments() 取活跃段再截 flushed extent——gc 会把完全落盘段退役（retired 只进 completed_bytes，不留在 segs），快照随之丢失退役区间 → 暂停 sidecar 缺已下载字节区间 → 续传时 gaps_of 把这些区间重开为缺口（worker 重下，lease 画蓝"正在下载"）且 Progress 投影缺这些块（绿→白/蓝），即「暂停→继续后已下载块变蓝」的用户可见形态。修复口径：快照 = merge_byte_ranges(resume_ranges ∪ writer.flushed_ranges())，与 pieces 投影共用同一区间源（writer.rs flushed_ranges 注释声明的"投影与快照共用"口径），planner 不再参与快照。判定线索：暂停瞬间 downloaded 正确（writer 真值）而续传后 downloaded 回退/done 块回退 = 快照源与投影源分叉；pause 路径 writer.finish() 后 flushed = pushed 全量真值，故快照与 PausedDone.downloaded 恒等可直接作 e2e 断言。
+
+## 下载中投影必须覆盖已提交区间：蓝块移走瞬间原块即 🟩（2026-11-26，coder 黄块轮）
+- **现象**：HTTP 下载中 pieces 窗口，蓝色“正在下载”块移入下一块后，原蓝块显示 🟨
+  （部分下载）而非 🟩（已下载）；列表百分比与网格绿块数不同步。
+- **处置**：Progress tick 投影由「resume ∪ flushed」扩为「resume ∪ flushed ∪
+  planner.committed_ranges()」（动态.rs 单点）；已完成判定、暂停/失败终态投影
+  （sidecar 权威）不变。
+- **根因**：绿块投影只用落盘区间，而落盘回收由 chunk 步进驱动——absorb 只在
+  step（每 chunk）与 finish 执行，服务器停发期间滞留队列与在途写作业不回收；
+  停包窗口（如真实网络的突发-间隙形态）内 flushed 滞后 committed 可达
+  HOLD_MAX/n_workers（远超旧口径设想的 256 KiB batch）。worker 的段耗尽→absorb
+  下一段在同一同步段完成，连接行 🟦 即刻前移，而 committed 已覆盖原段全部字节，
+  flushed 未及——投影判部分覆盖即用户所见 🟨。判定线索：列表 downloaded（聚合
+  游标）已满块而网格黄/白 = 提交与刷盘两口径分叉，显示层必须跟提交口径对齐。
+- **测试技法**：结构化复现刷盘滞后用 burst 服务器（快发 N 字节→停顿 pause_ms）：
+  停包期客户端无 chunk 步进、无 absorb，tick 必然采到滞后帧——匀速限速服务器
+  （absorb 跟得上）反而不易复现。不变式口径（conc=1 时 downloaded=已提交前缀）：
+  downloaded 覆盖的整块必须当场 ∈ done_blocks 且 ∉ partial_blocks。
+
+## HTTP 动态长租约的蓝块口径：🟦 画在当前写入位置，不是租约起点
+- **现象**：HTTP 任务暂停→继续后 pieces 窗口全程无 🟦（在传块显示 🟨），下载中（首段）
+  却正常；app 层四态 e2e 全绿而真实 TUI 复现——纯单元/e2e 层不一定能暴露 TUI 投影缺陷。
+- **处置**：`piece_states` 的 Active 臂用当前写入位置 `(start+done)/block_size` 定位块；
+  Done 臂（租约完成）与非下载态（暂停合成前沿连接）仍用租约起点 `start/block_size`。
+- **根因**：dynamic 引擎 `ConnView.start` = 租约起点（单租约跨多 MB、租约内不前进、续传时
+  从 gap 非块对齐边界起算），`done` = 租约内累计字节。按起点定块 = 把 🟦 画在「很久以前」
+  的块上：首段起点块恰是当前块（短暂正确），起点块落满即被绿压制（🟩 优先守卫）；
+  续传起点 = 缺口边界（部分已下载或早已落盘）→ 蓝从头到尾不出现。blocks 引擎租约 =
+  单块，两种口径同值，故 blocks 时代从未暴露——**引擎 ConnView 语义（租约起点）与
+  UI 语义（当前在传块）天然错位，长租约协议必须显式换算当前写入位置**。
+
+## 终态事件必须落地 sidecar 权威投影，不得沿用最后一次 Progress 的陈旧集合（2026-11-26，coder 续传残留轮）
+- **现象**：暂停→续传到 100% 后 pieces 窗口残留 🟨；暂停期间部分块显示成 ⬜（实为部分
+  下载）；完成/暂停/失败三终态的块集合各自来源不一（陈旧 Progress、假 Blocks、sidecar）。
+- **处置**：三终态统一由 `supervisor::projection_of(sidecar, spec.block_size)` 派生
+  （动态 sidecar 走 project_ranges 字节区间投影，blocks sidecar 走逐块权重）——
+  PausedDone/Failed 事件新增 done_blocks 字段、DownloadDone 在 app 层收口为全绿
+  （chunk_done=总块数、done_blocks=全块、partial 清空；引擎发 Done 前已验
+  flushed_complete，全绿即真值）。PausedState.blocks 字段（dynamic 曾传
+  Blocks::new(0,1) 假账）已删除，PausedDone 不再读它。
+- **根因**：最后一帧 Progress 的投影取自 flushed 区间，而 writer 批量落盘（256 KiB
+  batch 合并 ≤4 MB 写作业）使 flushed 滞后 committed 最多数 MB——100% 瞬间
+  downloaded=committed=total 但投影仍有未落盘尾块 → Done 后残留 🟨/⬜。终态的字节
+  真值只有 sidecar（finish 后 flushed 全量），**终态集合必须从终态权威源重建，任何
+  「沿用最后一帧」的捷径都是把瞬态渲染层延迟固化成持久错误**。
+
+## 列表百分比未收满一律地板到 0.1%（2026-11-26，coder 续传残留轮）
+- **现象**：HTTP 下载列表显示 100.0% 后仍在继续下载一会才完成。
+- **处置**：`task_lines::display_percent`——downloaded < total 时
+  `(progress*1000).floor()/10`，收满才显示精确 100.0%。
+- **根因**：`{:.1}` 四舍五入使 99.96% 显示为 100.0%（大文件尾差可达 MB 级），显示层
+  把「接近完成」伪装成「已完成」；对递进量做百分比渲染时**向上取整即谎报完成**。
+
+## 停止 worker 用 abort 不用 await（2026-11-26，coder 续传残留轮）
+- **处置**：`stop_dyn_workers` 改为 `h.abort()`（同步函数）；暂停/完成路径随后
+  `writer.finish()` 兜底刷盘。
+- **根因**：worker 的 `throttle.acquire().await` 位于 select 臂体内，臂体一旦被选中
+  就运行到底，watch 通道的 stop 信号无法打断它——await join handle 会被卡在限速
+  acquire 上拖慢暂停/收尾；abort 在 await 点即时取消，且 claim/commit/push 全是同步
+  段不会被撕裂，已 push 数据由 finish() 全量落盘，无丢失。
+
+## 切分点必须块对齐：后继租约块中起步会让原块在前沿移过后定格 🟨（2026-11-26，coder 块对齐轮）
+- **现象**：HTTP 下载中 pieces 窗口，蓝色"正在下载"块移入下一个"未下载"块后，原块显示
+  🟨（部分下载）而非 🟩；并发 ≥2 时必现且可持续数秒。**与黄块轮（投影源三源并集）不同
+  根因**：黄块轮修的是刷盘滞后，本轮修的是切分机制本身。
+- **处置**：`Planner::cut_point` 三级——①min_split 余量内的可行块边界取距理想切点最近者；
+  ②段内有块边界但余量不满足时仍取最近块边界；③段内无块边界且文件为单块
+  （chunk_total(total, cut_align) ≤ 1）时保留旧 4096 相对回退。多块文件段内无边界 →
+  拒绝切分（尾段单 worker 收尾）。`Planner::new/from_gaps` 新增 cut_align 参数 =
+  spec.block_size（= UI 网格同源）；`try_split` 不再有 4096 绝对对齐语义。
+- **根因**：旧切分 = claim_end + align_down(spare/2, 4096)，切点几乎必然落在块中间——
+  后继租约起点块的头字节 [block_start, cut) 属于前任租约的未完成区域，前任游标未越过
+  切点前该块永远部分覆盖；后继蓝块移过该块 → 投影判 🟨 → 用户所见"移走后变黄"。
+  切点块对齐后，后继租约的每一块都由其自身完整提交，移过即绿。单块文件保留回退的
+  原因：UI 网格仅一格、无块间转换，块中切分无显示危害，但 worker 2 的 Range 探测请求
+  （发现服务器忽略 Range → 降级救援 + toast）依赖切分发生——回退移除会让
+  `dynamic_range_ignored_rescues_to_single_stream` 假红（实测踩中）。
+
+## 跨段 chunk 必须进 carry 缓冲：absorb 续流 + 丢字节 = 数据错位（2026-11-26，coder 块对齐轮）
+- **现象**：潜在缺陷（用户要求排查 block 分割与下载逻辑潜在 bug 时发现）——chunk 跨越
+  段边界时 claim 只授予到段尾（n < bytes.len()），剩余字节被静默丢弃；若此刻
+  absorb_next 成功（同一条 HTTP 流继续），下一 chunk 会写到错误偏移：丢 L 字节 →
+  文件尾部缺失、内容整体错位（quiet corruption，校验和任务必然失败）。
+- **处置**：dynamic_worker 每次分配持 `carry: Vec<u8>`；Granted 臂 push 前 n 字节后把
+  `data[n..]` 追加进 carry；下次 chunk 先拼接 carry 再 claim。所有放弃流的路径
+  （Lost/rotation/Ok(None)/Err/abort）随外层循环重新声明而丢弃 carry——丢弃的字节由
+  新 Range 请求从 cursor 重下，永不腐蚀。throttle 只对新鲜字节 acquire（carry 不重复计费）。
+- **根因**：claim 的授予上限（seg.end - pos）与 reqwest chunk 的任意边界天然独立；
+  "剩余字节会被重下"的假设只在放弃流（重新发请求）时成立，absorb 续流路径打破它。
+  复现法：block_size 取 16 KiB 非对齐值（250 KiB）+ 服务器分步发送，切分点必被某
+  chunk 跨越；断言最终文件字节全等。
+
+## absorb 不得重置部分提交段：cursor==start 才可吸收（2026-11-26，coder 块对齐轮）
+- **处置**：`absorb_next` 增加 `s.cursor == s.start` 守卫；部分提交段（release/抢占退款后
+  cursor > start）改走 assign 路径从已提交游标续传（Assignment.from = seg.cursor，自动
+  发 `bytes={cursor}-` 请求）。
+- **根因**：旧 absorb 无条件 `seg.cursor = seg.start`——吸收部分提交段会重下已提交字节
+  （违背"优先续传部分下载"口径）且 committed_ranges 丢失该区间造成投影短暂 🟨/⬜。
+  吸收的意义是免重发请求延续整文件流，仅对 cursor==start（真·未动过的段）成立。
+
+## 速度回退修复轮（20261126）追加
+- 块对齐切分（bug9 修复）把 HTTP 动态并行度封顶在 UI 网格块数上（cut_align = spec.block_size）：
+  块数 < 并发的文件（如 2 MiB / 1 MiB 网格 / 并发 8）最多 2 连接 ≈ 800 KiB/s，回退前 4096 对齐
+  切分可达 8 连接 ≈ 3 MiB/s——「租约起点块对齐」与「并行度」在块数不足时物理互斥，唯一同时
+  满足两者的解 = 收细网格使块数 ≥ 并发（refine_http_grid：块数已足原样返回；不足收细到
+  ≤ total/并发 的最大 256 KiB 倍数，下限 MIN_HTTP_BLOCK_SIZE；幂等，回粗不发生）。
+- refine_http_grid 四处同源接线缺一即显示/投影错位：引擎 cut_align、引擎 Progress 投影、
+  supervisor projection_of（Paused/Failed 事件）、app Evt::Probed(dynamic) 回写 t.block_size
+  （chunk_info/pieces 弹窗/DownloadDone 全链同源）。sidecar 动态格式存字节区间（block_size=0），
+  网格细化不影响断点数据；blocks 模式块模型不变（FR-05-03 语义边界）。
+- worker 提交次序不变式：planner.commit 必须先于 ConnView.done 更新——进度 tick 先读 planner
+  后读 conns，反序会在两读窗口产生「pos 已过块尾但 committed 未跟上」假警报帧（vacated 绿块
+  不变式 e2e 在高并发测试负载下暴露）。修正后 committed ≥ conns 对任意交错成立，同时消除
+  UI 潜在黄块闪烁。

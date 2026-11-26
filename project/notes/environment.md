@@ -648,3 +648,20 @@ rg/sed/python-repr 的 Bash 输出层均吞 `[h`（[http] 显示为 ttp] 的三�
 （persistence-qa 5 处已随本轮修订归一）+ 本轮自伤 2 处（v1.51 注记模仿显示伪象误写 ttp]，已修）；
 notes 内现存 ttp] 均为对改写形态的刻意描述（bug18 判别法条目），不修；qa/09-bt-engine-qa.md:70
 余 1 处真缺陷（`ttp] 调优键` 应为 `[http] 调优键`）登记 handoff 待办归下一 QA 轮。
+
+**蓝块修复回归轮（2026-11-26，coder）追加**：①rustup 镜像复测——rsproxy `/rustup/dist/` 清单
+NoSuchKey XML 第 4 次复现（测速快 ≠ 能装口径再证）；USTC 单路径 `/rust-static/rustup/dist/…`
+清单 TOML 正常且 rustup-init 7.8MB/s 本轮最快（TUNA 2.1），DIST_SERVER/UPDATE_ROOT 均指
+`mirrors.ustc.edu.cn/rust-static` 前台一次装齐 nightly 1.102.0-nightly（739adecd4 2026-11-24）
+minimal + rustfmt + clippy；cargo registry rsproxy sparse。②工作区非持久恢复路径实测：沙箱重置后
+仓库不在，直接从上轮交付产物 `swarm-*.tar.gz` 解包恢复（= complete 时点的完整工作区，比重新
+clone 多出历轮全部修复），begin 会话照常建立。
+
+## 速度回退修复轮（20261126）追加
+- rustup 安装 env 变量名陷阱：toolchain install 的镜像变量是 `RUSTUP_DIST_SERVER`/
+  `RUSTUP_UPDATE_ROOT`（带 RUSTUP_ 前缀）——误用 `DIST_SERVER` 时 rustup 静默回退官方源
+  20 KB/s 龟速（manifest 能取到、组件下载爬行，590s 超时两次）；纠正后 rsproxy 整链路
+  一次装齐 nightly 1.102.0（minimal + rustfmt/clippy）。判据：downloads/*.partial 增速。
+- 装前镜像探测口径沿用：manifest 可达 ≠ 组件可达（TUNA 顶层 manifest 200 但日期化组件
+  404、USTC 403），必须对真实组件 URL 剥前缀重拼测速（rsproxy 206 @1.7 MB/s 胜出）。
+- sandbox 重置后 QA runner 依赖 pyte：pip 阿里云镜像 `pip install pyte -q` 秒装。

@@ -102,6 +102,7 @@ pub enum Evt {
         id: u32,
         downloaded: u64,
         chunk_done: u32,
+        done_blocks: Vec<u32>,
         partial_blocks: Vec<u32>,
     },
     Cancelled {
@@ -115,6 +116,7 @@ pub enum Evt {
         made_progress: bool,
         downloaded: u64,
         chunk_done: u32,
+        done_blocks: Vec<u32>,
         partial_blocks: Vec<u32>,
     },
     Invalidated {

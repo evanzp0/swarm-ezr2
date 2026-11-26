@@ -1,5 +1,7 @@
 use std::time::{Duration, Instant};
 
+use crate::model::chunk::chunk_total;
+
 pub(super) type WorkerId = usize;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,7 +45,7 @@ pub(super) struct Planner {
     retired: u64,
     pre_committed: u64,
     min_split: u64,
-    align: u64,
+    cut_align: u64,
     preempt_after: Duration,
 }
 
@@ -59,7 +61,12 @@ fn align_down(x: u64, align: u64) -> u64 {
 
 impl Planner {
     #[must_use]
-    pub(super) fn new(total: u64, min_split: u64, preempt_after: Duration) -> Planner {
+    pub(super) fn new(
+        total: u64,
+        min_split: u64,
+        cut_align: u64,
+        preempt_after: Duration,
+    ) -> Planner {
         let segs = if total > 0 {
             vec![Segment::new(0, total)]
         } else {
@@ -71,7 +78,7 @@ impl Planner {
             retired: 0,
             pre_committed: 0,
             min_split: min_split.max(1),
-            align: SPLIT_ALIGN,
+            cut_align: cut_align.max(1),
             preempt_after,
         }
     }
@@ -81,6 +88,7 @@ impl Planner {
         total: u64,
         gaps: &[(u64, u64)],
         min_split: u64,
+        cut_align: u64,
         preempt_after: Duration,
     ) -> Planner {
         let mut segs: Vec<Segment> = gaps
@@ -96,7 +104,7 @@ impl Planner {
             retired: 0,
             pre_committed: total.saturating_sub(gap_len),
             min_split: min_split.max(1),
-            align: SPLIT_ALIGN,
+            cut_align: cut_align.max(1),
             preempt_after,
         }
     }
@@ -182,16 +190,66 @@ impl Planner {
             if spare < 2 * self.min_split {
                 continue;
             }
-            let half = align_down(spare / 2, self.align);
-            if half < self.min_split {
+            let Some(cut) = self.cut_point(claim_end, s.end) else {
                 continue;
-            }
-            let cut = claim_end + half;
+            };
             if best.is_none_or(|(_, _, bs)| spare > bs) {
                 best = Some((i, cut, spare));
             }
         }
         best.map(|(i, cut, _)| (i, cut))
+    }
+
+    fn cut_point(&self, claim_end: u64, end: u64) -> Option<u64> {
+        let spare = end.checked_sub(claim_end)?;
+        let ideal = claim_end + spare / 2;
+        let mut cands: Vec<u64> = Vec::new();
+        let push = |v: &mut Vec<u64>, b: u64| {
+            if b > claim_end && b < end && !v.contains(&b) {
+                v.push(b);
+            }
+        };
+        let fl = ideal / self.cut_align * self.cut_align;
+        push(&mut cands, fl);
+        if fl < ideal {
+            if let Some(c) = fl.checked_add(self.cut_align) {
+                push(&mut cands, c);
+            }
+        }
+        let lo = claim_end.saturating_add(self.min_split);
+        let hi = end.saturating_sub(self.min_split);
+        if lo <= hi {
+            let lf = lo / self.cut_align * self.cut_align;
+            if lf < lo {
+                if let Some(c) = lf.checked_add(self.cut_align) {
+                    push(&mut cands, c);
+                }
+            } else {
+                push(&mut cands, lf);
+            }
+            push(&mut cands, hi / self.cut_align * self.cut_align);
+        }
+        let feasible = |b: u64| {
+            b >= claim_end.saturating_add(self.min_split) && b <= end.saturating_sub(self.min_split)
+        };
+        if let Some(b) = cands
+            .iter()
+            .copied()
+            .filter(|&b| feasible(b))
+            .min_by_key(|&b| b.abs_diff(ideal))
+        {
+            return Some(b);
+        }
+        if let Some(b) = cands.iter().copied().min_by_key(|&b| b.abs_diff(ideal)) {
+            return Some(b);
+        }
+        if chunk_total(self.total, self.cut_align) <= 1 {
+            let half = align_down(spare / 2, SPLIT_ALIGN);
+            if half >= self.min_split {
+                return Some(claim_end + half);
+            }
+        }
+        None
     }
 
     pub(super) fn claim(&mut self, w: WorkerId, pos: u64, len: u64) -> Claim {
@@ -246,10 +304,9 @@ impl Planner {
     }
 
     pub(super) fn absorb_next(&mut self, w: WorkerId, at: u64) -> Option<u64> {
-        let idx = self
-            .segs
-            .iter()
-            .position(|s| s.start == at && s.cursor < s.end && s.worker.is_none())?;
+        let idx = self.segs.iter().position(|s| {
+            s.start == at && s.cursor == s.start && s.cursor < s.end && s.worker.is_none()
+        })?;
         let seg = &mut self.segs[idx];
         seg.worker = Some(w);
         seg.cursor = seg.start;
@@ -267,6 +324,18 @@ impl Planner {
                 .iter()
                 .map(|s| s.cursor.min(s.end) - s.start)
                 .sum::<u64>()
+    }
+
+    /// 各段已提交字节区间 [start, cursor)：cursor 只在字节推入 writer 后前进，
+    /// 因此本集合 = 已接收并排队待落盘的区间（列表 downloaded 的同源覆盖口径，
+    /// 领先于 writer 刷盘区间）。retired 段已并入 flushed、pre_committed 并入
+    /// resume 区间，均不在此重复。
+    pub(super) fn committed_ranges(&self) -> Vec<(u64, u64)> {
+        self.segs
+            .iter()
+            .filter(|s| s.cursor > s.start)
+            .map(|s| (s.start, s.cursor.min(s.end)))
+            .collect()
     }
 
     #[cfg(test)]
@@ -307,17 +376,6 @@ impl Planner {
         });
         self.retired += retired;
         before - self.segs.len()
-    }
-
-    pub(super) fn sidecar_segments(&self) -> Vec<(u64, u64)> {
-        let mut v: Vec<(u64, u64)> = self
-            .segs
-            .iter()
-            .filter(|s| s.cursor > s.start)
-            .map(|s| (s.start, s.cursor))
-            .collect();
-        v.sort_by_key(|(a, _)| *a);
-        v
     }
 
     #[cfg(test)]
@@ -371,7 +429,7 @@ mod tests {
 
     #[test]
     fn fresh_planner_spans_whole_file() {
-        let p = Planner::new(10_000, 256 * 1024, MIN_PREEMPT);
+        let p = Planner::new(10_000, 256 * 1024, 4096, MIN_PREEMPT);
         assert_eq!(p.completed_bytes(), 0);
         assert_eq!(p.segments().len(), 1);
         assert_eq!(p.segments()[0].start, 0);
@@ -381,7 +439,7 @@ mod tests {
 
     #[test]
     fn assign_claim_commit_drive_to_completion() {
-        let mut p = Planner::new(10_000, 2_048, MIN_PREEMPT);
+        let mut p = Planner::new(10_000, 2_048, 4096, MIN_PREEMPT);
         let a = p.assign(1, None).unwrap();
         assert_eq!(a.from, 0);
         let mut at = 0u64;
@@ -403,7 +461,7 @@ mod tests {
 
     #[test]
     fn split_gives_tail_to_second_worker() {
-        let mut p = Planner::new(10_000, 2_048, MIN_PREEMPT);
+        let mut p = Planner::new(10_000, 2_048, 4096, MIN_PREEMPT);
         let a0 = p.assign(1, None).unwrap();
         assert_eq!(a0.from, 0);
         let a1 = p.assign(2, None).unwrap();
@@ -421,7 +479,7 @@ mod tests {
 
     #[test]
     fn split_respects_claimed_region() {
-        let mut p = Planner::new(100_000, 4_096, MIN_PREEMPT);
+        let mut p = Planner::new(100_000, 4_096, 4096, MIN_PREEMPT);
         p.assign(1, None).unwrap();
         assert!(matches!(p.claim(1, 0, 50_000), Claim::Granted { .. }));
         let reserved_before = p.segments()[0].reserved;
@@ -434,7 +492,7 @@ mod tests {
 
     #[test]
     fn claim_refunds_after_segment_shortened() {
-        let mut p = Planner::new(10_000, 2_048, MIN_PREEMPT);
+        let mut p = Planner::new(10_000, 2_048, 4096, MIN_PREEMPT);
         p.assign(1, None).unwrap();
         p.assign(2, None).unwrap();
         let seg1_end = p.segments()[1].end;
@@ -449,13 +507,13 @@ mod tests {
 
     #[test]
     fn claim_lost_when_stolen_or_empty() {
-        let mut p = Planner::new(4_096, 2_048, MIN_PREEMPT);
+        let mut p = Planner::new(4_096, 2_048, 4096, MIN_PREEMPT);
         p.assign(1, None).unwrap();
         match p.claim(2, 0, 100) {
             Claim::Lost => {}
             Claim::Granted { .. } => panic!("他人持有段认领应丢失"),
         }
-        let mut p2 = Planner::new(100, 64, MIN_PREEMPT);
+        let mut p2 = Planner::new(100, 64, 4096, MIN_PREEMPT);
         p2.assign(1, None).unwrap();
         p2.commit(1, 100);
         assert!(matches!(p2.claim(1, 100, 10), Claim::Lost), "段外认领丢失");
@@ -463,7 +521,7 @@ mod tests {
 
     #[test]
     fn release_returns_unclaimed_and_keeps_cursor() {
-        let mut p = Planner::new(10_000, 2_048, MIN_PREEMPT);
+        let mut p = Planner::new(10_000, 2_048, 4096, MIN_PREEMPT);
         p.assign(1, None).unwrap();
         assert!(matches!(p.claim(1, 0, 5_000), Claim::Granted { .. }));
         p.commit(1, 3_000);
@@ -479,7 +537,7 @@ mod tests {
 
     #[test]
     fn preempt_steals_silent_assignment() {
-        let mut p = Planner::new(10_000, 2_048, Duration::ZERO);
+        let mut p = Planner::new(10_000, 2_048, 4096, Duration::ZERO);
         let a1 = p.assign(1, None).unwrap();
         assert_eq!(a1.from, 0);
         let a2 = p.assign(2, None).unwrap();
@@ -495,7 +553,7 @@ mod tests {
 
     #[test]
     fn preempt_respects_receiving() {
-        let mut p = Planner::new(10_000, 2_048, Duration::ZERO);
+        let mut p = Planner::new(10_000, 2_048, 4096, Duration::ZERO);
         p.assign(1, None).unwrap();
         assert!(matches!(p.claim(1, 0, 100), Claim::Granted { .. }));
         p.commit(1, 100);
@@ -507,7 +565,7 @@ mod tests {
 
     #[test]
     fn absorb_merges_adjacent_unclaimed() {
-        let mut p = Planner::new(12_000, 4_096, MIN_PREEMPT);
+        let mut p = Planner::new(12_000, 4_096, 4096, MIN_PREEMPT);
         p.assign(1, None).unwrap();
         let a2 = p.assign(2, None).unwrap();
         let cut = a2.from;
@@ -524,10 +582,36 @@ mod tests {
 
     #[test]
     fn min_split_halves_under_tail_pressure() {
-        let mut p = Planner::new(10_240, 8_192, MIN_PREEMPT);
+        let mut p = Planner::new(10_240, 8_192, 4096, MIN_PREEMPT);
         p.assign(1, None).unwrap();
         let a2 = p.assign(2, None).unwrap();
         assert!(a2.from > 0, "尾段小于 2×min_split 时自适应降半仍可切分");
+        p.check_invariants().unwrap();
+    }
+
+    #[test]
+    fn from_gaps_resume_starts_inside_partial_block_residues() {
+        let mb = 1_048_576u64;
+        let mut p = Planner::from_gaps(
+            8 * mb,
+            &[
+                (246_000, mb),
+                (mb + 246_000, 2 * mb),
+                (2 * mb + 246_000, 3 * mb),
+            ],
+            64 * 1024,
+            4096,
+            MIN_PREEMPT,
+        );
+        let a1 = p.assign(1, None).unwrap();
+        assert_eq!(
+            a1.from, 246_000,
+            "首分配 = 首个缺口起点（黄块残留字节，块 0 内部）"
+        );
+        let a2 = p.assign(2, None).unwrap();
+        assert_eq!(a2.from, mb + 246_000, "次分配 = 次缺口起点（块 1 残留）");
+        let a3 = p.assign(3, None).unwrap();
+        assert_eq!(a3.from, 2 * mb + 246_000, "第三分配 = 块 2 残留");
         p.check_invariants().unwrap();
     }
 
@@ -537,6 +621,7 @@ mod tests {
             10_000,
             &[(2_000, 5_000), (6_000, 10_000)],
             2_048,
+            4096,
             MIN_PREEMPT,
         );
         assert_eq!(p.completed_bytes(), 3_000, "续传起步 = sidecar 已提交字节");
@@ -548,37 +633,41 @@ mod tests {
     }
 
     #[test]
-    fn sidecar_segments_sorted_and_positive() {
-        let mut p = Planner::from_gaps(20_000, &[(2_000, 20_000)], 2_048, MIN_PREEMPT);
-        p.assign(1, None).unwrap();
-        assert!(matches!(p.claim(1, 2_000, 1_000), Claim::Granted { .. }));
-        p.commit(1, 2_600);
-        let a2 = p.assign(2, None).unwrap();
-        let from2 = a2.from;
-        assert!(matches!(p.claim(2, from2, 1_000), Claim::Granted { .. }));
-        p.commit(2, from2 + 400);
-        p.release(2);
-        let segs = p.sidecar_segments();
-        assert_eq!(
-            segs,
-            vec![(2_000, 2_600), (from2, from2 + 400)],
-            "段列表含各段已提交区间"
-        );
-        assert!(segs.windows(2).all(|w| w[0].0 < w[1].0), "段列表按起点升序");
-        p.check_invariants().unwrap();
-    }
-
-    #[test]
     fn zero_size_planner_has_no_segments() {
-        let mut p = Planner::new(0, 2_048, MIN_PREEMPT);
+        let mut p = Planner::new(0, 2_048, 4096, MIN_PREEMPT);
         assert_eq!(p.completed_bytes(), 0);
         assert!(p.segments().is_empty());
         assert!(p.assign(1, None).is_none());
     }
 
     #[test]
+    fn committed_ranges_covers_partial_and_done_segments() {
+        let mut p = Planner::new(10_000, 2_048, 4096, MIN_PREEMPT);
+        assert!(p.committed_ranges().is_empty(), "无提交无区间");
+        p.assign(1, None).unwrap();
+        let a2 = p.assign(2, None).unwrap();
+        let cut = a2.from;
+        assert!(matches!(p.claim(1, 0, cut), Claim::Granted { .. }));
+        p.commit(1, cut);
+        assert!(matches!(p.claim(2, cut, 3_000), Claim::Granted { .. }));
+        p.commit(2, cut + 3_000);
+        assert_eq!(
+            p.committed_ranges(),
+            vec![(0, cut), (cut, cut + 3_000)],
+            "整段提交 + 段内部分提交各自成区间"
+        );
+        let expected_sum: u64 = p.committed_ranges().iter().map(|(a, b)| b - a).sum();
+        assert_eq!(
+            expected_sum,
+            cut + 3_000,
+            "区间字节数和 = completed_bytes 活段部分"
+        );
+        p.check_invariants().unwrap();
+    }
+
+    #[test]
     fn gc_removes_fully_flushed_done_segments() {
-        let mut p = Planner::new(10_000, 2_048, MIN_PREEMPT);
+        let mut p = Planner::new(10_000, 2_048, 4096, MIN_PREEMPT);
         p.assign(1, None).unwrap();
         assert!(matches!(p.claim(1, 0, 10_000), Claim::Granted { .. }));
         p.commit(1, 10_000);
@@ -593,7 +682,7 @@ mod tests {
 
     #[test]
     fn split_point_alignment() {
-        let mut p = Planner::new(1_000_000, 1_024, MIN_PREEMPT);
+        let mut p = Planner::new(1_000_000, 1_024, 4096, MIN_PREEMPT);
         p.assign(1, None).unwrap();
         let a2 = p.assign(2, None).unwrap();
         assert_eq!(a2.from % 4096, 0, "切分点按 4096 对齐");
@@ -602,10 +691,56 @@ mod tests {
 
     #[test]
     fn commit_rejects_out_of_range() {
-        let mut p = Planner::new(1_000, 512, MIN_PREEMPT);
+        let mut p = Planner::new(1_000, 512, 4096, MIN_PREEMPT);
         p.assign(1, None).unwrap();
         assert!(p.commit(1, 2_000).is_none(), "越过段尾提交拒绝");
         assert!(p.commit(2, 10).is_none(), "非持有者提交拒绝");
+        p.check_invariants().unwrap();
+    }
+
+    #[test]
+    fn split_cut_lands_on_block_boundary_when_available() {
+        let mb = 1_048_576u64;
+        let mut p = Planner::new(8 * mb, 256 * 1024, mb, MIN_PREEMPT);
+        p.assign(1, None).unwrap();
+        assert!(matches!(p.claim(1, 0, 4_900_000), Claim::Granted { .. }));
+        p.commit(1, 4_900_000);
+        let a2 = p.assign(2, None).unwrap();
+        assert_eq!(a2.from % mb, 0, "切分点必须落在块边界，后继租约块对齐");
+        assert_eq!(a2.from, 6 * mb, "取理想切点最近的可行块边界");
+        p.check_invariants().unwrap();
+    }
+
+    #[test]
+    fn split_without_internal_boundary_is_refused() {
+        let mb = 1_048_576u64;
+        let mut p = Planner::new(3 * mb + 512 * 1024, 256 * 1024, mb, MIN_PREEMPT);
+        p.assign(1, None).unwrap();
+        assert!(matches!(p.claim(1, 0, 3 * mb), Claim::Granted { .. }));
+        p.commit(1, 3 * mb);
+        let a2 = p.assign(2, None);
+        assert!(
+            a2.is_none(),
+            "段内无块边界时不得产生块中切分（尾段单 worker 收尾）"
+        );
+        p.check_invariants().unwrap();
+    }
+
+    #[test]
+    fn absorb_next_skips_partially_committed_segment() {
+        let mut p = Planner::new(12_000, 4_096, 4096, MIN_PREEMPT);
+        p.assign(1, None).unwrap();
+        let a2 = p.assign(2, None).unwrap();
+        let cut = a2.from;
+        assert!(matches!(p.claim(2, cut, 1_000), Claim::Granted { .. }));
+        p.commit(2, cut + 600);
+        p.release(2);
+        assert!(
+            p.absorb_next(1, cut).is_none(),
+            "部分提交段不得被吸收重置（已提交字节必须续传）"
+        );
+        let a = p.assign(1, Some(cut)).unwrap();
+        assert_eq!(a.from, cut + 600, "改走分配路径从已提交游标续传");
         p.check_invariants().unwrap();
     }
 }
@@ -644,7 +779,7 @@ mod proptests {
             min_split in 1u64..64_000u64,
             ops in prop::collection::vec(op_strategy(), 0..120),
         ) {
-            let mut p = Planner::new(total, min_split, Duration::ZERO);
+            let mut p = Planner::new(total, min_split, 4096, Duration::ZERO);
             p.check_invariants().unwrap();
             for op in &ops {
                 match op {
@@ -678,7 +813,7 @@ mod proptests {
             n_workers in 1usize..6usize,
             chunk_seed in 1u64..100u64,
         ) {
-            let mut p = Planner::new(total, min_split, MIN_PREEMPT);
+            let mut p = Planner::new(total, min_split, 4096, MIN_PREEMPT);
             let mut ats: Vec<Option<u64>> = vec![None; n_workers];
             let mut exited = vec![false; n_workers];
             let mut steps = 0usize;
