@@ -183,10 +183,7 @@ impl Writer {
                 if let Some(b) = g.buf.take() {
                     g.queue.push_back(b);
                 }
-                let mut v = g
-                    .spare
-                    .pop()
-                    .unwrap_or_else(|| Vec::with_capacity(BATCH));
+                let mut v = g.spare.pop().unwrap_or_else(|| Vec::with_capacity(BATCH));
                 v.clear();
                 g.buf = Some(Batch { at, data: v });
             }
@@ -220,6 +217,19 @@ impl Writer {
 
     pub(super) fn global_flushed_prefix(&self) -> u64 {
         self.inner.lock().unwrap().flushed_prefix
+    }
+
+    /// 全部已落盘字节区间（升序、互不相交）：
+    /// 前缀 [0, flushed_prefix) + 前沿之后的水洼区间 written。
+    /// pieces 网格投影与 sidecar 快照共用此口径。
+    pub(super) fn flushed_ranges(&self) -> Vec<(u64, u64)> {
+        let g = self.inner.lock().unwrap();
+        let mut v = Vec::with_capacity(g.written.len() + 1);
+        if g.flushed_prefix > 0 {
+            v.push((0, g.flushed_prefix));
+        }
+        v.extend(g.written.iter().copied());
+        v
     }
 
     pub(super) fn flushed_extent_from(&self, start: u64) -> u64 {
@@ -343,7 +353,11 @@ mod tests {
         let (w, p, dir) = new_writer("a.bin");
         w.push(0, &[1u8; BATCH]).unwrap();
         w.push(BATCH as u64, &[2u8; 100]).unwrap();
-        assert_eq!(w.pending_bytes(), (BATCH + 100) as u64, "队列满 batch + 在填 batch");
+        assert_eq!(
+            w.pending_bytes(),
+            (BATCH + 100) as u64,
+            "队列满 batch + 在填 batch"
+        );
         drain(&w).await.unwrap();
         assert_eq!(w.total_flushed(), BATCH as u64 + 100);
         assert_eq!(w.global_flushed_prefix(), BATCH as u64 + 100);
@@ -387,16 +401,13 @@ mod tests {
 
     #[tokio::test]
     async fn step_awaits_when_runway_exhausted() {
-        let (w, p, dir) = new_writer("c2.bin");
+        let (w, _p, dir) = new_writer("c2.bin");
         for i in 0..8usize {
             w.push((i * BATCH) as u64, &[i as u8; BATCH]).unwrap();
         }
         let hold_cap = (BATCH * 2) as u64;
         w.step(hold_cap).await.unwrap();
-        assert!(
-            w.total_flushed() > 0,
-            "跑道满触发等待回收，至少一单落盘"
-        );
+        assert!(w.total_flushed() > 0, "跑道满触发等待回收，至少一单落盘");
         drain(&w).await.unwrap();
         assert_eq!(w.total_flushed(), (BATCH * 8) as u64);
         std::fs::remove_dir_all(&dir).ok();
@@ -404,7 +415,7 @@ mod tests {
 
     #[tokio::test]
     async fn flushed_extent_tracks_sparse_completion() {
-        let (w, p, dir) = new_writer("d.bin");
+        let (w, _p, dir) = new_writer("d.bin");
         w.push(0, &[1u8; 100]).unwrap();
         w.push(10_000, &[2u8; 100]).unwrap();
         assert_eq!(w.global_flushed_prefix(), 0, "前沿未推进");
@@ -413,6 +424,21 @@ mod tests {
         assert_eq!(w.flushed_extent_from(10_000), 10_100);
         assert_eq!(w.flushed_extent_from(5_000), 5_000, "空洞区无写入");
         assert_eq!(w.flushed_extent_from(99_999), 99_999);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn flushed_ranges_covers_prefix_and_pools() {
+        // pieces 投影数据源：前缀 + 前沿后水洼 = 全部已落盘区间。
+        let (w, _p, dir) = new_writer("d2.bin");
+        assert!(w.flushed_ranges().is_empty(), "未写无区间");
+        w.push(0, &[1u8; 100]).unwrap();
+        w.push(10_000, &[2u8; 50]).unwrap();
+        drain(&w).await.unwrap();
+        assert_eq!(w.flushed_ranges(), vec![(0, 100), (10_000, 10_050)]);
+        w.push(100, &[3u8; 9_900]).unwrap();
+        drain(&w).await.unwrap();
+        assert_eq!(w.flushed_ranges(), vec![(0, 10_050)], "空洞补齐后并入前缀");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -446,7 +472,10 @@ mod tests {
         }
         drain(&w).await.unwrap();
         assert_eq!(w.total_flushed(), ((SPARE_MAX + 4) * BATCH) as u64);
-        assert_eq!(std::fs::metadata(&p).unwrap().len(), ((SPARE_MAX + 4) * BATCH) as u64);
+        assert_eq!(
+            std::fs::metadata(&p).unwrap().len(),
+            ((SPARE_MAX + 4) * BATCH) as u64
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

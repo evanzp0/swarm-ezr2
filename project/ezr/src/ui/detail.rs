@@ -344,14 +344,8 @@ mod bt_detail_tests {
         let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
         term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         let s = term.backend().to_string();
-        assert!(
-            s.contains(" · 动态分段"),
-            "动态分块行标签（D83）: {s}"
-        );
-        assert!(
-            s.contains("3.2 MB/10.0 MB"),
-            "动态分块行字节数对: {s}"
-        );
+        assert!(s.contains(" · 动态分段"), "动态分块行标签（D83）: {s}");
+        assert!(s.contains("3.2 MB/10.0 MB"), "动态分块行字节数对: {s}");
         assert!(!s.contains("/块"), "动态模式无块口径: {s}");
         app.shutdown().await;
     }

@@ -157,9 +157,15 @@ mod tests {
         let (_, _, wait) = step(1_000_000.0, 0.0, 0.0, 1.0);
         assert_eq!(wait, SLEEP_MS, "不足 1 ms 才落入防忙轮询下限");
         let (_, _, wait) = step(1_000_000.0, 0.0, 0.0, 8_192.0);
-        assert_eq!(wait, 8, "8192B @ 1MiB/s = 8ms 按比例，不再被 20 ms 下限钳住");
+        assert_eq!(
+            wait, 8,
+            "8192B @ 1MiB/s = 8ms 按比例，不再被 20 ms 下限钳住"
+        );
         let (_, _, wait) = step(1_000_000.0, 0.0, 0.0, 131_072.0);
-        assert_eq!(wait, 131, "128 KiB chunk @ 1 MiB/s = 131 ms，限速贴住设定值");
+        assert_eq!(
+            wait, 131,
+            "128 KiB chunk @ 1 MiB/s = 131 ms，限速贴住设定值"
+        );
         let (_, _, wait) = step(8_388_608.0, 0.0, 0.0, 131_072.0);
         assert_eq!(wait, 16, "128 KiB chunk @ 8 MiB/s = 16 ms");
     }

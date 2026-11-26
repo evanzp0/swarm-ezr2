@@ -146,7 +146,8 @@ impl Planner {
         self.segs.iter().position(|s| {
             s.worker.is_some()
                 && !s.receiving
-                && s.given_at.is_some_and(|t| now.duration_since(t) >= self.preempt_after)
+                && s.given_at
+                    .is_some_and(|t| now.duration_since(t) >= self.preempt_after)
         })
     }
 
@@ -269,6 +270,7 @@ impl Planner {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)] // hardening 测试以非 test cfg 包含本文件时会误报死代码
     pub(super) fn reserved_total(&self) -> u64 {
         self.pre_committed
             + self.retired
@@ -285,6 +287,7 @@ impl Planner {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)] // 同上：非 test cfg 包含时误报
     pub(super) fn min_split(&self) -> u64 {
         self.min_split
     }
@@ -334,7 +337,10 @@ impl Planner {
                 return Err(format!("空段或倒序段: [{}, {})", s.start, s.end));
             }
             if s.cursor < s.start || s.cursor > s.end {
-                return Err(format!("cursor 越界: {} ∉ [{}, {})", s.cursor, s.start, s.end));
+                return Err(format!(
+                    "cursor 越界: {} ∉ [{}, {})",
+                    s.cursor, s.start, s.end
+                ));
             }
             if s.reserved < s.cursor || s.reserved > s.end {
                 return Err(format!(
@@ -511,11 +517,7 @@ mod tests {
             "相邻无人认领段可被整文件流吸收"
         );
         p.check_invariants().unwrap();
-        let s = p
-            .segments()
-            .iter()
-            .find(|s| s.start == cut)
-            .unwrap();
+        let s = p.segments().iter().find(|s| s.start == cut).unwrap();
         assert_eq!(s.worker, Some(1), "吸收后 worker 1 持有相邻段");
         assert!(p.absorb_next(1, cut).is_none(), "重复吸收无相邻段返回 None");
     }
@@ -525,10 +527,7 @@ mod tests {
         let mut p = Planner::new(10_240, 8_192, MIN_PREEMPT);
         p.assign(1, None).unwrap();
         let a2 = p.assign(2, None).unwrap();
-        assert!(
-            a2.from > 0,
-            "尾段小于 2×min_split 时自适应降半仍可切分"
-        );
+        assert!(a2.from > 0, "尾段小于 2×min_split 时自适应降半仍可切分");
         p.check_invariants().unwrap();
     }
 
@@ -565,10 +564,7 @@ mod tests {
             vec![(2_000, 2_600), (from2, from2 + 400)],
             "段列表含各段已提交区间"
         );
-        assert!(
-            segs.windows(2).all(|w| w[0].0 < w[1].0),
-            "段列表按起点升序"
-        );
+        assert!(segs.windows(2).all(|w| w[0].0 < w[1].0), "段列表按起点升序");
         p.check_invariants().unwrap();
     }
 
@@ -616,8 +612,9 @@ mod tests {
 
 #[cfg(test)]
 mod proptests {
-    use super::*;
     use proptest::prelude::*;
+
+    use super::*;
 
     #[derive(Debug, Clone)]
     enum Op {
@@ -635,7 +632,7 @@ mod proptests {
             (1usize..8, 0u64..200_000u64, 1u64..40_000u64)
                 .prop_map(|(w, pos, len)| Op::Claim(w, pos, len)),
             (1usize..8, 0u64..200_000u64).prop_map(|(w, upto)| Op::Commit(w, upto)),
-            (1usize..8).prop_map(|w| Op::Release(w)),
+            (1usize..8).prop_map(Op::Release),
             (1usize..8, 0u64..200_000u64).prop_map(|(w, at)| Op::Absorb(w, at)),
         ]
     }

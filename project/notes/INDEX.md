@@ -175,4 +175,4 @@
 - environment.md — rustup 镜像复测（stable 1.100.0、manifest url 字段判别 dist 组件路径、TUNA 10.4MB/s 胜出）+ `[h` 吞噬显示伪象扩族与负向前瞻判别口径（真缺陷存量清点与修复分界）（新增）
 - testing.md — gherkin-ir-dry-checker findings 建议性口径与基线对照判读（未改动 feature 117–215 条）+ 高置信度逐条核对纪律（新增）
 - architecture.md — 引擎默认切换轮的 mode-aware 钉定模式（旧行为 Given 钉回退开关 / 新行为独立 feature / AC-1 随默认改判 / B 类快照锚）（新增）
-；动态分段调度器（phase-05 coder 轮）：planner 不变量/primed 对齐守卫/完成判定三口径/抢占活锁/按块重试计数/并发 mock 前置（architecture.md、testing.md 20261125 追加节）
+；动态分段调度器（phase-05 coder 轮）：planner 不变量/primed 对齐守卫/完成判定三口径/抢占活锁/按块重试计数/并发 mock 前置（architecture.md、testing.md 20261125 追加节）；pieces 窗口投影口径（追加轮）：事件占位空集合=关闭 UI 功能的定位法/project_ranges 字节区间→块网格投影（求并防虚增/piece 同源 spec.block_size）/绿=落盘非 received/resume 基数并入/restore 对称面（architecture.md 20261126 追加节）

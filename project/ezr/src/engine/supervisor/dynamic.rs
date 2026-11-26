@@ -12,14 +12,13 @@ use super::http::{probe_head, req_checked, req_with_identity};
 use super::planner::{Claim, Planner, MIN_PREEMPT};
 use super::single::single_stream;
 use super::writer::Writer;
-use super::{emit, Flow, PausedState, TaskCmd, TaskSpec, Evt};
-use crate::model::chunk::{Blocks, MIN_HTTP_BLOCK_SIZE};
+use super::{emit, Evt, Flow, PausedState, TaskCmd, TaskSpec};
+use crate::model::chunk::{project_ranges, Blocks, MIN_HTTP_BLOCK_SIZE};
 use crate::model::config::ProxyEndpoint;
 use crate::model::consistency::{self, Consistency, ServerStamp};
 use crate::model::namegen::DOWNLOADING_EXT;
-use crate::model::sidecar::Sidecar;
+use crate::model::sidecar::{Sidecar, SidecarTask};
 use crate::model::{Checksum, FailKind};
-use crate::model::sidecar::SidecarTask;
 
 const MAX_INPLACE_ATTEMPTS: u32 = 5;
 
@@ -34,11 +33,7 @@ fn inplace_backoff(attempt: u32) -> Duration {
 }
 
 fn gaps_of(segments: &[(u64, u64)], total: u64) -> Vec<(u64, u64)> {
-    let mut sorted: Vec<(u64, u64)> = segments
-        .iter()
-        .filter(|(s, c)| c > s)
-        .copied()
-        .collect();
+    let mut sorted: Vec<(u64, u64)> = segments.iter().filter(|(s, c)| c > s).copied().collect();
     sorted.sort_by_key(|(s, _)| *s);
     let mut gaps = Vec::new();
     let mut pos = 0u64;
@@ -383,8 +378,7 @@ async fn dynamic_worker(
 }
 
 fn flushed_complete(writer: &Writer, base_flushed: u64, total: u64) -> bool {
-    writer.global_flushed_prefix() >= total
-        || base_flushed + writer.total_flushed() == total
+    writer.global_flushed_prefix() >= total || base_flushed + writer.total_flushed() == total
 }
 
 fn expected_checksum(spec: &TaskSpec) -> Option<Checksum> {
@@ -511,7 +505,10 @@ pub(super) async fn download_dynamic(
                         "探测响应缺少 Content-Length，暂无法核验断点，保留断点稍后重试",
                     ),
                     false,
-                    Some((sidecar.clone(), spec.sidecar_path.clone().unwrap_or_default())),
+                    Some((
+                        sidecar.clone(),
+                        spec.sidecar_path.clone().unwrap_or_default(),
+                    )),
                 );
             }
             match consistency::check(&sidecar.stamp(), &probed_stamp) {
@@ -723,6 +720,12 @@ pub(super) async fn download_dynamic(
 
     let progress_tick = Duration::from_millis(spec.progress_tick_ms.max(1));
     let sidecar_flush = Duration::from_secs(spec.sidecar_flush_secs.max(1));
+    // 断点续传已收字节区间：pieces 投影基数（本会话落盘区间之外的历史进度）。
+    let resume_ranges: Vec<(u64, u64)> = sc
+        .as_ref()
+        .filter(|s| s.is_dynamic())
+        .map(|s| s.resume_segments())
+        .unwrap_or_default();
     let mut flush_deadline = tokio::time::Instant::now() + sidecar_flush;
     let mut last_sync = Instant::now();
     let mut last_sync_flushed = 0u64;
@@ -858,13 +861,18 @@ pub(super) async fn download_dynamic(
                 let completed = planner.lock().await.completed_bytes();
                 let conns_now = conns.lock().await.clone();
                 let downloaded = completed;
+                // pieces 网格投影：resume 区间 ∪ 本会话落盘区间 → Done/Partial 集合。
+                let mut ranges = resume_ranges.clone();
+                ranges.extend(writer.flushed_ranges());
+                let (chunk_done_proj, done_blocks, partial_blocks) =
+                    project_ranges(total, spec.block_size, &ranges);
                 if !emit(evt_tx, Evt::Progress {
                     id: spec.id,
                     downloaded,
                     conns: conns_now,
-                    chunk_done: 0,
-                    done_blocks: Vec::new(),
-                    partial_blocks: Vec::new(),
+                    chunk_done: chunk_done_proj,
+                    done_blocks,
+                    partial_blocks,
                 }).await {
                     return Flow::Cancelled;
                 }
@@ -970,11 +978,13 @@ mod tests {
 
 #[cfg(test)]
 mod e2e_tests {
-    use super::*;
-    use crate::engine::{EngineShared, supervisor::Flow};
-    use crate::model::Protocol;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
+
+    use super::*;
+    use crate::engine::supervisor::Flow;
+    use crate::engine::EngineShared;
+    use crate::model::Protocol;
 
     fn fill(buf: &mut [u8], pos: u64) {
         for (i, b) in buf.iter_mut().enumerate() {
@@ -1051,7 +1061,12 @@ mod e2e_tests {
     ) {
         let (tx, rx) = mpsc::channel::<Evt>(64);
         let (cmd_tx, cmd_rx) = mpsc::channel::<TaskCmd>(4);
-        tokio::spawn(crate::engine::supervisor::run(spec, free_shared(), cmd_rx, tx));
+        tokio::spawn(crate::engine::supervisor::run(
+            spec,
+            free_shared(),
+            cmd_rx,
+            tx,
+        ));
         (
             cmd_tx,
             rx,
@@ -1104,7 +1119,9 @@ mod e2e_tests {
             diffs.len(),
             diffs.first().unwrap_or(&0),
             diffs.first().map(|i| &data[*i..(*i + 8).min(data.len())]),
-            diffs.first().map(|i| &expect[*i..(*i + 8).min(expect.len())])
+            diffs
+                .first()
+                .map(|i| &expect[*i..(*i + 8).min(expect.len())])
         );
         assert!(!dir.join("f.bin.ezr").exists());
         std::fs::remove_dir_all(&dir).ok();
@@ -1261,6 +1278,60 @@ mod e2e_tests {
             }
         }
         assert!(done, "动态 sidecar 应由动态引擎接续");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dynamic_progress_carries_done_and_partial_blocks() {
+        // pieces 窗口数据源回归：Progress 必须携带真实 Done/Partial 集合，
+        // 否则分块网格只剩 🟦 与 ⬜（已下载块全白）。
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-dyn-pieces");
+        let total: u64 = 8 * 1024 * 1024;
+        let url = super::super::tests::mock_server(total, vec![("slow".into(), String::new())]);
+        let mut spec = dyn_spec(1, &url, &dir, 4);
+        spec.task_max_download_speed = 2 * 1024 * 1024; // 限速 2 MiB/s → ≥4s 可观察
+        let (_cmd_tx, mut rx, deadline) = launch(spec).await;
+        let mut saw_done_growth = false;
+        let mut saw_partial = false;
+        let mut last_done: u32 = 0;
+        let mut completed = false;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(Evt::Progress {
+                    chunk_done,
+                    done_blocks,
+                    partial_blocks,
+                    ..
+                })) => {
+                    assert_eq!(
+                        done_blocks.len() as u32,
+                        chunk_done,
+                        "chunk_done 与 done_blocks 长度一致"
+                    );
+                    assert_eq!(
+                        *done_blocks.last().unwrap_or(&0),
+                        *done_blocks.iter().max().unwrap_or(&0),
+                        "done_blocks 升序"
+                    );
+                    if chunk_done > last_done {
+                        last_done = chunk_done;
+                        saw_done_growth = true;
+                    }
+                    if !partial_blocks.is_empty() {
+                        saw_partial = true;
+                    }
+                }
+                Ok(Some(Evt::DownloadDone { .. })) => {
+                    completed = true;
+                    break;
+                }
+                Ok(Some(Evt::Failed { reason, .. })) => panic!("限速动态下载失败: {reason}"),
+                _ => {}
+            }
+        }
+        assert!(completed, "限速动态任务应完成");
+        assert!(saw_done_growth, "下载过程中应观察到 done 块增长（🟩）");
+        assert!(saw_partial, "下载过程中应观察到部分块（🟨）");
         std::fs::remove_dir_all(&dir).ok();
     }
 

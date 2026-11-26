@@ -32,6 +32,19 @@ impl App {
                     t.chunk_done = t.chunk_done.max(done.len() as u32);
                     t.done_blocks = done;
                     t.partial_blocks = part;
+                } else if t.done_blocks.is_empty() && sc.is_dynamic() {
+                    // 动态 sidecar：无逐块台账，只有字节区间——
+                    // 按任务块大小把已收区间投影成 Done/Partial 集合。
+                    let piece = if t.block_size > 0 {
+                        t.block_size
+                    } else {
+                        crate::model::chunk::MIN_HTTP_BLOCK_SIZE
+                    };
+                    let (chunk_done, done, part) =
+                        crate::model::chunk::project_ranges(sc.size, piece, &sc.resume_segments());
+                    t.chunk_done = t.chunk_done.max(chunk_done);
+                    t.done_blocks = done;
+                    t.partial_blocks = part;
                 }
             }
             if t.protocol.is_bt() {
@@ -187,6 +200,45 @@ mod hardening_restore {
             "piece 2 起始偏移恰等于 total（200）→ 越界陈旧片被过滤"
         );
         assert_eq!(tasks[0].downloaded, 200);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn restore_dynamic_sidecar_projects_done_and_partial() {
+        // 动态 sidecar（scheduler=dynamic）：按任务块大小投影字节区间，
+        // 整块 → 🟩 Done，零头块 → 🟨 Partial（否则重启/暂停后分块全白）。
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-rh-dyn");
+        let sd = dir.to_string_lossy().into_owned();
+        let mut t = http_task(15, "dyn.bin", &sd, vec![]);
+        t.total = 5_000_000;
+        t.block_size = 1_000_000;
+        let reg_path = write_registry(&dir, &[t.clone()]);
+        let task = crate::model::sidecar::SidecarTask {
+            id: 15,
+            added_at: 0,
+            save_dir: sd.clone(),
+            concurrency: 4,
+            protocol: crate::model::Protocol::Http,
+        };
+        let stamp = crate::model::consistency::ServerStamp::default();
+        // 已收区间：块 0、1 整块 + 块 2 的 400KB 零头（size=5MB，5 块）。
+        let sc = Sidecar::build_dynamic(
+            &stamp,
+            5_000_000,
+            &[(0, 2_000_000), (2_000_000, 2_400_000)],
+            None,
+            task,
+        );
+        sc.save(&t.sidecar_path()).unwrap();
+        let tasks = App::restore(reg_path.to_str().unwrap());
+        assert!(
+            tasks[0].done_blocks == vec![0, 1],
+            "整块区间 → Done: {:?}",
+            tasks[0].done_blocks
+        );
+        assert_eq!(tasks[0].partial_blocks, vec![2], "零头区间 → Partial");
+        assert_eq!(tasks[0].chunk_done, 2, "chunk_done = Done 块数");
+        assert_eq!(tasks[0].downloaded, 2_400_000, "downloaded = 区间字节和");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

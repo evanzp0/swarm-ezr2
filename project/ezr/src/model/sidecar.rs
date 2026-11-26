@@ -105,11 +105,7 @@ impl Sidecar {
         expected: Option<&Checksum>,
         task: SidecarTask,
     ) -> Sidecar {
-        let segs: Vec<(u64, u64)> = segments
-            .iter()
-            .filter(|(s, c)| c > s)
-            .copied()
-            .collect();
+        let segs: Vec<(u64, u64)> = segments.iter().filter(|(s, c)| c > s).copied().collect();
         let downloaded = segs.iter().map(|(s, c)| c - s).sum();
         Sidecar {
             version: SIDECAR_VERSION,
@@ -422,7 +418,11 @@ mod tests {
         if pos < sc.size {
             gaps.push((pos, sc.size));
         }
-        assert_eq!(gaps, vec![(2_000_000, 3_000_000), (3_500_000, 10_000_000)], "缺口 = 已提交区间的补集");
+        assert_eq!(
+            gaps,
+            vec![(2_000_000, 3_000_000), (3_500_000, 10_000_000)],
+            "缺口 = 已提交区间的补集"
+        );
     }
 
     #[test]

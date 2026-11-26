@@ -287,97 +287,97 @@ pub(super) mod tests {
                 let seq = conn_seq.fetch_add(1, Ordering::Relaxed);
                 let opts = Arc::clone(&opts);
                 std::thread::spawn(move || {
-                let mut w = conn.try_clone().unwrap();
-                let mut r = BufReader::new(conn);
-                let mut line = String::new();
-                if r.read_line(&mut line).is_err() || line.is_empty() {
-                    return;
-                }
-                let mut range_header = None;
-                loop {
-                    let mut h = String::new();
-                    if r.read_line(&mut h).is_err() || h.trim().is_empty() {
-                        break;
+                    let mut w = conn.try_clone().unwrap();
+                    let mut r = BufReader::new(conn);
+                    let mut line = String::new();
+                    if r.read_line(&mut line).is_err() || line.is_empty() {
+                        return;
                     }
-                    if let Some((k, v)) = h.split_once(':') {
-                        if k.trim().eq_ignore_ascii_case("range") {
-                            range_header = Some(v.trim().to_string());
+                    let mut range_header = None;
+                    loop {
+                        let mut h = String::new();
+                        if r.read_line(&mut h).is_err() || h.trim().is_empty() {
+                            break;
+                        }
+                        if let Some((k, v)) = h.split_once(':') {
+                            if k.trim().eq_ignore_ascii_case("range") {
+                                range_header = Some(v.trim().to_string());
+                            }
                         }
                     }
-                }
-                let want_status = opts
-                    .iter()
-                    .find(|(k, _)| k == "status")
-                    .and_then(|(_, v)| v.parse::<u16>().ok());
-                if let Some(code) = want_status {
-                    let _ = write!(w, "HTTP/1.1 {code} Injected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-                    return;
-                }
-                if opts
-                    .iter()
-                    .find(|(k, _)| k == "dropseq")
-                    .and_then(|(_, v)| v.parse::<u32>().ok())
-                    .is_some_and(|n| seq == n)
-                {
-                    return;
-                }
-                let norange = opts.iter().any(|(k, _)| k == "norange");
-                let noclen = opts.iter().any(|(k, _)| k == "noclen");
-                let drophalf = opts.iter().any(|(k, _)| k == "drophalf");
-                let droponce = opts.iter().any(|(k, _)| k == "droponce");
-                let (start, end, status) = match range_header
-                    .as_deref()
-                    .and_then(|v| v.strip_prefix("bytes="))
-                {
-                    Some(rv) if !norange => {
-                        let (a, b) = rv.split_once('-').unwrap();
-                        let s = a.parse::<u64>().unwrap_or(0);
-                        let e = if b.is_empty() {
-                            total - 1
-                        } else {
-                            b.parse::<u64>().unwrap_or(total - 1).min(total - 1)
-                        };
-                        (s, e, 206)
+                    let want_status = opts
+                        .iter()
+                        .find(|(k, _)| k == "status")
+                        .and_then(|(_, v)| v.parse::<u16>().ok());
+                    if let Some(code) = want_status {
+                        let _ = write!(w, "HTTP/1.1 {code} Injected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        return;
                     }
-                    _ => (0, total - 1, 200),
-                };
-                let len = end - start + 1;
-                let cl = if noclen {
-                    String::new()
-                } else {
-                    format!("Content-Length: {len}\r\n")
-                };
-                let cr = if status == 206 && !noclen {
-                    format!("Content-Range: bytes {start}-{end}/{total}\r\n")
-                } else {
-                    String::new()
-                };
-                let _ = write!(
+                    if opts
+                        .iter()
+                        .find(|(k, _)| k == "dropseq")
+                        .and_then(|(_, v)| v.parse::<u32>().ok())
+                        .is_some_and(|n| seq == n)
+                    {
+                        return;
+                    }
+                    let norange = opts.iter().any(|(k, _)| k == "norange");
+                    let noclen = opts.iter().any(|(k, _)| k == "noclen");
+                    let drophalf = opts.iter().any(|(k, _)| k == "drophalf");
+                    let droponce = opts.iter().any(|(k, _)| k == "droponce");
+                    let (start, end, status) = match range_header
+                        .as_deref()
+                        .and_then(|v| v.strip_prefix("bytes="))
+                    {
+                        Some(rv) if !norange => {
+                            let (a, b) = rv.split_once('-').unwrap();
+                            let s = a.parse::<u64>().unwrap_or(0);
+                            let e = if b.is_empty() {
+                                total - 1
+                            } else {
+                                b.parse::<u64>().unwrap_or(total - 1).min(total - 1)
+                            };
+                            (s, e, 206)
+                        }
+                        _ => (0, total - 1, 200),
+                    };
+                    let len = end - start + 1;
+                    let cl = if noclen {
+                        String::new()
+                    } else {
+                        format!("Content-Length: {len}\r\n")
+                    };
+                    let cr = if status == 206 && !noclen {
+                        format!("Content-Range: bytes {start}-{end}/{total}\r\n")
+                    } else {
+                        String::new()
+                    };
+                    let _ = write!(
                     w,
                     "HTTP/1.1 {status} OK\r\nAccept-Ranges: bytes\r\nETag: \"mock-{total}\"\r\nLast-Modified: Mon, 09 Feb 2026 08:00:00 GMT\r\n{cl}{cr}Connection: close\r\n\r\n"
                 );
-                let slow = opts.iter().any(|(k, _)| k == "slow");
-                let hold = opts.iter().any(|(k, _)| k == "hold");
-                if hold {
-                    let mut sink = [0u8; 1];
-                    let _ = std::io::Read::read(&mut r, &mut sink);
-                    return;
-                }
-                let cut = drophalf || (droponce && seq == 0);
-                let limit = if cut { start + len / 2 } else { end + 1 };
-                let mut buf = vec![0u8; 8192];
-                let mut pos = start;
-                while pos < limit {
-                    let n = (limit - pos).min(8192) as usize;
-                    fill(&mut buf[..n], pos);
-                    if w.write_all(&buf[..n]).is_err() {
-                        break;
+                    let slow = opts.iter().any(|(k, _)| k == "slow");
+                    let hold = opts.iter().any(|(k, _)| k == "hold");
+                    if hold {
+                        let mut sink = [0u8; 1];
+                        let _ = std::io::Read::read(&mut r, &mut sink);
+                        return;
                     }
-                    pos += n as u64;
-                    if slow {
-                        std::thread::sleep(std::time::Duration::from_millis(15));
+                    let cut = drophalf || (droponce && seq == 0);
+                    let limit = if cut { start + len / 2 } else { end + 1 };
+                    let mut buf = vec![0u8; 8192];
+                    let mut pos = start;
+                    while pos < limit {
+                        let n = (limit - pos).min(8192) as usize;
+                        fill(&mut buf[..n], pos);
+                        if w.write_all(&buf[..n]).is_err() {
+                            break;
+                        }
+                        pos += n as u64;
+                        if slow {
+                            std::thread::sleep(std::time::Duration::from_millis(15));
+                        }
                     }
-                }
                 });
             }
         });
@@ -1674,7 +1674,11 @@ pub(super) mod tests {
         let (_tx, mut rx, deadline) = launch_spec(spec1);
         pump_until_done(&mut rx, deadline).await;
         let data = std::fs::read(dir.join("f.bin")).expect("完成文件在位");
-        assert_eq!(data.len() as u64, total, "单次半途断连应被原地重试吸收（FR-05-04）");
+        assert_eq!(
+            data.len() as u64,
+            total,
+            "单次半途断连应被原地重试吸收（FR-05-04）"
+        );
         let mut expect = vec![0u8; total as usize];
         fill(&mut expect, 0);
         assert_eq!(data, expect, "吸收重试后字节完整");
@@ -1708,8 +1712,7 @@ pub(super) mod tests {
             resumed_at > 0 && resumed_at < total,
             "持续断连应升级任务级失败（{resumed_at}/{total}）"
         );
-        let sc = Sidecar::load(dir.join("f.bin.ezr").to_str().unwrap())
-            .expect("断点台账应落盘");
+        let sc = Sidecar::load(dir.join("f.bin.ezr").to_str().unwrap()).expect("断点台账应落盘");
         assert_eq!(sc.downloaded, resumed_at, "台账字节 = 失败事件字节");
         let url_good = mock_server(total, vec![]);
         let spec2 = sidecar_spec(1, &url_good, &dir, 4);

@@ -892,3 +892,10 @@ B 类快照（任务启动烘焙、sidecar 格式即引擎 D89）使 mode 断言
 - 抢占活锁的根因与修法：preempt_after 用 HEAD 延迟测量（微秒级→20ms 地板）而 worker 首字节延迟更高时，四 worker 互相偷段永不收工（claim LOST→re-steal 循环）——TTFB 按定义测到首字节：supervisor 预读 probe 首个 chunk 计入 TTFB 并随 primed 传给 worker #1，preempt_after=2×首字节延迟后窗口自洽。
 - 共享重试计数按块不按 worker：块经 requeue 被不同 worker 接力续传时，per-worker 计数各自从零起算，几何减半的半截传输永不触发升级上限——用 Arc<Mutex<HashMap<块号,次数>>> 计数、块完成时清除。
 - 测试 mock 的并发语义是动态引擎测试的前置：串行 accept 的 mock（读请求+慢速流式全在 accept 线程）会把开区间请求的整个尾部流完才 accept 下一个连接，表象是「请求头 250ms 才到」诱发抢占活锁假象——每连接一线程后 e2e 恢复真实时序；noclen 语义应同时抑制 Content-Length 与 Content-Range（206 带 Content-Range 时总长可推导，缺 CL 判据不再成立）。
+
+## pieces 窗口投影口径（2026-11-26，coder 追加轮）追加
+- 事件层数据源缺失型 bug 的定位法：渲染与消费端全绿（pieces.rs/draw 逻辑、evt.rs Progress 落地、Blocks done_indices 均未改动）时，优先核对**新路径是否还在发旧占位数据**——动态调度器 Progress 恒发 chunk_done:0/done_blocks:[]/partial_blocks:[]，而 UI 的 pieces() 采取 done_blocks 非空即忽略 chunk_done 前缀的权威口径，两相叠加 = 已下载块永不点亮（只剩 🟦 在途与 ⬜ 未下载）。教训：新增引擎路径接 UI 事件时，事件载荷的每个字段都要有真实数据源，占位空集合等于关闭该 UI 功能。
+- 字节区间→块网格投影口径（model::chunk::project_ranges）：动态模式无逐块台账（planner 只存字节段），UI 分块窗口的 Done/Partial 由「已落盘区间 ∪ 续传区间」投影得出——整块覆盖→Done、部分覆盖→Partial、零覆盖不入集合（Empty）；区间先 merge_byte_ranges 求并（重叠区间按和计会虚增覆盖，1/2+1/2 误判整块），块边界覆盖用 block_range 尾块吸收口径。投影 piece 必须取 spec.block_size（= Task.block_size = UI chunk_total 同源），双口径分叉会把 Done 块投到错误索引或整体滤空（idx ≥ y 全被 filter 掉时恰好呈现「只有蓝和白」的本轮 bug 形态）。
+- 绿色 = 落盘（flushed）而非 received：投影数据源取 writer.flushed_ranges()（前缀 flushed_prefix ∪ 水洼 written，升序不相交）而非 planner.completed_bytes()（received 口径）——received-but-unflushed 的在途内存由连接行 🟦 表达，绿块滞后 ≤ 256 KiB batch 可接受；两口径混用会让「绿块数 × 块大小」与 downloaded 字节暂时不等，属预期非缺陷。
+- 续传场景的投影基数：download_dynamic 循环前捕获 resume_ranges = sidecar.resume_segments()（已收区间），与 writer.flushed_ranges()（仅本会话落盘）并集后投影——writer 前缀账只追踪本运行句柄，漏掉 resume 基数会让续传任务的已收块在首轮 tick 全部回白。
+- 对称面：restore.rs 的动态 sidecar 还原同样走 project_ranges（sidecar 只有字节段无逐块台账），暂停/重启后的分块窗口显示才不回白；恢复口径 chunk_done = 投影 Done 数（max 合并，防回退）。

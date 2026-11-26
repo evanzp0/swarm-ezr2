@@ -51,7 +51,6 @@ impl HttpScheduler {
             _ => None,
         }
     }
-
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -379,17 +378,16 @@ fn range_val_bounded(
     }
 }
 
-fn scheduler_val(raw: Option<&toml::Value>, key: &str, default: HttpScheduler) -> Result<HttpScheduler, String> {
+fn scheduler_val(
+    raw: Option<&toml::Value>,
+    key: &str,
+    default: HttpScheduler,
+) -> Result<HttpScheduler, String> {
     match raw {
         None => Ok(default),
-        Some(toml::Value::String(s)) => {
-            HttpScheduler::parse(s).ok_or_else(|| {
-                format!("键 {key}：{s:?}（应为 dynamic 或 blocks，拒绝启动）")
-            })
-        }
-        Some(v) => Err(format!(
-            "键 {key}：{v}（应为 dynamic 或 blocks，拒绝启动）"
-        )),
+        Some(toml::Value::String(s)) => HttpScheduler::parse(s)
+            .ok_or_else(|| format!("键 {key}：{s:?}（应为 dynamic 或 blocks，拒绝启动）")),
+        Some(v) => Err(format!("键 {key}：{v}（应为 dynamic 或 blocks，拒绝启动）")),
     }
 }
 
@@ -694,11 +692,7 @@ impl Config {
             "http.dns_race_grace_ms",
             d.dns_race_grace_ms,
         )?;
-        let scheduler = scheduler_val(
-            http.scheduler.as_ref(),
-            "http.scheduler",
-            d.scheduler,
-        )?;
+        let scheduler = scheduler_val(http.scheduler.as_ref(), "http.scheduler", d.scheduler)?;
         let min_split_kib = min1_val(
             http.min_split_kib.as_ref(),
             "http.min_split_kib",
@@ -1391,19 +1385,18 @@ mod tests {
             "首尾空白容忍"
         );
         assert_eq!(
-            Config::from_toml("[http]\nmin_split_kib = 512\n").min_split_kib, 512
+            Config::from_toml("[http]\nmin_split_kib = 512\n").min_split_kib,
+            512
         );
         for bad in ["turbo", "", "Dynamic|blocks"] {
             let text = format!("[http]\nscheduler = \"{bad}\"\n");
-            let err = Config::try_from_toml(&text)
-                .expect_err("非法 scheduler 拒绝启动");
+            let err = Config::try_from_toml(&text).expect_err("非法 scheduler 拒绝启动");
             assert!(err.contains("http.scheduler"), "{err}");
         }
         let errnum = Config::try_from_toml("[http]\nscheduler = 3\n")
             .expect_err("非字符串 scheduler 拒绝启动");
         assert!(errnum.contains("http.scheduler"), "{errnum}");
-        let err0 = Config::try_from_toml("[http]\nmin_split_kib = 0\n")
-            .expect_err("0 拒绝启动");
+        let err0 = Config::try_from_toml("[http]\nmin_split_kib = 0\n").expect_err("0 拒绝启动");
         assert!(err0.contains("http.min_split_kib"), "{err0}");
     }
 
