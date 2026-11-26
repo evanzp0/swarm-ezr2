@@ -140,6 +140,7 @@ pub(crate) fn sample_task() -> Task {
         speed: 0.0,
         state: TaskState::Queued,
         resumable: true,
+        dynamic: false,
         probed: false,
         connections: vec![],
         chunk_done: 0,

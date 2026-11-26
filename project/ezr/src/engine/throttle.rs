@@ -29,7 +29,12 @@ pub fn bucket_step(
     let wait_ms = if left <= 0.0 {
         0
     } else {
-        (left / rate * 1000.0).max(sleep_ms as f64) as u64
+        let proportional = (left / rate * 1000.0).round();
+        if proportional < 1.0 {
+            sleep_ms
+        } else {
+            proportional as u64
+        }
     };
     (tokens, take, wait_ms)
 }
@@ -148,9 +153,15 @@ mod tests {
         let (tokens, taken, wait) = step(2_000.0, 1_000.0, 0.0, 4_000.0);
         assert_eq!(taken, 1_000.0);
         assert_eq!(tokens, 0.0);
-        assert_eq!(wait, 1_500, "deficit 3000B @ 2000B/s = 1500ms");
+        assert_eq!(wait, 1_500, "deficit 3000B @ 2000B/s = 1500ms 按比例");
         let (_, _, wait) = step(1_000_000.0, 0.0, 0.0, 1.0);
-        assert_eq!(wait, SLEEP_MS, "防忙轮询下限");
+        assert_eq!(wait, SLEEP_MS, "不足 1 ms 才落入防忙轮询下限");
+        let (_, _, wait) = step(1_000_000.0, 0.0, 0.0, 8_192.0);
+        assert_eq!(wait, 8, "8192B @ 1MiB/s = 8ms 按比例，不再被 20 ms 下限钳住");
+        let (_, _, wait) = step(1_000_000.0, 0.0, 0.0, 131_072.0);
+        assert_eq!(wait, 131, "128 KiB chunk @ 1 MiB/s = 131 ms，限速贴住设定值");
+        let (_, _, wait) = step(8_388_608.0, 0.0, 0.0, 131_072.0);
+        assert_eq!(wait, 16, "128 KiB chunk @ 8 MiB/s = 16 ms");
     }
 
     #[tokio::test]
@@ -191,9 +202,9 @@ mod tests {
         let t = Throttle::with_params(1_000_000, 2.0, 5);
         assert_eq!(t.burst_secs, 2.0, "burst 参数落位");
         assert_eq!(t.sleep_ms, 5, "sleep 参数落位");
-        let (tokens, taken, wait) = bucket_step(1_000.0, 0.0, 0.0, 1.0, 2.0, 5);
+        let (tokens, taken, wait) = bucket_step(1_000.0, 0.0, 0.0, 0.4, 2.0, 5);
         assert_eq!(tokens, 0.0);
         assert_eq!(taken, 0.0);
-        assert_eq!(wait, 5, "自定义 sleep 下限生效");
+        assert_eq!(wait, 5, "不足 1 ms 的计算值才落入自定义 sleep 下限");
     }
 }

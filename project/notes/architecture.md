@@ -884,3 +884,11 @@ ws/webrtc 轮（2026-11-09）：TrackerUrl 三族分型（Ws 变体与 Http/Udp 
 4→8：add-task 对话框回退断言/CLI 边界 65→129/PC-03 默认口径；块模型默认：download-engine
 分块行断言钉 blocks；模板键 40→42；退避触发面：retry-backoff-02 fixture 口径）；④调度模式
 B 类快照（任务启动烘焙、sidecar 格式即引擎 D89）使 mode 断言可跨热加载稳定。
+
+## 动态分段调度器（2026-11-25，coder phase-05）追加
+- planner 不变量三件套的测试化口径：段区间互不重叠 + cursor≤reserved≤end + pre_committed+retired+Σ段长=文件大小（resume 场景的已提交字节必须计入 pre_committed，否则覆盖不变量误报）；proptest 用公平轮转仿真（assign→claim→commit→absorb/release）验证收敛到文件大小，仿真用 MIN_PREEMPT 冻结时钟——preempt_after=ZERO 会让仿真退化成抢段乒乓（真实时钟下首字节延迟>抢占窗才触发，仿真无时钟推进）。
+- 动态引擎的 primed 对齐守卫不可省略：worker #1 的首个 assign 与其他 worker 的切分竞争，可能偷到切分段（from≠primed_start），此时必须弃用裸 GET primed 响应改走自己的开区间请求——否则响应体（从 0 起）按段起点（≠0）写入即成 128 KiB 错位内容（实证：diffs=131072 first=131072，got=[0,1,2…] want=[50,51,…]）。
+- 完成判定的落盘口径必须区分三种场景：新任务=writer.global_flushed_prefix()≥total；续传=sidecar 基线(downloaded)+本轮 total_flushed==total（writer 前缀只追踪本运行句柄的写入，续传的头部区间不在其中）；降级救援=重下覆盖后前缀再次覆盖全文件——并集守卫 flushed_complete = prefix≥total ‖ base+flushed==total，两种口径各自在可达场景下可靠。
+- 抢占活锁的根因与修法：preempt_after 用 HEAD 延迟测量（微秒级→20ms 地板）而 worker 首字节延迟更高时，四 worker 互相偷段永不收工（claim LOST→re-steal 循环）——TTFB 按定义测到首字节：supervisor 预读 probe 首个 chunk 计入 TTFB 并随 primed 传给 worker #1，preempt_after=2×首字节延迟后窗口自洽。
+- 共享重试计数按块不按 worker：块经 requeue 被不同 worker 接力续传时，per-worker 计数各自从零起算，几何减半的半截传输永不触发升级上限——用 Arc<Mutex<HashMap<块号,次数>>> 计数、块完成时清除。
+- 测试 mock 的并发语义是动态引擎测试的前置：串行 accept 的 mock（读请求+慢速流式全在 accept 线程）会把开区间请求的整个尾部流完才 accept 下一个连接，表象是「请求头 250ms 才到」诱发抢占活锁假象——每连接一线程后 e2e 恢复真实时序；noclen 语义应同时抑制 Content-Length 与 Content-Range（206 带 Content-Range 时总长可推导，缺 CL 判据不再成立）。

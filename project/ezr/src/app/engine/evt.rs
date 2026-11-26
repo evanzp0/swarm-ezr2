@@ -15,6 +15,7 @@ impl App {
                 resumable,
                 etag,
                 last_modified,
+                dynamic,
             } => {
                 let rename_to = {
                     let cur = self.tasks.iter().find(|t| t.id == id);
@@ -38,6 +39,7 @@ impl App {
                     t.resume_orphan = false;
                     t.total = total;
                     t.resumable = resumable;
+                    t.dynamic = dynamic;
                     t.probed = true;
                     t.etag = etag;
                     t.last_modified = last_modified;

@@ -18,7 +18,13 @@ pub struct Sidecar {
     pub non_resumable: bool,
     pub expected: Option<ChecksumCompat>,
     pub task: SidecarTask,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduler: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segments: Option<Vec<(u64, u64)>>,
 }
+
+pub const SIDECAR_SCHEDULER_DYNAMIC: &str = "dynamic";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ChecksumCompat {
@@ -86,7 +92,50 @@ impl Sidecar {
             non_resumable,
             expected: expected.map(ChecksumCompat::from),
             task,
+            scheduler: None,
+            segments: None,
         }
+    }
+
+    #[must_use]
+    pub fn build_dynamic(
+        stamp: &ServerStamp,
+        size: u64,
+        segments: &[(u64, u64)],
+        expected: Option<&Checksum>,
+        task: SidecarTask,
+    ) -> Sidecar {
+        let segs: Vec<(u64, u64)> = segments
+            .iter()
+            .filter(|(s, c)| c > s)
+            .copied()
+            .collect();
+        let downloaded = segs.iter().map(|(s, c)| c - s).sum();
+        Sidecar {
+            version: SIDECAR_VERSION,
+            size,
+            etag: stamp.etag.clone(),
+            last_modified: stamp.last_modified.clone(),
+            block_size: 0,
+            block_count: 0,
+            blocks: Vec::new(),
+            downloaded,
+            non_resumable: false,
+            expected: expected.map(ChecksumCompat::from),
+            task,
+            scheduler: Some(SIDECAR_SCHEDULER_DYNAMIC.to_string()),
+            segments: Some(segs),
+        }
+    }
+
+    #[must_use]
+    pub fn is_dynamic(&self) -> bool {
+        self.scheduler.as_deref() == Some(SIDECAR_SCHEDULER_DYNAMIC)
+    }
+
+    #[must_use]
+    pub fn resume_segments(&self) -> Vec<(u64, u64)> {
+        self.segments.clone().unwrap_or_default()
     }
 
     #[must_use]
@@ -291,6 +340,89 @@ mod tests {
             !text.contains("final_url"),
             "新序列化不得含 final_url: {text}"
         );
+    }
+
+    fn dynamic_sample() -> Sidecar {
+        let stamp = ServerStamp {
+            etag: Some("dyn123".to_string()),
+            last_modified: Some("Mon, 09 Feb 2026 00:00:00 GMT".to_string()),
+            size: Some(10_000_000),
+        };
+        Sidecar::build_dynamic(
+            &stamp,
+            10_000_000,
+            &[(0, 2_000_000), (3_000_000, 3_500_000)],
+            None,
+            SidecarTask {
+                id: 9,
+                added_at: 1_700_000_000,
+                save_dir: "/dl".to_string(),
+                concurrency: 8,
+                protocol: Protocol::Http,
+            },
+        )
+    }
+
+    #[test]
+    fn dynamic_roundtrip_preserves_segments() {
+        let sc = dynamic_sample();
+        let dir = tmp_dir();
+        let p = format!("{dir}/dyn.bin.ezr");
+        sc.save(&p).unwrap();
+        let loaded = Sidecar::load(&p).unwrap();
+        assert_eq!(sc, loaded);
+        assert!(loaded.is_dynamic(), "scheduler 字段标记动态格式");
+        assert_eq!(
+            loaded.resume_segments(),
+            vec![(0, 2_000_000), (3_000_000, 3_500_000)]
+        );
+        assert_eq!(loaded.downloaded, 2_500_000, "downloaded = Σ(cursor-start)");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn blocks_format_json_has_no_scheduler_key() {
+        let sc = sample();
+        let text = serde_json::to_string(&sc).unwrap();
+        assert!(
+            !text.contains("scheduler"),
+            "blocks 格式不写 scheduler 键: {text}"
+        );
+        assert!(!text.contains("segments"), "blocks 格式不写 segments 键");
+        let loaded: Sidecar = serde_json::from_str(&text).unwrap();
+        assert!(!loaded.is_dynamic());
+        assert!(loaded.segments.is_none());
+    }
+
+    #[test]
+    fn dynamic_json_carries_scheduler_and_segments() {
+        let sc = dynamic_sample();
+        let text = serde_json::to_string(&sc).unwrap();
+        assert!(text.contains("\"scheduler\""), "动态格式写 scheduler 键");
+        assert!(text.contains("\"segments\""), "动态格式写 segments 键");
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["scheduler"], "dynamic");
+        assert_eq!(v["segments"][0][0], 0);
+        assert_eq!(v["segments"][0][1], 2_000_000);
+        assert_eq!(v["block_size"], 0, "动态格式块字段置零");
+    }
+
+    #[test]
+    fn dynamic_resume_gap_complement_is_engine_input() {
+        let sc = dynamic_sample();
+        let segs = sc.resume_segments();
+        let mut gaps: Vec<(u64, u64)> = Vec::new();
+        let mut pos = 0u64;
+        for (s, c) in &segs {
+            if *s > pos {
+                gaps.push((pos, *s));
+            }
+            pos = (*c).max(pos);
+        }
+        if pos < sc.size {
+            gaps.push((pos, sc.size));
+        }
+        assert_eq!(gaps, vec![(2_000_000, 3_000_000), (3_500_000, 10_000_000)], "缺口 = 已提交区间的补集");
     }
 
     #[test]

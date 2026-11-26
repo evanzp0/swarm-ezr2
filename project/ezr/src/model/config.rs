@@ -5,11 +5,11 @@ use serde::Deserialize;
 
 pub const DEFAULT_BLOCK_SIZE_HTTP: u64 = super::chunk::HTTP_CHUNK_SIZE;
 pub const DEFAULT_DOWNLOAD_SLOTS: usize = 5;
-pub const DEFAULT_HTTP_CONCURRENCY: usize = 4;
+pub const DEFAULT_HTTP_CONCURRENCY: usize = 8;
 pub const DEFAULT_MAX_RETRIES: u32 = 5;
 pub const DEFAULT_PROGRESS_TICK_MS: u64 = 100;
 pub const DEFAULT_SIDECAR_FLUSH_SECS: u64 = 2;
-pub const DEFAULT_THROTTLE_BURST_SECS: f64 = 0.5;
+pub const DEFAULT_THROTTLE_BURST_SECS: f64 = 1.0;
 pub const DEFAULT_THROTTLE_SLEEP_MS: u64 = 20;
 pub const DEFAULT_DNS_RACE_GRACE_MS: u64 = 1000;
 pub const DEFAULT_BT_CONCURRENCY: usize = 20;
@@ -33,6 +33,26 @@ pub const DEFAULT_UDP_BASE_TIMEOUT_SECS: u64 = 15;
 pub const DEFAULT_UDP_RETRIES: u32 = 3;
 pub const DEFAULT_SEED_DURATION_M: u64 = 30;
 pub const DEFAULT_PEER_CONNECTION_PROTOCOL: [&str; 2] = ["tcp", "webrtc"];
+pub const DEFAULT_HTTP_SCHEDULER_MIN_SPLIT_KIB: u64 = 256;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum HttpScheduler {
+    #[default]
+    Dynamic,
+    Blocks,
+}
+
+impl HttpScheduler {
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "dynamic" => Some(Self::Dynamic),
+            "blocks" => Some(Self::Blocks),
+            _ => None,
+        }
+    }
+
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SeedExitRule {
@@ -163,6 +183,8 @@ pub struct Config {
     pub default_seed_duration_m: u64,
     pub seed_exit_rule: Option<SeedExitRule>,
     pub bt_listen_port: u16,
+    pub scheduler: HttpScheduler,
+    pub min_split_kib: u64,
     pub warnings: Vec<String>,
 }
 
@@ -214,6 +236,8 @@ impl Default for Config {
             default_seed_duration_m: DEFAULT_SEED_DURATION_M,
             seed_exit_rule: None,
             bt_listen_port: 0,
+            scheduler: HttpScheduler::Dynamic,
+            min_split_kib: DEFAULT_HTTP_SCHEDULER_MIN_SPLIT_KIB,
             warnings: Vec::new(),
         }
     }
@@ -254,6 +278,8 @@ struct HttpRaw {
     throttle_burst_secs: Option<toml::Value>,
     throttle_sleep_ms: Option<toml::Value>,
     dns_race_grace_ms: Option<toml::Value>,
+    scheduler: Option<toml::Value>,
+    min_split_kib: Option<toml::Value>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -332,11 +358,38 @@ fn min1_u32_val(raw: Option<&toml::Value>, key: &str, default: u32) -> Result<u3
 }
 
 fn range1_64_val(raw: Option<&toml::Value>, key: &str, default: usize) -> Result<usize, String> {
+    range_val_bounded(raw, key, default, 64)
+}
+
+fn range1_128_val(raw: Option<&toml::Value>, key: &str, default: usize) -> Result<usize, String> {
+    range_val_bounded(raw, key, default, 128)
+}
+
+fn range_val_bounded(
+    raw: Option<&toml::Value>,
+    key: &str,
+    default: usize,
+    max: usize,
+) -> Result<usize, String> {
     let v = int_of(raw).map_err(|e| format!("键 {key}：{e}（拒绝启动）"))?;
     match v {
         None => Ok(default),
-        Some(i) if (1..=64).contains(&i) => Ok(i as usize),
-        Some(i) => Err(format!("键 {key}：{i}（应为 1–64 的整数，拒绝启动）")),
+        Some(i) if (1..=max as i64).contains(&i) => Ok(i as usize),
+        Some(i) => Err(format!("键 {key}：{i}（应为 1–{max} 的整数，拒绝启动）")),
+    }
+}
+
+fn scheduler_val(raw: Option<&toml::Value>, key: &str, default: HttpScheduler) -> Result<HttpScheduler, String> {
+    match raw {
+        None => Ok(default),
+        Some(toml::Value::String(s)) => {
+            HttpScheduler::parse(s).ok_or_else(|| {
+                format!("键 {key}：{s:?}（应为 dynamic 或 blocks，拒绝启动）")
+            })
+        }
+        Some(v) => Err(format!(
+            "键 {key}：{v}（应为 dynamic 或 blocks，拒绝启动）"
+        )),
     }
 }
 
@@ -601,7 +654,7 @@ impl Config {
             d.block_size_http,
         )?
         .max(super::chunk::MIN_HTTP_BLOCK_SIZE);
-        let http_concurrency = range1_64_val(
+        let http_concurrency = range1_128_val(
             http.http_concurrency.as_ref(),
             "http.http_concurrency",
             d.http_concurrency,
@@ -640,6 +693,16 @@ impl Config {
             http.dns_race_grace_ms.as_ref(),
             "http.dns_race_grace_ms",
             d.dns_race_grace_ms,
+        )?;
+        let scheduler = scheduler_val(
+            http.scheduler.as_ref(),
+            "http.scheduler",
+            d.scheduler,
+        )?;
+        let min_split_kib = min1_val(
+            http.min_split_kib.as_ref(),
+            "http.min_split_kib",
+            d.min_split_kib,
         )?;
         let trackers = trackers_val(bt.trackers.as_ref(), "bt.trackers")?;
         let peer_connection_protocol = peer_connection_protocol_val(
@@ -829,6 +892,8 @@ impl Config {
             default_seed_duration_m,
             seed_exit_rule,
             bt_listen_port,
+            scheduler,
+            min_split_kib,
             warnings,
         })
     }
@@ -1065,8 +1130,8 @@ task_max_upload_speed = 0
 block_size_http = 1048576
 
 # 默认并发数
-# 取值范围：1–64 的整数；0 或越界拒绝启动
-http_concurrency = 4
+# 取值范围：1–128 的整数；0 或越界拒绝启动
+http_concurrency = 8
 
 # 自动重试上限次数（达上限转停等，可按 R 手动重试）
 # 取值范围：≥1 的整数；0 或非法值拒绝启动
@@ -1094,7 +1159,7 @@ sidecar_flush_secs = 2
 
 # 限速令牌桶突发窗（秒）
 # 取值范围：>0 的有限数；非法值拒绝启动
-throttle_burst_secs = 0.5
+throttle_burst_secs = 1.0
 
 # 限速循环步进睡眠（毫秒）
 # 取值范围：正整数（≥1）；0 或非法值拒绝启动
@@ -1103,6 +1168,14 @@ throttle_sleep_ms = 20
 # DNS 双腿竞速宽限（毫秒，双栈并行解析）
 # 取值范围：正整数（≥1）；0 或非法值拒绝启动
 dns_race_grace_ms = 1000
+
+# HTTP 引擎调度模式（dynamic = 动态分段调度；blocks = 固定块回退开关）
+# 取值范围：dynamic 或 blocks（大小写不敏感）；非法值拒绝启动；B 类快照——任务启动时烘焙，热加载不影响运行中任务
+scheduler = "dynamic"
+
+# 动态模式初始切分粒度下限（KiB；尾段竞争自适应降半，切分点按 4096 对齐）
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
+min_split_kib = 256
 
 # ===== BT 引擎配置 =====
 
@@ -1284,14 +1357,14 @@ mod tests {
     #[test]
     fn block_size_http_positive_below_floor_clamped() {
         let mk = |v: &str| Config::from_toml(&format!("[http]\nblock_size_http = {v}\n"));
-        assert_eq!(mk("512").block_size_http, 1_048_576);
+        assert_eq!(mk("512").block_size_http, 262_144);
         assert_eq!(
-            mk("1048575").block_size_http,
-            1_048_576,
+            mk("262143").block_size_http,
+            262_144,
             "下限之下 1 字节也钳制"
         );
-        assert_eq!(mk("1048576").block_size_http, 1_048_576, "恰在下限 = 原值");
-        assert_eq!(mk("2097152").block_size_http, 2_097_152, "大于下限原值生效");
+        assert_eq!(mk("262144").block_size_http, 262_144, "恰在下限 = 原值");
+        assert_eq!(mk("1048576").block_size_http, 1_048_576, "大于下限原值生效");
         let err0 = Config::try_from_toml("[http]\nblock_size_http = 0\n").expect_err("0 拒绝启动");
         assert!(err0.contains("http.block_size_http"));
         let errneg =
@@ -1300,6 +1373,38 @@ mod tests {
         let errstr = Config::try_from_toml("[http]\nblock_size_http = \"256 KB\"\n")
             .expect_err("非法类型拒绝启动");
         assert!(errstr.contains("http.block_size_http"), "{errstr}");
+    }
+
+    #[test]
+    fn scheduler_and_min_split_kib_validation() {
+        let c = Config::default();
+        assert_eq!(c.scheduler, HttpScheduler::Dynamic, "默认 dynamic（D84）");
+        assert_eq!(c.min_split_kib, 256, "默认 256 KiB（D85）");
+        assert_eq!(
+            Config::from_toml("[http]\nscheduler = \"BLOCKS\"\n").scheduler,
+            HttpScheduler::Blocks,
+            "大小写不敏感"
+        );
+        assert_eq!(
+            Config::from_toml("[http]\nscheduler = \" Dynamic \"\n").scheduler,
+            HttpScheduler::Dynamic,
+            "首尾空白容忍"
+        );
+        assert_eq!(
+            Config::from_toml("[http]\nmin_split_kib = 512\n").min_split_kib, 512
+        );
+        for bad in ["turbo", "", "Dynamic|blocks"] {
+            let text = format!("[http]\nscheduler = \"{bad}\"\n");
+            let err = Config::try_from_toml(&text)
+                .expect_err("非法 scheduler 拒绝启动");
+            assert!(err.contains("http.scheduler"), "{err}");
+        }
+        let errnum = Config::try_from_toml("[http]\nscheduler = 3\n")
+            .expect_err("非字符串 scheduler 拒绝启动");
+        assert!(errnum.contains("http.scheduler"), "{errnum}");
+        let err0 = Config::try_from_toml("[http]\nmin_split_kib = 0\n")
+            .expect_err("0 拒绝启动");
+        assert!(err0.contains("http.min_split_kib"), "{err0}");
     }
 
     #[test]
@@ -1393,8 +1498,8 @@ mod tests {
         );
         assert_eq!(
             t.matches("拒绝启动").count(),
-            36,
-            "翻转后的拒绝启动注释计数（v1.21/D79：default_seed_duration_m + exit rule 三键计入）"
+            38,
+            "翻转后的拒绝启动注释计数（v1.62/FR-05-12：scheduler + min_split_kib 计入）"
         );
         assert!(
             t.contains("占用时回退随机 + 启动警告"),
@@ -1757,7 +1862,9 @@ mod tests {
             ),
             ("[common]\ndownload_slots = 0\n", "common.download_slots"),
             ("[http]\nmax_retries = -1\n", "http.max_retries"),
-            ("[http]\nhttp_concurrency = 99\n", "http.http_concurrency"),
+            ("[http]\nhttp_concurrency = 129\n", "http.http_concurrency"),
+            ("[http]\nscheduler = \"turbo\"\n", "http.scheduler"),
+            ("[http]\nmin_split_kib = 0\n", "http.min_split_kib"),
             (
                 "[common]\nglobal_max_download_speed = \"xyz\"\n",
                 "common.global_max_download_speed",
@@ -2023,11 +2130,11 @@ mod tests {
     }
 
     #[test]
-    fn template_line_count_is_207() {
+    fn template_line_count_is_215() {
         assert_eq!(
             Config::default_template().lines().count(),
-            206,
-            "钦定模板 v1.17/v1.18 = 207 行（split 计数；lines 计数 206）"
+            214,
+            "钦定模板 v1.62 = 215 行（FR-05-12 增两键四行；split 计数；lines 计数 214）"
         );
         assert!(Config::default_template().ends_with('\n'));
         assert!(
@@ -2068,8 +2175,8 @@ mod tests {
         assert!(t.contains("# 取值范围"), "用途/取值范围注释保持");
         assert_eq!(
             t.matches("取值范围").count(),
-            43,
-            "40 键 + [bt.seed_exit_rule] 注释块三键（v1.17/D79）"
+            45,
+            "42 键 + [bt.seed_exit_rule] 注释块三键（v1.62/FR-05-12 增两键）"
         );
         let active: Vec<&str> = t
             .lines()
@@ -2077,13 +2184,13 @@ mod tests {
             .collect();
         assert_eq!(
             active.len(),
-            43,
-            "活跃行 = 40 键值行 + 3 表声明行，实际 {active:?}"
+            45,
+            "活跃行 = 42 键值行 + 3 表声明行，实际 {active:?}"
         );
     }
 
     #[test]
-    fn template_36_keys_three_line_form() {
+    fn template_42_keys_three_line_form() {
         let t = Config::default_template();
         let keys = [
             "download_dir",
@@ -2103,6 +2210,8 @@ mod tests {
             "throttle_burst_secs",
             "throttle_sleep_ms",
             "dns_race_grace_ms",
+            "scheduler",
+            "min_split_kib",
             "trackers",
             "peer_connection_protocol",
             "bt_concurrency",
@@ -2127,7 +2236,7 @@ mod tests {
             "default_seed_duration_m",
             "listen_port",
         ];
-        assert_eq!(keys.len(), 40);
+        assert_eq!(keys.len(), 42);
         for k in keys {
             assert!(
                 t.contains(&format!("\n{k} = ")),
@@ -2159,8 +2268,8 @@ mod tests {
         }
         assert_eq!(
             t.matches("取值范围").count(),
-            43,
-            "40 键 + [bt.seed_exit_rule] 注释块三键（v1.17/D79）"
+            45,
+            "42 键 + [bt.seed_exit_rule] 注释块三键（v1.62/FR-05-12 增两键）"
         );
     }
 
@@ -2175,16 +2284,18 @@ mod tests {
             "task_max_download_speed = 0",
             "task_max_upload_speed = 0",
             "block_size_http = 1048576",
-            "http_concurrency = 4",
+            "http_concurrency = 8",
             "max_retries = 5",
             "auto_retry = true",
             "backoff_initial = 8.0",
             "backoff_cap = 60.0",
             "progress_tick_ms = 100",
             "sidecar_flush_secs = 2",
-            "throttle_burst_secs = 0.5",
+            "throttle_burst_secs = 1.0",
             "throttle_sleep_ms = 20",
             "dns_race_grace_ms = 1000",
+            "scheduler = \"dynamic\"",
+            "min_split_kib = 256",
             "trackers = []",
             "peer_connection_protocol = [\"tcp\", \"webrtc\"]",
             "bt_concurrency = 20",
@@ -2272,7 +2383,7 @@ mod tests {
             val_of("sidecar_flush_secs"),
             c.sidecar_flush_secs.to_string()
         );
-        assert_eq!(val_of("throttle_burst_secs"), "0.5");
+        assert_eq!(val_of("throttle_burst_secs"), "1.0");
         assert_eq!(val_of("throttle_sleep_ms"), c.throttle_sleep_ms.to_string());
         assert_eq!(val_of("dns_race_grace_ms"), c.dns_race_grace_ms.to_string());
         assert_eq!(val_of("bt_concurrency"), c.bt_concurrency.to_string());

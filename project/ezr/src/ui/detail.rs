@@ -66,6 +66,15 @@ fn chunk_row(t: &Task) -> Vec<Span<'static>> {
     let mut l = vec![Span::raw("  "), dim_label("分块")];
     if t.total == 0 || y == 0 || !t.supports_pieces() {
         l.push(Span::styled("-".to_string(), Style::default().fg(DIM)));
+    } else if t.dynamic {
+        l.push(Span::styled(
+            format!("{}/{}", fmt_size(t.downloaded), fmt_size(t.total)),
+            Style::default().fg(state_c).add_modifier(Modifier::BOLD),
+        ));
+        l.push(Span::styled(
+            " · 动态分段".to_string(),
+            Style::default().fg(FG),
+        ));
     } else {
         l.push(Span::styled(
             format!("{x}/{y}"),
@@ -319,6 +328,49 @@ mod bt_detail_tests {
         let plain: String = s.chars().filter(|&c| c != '\u{FE0E}').collect();
         assert!(plain.contains("ubuntu.torrent"), "URL 行: {plain}");
         assert!(!s.contains("校验"), "无校验字段行: {s}");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn http_detail_dynamic_chunk_row_shows_bytes_and_label() {
+        let mut app = crate::ui::testfx::make_app_in("ezr-udetail-dyn", "http");
+        let mut t = crate::model::sample_task();
+        t.dynamic = true;
+        t.resumable = true;
+        t.total = 10_000_000;
+        t.downloaded = 3_200_000;
+        app.tasks.push(t);
+        app.selected = 0;
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        let s = term.backend().to_string();
+        assert!(
+            s.contains(" · 动态分段"),
+            "动态分块行标签（D83）: {s}"
+        );
+        assert!(
+            s.contains("3.2 MB/10.0 MB"),
+            "动态分块行字节数对: {s}"
+        );
+        assert!(!s.contains("/块"), "动态模式无块口径: {s}");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn http_detail_blocks_chunk_row_unchanged() {
+        let mut app = crate::ui::testfx::make_app_in("ezr-udetail-blk", "http");
+        let mut t = crate::model::sample_task();
+        t.dynamic = false;
+        t.resumable = true;
+        t.total = 3_000_000;
+        t.block_size = 1_048_576;
+        app.tasks.push(t);
+        app.selected = 0;
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        let s = term.backend().to_string();
+        assert!(s.contains("0/3 · 1 MB/块"), "blocks 分块行维持旧口径: {s}");
+        assert!(!s.contains("动态分段"), "blocks 模式无动态标签: {s}");
         app.shutdown().await;
     }
 }

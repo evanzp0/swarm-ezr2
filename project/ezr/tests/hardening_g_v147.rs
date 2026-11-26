@@ -600,6 +600,8 @@ async fn unknown_size_orphan_redirects_not_transient_fail() {
     let addr = stub_nocl_trickle();
     let (dir, reg) = workspace("u0");
     let sc = model::sidecar::Sidecar {
+        scheduler: None,
+        segments: None,
         version: 1,
         size: 0,
         etag: None,
@@ -716,6 +718,8 @@ async fn inconsistent_block_count_orphan_redirects_even_when_size_matches() {
     let addr = stub_range_recorder(log.clone());
     let (dir, reg) = workspace("bc");
     let sc = model::sidecar::Sidecar {
+        scheduler: None,
+        segments: None,
         version: 1,
         size: 3_000_000,
         etag: None,
@@ -1034,6 +1038,8 @@ async fn engine_progress_freezes_after_failure_event() {
     let (etx, mut erx) = tokio::sync::mpsc::channel(1024);
     let handle = engine::EngineHandle::start(&cfg, etx);
     let spec = engine::TaskSpec {
+        scheduler: model::config::HttpScheduler::Blocks,
+        min_split: 256 * 1024,
         id: 1,
         url: format!("http://{addr}/f.bin"),
         save_dir: dir.to_string_lossy().into_owned(),
@@ -1090,6 +1096,8 @@ async fn engine_conns_quota_exact_and_unique_ids() {
     let handle = engine::EngineHandle::start(&cfg, etx);
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     let spec = engine::TaskSpec {
+        scheduler: model::config::HttpScheduler::Blocks,
+        min_split: 256 * 1024,
         id: 1,
         url: format!("http://{addr}/f.bin"),
         save_dir: dir.to_string_lossy().into_owned(),

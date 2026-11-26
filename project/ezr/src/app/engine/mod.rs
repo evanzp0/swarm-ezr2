@@ -80,6 +80,12 @@ impl App {
     ) -> crate::engine::TaskSpec {
         let sidecar = Sidecar::load(&t.sidecar_path());
         let sc_path = (sidecar.is_some()).then(|| t.sidecar_path());
+        let scheduler = if sidecar.as_ref().is_some_and(|s| s.is_dynamic()) {
+            crate::model::config::HttpScheduler::Dynamic
+        } else {
+            self.cfg.scheduler
+        };
+        let min_split = self.cfg.min_split_kib.saturating_mul(1024);
         crate::engine::TaskSpec {
             id: t.id,
             url: t.url.clone(),
@@ -87,6 +93,8 @@ impl App {
             name: t.name.clone(),
             concurrency: t.concurrency,
             block_size: t.block_size,
+            scheduler,
+            min_split,
             protocol: t.protocol,
             expected_algo: t.checksum.as_ref().map(|c| c.algo),
             expected_value: t.checksum.as_ref().map(|c| c.value.clone()),
@@ -666,6 +674,7 @@ mod evt_tests {
             resumable: true,
             etag: None,
             last_modified: None,
+            dynamic: false,
         })
         .await;
         assert!(app.tasks.is_empty(), "未知 id：无任务被创建或修改");
@@ -688,6 +697,7 @@ mod evt_tests {
             resumable: true,
             etag: None,
             last_modified: None,
+            dynamic: false,
         })
         .await;
         assert_eq!(app.tasks[0].name, "b.bin.1", "同名任务占用 → 追加 .1 去重");
@@ -710,6 +720,7 @@ mod evt_tests {
             resumable: true,
             etag: None,
             last_modified: None,
+            dynamic: false,
         })
         .await;
         assert_eq!(app.tasks[0].name, "b.bin", "不同保存目录的同名不算占用");
@@ -733,6 +744,7 @@ mod evt_tests {
             resumable: true,
             etag: None,
             last_modified: None,
+            dynamic: false,
         })
         .await;
         assert_eq!(
@@ -756,6 +768,7 @@ mod evt_tests {
             resumable: false,
             etag: Some("\"e1\"".to_string()),
             last_modified: Some("yesterday".to_string()),
+            dynamic: false,
         })
         .await;
         let t = &app.tasks[0];
@@ -787,6 +800,7 @@ mod evt_tests {
             resumable: true,
             etag: None,
             last_modified: None,
+            dynamic: false,
         })
         .await;
         let t = &app.tasks[0];
@@ -860,6 +874,7 @@ mod evt_tests {
             resumable: true,
             etag: None,
             last_modified: None,
+            dynamic: false,
         })
         .await;
         assert!(
@@ -1781,6 +1796,7 @@ mod conn_stats_tests {
             resumable: true,
             etag: None,
             last_modified: None,
+            dynamic: false,
         })
         .await;
         progress(&mut app, 1, vec![cv(1, 0, 0, 1000, 120)]).await;
@@ -1806,6 +1822,7 @@ mod conn_stats_tests {
             resumable: true,
             etag: None,
             last_modified: None,
+            dynamic: false,
         })
         .await;
         assert_eq!(app.tasks[0].state, TaskState::Downloading, "Probed 转下载");

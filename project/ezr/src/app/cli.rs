@@ -33,7 +33,7 @@ impl App {
             url,
             dir,
             self.cfg.block_size_http,
-            conns.unwrap_or(self.cfg.http_concurrency).clamp(1, 64),
+            conns.unwrap_or(self.cfg.http_concurrency).clamp(1, 128),
             self.cfg.max_retries,
             checksum,
             crate::model::config::ProxyChoice::Direct,

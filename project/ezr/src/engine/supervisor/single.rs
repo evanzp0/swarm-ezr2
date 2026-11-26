@@ -1,13 +1,14 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use tokio::io::AsyncSeekExt;
 use tokio::sync::mpsc;
 
 use super::super::error::{classify_reqwest, EngineFailure};
 use super::super::ConnView;
 use super::finalize::{build_sidecar, failed_ledger, finalize_completed};
 use super::http::req_checked;
+use super::workers::WBuf;
 use super::{emit, Evt, Flow, PausedState, TaskCmd, TaskSpec};
 use crate::model::chunk::{block_range, Blocks};
 use crate::model::consistency::ServerStamp;
@@ -115,17 +116,23 @@ pub(super) async fn single_stream(
         shared.throttle_burst_secs(),
         shared.throttle_sleep_ms(),
     ));
+    let mut wbuf = WBuf::new();
     loop {
         tokio::select! {
             cmd = cmd_rx.recv() => match cmd {
                 Some(TaskCmd::Pause) => {
+                    let _ = wbuf.flush_now(&mut file).await;
+                    let flushed = wbuf.flushed_total();
+                    let base = if resume { resumed } else { 0 };
                     let mut ledger = blocks.clone();
                     if multi_ok {
-                        ledger.mark_progress(0, downloaded);
+                        ledger.mark_progress(0, flushed.max(base));
                     }
+                    let downloaded = ledger.downloaded();
                     let sidecar = build_sidecar(spec, stamp, &ledger, !multi_ok);
                     return Flow::Paused(PausedState {
                         blocks: ledger,
+                        downloaded,
                         sidecar,
                         sidecar_path: sc_path.to_string(),
                     });
@@ -139,11 +146,12 @@ pub(super) async fn single_stream(
                 Ok(Some(bytes)) => {
                     shared.dl_throttle().acquire(bytes.len() as u64).await;
                     task_dl.acquire(bytes.len() as u64).await;
-                    if file.write_all(&bytes).await.is_err() {
+                    if wbuf.push(downloaded, &bytes, &mut file).await.is_err() {
+                        let flushed = wbuf.flushed_total();
                         return Flow::Failed(
                             EngineFailure::fatal("磁盘写入失败"),
                             downloaded > 0,
-                            failed_ledger(spec, stamp, &blocks, multi_ok, downloaded, sc_path),
+                            failed_ledger(spec, stamp, &blocks, multi_ok, flushed, sc_path),
                         );
                     }
                     downloaded += bytes.len() as u64;
@@ -167,6 +175,13 @@ pub(super) async fn single_stream(
                     }
                 }
                 Ok(None) => {
+                    if wbuf.flush_now(&mut file).await.is_err() {
+                        return Flow::Failed(
+                            EngineFailure::fatal("磁盘写入失败"),
+                            downloaded > 0,
+                            failed_ledger(spec, stamp, &blocks, multi_ok, wbuf.flushed_total(), sc_path),
+                        );
+                    }
                     if blocks.total > 0 && downloaded != blocks.total {
                         return Flow::Failed(
                             EngineFailure {
@@ -199,10 +214,12 @@ pub(super) async fn single_stream(
                     .await;
                 }
                 Err(e) => {
+                    let _ = wbuf.flush_now(&mut file).await;
+                    let flushed = wbuf.flushed_total();
                     return Flow::Failed(
                         classify_reqwest(&e),
                         downloaded > 0,
-                        failed_ledger(spec, stamp, &blocks, multi_ok, downloaded, sc_path),
+                        failed_ledger(spec, stamp, &blocks, multi_ok, flushed, sc_path),
                     );
                 }
             },

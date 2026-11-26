@@ -88,6 +88,7 @@ pub enum Evt {
         resumable: bool,
         etag: Option<String>,
         last_modified: Option<String>,
+        dynamic: bool,
     },
     Progress {
         id: u32,
@@ -866,6 +867,8 @@ mod main_loop_tests {
             name: format!("ezr-ml-{id}.bin"),
             concurrency: 2,
             block_size: 1024 * 1024,
+            scheduler: crate::model::config::HttpScheduler::Blocks,
+            min_split: 256 * 1024,
             protocol: crate::model::Protocol::Http,
             expected_algo: None,
             expected_value: None,

@@ -18,10 +18,14 @@ use crate::model::FailKind;
 use crate::model::{checksum, namegen, Protocol};
 
 mod download;
+mod dynamic;
 mod finalize;
 mod http;
+mod planner;
 mod single;
+mod sparse;
 mod workers;
+mod writer;
 
 use download::download;
 
@@ -33,6 +37,8 @@ pub struct TaskSpec {
     pub name: String,
     pub concurrency: usize,
     pub block_size: u64,
+    pub scheduler: crate::model::config::HttpScheduler,
+    pub min_split: u64,
     pub protocol: Protocol,
     pub expected_algo: Option<&'static str>,
     pub expected_value: Option<String>,
@@ -138,7 +144,7 @@ pub(crate) async fn run(
             let _ = evt_tx
                 .send(Evt::PausedDone {
                     id: spec.id,
-                    downloaded: state.blocks.downloaded(),
+                    downloaded: state.downloaded,
                     chunk_done: state.blocks.completed(),
                     partial_blocks: state.blocks.partial_indices(),
                 })
@@ -214,6 +220,7 @@ enum Flow {
 
 struct PausedState {
     blocks: Blocks,
+    downloaded: u64,
     sidecar: Sidecar,
     sidecar_path: String,
 }
@@ -258,30 +265,33 @@ pub(crate) async fn verify(spec: VerifySpec, evt_tx: mpsc::Sender<Evt>) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
 
     use super::*;
 
-    fn fill(buf: &mut [u8], start: u64) {
+    pub(super) fn fill(buf: &mut [u8], start: u64) {
         for (i, b) in buf.iter_mut().enumerate() {
             *b = ((start as usize + i) % 251) as u8;
         }
     }
 
-    fn mock_server(total: u64, opts: Vec<(String, String)>) -> String {
+    pub(super) fn mock_server(total: u64, opts: Vec<(String, String)>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let conn_seq = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let opts = std::sync::Arc::new(opts);
         std::thread::spawn(move || {
             for conn in listener.incoming().flatten() {
                 let seq = conn_seq.fetch_add(1, Ordering::Relaxed);
+                let opts = Arc::clone(&opts);
+                std::thread::spawn(move || {
                 let mut w = conn.try_clone().unwrap();
                 let mut r = BufReader::new(conn);
                 let mut line = String::new();
                 if r.read_line(&mut line).is_err() || line.is_empty() {
-                    continue;
+                    return;
                 }
                 let mut range_header = None;
                 loop {
@@ -301,7 +311,7 @@ mod tests {
                     .and_then(|(_, v)| v.parse::<u16>().ok());
                 if let Some(code) = want_status {
                     let _ = write!(w, "HTTP/1.1 {code} Injected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-                    continue;
+                    return;
                 }
                 if opts
                     .iter()
@@ -309,7 +319,7 @@ mod tests {
                     .and_then(|(_, v)| v.parse::<u32>().ok())
                     .is_some_and(|n| seq == n)
                 {
-                    continue;
+                    return;
                 }
                 let norange = opts.iter().any(|(k, _)| k == "norange");
                 let noclen = opts.iter().any(|(k, _)| k == "noclen");
@@ -337,21 +347,28 @@ mod tests {
                 } else {
                     format!("Content-Length: {len}\r\n")
                 };
+                let cr = if status == 206 && !noclen {
+                    format!("Content-Range: bytes {start}-{end}/{total}\r\n")
+                } else {
+                    String::new()
+                };
                 let _ = write!(
                     w,
-                    "HTTP/1.1 {status} OK\r\nAccept-Ranges: bytes\r\nETag: \"mock-{total}\"\r\nLast-Modified: Mon, 09 Feb 2026 08:00:00 GMT\r\n{cl}Connection: close\r\n\r\n"
+                    "HTTP/1.1 {status} OK\r\nAccept-Ranges: bytes\r\nETag: \"mock-{total}\"\r\nLast-Modified: Mon, 09 Feb 2026 08:00:00 GMT\r\n{cl}{cr}Connection: close\r\n\r\n"
                 );
                 let slow = opts.iter().any(|(k, _)| k == "slow");
                 let hold = opts.iter().any(|(k, _)| k == "hold");
                 if hold {
                     let mut sink = [0u8; 1];
                     let _ = std::io::Read::read(&mut r, &mut sink);
-                    continue;
+                    return;
                 }
+                let cut = drophalf || (droponce && seq == 0);
+                let limit = if cut { start + len / 2 } else { end + 1 };
                 let mut buf = vec![0u8; 8192];
                 let mut pos = start;
-                while pos <= end {
-                    let n = (end - pos + 1).min(8192) as usize;
+                while pos < limit {
+                    let n = (limit - pos).min(8192) as usize;
                     fill(&mut buf[..n], pos);
                     if w.write_all(&buf[..n]).is_err() {
                         break;
@@ -360,10 +377,8 @@ mod tests {
                     if slow {
                         std::thread::sleep(std::time::Duration::from_millis(15));
                     }
-                    if (drophalf || (droponce && seq == 0)) && pos - start >= len / 2 {
-                        break;
-                    }
                 }
+                });
             }
         });
         format!("http://{addr}/f.bin")
@@ -378,7 +393,7 @@ mod tests {
                 let mut r = BufReader::new(conn);
                 let mut line = String::new();
                 if r.read_line(&mut line).is_err() || line.is_empty() {
-                    continue;
+                    return;
                 }
                 loop {
                     let mut h = String::new();
@@ -424,6 +439,8 @@ mod tests {
             name: "f.bin".to_string(),
             concurrency: conc,
             block_size: block,
+            scheduler: crate::model::config::HttpScheduler::Blocks,
+            min_split: 256 * 1024,
             protocol: Protocol::Http,
             expected_algo: expected.as_ref().map(|(a, _)| *a),
             expected_value: expected.as_ref().map(|(_, v)| v.clone()),
@@ -539,6 +556,7 @@ mod tests {
             total_written: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             failure: Arc::new(tokio::sync::Mutex::new(None)),
             conns: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            inplace: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         };
         (deps, stop_tx)
     }
@@ -552,7 +570,7 @@ mod tests {
         let blocks_shared = Arc::new(tokio::sync::Mutex::new(Blocks::new(total, total)));
         let shared = throttle_free();
         let (deps, _stop_tx) = worker_deps_for(&url, path.clone(), blocks_shared.clone());
-        let handle = deps.spawn(1, Arc::clone(&shared));
+        let handle = deps.spawn(1, Arc::clone(&shared), None);
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let f = tokio::fs::OpenOptions::new()
@@ -589,7 +607,7 @@ mod tests {
         let blocks_shared = Arc::new(tokio::sync::Mutex::new(Blocks::new(total, total)));
         let shared = throttle_free();
         let (deps, _stop_tx) = worker_deps_for(&url, dir.join("f.bin"), blocks_shared);
-        let handle = deps.spawn(1, Arc::clone(&shared));
+        let handle = deps.spawn(1, Arc::clone(&shared), None);
         tokio::time::timeout(std::time::Duration::from_secs(10), handle)
             .await
             .expect("worker 应在有界窗耗尽后返回")
@@ -705,8 +723,8 @@ mod tests {
         let (_cmd_tx, mut rx, deadline) = launch_spec_with(spec, throttle_free(), 30);
         let took = timed_download(&mut rx, deadline).await;
         assert!(
-            took >= 4.5,
-            "任务级限速 100KB/s 下载 512KiB 应 ≥4.5s，实际 {took:.2}s"
+            took >= 4.0,
+            "任务级限速 100KB/s 下载 512KiB 应 ≥4.0s（burst 1.0s 先放行 100KiB，余 412KiB ≈ 4.2s），实际 {took:.2}s"
         );
         assert_eq!(std::fs::metadata(dir.join("f.bin")).unwrap().len(), total);
         std::fs::remove_dir_all(&dir).ok();
@@ -722,8 +740,8 @@ mod tests {
         let (_cmd_tx, mut rx, deadline) = launch_spec_with(spec, throttle_free(), 30);
         let took = timed_download(&mut rx, deadline).await;
         assert!(
-            took >= 4.5,
-            "4 连接聚合仍受任务级限速 100KB/s 约束，应 ≥4.5s，实际 {took:.2}s"
+            took >= 4.0,
+            "4 连接聚合仍受任务级限速 100KB/s 约束，应 ≥4.0s（FR-05-05 burst 1.0s），实际 {took:.2}s"
         );
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -737,8 +755,8 @@ mod tests {
         let (_cmd_tx, mut rx, deadline) = launch_spec_with(spec, throttle_global_dl(100_000), 30);
         let took = timed_download(&mut rx, deadline).await;
         assert!(
-            took >= 4.5,
-            "全局限速 100KB/s（任务级 0）下载 512KiB 应 ≥4.5s，实际 {took:.2}s"
+            took >= 4.0,
+            "全局限速 100KB/s（任务级 0）下载 512KiB 应 ≥4.0s（FR-05-05 burst 1.0s），实际 {took:.2}s"
         );
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1447,7 +1465,7 @@ mod tests {
                 let mut r = BufReader::new(conn);
                 let mut line = String::new();
                 if r.read_line(&mut line).is_err() || line.is_empty() {
-                    continue;
+                    return;
                 }
                 let mut range_header = None;
                 loop {
@@ -1616,7 +1634,7 @@ mod tests {
             4,
             None,
         );
-        let (_cmd_tx, mut rx, deadline) = launch_spec(spec);
+        let (_cmd_tx, mut rx, deadline) = launch_spec_with(spec, throttle_free(), 40);
         let mut failed: Option<u64> = None;
         while std::time::Instant::now() < deadline {
             match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
@@ -1641,7 +1659,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn single_stream_failure_then_retry_resumes_without_restart() {
+    async fn inplace_retry_absorbs_single_midstream_drop() {
         let dir = crate::model::testenv::uniq_tmp_dir("ezr-ss-resume");
         let total: u64 = 512 * 1024;
         let url = mock_server(total, vec![("droponce".into(), String::new())]);
@@ -1654,6 +1672,29 @@ mod tests {
             None,
         );
         let (_tx, mut rx, deadline) = launch_spec(spec1);
+        pump_until_done(&mut rx, deadline).await;
+        let data = std::fs::read(dir.join("f.bin")).expect("完成文件在位");
+        assert_eq!(data.len() as u64, total, "单次半途断连应被原地重试吸收（FR-05-04）");
+        let mut expect = vec![0u8; total as usize];
+        fill(&mut expect, 0);
+        assert_eq!(data, expect, "吸收重试后字节完整");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn persistent_drop_escalates_then_retry_resumes_without_restart() {
+        let dir = crate::model::testenv::uniq_tmp_dir("ezr-ss-escalate");
+        let total: u64 = 512 * 1024;
+        let url_bad = mock_server(total, vec![("drophalf".into(), String::new())]);
+        let spec1 = spec_for(
+            1,
+            &url_bad,
+            dir.to_str().unwrap(),
+            crate::model::chunk::MIN_HTTP_BLOCK_SIZE,
+            4,
+            None,
+        );
+        let (_tx, mut rx, deadline) = launch_spec_with(spec1, throttle_free(), 40);
         let mut resumed_at = 0u64;
         while std::time::Instant::now() < deadline {
             if let Ok(Some(Evt::Failed { downloaded, .. })) =
@@ -1665,9 +1706,13 @@ mod tests {
         }
         assert!(
             resumed_at > 0 && resumed_at < total,
-            "第一轮应半途失败（{resumed_at}/{total}）"
+            "持续断连应升级任务级失败（{resumed_at}/{total}）"
         );
-        let spec2 = sidecar_spec(1, &url, &dir, 4);
+        let sc = Sidecar::load(dir.join("f.bin.ezr").to_str().unwrap())
+            .expect("断点台账应落盘");
+        assert_eq!(sc.downloaded, resumed_at, "台账字节 = 失败事件字节");
+        let url_good = mock_server(total, vec![]);
+        let spec2 = sidecar_spec(1, &url_good, &dir, 4);
         let (_tx2, mut rx2, deadline2) = launch_spec(spec2);
         let mut done = false;
         let mut first_progress = true;
@@ -1985,8 +2030,8 @@ mod tests {
         assert_eq!(data, expect, "经重定向链路下载内容完整");
         assert_eq!(
             hits.load(Ordering::Relaxed),
-            5,
-            "重定向命中 = 探测 1 + 分块请求 4（每个数据请求都从原始 URL 独立跟跳转，v1.28）"
+            1 + crate::model::chunk::chunk_total(total, crate::model::chunk::MIN_HTTP_BLOCK_SIZE) - 1,
+            "重定向命中 = 探测 1 + 分块请求 N-1（probe 体复用作第 0 块，FR-05-03；每个数据请求都从原始 URL 独立跟跳转，v1.28）"
         );
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -2047,7 +2092,7 @@ mod tests {
         let shared = throttle_free();
         let (deps, _stop_tx) = worker_deps_for("http://127.0.0.1:1/", target, blocks_shared);
         let started = std::time::Instant::now();
-        let handle = deps.spawn(1, Arc::clone(&shared));
+        let handle = deps.spawn(1, Arc::clone(&shared), None);
         tokio::time::timeout(std::time::Duration::from_secs(10), handle)
             .await
             .expect("worker 应返回")
@@ -2084,7 +2129,7 @@ mod tests {
         let blocks_shared = Arc::new(tokio::sync::Mutex::new(Blocks::new(total, total)));
         let shared = throttle_free();
         let (deps, _stop_tx) = worker_deps_for("http://127.0.0.1:1/", path, blocks_shared);
-        let handle = deps.spawn(1, Arc::clone(&shared));
+        let handle = deps.spawn(1, Arc::clone(&shared), None);
         tokio::time::timeout(std::time::Duration::from_secs(10), handle)
             .await
             .expect("worker 应在请求失败后返回")
@@ -2118,7 +2163,7 @@ mod tests {
         let (deps, _stop_tx) = worker_deps_for(&url, path, blocks_shared.clone());
         deps.requeue.lock().await.push(0);
         deps.requeue.lock().await.push(1);
-        let handle = deps.spawn(1, Arc::clone(&shared));
+        let handle = deps.spawn(1, Arc::clone(&shared), None);
         tokio::time::timeout(std::time::Duration::from_secs(10), handle)
             .await
             .expect("worker 应跳过已完成块并续传未完成块")

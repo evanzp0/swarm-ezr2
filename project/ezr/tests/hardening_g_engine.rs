@@ -542,6 +542,8 @@ async fn invalidated_resets_and_toasts() {
         blocks: vec![512, 488],
         downloaded: 100,
         non_resumable: false,
+        scheduler: None,
+        segments: None,
         expected: None,
         task: SidecarTask {
             id: 1,
@@ -593,6 +595,8 @@ async fn orphan_adopt_mismatch_redirects_silently_and_preserves_sidecar() {
         blocks: vec![512, 488],
         downloaded: 100,
         non_resumable: false,
+        scheduler: None,
+        segments: None,
         expected: None,
         task: SidecarTask {
             id: 99,

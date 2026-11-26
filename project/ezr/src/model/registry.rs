@@ -138,6 +138,7 @@ impl From<&TaskSnapshot> for Task {
             speed: 0.0,
             state: s.state,
             resumable: s.resumable,
+            dynamic: false,
             probed: s.probed,
             connections: vec![],
             chunk_done: 0,

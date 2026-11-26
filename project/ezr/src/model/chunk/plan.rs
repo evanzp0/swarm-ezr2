@@ -1,6 +1,6 @@
 pub const HTTP_CHUNK_SIZE: u64 = 1024 * 1024;
 
-pub const MIN_HTTP_BLOCK_SIZE: u64 = 1024 * 1024;
+pub const MIN_HTTP_BLOCK_SIZE: u64 = 256 * 1024;
 
 #[allow(dead_code)]
 pub const BT_CHUNK_SIZE: u64 = 256 * 1024;

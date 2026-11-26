@@ -44,15 +44,30 @@ pub(super) struct ProbeHead {
     pub(super) retry_after: Option<f64>,
 }
 
+fn content_range_total(v: &str) -> Option<u64> {
+    let rest = v.trim().strip_prefix("bytes ")?;
+    let (_range, total) = rest.split_once('/')?;
+    let total = total.trim();
+    if total == "*" {
+        return None;
+    }
+    total.parse::<u64>().ok()
+}
+
 pub(super) fn probe_head(r: &reqwest::Response) -> ProbeHead {
     let h = r.headers();
+    let cr_total = h
+        .get("content-range")
+        .and_then(|v| v.to_str().ok())
+        .and_then(content_range_total);
+    let cl_total = h
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(0);
     ProbeHead {
         status: r.status().as_u16(),
-        total: h
-            .get("content-length")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.trim().parse::<u64>().ok())
-            .unwrap_or(0),
+        total: cr_total.unwrap_or(cl_total),
         etag: h
             .get("etag")
             .and_then(|v| v.to_str().ok())

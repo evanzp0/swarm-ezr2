@@ -24,6 +24,11 @@ pub(super) async fn download(
     cmd_rx: &mut mpsc::Receiver<TaskCmd>,
     evt_tx: &mpsc::Sender<Evt>,
 ) -> Flow {
+    if spec.scheduler == crate::model::config::HttpScheduler::Dynamic
+        || spec.sidecar.as_ref().is_some_and(|s| s.is_dynamic())
+    {
+        return super::dynamic::download_dynamic(spec, shared, cmd_rx, evt_tx).await;
+    }
     let probe_client = shared.client_for(spec.proxy_endpoint.as_ref());
     let resp = loop {
         tokio::select! {
@@ -120,6 +125,7 @@ pub(super) async fn download(
             resumable: multi_ok,
             etag: head.etag.clone(),
             last_modified: head.last_modified.clone(),
+            dynamic: false,
         },
     )
     .await
@@ -150,7 +156,6 @@ pub(super) async fn download(
         .await;
     }
 
-    drop(resp);
     match tokio::fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -179,7 +184,7 @@ pub(super) async fn download(
     let total = head.total;
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (stop_tx, stop_rx) = watch::channel(false);
-    let (quota_tx, quota_rx) = watch::channel(spec.concurrency.clamp(1, 64));
+    let (quota_tx, quota_rx) = watch::channel(spec.concurrency.clamp(1, 128));
     let (ep_tx, ep_rx) = watch::channel(Arc::new(spec.proxy_endpoint.clone()));
     let (speed_tx, speed_rx) = watch::channel(spec.task_max_download_speed);
     let task_dl = Arc::new(super::super::throttle::Throttle::with_params(
@@ -209,11 +214,14 @@ pub(super) async fn download(
         total_written: total_written.clone(),
         failure: failure.clone(),
         conns: conns.clone(),
+        inplace: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     };
-    let n_workers = spec.concurrency.clamp(1, 64);
+    let n_workers = spec.concurrency.clamp(1, 128);
+    let mut primed_resp = Some(resp);
     let mut handles: Vec<(usize, tokio::task::JoinHandle<()>)> = Vec::with_capacity(n_workers);
     for wid in 1..=n_workers {
-        handles.push((wid, deps.spawn(wid, Arc::clone(shared))));
+        let primed = if wid == 1 { primed_resp.take() } else { None };
+        handles.push((wid, deps.spawn(wid, Arc::clone(shared), primed)));
     }
 
     let progress_tick = Duration::from_millis(spec.progress_tick_ms.max(1));
@@ -223,7 +231,7 @@ pub(super) async fn download(
         tokio::select! {
             cmd = cmd_rx.recv() => match cmd {
                 Some(TaskCmd::Reconfigure { concurrency, endpoint, max_download_speed }) => {
-                    let q = concurrency.clamp(1, 64);
+                    let q = concurrency.clamp(1, 128);
                     let _ = ep_tx.send(Arc::new(endpoint));
                     let _ = quota_tx.send(q);
                     let _ = speed_tx.send(max_download_speed);
@@ -238,10 +246,12 @@ pub(super) async fn download(
                     if cancelled {
                         return Flow::Cancelled;
                     }
+                    let downloaded = blocks.downloaded();
                     let sidecar =
                         build_sidecar(spec, &probed_stamp, &blocks, false);
                     return Flow::Paused(PausedState {
                         blocks,
+                        downloaded,
                         sidecar,
                         sidecar_path: sc_path.clone(),
                     });
@@ -273,6 +283,7 @@ pub(super) async fn download(
                 let chunk_done = b.completed();
                 let done_blocks = b.done_indices();
                 let partial_blocks = b.partial_indices();
+                let downloaded_exact = b.downloaded();
                 let conns_now = conns.lock().await.clone();
                 drop(b);
                 let downloaded = base_downloaded + total_written.load(Ordering::Relaxed);
@@ -287,7 +298,7 @@ pub(super) async fn download(
                     return Flow::Cancelled;
                 }
                 if chunk_done == total_blocks && total_blocks > 0 {
-                    if downloaded != total {
+                    if downloaded_exact != total {
                         let f = EngineFailure {
                             kind: FailKind::Transient,
                             reason: format!(

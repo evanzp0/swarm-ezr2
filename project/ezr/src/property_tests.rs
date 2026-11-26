@@ -426,7 +426,7 @@ fn prop_config_from_toml_domain_invariants(
             }
         }
         _ => {
-            if v == 0 || v > 64 {
+            if v == 0 || v > 128 {
                 prop_assert!(parsed.is_err(), "FR-02-35：越界拒绝启动");
             } else {
                 let c = parsed.expect("范围内合法");
@@ -1597,10 +1597,16 @@ proptest! {
             prop_assert_eq!(wait, 0, "取足收束");
         } else {
             let deficit_ms = (remaining - available) / rate * 1000.0;
+            let proportional = deficit_ms.round();
+            let expect = if proportional < 1.0 {
+                crate::engine::SLEEP_MS
+            } else {
+                proportional as u64
+            };
             prop_assert_eq!(
                 wait,
-                deficit_ms.max(crate::engine::SLEEP_MS as f64) as u64,
-                "等待 = max(deficit 换算, SLEEP_MS)"
+                expect,
+                "FR-05-02：等待按差额比例，仅 <1 ms 落入 SLEEP_MS 防忙轮询"
             );
         }
     }

@@ -1012,3 +1012,7 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 （duplicate-in-scenario/high）逐条人工核对（本轮 01-add-task 唯一 high = 场景 05 有意重复
 「按 Enter 确认」两臂，既有非本轮引入）；bb v1.13.230 静态包 gh-proxy 直连快（GitHub 直连
 120s 超时再证）+ APS clone 直连可用，7 个涉改 feature parser/dry-check 全绿。
+
+## 动态引擎测试（2026-11-25，coder phase-05）追加
+- e2e 竞速与暂停触发：全速 mock 下 2 MiB 秒完，「进度>256 KiB 即 Pause」的暂停触发会输给下载完成——暂停类测试用 slow mock（8 KiB/15ms）把窗口拉到秒级；测字节完整性用确定性 fill(pos) 内容（跨服务器实例续传也成立）。
+- cargo test 超时误判：大 crate 增量编译 60-90s，杀掉编译后再跑会反复触发重编——长时间编译单独跑一次（build --tests），测试运行与编译分开限时；被杀的编译留下脏状态是「测试挂死」假象的主因之一。

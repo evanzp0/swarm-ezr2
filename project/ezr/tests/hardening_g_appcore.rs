@@ -208,6 +208,8 @@ async fn restore_keeps_tasks_and_ids() {
 
 fn fixture_sidecar(_url: &str, save_dir: &str, non_resumable: bool) -> Sidecar {
     Sidecar {
+        scheduler: None,
+        segments: None,
         version: SIDECAR_VERSION,
         size: 1000,
         etag: None,

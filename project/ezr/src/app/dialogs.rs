@@ -20,7 +20,7 @@ fn validate_add_url(url: &str) -> Result<(), String> {
 
 fn conns_from_input(raw: &str, fallback: usize) -> usize {
     match raw.parse::<usize>() {
-        Ok(v) if (1..=64).contains(&v) => v,
+        Ok(v) if (1..=128).contains(&v) => v,
         _ => fallback,
     }
 }
@@ -217,7 +217,7 @@ impl App {
         let concurrency = if conns_raw.is_empty() {
             self.tasks[idx].concurrency
         } else {
-            conns_raw.parse::<usize>().unwrap_or(0).clamp(1, 64)
+            conns_raw.parse::<usize>().unwrap_or(0).clamp(1, 128)
         };
 
         let cfg_down = self.cfg.task_max_download_speed;

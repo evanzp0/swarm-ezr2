@@ -131,9 +131,9 @@ fn opt_conns(v: Option<&String>) -> Result<usize, String> {
     let v = v.ok_or("-c 需要并发数参数")?;
     let parsed = v
         .parse::<usize>()
-        .map_err(|_| format!("-c 并发数非法（{v}）：应为 1–64 的整数"))?;
-    if !(1..=64).contains(&parsed) {
-        return Err(format!("-c 并发数非法（{v}）：应为 1–64 的整数"));
+        .map_err(|_| format!("-c 并发数非法（{v}）：应为 1–128 的整数"))?;
+    if !(1..=128).contains(&parsed) {
+        return Err(format!("-c 并发数非法（{v}）：应为 1–128 的整数"));
     }
     Ok(parsed)
 }
@@ -195,7 +195,7 @@ fn print_help() {
          \n\
          选项:\n\
            -d, --dir <目录>          保存目录（默认取配置 download_dir，缺省 ~/Downloads）\n\
-           -c, --concurrency <n>     并发数 1–64（默认 4）\n\
+           -c, --concurrency <n>     并发数 1–128（默认 8）\n\
            -x, --checksum <算法>=<校验码>\n\
                                      完整性校验（算法: md5/sha1/sha224/sha256/sha384/sha512/adler32）\n\
            --max-speed <速度>        全局限速（如 2 MiB/s；0 = 不限）\n\
@@ -472,8 +472,8 @@ mod cli_parse_tests {
     #[test]
     fn parse_cli_conns_bounds_and_errors() {
         assert_eq!(parse_cli(&args(&["-c", "1"])).unwrap().conns, Some(1));
-        assert_eq!(parse_cli(&args(&["-c", "64"])).unwrap().conns, Some(64));
-        for bad in ["0", "65", "abc"] {
+        assert_eq!(parse_cli(&args(&["-c", "128"])).unwrap().conns, Some(128));
+        for bad in ["0", "129", "abc"] {
             assert!(parse_cli(&args(&["-c", bad])).is_err(), "conns {bad}");
         }
         assert!(parse_cli(&args(&["-c"])).is_err());
