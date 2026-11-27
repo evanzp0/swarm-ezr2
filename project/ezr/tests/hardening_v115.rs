@@ -616,8 +616,15 @@ async fn named_dead_proxy_fails_probe() {
 async fn speed_window_tracks_downloading_task() {
     let addr = stub_trickle();
     let reg = temp_reg();
+    let dir = std::env::temp_dir().join(format!("ezr-hard-v115-dir-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
     let mut a = App::new(Config::default(), reg.to_string_lossy().into_owned());
-    a.add_cli_task(format!("http://{addr}/f.bin"), None, Some(1), None);
+    a.add_cli_task(
+        format!("http://{addr}/f.bin"),
+        Some(dir.to_string_lossy().into_owned()),
+        Some(1),
+        None,
+    );
     assert!(
         wait_until(&mut a, 20, |a| a.tasks[0].state == TaskState::Downloading).await,
         "滴流下载应进入下载中"
@@ -630,6 +637,7 @@ async fn speed_window_tracks_downloading_task() {
         a.tasks[0].speed
     );
     a.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_file(&reg);
 }
 

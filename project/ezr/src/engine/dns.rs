@@ -85,8 +85,11 @@ where
         r = &mut a => (false, r),
         r = &mut b => (true, r),
     };
+    let usable = first.as_ref().is_ok_and(|ips| !ips.is_empty());
     let pending_leg: PendingLeg<'_, T, E> = if first_is_b { a.as_mut() } else { b.as_mut() };
-    let second = if first.is_ok() {
+    let second = if usable {
+        None
+    } else if first.is_ok() {
         tokio::time::timeout(grace, pending_leg).await.ok()
     } else {
         Some(pending_leg.await)
@@ -302,28 +305,47 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn race_first_ok_abandons_slow_leg_after_grace() {
+    async fn race_first_usable_returns_without_waiting_slow_leg() {
         let slow = pending::<Result<Vec<IpAddr>, ()>>();
         let t0 = tokio::time::Instant::now();
         let (r4, r6) = race_with_grace(ready(Ok(vec![ip4(1, 1, 1, 1)])), slow, GRACE).await;
-        assert_eq!(t0.elapsed(), GRACE, "慢腿至多拖 GRACE，不等到其超时");
+        assert_eq!(
+            t0.elapsed(),
+            Duration::ZERO,
+            "首腿可用立即返回，连接不为另一族空等宽限"
+        );
         assert_eq!(r4.map(|r| r.unwrap()), Some(vec![ip4(1, 1, 1, 1)]));
-        assert_eq!(r6, None, "黑吞腿弃置");
+        assert_eq!(r6, None, "慢腿弃置（其答案由后续连接的查询/缓存服务）");
     }
 
     #[tokio::test(start_paused = true)]
-    async fn race_second_leg_within_grace_is_kept() {
-        let slow_ok = async {
+    async fn race_first_empty_leg_keeps_other_within_grace() {
+        let other_ok = async {
             tokio::time::sleep(Duration::from_millis(300)).await;
-            Ok::<Vec<IpAddr>, ()>(vec![ip6(1, 2)])
+            Ok::<Vec<IpAddr>, ()>(vec![ip4(9, 9, 9, 9)])
         };
-        let (r4, r6) = race_with_grace(ready(Ok(vec![ip4(1, 1, 1, 1)])), slow_ok, GRACE).await;
-        assert_eq!(r4.map(|r| r.unwrap()), Some(vec![ip4(1, 1, 1, 1)]));
+        let t0 = tokio::time::Instant::now();
+        let (r4, r6) = race_with_grace(other_ok, ready(Ok(Vec::new())), GRACE).await;
+        assert_eq!(t0.elapsed(), Duration::from_millis(300), "首腿空集才等宽限");
         assert_eq!(
-            r6.map(|r| r.unwrap()),
-            Some(vec![ip6(1, 2)]),
+            r4.map(|r| r.unwrap()),
+            Some(vec![ip4(9, 9, 9, 9)]),
             "宽限内到达的腿保留"
         );
+        assert_eq!(r6.map(|r| r.unwrap()), Some(Vec::new()));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn race_first_empty_leg_drops_second_beyond_grace() {
+        let slow = async {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            Ok::<Vec<IpAddr>, ()>(vec![ip4(9, 9, 9, 9)])
+        };
+        let t0 = tokio::time::Instant::now();
+        let (r4, r6) = race_with_grace(slow, ready(Ok(Vec::new())), GRACE).await;
+        assert_eq!(t0.elapsed(), GRACE, "首腿空集时慢腿至多拖 GRACE");
+        assert_eq!(r4, None, "慢腿宽限超时弃置");
+        assert_eq!(r6.map(|r| r.unwrap()), Some(Vec::new()));
     }
 
     #[tokio::test(start_paused = true)]
@@ -353,12 +375,16 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn race_first_is_b_ok_abandons_slow_leg_after_grace() {
+    async fn race_first_is_b_usable_returns_without_waiting_slow_leg() {
         let slow = pending::<Result<Vec<IpAddr>, ()>>();
         let t0 = tokio::time::Instant::now();
         let (r4, r6) = race_with_grace(slow, ready(Ok(vec![ip6(7, 8)])), GRACE).await;
-        assert_eq!(t0.elapsed(), GRACE, "慢腿（a）至多拖 GRACE");
-        assert_eq!(r4, None, "a 腿宽限超时弃置");
+        assert_eq!(
+            t0.elapsed(),
+            Duration::ZERO,
+            "首腿（b）可用立即返回，慢腿（a）不拖连接"
+        );
+        assert_eq!(r4, None, "a 腿弃置");
         assert_eq!(
             r6.map(|r| r.unwrap()),
             Some(vec![ip6(7, 8)]),

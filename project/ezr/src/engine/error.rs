@@ -34,6 +34,15 @@ impl EngineFailure {
             retry_after: None,
         }
     }
+
+    #[must_use]
+    pub fn into_block_retry(self) -> EngineFailure {
+        if self.kind == FailKind::Fatal && self.reason.starts_with("HTTP ") {
+            EngineFailure::network(format!("传输中断（{}）", self.reason))
+        } else {
+            self
+        }
+    }
 }
 
 const STATUS_TEXTS: [(u16, &str); 12] = [
@@ -171,6 +180,29 @@ mod tests {
         assert_eq!(f.retry_after, Some(10.0));
         let f = EngineFailure::http(408, None);
         assert_eq!(f.kind, FailKind::Transient);
+    }
+
+    #[test]
+    fn block_retry_remaps_http_fatal_keeps_network_and_transient() {
+        let f = EngineFailure::http(403, None).into_block_retry();
+        assert_eq!(f.kind, FailKind::Transient, "块请求面 4xx 原地重试（D93）");
+        assert!(
+            f.reason.contains("传输中断"),
+            "分类文案含传输中断: {}",
+            f.reason
+        );
+        assert!(f.reason.contains("403"), "保留状态码成因: {}", f.reason);
+        let f = EngineFailure::fatal("磁盘写入失败").into_block_retry();
+        assert_eq!(f.kind, FailKind::Fatal);
+        assert_eq!(f.reason, "磁盘写入失败", "非 HTTP 致命失败不重映射");
+        let f = EngineFailure::http(503, None).into_block_retry();
+        assert_eq!(f.kind, FailKind::Transient);
+        assert!(
+            !f.reason.contains("传输中断"),
+            "Transient HTTP 失败原样保留"
+        );
+        let f = EngineFailure::network("传输中断（连接已断）").into_block_retry();
+        assert_eq!(f.reason, "传输中断（连接已断）", "网络失败原样保留");
     }
 
     #[test]

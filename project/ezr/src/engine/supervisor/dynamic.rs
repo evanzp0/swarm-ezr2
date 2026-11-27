@@ -23,6 +23,7 @@ use crate::model::sidecar::{Sidecar, SidecarTask};
 use crate::model::{Checksum, FailKind};
 
 const MAX_INPLACE_ATTEMPTS: u32 = 5;
+const CONN_VIEW_PERIOD: Duration = Duration::from_millis(100);
 
 fn inplace_backoff(attempt: u32) -> Duration {
     match attempt {
@@ -61,15 +62,15 @@ struct DynDeps {
     total: u64,
     resume: bool,
     primed_start: u64,
-    planner: Arc<tokio::sync::Mutex<Planner>>,
+    planner: Arc<std::sync::Mutex<Planner>>,
     writer: Arc<Writer>,
     stop_rx: watch::Receiver<bool>,
     quota_rx: watch::Receiver<usize>,
     ep_rx: watch::Receiver<Arc<Option<ProxyEndpoint>>>,
     task_dl: Arc<Throttle>,
     speed_rx: watch::Receiver<u64>,
-    failure: Arc<tokio::sync::Mutex<Option<EngineFailure>>>,
-    conns: Arc<tokio::sync::Mutex<Vec<ConnView>>>,
+    failure: Arc<std::sync::Mutex<Option<EngineFailure>>>,
+    conns: Arc<std::sync::Mutex<Vec<ConnView>>>,
     hold_cap: u64,
     range_ignored: Arc<AtomicBool>,
 }
@@ -139,24 +140,25 @@ async fn dynamic_worker(
     let mut after: Option<u64> = None;
     loop {
         if *stop_rx.borrow() {
-            planner.lock().await.release(wid);
-            conns.lock().await.retain(|c| c.id != wid);
+            planner.lock().expect("planner 锁").release(wid);
+            conns.lock().expect("conns 锁").retain(|c| c.id != wid);
             return;
         }
         if wid > *quota_rx.borrow_and_update() {
-            planner.lock().await.release(wid);
-            conns.lock().await.retain(|c| c.id != wid);
+            planner.lock().expect("planner 锁").release(wid);
+            conns.lock().expect("conns 锁").retain(|c| c.id != wid);
             return;
         }
-        let assignment = planner.lock().await.assign(wid, after);
+        let assignment = planner.lock().expect("planner 锁").assign(wid, after);
         let Some(a) = assignment else {
-            conns.lock().await.retain(|c| c.id != wid);
+            conns.lock().expect("conns 锁").retain(|c| c.id != wid);
             return;
         };
         after = None;
         let mut cur_start = a.from;
+        let mut last_cv_at = Instant::now();
         {
-            let mut g = conns.lock().await;
+            let mut g = conns.lock().expect("conns 锁");
             g.retain(|c| c.id != wid);
             g.push(ConnView {
                 id: wid,
@@ -181,36 +183,42 @@ async fn dynamic_worker(
                 Ok(r) => {
                     if r.status().as_u16() == 200 {
                         range_ignored.store(true, Ordering::Relaxed);
-                        planner.lock().await.release(wid);
+                        planner.lock().expect("planner 锁").release(wid);
                         if resume {
-                            *failure.lock().await = Some(EngineFailure::network(
+                            *failure.lock().expect("failure 锁") = Some(EngineFailure::network(
                                 "服务器本次未支持断点续传（Range），保留断点稍后重试",
                             ));
                         }
-                        conns.lock().await.retain(|c| c.id != wid);
+                        conns.lock().expect("conns 锁").retain(|c| c.id != wid);
                         return;
                     }
                     r
                 }
                 Err(f) => {
+                    let f = f.into_block_retry();
                     let wait = match f.kind {
                         FailKind::Transient => {
                             inplace += 1;
                             if inplace > MAX_INPLACE_ATTEMPTS {
-                                *failure.lock().await = Some(f);
+                                *failure.lock().expect("failure 锁") = Some(f);
                                 return;
                             }
-                            if let Some(cv) = conns.lock().await.iter_mut().find(|c| c.id == wid) {
+                            if let Some(cv) = conns
+                                .lock()
+                                .expect("conns 锁")
+                                .iter_mut()
+                                .find(|c| c.id == wid)
+                            {
                                 cv.activity = ConnActivity::Retrying(f.reason.clone());
                             }
                             inplace_backoff(inplace)
                         }
                         _ => {
-                            *failure.lock().await = Some(f);
+                            *failure.lock().expect("failure 锁") = Some(f);
                             return;
                         }
                     };
-                    planner.lock().await.release(wid);
+                    planner.lock().expect("planner 锁").release(wid);
                     tokio::select! {
                         _ = tokio::time::sleep(wait) => {}
                         _ = stop_rx.changed() => {
@@ -220,7 +228,7 @@ async fn dynamic_worker(
                         }
                         _ = quota_rx.changed() => {
                             if wid > *quota_rx.borrow_and_update() {
-                                conns.lock().await.retain(|c| c.id != wid);
+                                conns.lock().expect("conns 锁").retain(|c| c.id != wid);
                                 return;
                             }
                         }
@@ -229,7 +237,12 @@ async fn dynamic_worker(
                 }
             }
         };
-        if let Some(cv) = conns.lock().await.iter_mut().find(|c| c.id == wid) {
+        if let Some(cv) = conns
+            .lock()
+            .expect("conns 锁")
+            .iter_mut()
+            .find(|c| c.id == wid)
+        {
             cv.activity = ConnActivity::Receiving;
         }
         let mut at = a.from;
@@ -271,20 +284,32 @@ async fn dynamic_worker(
                                 buf.extend_from_slice(&bytes);
                                 bytes::Bytes::from(buf)
                             };
-                            let claim = planner.lock().await.claim(wid, at, data.len() as u64);
+                            let claim = planner
+                                .lock()
+                                .expect("planner 锁")
+                                .claim(wid, at, data.len() as u64);
                             match claim {
                                 Claim::Granted { n, seg_end } => {
                                     if n > 0 {
-                                        if writer.push(at, &data[..n as usize]).is_err() {
-                                            *failure.lock().await = Some(EngineFailure::fatal("磁盘写入失败"));
-                                            aborted = true;
-                                            break;
-                                        }
-                                        if let Err(e) = writer.step(hold_cap).await {
-                                            *failure.lock().await =
-                                                Some(EngineFailure::fatal(format!("磁盘写入失败（{e}）")));
-                                            aborted = true;
-                                            break;
+                                        let sealed = match writer.push(at, &data[..n as usize]) {
+                                            Ok(s) => s,
+                                            Err(_) => {
+                                                *failure.lock().expect("failure 锁") =
+                                                    Some(EngineFailure::fatal("磁盘写入失败"));
+                                                aborted = true;
+                                                break;
+                                            }
+                                        };
+                                        if sealed || writer.pending_bytes() >= hold_cap {
+                                            if let Err(e) = writer.step(hold_cap).await {
+                                                *failure.lock().expect("failure 锁") = Some(
+                                                    EngineFailure::fatal(format!(
+                                                        "磁盘写入失败（{e}）"
+                                                    )),
+                                                );
+                                                aborted = true;
+                                                break;
+                                            }
                                         }
                                         at += n;
                                     }
@@ -292,30 +317,47 @@ async fn dynamic_worker(
                                     if granted < data.len() {
                                         carry.extend_from_slice(&data[granted..]);
                                     }
-                                    let exhausted = planner.lock().await.commit(wid, at);
-                                    if n > 0 {
-                                        if let Some(cv) = conns.lock().await.iter_mut().find(|c| c.id == wid) {
+                                    let (absorbed, rotate_after) = {
+                                        let mut p = planner.lock().expect("planner 锁");
+                                        match p.commit(wid, at) {
+                                            Some(end) => match p.absorb_next(wid, end) {
+                                                Some(new_end) => (Some((end, new_end)), None),
+                                                None => (None, Some(end)),
+                                            },
+                                            None => (None, None),
+                                        }
+                                    };
+                                    if n > 0 && last_cv_at.elapsed() >= CONN_VIEW_PERIOD {
+                                        last_cv_at = Instant::now();
+                                        if let Some(cv) = conns
+                                            .lock()
+                                            .expect("conns 锁")
+                                            .iter_mut()
+                                            .find(|c| c.id == wid)
+                                        {
                                             cv.start = cur_start;
                                             cv.end = seg_end;
                                             cv.done = at - cur_start;
                                         }
                                     }
-                                    if let Some(end) = exhausted {
-                                        match planner.lock().await.absorb_next(wid, end) {
-                                            Some(new_end) => {
-                                                cur_start = end;
-                                                if let Some(cv) = conns.lock().await.iter_mut().find(|c| c.id == wid) {
-                                                    cv.start = cur_start;
-                                                    cv.end = new_end;
-                                                    cv.done = 0;
-                                                }
-                                            }
-                                            None => {
-                                                after = Some(end);
-                                                clean_rotation = true;
-                                                break;
-                                            }
+                                    if let Some((end, new_end)) = absorbed {
+                                        cur_start = end;
+                                        last_cv_at = Instant::now();
+                                        if let Some(cv) = conns
+                                            .lock()
+                                            .expect("conns 锁")
+                                            .iter_mut()
+                                            .find(|c| c.id == wid)
+                                        {
+                                            cv.start = cur_start;
+                                            cv.end = new_end;
+                                            cv.done = 0;
                                         }
+                                    }
+                                    if let Some(end) = rotate_after {
+                                        after = Some(end);
+                                        clean_rotation = true;
+                                        break;
                                     }
                                 }
                                 Claim::Lost => {
@@ -329,14 +371,18 @@ async fn dynamic_worker(
                             }
                         }
                         Ok(None) => {
-                            planner.lock().await.release(wid);
+                            planner.lock().expect("planner 锁").release(wid);
                             inplace += 1;
                             if inplace > MAX_INPLACE_ATTEMPTS {
-                                *failure.lock().await = Some(EngineFailure::network("服务器提前结束响应"));
+                                *failure.lock().expect("failure 锁") =
+                                    Some(EngineFailure::network("服务器提前结束响应"));
                                 aborted = true;
                             } else {
-                                if let Some(cv) =
-                                    conns.lock().await.iter_mut().find(|c| c.id == wid)
+                                if let Some(cv) = conns
+                                    .lock()
+                                    .expect("conns 锁")
+                                    .iter_mut()
+                                    .find(|c| c.id == wid)
                                 {
                                     cv.activity =
                                         ConnActivity::Retrying("服务器提前结束响应".to_string());
@@ -349,14 +395,17 @@ async fn dynamic_worker(
                             let f = classify_reqwest(&e);
                             match f.kind {
                                 FailKind::Transient => {
-                                    planner.lock().await.release(wid);
+                                    planner.lock().expect("planner 锁").release(wid);
                                     inplace += 1;
                                     if inplace > MAX_INPLACE_ATTEMPTS {
-                                        *failure.lock().await = Some(f);
+                                        *failure.lock().expect("failure 锁") = Some(f);
                                         aborted = true;
                                     } else {
-                                        if let Some(cv) =
-                                            conns.lock().await.iter_mut().find(|c| c.id == wid)
+                                        if let Some(cv) = conns
+                                            .lock()
+                                            .expect("conns 锁")
+                                            .iter_mut()
+                                            .find(|c| c.id == wid)
                                         {
                                             cv.activity =
                                                 ConnActivity::Retrying(f.reason.clone());
@@ -365,7 +414,7 @@ async fn dynamic_worker(
                                     }
                                 }
                                 _ => {
-                                    *failure.lock().await = Some(f);
+                                    *failure.lock().expect("failure 锁") = Some(f);
                                     aborted = true;
                                 }
                             }
@@ -388,7 +437,7 @@ async fn dynamic_worker(
                 }
                 _ = quota_rx.changed() => {
                     if wid > *quota_rx.borrow_and_update() {
-                        conns.lock().await.retain(|c| c.id != wid);
+                        conns.lock().expect("conns 锁").retain(|c| c.id != wid);
                         return;
                     }
                 }
@@ -396,14 +445,14 @@ async fn dynamic_worker(
             continue;
         }
         if aborted {
-            planner.lock().await.release(wid);
+            planner.lock().expect("planner 锁").release(wid);
             if quota_aborted {
-                conns.lock().await.retain(|c| c.id != wid);
+                conns.lock().expect("conns 锁").retain(|c| c.id != wid);
             }
             return;
         }
-        if failure.lock().await.is_some() {
-            planner.lock().await.release(wid);
+        if failure.lock().expect("failure 锁").is_some() {
+            planner.lock().expect("planner 锁").release(wid);
             return;
         }
         if clean_rotation {
@@ -486,7 +535,7 @@ pub(super) async fn download_dynamic(
     let probe_client = shared.client_for(spec.proxy_endpoint.as_ref());
     let range_req = resume_from.map(|from| format!("bytes={from}-"));
     let ttfb_start = Instant::now();
-    let mut resp = loop {
+    let resp = loop {
         tokio::select! {
             r = req_with_identity(&probe_client, &spec.url, range_req.clone()).send() => match r {
                 Ok(r) => break r,
@@ -501,13 +550,6 @@ pub(super) async fn download_dynamic(
         }
     };
     let head = probe_head(&resp);
-    let first_chunk = match resp.chunk().await {
-        Ok(Some(b)) => Some(b),
-        Ok(None) => None,
-        Err(e) => {
-            return Flow::Failed(classify_reqwest(&e), false, probed_sidecar);
-        }
-    };
     let ttfb = ttfb_start.elapsed();
     if !(200..=299).contains(&head.status) {
         return Flow::Failed(
@@ -727,9 +769,9 @@ pub(super) async fn download_dynamic(
         shared.throttle_burst_secs(),
         shared.throttle_sleep_ms(),
     ));
-    let planner = Arc::new(tokio::sync::Mutex::new(planner));
-    let failure = Arc::new(tokio::sync::Mutex::<Option<EngineFailure>>::new(None));
-    let conns = Arc::new(tokio::sync::Mutex::<Vec<ConnView>>::new(Vec::new()));
+    let planner = Arc::new(std::sync::Mutex::new(planner));
+    let failure = Arc::new(std::sync::Mutex::<Option<EngineFailure>>::new(None));
+    let conns = Arc::new(std::sync::Mutex::<Vec<ConnView>>::new(Vec::new()));
     let range_ignored = Arc::new(AtomicBool::new(false));
     let deps = DynDeps {
         url: spec.url.clone(),
@@ -750,7 +792,7 @@ pub(super) async fn download_dynamic(
         range_ignored: Arc::clone(&range_ignored),
     };
 
-    let mut primed_resp: PrimedResponse = Some((resp, first_chunk));
+    let mut primed_resp: PrimedResponse = Some((resp, None));
     let mut handles: Vec<(usize, tokio::task::JoinHandle<()>)> = Vec::with_capacity(n_workers);
     for wid in 1..=n_workers {
         let primed = if wid == 1 { primed_resp.take() } else { None };
@@ -773,7 +815,7 @@ pub(super) async fn download_dynamic(
                     let _ = ep_tx.send(Arc::new(endpoint));
                     let _ = quota_tx.send(q);
                     let _ = speed_tx.send(max_download_speed);
-                    deps.conns.lock().await.retain(|c| c.id <= q);
+                    deps.conns.lock().expect("conns 锁").retain(|c| c.id <= q);
                     handles.retain(|(_, h)| !h.is_finished());
                     while handles.len() < q {
                         let next = (1..=q).find(|i| !handles.iter().any(|(s, _)| s == i)).unwrap_or(q + 1);
@@ -829,24 +871,11 @@ pub(super) async fn download_dynamic(
                     let _ = writer.finish().await;
                     stop.store(false, Ordering::Relaxed);
                     let _ = stop_tx.send(false);
-                    *planner.lock().await = Planner::new(total, min_split, cut_align, preempt_rescue);
+                    *planner.lock().expect("planner 锁") = Planner::new(total, min_split, cut_align, preempt_rescue);
                     let _ = quota_tx.send(1);
                     let rescue_client = shared.client_for(spec.proxy_endpoint.as_ref());
                     let rescue_resp = match req_with_identity(&rescue_client, &spec.url, None).send().await {
-                        Ok(r) if r.status().is_success() => {
-                            let mut r = r;
-                            let rescue_first = match r.chunk().await {
-                                Ok(b) => b,
-                                Err(e) => {
-                                    return Flow::Failed(
-                                        classify_reqwest(&e),
-                                        writer.total_pushed() > 0,
-                                        sc.clone().map(|s| (s, sc_path.clone())),
-                                    );
-                                }
-                            };
-                            Some((r, rescue_first))
-                        }
+                        Ok(r) if r.status().is_success() => Some((r, None)),
                         Ok(r) => {
                             let st = r.status().as_u16();
                             let ra = super::super::error::parse_retry_after_header(
@@ -870,10 +899,10 @@ pub(super) async fn download_dynamic(
                     handles.clear();
                     handles.push((1, deps.spawn(1, Arc::clone(shared), rescue_resp)));
                 }
-                if failure.lock().await.is_some() {
+                if failure.lock().expect("failure 锁").is_some() {
                     stop_dyn_workers(&stop, &stop_tx, &mut handles);
                     let _ = writer.finish().await;
-                    let f = failure.lock().await.clone().unwrap_or_else(|| {
+                    let f = failure.lock().expect("failure 锁").clone().unwrap_or_else(|| {
                         EngineFailure::network("传输中断")
                     });
                     let sidecar =
@@ -885,10 +914,10 @@ pub(super) async fn download_dynamic(
                     );
                 }
                 let (completed, committed) = {
-                    let p = planner.lock().await;
+                    let p = planner.lock().expect("planner 锁");
                     (p.completed_bytes(), p.committed_ranges())
                 };
-                let conns_now = conns.lock().await.clone();
+                let conns_now = conns.lock().expect("conns 锁").clone();
                 let downloaded = completed;
                 // pieces 网格投影：resume 区间 ∪ 本会话落盘区间 ∪ 本会话已提交区间
                 // → Done/Partial 集合。刷盘回收由 chunk 步进驱动（absorb 只在
@@ -967,8 +996,9 @@ pub(super) async fn download_dynamic(
                 }
                 if tokio::time::Instant::now() >= flush_deadline {
                     flush_deadline = tokio::time::Instant::now() + sidecar_flush;
+                    let _ = writer.step(u64::MAX).await;
                     {
-                        let mut p = planner.lock().await;
+                        let mut p = planner.lock().expect("planner 锁");
                         let w = Arc::clone(&writer);
                         p.gc(|start, end| w.flushed_extent_from(start).min(end));
                     }

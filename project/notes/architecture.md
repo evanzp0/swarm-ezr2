@@ -1039,3 +1039,12 @@ B 类快照（任务启动烘焙、sidecar 格式即引擎 D89）使 mode 断言
   blocks 引擎（workers.rs，生产不可达）构造点占位 Connecting 仅保编译。
 - 回退重连语义：退避 sleep 结束 continue 后重走 assign → 重推 Connecting——重试显示
   自然回到「正在连接...」，无需显式复位。
+
+## MDM 对齐的 HTTP dynamic 引擎热路径与启动时序（20261127 启动延迟与峰值优化轮）
+- **背景**：操作者报告 EZR 输入 URL 确认后要等好几秒才下载、HTTP 峰值低于 MDM（`.tools/misterdownloadmanager`）。逐项对照 MDM `crates/engine` 源码定位两族差距。
+- **启动延迟三源与修法**：①DNS 竞速首腿 Ok 非空仍空等 1s 宽限窗（`race_with_grace`）——MDM 的对应物是 TCP 连接竞速（竞速产出已建立连接），EZR 宽限是纯空等，每个新主机 +1s；修法 = 首腿可用即返回，宽限只保留给「首腿空集」场景（另一族答案由 hickory 缓存服务后续连接）。②probe 预读首 body chunk 才 spawn 其余 worker——把 N-1 条连接的建连串行化到 TTFB+首块之后；修法 = 响应头到达即建 planner/writer 并 spawn 全部 worker，probe 响应体整体交给 worker #1（`PrimedResponse` 首块恒 None，rescue 路径同步）。
+- **②暴露的规格缺口（D93）**：动态 worker 块请求面 4xx 从未实现原地重试映射——旧代码靠 probe 预读把「body EOF」挡在探测阶段（瞬败 Transient）才碰巧通过 `worker_block_403` 类用例；预读取消后 EOF 错位到 worker 阶段 + Range 重试撞 403 → 立即 Fatal。修法 = `EngineFailure::into_block_retry`（reason 以 "HTTP " 开头的 Fatal → `传输中断（HTTP xxx…）` Transient），仅接在 dynamic worker 的 `req_checked` Err 臂；probe 用 `req_with_identity` 不受影响（探测面 4xx→Fatal 停等口径不变，QA v1.63）。退避梯子 0/1/2/4/8s、耗尽后任务级失败 kind=Transient。
+- **峰值热路径锁成本账（每 chunk）**：改前 = planner tokio Mutex×2（claim/commit 分离）+ conns tokio Mutex×1 + 共享 Writer std Mutex×2~3（含 `pending()` O(queue) 求和）+ 双 throttle 各 3 把 std Mutex（不限速也全走）+ carry 字节重复限速；改后 = planner std Mutex×2 且 commit+absorb_next 合并单锁 + Writer std Mutex×1（push；step 仅在「push 封包 ∨ pending≥hold_cap」时执行）+ throttle `unlimited: AtomicBool` 快路径（不限速即返）+ 限速只按新到字节支付（carry 不再重付）。MDM 对应结构：planner std Mutex×1、claim 按 chunk/commit 按刷盘完成、每 worker 独享 Writer、limiter 有 refund。
+- **Writer 配套**：`pending` 增量字段（push += / absorb -=，去 O(queue) 求和）；`push` 返回封包 bool；监控 tick 的 flush_deadline 分支加 `writer.step(u64::MAX)`（只回收+派发不等待）保 sidecar 前沿新鲜——worker 停滞时已落盘进度不丢。
+- **ConnView 节流红线**：`ConnView.done` 是 app 侧 per-conn 速度 EMA 的唯一字节来源（喂窗义务在事件路径不变式的 HTTP 引擎实现面）——按字节步长（256KiB）节流会让慢速流（滴流 ≈2KB/s）速度恒 0（v115 speed_window 假失败根因）；正确节流 = 时间门控 `CONN_VIEW_PERIOD=100ms` 与 Progress/采样节拍对齐，段轮转/重试等事件驱动更新保留即时。
+- **MDM 未移植项登记**：TCP 多地址竞速+赢家 300s 缓存（reqwest 侧无 connect 钩子，hyper 顺序尝试）、每 worker 独享 Writer（共享 Writer 语义与 pieces 投影/sidecar/断点口径耦合，动面大归后续裁决）、BDP/RCVBUF 与慢连接剔除（P3 沿规格排除）。

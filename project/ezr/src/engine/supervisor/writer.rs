@@ -27,20 +27,15 @@ struct WriterInner {
     writing: Option<WriteJob>,
     spare: Vec<Vec<u8>>,
     written: Vec<(u64, u64)>,
+    pending: u64,
     flushed_prefix: u64,
     total_flushed: u64,
     total_pushed: u64,
 }
 
 impl WriterInner {
-    fn pending(&self) -> u64 {
-        let queued: u64 = self.queue.iter().map(|b| b.data.len() as u64).sum();
-        let buf = self.buf.as_ref().map_or(0, |b| b.data.len() as u64);
-        let writing = self.writing.as_ref().map_or(0, |j| j.bytes);
-        queued + buf + writing
-    }
-
-    fn absorb(&mut self, intervals: &[(u64, u64)]) {
+    fn absorb(&mut self, job_bytes: u64, intervals: &[(u64, u64)]) {
+        self.pending = self.pending.saturating_sub(job_bytes);
         for (a, b) in intervals {
             insert_merged(&mut self.written, *a, *b);
             self.total_flushed += b - a;
@@ -162,6 +157,7 @@ impl Writer {
                 writing: None,
                 spare: Vec::new(),
                 written: Vec::new(),
+                pending: 0,
                 flushed_prefix: 0,
                 total_flushed: 0,
                 total_pushed: 0,
@@ -169,9 +165,11 @@ impl Writer {
         }
     }
 
-    pub(super) fn push(&self, at: u64, data: &[u8]) -> io::Result<()> {
+    pub(super) fn push(&self, at: u64, data: &[u8]) -> io::Result<bool> {
         let mut g = self.inner.lock().unwrap();
         g.total_pushed += data.len() as u64;
+        g.pending += data.len() as u64;
+        let mut sealed = false;
         let mut at = at;
         let mut rest = data;
         while !rest.is_empty() {
@@ -182,6 +180,7 @@ impl Writer {
             if seal {
                 if let Some(b) = g.buf.take() {
                     g.queue.push_back(b);
+                    sealed = true;
                 }
                 let mut v = g.spare.pop().unwrap_or_else(|| Vec::with_capacity(BATCH));
                 v.clear();
@@ -194,17 +193,17 @@ impl Writer {
             if b.data.len() >= BATCH {
                 if let Some(b) = g.buf.take() {
                     g.queue.push_back(b);
+                    sealed = true;
                 }
             }
             at += n as u64;
             rest = &rest[n..];
         }
-        Ok(())
+        Ok(sealed)
     }
 
-    #[cfg(test)]
     pub(super) fn pending_bytes(&self) -> u64 {
-        self.inner.lock().unwrap().pending()
+        self.inner.lock().unwrap().pending
     }
 
     pub(super) fn total_pushed(&self) -> u64 {
@@ -262,8 +261,9 @@ impl Writer {
                 .handle
                 .await
                 .map_err(|e| io::Error::other(e.to_string()))??;
+            let bytes = job.bytes;
             let mut g = shared.lock().unwrap();
-            g.absorb(&job.intervals);
+            g.absorb(bytes, &job.intervals);
             g.recycle(bufs);
         }
     }
@@ -276,7 +276,7 @@ impl Writer {
             if g.writing.is_none() {
                 g.dispatch();
             }
-            if g.pending() >= hold_cap {
+            if g.pending >= hold_cap {
                 g.writing.take()
             } else {
                 None
@@ -287,8 +287,9 @@ impl Writer {
                 .handle
                 .await
                 .map_err(|e| io::Error::other(e.to_string()))??;
+            let bytes = job.bytes;
             let mut g = shared.lock().unwrap();
-            g.absorb(&job.intervals);
+            g.absorb(bytes, &job.intervals);
             g.recycle(bufs);
         }
         Ok(())
@@ -303,7 +304,7 @@ impl Writer {
                 if g.writing.is_none() {
                     g.dispatch();
                 }
-                match g.pending() {
+                match g.pending {
                     0 => None,
                     _ => g.writing.take(),
                 }
@@ -313,8 +314,9 @@ impl Writer {
                 .handle
                 .await
                 .map_err(|e| io::Error::other(e.to_string()))??;
+            let bytes = job.bytes;
             let mut g = shared.lock().unwrap();
-            g.absorb(&job.intervals);
+            g.absorb(bytes, &job.intervals);
             g.recycle(bufs);
         }
         Ok(())

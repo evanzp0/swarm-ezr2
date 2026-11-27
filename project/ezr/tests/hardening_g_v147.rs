@@ -858,6 +858,54 @@ fn stub_probe_then_403_then_trickle() -> std::net::SocketAddr {
     addr
 }
 
+fn stub_probe_then_trickle_then_403() -> std::net::SocketAddr {
+    use std::io::{BufRead, BufReader, Write};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let n = std::sync::Arc::new(AtomicUsize::new(0));
+    std::thread::spawn(move || {
+        for mut c in listener.incoming().flatten() {
+            {
+                let mut reader = BufReader::new(&c);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    if line == "\r\n" || line == "\n" {
+                        break;
+                    }
+                }
+            }
+            let k = n.fetch_add(1, Ordering::Relaxed);
+            if k == 0 {
+                let _ = c.write_all(
+                    b"HTTP/1.1 206 Partial Content\r\nContent-Length: 3000000\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
+                );
+            } else if k == 1 {
+                let _ = c.write_all(
+                    b"HTTP/1.1 206 Partial Content\r\nContent-Length: 3000000\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
+                );
+                let _ = c.flush();
+                loop {
+                    if c.write_all(&[8u8; 4096]).is_err() {
+                        break;
+                    }
+                    let _ = c.flush();
+                    std::thread::sleep(std::time::Duration::from_millis(40));
+                }
+            } else {
+                let _ = c.write_all(
+                    b"HTTP/1.1 403 Forbidden\r\nContent-Length: 5\r\nConnection: close\r\n\r\noops\n",
+                );
+            }
+            let _ = c.flush();
+        }
+    });
+    addr
+}
+
 fn stub_206_burst_2m() -> std::net::SocketAddr {
     use std::io::{BufRead, BufReader, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -917,7 +965,7 @@ fn stub_206_burst_2m() -> std::net::SocketAddr {
 
 #[tokio::test]
 async fn failure_freezes_all_worker_progress() {
-    let addr = stub_probe_then_403_then_trickle();
+    let addr = stub_probe_then_trickle_then_403();
     let (dir, reg) = workspace("stp");
     let cfg = Config {
         auto_retry: false,
@@ -930,8 +978,11 @@ async fn failure_freezes_all_worker_progress() {
         Some(2),
         None,
     );
-    let hit = wait_state(&mut a, 0, TaskState::Failed, 20).await;
-    assert!(hit, "403 块失败必须导致任务失败");
+    let hit = wait_state(&mut a, 0, TaskState::Failed, 30).await;
+    assert!(
+        hit,
+        "403 块请求面按 D93 原地重试，全部重试仍 403 → 原地重试耗尽任务失败"
+    );
     let frozen = a.tasks[0].downloaded;
     tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
     a.tick().await;

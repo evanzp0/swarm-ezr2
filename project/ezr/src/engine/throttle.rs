@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -5,6 +6,7 @@ pub struct Throttle {
     rate: Mutex<f64>,
     tokens: Mutex<f64>,
     last: Mutex<Instant>,
+    unlimited: AtomicBool,
     burst_secs: f64,
     sleep_ms: u64,
 }
@@ -56,6 +58,7 @@ impl Throttle {
                 rate_bps as f64 * burst_secs
             }),
             last: Mutex::new(Instant::now()),
+            unlimited: AtomicBool::new(rate_bps == 0),
             burst_secs,
             sleep_ms,
         }
@@ -63,6 +66,7 @@ impl Throttle {
 
     pub fn set_rate(&self, rate_bps: u64) {
         let new_rate = rate_bps as f64;
+        self.unlimited.store(rate_bps == 0, Ordering::Relaxed);
         *self.rate.lock().unwrap() = new_rate;
         let mut tokens = self.tokens.lock().unwrap();
         *tokens = if rate_bps == 0 {
@@ -73,6 +77,9 @@ impl Throttle {
     }
 
     pub async fn acquire(&self, n: u64) {
+        if n == 0 || self.unlimited.load(Ordering::Relaxed) {
+            return;
+        }
         let mut remaining = n as f64;
         while remaining > 0.0 {
             let wait = {

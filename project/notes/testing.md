@@ -1113,3 +1113,25 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
 - clippy --all-targets 是测试目标编译断裂的第一道网：`cargo test --bin ezr` 不编译
   tests/ 目标，构造点新增字段这类签名断裂只有 --all-targets（或显式 --test <名>）先红——
   全量验证序列里 clippy 必须先于 test 跑，红灯定位比 test 全量后置发现便宜得多。
+
+## 20261127 启动延迟与峰值优化轮追加
+- **默认下载目录（~/Downloads）是集成测试共享状态陷阱**：`add_cli_task(dir=None)` 落
+  `default_download_dir`，同名 `f.bin` 的 `.ezr` sidecar 残留 → 下一轮任务带断点恢复 →
+  stub 一律 200 → 「未支持 Range」Failed → 「应进入下载中」假失败；判别法 = 看任务
+  err 文案 + `ls ~/Downloads`。修复模式 = 每用例 `temp_dir()+进程 id` 独立目录 + 收尾
+  `remove_dir_all`（同套件 shutdown_pauses 早是该模式）；本轮已修
+  speed_window_tracks_downloading_task 并清空 ~/Downloads 残留。
+- **e2e 时限断言的负载抖动家族**：`assert!(completed, "…任务应完成")` 类 30s deadline
+  在全量并行负载下偶发超时（g_engine dynamic_vacated_blocks 四次全量两失败；单测复跑
+  3/3 绿 3.2s）；判别 = 失败点是否 deadline 类断言（非不变量断言）+ 单测复跑；处置 =
+  复跑确认全绿即登记放行，不为抖动改引擎。
+- **规格缺口由优化暴露的改写授权（QA v1.63「stale hardening 断言归 coder 轮按 D93
+  改写」）**：failure_freezes_all_worker_progress 触发器从「403 快速任务失败」（废弃
+  口径）改写为「403 原地重试耗尽」——新 stub_probe_then_trickle_then_403（conn0=probe
+  206 EOF / conn1=滴流 206 / conn2+=403）保住 stop_workers no-op 突变体杀伤（失败收口
+  时另一 worker 正在滴流接收）；同 stub 的 blocks 引擎孪生用例
+  engine_progress_freezes_after_failure_event 不动（blocks 引擎未改，403 仍快速失败）。
+- **probe 时序变化的套件敏感面**：动态引擎 probe 不再预读首 chunk 后，探测阶段 body
+  EOF 错位到 worker 阶段——stub_206_then_403 家族用例的真实通过路径从「探测 EOF 瞬败
+  （0.2s）」变为「D93 原地重试耗尽（≈15s）」，套件总时长上涨属预期；worker_block_403
+  类用例断言不变（Transient+传输中断）但机制已按 D93 真实路径成立。
