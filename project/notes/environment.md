@@ -4,6 +4,16 @@
 - ~/.cargo/config.toml 配 `rsproxy-sparse`（sparse+https://rsproxy.cn/index/）替换
   crates-io（registry 用 rsproxy 实测正常）。直连 crates.io 在本沙箱会长时间卡在下载阶段。
 - rustup dist（工具链组件下载）不用 rsproxy，改用 TUNA（见下节实测）。
+- **20261127 复测：镜像速度排名随时间漂移，每会话开工先重测**（curl --max-time 8 对
+  rustup-init 取 speed_download 比较即可，串行前台）。本轮：rsproxy 12.3MB/s 最快、
+  aliyun 20KB/s、TUNA 618B/s、ustc 368B/s、sjtu 不可达；nightly 1.102.0-nightly 组件
+  经 rsproxy 前台装齐（RUSTUP_DIST_SERVER=https://rsproxy.cn，rustup 自动拼 /dist/ 路径）。
+
+## rustup-init 文件名带前导点会报 unknown proxy name
+- 安装器按 argv[0] 基名自识别：下载为 `.rustup-init`（前导点）直接执行报
+  `error: unknown proxy name: '.rustup-init'`——ELF 本体完好也会被名字分发拒绝。
+  处置：改名去前导点（`rustup-init`）再执行；`--default-toolchain none` 装管理器、
+  工具链按 rust-toolchain.toml 钉定版本经 dist 镜像补装。
 
 ## 后台进程会被回收：长构建分块前台跑
 - nohup/setsid 起的 cargo 后台进程在工具调用间隙被沙箱回收（日志停更、进程消失）。
@@ -22,6 +32,11 @@
 - **build 命令同受小盘约束**（config 废弃轮复现）：`cargo build` 漏带
   `CARGO_INCREMENTAL=0` 时 incremental 会话目录写入同样爆盘（os error 28）——
   测试命令带了、build 命令漏带照样翻车；所有 cargo 调用统一带。
+- **磁盘满的另一种形态 = 链接期 SIGBUS**（D91 落地轮复现）：多目标连跑到
+  `collect2: fatal error: ld terminated with signal 7 [Bus error]`，无 os error 28——
+  根因同为磁盘耗尽（当时 df 93%、target ~6.7G、incremental 已涨到 4.6G），链接大目标
+  时表现为 SIGBUS 而非 ENOSPC。同处置：`rm -rf target/debug/incremental` 后原样重跑即过
+  （依赖 rlib 指纹有效，仅重链接）。判别：链接/编译错误但代码未改 + df 高水位 → 先清盘再归因。
 
 ## harness 的 tracker/seeder 是会话级临时进程：BT 手测前先起夹具
 - **现象**：操作者报告「BT 连不上 tracker、无 peer」；实测 e2e 三连 PASS、产品无回归。
@@ -665,3 +680,16 @@ clone 多出历轮全部修复），begin 会话照常建立。
 - 装前镜像探测口径沿用：manifest 可达 ≠ 组件可达（TUNA 顶层 manifest 200 但日期化组件
   404、USTC 403），必须对真实组件 URL 剥前缀重拼测速（rsproxy 206 @1.7 MB/s 胜出）。
 - sandbox 重置后 QA runner 依赖 pyte：pip 阿里云镜像 `pip install pyte -q` 秒装。
+
+## 族A/族B 裁决落实轮（20261127）追加
+- 沙箱重置后 nightly 工具链重建的镜像选择陷阱：rust-toolchain.toml 只钉 `channel = "nightly"`
+  不钉日期，镜像端 nightly 快照随镜像滞后漂移——aliyun dist 快照停在 2026-05-29（nightly
+  1.98.0），编译 `ezr-mktorrent` 报 E0658 `result_option_map_or_default` 未稳定（handoff 基线
+  nightly 1.102.0）；rsproxy dist 根路径 = `https://rsproxy.cn/dist/`（RUSTUP_DIST_SERVER 取
+  该根，rustup 自动拼 /dist/channel-*.toml），取 2026-11-26 快照 = 1.102.0-nightly 与基线一致；
+  `https://rsproxy.cn/rustup/dist/...` 是 404（与 aliyun 的 `/rustup/dist` 布局不同），404 先
+  剥路径归因再换根。判据：channel-rust-nightly.toml 的 date + version 双探针。
+- rustup self-update 检查 404（release-stable.toml）无害可忽略：不影响 toolchain 安装与使用。
+- Babashka 安装口径：GitHub release 资产名会漂移——`babashka-<v>-linux-amd64.tar.xz` 404 后
+  按「发行资产形态会随版本漂移」条款先取资产清单确认实际名（实际 =
+  `babashka-<v>-linux-amd64-static.tar.gz`），不要按旧名盲试。

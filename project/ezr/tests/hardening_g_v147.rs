@@ -276,7 +276,7 @@ async fn wait_state(a: &mut App, idx: usize, target: TaskState, secs: u64) -> bo
 }
 
 #[tokio::test]
-async fn worker_block_403_fails_fatal_not_transient() {
+async fn worker_block_403_transient_transport_interrupted() {
     let addr = stub_206_then_403();
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let (dir, reg) = workspace("h403");
@@ -291,18 +291,26 @@ async fn worker_block_403_fails_fatal_not_transient() {
         Some(1),
         None,
     );
-    let hit = wait_state(&mut a, 0, TaskState::Failed, 20).await;
+    let hit = wait_state(&mut a, 0, TaskState::Failed, 30).await;
     assert!(
         hit,
-        "块请求 403 必须失败；实际 {:?} err={:?} dl={}",
-        a.tasks[0].state, a.tasks[0].error, a.tasks[0].downloaded
+        "原地重试耗尽后升级任务级失败；实际 state={:?}",
+        a.tasks[0].state
     );
     assert_eq!(
         a.tasks[0].fail_kind,
-        Some(model::FailKind::Fatal),
-        "4xx 块请求必须按语义性错误（Fatal）分类；37:18 突变体（guard→true）把 \
-         403 当成功 → body EOF → 网络分类 → Transient；实际 kind={:?} err={:?}",
+        Some(model::FailKind::Transient),
+        "worker 块请求面 4xx 按 FR-05-04 原地重试 + 网络 Transient 分类，不升任务级 Fatal（D93）；\
+         实际 kind={:?} err={:?}",
         a.tasks[0].fail_kind,
+        a.tasks[0].error
+    );
+    assert!(
+        a.tasks[0]
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("传输中断")),
+        "body EOF 分类文案 = 传输中断（D93）；实际 err={:?}",
         a.tasks[0].error
     );
     a.shutdown().await;
@@ -343,7 +351,7 @@ async fn zero_written_chunk_failure_counts_continuous_retry() {
 }
 
 #[tokio::test]
-async fn single_stream_200_failure_writes_no_ledger() {
+async fn single_stream_burst_cut_keeps_downloading() {
     let addr = stub_200_burst_cut(400 * 1024);
     let (dir, reg) = workspace("lg");
     let mut a = App::new(Config::default(), reg.to_string_lossy().into_owned());
@@ -353,12 +361,31 @@ async fn single_stream_200_failure_writes_no_ledger() {
         Some(1),
         None,
     );
-    let hit = wait_state(&mut a, 0, TaskState::Failed, 25).await;
-    assert!(hit, "burst 后断连必须失败；实际 {:?}", a.tasks[0].state);
-    let sc = dir.join("f.bin.ezr");
+    let hit = wait_until(&mut a, 20, |a| a.tasks[0].downloaded > 0).await;
     assert!(
-        !sc.exists(),
-        "200 单流（multi_ok=false）失败不得写断点台账；88:18 突变体（||→&&）会写 Some"
+        hit,
+        "burst 阶段应有进度；实际 dl={} state={:?}",
+        a.tasks[0].downloaded, a.tasks[0].state
+    );
+    let mut ever_failed = false;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        a.tick().await;
+        if a.tasks[0].state == TaskState::Failed {
+            ever_failed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        !ever_failed,
+        "有进展断连持续原地重试，任务不失败（D93）；实际 state={:?} err={:?}",
+        a.tasks[0].state, a.tasks[0].error
+    );
+    assert_eq!(
+        a.tasks[0].state,
+        TaskState::Downloading,
+        "观察窗结束仍处下载中（D93）"
     );
     a.shutdown().await;
     cleanup(&dir, &reg);
@@ -596,7 +623,7 @@ async fn wait_until(a: &mut App, secs: u64, mut pred: impl FnMut(&App) -> bool) 
 }
 
 #[tokio::test]
-async fn unknown_size_orphan_redirects_not_transient_fail() {
+async fn blocks_unknown_size_ledger_downloads_fresh_to_completion() {
     let addr = stub_nocl_trickle();
     let (dir, reg) = workspace("u0");
     let sc = model::sidecar::Sidecar {
@@ -632,25 +659,27 @@ async fn unknown_size_orphan_redirects_not_transient_fail() {
         Some(1),
         None,
     );
-    let _ = wait_until(&mut a, 12, |a| a.tasks[0].name == "f.bin.1").await;
+    let _ = wait_until(&mut a, 20, |a| a.tasks[0].state == TaskState::Completed).await;
     assert_eq!(
-        a.tasks[0].name, "f.bin.1",
-        "未知大小台账 + 无 CL 探测必须走一致性裁决（孤儿臂 → 序号改道 <名>.1）；\
-         117:44 突变体（> → >=）把 size=0 台账误判「已知大小」→ 提前暂态失败不致改道；\
-         实际 name={} state={:?} err={:?}",
-        a.tasks[0].name, a.tasks[0].state, a.tasks[0].error
-    );
-    assert_ne!(
         a.tasks[0].state,
-        TaskState::Failed,
-        "孤儿候选不得暂态失败（探测路径走一致性裁决）"
+        TaskState::Completed,
+        "blocks 旧台账（未知大小）按无台账处理：滴流全量完成（D90）；\
+         实际 name={} state={:?} err={:?}",
+        a.tasks[0].name,
+        a.tasks[0].state,
+        a.tasks[0].error
+    );
+    assert_eq!(
+        a.tasks[0].name, "f.bin",
+        "不孤儿改道，原名下载（D90）；实际 name={}",
+        a.tasks[0].name
     );
     a.shutdown().await;
     cleanup(&dir, &reg);
 }
 
 #[tokio::test]
-async fn matching_sidecar_resumes_with_nonzero_range() {
+async fn trickle_disconnect_with_progress_keeps_downloading() {
     let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let addr = stub_range_recorder(log.clone());
     let (dir, reg) = workspace("sc");
@@ -665,55 +694,39 @@ async fn matching_sidecar_resumes_with_nonzero_range() {
         Some(1),
         None,
     );
-    let hit = wait_state(&mut a, 0, TaskState::Failed, 20).await;
-    assert!(hit, "滴流断连必须失败 state={:?}", a.tasks[0].state);
-    assert!(a.tasks[0].downloaded > 0, "失败前应有进度");
+    let hit = wait_until(&mut a, 20, |a| a.tasks[0].downloaded > 0).await;
     assert!(
-        dir.join("f.bin.ezr").exists(),
-        "分块失败（multi_ok、有进度）必须落失败台账 failed_flow→Some"
+        hit,
+        "断连前应有进度；实际 dl={} state={:?}",
+        a.tasks[0].downloaded, a.tasks[0].state
     );
-    a.on_key(KeyCode::Char('r'), KeyModifiers::empty());
-    let _ = wait_until(&mut a, 8, |a| {
-        a.tasks[0].state == TaskState::Downloading || a.tasks[0].state == TaskState::Failed
-    })
-    .await;
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    a.tick().await;
-    let heads_snapshot: Vec<String> = log.lock().unwrap().clone();
-    let has_resume_range = heads_snapshot.iter().any(|h| {
-        for line in h.lines() {
-            let line = line.trim();
-            let lower = line.to_ascii_lowercase();
-            if let Some(r) = lower.strip_prefix("range:") {
-                let r = r.trim();
-                if let Some(rest) = r.strip_prefix("bytes=") {
-                    if let Some(start) = rest.split('-').next() {
-                        if let Ok(n) = start.parse::<u64>() {
-                            if n > 0 {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
+    let mut ever_failed = false;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        a.tick().await;
+        if a.tasks[0].state == TaskState::Failed {
+            ever_failed = true;
+            break;
         }
-        false
-    });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     assert!(
-        has_resume_range,
-        "同名同 id sidecar 必须断点接续（恢复请求带非零 Range 起点）；\
-         108:78 突变体（== → !=）翻转过滤器 → 弃账重下；请求头日志 {:?}",
-        heads_snapshot
-            .iter()
-            .map(|h| h.replace("\r\n", " | "))
-            .collect::<Vec<_>>()
+        !ever_failed,
+        "滴流断连原地重试不失败（D93）；实际 state={:?} err={:?}",
+        a.tasks[0].state, a.tasks[0].error
     );
+    assert_eq!(
+        a.tasks[0].state,
+        TaskState::Downloading,
+        "观察窗结束仍处下载中（D93）"
+    );
+    assert!(a.tasks[0].downloaded > 0, "进展保持（D93）");
     a.shutdown().await;
     cleanup(&dir, &reg);
 }
 
 #[tokio::test]
-async fn inconsistent_block_count_orphan_redirects_even_when_size_matches() {
+async fn blocks_inconsistent_ledger_downloads_in_place() {
     let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let addr = stub_range_recorder(log.clone());
     let (dir, reg) = workspace("bc");
@@ -750,18 +763,24 @@ async fn inconsistent_block_count_orphan_redirects_even_when_size_matches() {
         Some(1),
         None,
     );
-    let _ = wait_until(&mut a, 12, |a| a.tasks[0].name == "f.bin.1").await;
+    let _ = wait_until(&mut a, 12, |a| a.tasks[0].downloaded > 0).await;
+    assert!(
+        a.tasks[0].downloaded > 0,
+        "块数不自洽的 blocks 旧台账不校验：按无台账新任务从头下载有进展（D90）；\
+         实际 dl={} state={:?} err={:?}",
+        a.tasks[0].downloaded,
+        a.tasks[0].state,
+        a.tasks[0].error
+    );
     assert_eq!(
-        a.tasks[0].name, "f.bin.1",
-        "块数不自洽（size 一致）孤儿臂必须改道；\
-         129:59 突变体（&&→||）被 size 恒等单条件放行 → 误接续不致改道；\
-         实际 name={} state={:?} err={:?}",
-        a.tasks[0].name, a.tasks[0].state, a.tasks[0].error
+        a.tasks[0].name, "f.bin",
+        "不孤儿改道，原名下载（D90）；实际 name={}",
+        a.tasks[0].name
     );
     assert_ne!(
         a.tasks[0].state,
         TaskState::Failed,
-        "孤儿候选不得失败（台账不自洽走改道）"
+        "旧规则失效臂不适用，不失败（D90）"
     );
     a.shutdown().await;
     cleanup(&dir, &reg);

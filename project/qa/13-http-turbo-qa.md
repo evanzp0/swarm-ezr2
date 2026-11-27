@@ -1,6 +1,7 @@
 # QA 套件 · 13-http-turbo HTTP 引擎提速 P0–P2（期号 05，v1.62 新建）
 
-> 对应规格：`project/features/13-http-turbo.feature`（15 场景 + 08b/13b）。
+> 对应规格：`project/features/13-http-turbo.feature`（15 场景 + 08b/13b；v1.63/族A：场景 12/13b 退役留空不重排）。
+> **v1.63 同步（族A/族B 裁决落实轮 20261127，phase-05 v1.1/D90–D93）**：blocks 引擎整体退役——QA-HT-12/13b 退役留空；QA-HT-13 scheduler 行改判「含 scheduler 键任意值拒绝启动（未知键，FR-02-35/D91）」；QA-HT-15 的「服务器不支持 Range」族判据不变（D93：Range 全拒降级完成不失败，旧预期废弃）。
 > 需求依据：`project/mission/phase-05.md` FR-05-01~13、D83–D89（操作者 20261125 指令 + 设计
 > 权威 `project/ezr-http-dw-tunning.md`；Inversion 阶段 1 受限退化沿 v1.45–v1.62 轮先例）。
 > 行为口径：动态分段调度为默认引擎（`http.scheduler` 默认 dynamic，blocks 一键回退）；
@@ -48,9 +49,9 @@
 | QA-HT-09 | 13-http-turbo-09 | 默认配置下载 big-100m.bin（含 .sha256 伴随） | 「SHA-256 校验成功」；字节数 104857600；日志多连接分段交付 |
 | QA-HT-10 | 13-http-turbo-10 | sparse-g.bin（1 GiB）限速 64 MiB/s 下载至约 64 MB 后 Space 暂停，采样磁盘占用；Space 继续 | part 名义 1073741824 B 且 du/st_blocks ≪ 名义（随接收增长）；继续后完成且字节完整；若文件系统不支持稀疏则记 S（内嵌判据文案） |
 | QA-HT-11 | 13-http-turbo-11 | eight-m.bin 下载至 ≥2 MB 后 kill -9；重启续传 | sidecar 声称字节 ≤ 磁盘实际数据量；从 sidecar 进度续传不从头；完成「SHA-256 校验成功」 |
-| QA-HT-12 | 13-http-turbo-12 | scheduler = "blocks" 下载 ten-m.bin（Range 日志开） | 首请求 `bytes=0-`；分块封闭区间；分块行 `x/10 · 1 MB/块`；完成字节完整（回退开关有效） |
-| QA-HT-13 | 13-http-turbo-13 | scheduler/min_split_kib 合法与非法组合启动（dynamic/blocks/DYNAMIC/turbo/min_split_kib=0） | 合法组合启动成功（DYNAMIC 大小写不敏感生效）；turbo 与 min_split_kib=0 启动失败并报错（FR-02-35） |
-| QA-HT-13b | 13-http-turbo-13b | blocks 任务下载中；外部改 scheduler = "dynamic" → Ctrl+R；再添加新任务 | 运行中任务保持 blocks 封闭区间形态；新任务首请求无 Range 头（动态）；toast 仅 `✓ 配置已重新加载`；两任务均完成完整 |
+| QA-HT-12 | 13-http-turbo-12 | **（退役，不执行）** 原 blocks 回退开关用例随 blocks 引擎退役（v1.63/族A，D91——scheduler 键整键退役，blocks 模式不复存在） | **（无判据）** 本用例退役留空不重排（修订纪律三层同步口径）；动态引擎行为由 QA-HT-01–08/09/14/15 全族承载，执行时直接记 S 并注记「D91 退役」 |
+| QA-HT-13 | 13-http-turbo-13 | min_split_kib 合法/非法启动 + scheduler 退役键拒绝启动（v1.63/族A 改判：无 scheduler 键+256 启动成功；含 scheduler 键任意值拒绝启动；512 成功；0 拒绝） | 无 scheduler 键启动成功（默认口径）；含 scheduler 键（任意值）启动失败并报错（未知键直接废弃，FR-02-35/D91）；min_split_kib=0 启动失败并报错（FR-02-35）；原 DYNAMIC 大小写不敏感臂随键退役失去载体 |
+| QA-HT-13b | 13-http-turbo-13b | **（退役，不执行）** 原调度模式烘焙用例随 scheduler 键退役失去 premise（v1.63/族A，D91——不存在「改写 scheduler 热加载」操作面） | **（无判据）** 本用例退役留空不重排；B 类快照键语义由 QA-RC-07（block_size_http/http_concurrency/max_retries）继续承载，执行时直接记 S 并注记「D91 退役，行为归 QA-RC-07」 |
 | QA-HT-14 | 13-http-turbo-14 | eight-m.bin 下载至 ≥30% → Space 暂停 → Space 继续 | 续传请求从首个未提交字节开区间；已提交字节零重复写入（磁盘不回退）；进度从 sidecar 值继续；最终完整 |
 | QA-HT-15 | 13-http-turbo-15 | norange-8m.bin 默认下载；同任务下载至有进度后暂停再继续 | 分段请求收 200 后静默退出不写入；toast「⚠ 服务器不支持断点续传，单线程下载: <name>」；首连接单流完成完整；有进度续传臂转「服务器本次未支持断点续传（Range），保留断点稍后重试」 |
 
@@ -67,7 +68,7 @@
 - kill -9 一致性判据（QA-HT-11）：sidecar 声称字节 ≤ 磁盘实际（sync_data 条件前置）；重启
   后从声称进度续传且最终校验通过。
 - 稀疏判据（QA-HT-10）按文件系统实际能力记 S 兜底，判据文案内嵌（du/名义比 + fs 类型）。
-- 关联回归：QA-HT-12 与 01-download-engine（blocks 旧行为逐条一致）、QA-HT-14 与
+- 关联回归：QA-HT-14 与
   01-resume-sidecar（sidecar 一致性/孤儿分支）、QA-HT-05 与 01-retry-backoff（任务级退避
   序列）、QA-HT-13b 与 12-reload-config（固定文案 toast + B 类快照族）联合回归——提速改造
   不得破坏既有语义。

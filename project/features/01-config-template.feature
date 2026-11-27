@@ -16,6 +16,11 @@
 # block_size_http（仅 blocks 回退模式适用；下限 1 MB → 256 KiB）、http_concurrency（默认
 # 4 → 8；范围 1–64 → 1–128）、throttle_burst_secs（默认 0.5 → 1.0）。钦定原文整体替换为
 # v1.51 版（180 行，行集结构不变、仅 [http] 表增两键三行式并改三处键值/注释行）。
+# v1.63 修订注（族A/族B 裁决落实轮 20261127，phase-05 v1.1/D91/D92）：scheduler 键随
+# blocks 引擎退役整键退役——模板 42 → 41 键（180 → 177 行，去 scheduler 三行式，
+# 行位保留追溯不重排）；config 含 scheduler 键（任意值）→ 未知键直接废弃拒绝启动
+# （FR-02-35）；block_size_http 语义改判 = 动态模式网格细化上限（D92，模板注释行
+# 「仅 blocks 回退模式适用」同步退役）。钦定原文整体替换为 v1.63 版（177 行）。
 Feature: 01-config-template 配置模板自动生成
 
   期号 01。依据 project/mission/phase-01.md FR-01-85（v1.4 操作者指令）与 D17：
@@ -124,9 +129,9 @@ Feature: 01-config-template 配置模板自动生成
     Given 不存在配置文件 <config_path>
     When 启动 ezr 并正常使用
     Then 配置文件 <config_path> 已生成
-    And 3 个表声明行（[common]/[http]/[bt]）与 42 个键值行为活跃 TOML（v1.13 取消注释：无 # 前缀；v1.14：36 → 40 键；v1.17：seed_duration_secs → default_seed_duration_m 键数不变；v1.51：40 → 42 键，新增 scheduler/min_split_kib）且其余行（用途/取值范围注释、3 条分隔头注释、proxy 一句头注释、双示例块、[bt.seed_exit_rule] 做种退出条件子表注释块——含子表声明行整块 # 注释）保持 # 注释
+    And 3 个表声明行（[common]/[http]/[bt]）与 41 个键值行为活跃 TOML（v1.13 取消注释：无 # 前缀；v1.14：36 → 40 键；v1.17：seed_duration_secs → default_seed_duration_m 键数不变；v1.51：40 → 42 键，新增 scheduler/min_split_kib；v1.63/族A：42 → 41 键，scheduler 键随 blocks 引擎退役移除，D91）且其余行（用途/取值范围注释、3 条分隔头注释、proxy 一句头注释、双示例块、[bt.seed_exit_rule] 做种退出条件子表注释块——含子表声明行整块 # 注释）保持 # 注释
     And 生成的文件可解析且解析结果与文件缺失一致（示例值 = 代码常量默认逐键一致，全部默认值生效；活跃模板不改变默认行为）
-    And 模板内容与操作者钦定文本逐字节一致（钦定原文行集内嵌于本场景下方注释块：标题行、3 组「分隔头注释 + 空行 + 表声明行（活跃）」、42 键三行式（首行注释无键名前缀、键值行活跃；v1.51：40 → 42 键）、[[common.proxy]] 一句头注释 + 双示例块、空行位置与行序、EOF 单换行收尾全部一致，v1.13）
+    And 模板内容与操作者钦定文本逐字节一致（钦定原文行集内嵌于本场景下方注释块：标题行、3 组「分隔头注释 + 空行 + 表声明行（活跃）」、41 键三行式（首行注释无键名前缀、键值行活跃；v1.51：40 → 42 键；v1.63/族A：42 → 41 键，scheduler 键退役移除，D91）、[[common.proxy]] 一句头注释 + 双示例块、空行位置与行序、EOF 单换行收尾全部一致，v1.13）
     And 键 "<key>" 以注释形式给出默认值 "<default_line>"
     And 键 "<key>" 的注释说明含用途要点 "<purpose>" 与取值范围要点 "<range>"
 
@@ -138,8 +143,7 @@ Feature: 01-config-template 配置模板自动生成
       | global_max_upload_speed      | global_max_upload_speed = 0             | 全局上传限速（BT 上传合计）                      | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
       | task_max_download_speed      | task_max_download_speed = 0             | 新任务默认任务级下载限速                         | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
       | task_max_upload_speed        | task_max_upload_speed = 0               | 新任务默认任务级上传限速                         | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
-      | scheduler                    | scheduler = "dynamic"                   | HTTP 下载引擎调度模式（v1.51 新增）              | dynamic / blocks（大小写不敏感）；其他值拒绝启动；任务启动烘焙（B 类快照） |
-      | min_split_kib                | min_split_kib = 256                     | 动态分段调度初始切分粒度下限（KiB，v1.51 新增）  | 正整数（≥1）；0 或非法值拒绝启动；仅 dynamic 模式适用 |
+      | min_split_kib                | min_split_kib = 256                     | 动态分段调度初始切分粒度下限（KiB，v1.51 新增）  | 正整数（≥1）；0 或非法值拒绝启动；仅 dynamic 模式适用（v1.63：blocks 模式退役后语义自然收窄为动态模式单形态口径） |
       | block_size_http              | block_size_http = 1048576               | HTTP 分块块大小（字节；仅 blocks 回退模式适用）  | 正整数（≥262144 即 256 KiB 下限）；0 或非法值拒绝启动（v1.51：下限 1 MB → 256 KiB） |
       | http_concurrency             | http_concurrency = 8                    | 默认并发数（v1.51：默认 4 → 8）                  | 1–128 的整数；0 或越界拒绝启动（v1.51：上限 64 → 128） |
       | max_retries                  | max_retries = 5                         | 自动重试上限次数                                 | ≥1 的整数；0 或非法值拒绝启动               |
@@ -177,8 +181,8 @@ Feature: 01-config-template 配置模板自动生成
       | listen_port                  | listen_port = 0                         | BT 监听端口（0 = 随机绑定）                      | 0 = 随机；1–65535 = 指定（占用回退随机+警告）；负/非法回退随机 |
 
   （v1.13 操作者钦定模板原文——default_template() 输出与其逐字节一致，coder 不得增删改
-  任何字符/空行；钦定原文共 180 行 = 标题行 + 3 组「分隔头注释 + 空行 + 表声明行（活跃）」+（v1.51：174 → 180 行，新增 scheduler/min_split_kib 两键×3 行）
-  42 键×3 行三行式（首行注释无键名前缀、键值行活跃；v1.51：40 → 42 键）+ [[common.proxy]] 一句头注释 +
+  任何字符/空行；钦定原文共 177 行 = 标题行 + 3 组「分隔头注释 + 空行 + 表声明行（活跃）」+（v1.51：174 → 180 行，新增 scheduler/min_split_kib 两键×3 行；v1.63/族A：180 → 177 行，scheduler 键三行式退役移除，D91）
+  41 键×3 行三行式（首行注释无键名前缀、键值行活跃；v1.51：40 → 42 键；v1.63：42 → 41 键）+ [[common.proxy]] 一句头注释 +
   双示例块（各 7 行 = 1 表头行 + 6 字段行）+ 空行分隔（空行总数以内嵌原文实测为准），
   EOF 以一个换行符收尾。下为权威原文逐字节内嵌（空行即真实空行；示例值与代码常量
   默认逐键比对 40/40 一致，specifier v1.14；总行数 v1.14 实测见修订注）：
@@ -233,9 +237,7 @@ Feature: 01-config-template 配置模板自动生成
   
   [http]
   
-  # HTTP 下载引擎调度模式（dynamic 动态分段 | blocks 块模型回退）
-  # 取值范围：dynamic / blocks（大小写不敏感）；其他值拒绝启动；任务启动时烘焙（B 类快照）
-  scheduler = "dynamic"
+  （v1.63/族A 退役：原 scheduler 键三行式——「# HTTP 下载引擎调度模式（dynamic 动态分段 | blocks 块模型回退）」/「# 取值范围：dynamic / blocks（大小写不敏感）；其他值拒绝启动；任务启动时烘焙（B 类快照）」/「scheduler = "dynamic"」——随 scheduler 键退役自模板移除，180 → 177 行、42 → 41 键，D91；行位保留追溯不重排）
   
   # 动态分段调度初始切分粒度下限（KiB；仅 dynamic 模式适用）
   # 取值范围：正整数（≥1）；0 或非法值拒绝启动

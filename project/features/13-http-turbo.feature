@@ -11,9 +11,9 @@
 #   13-http-turbo-09 大文件端到端正确性（写合并 + 写流水线）
 #   13-http-turbo-10 稀疏预分配磁盘占用随进度增长
 #   13-http-turbo-11 kill -9 崩溃一致性续传
-#   13-http-turbo-12 blocks 回退开关旧行为
-#   13-http-turbo-13 config 新键严格校验
-#   13-http-turbo-13b 调度模式烘焙于任务启动（B 类快照）
+#   13-http-turbo-12 blocks 回退开关旧行为【退役，留空不重排——v1.63/族A：blocks 引擎退役】
+#   13-http-turbo-13 config 新键严格校验（v1.63/族A：scheduler 键退役，blocks 行改判启动失败）
+#   13-http-turbo-13b 调度模式烘焙于任务启动（B 类快照）【退役，留空不重排——v1.63/族A：scheduler 键退役，premise 失效；B 类快照语义由 12-reload-config-07 承载】
 #   13-http-turbo-14 动态模式断点续传
 #   13-http-turbo-15 服务器不支持 Range 降级单流
 Feature: 13-http-turbo HTTP 引擎提速（P0–P2：动态分段调度 · 磁盘流水线 · 补丁层修复）
@@ -24,6 +24,12 @@ Feature: 13-http-turbo HTTP 引擎提速（P0–P2：动态分段调度 · 磁�
   设计权威 = project/ezr-http-dw-tunning.md。P3 增益层（BDP 自适应/并发预热/慢连接剔除/
   主机连接上限/切分粒度持续校准/h2 降级）不在本期。
   回退开关：http.scheduler = "dynamic"（默认）| "blocks"（旧引擎一键回退）。
+  v1.63 修订注（族A/族B 裁决落实轮 20261127，phase-05 v1.1/D90–D93）：①blocks 引擎整体
+  退役——回退开关与 [http] scheduler 键整键退役（config 含 scheduler 键 → 未知键拒绝启动，
+  FR-02-35/D91），场景 12/13b 随之退役留空不重排；②磁盘遗留 blocks 形态台账不沿用旧规则
+  校验（D90：不接续、不校验、不改道、不提示，按无台账新任务处理）；③worker 块请求面
+  4xx/断连按 FR-05-04 失败粒度（原地重试 + Transient 分类）、Range 全拒降级完成不失败、
+  有进展反复断连不失败（D93，旧预期废弃）。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
@@ -152,37 +158,35 @@ Feature: 13-http-turbo HTTP 引擎提速（P0–P2：动态分段调度 · 磁�
     And 任务从 sidecar 进度续传（不从头重下）且下载最终完成
     And 完成后「SHA-256 校验成功」且文件字节完整
 
-  Scenario: 13-http-turbo-12 blocks 回退开关旧行为
-    Given 配置文件设 [http] 表 scheduler = "blocks"
-    And fixture 文件 "<file>" 支持且可记录各请求 Range 头
-    When 以默认其余配置添加并开始下载
-    Then fixture 记录的首个请求携带 Range 头 "bytes=0-" 且分块请求为封闭区间（bytes=<start>-<end> 形态）
-    And 详情分块行按 "x/<blocks> · 1 MB/块" 既有口径显示（blocks 模式块模型不变，FR-05-03/D83）
-    And 下载最终完成且文件字节完整
-
-    Examples:
-      | file      | blocks |
-      | ten-m.bin | 10     |
+  Scenario: 13-http-turbo-12 [退役，留空不重排]
+    # 原「blocks 回退开关旧行为」场景随 blocks 引擎退役（v1.63/族A 操作者裁决 20261127，
+    # phase-05 v1.1/D91：scheduler 键整键退役，blocks 模式不复存在，动态引擎为 HTTP 单形态）。
+    # 场景序号保留追溯、不重排（修订纪律：删除类修订三层同步口径）。
+    # 本场景无可执行步骤：QA 对应用例 QA-HT-12 同步退役（qa/13-http-turbo-qa.md 注记）。
 
   Scenario: 13-http-turbo-13 config 新键严格校验
-    Given 配置文件设 [http] 表 scheduler = "<sched>" 与 min_split_kib = "<split>"
+    # v1.63/族A 修订（D91）：scheduler 键整键退役——原 {dynamic, blocks} 取值域收缩为
+    # 「键不存在」；含 scheduler 键的 config 一律拒绝启动（未知键直接废弃，FR-02-35）。
+    # 原 DYNAMIC 大小写不敏感臂随键退役失去载体（大小写不敏感语义随键消失）。
+    Given 配置文件设 [http] 表 min_split_kib = "<split>"<sched_part>
     When ezr 启动
     Then 启动行为为 "<behavior>"
 
     Examples:
-      | sched   | split | behavior                                        |
-      | dynamic | 256   | 启动成功（默认口径）                             |
-      | blocks  | 256   | 启动成功（blocks 引擎回退）                      |
-      | DYNAMIC | 512   | 启动成功且动态调度生效（大小写不敏感，D84）      |
-      | turbo   | 256   | 启动失败并报错（scheduler 非法值，FR-02-35）     |
-      | dynamic | 0     | 启动失败并报错（min_split_kib 非正数，FR-02-35） |
+      | sched_part            | split | behavior                                        |
+      | （无）                | 256   | 启动成功（默认口径）                             |
+      | 与 scheduler = "any"  | 256   | 启动失败并报错（scheduler 键已退役 = 未知键，FR-02-35/D91） |
+      | （无）                | 512   | 启动成功（合法非默认值）                         |
+      | （无）                | 0     | 启动失败并报错（min_split_kib 非正数，FR-02-35） |
 
-  Scenario: 13-http-turbo-13b 调度模式烘焙于任务启动（B 类快照）
-    Given 配置文件设 [http] 表 scheduler = "blocks" 且任务 "ten-m.bin" 下载中
-    When 外部改写 config scheduler = "dynamic" 并按 Ctrl+R 热加载
-    Then 运行中任务保持 blocks 请求形态（封闭区间分块，不切动态，FR-05-12/D84）
-    And 热加载后新添加任务按 dynamic 形态（首个请求无 Range 头）
-    And 两任务均最终完成且字节完整（成功 toast 沿 v1.57 固定文案 ✓ 配置已重新加载）
+  Scenario: 13-http-turbo-13b [退役，留空不重排]
+    # 原「调度模式烘焙于任务启动（B 类快照）」场景随 scheduler 键退役失去 premise
+    # （v1.63/族A 操作者裁决 20261127，phase-05 v1.1/D91：键退役后不存在「改写 scheduler
+    # 热加载」操作面；HTTP 引擎仅存动态单形态、无需烘焙切换）。
+    # 场景序号保留追溯、不重排（修订纪律：删除类修订三层同步口径）；
+    # B 类快照键语义（任务启动烘焙、热加载只影响新任务）由 features/12-reload-config.feature
+    # 场景 07（QA-RC-07：block_size_http/http_concurrency/max_retries）继续承载。
+    # 本场景无可执行步骤：QA 对应用例 QA-HT-13b 同步退役（qa/13-http-turbo-qa.md 注记）。
 
   Scenario: 13-http-turbo-14 动态模式断点续传
     Given fixture 文件 "eight-m.bin" 支持且请求区间可被记录

@@ -182,6 +182,17 @@
   陷阱：示例块行数计入块体（`# [[common.proxy]]` 表头行算 1 行，双示例块各 7 行不是 6），
   行数手工推算容易少 2。
 
+- **runner 不可执行期间，钦定原文 ↔ 代码常量会静默漂移**（D91 落地轮实测三重漂移）：
+  代码侧模板单测只钉 counts/substrings（键数/行数/取值范围计数/键行存在），不做逐字节；
+  cmp 逐字节只在 runner（QA-CT-01）里——runner 未可执行的沿袭期里，v1.51 起的漂移无人
+  发现：[http] 键序不同（钦定 = scheduler/min_split 前置，代码 = block_size 前置 + 两键
+  后置）、block_size_http 注释停留在 v1.16 文案（下限（1 MB）未随 v1.51 256 KiB 同步）。
+  重建口径：以规格内嵌钦定原文为唯一字节权威，**双路径构建互证**（v1.62 原文减三行 vs
+  v1.63 原文减注记行，diff 为空才写入）+ tomllib 解析断言（41 键/默认值/键序）+ 尾部单
+  换行。钦定文本内嵌的退役注记行（「（v1.63/族A 退役：…）」）是规格编辑器留痕，不是
+  模板行——构建时剔除；QA 轮执行 suite_config_template.py 时注意其解析锚点（起点锚
+  「specifier v<N.N>）：」行 + 终点「）」行）对 v1.63 修订注的适配。
+
 ## QA 套件 write_config 的键路径随三大表重构整体迁移（13 套件 ~57 处）
 - runner 写配置一律顶层平铺（`download_slots = 2`），三大表后这些键全部变成「未知键静默
   忽略」→ 用例假绿（回退默认恰好等于期望值时）或假红。迁移清单（v1.17 登记）：
@@ -1078,3 +1089,12 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
   注入 → 跑 6 次 → 对比失败样本帧序列）定性根因后撤探针。
 - app 侧 Probed 细化接线测试注意：全部既有 app Probed 测试均 dynamic:false——新增 dynamic:true
   用例才覆盖 t.block_size 回写链；blocks 模式不变式需独立反例用例钉住。
+- spec 三层同步的 examples 行退役操作细节（20261127 族A 轮）：退役 Examples 表中的行不能写
+  「单格占位行」——Gherkin 要求 example row 列数 = header 列数，占位行 parse 即报
+  "example row has N cells, header has M"（APS gherkin-parser line 146 实证）；正确形态 =
+  整行删除 + 撤销痕写进场景清单注释/头部注记（修订纪律的留空只适用于「场景」整体退役，
+  不适用于表行）。
+- APS dry-check 是两步流水线：`gherkin-parser <feature> <ir.json>` 产出 IR 后才能
+  `gherkin-ir-dry-checker <ir.json> <dry.json>`——直接把 feature 原文喂 dry-checker 报
+  "Unexpected character '#'"（输入不是 JSON）；bb 任务必须在 .tools/Acceptance-Pipeline-Specification
+  目录内调用（engineering.md 调用约定）。

@@ -39,18 +39,8 @@ pub const DEFAULT_HTTP_SCHEDULER_MIN_SPLIT_KIB: u64 = 256;
 pub enum HttpScheduler {
     #[default]
     Dynamic,
+    #[allow(dead_code)]
     Blocks,
-}
-
-impl HttpScheduler {
-    #[must_use]
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "dynamic" => Some(Self::Dynamic),
-            "blocks" => Some(Self::Blocks),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -182,7 +172,6 @@ pub struct Config {
     pub default_seed_duration_m: u64,
     pub seed_exit_rule: Option<SeedExitRule>,
     pub bt_listen_port: u16,
-    pub scheduler: HttpScheduler,
     pub min_split_kib: u64,
     pub warnings: Vec<String>,
 }
@@ -235,7 +224,6 @@ impl Default for Config {
             default_seed_duration_m: DEFAULT_SEED_DURATION_M,
             seed_exit_rule: None,
             bt_listen_port: 0,
-            scheduler: HttpScheduler::Dynamic,
             min_split_kib: DEFAULT_HTTP_SCHEDULER_MIN_SPLIT_KIB,
             warnings: Vec::new(),
         }
@@ -375,19 +363,6 @@ fn range_val_bounded(
         None => Ok(default),
         Some(i) if (1..=max as i64).contains(&i) => Ok(i as usize),
         Some(i) => Err(format!("键 {key}：{i}（应为 1–{max} 的整数，拒绝启动）")),
-    }
-}
-
-fn scheduler_val(
-    raw: Option<&toml::Value>,
-    key: &str,
-    default: HttpScheduler,
-) -> Result<HttpScheduler, String> {
-    match raw {
-        None => Ok(default),
-        Some(toml::Value::String(s)) => HttpScheduler::parse(s)
-            .ok_or_else(|| format!("键 {key}：{s:?}（应为 dynamic 或 blocks，拒绝启动）")),
-        Some(v) => Err(format!("键 {key}：{v}（应为 dynamic 或 blocks，拒绝启动）")),
     }
 }
 
@@ -692,7 +667,11 @@ impl Config {
             "http.dns_race_grace_ms",
             d.dns_race_grace_ms,
         )?;
-        let scheduler = scheduler_val(http.scheduler.as_ref(), "http.scheduler", d.scheduler)?;
+        if let Some(v) = http.scheduler.as_ref() {
+            return Err(format!(
+                "键 http.scheduler：{v}（scheduler 键已退役，未知键拒绝启动）"
+            ));
+        }
         let min_split_kib = min1_val(
             http.min_split_kib.as_ref(),
             "http.min_split_kib",
@@ -886,7 +865,6 @@ impl Config {
             default_seed_duration_m,
             seed_exit_rule,
             bt_listen_port,
-            scheduler,
             min_split_kib,
             warnings,
         })
@@ -1119,8 +1097,13 @@ task_max_upload_speed = 0
 
 [http]
 
-# HTTP 分块块大小（字节）
-# 取值范围：正整数（≥1）；0 或非法值拒绝启动（1 MB）
+
+# 动态分段调度初始切分粒度下限（KiB；仅 dynamic 模式适用）
+# 取值范围：正整数（≥1）；0 或非法值拒绝启动
+min_split_kib = 256
+
+# HTTP 分块块大小（字节；仅 blocks 回退模式适用）
+# 取值范围：正整数（≥262144 即 256 KiB 下限）；0 或非法值拒绝启动
 block_size_http = 1048576
 
 # 默认并发数
@@ -1162,14 +1145,6 @@ throttle_sleep_ms = 20
 # DNS 双腿竞速宽限（毫秒，双栈并行解析）
 # 取值范围：正整数（≥1）；0 或非法值拒绝启动
 dns_race_grace_ms = 1000
-
-# HTTP 引擎调度模式（dynamic = 动态分段调度；blocks = 固定块回退开关）
-# 取值范围：dynamic 或 blocks（大小写不敏感）；非法值拒绝启动；B 类快照——任务启动时烘焙，热加载不影响运行中任务
-scheduler = "dynamic"
-
-# 动态模式初始切分粒度下限（KiB；尾段竞争自适应降半，切分点按 4096 对齐）
-# 取值范围：正整数（≥1）；0 或非法值拒绝启动
-min_split_kib = 256
 
 # ===== BT 引擎配置 =====
 
@@ -1371,30 +1346,24 @@ mod tests {
 
     #[test]
     fn scheduler_and_min_split_kib_validation() {
-        let c = Config::default();
-        assert_eq!(c.scheduler, HttpScheduler::Dynamic, "默认 dynamic（D84）");
-        assert_eq!(c.min_split_kib, 256, "默认 256 KiB（D85）");
-        assert_eq!(
-            Config::from_toml("[http]\nscheduler = \"BLOCKS\"\n").scheduler,
-            HttpScheduler::Blocks,
-            "大小写不敏感"
-        );
-        assert_eq!(
-            Config::from_toml("[http]\nscheduler = \" Dynamic \"\n").scheduler,
-            HttpScheduler::Dynamic,
-            "首尾空白容忍"
-        );
+        assert_eq!(Config::default().min_split_kib, 256, "默认 256 KiB（D85）");
         assert_eq!(
             Config::from_toml("[http]\nmin_split_kib = 512\n").min_split_kib,
             512
         );
-        for bad in ["turbo", "", "Dynamic|blocks"] {
-            let text = format!("[http]\nscheduler = \"{bad}\"\n");
-            let err = Config::try_from_toml(&text).expect_err("非法 scheduler 拒绝启动");
+        assert!(
+            Config::try_from_toml("[common]\ndownload_slots = 5\n").is_ok(),
+            "无 scheduler 键正常启动"
+        );
+        for v in ["dynamic", "BLOCKS", " Dynamic ", "turbo", ""] {
+            let text = format!("[http]\nscheduler = \"{v}\"\n");
+            let err = Config::try_from_toml(&text)
+                .expect_err("scheduler 键整键退役：任意值拒绝启动（D91）");
             assert!(err.contains("http.scheduler"), "{err}");
+            assert!(err.contains("已退役"), "{err}");
         }
         let errnum = Config::try_from_toml("[http]\nscheduler = 3\n")
-            .expect_err("非字符串 scheduler 拒绝启动");
+            .expect_err("非字符串 scheduler 同样拒绝启动");
         assert!(errnum.contains("http.scheduler"), "{errnum}");
         let err0 = Config::try_from_toml("[http]\nmin_split_kib = 0\n").expect_err("0 拒绝启动");
         assert!(err0.contains("http.min_split_kib"), "{err0}");
@@ -1491,8 +1460,8 @@ mod tests {
         );
         assert_eq!(
             t.matches("拒绝启动").count(),
-            38,
-            "翻转后的拒绝启动注释计数（v1.62/FR-05-12：scheduler + min_split_kib 计入）"
+            37,
+            "翻转后的拒绝启动注释计数（v1.63/D91：scheduler 键退役出模板）"
         );
         assert!(
             t.contains("占用时回退随机 + 启动警告"),
@@ -1857,6 +1826,7 @@ mod tests {
             ("[http]\nmax_retries = -1\n", "http.max_retries"),
             ("[http]\nhttp_concurrency = 129\n", "http.http_concurrency"),
             ("[http]\nscheduler = \"turbo\"\n", "http.scheduler"),
+            ("[http]\nscheduler = \"dynamic\"\n", "http.scheduler"),
             ("[http]\nmin_split_kib = 0\n", "http.min_split_kib"),
             (
                 "[common]\nglobal_max_download_speed = \"xyz\"\n",
@@ -2123,11 +2093,11 @@ mod tests {
     }
 
     #[test]
-    fn template_line_count_is_215() {
+    fn template_line_count_is_212() {
         assert_eq!(
             Config::default_template().lines().count(),
-            214,
-            "钦定模板 v1.62 = 215 行（FR-05-12 增两键四行；split 计数；lines 计数 214）"
+            211,
+            "钦定模板 v1.63 = 212 行（D91 去 scheduler 三行式；split 计数；lines 计数 211）"
         );
         assert!(Config::default_template().ends_with('\n'));
         assert!(
@@ -2168,8 +2138,8 @@ mod tests {
         assert!(t.contains("# 取值范围"), "用途/取值范围注释保持");
         assert_eq!(
             t.matches("取值范围").count(),
-            45,
-            "42 键 + [bt.seed_exit_rule] 注释块三键（v1.62/FR-05-12 增两键）"
+            44,
+            "41 键 + [bt.seed_exit_rule] 注释块三键（v1.63/D91：scheduler 键退役）"
         );
         let active: Vec<&str> = t
             .lines()
@@ -2177,13 +2147,13 @@ mod tests {
             .collect();
         assert_eq!(
             active.len(),
-            45,
-            "活跃行 = 42 键值行 + 3 表声明行，实际 {active:?}"
+            44,
+            "活跃行 = 41 键值行 + 3 表声明行，实际 {active:?}"
         );
     }
 
     #[test]
-    fn template_42_keys_three_line_form() {
+    fn template_41_keys_three_line_form() {
         let t = Config::default_template();
         let keys = [
             "download_dir",
@@ -2203,7 +2173,6 @@ mod tests {
             "throttle_burst_secs",
             "throttle_sleep_ms",
             "dns_race_grace_ms",
-            "scheduler",
             "min_split_kib",
             "trackers",
             "peer_connection_protocol",
@@ -2229,7 +2198,7 @@ mod tests {
             "default_seed_duration_m",
             "listen_port",
         ];
-        assert_eq!(keys.len(), 42);
+        assert_eq!(keys.len(), 41);
         for k in keys {
             assert!(
                 t.contains(&format!("\n{k} = ")),
@@ -2261,8 +2230,8 @@ mod tests {
         }
         assert_eq!(
             t.matches("取值范围").count(),
-            45,
-            "42 键 + [bt.seed_exit_rule] 注释块三键（v1.62/FR-05-12 增两键）"
+            44,
+            "41 键 + [bt.seed_exit_rule] 注释块三键（v1.63/D91：scheduler 键退役）"
         );
     }
 
@@ -2287,7 +2256,6 @@ mod tests {
             "throttle_burst_secs = 1.0",
             "throttle_sleep_ms = 20",
             "dns_race_grace_ms = 1000",
-            "scheduler = \"dynamic\"",
             "min_split_kib = 256",
             "trackers = []",
             "peer_connection_protocol = [\"tcp\", \"webrtc\"]",

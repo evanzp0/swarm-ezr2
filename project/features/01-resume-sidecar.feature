@@ -43,6 +43,14 @@
 # 形态按模式断言（blocks 封闭区间不含已下载块区间；dynamic 开区间认领不覆盖已提交字节，
 # 磁盘不回退）；③场景 04 任务级失败触发 = 原地重试耗尽（6 次连接尝试，FR-05-04）——单次
 # 中途断连由原地重试吸收不再触发任务级失败。
+# v1.63 修订注（族A/族B 裁决落实轮 20261127，phase-05 v1.1/D90–D93）：blocks 引擎整体退役
+# （D91）——①场景 01/03 的 blocks 臂随引擎退役收窄为 dynamic 单形态口径（sidecar 进度状态
+# 仅 scheduler 字段 + (start, cursor) 分段列表；续传请求仅开区间认领形态）；②磁盘遗留
+# blocks 形态台账（无 scheduler 字段）不沿用旧规则校验（D90）：不接续、不校验、不改道、
+# 不提示——场景 07 一致性失效 toast 与场景 14 孤儿序号改道均仅对动态台账触发，blocks 旧
+# 台账按无台账新任务处理（原名静默从头下载，孤儿候选标记置位但不消费不改道）；场景
+# 13/14/15 动态台账口径不变。族B：任务级失败仅在原地重试耗尽后触发（FR-05-04/D93），
+# 「失败后有进度写台账 + R 重试非零 Range 起点」旧预期废弃。
 Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
 
   期号 01。依据 project/mission/phase-01.md FR-01-20~26 与 D10/D11 定案。sidecar 文件为
@@ -61,7 +69,7 @@ Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
   Scenario: 01-resume-sidecar-01 sidecar 伴随目标文件创建且内容齐全
     When 添加支持续传的文件 "<file>" 并开始下载
     Then 目标文件旁存在 sidecar 文件 "<file>.ezr"
-    And sidecar 内容涵盖：文件大小、ETag、Last-Modified、已下载字节、校验期望值（如有）与任务元信息，并按调度模式记载进度状态（blocks 模式 = 块大小/总块数/各块状态含部分块内字节；dynamic 模式 = scheduler 字段 + (start, cursor) 分段列表，v1.51/D89）
+    And sidecar 内容涵盖：文件大小、ETag、Last-Modified、已下载字节、校验期望值（如有）与任务元信息，进度状态按动态模式记载（scheduler 字段 + (start, cursor) 分段列表，v1.51/D89；blocks 模式臂随 blocks 引擎退役收窄——v1.63/D91，磁盘遗留 blocks 旧台账不校验不接管按无台账处理，D90）
     And sidecar 不含任何 URL 字段（原始/最终 URL 键退役，持久化 URL 仅任务注册表中的原始 URL，v1.28/FR-01-20）
 
     Examples:
@@ -82,7 +90,7 @@ Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
     Given 文件 <file_size> 支持断点续传且请求区间可被记录
     When 下载至进度 ≥ <progress> 后按 Space 暂停
     And 按 Space 继续任务
-    Then 任务从断点续传且已提交字节零重复写入（blocks 模式：fixture 请求不含已下载块区间；dynamic 模式：续传请求从首个未提交字节开区间、认领不覆盖已提交字节，v1.51/D87）
+    Then 任务从断点续传且已提交字节零重复写入（续传请求从首个未提交字节开区间、认领不覆盖已提交字节，v1.51/D87；blocks 封闭区间臂随 blocks 引擎退役收窄——v1.63/D91）
     And 已下载块的字节保持有效（最终文件字节完整）
 
     Examples:

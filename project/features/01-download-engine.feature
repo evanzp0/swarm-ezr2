@@ -7,10 +7,10 @@
 #   01-download-engine-01 探测结果与详情如实显示（支持断点续传）
 #   01-download-engine-02 无 Content-Length 降级单并发
 #   01-download-engine-03 服务器不响应 Range 降级且暂停后从头下载
-#   01-download-engine-04 分块总数按 1 MB 块计算且末块吸收余数
-#   01-download-engine-05 多连接动态领块乱序完成
-#   01-download-engine-06 队列临近结束多余连接转待命
-#   01-download-engine-07 续传不重写已下载块
+#   01-download-engine-04 分块总数按 1 MB 块计算且末块吸收余数【退役，留空不重排——v1.63/族A：blocks 钉定臂随 blocks 引擎退役】
+#   01-download-engine-05 多连接动态领块乱序完成【退役，留空不重排——v1.63/族A：同上】
+#   01-download-engine-06 队列临近结束多余连接转待命【退役，留空不重排——v1.63/族A：同上】
+#   01-download-engine-07 续传不重写已下载块【退役，留空不重排——v1.63/族A：同上；动态续传断言由 01-resume-sidecar-03/13-http-turbo-14 承载】
 #   01-download-engine-08 重定向跟随完成下载（原始 URL 唯一权威，各连接独立跟跳转）
 #   01-download-engine-09 重定向超过 10 次停等
 #   01-download-engine-10 重定向目标非 http(s) 停等
@@ -36,6 +36,12 @@ Feature: 01-download-engine HTTP 下载内核（探测 · 分块 · 重定向 ·
   （Given 显式 scheduler = "blocks"），动态分段行为由 features/13-http-turbo.feature 承载；
   场景 16（AC-1）随新默认改判：默认并发 4→8（FR-05-05）、分块行动态分段口径（D83）。
   probe 连接复用（探测即数据流）语义由 13-http-turbo-01 承载（FR-05-07/D87）。
+  v1.63 修订注（族A/族B 裁决落实轮 20261127，phase-05 v1.1/D90–D93）：blocks 引擎整体退役
+  （D91）——场景 04/05/06/07 的「scheduler = "blocks" 块模型钉定」premise 失效，四场景退役
+  留空不重排；动态分段行为由 features/13-http-turbo.feature 承载（v1.51 注记的承接关系
+  不变）。族B：worker 块请求面 4xx/断连按 FR-05-04 失败粒度原地重试 + Transient 分类、
+  Range 全拒降级完成不失败、有进展反复断连不失败（D93，旧预期废弃）；探测面（URL 级）
+  4xx → Fatal 停等口径不变（场景 09/10/11 不受影响）。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
@@ -74,50 +80,32 @@ Feature: 01-download-engine HTTP 下载内核（探测 · 分块 · 重定向 ·
       | file       | progress |
       | three-m.bin | 30%      |
 
-  Scenario: 01-download-engine-04 分块总数按 1 MB 块计算且末块吸收余数
-    Given 配置文件设 [http] 表 scheduler = "blocks"（块模型规格钉定 blocks 回退模式，v1.51）
-    And fixture 文件大小 <file_size>
-    When 添加该文件并等待开始
-    Then 详情分块行显示 "<expected_chunks> · 1 MB/块"
+  Scenario: 01-download-engine-04 [退役，留空不重排]
+    # 原「分块总数按 1 MB 块计算且末块吸收余数」场景钉定 blocks 回退模式（v1.51），随 blocks
+    # 引擎退役失去 premise（v1.63/族A 操作者裁决 20261127，phase-05 v1.1/D91）。
+    # 场景序号保留追溯、不重排（修订纪律：删除类修订三层同步口径）；动态分段显示口径由
+    # 13-http-turbo-01/02（D83）与 05-ui-pieces 元信息行承载。
+    # 本场景无可执行步骤：QA 对应用例 QA-DE-04 同步退役（qa/01-download-engine-qa.md 注记）。
 
-    Examples:
-      | file_size | expected_chunks |
-      | 2.5 MB    | 0/3             |
-      | 1 MB      | 0/1             |
-      | 512 KB    | 0/1             |
-      | 10 MB     | 0/10            |
+  Scenario: 01-download-engine-05 [退役，留空不重排]
+    # 原「多连接动态领块乱序完成」场景钉定 blocks 回退模式（v1.51），随 blocks 引擎退役失去
+    # premise（v1.63/族A，D91）；动态多连接乱序形态由 13-http-turbo-01/02（D83/FR-05-06）
+    # 与 01-download-engine-16 承载。
+    # 场景序号保留追溯、不重排（修订纪律：删除类修订三层同步口径）。
+    # 本场景无可执行步骤：QA 对应用例 QA-DE-05 同步退役（qa/01-download-engine-qa.md 注记）。
 
-  Scenario: 01-download-engine-05 多连接动态领块乱序完成
-    Given 配置文件设 [http] 表 scheduler = "blocks"（块模型规格钉定 blocks 回退模式，v1.51）
-    And fixture 文件 <file_size> 且支持 Range 请求
-    When 以并发数 <concurrency> 添加并开始下载
-    Then 分块明细表同时显示最多 <concurrency> 个连接各自持有块号
-    And 各连接完成一块立即领取下一块且块完成顺序为乱序
-    And 实际并发不超过 <concurrency> 且下载完成后分块行显示 "<done_chunks> · 1 MB/块"
+  Scenario: 01-download-engine-06 [退役，留空不重排]
+    # 原「队列临近结束多余连接转待命」场景钉定 blocks 回退模式（v1.51），随 blocks 引擎退役
+    # 失去 premise（v1.63/族A，D91）；并发上限与待命观察由 13-http-turbo-02/07 承载。
+    # 场景序号保留追溯、不重排（修订纪律：删除类修订三层同步口径）。
+    # 本场景无可执行步骤：QA 对应用例 QA-DE-06 同步退役（qa/01-download-engine-qa.md 注记）。
 
-    Examples:
-      | file_size | concurrency | done_chunks |
-      | 12 MB     | 4           | 12/12       |
-      | 3 MB      | 8           | 3/3         |
-
-  Scenario: 01-download-engine-06 队列临近结束多余连接转待命
-    Given 配置文件设 [http] 表 scheduler = "blocks"（块模型规格钉定 blocks 回退模式，v1.51）
-    And fixture 文件大小 2 MB（共 2 块）
-    When 以并发数 4 添加并开始下载
-    Then 实际并发不超过 4 且下载完成后详情分块行显示 "2/2 · 1 MB/块"（无连接级明细——并发分块明细表已随 FR-01-81 v1.34 修订二移除）
-    And 下载最终完成
-
-  Scenario: 01-download-engine-07 续传不重写已下载块
-    Given 配置文件设 [http] 表 scheduler = "blocks"（封闭区间续传断言钉定 blocks 回退模式，v1.51）
-    And fixture 文件 <file_size> 支持断点续传且请求区间可被记录
-    When 下载至进度 ≥ <progress> 后按 Space 暂停
-    And 按 Space 继续任务
-    Then fixture 记录的续传请求仅覆盖未完成块的区间（已下载块区间零重复请求）
-    And 下载最终完成且文件字节完整
-
-    Examples:
-      | file_size | progress |
-      | 8 MB      | 40%      |
+  Scenario: 01-download-engine-07 [退役，留空不重排]
+    # 原「续传不重写已下载块」场景钉定 blocks 封闭区间续传断言（v1.51），随 blocks 引擎退役
+    # 失去 premise（v1.63/族A，D91）；动态续传「已提交字节零重复写入」由 01-resume-sidecar-03
+    # 与 13-http-turbo-14 承载（开区间认领不覆盖已提交字节，D87）。
+    # 场景序号保留追溯、不重排（修订纪律：删除类修订三层同步口径）。
+    # 本场景无可执行步骤：QA 对应用例 QA-DE-07 同步退役（qa/01-download-engine-qa.md 注记）。
 
   Scenario: 01-download-engine-08 重定向跟随完成下载（原始 URL 唯一权威，各连接独立跟跳转）
     Given fixture 提供从 "<origin_url>" 重定向（<redirects> 次）至 "<landing_url>" 的下载链

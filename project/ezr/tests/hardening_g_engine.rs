@@ -527,9 +527,9 @@ async fn progress_updates_bytes_and_progress_flag() {
 }
 
 #[tokio::test]
-async fn invalidated_resets_and_toasts() {
+async fn blocks_ledger_ignored_no_invalidation_toast() {
     let addr = stub_with("", 2000, false);
-    let mut a = mkapp("invalidated");
+    let mut a = mkapp("blocks-ledger-ignored");
     let dir = std::env::temp_dir().join(format!("ezr-hard-inv-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     Sidecar {
@@ -563,26 +563,39 @@ async fn invalidated_resets_and_toasts() {
     );
     a.tasks[0].downloaded = 500;
     a.tasks[0].resume_orphan = false;
-    pump(&mut a, 20, |x| {
-        x.toast
-            .as_deref()
-            .is_some_and(|t| t.contains("作废") || t.contains("从头"))
+    pump(&mut a, 15, |x| {
+        x.tasks[0].state == model::TaskState::Completed
     })
     .await;
+    assert_eq!(
+        a.tasks[0].name, "f.bin",
+        "blocks 旧台账不接管：原名从头下载不改道（D90）；实际 name={}",
+        a.tasks[0].name
+    );
+    assert_eq!(
+        a.tasks[0].state,
+        model::TaskState::Completed,
+        "按无台账新任务处理直至完成（D90）；实际 state={:?} err={:?}",
+        a.tasks[0].state,
+        a.tasks[0].error
+    );
     assert!(
+        a.toast.is_none()
+            || !a
+                .toast
+                .as_deref()
+                .is_some_and(|t| t.contains("作废") || t.contains("从头")),
+        "旧规则失效作废提示不适用（D90 无提示）: {:?}",
         a.toast
-            .as_deref()
-            .is_some_and(|t| t.contains("作废") || t.contains("从头")),
-        "自有臂一致性失效必须提示（find `==→!=` 变异体静默跳过）"
     );
     a.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
-async fn orphan_adopt_mismatch_redirects_silently_and_preserves_sidecar() {
+async fn blocks_orphan_ledger_not_adopted_downloads_in_place() {
     let addr = stub_with("", 2000, false);
-    let mut a = mkapp("orphan-adopt-redirect");
+    let mut a = mkapp("blocks-orphan-not-adopted");
     let dir = std::env::temp_dir().join(format!("ezr-hard-orph-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     Sidecar {
@@ -616,28 +629,33 @@ async fn orphan_adopt_mismatch_redirects_silently_and_preserves_sidecar() {
     );
     assert!(
         a.tasks[0].resume_orphan,
-        "添加时路径基匹配孤儿 sidecar → 候选标记置位（v1.46）"
+        "添加时路径基匹配孤儿 sidecar → 候选标记置位（v1.46 添加层面不变）"
     );
     a.tasks[0].downloaded = 500;
-    pump(&mut a, 20, |x| x.tasks[0].name == "f.bin.1").await;
+    pump(&mut a, 15, |x| {
+        x.tasks[0].state == model::TaskState::Completed
+    })
+    .await;
     assert_eq!(
-        a.tasks[0].name, "f.bin.1",
-        "探测不符 → 序号改道 <名>.1（v1.46 场景 14）"
+        a.tasks[0].name, "f.bin",
+        "blocks 旧台账不孤儿改道，原名下载（D90）；实际 name={}",
+        a.tasks[0].name
     );
-    assert_eq!(a.tasks[0].state, model::TaskState::Queued, "改道后重新排队");
-    assert!(!a.tasks[0].resume_orphan, "改道即消费候选标记");
+    assert_eq!(
+        a.tasks[0].state,
+        model::TaskState::Completed,
+        "孤儿改道裁决不适用，按无台账处理直至完成（D90）；实际 state={:?} err={:?}",
+        a.tasks[0].state,
+        a.tasks[0].error
+    );
     assert!(
         a.toast.is_none()
             || !a
                 .toast
                 .as_deref()
                 .is_some_and(|t| t.contains("作废") || t.contains("从头")),
-        "改道静默无作废提示: {:?}",
+        "改道/作废提示均不适用（D90 静默）: {:?}",
         a.toast
-    );
-    assert!(
-        dir.join("f.bin.ezr").exists(),
-        "孤儿 sidecar 原样保留（v1.46 操作者裁定）"
     );
     a.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);

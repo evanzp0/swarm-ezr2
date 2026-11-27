@@ -1,4 +1,4 @@
-# 05 · HTTP 引擎提速改造 P0–P2（第五期详细需求）(v1.0)
+# 05 · HTTP 引擎提速改造 P0–P2（第五期详细需求）(v1.1)
 
 > 期号：**05**（分期模式；需求大纲见 `../mission.md` v1.62 修订注）。
 > 本文档是 05 的唯一需求详述依据：05 的 feature 与 QA 文档依本文生成，产出文件在文件名或头部标注期号 05（宪法第一章）。
@@ -17,13 +17,35 @@
 > `download.rs:30`（probe `Range: bytes=0-` 后 `drop(resp)` 丢弃探测体）、`model/chunk/plan.rs`
 >（`MIN_HTTP_BLOCK_SIZE = 1 MB`）、`model/config.rs`（`DEFAULT_HTTP_CONCURRENCY = 4`、
 > `DEFAULT_THROTTLE_BURST_SECS = 0.5`）、CLI/dialog 并发范围 `1..=64`——与方案中的现状描述一致。
+> **v1.1 修订注（族A/族B 既有失败修复口径裁决落实，specifier 裁决落实轮 20261127；操作者 chat
+> 裁决即修订依据，Inversion 受限退化沿 v1.45–v1.62 先例）**：
+> **族A（blocks 引擎退役）**：①blocks 引擎整体退役——「回退开关」设计条款随之退役（方案
+> 「风险控制」条款不再适用），HTTP 下载引擎仅存动态分段调度器单形态；②`[http]` 表
+> `scheduler` 键整键退役（D91）：blocks 唯一另值随引擎消失后单值键无存在意义，键退役 =
+> 未知键直接废弃口径（FR-02-35）——config 含 `scheduler` 键 → 拒绝启动并报错；配置模板
+> 同步 42 → 41 键；③磁盘遗留 blocks 形态断点台账（sidecar 无 `scheduler` 字段）处置口径
+> （D90，操作者钦定「保留现有行为，不沿用旧规则校验台账」）：动态引擎不沿用旧规则校验——
+> 三要素一致性 / 块数自洽 / 孤儿序号改道 / 失效作废提示全部**不适用**，按无台账新任务处理
+> （原名静默从头下载，动态引擎写自己的动态台账，旧台账不特判不清理）；FR-05-08
+> 「格式即引擎（无 scheduler 字段 → blocks 引擎接续）」blocks 臂退役；`block_size_http`
+> 语义改判为动态模式网格细化上限（D92，v1.62 速度回退修复轮已实装现行为：
+> `refine_http_grid(total, block_size, concurrency)` 入参与 pieces 弹窗网格，保留现有行为）。
+> **族B（动态引擎失败/降级语义旧预期废弃）**：操作者钦定「保留现在的 ezr 实际行为，废弃旧
+> 预期」——worker 块请求面 4xx（含 403）与断连按 FR-05-04 失败粒度处理（原地重试 + 网络
+> 类 Transient 分类，body EOF → 「传输中断」，不升任务级 Fatal 停等；D93）；Range 全拒
+> （403）→ 探测流/降级单流完成、任务不失败；有进展反复断连 → 持续原地重试不失败（进展
+> 重置计数）。探测面（URL 级）4xx → Fatal 停等口径不变（QA-RB-07 现行为保留）。对应
+> 4 个 hardening 旧断言（403→Fatal 停等、200 单流失败不写台账、失败台账非零 Range 重试、
+> Range 拒绝任务失败）废弃，归 coder 轮按新口径退役/改写。详见 D90–D93。
 
 ## 1. 范围与目标
 
 - **目标**：ezr 与 MDM 底层栈相同（reqwest/hyper/rustls/tokio），差距在调度层——不动技术栈，
   通过补丁层修复 + 动态分段调度 + 磁盘写流水线追平 MDM 档位的下载吞吐。
-- **回退开关**：所有新路径放在配置开关 `http.scheduler = "dynamic" | "blocks"` 之后（默认
-  `dynamic`）；旧 blocks 引擎完整保留、随时一键回退（方案「风险控制」条款）。
+- **回退开关**：**已退役（v1.1/族A 裁决）**——原「所有新路径放在配置开关
+  `http.scheduler = "dynamic" | "blocks"` 之后（默认 dynamic）；旧 blocks 引擎完整保留、随时一键回退
+  （方案「风险控制」条款）」条款随 blocks 引擎退役整条退役：HTTP 下载引擎仅存动态分段调度器
+  单形态，回退开关与 `scheduler` 键不再存在（D91）。
 - **判断原则**：以「提高下载速度」为功能取舍准绳；凡与提速无关的重构不进本期。
 
 ## 2. P0 补丁层（FR-05-01 ~ FR-05-05）
@@ -35,7 +57,8 @@ blocks 引擎 worker 与单流路径的逐 chunk 同步写盘改为 **256 KiB �
 - 网络收包从「每 chunk 1 次 seek + 1 次 syscall + 1 次阻塞池调度」变为「1 次内存拷贝」。
 - 并发连接面板 ConnView 更新从每 chunk 一次降为每 flush 一次（UI 100 ms tick 无观感差异）。
 - 适用面：blocks 引擎 `workers.rs` 与 `single.rs` 单流路径；动态模式（FR-05-09 Writer）自带
-  批量写，不使用 WBuf。
+  批量写，不使用 WBuf（v1.1 注：blocks 引擎随族A 裁决退役，本条款保留为设计溯源——WBuf
+  能力面已由动态 Writer 承载）。
 - 验收：默认配置下载任意大文件字节完整（与 FR-05-09 共用端到端正确性断言）。
 
 ### FR-05-02 throttle 睡眠下限修正（P0.2）
@@ -47,14 +70,20 @@ blocks 引擎 worker 与单流路径的逐 chunk 同步写盘改为 **256 KiB �
 - 验收：全局限速 ≥ 8 MiB/s 时稳态速率落在设定值 ±10%（既有 01-throttle-proxy ±10% 口径）。
 
 ### FR-05-03 probe 连接复用 + 块大小下限（P0.3）
-- **probe 连接复用（多流模式）**：blocks 引擎多流下载的 probe 响应体不再丢弃——作为 worker #0
-  的第一个块从字节 0 边收边写（简化版：probe 收第 0 块，收完正常进入租约循环）；消除
-  「probe→丢弃→重新握手」启动空窗。
+- **probe 连接复用（多流模式）**：探测响应体不再丢弃——作为 worker #0（动态引擎为
+  planner 首租约）从字节 0 边收边写；消除「probe→丢弃→重新握手」启动空窗（v1.1 注：
+  原文「blocks 引擎多流下载」表述随 blocks 引擎退役，能力面 = 现行动态引擎 probe 复用，
+  D87 已承载）。
 - **块大小下限放宽**：`MIN_HTTP_BLOCK_SIZE` 从 1 MB 放宽到 **256 KiB**（`block_size_http`
-  合法下限随之放宽；01-persistence-config-05 下限口径同步修订）。
+  合法下限随之放宽；下限口径同步修订，v1.1：blocks 模式随引擎退役，下限语义 = 动态网格
+  细化下限与 `block_size_http` 合法域下限同源）。
 - **默认块大小**：`DEFAULT_BLOCK_SIZE_HTTP` **维持 1 MB**（操作者裁决②：方案中「提到 4 MB」
-  去除；blocks 模式块模型语义不变）。
-- `block_size_http` 仅对 blocks 模式有意义；动态模式下块大小概念由调度器取代（FR-05-06）。
+  去除；v1.1：语义 = 动态模式网格细化上限默认值，D92）。
+- `block_size_http` 语义改判（v1.1/D92）：原「仅对 blocks 模式有意义；动态模式下块大小概念
+  由调度器取代」随 blocks 引擎退役改判——现行为 = 动态模式**网格细化上限**（
+  `refine_http_grid(total, block_size, concurrency)` 入参：块数已足原样返回，不足收细到
+  ≤ total/并发 的最大 256 KiB 倍数且不超过配置块大小；v1.62 速度回退修复轮实机 PTY 实证
+  口径），默认仍 1 MB、合法域下限 256 KiB 不变。
 
 ### FR-05-04 失败粒度：单 worker 出错只重试该块（P0.4）
 - worker 网络错误**不再写全局 `failure` 触发全任务停止**：把当前块 requeue 并**原地重试**——
@@ -114,14 +143,18 @@ blocks 引擎 worker 与单流路径的逐 chunk 同步写盘改为 **256 KiB �
 - **sidecar 体积**：动态模式状态从 `Vec<u64> written`（每块 8 字节 × N 万块）变为 O(段数)
   `(start, cursor)` 段列表（D89），2 s 一次的 JSON 全量重写不再随块数膨胀。
 
-### FR-05-08 sidecar 双格式与动态续传（D89）
+### FR-05-08 sidecar 双格式与动态续传（D89；v1.1 修订）
 - **动态模式 sidecar**：新增 `scheduler = "dynamic"` 字段与 `(start, cursor)` 分段列表；
   保留 文件大小 / ETag / Last-Modified / 已下载字节 / 校验期望 / 任务元信息 等既有字段。
-- **blocks 模式 sidecar**：现行格式（块大小 / 总块数 / 各块状态）原样保留。
-- **格式即引擎**：sidecar 含 `scheduler = "dynamic"` → 动态引擎接续；无该字段（blocks 格式）
-  → blocks 引擎接续。任务调度模式**烘焙于启动时**（D84），运行中任务与 sidecar 均不随
-  config 热加载切换（B 类快照语义，FR-01-119 快照族口径）。
-- 一致性校验口径不变（ETag/Last-Modified/Size 三要素；不符走既有 孤儿/失效 分支）。
+- **blocks 格式台账处置（v1.1/族A 裁决，D90）**：磁盘遗留 blocks 形态台账（sidecar 无
+  `scheduler` 字段，以前引擎写入）——不沿用旧规则校验（三要素一致性 / 块数自洽 /
+  孤儿序号改道 / 失效作废提示全部不适用），按无台账新任务处理：原名静默从头下载、不改道、
+  无提示，动态引擎写自己的动态台账（同路径首次 flush 起自然覆写），旧台账不特判不清理。
+  原「blocks 模式 sidecar 原样保留」「格式即引擎（无 scheduler 字段 → blocks 引擎接续）」
+  两臂随 blocks 引擎退役。
+- **接续口径（v1.1）**：仅含 `scheduler = "dynamic"` 字段的动态台账进入接续与三要素一致性
+  校验（不符走既有孤儿/失效分支——孤儿序号改道 / 失效从头提示，动态台账口径不变）；
+  调度模式烘焙语义随 `scheduler` 键退役失效（引擎仅存单形态，D91）。
 - ezr 不做旧版本兼容（操作者钦定沿 v1.45/FR-02-35）：格式变更无迁移负担。
 
 ## 4. P2 磁盘流水线（FR-05-09 ~ FR-05-11）
@@ -156,22 +189,31 @@ blocks 引擎 worker 与单流路径的逐 chunk 同步写盘改为 **256 KiB �
 
 ## 5. 配置面（FR-05-12）与 UI 口径（FR-05-13）
 
-### FR-05-12 config 新增键与严格校验
+### FR-05-12 config 新增键与严格校验（v1.1 修订）
 ```toml
-[http]
-scheduler = "dynamic"        # dynamic | blocks（回退开关；默认 dynamic；D84）
+ttp]
 min_split_kib = 256          # 动态模式初始切分粒度下限（KiB；默认 256；D85）
 ```
-- `http.scheduler`：取值 {dynamic, blocks}（大小写不敏感，D84）；非法值/未知值 → **拒绝启动**
-  （FR-02-35 严格校验口径）；**B 类快照**——任务启动时烘焙，运行中任务与 sidecar 不随热加载
-  切换（FR-01-119 快照族口径；热加载只影响后续新任务，成功 toast 沿 v1.57 固定文案）。
-- `http.min_split_kib`：正整数（KiB），默认 256；非法值 → 拒绝启动（FR-02-35）。
-- `block_size_http` 保留，语义限定 blocks 模式（动态模式不读取；合法域下限 256 KiB）。
-- 配置模板（FR-01-85）同步收录两新键（用途与取值范围注释；模板活跃键 40 → 42）。
+- **`http.scheduler` 键退役（v1.1/族A 裁决，D91）**：原「取值 {dynamic, blocks}（大小写不
+  敏感，D84）；非法值/未知值 → **拒绝启动**（FR-02-35 严格校验口径）；B 类快照——任务启动
+  时烘焙」条款随 blocks 引擎退役整条退役——blocks 唯一另值随引擎消失后单值键无存在意义，
+  键整键退役 = 未知键直接废弃口径（FR-02-35，沿 v1.21 `seed_duration_secs` 先例）：
+  config 含 `scheduler` 键（任意值）→ **拒绝启动并报错**。原 B 类快照语义由 `ttp]` 其余键
+  （`min_split_kib`/`http_concurrency`/`block_size_http` 等）继续承载（FR-01-119 快照族
+  口径不变，QA-RC-07 烘焙口径不受影响）。
+- `http.min_split_kib`：正整数（KiB），默认 256；非法值 → 拒绝启动（FR-02-35）；**B 类
+  快照**——任务启动时烘焙，运行中任务不随热加载切换（FR-01-119 快照族口径；热加载只影响
+  后续新任务，成功 toast 沿 v1.57 固定文案）。
+- `block_size_http` 语义改判（v1.1/D92）：动态模式网格细化上限（FR-05-03 v1.1 注），
+  默认 1 MB、合法域下限 256 KiB。
+- 配置模板（FR-01-85）同步修订：v1.62 曾收录 scheduler/min_split_kib 两键（40 → 42）；
+  v1.1 scheduler 键退役 → 模板活跃键 **42 → 41**（去 scheduler 三行式，min_split_kib 保留）。
 
-### FR-05-13 UI 口径（最小变化）
+### FR-05-13 UI 口径（最小变化；v1.1 注）
 - **详情分块行（D83）**：动态模式显示 `<已下载>/<总字节> · 动态分段`（如 `3.2 MB/10 MB ·
-  动态分段`）；blocks 模式保持 `x/N · <块大小>/块` 既有口径。
+  动态分段`）；原「blocks 模式保持 `x/N · <块大小>/块` 既有口径」臂随 blocks 引擎退役
+  （v1.1：分块行仅存动态分段单形态；pieces 弹窗网格随 refine_http_grid 细化，
+  05-ui-pieces 元信息行口径不变、值随网格）。
 - 并发连接面板：动态模式每行 = 一条连接当前持段（start/end/done 语义沿用 ConnView），
   列结构不变。
 - 任务行/头部仪表/速度统计/限速/代理/槽位/重试 UI 全部不变（本期零 UI 结构改动）。
@@ -185,16 +227,22 @@ min_split_kib = 256          # 动态模式初始切分粒度下限（KiB；默�
    1 GiB / 256 KiB / 4 GiB 三档；`tc netem` RTT 20/100/200 ms + 1% 丢包；磁盘瓶颈场景
    （机械盘/U 盘验证流水线跑道）。通过线：追平 = 各场景吞吐 ≥ MDM 95%（P3 超越线不在本期）。
 4. **断点续传**：kill -9 后重启，sidecar 声称字节数与磁盘实际内容一致（FR-05-11 前置保证）。
-5. **回退开关**：`scheduler = "blocks"` 时旧行为逐条可复现（13-http-turbo-11）。
+5. **回退开关**：**已退役（v1.1/族A 裁决）**——原「`scheduler = "blocks"` 时旧行为逐条可复现
+   （13-http-turbo-12）」验收项随 blocks 引擎退役整条退役；正确性回归以动态引擎单形态口径
+   全量验收（验收标准 1/2）。
 
-## 7. 裁决登记（D83–D89，可回退）
+## 7. 裁决登记（D83–D93，可回退；D90–D93 为 v1.1 族A/族B 裁决新增）
 
 | # | 裁决 | 内容 | 依据 |
 |---|---|---|---|
-| D83 | 分块行动态口径 | 动态模式详情分块行 = `<已下载>/<总字节> · 动态分段`；blocks 口径不变 | 设计文档未定义动态模式 UI 呈现；最小变化原则 + v1.49 尺寸口径延续 |
-| D84 | scheduler 键口径 | 取值 {dynamic, blocks} 大小写不敏感；默认 dynamic；非法拒绝启动（FR-02-35）；B 类快照（任务启动烘焙，热加载不影响运行中任务与 sidecar） | 方案「所有改动放在配置开关后面」+ FR-01-119 B 类快照先例（QA-RC-07 烘焙口径） |
-| D85 | min_split_kib 语义 | 默认 256 KiB；仅动态模式；尾段竞争自适应降半、切分点 align 4096；不适用于 blocks 模式 | 方案 P1.1（min_split 初始 256 KiB / align 4096 / 自适应降）+ 操作者裁决②（下限 256 KiB） |
+| D83 | 分块行动态口径 | 动态模式详情分块行 = `<已下载>/<总字节> · 动态分段`；~~blocks 口径不变~~（blocks 臂 v1.1 随 blocks 引擎退役） | 设计文档未定义动态模式 UI 呈现；最小变化原则 + v1.49 尺寸口径延续 |
+| D84 | ~~scheduler 键口径~~（v1.1 退役：键整键退役随 blocks 引擎退役，B 类快照语义由 `min_split_kib` 等键继续承载） | ~~取值 {dynamic, blocks} 大小写不敏感；默认 dynamic；非法拒绝启动（FR-02-35）；B 类快照~~ | 方案「所有改动放在配置开关后面」+ FR-01-119 B 类快照先例（QA-RC-07 烘焙口径） |
+| D85 | min_split_kib 语义 | 默认 256 KiB；仅动态模式；尾段竞争自适应降半、切分点 align 4096；~~不适用于 blocks 模式~~（blocks 模式已退役，语义收窄为动态模式单形态口径） | 方案 P1.1（min_split 初始 256 KiB / align 4096 / 自适应降）+ 操作者裁决②（下限 256 KiB） |
 | D86 | 原地重试节奏 | 第 1 次立即，之后指数退避（1s、2s、4s、8s），上限 5 次；耗尽升级任务级瞬态失败走既有 8→60 s 退避 | 方案 P0.4（首次立即重试，之后指数退避到上限 5 次）+ 既有 retry.rs 退避族 |
 | D87 | probe 裸 GET 语义 | 新任务裸 GET（无 Range）+ worker #0 absorb；续传任务开区间 Range 从首个未提交字节；Range 失效臂保留既有 toast/失败口径 | 方案 P1.3 + 既有 single.rs 降级臂（「不支持断点续传」「保留断点稍后重试」） |
 | D88 | 稀疏回退 | 平台稀疏分支失败静默回退普通 set_len，不产生任务失败 | 方案 P2.2（平台分支）+ 「不能因预分配增强而新增任务失败」最小风险原则 |
-| D89 | sidecar 双格式 | 动态模式 = scheduler 字段 + (start,cursor) 段列表；blocks 格式原样；格式即引擎（无 scheduler 字段 → blocks 引擎接续）；调度模式烘焙于任务启动 | 方案 P1.3（O(段数) 状态）+ FR-02-35 不兼容废弃口径 + B 类快照 |
+| D89 | sidecar 双格式 | 动态模式 = scheduler 字段 + (start,cursor) 段列表；~~blocks 格式原样；格式即引擎（无 scheduler 字段 → blocks 引擎接续）~~（v1.1 随 blocks 引擎退役改判 D90）；~~调度模式烘焙于任务启动~~（v1.1 随 scheduler 键退役失效） | 方案 P1.3（O(段数) 状态）+ FR-02-35 不兼容废弃口径 + B 类快照 |
+| D90 | blocks 旧台账处置（v1.1/族A） | 磁盘遗留 blocks 形态台账（无 scheduler 字段）不沿用旧规则校验（三要素/块数自洽/孤儿改道/失效提示全部不适用），按无台账新任务处理：原名静默从头下载、不改道、无提示，动态台账同路径自然覆写，旧台账不特判不清理；动态台账（含 scheduler 字段）接续与一致性口径不变 | 操作者 20261127 裁决「保留现有行为，不沿用旧规则校验台账」+ 4 例 hardening 实测（invalidated 无提示/orphan 不改道/unknown_size 正常完成/inconsistent 正常下载） |
+| D91 | scheduler 键退役形态（v1.1/族A） | `[http] scheduler` 键整键退役（非仅 blocks 值非法）：config 含该键（任意值）→ 未知键直接废弃拒绝启动（FR-02-35，沿 v1.21 seed_duration_secs 先例）；配置模板 42 → 41 键；回退开关验收项（原验收 5）同步退役 | 操作者 20261127 裁决「退役 blocks 引擎」+ 单值键无存在意义 + FR-02-35 旧条目退役不兼容先例 |
+| D92 | block_size_http 语义改判（v1.1/族A） | 原「仅 blocks 模式有意义；动态模式不读取」退役，改判 = 动态模式网格细化上限（refine_http_grid(total, block_size, concurrency) 入参：块数已足原样返回、不足收细到 ≤ total/并发 的最大 256 KiB 倍数且不超过配置块大小）；默认 1 MB、下限 256 KiB 不变 | 操作者 20261127 裁决「保留现有行为」+ v1.62 速度回退修复轮已实装现行为（实机 PTY 四 Range 起点实证） |
+| D93 | 族B 失败/降级语义权威口径（v1.1/族B） | worker 块请求面 4xx（含 403）与断连按 FR-05-04 失败粒度：原地重试 + 网络 Transient 分类（body EOF → 「传输中断」），不升任务级 Fatal 停等；Range 全拒（403）→ 探测流/降级单流完成不失败；有进展反复断连持续原地重试不失败；探测面（URL 级）4xx → Fatal 停等不变（QA-RB-07 保留）；4 个 hardening 旧断言废弃归 coder 轮改写 | 操作者 20261127 裁决「保留现在的 ezr 实际行为，废弃旧预期」+ 4 例 hardening 实测（403→Transient、range_denied→Completed、200 单流断连 25s 不失败、滴流断连不失败） |

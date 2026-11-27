@@ -1,6 +1,13 @@
 # QA 套件 · 01-retry-backoff 失败重试与退避（期号 01）
 
 > 对应规格：`project/features/01-retry-backoff.feature`（10 场景；e2e 用例 9 条）。
+> **v1.63 同步（族A/族B 裁决落实轮 20261127，phase-05 v1.1/D93）**：QA-RB-07 探测面（URL 级）
+> 4xx → Fatal 停等口径**不变**（probe 非 2xx → 任务失败停等，现行为保留）；worker 块请求面
+> 4xx（含 403）与断连按 FR-05-04 失败粒度处理——原地重试 + 网络 Transient 分类（body EOF →
+> 「传输中断」），不升任务级 Fatal 停等；Range 全拒（403）→ 探测流/降级单流完成不失败；
+> 有进展反复断连持续原地重试不失败。旧预期（403→Fatal 停等于块请求面、200 单流失败不写
+> 台账、失败台账非零 Range 重试、Range 拒绝任务失败）废弃，stale hardening 断言归 coder 轮
+> 按 D93 改写。
 > 端到端 UI 层验证：TUI 状态/列表行文案断言 + fixture 故障注入 + 配置文件控制。
 > （v140 修订：QA-RB-09 删除——受限目录磁盘预检用例需 64MB tmpfs/配额或 docker，
 >  沙箱无 mount/配额权限且无 docker，环境不可搭建；磁盘预检路径（disk_precheck）

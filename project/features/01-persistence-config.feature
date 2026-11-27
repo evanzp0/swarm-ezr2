@@ -10,7 +10,7 @@
 #    判据由「允许缺失」改为「缺失时自动生成」，生成细则见 01-config-template.feature）
 #   01-persistence-config-03 配置文件缺失时全部使用默认值（v1.25：默认行为描述「max_speed 不限」改「不限速」，退役键名标签清理）
 #   01-persistence-config-04 配置非法值拒绝启动并报错（v1.21 行为翻转：语义非法值 fail-fast，FR-02-35；v1.16/v1.17/v1.19 历史口径退役；v1.24：seed_duration_secs 拒绝行改判 default_seed_duration_m = 0，FR-02-40②；v1.25：max_speed 退役键拒绝行删除——待批① 裁决 20261116，FR-01-60 v1.42）
-#   01-persistence-config-05 block_size_http 可配置生效（v1.16：下限 1 MB；v1.17：迁入 [http]；v1.51：下限放宽 256 KiB 且仅 blocks 回退模式适用）
+#   01-persistence-config-05 block_size_http 可配置生效【退役，留空不重排——v1.63/族A：blocks 块模型断言面随 blocks 引擎退役；block_size_http 现行语义（动态网格细化上限）由 05-ui-pieces-01/13-http-turbo-02 承载，D92】
 #   01-persistence-config-06 download_slots 可配置生效
 #   01-persistence-config-07 单实例保护
 #   01-persistence-config-08 Q 优雅退出断点保留重启恢复
@@ -160,16 +160,16 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
       | bt.trackers                | ["ftp://x/ann"]（白名单外 scheme = 未知值） |
       | bt.peer_connection_protocol | ["tcp","tcp"]（重复项） |
 
-  Scenario: 01-persistence-config-05 block_size_http 可配置生效（v1.16：下限 1 MB；v1.17：迁入 [http]）
-    Given 配置文件设 [http] 表 scheduler = "blocks" 与 block_size_http = "<block_size>"（块模型断言钉定 blocks 回退模式，v1.51）
-    When 下载文件 "<file>"
-    Then 详情分块行显示 "x/<chunks> · <display>/块"
-
-    Examples:
-      | file       | block_size | chunks | display  |
-      | five-m.bin | 4 MB       | 2      | 4 MB     |
-      | five-m.bin | 2 MB       | 3      | 2 MB     |
-      | five-m.bin | 256 KiB    | 20     | 256 KB   |
+  Scenario: 01-persistence-config-05 [退役，留空不重排]
+    # 原「block_size_http 可配置生效」场景断言面 = blocks 块模型分块行（v1.51 钉定
+    # scheduler = "blocks"），随 blocks 引擎退役失去 premise（v1.63/族A 操作者裁决 20261127，
+    # phase-05 v1.1/D91）。
+    # 场景序号保留追溯、不重排（修订纪律：删除类修订三层同步口径）。
+    # block_size_http 现行语义 = 动态模式网格细化上限（v1.63/D92：refine_http_grid 入参，
+    # 默认 1 MB、下限 256 KiB），观察载体 = pieces 弹窗元信息行网格（05-ui-pieces-01）与
+    # 13-http-turbo-02 自适应切分；键合法域（下限 256 KiB）非法拒绝启动由键校验族与
+    # 13-http-turbo-08b 同源承载。
+    # 本场景无可执行步骤：QA 对应用例 QA-PC-05 同步退役（qa/01-persistence-config-qa.md 注记）。
 
   Scenario: 01-persistence-config-06 download_slots 可配置生效（v1.17：迁入 [common]）
     Given 配置文件设 [common] 表 download_slots = <slots>

@@ -660,7 +660,7 @@ async fn single_conn_download_completes() {
 }
 
 #[tokio::test]
-async fn range_denied_fails_task() {
+async fn range_denied_downgrades_to_completion() {
     let deny = Arc::new(AtomicBool::new(true));
     let (addr, _data) = stub_http(2 * 1024 * 1024, (0, 0), None, Some(deny));
     let reg = temp_reg();
@@ -675,15 +675,11 @@ async fn range_denied_fails_task() {
         Some(1),
         None,
     );
-    let ok = wait_until(&mut a, 20, |a| a.tasks[0].state == TaskState::Failed).await;
+    let ok = wait_until(&mut a, 30, |a| a.tasks[0].state == TaskState::Completed).await;
     assert!(
         ok,
-        "块请求 403 必须让任务失败（实际状态 {:?}）",
-        a.tasks[0].state
-    );
-    assert_eq!(
-        a.tasks[0].chunk_done, 0,
-        "失败汇总不得把部分写块计入已完成块（completed_of 整块口径）"
+        "Range 全拒（403）→ 探测流/降级单流完成，任务不失败（D93）；实际 state={:?} err={:?}",
+        a.tasks[0].state, a.tasks[0].error
     );
     a.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);

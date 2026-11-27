@@ -80,11 +80,7 @@ impl App {
     ) -> crate::engine::TaskSpec {
         let sidecar = Sidecar::load(&t.sidecar_path());
         let sc_path = (sidecar.is_some()).then(|| t.sidecar_path());
-        let scheduler = if sidecar.as_ref().is_some_and(|s| s.is_dynamic()) {
-            crate::model::config::HttpScheduler::Dynamic
-        } else {
-            self.cfg.scheduler
-        };
+        let scheduler = crate::model::config::HttpScheduler::Dynamic;
         let min_split = self.cfg.min_split_kib.saturating_mul(1024);
         crate::engine::TaskSpec {
             id: t.id,
