@@ -5,6 +5,7 @@ fn update_conn_stats(
     conn_prev: &mut HashMap<ConnKey, ConnObs>,
     conn_cum: &mut HashMap<ConnKey, u64>,
     conn_windows: &mut HashMap<ConnKey, SpeedWindow>,
+    conn_activity: &mut HashMap<ConnKey, ConnActivity>,
     task_id: u32,
     conns: &[crate::engine::ConnView],
 ) {
@@ -16,6 +17,7 @@ fn update_conn_stats(
             _ => c.done,
         };
         conn_prev.insert(key, (c.block, c.done));
+        conn_activity.insert(key, c.activity.clone());
         let cap = c.end.saturating_sub(c.start);
         let active = crate::model::conn_transferring(cap, c.done);
         if delta > 0 {

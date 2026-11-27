@@ -7,7 +7,7 @@ use tokio::sync::{mpsc, watch};
 
 use super::super::error::{classify_reqwest, EngineFailure};
 use super::super::throttle::Throttle;
-use super::super::ConnView;
+use super::super::{ConnActivity, ConnView};
 use super::http::{probe_head, req_checked, req_with_identity};
 use super::planner::{Claim, Planner, MIN_PREEMPT};
 use super::single::single_stream;
@@ -164,6 +164,7 @@ async fn dynamic_worker(
                 start: a.from,
                 end: total,
                 done: 0,
+                activity: ConnActivity::Connecting,
             });
         }
         let mut primed_chunk: Option<bytes::Bytes> = None;
@@ -199,6 +200,9 @@ async fn dynamic_worker(
                                 *failure.lock().await = Some(f);
                                 return;
                             }
+                            if let Some(cv) = conns.lock().await.iter_mut().find(|c| c.id == wid) {
+                                cv.activity = ConnActivity::Retrying(f.reason.clone());
+                            }
                             inplace_backoff(inplace)
                         }
                         _ => {
@@ -225,6 +229,9 @@ async fn dynamic_worker(
                 }
             }
         };
+        if let Some(cv) = conns.lock().await.iter_mut().find(|c| c.id == wid) {
+            cv.activity = ConnActivity::Receiving;
+        }
         let mut at = a.from;
         let mut carry: Vec<u8> = Vec::new();
         let mut aborted = false;
@@ -328,6 +335,12 @@ async fn dynamic_worker(
                                 *failure.lock().await = Some(EngineFailure::network("服务器提前结束响应"));
                                 aborted = true;
                             } else {
+                                if let Some(cv) =
+                                    conns.lock().await.iter_mut().find(|c| c.id == wid)
+                                {
+                                    cv.activity =
+                                        ConnActivity::Retrying("服务器提前结束响应".to_string());
+                                }
                                 retry_wait = Some(inplace_backoff(inplace));
                             }
                             break;
@@ -342,6 +355,12 @@ async fn dynamic_worker(
                                         *failure.lock().await = Some(f);
                                         aborted = true;
                                     } else {
+                                        if let Some(cv) =
+                                            conns.lock().await.iter_mut().find(|c| c.id == wid)
+                                        {
+                                            cv.activity =
+                                                ConnActivity::Retrying(f.reason.clone());
+                                        }
                                         retry_wait = Some(inplace_backoff(inplace));
                                     }
                                 }

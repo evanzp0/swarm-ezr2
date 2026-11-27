@@ -11,6 +11,7 @@ use super::{
     MAGENTA, PINK, SEL_BG,
 };
 use crate::app::{App, Panel, SbKey};
+use crate::engine::ConnActivity;
 
 /// BT 九列数据宽（FR-02-33 v1.17：地址 18 / 标志 4 / 下载速度 12 / 上传速度 12 /
 /// 累计下载 10 / 累计上传 10 / 客户端 34 / 相关度 7 / 协议 8）。
@@ -21,8 +22,16 @@ const BT_CLIENT_MIN: usize = 26;
 const BT_PROTO_TEXT_W: usize = 8;
 /// BT 内容宽（v1.17：九列数据 115 + 8 分隔 = 123）。
 const BT_CONTENT_W: usize = 123;
-const HTTP_COLW: [usize; 3] = [4, 12, 10];
-const HTTP_CONTENT_W: usize = 28;
+const HTTP_COLW: [usize; 4] = [4, 12, 10, 18];
+const HTTP_CONTENT_W: usize = 47;
+
+fn activity_text(a: &ConnActivity) -> String {
+    match a {
+        ConnActivity::Connecting => "正在连接...".to_string(),
+        ConnActivity::Receiving => "正在接收数据...".to_string(),
+        ConnActivity::Retrying(reason) => format!("正在重试：{reason}"),
+    }
+}
 
 fn active_title(active: usize, max_conc: usize) -> String {
     format!(" {active}/{max_conc} 项 ")
@@ -90,7 +99,7 @@ type BtRowCells = (
 
 enum Rows {
     Bt(Vec<BtRowCells>),
-    Http(Vec<(usize, f64, u64, bool)>),
+    Http(Vec<(usize, f64, u64, bool, String)>),
 }
 
 impl Rows {
@@ -139,7 +148,7 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                 };
                 (true, Rows::Bt(v), t.concurrency)
             } else {
-                let v: Vec<(usize, f64, u64, bool)> = if shows {
+                let v: Vec<(usize, f64, u64, bool, String)> = if shows {
                     app.active_conn_ids()
                         .iter()
                         .filter_map(|cid| {
@@ -147,7 +156,11 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                             t.connections.iter().find(|c| c.id == *cid)?;
                             let speed = app.conn_speed_of(t.id, *cid);
                             let cum = app.conn_cum_of(t.id, *cid);
-                            Some((*cid, speed, cum, cum > 0))
+                            let info = app
+                                .conn_activity_of(t.id, *cid)
+                                .map(|a| activity_text(&a))
+                                .unwrap_or_default();
+                            Some((*cid, speed, cum, cum > 0, info))
                         })
                         .collect()
                 } else {
@@ -239,6 +252,8 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
             head_cell_r("下载速度", HTTP_COLW[1]),
             Span::raw(" "),
             head_cell_r("累计下载", HTTP_COLW[2]),
+            Span::raw(" "),
+            head_cell("信息", HTTP_COLW[3]),
         ]
     };
 
@@ -346,7 +361,7 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                 ]
             }
             Rows::Http(v) => {
-                let (cid, speed, cum, transferring) = &v[i];
+                let (cid, speed, cum, transferring, info) = &v[i];
                 vec![
                     cell(
                         format!("{cid}"),
@@ -365,6 +380,8 @@ pub(super) fn draw_conns(f: &mut Frame, app: &mut App, area: Rect) {
                     ),
                     sep(),
                     cell(fmt_size(*cum), HTTP_COLW[2], FG),
+                    sep(),
+                    cell_left(info.clone(), HTTP_COLW[3], FG),
                 ]
             }
         };
@@ -1079,6 +1096,130 @@ mod tests {
         assert!(
             head_line.contains("下载速度   累计下载"),
             "HTTP 累计下载表头右对齐至 10 列（bug25）: {head_line:?}"
+        );
+    }
+
+    #[test]
+    fn http_column_widths_and_activity_text_match_spec_v164() {
+        assert_eq!(
+            HTTP_COLW,
+            [4, 12, 10, 18],
+            "HTTP 四列数据宽（v1.64/D94：序号 4/下载速度 12/累计下载 10/信息 18）"
+        );
+        assert_eq!(HTTP_CONTENT_W, 47, "HTTP 内容宽 47（v1.64/D94：28 → 47）");
+        assert_eq!(
+            super::activity_text(&crate::engine::ConnActivity::Connecting),
+            "正在连接..."
+        );
+        assert_eq!(
+            super::activity_text(&crate::engine::ConnActivity::Receiving),
+            "正在接收数据..."
+        );
+        assert_eq!(
+            super::activity_text(&crate::engine::ConnActivity::Retrying(
+                "连接超时".to_string()
+            )),
+            "正在重试：连接超时"
+        );
+    }
+
+    #[tokio::test]
+    async fn http_info_header_fourth_column_left_aligned() {
+        let mut app = testfx::make_app_in("ezr-conns", "infohead");
+        app.tasks.push(task_with_conns(Protocol::Http));
+        app.selected = 0;
+        let text = conns_render(&mut app, 60, 14).backend().to_string();
+        let head_line = text
+            .lines()
+            .find(|l| l.contains("累计下载") && l.contains("信息"))
+            .unwrap_or_else(|| panic!("HTTP 四列表头行缺失: {text}"));
+        assert!(
+            head_line.contains("累计下载 信息"),
+            "信息表头左对齐（字符串列族同序号；累计下载右对齐至 10 后单空格分隔）: {head_line:?}"
+        );
+        let info_pos = head_line.find("信息").unwrap();
+        assert!(
+            head_line[info_pos..].starts_with("信息              "),
+            "信息表头右填充至 18 列: {head_line:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn http_info_column_renders_three_states() {
+        let mut app = testfx::make_app_in("ezr-conns", "info3");
+        app.tasks.push(task_with_conns(Protocol::Http));
+        app.selected = 0;
+        app.conn_activity
+            .insert((1, 1), crate::engine::ConnActivity::Connecting);
+        app.conn_activity
+            .insert((1, 2), crate::engine::ConnActivity::Receiving);
+        app.conn_activity.insert(
+            (1, 3),
+            crate::engine::ConnActivity::Retrying("连接超时".to_string()),
+        );
+        let text = conns_render(&mut app, 60, 14).backend().to_string();
+        assert!(text.contains("正在连接..."), "Connecting 文案: {text}");
+        assert!(text.contains("正在接收数据..."), "Receiving 文案: {text}");
+        assert!(
+            text.contains("正在重试：连接超时"),
+            "Retrying 文案（前缀 + 既有失败分类 reason）: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn http_info_cell_overwide_truncated_with_ellipsis() {
+        let mut app = testfx::make_app_in("ezr-conns", "infotrunc");
+        app.tasks.push(task_with_conns(Protocol::Http));
+        app.selected = 0;
+        app.conn_activity.insert(
+            (1, 1),
+            crate::engine::ConnActivity::Retrying(
+                "传输中断（连接被远端重置且错误链极长超出列宽）".to_string(),
+            ),
+        );
+        let text = conns_render(&mut app, 60, 14).backend().to_string();
+        assert!(text.contains('…'), "超宽信息单元格尾部 … 截断: {text}");
+        assert!(text.contains("正在重试："), "重试前缀保留: {text}");
+    }
+
+    #[tokio::test]
+    async fn http_hscroll_window_narrow_and_wide() {
+        let mut app = testfx::make_app_in("ezr-conns", "hscroll47");
+        app.tasks.push(task_with_conns(Protocol::Http));
+        app.selected = 0;
+        let term = conns_render(&mut app, 50, 10);
+        assert_eq!(
+            app.conns_max_hscroll, 4,
+            "右栏数据区视口 44 < 内容宽 47 → 上限 = 47−44+1（v1.34⑤ 平移）"
+        );
+        assert!(
+            app.conns_h_scrollbar.is_some(),
+            "视口 44 < 47 出现水平滚动条（v1.64/D94）"
+        );
+        drop(term);
+        let term2 = conns_render(&mut app, 55, 10);
+        assert!(
+            app.conns_h_scrollbar.is_none(),
+            "视口 ≥ 51 整表无横向滚动完整可见"
+        );
+        drop(term2);
+    }
+
+    #[tokio::test]
+    async fn http_info_text_left_aligned() {
+        let mut app = testfx::make_app_in("ezr-conns", "infofg");
+        app.tasks.push(task_with_conns(Protocol::Http));
+        app.selected = 0;
+        app.conn_activity
+            .insert((1, 1), crate::engine::ConnActivity::Receiving);
+        let text = conns_render(&mut app, 60, 14).backend().to_string();
+        let line = text
+            .lines()
+            .find(|l| l.contains("正在接收数据"))
+            .unwrap_or_else(|| panic!("信息数据行缺失: {text}"));
+        assert!(
+            line.contains("0 B 正在接收数据..."),
+            "信息数据左对齐（累计下载右对齐至 10 后单空格分隔，紧跟数据）: {line:?}"
         );
     }
 }

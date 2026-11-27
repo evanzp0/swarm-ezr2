@@ -705,3 +705,12 @@ clone 多出历轮全部修复），begin 会话照常建立。
   qa/09-bt-engine-qa.md:70 真缺陷仍登记归 QA 轮（沿袭）。
 - bb 落位：`.tools/bb-bin/bb`（PATH 注入调用）；APS 仓克隆于
   `.tools/Acceptance-Pipeline-Specification`（bb 任务子 shell 调用）。
+
+## D94 实现轮（20261127）追加
+- 中断恢复的 PATH 误判判别法：新 shell `which rustup` 报未安装 ≠ 未安装——工具链本体在
+  `~/.cargo/bin` 完好（stable + nightly 双链在），丢的是 PATH 注入；先
+  `export PATH="$HOME/.cargo/bin:$PATH"` 再探针（--version），与「环境不跨会话持久」条款
+  的项目侧实证一致：恢复会话先重建注入，别急着重装。
+- RAG 索引（`.work/rag`）属会话级运行时，中断即丢：`bin/rag/rag status` EXIT=1 → 直接
+  `bin/rag/rag index project --types rs,md,toml` 重建（185 文件 1.14s）——重建成本低于
+  保留成本，恢复会话一律重建再检索，不做增量抢救。

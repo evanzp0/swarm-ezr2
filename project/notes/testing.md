@@ -1104,3 +1104,12 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
   （exit 0），不阻断；轮内回归判据 = 与 HEAD 基线 findings 计数对比（本轮两 feature
   12→12、92→92 持平 = 零新增）。基线对比法：`git show HEAD:<feature>` 落 .work/tmp 后
   同管道跑 parser + dry-checker 对计数。
+
+## D94 实现轮追加
+- update_conn_stats 签名变更的剥头副本三触点联动：tests/gen/update_conn_stats_stripped.rs
+  （逐字节重生成 = type 别名两行 + fn 全文）+ ucs_fix.call 形参 + pure_targets 构造点/新
+  map 断言三处同步；凡改 product fn 签名，收尾前先 grep tests/gen/ 剥头副本面。gen_ucs_
+  fixture 对比锚 = `fn update_conn_stats(` 起至列 0 `}` 止，剥头副本含别名两行。
+- clippy --all-targets 是测试目标编译断裂的第一道网：`cargo test --bin ezr` 不编译
+  tests/ 目标，构造点新增字段这类签名断裂只有 --all-targets（或显式 --test <名>）先红——
+  全量验证序列里 clippy 必须先于 test 跑，红灯定位比 test 全量后置发现便宜得多。

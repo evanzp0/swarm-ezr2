@@ -1025,3 +1025,17 @@ B 类快照（任务启动烘焙、sidecar 格式即引擎 D89）使 mode 断言
   列宽极值算法（信息 18 = 「正在接收数据...」17 显示列 + 1 空白，沿标志 5/相关度 7 口径）
   见 phase-05 v1.2/D94 与 features/04-ui-conns v1.64；实现入口 = 引擎 per-conn 状态快照
   （MDM ConnView {id, downloaded, status} 同构形态）。
+
+## D94 实现轮追加：ConnActivity 三态快照流动链（实现侧）
+- 标记点位：worker 每次租约落位重推 ConnView = Connecting；响应开启（req Ok 与 primed
+  分支在 `let mut at = a.from` 前汇合）= Receiving；三处原地重试退避路径 = Retrying——
+  req Err Transient / chunk Err Transient 用 `f.reason.clone()`（EngineFailure.reason 即
+  既有失败分类文案族，信息列零转换直接拼「正在重试：」前缀，与任务级失败 reason 同源）、
+  Ok(None) 固定「服务器提前结束响应」（与达上限失败文案同源）。
+- 流动机制：worker 用 `conns.lock().await.iter_mut().find(|c| c.id == wid)` 自更新自身
+  条目（不新增事件），supervisor progress_tick 周期整表快照随 Evt::Progress 下发；
+  App 侧 update_conn_stats 同步写入 conn_activity 表（与 conn_prev 同点插入）、
+  clear_conn_stats 五表连带清理；单流降级臂快照仅在收流后发射 → 恒 Receiving；
+  blocks 引擎（workers.rs，生产不可达）构造点占位 Connecting 仅保编译。
+- 回退重连语义：退避 sleep 结束 continue 后重走 assign → 重推 Connecting——重试显示
+  自然回到「正在连接...」，无需显式复位。

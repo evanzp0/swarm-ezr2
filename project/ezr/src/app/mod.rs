@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use ratatui::layout::Rect;
 
-use crate::engine::{EngineHandle, Evt};
+use crate::engine::{ConnActivity, EngineHandle, Evt};
 use crate::model::config::Config;
 #[cfg(test)]
 use crate::model::registry::Registry;
@@ -291,6 +291,7 @@ pub struct App {
     pub err_area: Option<Rect>,
     pub err_btn_rect: Option<Rect>,
     pub bt_conns: HashMap<u32, Vec<BtConnRow>>,
+    pub conn_activity: HashMap<(u32, usize), ConnActivity>,
     bt_conn_stats: HashMap<(u32, usize), BtConnSpeedStat>,
     /// BT 引擎「正在停止」登记：暂停是乐观置状态（引擎 select 循环异步消费
     /// Pause），恢复若早于引擎真正退出会拉起第二个引擎——两个引擎同写文件与
@@ -492,6 +493,7 @@ impl App {
             err_area: None,
             err_btn_rect: None,
             bt_conns: HashMap::new(),
+            conn_activity: HashMap::new(),
             bt_conn_stats: HashMap::new(),
             bt_stopping: HashMap::new(),
             cli_max_speed_override: None,

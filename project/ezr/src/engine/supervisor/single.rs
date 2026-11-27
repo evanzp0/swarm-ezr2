@@ -5,7 +5,7 @@ use tokio::io::AsyncSeekExt;
 use tokio::sync::mpsc;
 
 use super::super::error::{classify_reqwest, EngineFailure};
-use super::super::ConnView;
+use super::super::{ConnActivity, ConnView};
 use super::finalize::{build_sidecar, failed_ledger, finalize_completed};
 use super::http::req_checked;
 use super::workers::WBuf;
@@ -162,6 +162,7 @@ pub(super) async fn single_stream(
                             start: 0,
                             end: blocks.total,
                             done: downloaded,
+                            activity: ConnActivity::Receiving,
                         }];
                         let _ = emit(evt_tx, Evt::Progress {
                             id: spec.id,

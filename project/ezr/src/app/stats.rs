@@ -1,4 +1,5 @@
 use super::App;
+use crate::engine::ConnActivity;
 use crate::model::speed::SmoothedSpeed;
 use crate::model::{Connection, Task};
 
@@ -7,6 +8,10 @@ impl App {
         self.conn_speed
             .get(&(task_id, conn_id))
             .map_or(0.0, SmoothedSpeed::value)
+    }
+
+    pub(crate) fn conn_activity_of(&self, task_id: u32, conn_id: usize) -> Option<ConnActivity> {
+        self.conn_activity.get(&(task_id, conn_id)).cloned()
     }
 
     pub(crate) fn bt_conn_speeds_of(&self, task_id: u32, conn_id: usize) -> (f64, f64) {
@@ -120,6 +125,7 @@ impl App {
         self.conn_cum.retain(|(tid, _), _| *tid != task_id);
         self.conn_speed.retain(|(tid, _), _| *tid != task_id);
         self.conn_windows.retain(|(tid, _), _| *tid != task_id);
+        self.conn_activity.retain(|(tid, _), _| *tid != task_id);
     }
 
     pub(crate) fn clear_bt_conn_stats(&mut self, task_id: u32) {
@@ -235,6 +241,12 @@ mod stats_hardening {
             .insert((1, 0), crate::model::speed::SpeedWindow::new());
         app.conn_windows
             .insert((2, 0), crate::model::speed::SpeedWindow::new());
+        app.conn_activity
+            .insert((1, 0), crate::engine::ConnActivity::Receiving);
+        app.conn_activity.insert(
+            (2, 0),
+            crate::engine::ConnActivity::Retrying("连接超时".to_string()),
+        );
         app.clear_conn_stats(1);
         assert!(!app.conn_cum.contains_key(&(1, 0)), "任务 1 的 cum 被清");
         assert!(app.conn_cum.contains_key(&(2, 0)), "任务 2 的 cum 必须保留");
@@ -247,6 +259,14 @@ mod stats_hardening {
         assert!(
             app.conn_windows.contains_key(&(2, 0)),
             "任务 2 的窗口必须保留"
+        );
+        assert!(
+            !app.conn_activity.contains_key(&(1, 0)),
+            "任务 1 的活动被清"
+        );
+        assert!(
+            app.conn_activity.contains_key(&(2, 0)),
+            "任务 2 的活动必须保留"
         );
         app.shutdown().await;
     }

@@ -276,7 +276,7 @@ mod ucs_fix {
     use std::collections::HashMap;
     use std::time::Instant;
 
-    pub(crate) use crate::engine::ConnView;
+    pub(crate) use crate::engine::{ConnActivity, ConnView};
     pub(crate) use crate::model::speed::{SpeedWindow, WINDOW};
     include!("gen/update_conn_stats_stripped.rs");
 
@@ -285,10 +285,11 @@ mod ucs_fix {
         prev: &mut HashMap<ConnKey, ConnObs>,
         cum: &mut HashMap<ConnKey, u64>,
         windows: &mut HashMap<ConnKey, SpeedWindow>,
+        activity: &mut HashMap<ConnKey, ConnActivity>,
         task_id: u32,
         conns: &[ConnView],
     ) {
-        update_conn_stats(prev, cum, windows, task_id, conns)
+        update_conn_stats(prev, cum, windows, activity, task_id, conns)
     }
 }
 
@@ -296,21 +297,42 @@ mod ucs_fix {
 fn update_conn_stats_pure_targets() {
     use std::collections::HashMap;
 
-    use ucs_fix::{ConnView, SpeedWindow};
-    let view = |block: u32, done: u64| ConnView {
+    use ucs_fix::{ConnActivity, ConnView, SpeedWindow};
+    let view = |block: u32, done: u64, activity: ConnActivity| ConnView {
         id: 1,
         block,
         start: 0,
         end: 4_000_000,
         done,
+        activity,
     };
 
     let mut prev = HashMap::new();
     let mut cum = HashMap::new();
     let mut windows: HashMap<(u32, usize), SpeedWindow> = HashMap::new();
-    ucs_fix::call(&mut prev, &mut cum, &mut windows, 7, &[view(0, 100)]);
+    let mut activity: HashMap<(u32, usize), ConnActivity> = HashMap::new();
+    ucs_fix::call(
+        &mut prev,
+        &mut cum,
+        &mut windows,
+        &mut activity,
+        7,
+        &[view(0, 100, ConnActivity::Connecting)],
+    );
+    assert_eq!(
+        activity.get(&(7, 1)),
+        Some(&ConnActivity::Connecting),
+        "活动表随快照写入"
+    );
     std::thread::sleep(Duration::from_millis(100));
-    ucs_fix::call(&mut prev, &mut cum, &mut windows, 7, &[view(0, 400)]);
+    ucs_fix::call(
+        &mut prev,
+        &mut cum,
+        &mut windows,
+        &mut activity,
+        7,
+        &[view(0, 400, ConnActivity::Receiving)],
+    );
     assert_eq!(cum.get(&(7, 1)), Some(&400u64), "累计量随增量累加");
     let r = windows.get_mut(&(7, 1)).unwrap().rate();
     assert!(
@@ -323,6 +345,7 @@ fn update_conn_stats_pure_targets() {
         &mut prev,
         &mut cum,
         &mut windows,
+        &mut activity,
         7,
         &[ConnView {
             id: 1,
@@ -330,7 +353,13 @@ fn update_conn_stats_pure_targets() {
             start: 0,
             end: 1_000,
             done: 1_000,
+            activity: ConnActivity::Retrying("传输中断".to_string()),
         }],
+    );
+    assert_eq!(
+        activity.get(&(7, 1)),
+        Some(&ConnActivity::Retrying("传输中断".to_string())),
+        "重试态文案随快照落表"
     );
     let r_idle = windows.get_mut(&(7, 1)).unwrap().rate();
     assert!(
@@ -339,7 +368,14 @@ fn update_conn_stats_pure_targets() {
     );
 
     std::thread::sleep(Duration::from_millis(1_100));
-    ucs_fix::call(&mut prev, &mut cum, &mut windows, 7, &[view(1, 200)]);
+    ucs_fix::call(
+        &mut prev,
+        &mut cum,
+        &mut windows,
+        &mut activity,
+        7,
+        &[view(1, 200, ConnActivity::Receiving)],
+    );
     let r_stale = windows.get_mut(&(7, 1)).unwrap().rate();
     assert_eq!(
         r_stale, 0.0,
@@ -349,16 +385,32 @@ fn update_conn_stats_pure_targets() {
     let mut prev_s = HashMap::new();
     let mut cum_s = HashMap::new();
     let mut win_s: HashMap<(u32, usize), SpeedWindow> = HashMap::new();
+    let mut act_s: HashMap<(u32, usize), ConnActivity> = HashMap::new();
     let stream_view = |done: u64| ConnView {
         id: 1,
         block: 0,
         start: 0,
         end: 0,
         done,
+        activity: ConnActivity::Receiving,
     };
-    ucs_fix::call(&mut prev_s, &mut cum_s, &mut win_s, 9, &[stream_view(100)]);
+    ucs_fix::call(
+        &mut prev_s,
+        &mut cum_s,
+        &mut win_s,
+        &mut act_s,
+        9,
+        &[stream_view(100)],
+    );
     std::thread::sleep(Duration::from_millis(100));
-    ucs_fix::call(&mut prev_s, &mut cum_s, &mut win_s, 9, &[stream_view(400)]);
+    ucs_fix::call(
+        &mut prev_s,
+        &mut cum_s,
+        &mut win_s,
+        &mut act_s,
+        9,
+        &[stream_view(400)],
+    );
     assert_eq!(cum_s.get(&(9, 1)), Some(&400u64), "流式累计随增量累加");
     let r_stream = win_s.get_mut(&(9, 1)).unwrap().rate();
     assert!(
@@ -369,6 +421,7 @@ fn update_conn_stats_pure_targets() {
         &mut prev_s,
         &mut cum_s,
         &mut win_s,
+        &mut act_s,
         10,
         &[ConnView {
             id: 1,
@@ -376,6 +429,7 @@ fn update_conn_stats_pure_targets() {
             start: 0,
             end: 0,
             done: 0,
+            activity: ConnActivity::Connecting,
         }],
     );
     assert!(

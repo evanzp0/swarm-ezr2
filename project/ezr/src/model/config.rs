@@ -1098,11 +1098,11 @@ task_max_upload_speed = 0
 [http]
 
 
-# 动态分段调度初始切分粒度下限（KiB；仅 dynamic 模式适用）
+# 动态分段调度初始切分粒度下限（KiB）
 # 取值范围：正整数（≥1）；0 或非法值拒绝启动
 min_split_kib = 256
 
-# HTTP 分块块大小（字节；仅 blocks 回退模式适用）
+# HTTP 分块块大小（字节）
 # 取值范围：正整数（≥262144 即 256 KiB 下限）；0 或非法值拒绝启动
 block_size_http = 1048576
 

@@ -182,6 +182,13 @@ pub enum Evt {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConnActivity {
+    Connecting,
+    Receiving,
+    Retrying(String),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConnView {
     pub id: usize,
@@ -189,6 +196,7 @@ pub struct ConnView {
     pub start: u64,
     pub end: u64,
     pub done: u64,
+    pub activity: ConnActivity,
 }
 
 #[derive(Clone, Debug, PartialEq)]

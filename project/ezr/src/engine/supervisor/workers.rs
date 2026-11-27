@@ -8,7 +8,7 @@ use tokio::sync::watch;
 
 use super::super::error::{classify_reqwest, EngineFailure};
 use super::super::throttle::Throttle;
-use super::super::ConnView;
+use super::super::{ConnActivity, ConnView};
 use super::finalize::block_span;
 use super::http::req_checked;
 use crate::model::chunk::Blocks;
@@ -280,6 +280,7 @@ async fn block_worker(
                 start: 0,
                 end: 0,
                 done: 0,
+                activity: ConnActivity::Connecting,
             });
             drop(g);
             return;
@@ -291,6 +292,7 @@ async fn block_worker(
             start,
             end,
             done: written,
+            activity: ConnActivity::Connecting,
         });
         let primed_fits = primed.is_some() && start + written == 0;
         let mut resp = if primed_fits {

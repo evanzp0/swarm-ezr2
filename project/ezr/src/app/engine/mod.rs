@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use super::App;
-use crate::engine::Cmd;
 #[cfg(test)]
 use crate::engine::Evt;
+use crate::engine::{Cmd, ConnActivity};
 use crate::model::registry::Registry;
 use crate::model::sidecar::Sidecar;
 use crate::model::speed::{SpeedWindow, WINDOW};
@@ -30,6 +30,7 @@ fn update_conn_stats(
     conn_prev: &mut HashMap<ConnKey, ConnObs>,
     conn_cum: &mut HashMap<ConnKey, u64>,
     conn_windows: &mut HashMap<ConnKey, SpeedWindow>,
+    conn_activity: &mut HashMap<ConnKey, ConnActivity>,
     task_id: u32,
     conns: &[crate::engine::ConnView],
 ) {
@@ -41,6 +42,7 @@ fn update_conn_stats(
             _ => c.done,
         };
         conn_prev.insert(key, (c.block, c.done));
+        conn_activity.insert(key, c.activity.clone());
         let cap = c.end.saturating_sub(c.start);
         let active = crate::model::conn_transferring(cap, c.done);
         if delta > 0 {
@@ -712,6 +714,7 @@ mod tick_tests {
             start: 100,
             end: 1100,
             done: 400,
+            activity: ConnActivity::Connecting,
         };
         let c = conn_from_view(&cv);
         assert_eq!(c.id, 3);
@@ -776,6 +779,7 @@ mod evt_tests {
             start,
             end,
             done,
+            activity: ConnActivity::Connecting,
         }
     }
 
@@ -1812,6 +1816,7 @@ mod conn_stats_tests {
             start,
             end,
             done,
+            activity: ConnActivity::Connecting,
         }
     }
 
@@ -1826,6 +1831,100 @@ mod conn_stats_tests {
             partial_blocks: Vec::new(),
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn progress_evt_activity_snapshot_propagates() {
+        let mut app = make_app("act");
+        app.tasks.push(seed(1, "act.bin", TaskState::Downloading));
+        progress(
+            &mut app,
+            1,
+            vec![
+                ConnView {
+                    id: 1,
+                    block: 0,
+                    start: 0,
+                    end: 1000,
+                    done: 0,
+                    activity: ConnActivity::Connecting,
+                },
+                ConnView {
+                    id: 2,
+                    block: 0,
+                    start: 1000,
+                    end: 2000,
+                    done: 100,
+                    activity: ConnActivity::Receiving,
+                },
+                ConnView {
+                    id: 3,
+                    block: 0,
+                    start: 2000,
+                    end: 3000,
+                    done: 0,
+                    activity: ConnActivity::Retrying("连接超时".to_string()),
+                },
+            ],
+        )
+        .await;
+        assert_eq!(
+            app.conn_activity_of(1, 1),
+            Some(ConnActivity::Connecting),
+            "连接阶段快照 = Connecting"
+        );
+        assert_eq!(
+            app.conn_activity_of(1, 2),
+            Some(ConnActivity::Receiving),
+            "在传快照 = Receiving"
+        );
+        assert_eq!(
+            app.conn_activity_of(1, 3),
+            Some(ConnActivity::Retrying("连接超时".to_string())),
+            "原地重试快照携带原因文案"
+        );
+        assert_eq!(app.conn_activity_of(1, 9), None, "无快照连接查询 = None");
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn progress_evt_activity_overwrites_and_clear_follows_task() {
+        let mut app = make_app("act2");
+        app.tasks.push(seed(1, "act2.bin", TaskState::Downloading));
+        app.tasks.push(seed(2, "act2b.bin", TaskState::Downloading));
+        app.conn_activity.insert((1, 1), ConnActivity::Connecting);
+        progress(
+            &mut app,
+            1,
+            vec![ConnView {
+                id: 1,
+                block: 0,
+                start: 0,
+                end: 1000,
+                done: 0,
+                activity: ConnActivity::Receiving,
+            }],
+        )
+        .await;
+        assert_eq!(
+            app.conn_activity_of(1, 1),
+            Some(ConnActivity::Receiving),
+            "后续快照覆写旧活动"
+        );
+        app.clear_conn_stats(1);
+        assert_eq!(
+            app.conn_activity_of(1, 1),
+            None,
+            "任务清理连带活动表（其余任务保留）"
+        );
+        app.conn_activity.insert((2, 1), ConnActivity::Connecting);
+        app.clear_conn_stats(1);
+        assert_eq!(
+            app.conn_activity_of(2, 1),
+            Some(ConnActivity::Connecting),
+            "其他任务的活动不受清理影响"
+        );
+        app.shutdown().await;
     }
 
     #[tokio::test]

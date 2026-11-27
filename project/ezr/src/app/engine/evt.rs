@@ -85,6 +85,7 @@ impl App {
                     &mut self.conn_prev,
                     &mut self.conn_cum,
                     &mut self.conn_windows,
+                    &mut self.conn_activity,
                     id,
                     &conns,
                 );
