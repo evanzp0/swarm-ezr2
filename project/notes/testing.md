@@ -1098,3 +1098,9 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
   `gherkin-ir-dry-checker <ir.json> <dry.json>`——直接把 feature 原文喂 dry-checker 报
   "Unexpected character '#'"（输入不是 JSON）；bb 任务必须在 .tools/Acceptance-Pipeline-Specification
   目录内调用（engineering.md 调用约定）。
+
+## v1.64 轮追加
+- APS `gherkin-ir-dry-checker` 的 findings（near-duplicate/possible-synonym）是提示级输出
+  （exit 0），不阻断；轮内回归判据 = 与 HEAD 基线 findings 计数对比（本轮两 feature
+  12→12、92→92 持平 = 零新增）。基线对比法：`git show HEAD:<feature>` 落 .work/tmp 后
+  同管道跑 parser + dry-checker 对计数。

@@ -21,6 +21,12 @@
 # 行位保留追溯不重排）；config 含 scheduler 键（任意值）→ 未知键直接废弃拒绝启动
 # （FR-02-35）；block_size_http 语义改判 = 动态模式网格细化上限（D92，模板注释行
 # 「仅 blocks 回退模式适用」同步退役）。钦定原文整体替换为 v1.63 版（177 行）。
+# v1.64 修订注（操作者裁决落实轮 20261127，phase-05 v1.2/D92）：D92 修订注与钦定原文
+# 矛盾落地——钦定模板 min_split_kib/block_size_http 两注释行整短语删除适用范围标注
+# 「仅 dynamic 模式适用」「仅 blocks 回退模式适用」（EZR 只有 dynamic 单形态：blocks
+# 引擎随族A 退役后适用范围短语失去语义对象，操作者裁决删除）；注释行行内文本修订、
+# 行数不变（177）、键数不变（41）；v1.63 修订注宣称的「『仅 blocks 回退模式适用』同步
+# 退役」就此成立。场景 01 取值范围表残留短语同步删除。
 Feature: 01-config-template 配置模板自动生成
 
   期号 01。依据 project/mission/phase-01.md FR-01-85（v1.4 操作者指令）与 D17：
@@ -143,8 +149,8 @@ Feature: 01-config-template 配置模板自动生成
       | global_max_upload_speed      | global_max_upload_speed = 0             | 全局上传限速（BT 上传合计）                      | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
       | task_max_download_speed      | task_max_download_speed = 0             | 新任务默认任务级下载限速                         | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
       | task_max_upload_speed        | task_max_upload_speed = 0               | 新任务默认任务级上传限速                         | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
-      | min_split_kib                | min_split_kib = 256                     | 动态分段调度初始切分粒度下限（KiB，v1.51 新增）  | 正整数（≥1）；0 或非法值拒绝启动；仅 dynamic 模式适用（v1.63：blocks 模式退役后语义自然收窄为动态模式单形态口径） |
-      | block_size_http              | block_size_http = 1048576               | HTTP 分块块大小（字节；仅 blocks 回退模式适用）  | 正整数（≥262144 即 256 KiB 下限）；0 或非法值拒绝启动（v1.51：下限 1 MB → 256 KiB） |
+      | min_split_kib                | min_split_kib = 256                     | 动态分段调度初始切分粒度下限（KiB，v1.51 新增）  | 正整数（≥1）；0 或非法值拒绝启动 |
+      | block_size_http              | block_size_http = 1048576               | HTTP 分块块大小（字节）                        | 正整数（≥262144 即 256 KiB 下限）；0 或非法值拒绝启动（v1.51：下限 1 MB → 256 KiB；v1.64/D92：语义 = 动态模式网格细化上限，适用范围短语随钦定模板注释行删除退役） |
       | http_concurrency             | http_concurrency = 8                    | 默认并发数（v1.51：默认 4 → 8）                  | 1–128 的整数；0 或越界拒绝启动（v1.51：上限 64 → 128） |
       | max_retries                  | max_retries = 5                         | 自动重试上限次数                                 | ≥1 的整数；0 或非法值拒绝启动               |
       | auto_retry                   | auto_retry = true                       | 失败后是否自动重试                               | true / false                                |
@@ -239,11 +245,11 @@ Feature: 01-config-template 配置模板自动生成
   
   （v1.63/族A 退役：原 scheduler 键三行式——「# HTTP 下载引擎调度模式（dynamic 动态分段 | blocks 块模型回退）」/「# 取值范围：dynamic / blocks（大小写不敏感）；其他值拒绝启动；任务启动时烘焙（B 类快照）」/「scheduler = "dynamic"」——随 scheduler 键退役自模板移除，180 → 177 行、42 → 41 键，D91；行位保留追溯不重排）
   
-  # 动态分段调度初始切分粒度下限（KiB；仅 dynamic 模式适用）
+  # 动态分段调度初始切分粒度下限（KiB）
   # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   min_split_kib = 256
   
-  # HTTP 分块块大小（字节；仅 blocks 回退模式适用）
+  # HTTP 分块块大小（字节）
   # 取值范围：正整数（≥262144 即 256 KiB 下限）；0 或非法值拒绝启动
   block_size_http = 1048576
   

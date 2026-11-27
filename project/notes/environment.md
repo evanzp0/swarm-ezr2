@@ -693,3 +693,15 @@ clone 多出历轮全部修复），begin 会话照常建立。
 - Babashka 安装口径：GitHub release 资产名会漂移——`babashka-<v>-linux-amd64.tar.xz` 404 后
   按「发行资产形态会随版本漂移」条款先取资产清单确认实际名（实际 =
   `babashka-<v>-linux-amd64-static.tar.gz`），不要按旧名盲试。
+
+## v1.64 裁决落实轮（20261127）追加
+- GitHub release 资产直连慢（bb 静态包 300 s 仅 8.5 MB/26.5 MB）不必换镜像：同 URL
+  `curl -C -` 断点续传一次即补齐剩余 18 MB（560 s 内完成）——先续传再考虑代理/换源。
+- 显示伪象通道面本轮实测补全：Write/Edit 通道**不吞** `[h`（序数探针验证 `91 104 116 116 112 93`
+  完整落盘），仅 Bash 输出层吞——「别凭显示断定损坏」判别法扩展为**逐通道探针**，别假定所有
+  通道同病；编辑终审仍按字节计数比对（`[h` 计数 + realbad `ttp]` 扫描，编辑前后各一次）。
+- phase-05.md §5 示例块表头行（194）与 D91 条款内联（201）两处真损坏已随 v1.64 修复
+  （磁盘真值当时仅此两处）；notes 内现存 `ttp]` 仍为对伪象的刻意描述不修；
+  qa/09-bt-engine-qa.md:70 真缺陷仍登记归 QA 轮（沿袭）。
+- bb 落位：`.tools/bb-bin/bb`（PATH 注入调用）；APS 仓克隆于
+  `.tools/Acceptance-Pipeline-Specification`（bb 任务子 shell 调用）。

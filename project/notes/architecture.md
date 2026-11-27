@@ -1014,3 +1014,14 @@ B 类快照（任务启动烘焙、sidecar 格式即引擎 D89）使 mode 断言
   后读 conns，反序会在两读窗口产生「pos 已过块尾但 committed 未跟上」假警报帧（vacated 绿块
   不变式 e2e 在高并发测试负载下暴露）。修正后 committed ≥ conns 对任意交错成立，同时消除
   UI 潜在黄块闪烁。
+
+## v1.64 轮追加：并发「信息」列语义源核证路径
+- 参考实现 = MDM（misterdownloadmanager，克隆缓存 `.tools/misterdownloadmanager`）；「信息」列
+  定位法：`i18n/en.tsv` 注释行 `#. column title: what the connection is doing`（词条 Info）→
+  `crates/app/src/progress.rs connections()`（列序 N. · Downloaded · Info；Info 文案 = ConnStatus
+  匹配）→ `crates/engine/src/download.rs ConnStatus` 六态（Connecting/Receiving/Retrying/
+  Finished/Failed/Retired）+ `i18n/zh-hans.tsv` 文案族（正在连接.../正在接收数据.../正在重试：
+  {error}/空/错误：{error}/{host} 允许 {n} 个连接）。ezr 映射三态与另三态无对应臂的理由、
+  列宽极值算法（信息 18 = 「正在接收数据...」17 显示列 + 1 空白，沿标志 5/相关度 7 口径）
+  见 phase-05 v1.2/D94 与 features/04-ui-conns v1.64；实现入口 = 引擎 per-conn 状态快照
+  （MDM ConnView {id, downloaded, status} 同构形态）。
