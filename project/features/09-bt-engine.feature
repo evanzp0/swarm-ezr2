@@ -314,8 +314,8 @@ Feature: 09-bt-engine BT 下载与做种引擎（tracker / peer / 上传 / 文�
       peer_retry_cap_secs / tracker_backoff_start_secs / tracker_backoff_cap_secs /
       udp_base_timeout_secs / udp_retries）未配置时按代码常量默认值生效、配置合法值时引擎按
       配置值执行（下载/做种全链路行为不变，仅节律/窗口随配置伸缩）
-    And [http] 调优键同理（progress_tick_ms / sidecar_flush_secs / throttle_burst_secs /
-      throttle_sleep_ms / dns_race_grace_ms；HTTP 任务链路按配置值执行，语义非法值拒绝启动（FR-02-35 v1.41，样例行见 01-persistence-config-04 v1.21）
+    And [http] 调优键同理（progress_tick_ms / sidecar_flush_secs / min_split_kib；
+      HTTP 任务链路按配置值执行，语义非法值拒绝启动（FR-02-35 v1.41，样例行见 01-persistence-config-04 v1.65）；throttle_burst_secs/throttle_sleep_ms/dns_race_grace_ms/block_size_http 已随 v1.65/D97① 键退役——含键拒绝启动）
     When [bt] 表写入 0/负值/非法值后启动
     Then 启动失败并报错（v1.41 反转：错误含配置文件路径、键点路径与非法原因，非零退出码退出；原「对应键回退代码常量默认值且启动不报错」口径随 FR-01-71 回退臂全局退役，FR-02-35）
 

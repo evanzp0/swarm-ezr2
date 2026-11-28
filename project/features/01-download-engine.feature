@@ -12,7 +12,7 @@
 #   01-download-engine-06 队列临近结束多余连接转待命【退役，留空不重排——v1.63/族A：同上】
 #   01-download-engine-07 续传不重写已下载块【退役，留空不重排——v1.63/族A：同上；动态续传断言由 01-resume-sidecar-03/13-http-turbo-14 承载】
 #   01-download-engine-08 重定向跟随完成下载（原始 URL 唯一权威，各连接独立跟跳转）
-#   01-download-engine-09 重定向超过 10 次停等
+#   01-download-engine-09 重定向超过 20 次停等（v1.3：上限 10 → 20 = MDM MAX_REDIRECTS，D97③）
 #   01-download-engine-10 重定向目标非 http(s) 停等
 #   01-download-engine-11 HTTPS 证书错误按任务失败处理
 #   01-download-engine-12 HTTPS 正常下载成功
@@ -42,6 +42,14 @@ Feature: 01-download-engine HTTP 下载内核（探测 · 分块 · 重定向 ·
   不变）。族B：worker 块请求面 4xx/断连按 FR-05-04 失败粒度原地重试 + Transient 分类、
   Range 全拒降级完成不失败、有进展反复断连不失败（D93，旧预期废弃）；探测面（URL 级）
   4xx → Fatal 停等口径不变（场景 09/10/11 不受影响）。
+  v1.65 修订注（MDM 完全移植轮 20261128，phase-05 v1.3/D95–D100）：HTTP 引擎 = MDM crates/engine
+  策略与算法整体移植——①重定向上限 10 → 20（MDM MAX_REDIRECTS = 浏览器 20，D97③）：场景 09
+  同步改判（链长 21 停等；报错文案与不自动重试语义不变）；②探测 = 不带 Range 的完整 GET
+  即数据流（场景 01 的「探测」观察口径不变，探测/下载合一由 13-http-turbo-01 承载）；
+  ③无 Content-Length → MDM single_stream（场景 02 断言不变，实现面 = MDM 移植）；
+  ④场景 03 无 Range 降级暂停后从头下载 = MDM 无台账语义（13-http-turbo-15 同口径）；
+  ⑤D93 的「Range 全拒降级完成不失败」语义由 FR-05-12 MDM 收口承载（口径等效，条款载体
+  转入 phase-05 v1.3）；其余场景（重定向权威模型/HTTPS/压缩禁用/速度窗口/槽位）不受本轮影响。
 
   Background:
     Given ezr 以干净环境启动（独立 HOME，无历史注册表与配置文件）
@@ -118,7 +126,7 @@ Feature: 01-download-engine HTTP 下载内核（探测 · 分块 · 重定向 ·
       | origin_url                              | redirects | landing_url                          |
       | http://fixture.local/r/jump/a.bin       | 2         | http://fixture.local/files/a.bin      |
 
-  Scenario: 01-download-engine-09 重定向超过 10 次停等
+  Scenario: 01-download-engine-09 重定向超过 20 次停等（v1.3：上限 10 → 20，D97③）
     Given fixture 提供重定向链长度 <chain_length> 的下载项
     When 添加该下载项并等待开始
     Then 任务转「已失败」且失败原因显示「重定向次数超限」
@@ -126,7 +134,7 @@ Feature: 01-download-engine HTTP 下载内核（探测 · 分块 · 重定向 ·
 
     Examples:
       | chain_length |
-      | 11           |
+      | 21           |
 
   Scenario: 01-download-engine-10 重定向目标非 http(s) 停等
     Given fixture 提供重定向至 "<target>" 的下载项

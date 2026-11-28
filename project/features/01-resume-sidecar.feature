@@ -50,7 +50,18 @@
 # 不提示——场景 07 一致性失效 toast 与场景 14 孤儿序号改道均仅对动态台账触发，blocks 旧
 # 台账按无台账新任务处理（原名静默从头下载，孤儿候选标记置位但不消费不改道）；场景
 # 13/14/15 动态台账口径不变。族B：任务级失败仅在原地重试耗尽后触发（FR-05-04/D93），
-# 「失败后有进度写台账 + R 重试非零 Range 起点」旧预期废弃。
+ # 「失败后有进度写台账 + R 重试非零 Range 起点」旧预期废弃。
+# v1.65 修订注（MDM 完全移植轮 20261128，phase-05 v1.3/D98/D99/D100）：sidecar 恢复状态改
+# MDM ResumeState 移植形态——①场景 01：sidecar 进度状态 = (start, cursor, end) 平铺段列表
+# （MDM SavedSegment 平铺、恰好覆盖 [0, size)，恢复时 tiling 校验失败 = InvalidState）+
+# validators（ETag/Last-Modified/全文件摘要族）；scheduler 字段退役（引擎单形态键面消亡）；
+# ②场景 03：续传请求改封闭区间 bytes=(cursor−64)-(end−1)（原开区间口径退役，D99③），
+# 前 64 B 覆叠重取与盘上字节比对（MDM/IDM resume overlap check）；③场景 07：一致性判定
+# 由「请求期 If-Range/覆叠校验」承载——ETag 变化而 Last-Modified 与大小一致 → per-node
+# ETag 语义不失效（丢弃 ETag 按日期继续）；服务器不再返回校验头 → 长度一致 + 覆叠兑底
+# 继续（不符才失效）；Last-Modified/大小变化 → 一致性失效从头（FileChanged 映射 ezr
+# 既有从头 toast 流程不变）；④磁盘遗留全部旧格式台账（含 v1.62 动态格式、blocks 格式）
+# 一律按无台账新任务处理（D98，D90 扩面）。
 Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
 
   期号 01。依据 project/mission/phase-01.md FR-01-20~26 与 D10/D11 定案。sidecar 文件为
@@ -69,7 +80,7 @@ Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
   Scenario: 01-resume-sidecar-01 sidecar 伴随目标文件创建且内容齐全
     When 添加支持续传的文件 "<file>" 并开始下载
     Then 目标文件旁存在 sidecar 文件 "<file>.ezr"
-    And sidecar 内容涵盖：文件大小、ETag、Last-Modified、已下载字节、校验期望值（如有）与任务元信息，进度状态按动态模式记载（scheduler 字段 + (start, cursor) 分段列表，v1.51/D89；blocks 模式臂随 blocks 引擎退役收窄——v1.63/D91，磁盘遗留 blocks 旧台账不校验不接管按无台账处理，D90）
+    And sidecar 内容涵盖：文件大小、ETag、Last-Modified、全文件摘要族（如有）、已下载字节、校验期望值（如有）与任务元信息，进度状态按 MDM 平铺段记载（(start, cursor, end) 平铺段列表恰好覆盖 [0, size)，v1.65/D98；原 scheduler 字段 + (start, cursor) 分段列表随 MDM 移植退役——scheduler 字段消亡、段改三元平铺含 end；blocks 模式臂随 blocks 引擎退役收窄——v1.63/D91，磁盘遗留全部旧格式台账不校验不接管按无台账处理，D90/v1.65 扩面）
     And sidecar 不含任何 URL 字段（原始/最终 URL 键退役，持久化 URL 仅任务注册表中的原始 URL，v1.28/FR-01-20）
 
     Examples:
@@ -90,7 +101,7 @@ Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
     Given 文件 <file_size> 支持断点续传且请求区间可被记录
     When 下载至进度 ≥ <progress> 后按 Space 暂停
     And 按 Space 继续任务
-    Then 任务从断点续传且已提交字节零重复写入（续传请求从首个未提交字节开区间、认领不覆盖已提交字节，v1.51/D87；blocks 封闭区间臂随 blocks 引擎退役收窄——v1.63/D91）
+    Then 任务从断点续传且已提交字节零重复写入（续传请求为封闭区间 bytes=(cursor−64)-(end−1)：前 64 B 覆叠重取与盘上字节比对通过后续传、claim 只授予未认领部分，v1.65/D98/D99③——原「开区间认领」口径随 MDM 移植退役；blocks 封闭区间臂随 blocks 引擎退役收窄——v1.63/D91）
     And 已下载块的字节保持有效（最终文件字节完整）
 
     Examples:
@@ -131,19 +142,21 @@ Feature: 01-resume-sidecar 断点续传与 sidecar 元数据
       | 20%      |
 
   Scenario: 01-resume-sidecar-07 续传一致性失效自动从头重下且不计失败
+    # v1.65/D98 修订：一致性判定载体 = 请求期 If-Range/覆叠校验（MDM validators）——
+    # ETag 变化而 Last-Modified 与大小一致 → per-node ETag 不失效（丢弃 ETag 按日期继续）；
+    # 服务器不再返回校验头 → 长度一致 + 64 B 覆叠兑底继续（不符才失效）；
+    # Last-Modified 或大小变化 → 失效从头（FileChanged → ezr 既有从头 toast 流程不变）。
     Given 任务已下载至进度 ≥ <progress> 后暂停
     And fixture 使 "<invariant>" 相比 sidecar 记录发生变化（或不再返回该头）
     When 按 Space 继续任务
-    Then 出现「服务器内容已更新，已从头重新下载」toast
-    And 任务转入「等待中」重新排队且不计失败、重试计数不变
-    And 获得槽位后从头下载（原 sidecar 作废）
+    Then 续传行为为 "<behavior>"
 
     Examples:
-      | progress | invariant       |
-      | 30%      | ETag            |
-      | 30%      | Last-Modified   |
-      | 30%      | 文件大小        |
-      | 30%      | 全部一致性头（服务器不再返回）|
+      | progress | invariant       | behavior                                                    |
+      | 30%      | Last-Modified   | 一致性失效：出现「服务器内容已更新，已从头重新下载」toast、转「等待中」重新排队不计失败、获得槽位后从头下载（原 sidecar 作废） |
+      | 30%      | 文件大小        | 一致性失效：同 Last-Modified 臂（从头重下）                    |
+      | 30%      | ETag            | 不失效（per-node ETag：同长同 Last-Modified、ETag 异 → 丢弃 ETag 按日期继续续传） |
+      | 30%      | 全部一致性头（服务器不再返回）| 不失效（长度一致 + 64 B 覆叠校验兑底继续续传；覆叠不符才失效从头）  |
 
   Scenario: 01-resume-sidecar-08 一致性连续 3 次失效转停等
     Given 同一任务已连续 <strikes> 次发生续传一致性失效

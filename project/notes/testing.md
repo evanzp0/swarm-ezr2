@@ -1135,3 +1135,9 @@ bug28 轮（2026-11-09）：tokio::spawn 借用参数必 'static——ws_tracker
   EOF 错位到 worker 阶段——stub_206_then_403 家族用例的真实通过路径从「探测 EOF 瞬败
   （0.2s）」变为「D93 原地重试耗尽（≈15s）」，套件总时长上涨属预期；worker_block_403
   类用例断言不变（Transient+传输中断）但机制已按 D93 真实路径成立。
+
+## MDM 完全移植轮（20261128）testing 追加
+- **Examples 表退役行的安全形态再证**：非 | 行插在 Examples 行间不破坏 APS 解析（IR 行序完整、后续行正常入表，本轮 38 行实测）——但沿 20261127 先例「撤销痕进注释」仍是首选（# 注释行零歧义）；非 | 行属可解析但非惯例形态，coder/QA 轮改写 Examples 时统一收编为注释。
+- **dry-checker findings 基线对比法沿用**：本轮 9 文件 findings 全为中文分词假阳性（near-duplicate score=1/possible-synonym 空 token 集）+ 1 例 placeholder-variant（<cap>/<concurrency> 同文异名，规范化修复）+ 1 例既有场景刻意重复断言（05-05 两臂弹窗关闭，保留）；回归判据 = 与上轮基线同性质，无新增真阳性。
+- **封闭区间断言面迁移提醒（QA 轮）**：全部「开区间 bytes=N-」请求日志断言随 D99③ 退役（13-http-turbo-01/14、01-resume-sidecar-03）；续传断言形态 = bytes=(cursor−64)-(end−1)（覆叠 64B 重取）——fixture 需支持覆叠区间比对（前 64B 与盘上字节一致断言）；旧断言残留在 suite_*.py 属 QA 轮同步面。
+- **退役键拒绝启动的探针矩阵**（13-13/PC-04）：四键各一行「合法值 + 键名」组合（值无关性证明）+ min_split_kib=0 标量非法行；顶层平铺旧格式忽略口径不变（PC-12 主臂）——两臂同跑防「孤儿键拒绝」误伤旧格式兼容探针。

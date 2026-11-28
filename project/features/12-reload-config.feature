@@ -53,6 +53,11 @@
 # 代码实证：dialogs.rs open_modify 旧名注入形态与 resolve_proxy missing 悬挂引用为 bug 机制，
 # 修复语义以落库转直连为锚（specifier 20261124 源码核证，产品端实现归下一 coder 轮）。
 Feature: 12-reload-config 配置热加载（Ctrl+R）
+  v1.65 修订注（MDM 完全移植轮 20261128，phase-05 v1.3/D97①）：B/C 类示例键同步——
+  block_size_http（B 类，场景 07）与 throttle_burst_secs（C 类，场景 08）随四键退役
+  （D97①）分别改判 min_split_kib（B 类沿袭）与 upload_read_concurrency（C 类键集收窄为
+  listen_port / upload_read_concurrency）；dns_race_grace_ms / throttle_sleep_ms 同批退役；
+  热加载语义（任一键非法整体拒绝、固定文案 toast、快照族）不受本轮影响。
 
   期号 01。按 Ctrl+R 重新读取 config 文件（EZR_HOME/config.toml，D16）并热加载，无需重启
   ezr（FR-01-119）。主界面与全部浮层内均响应（与 Ctrl+C 同级处理）；任一键非法整体拒绝、
@@ -147,22 +152,24 @@ Feature: 12-reload-config 配置热加载（Ctrl+R）
     And 再次按 Ctrl+R toast 仍仅 "✓ 配置已重新加载"（任何配置项改动均不追加可选段，v1.57/D81②）
 
   Scenario: 12-reload-config-07 B 类快照键仅影响后续新任务
-    Given ezr 以独立 EZR_HOME 启动且 config.toml 预置 [http] block_size_http = 1 MB、http_concurrency = 4、max_retries = 5
+    # v1.65/D97① 修订：B 类示例键 block_size_http 随键退役（MDM 移植，D92）——改用
+    # min_split_kib（[http] 表 B 类快照键沿袭）承载同一语义。
+    Given ezr 以独立 EZR_HOME 启动且 config.toml 预置 [http] min_split_kib = 256、http_concurrency = 4、max_retries = 5
     And 添加 HTTP 任务 a 并开始下载
-    When 修改 config.toml 将 block_size_http 改为 2 MB、http_concurrency 改为 8、max_retries 改为 9 并按 Ctrl+R
+    When 修改 config.toml 将 min_split_kib 改为 512、http_concurrency 改为 8、max_retries 改为 9 并按 Ctrl+R
     Then toast 显示 "✓ 配置已重新加载"
-    And 运行中任务 a 的块大小/并发/重试上限维持添加时烘焙值（分块口径与并发面板连接数不变）
+    And 运行中任务 a 的切分粒度/并发/重试上限维持添加时烘焙值（分段行为与并发面板连接数不变）
     When 添加新 HTTP 任务 b（同 fixture 文件族）并开始下载
-    Then 任务 b 按新值烘焙（块大小 2 MB、并发 8、重试上限 9）
+    Then 任务 b 按新值烘焙（切分粒度 512 KiB、并发 8、重试上限 9）
     And 添加对话框并发字段预填 8（http_concurrency 新默认进入对话框预填）
 
   Scenario: 12-reload-config-08 C 类键需重启生效且监听端口维持启动绑定
-    Given ezr 以独立 EZR_HOME 启动且 config.toml 预置 [http] throttle_burst_secs = 0.5 与 [bt] listen_port = <port>
+    Given ezr 以独立 EZR_HOME 启动且 config.toml 预置 [bt] upload_read_concurrency = 128 与 [bt] listen_port = <port>
     And BT fixture（tracker + seeder）已启动
     And 添加 BT 任务 t1 并开始下载（tracker fixture 记录 announce 来源端口 = <port>）
-    When 修改 config.toml 将 throttle_burst_secs 改为 1.5（listen_port 不变）并按 Ctrl+R
+    When 修改 config.toml 将 upload_read_concurrency 改为 256（listen_port 不变）并按 Ctrl+R
     Then toast 显示 "✓ 配置已重新加载"（C 类变化不再追加重启提示段，v1.57/D81③）
-    And 运行中任务 t1 传输行为无异常（限速桶参数维持、进度持续推进）
+    And 运行中任务 t1 传输行为无异常（上传读盘并发维持启动值、进度持续推进）
     When 修改 config.toml 将 listen_port 改为 <port2> 并按 Ctrl+R
     Then toast 显示 "✓ 配置已重新加载"（本次仅 listen_port 变化，重启提示段不再呈现，v1.57/D81③）
     And BT 监听端口仍为 <port>（新添加 BT 任务的 tracker announce 来源端口 = <port>，listen_port 引擎启动绑定一次）

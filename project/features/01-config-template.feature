@@ -27,6 +27,14 @@
 # 引擎随族A 退役后适用范围短语失去语义对象，操作者裁决删除）；注释行行内文本修订、
 # 行数不变（177）、键数不变（41）；v1.63 修订注宣称的「『仅 blocks 回退模式适用』同步
 # 退役」就此成立。场景 01 取值范围表残留短语同步删除。
+# v1.65 修订注（MDM 完全移植轮 20261128，phase-05 v1.3/D95–D97）：四键随引擎整体移植
+# 整键退役——block_size_http（MDM 无块概念，分段全由 planner 动态决定，D92/D97①）、
+# throttle_burst_secs（MDM Limiter burst 为常量 1.0 s）、throttle_sleep_ms（MDM 无睡眠下限）、
+# dns_race_grace_ms（MDM DNS 竞速固定常量）——模板 41 → 37 键（177 → 165 行，各去三行式，
+# 行位保留追溯不重排）；config 已知表含任一退役键（任意值）→ 未知键拒绝启动（FR-02-35/
+# D91 口径推广：孤儿键无替代 = 拒绝启动，与 seed_duration_secs/max_speed 等有替代键的
+# 「静默废弃」先例相区分）；min_split_kib 默认 256 → 12（MDM min_split = 12 KiB，D97②）。
+# 钦定原文整体替换为 v1.65 版（165 行）。
 Feature: 01-config-template 配置模板自动生成
 
   期号 01。依据 project/mission/phase-01.md FR-01-85（v1.4 操作者指令）与 D17：
@@ -135,9 +143,9 @@ Feature: 01-config-template 配置模板自动生成
     Given 不存在配置文件 <config_path>
     When 启动 ezr 并正常使用
     Then 配置文件 <config_path> 已生成
-    And 3 个表声明行（[common]/[http]/[bt]）与 41 个键值行为活跃 TOML（v1.13 取消注释：无 # 前缀；v1.14：36 → 40 键；v1.17：seed_duration_secs → default_seed_duration_m 键数不变；v1.51：40 → 42 键，新增 scheduler/min_split_kib；v1.63/族A：42 → 41 键，scheduler 键随 blocks 引擎退役移除，D91）且其余行（用途/取值范围注释、3 条分隔头注释、proxy 一句头注释、双示例块、[bt.seed_exit_rule] 做种退出条件子表注释块——含子表声明行整块 # 注释）保持 # 注释
+    And 3 个表声明行（[common]/[http]/[bt]）与 37 个键值行为活跃 TOML（v1.13 取消注释：无 # 前缀；v1.14：36 → 40 键；v1.17：seed_duration_secs → default_seed_duration_m 键数不变；v1.51：40 → 42 键，新增 scheduler/min_split_kib；v1.63/族A：42 → 41 键，scheduler 键随 blocks 引擎退役移除，D91；v1.65：41 → 37 键，block_size_http/throttle_burst_secs/throttle_sleep_ms/dns_race_grace_ms 四键随 MDM 完全移植退役移除，D97①）且其余行（用途/取值范围注释、3 条分隔头注释、proxy 一句头注释、双示例块、[bt.seed_exit_rule] 做种退出条件子表注释块——含子表声明行整块 # 注释）保持 # 注释
     And 生成的文件可解析且解析结果与文件缺失一致（示例值 = 代码常量默认逐键一致，全部默认值生效；活跃模板不改变默认行为）
-    And 模板内容与操作者钦定文本逐字节一致（钦定原文行集内嵌于本场景下方注释块：标题行、3 组「分隔头注释 + 空行 + 表声明行（活跃）」、41 键三行式（首行注释无键名前缀、键值行活跃；v1.51：40 → 42 键；v1.63/族A：42 → 41 键，scheduler 键退役移除，D91）、[[common.proxy]] 一句头注释 + 双示例块、空行位置与行序、EOF 单换行收尾全部一致，v1.13）
+    And 模板内容与操作者钦定文本逐字节一致（钦定原文行集内嵌于本场景下方注释块：标题行、3 组「分隔头注释 + 空行 + 表声明行（活跃）」、37 键三行式（首行注释无键名前缀、键值行活跃；v1.51：40 → 42 键；v1.63/族A：42 → 41 键；v1.65：41 → 37 键，四退役键移除，D97①）、[[common.proxy]] 一句头注释 + 双示例块、空行位置与行序、EOF 单换行收尾全部一致，v1.13）
     And 键 "<key>" 以注释形式给出默认值 "<default_line>"
     And 键 "<key>" 的注释说明含用途要点 "<purpose>" 与取值范围要点 "<range>"
 
@@ -149,8 +157,8 @@ Feature: 01-config-template 配置模板自动生成
       | global_max_upload_speed      | global_max_upload_speed = 0             | 全局上传限速（BT 上传合计）                      | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
       | task_max_download_speed      | task_max_download_speed = 0             | 新任务默认任务级下载限速                         | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
       | task_max_upload_speed        | task_max_upload_speed = 0               | 新任务默认任务级上传限速                         | ≥0；支持 "2 MiB/s" / "500 KiB/s" / 整数 B/s |
-      | min_split_kib                | min_split_kib = 256                     | 动态分段调度初始切分粒度下限（KiB，v1.51 新增）  | 正整数（≥1）；0 或非法值拒绝启动 |
-      | block_size_http              | block_size_http = 1048576               | HTTP 分块块大小（字节）                        | 正整数（≥262144 即 256 KiB 下限）；0 或非法值拒绝启动（v1.51：下限 1 MB → 256 KiB；v1.64/D92：语义 = 动态模式网格细化上限，适用范围短语随钦定模板注释行删除退役） |
+      | min_split_kib                | min_split_kib = 12                      | 动态分段调度初始切分粒度下限（KiB，v1.51 新增；v1.65/D97②：默认 256 → 12 = MDM/IDM） | 正整数（≥1）；0 或非法值拒绝启动 |
+      （v1.65 退役行：原 block_size_http 断言行——随键退役自 Examples 移除，D97①；行位保留追溯不重排）
       | http_concurrency             | http_concurrency = 8                    | 默认并发数（v1.51：默认 4 → 8）                  | 1–128 的整数；0 或越界拒绝启动（v1.51：上限 64 → 128） |
       | max_retries                  | max_retries = 5                         | 自动重试上限次数                                 | ≥1 的整数；0 或非法值拒绝启动               |
       | auto_retry                   | auto_retry = true                       | 失败后是否自动重试                               | true / false                                |
@@ -158,9 +166,7 @@ Feature: 01-config-template 配置模板自动生成
       | backoff_cap                  | backoff_cap = 60.0                      | 自动重试退避封顶秒                               | >0 的有限数；非法值拒绝启动                 |
       | progress_tick_ms             | progress_tick_ms = 100                  | HTTP 下载进度事件节拍（毫秒）                    | 正整数（≥1）；0 或非法值拒绝启动            |
       | sidecar_flush_secs           | sidecar_flush_secs = 2                  | 断点 sidecar 落盘间隔（秒）                      | 正整数（≥1）；0 或非法值拒绝启动            |
-      | throttle_burst_secs          | throttle_burst_secs = 1.0               | 限速令牌桶突发窗（秒）                           | >0 的有限数；非法值拒绝启动                 |
-      | throttle_sleep_ms            | throttle_sleep_ms = 20                  | 限速循环步进睡眠（毫秒）                         | 正整数（≥1）；0 或非法值拒绝启动            |
-      | dns_race_grace_ms            | dns_race_grace_ms = 1000                | DNS 双腿竞速宽限（毫秒）                         | 正整数（≥1）；0 或非法值拒绝启动            |
+      （v1.65 退役行：原 throttle_burst_secs / throttle_sleep_ms / dns_race_grace_ms 三断言行——随键退役自 Examples 移除，D97①；行位保留追溯不重排）
       | trackers                     | trackers = []                           | BT 任务默认 tracker 池（默认池来源之一，三来源合并） | 字符串数组；元素限 http(s)/ws(s)/udp scheme（大小写不敏感）；未知 scheme 或重复项拒绝启动 |
       | peer_connection_protocol     | peer_connection_protocol = ["tcp", "webrtc"] | BT peer 连接与数据传输的传输协议全局开关（v1.16 新增） | 无序字符串数组；元素限 tcp/webrtc（大小写不敏感、去重）；未知值或重复项拒绝启动 |
       | bt_concurrency               | bt_concurrency = 20                     | BT 任务默认并发数                                | 1–64 的整数；0 或越界拒绝启动                 |
@@ -187,8 +193,8 @@ Feature: 01-config-template 配置模板自动生成
       | listen_port                  | listen_port = 0                         | BT 监听端口（0 = 随机绑定）                      | 0 = 随机；1–65535 = 指定（占用回退随机+警告）；负/非法回退随机 |
 
   （v1.13 操作者钦定模板原文——default_template() 输出与其逐字节一致，coder 不得增删改
-  任何字符/空行；钦定原文共 177 行 = 标题行 + 3 组「分隔头注释 + 空行 + 表声明行（活跃）」+（v1.51：174 → 180 行，新增 scheduler/min_split_kib 两键×3 行；v1.63/族A：180 → 177 行，scheduler 键三行式退役移除，D91）
-  41 键×3 行三行式（首行注释无键名前缀、键值行活跃；v1.51：40 → 42 键；v1.63：42 → 41 键）+ [[common.proxy]] 一句头注释 +
+  任何字符/空行；钦定原文共 165 行 = 标题行 + 3 组「分隔头注释 + 空行 + 表声明行（活跃）」+（v1.51：174 → 180 行，新增 scheduler/min_split_kib 两键×3 行；v1.63/族A：180 → 177 行，scheduler 键三行式退役移除，D91；v1.65：177 → 165 行，block_size_http/throttle_burst_secs/throttle_sleep_ms/dns_race_grace_ms 四键三行式退役移除，D97①）
+  37 键×3 行三行式（首行注释无键名前缀、键值行活跃；v1.51：40 → 42 键；v1.63：42 → 41 键；v1.65：41 → 37 键）+ [[common.proxy]] 一句头注释 +
   双示例块（各 7 行 = 1 表头行 + 6 字段行）+ 空行分隔（空行总数以内嵌原文实测为准），
   EOF 以一个换行符收尾。下为权威原文逐字节内嵌（空行即真实空行；示例值与代码常量
   默认逐键比对 40/40 一致，specifier v1.14；总行数 v1.14 实测见修订注）：
@@ -247,11 +253,9 @@ Feature: 01-config-template 配置模板自动生成
   
   # 动态分段调度初始切分粒度下限（KiB）
   # 取值范围：正整数（≥1）；0 或非法值拒绝启动
-  min_split_kib = 256
+  min_split_kib = 12
   
-  # HTTP 分块块大小（字节）
-  # 取值范围：正整数（≥262144 即 256 KiB 下限）；0 或非法值拒绝启动
-  block_size_http = 1048576
+  （v1.65 退役：原 block_size_http 键三行式——「# HTTP 分块块大小（字节）」/「# 取值范围：正整数（≥262144 即 256 KiB 下限）；0 或非法值拒绝启动」/「block_size_http = 1048576」——随 MDM 完全移植退役自模板移除（MDM 无块概念，分段全由 planner 动态决定），177 → 165 行、41 → 37 键，D92/D97①；行位保留追溯不重排）
   
   # 默认并发数
   # 取值范围：1–128 的整数；0 或越界拒绝启动
@@ -281,17 +285,7 @@ Feature: 01-config-template 配置模板自动生成
   # 取值范围：正整数（≥1）；0 或非法值拒绝启动
   sidecar_flush_secs = 2
   
-  # 限速令牌桶突发窗（秒）
-  # 取值范围：>0 的有限数；非法值拒绝启动
-  throttle_burst_secs = 1.0
-  
-  # 限速循环步进睡眠（毫秒）
-  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
-  throttle_sleep_ms = 20
-  
-  # DNS 双腿竞速宽限（毫秒，双栈并行解析）
-  # 取值范围：正整数（≥1）；0 或非法值拒绝启动
-  dns_race_grace_ms = 1000
+  （v1.65 退役：原 throttle_burst_secs / throttle_sleep_ms / dns_race_grace_ms 三键三行式——随 MDM 完全移植退役自模板移除（Limiter burst 为常量 1.0 s、无睡眠下限、DNS 竞速固定常量），同上 D97①；行位保留追溯不重排）
   
   # ===== BT 引擎配置 =====
   

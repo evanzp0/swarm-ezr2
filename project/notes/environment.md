@@ -714,3 +714,9 @@ clone 多出历轮全部修复），begin 会话照常建立。
 - RAG 索引（`.work/rag`）属会话级运行时，中断即丢：`bin/rag/rag status` EXIT=1 → 直接
   `bin/rag/rag index project --types rs,md,toml` 重建（185 文件 1.14s）——重建成本低于
   保留成本，恢复会话一律重建再检索，不做增量抢救。
+
+## MDM 完全移植轮（20261128）environment 追加
+- **rustup 镜像选型（全新沙箱）**：清单探针 TUNA 0.033s 最快（USTC 0.15s、SJTU 0.21s、腾讯 0.06s、官方 3s 超时）；**双层路径陷阱第 N 次复证**：rustup-init 二进制在 /rustup/rustup/dist/<arch>/rustup-init（RUSTUP_UPDATE_ROOT=…/rustup），/rustup/dist/<arch>/ 是 dist 日期快照目录无 rustup-init；直链二进制 + RUSTUP_DIST_SERVER=https://mirrors.tuna.tsinghua.edu.cn/rustup 前台一次装齐 stable 1.100.1 minimal。
+- **GitHub release 直连 1.8MB/120s**（babashka 静态包）；ghfast.top 前缀可用（gh-proxy.com 226KB/s 次之、mirror.ghproxy.com/github.moeyy.xyz 0 字节）——bb 1.13.230 static 26.5MB 经 ghfast.top 118s 落地。
+- **终端显示伪象「ttp]」第 2 次实锤与本轮教训**：sed/cat 显示 "[http]" 为 "ttp]" 是终端渲染伪象——磁盘字节恒为 "[http]"（python repr/od 终审）；Edit old_str 必须按磁盘真字节写（"ttp]" 永不匹配，误判「文件损坏」会白走修复路）；本终端 sed 输出不可作为字节证据。
+- **APS 仓落位**：本轮 .tools/aps（非全名 Acceptance-Pipeline-Specification）——bb 任务按 cwd 的 bb.edn 解析，目录名不影响调用；MDM 参考仓 .tools/misterdownloadmanager（@aeeb878）。

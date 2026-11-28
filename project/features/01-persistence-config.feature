@@ -9,7 +9,7 @@
 #   （v1.4 注：config.toml 缺失时启动自动生成全注释默认模板，FR-01-85 ——
 #    判据由「允许缺失」改为「缺失时自动生成」，生成细则见 01-config-template.feature）
 #   01-persistence-config-03 配置文件缺失时全部使用默认值（v1.25：默认行为描述「max_speed 不限」改「不限速」，退役键名标签清理）
-#   01-persistence-config-04 配置非法值拒绝启动并报错（v1.21 行为翻转：语义非法值 fail-fast，FR-02-35；v1.16/v1.17/v1.19 历史口径退役；v1.24：seed_duration_secs 拒绝行改判 default_seed_duration_m = 0，FR-02-40②；v1.25：max_speed 退役键拒绝行删除——待批① 裁决 20261116，FR-01-60 v1.42）
+#   01-persistence-config-04 配置非法值拒绝启动并报错（v1.21 行为翻转：语义非法值 fail-fast，FR-02-35；v1.24：seed_duration_secs 拒绝行改判 default_seed_duration_m = 0；v1.25：max_speed 退役键拒绝行删除；v1.65/D97①：block_size_http/throttle_burst_secs/throttle_sleep_ms/dns_race_grace_ms 四行改判退役键拒绝启动——孤儿键无替代 = 拒绝，D91 口径推广）
 #   01-persistence-config-05 block_size_http 可配置生效【退役，留空不重排——v1.63/族A：blocks 块模型断言面随 blocks 引擎退役；block_size_http 现行语义（动态网格细化上限）由 05-ui-pieces-01/13-http-turbo-02 承载，D92】
 #   01-persistence-config-06 download_slots 可配置生效
 #   01-persistence-config-07 单实例保护
@@ -121,21 +121,27 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
     # 20261116；FR-01-60 v1.42）：common.max_speed = xyz 拒绝行删除——max_speed 退役键按
     # 未知键静默忽略（场景 12 同口径、单测 legacy_max_speed_key_retired_as_unknown 承载），
     # 退役键不入拒绝集；替代键拒绝行不新增，拒绝集以 runner QA-PC-04 行集（32 行）为锚。
+    # v1.65 同步（MDM 完全移植轮 20261128，phase-05 v1.3/D97①）：block_size_http/
+    # throttle_burst_secs/throttle_sleep_ms/dns_race_grace_ms 四键整键退役（孤儿键无替代）——
+    # 原四行由「非法值拒绝」改判「退役键拒绝启动」（行值改合法值，证明键级拒绝与值无关）；
+    # D91（scheduler）口径推广；与 seed_duration_secs/max_speed 等「有替代键 → 静默废弃」
+    # 先例相区分。新增 min_split_kib = 0 非法拒绝行。
     Given 配置文件设 "<key>" = "<value>"（非法）
     When 启动 ezr
     Then 启动失败并报错（错误信息含配置文件路径、键点路径 "<key>" 与非法原因；非零退出码退出；配置文件字节级不变）
 
     Examples:
       | key                        | value |
-      | http.block_size_http       | 256 KB |
+      | http.block_size_http       | 1048576（键退役 = 未知键，D97①） |
+      | http.throttle_burst_secs   | 1.0（键退役 = 未知键，D97①） |
+      | http.throttle_sleep_ms     | 20（键退役 = 未知键，D97①） |
+      | http.dns_race_grace_ms     | 1000（键退役 = 未知键，D97①） |
+      | http.min_split_kib         | 0     |
       | common.download_slots      | 0     |
       | http.max_retries           | -1    |
       | http.http_concurrency      | 99    |
       | http.progress_tick_ms      | 0     |
       | http.sidecar_flush_secs    | 0     |
-      | http.throttle_burst_secs   | 0     |
-      | http.throttle_sleep_ms     | 0     |
-      | http.dns_race_grace_ms     | 0     |
       | bt.bt_concurrency          | 0     |
       | bt.bt_concurrency          | 99    |
       | bt.peer_pipeline           | 0     |
@@ -235,14 +241,15 @@ Feature: 01-persistence-config 持久化 · 配置 · 单实例与退出语义
     And 相关配置项全部按默认值生效（槽位 5、块大小 1 MB、并发默认 4、不限速）
     And 旧 [[proxies]] 条目不出现在代理下拉（proxy 键已改名迁入 [common.proxy]，旧表不读）
     And 同文件追加新表头（[common] download_slots = 3 等）后新表键正常生效（新格式不受旧键干扰）
+    And 表内退役键拒绝启动口径（v1.65/D97①）：已知表含 block_size_http / throttle_burst_secs / throttle_sleep_ms / dns_race_grace_ms / scheduler 任一键（任意值）→ 启动失败并报错（孤儿键无替代 = 拒绝，D91 口径推广）——顶层平铺旧格式（无表头）整体忽略口径不变（本场景主臂）
     And 退役键同口径（v1.21，FR-02-35）：配置含旧键 http_trackers / udp_trackers 时按未知键静默忽略——不迁移、不兼容、不并入 tracker 池、不阻塞启动（旧条目直接废弃；tracker 池只来自 [bt] trackers 键，场景见 09-bt-engine-09 v1.41）
     And 退役键 seed_duration_secs 同口径（v1.24，FR-02-40②）：配置含旧键 [bt] seed_duration_secs（任意取值）时按未知键静默忽略——不迁移、不报错、无警告 toast、启动成功（退役键静默忽略正探针，与场景 04 拒绝行改判 default_seed_duration_m = 0 对账；runner 口径见 suite_persistence_config.py QA-PC-04 v1.24 正探针）
 
   Scenario: 01-persistence-config-13 全量配置键合法值生效冒烟（v1.18 新增，D62③）
-    Given 配置文件一次性写入全部 40 键的合法非默认值（[common] 6 键 + [[common.proxy]] 双条目 + [http]] 11 键 + [bt] 23 键——proxy 双条目不计入 40（可选附加面）；[bt] 23 = trackers/peer_connection_protocol/bt_concurrency 3 核心键 + 20 调优键；v1.26 按模板权威对账修正 v1.20 起分表分解（原「+ proxy 双条目 + [bt] 21」两项偏差恰好抵消合 40）；v1.21：seed_duration_secs 废弃由 default_seed_duration_m 替代、键数不变，另可选子表 [bt.seed_exit_rule] 保持未配置（默认形态，default_seed_duration_m 生效）；取值均在模板注明取值范围内且非代码默认；v1.20/v1.21/v1.26）
+    Given 配置文件一次性写入全部 37 键的合法非默认值（[common] 6 键 + [[common.proxy]] 双条目 + [http] 8 键 + [bt] 23 键——proxy 双条目不计入 37（可选附加面）；[bt] 23 = trackers/peer_connection_protocol/bt_concurrency 3 核心键 + 20 调优键；v1.63/族A：scheduler 键退役（42 → 41 = 6+12+23，D91）；v1.65：block_size_http/throttle_burst_secs/throttle_sleep_ms/dns_race_grace_ms 四键退役（41 → 37 = 6+8+23，D97①）；另可选子表 [bt.seed_exit_rule] 保持未配置（默认形态，default_seed_duration_m 生效）；取值均在模板注明取值范围内且非代码默认）
     When 启动 ezr 并正常使用（添加 HTTP 下载、打开添加对话框与代理下拉、打开 BT 对话框）
     Then 启动不报错且无任何警告 toast（全量合法值零警告）
-    And 可观察键逐项生效：download_dir = 添加对话框保存目录字段预填值；download_slots = 任务队列栏「n/<slots>」；global_max_download_speed = 下载限速生效（速度曲线封顶）、global_max_upload_speed = BT 上传限速生效、task_max_download_speed/task_max_upload_speed = 添加对话框（HTTP/BT）限速字段预填值；命名代理 = 代理下拉按配置顺序出现且可选；block_size_http = 详情分块行显示自定义块大小；http_concurrency = HTTP 对话框并发自动回填值；auto_retry/max_retries/backoff_initial/backoff_cap = 失败重试行为按配置推进（序列与上限一致）；progress_tick_ms/sidecar_flush_secs/throttle_burst_secs/throttle_sleep_ms/dns_race_grace_ms = 运行期无异常（行为不劣化，无错误 toast）
+    And 可观察键逐项生效：download_dir = 添加对话框保存目录字段预填值；download_slots = 任务队列栏「n/<slots>」；global_max_download_speed = 下载限速生效（速度曲线封顶）、global_max_upload_speed = BT 上传限速生效、task_max_download_speed/task_max_upload_speed = 添加对话框（HTTP/BT）限速字段预填值；命名代理 = 代理下拉按配置顺序出现且可选；min_split_kib = 切分粒度按写入值生效（动态分段行为对齐，v1.65/D97②）；http_concurrency = HTTP 对话框并发自动回填值；auto_retry/max_retries/backoff_initial/backoff_cap = 失败重试行为按配置推进（序列与上限一致）；progress_tick_ms/sidecar_flush_secs = 运行期无异常（行为不劣化，无错误 toast）
     And BT 键逐项生效：listen_port = 实际监听端口生效（fixture announce port 可观察）;trackers = BT 对话框 trackers 预填（配置 trackers 与种子 announce 合并；v1.26 改标——退役键 http_trackers/udp_trackers 不并入池，v1.21/FR-02-35）；bt_concurrency = BT 对话框并发预填值；peer_pipeline/upload_slots/upload_read_concurrency/idle_eviction_secs/connect_timeout_secs/handshake_timeout_secs/request_timeout_secs/requests_per_piece/rechoke_interval_secs/optimistic_interval_secs/progress_emit_min_interval_ms/tracker_numwant/peer_retry_base_secs/peer_retry_cap_secs/tracker_backoff_start_secs/tracker_backoff_cap_secs/udp_base_timeout_secs/udp_retries/default_seed_duration_m（exit rule 未配置时其生效：全量写入按写入非默认值生效、未配置默认 30 分钟，做种倒计时正常；v1.26 写入值口径） = BT 下载与做种全程无错误（引擎行为正常、无致命 toast；v1.21：seed_duration_secs 键退役）
     And 下载正常完成且产物完整（全量配置下核心链路不致病）
 

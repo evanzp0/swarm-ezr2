@@ -28,6 +28,10 @@
 # 各空 1 行（呼吸行）；网格 14→11 行、每行 29→31 块（视口 62 列整除无余列）、一屏 406→341 块；
 # 其余（四态色块/前沿定位/滚动条/模态/关闭/鼠标）不变。
 Feature: 05-ui-pieces P 键 pieces 分块弹窗（FR-01-106，对齐 ezr-demo 重构版 §6.5）
+  v1.65 修订注（MDM 完全移植轮 20261128，phase-05 v1.3/D99⑤）：pieces 网格数据源改
+  planner 动态段（SegmentView：🟩 已落盘 [start,cursor) / 🟦 在写 [cursor,reserved) / ⬜
+  未认领）——「块」语义随 block_size_http 键退役（D92/D97①），v1.63 的 refine_http_grid
+  网格细化口径退役；窗口形态/四色图例/交互/门槛语义不变（场景 03 行内措辞块→段同步）。
 
   期号 01。依据 project/mission/phase-01.md v1.29（FR-01-106、D35，操作者指令两批需求之一）；
   v1.30 修订（操作者指令，对齐 ezr-demo 重构版）：窗口 64×21→64×19（底部快捷键提示行改四色
@@ -81,14 +85,14 @@ Feature: 05-ui-pieces P 键 pieces 分块弹窗（FR-01-106，对齐 ezr-demo �
       | 已暂停 | piece-pause.bin | 4     | 5    | 2       |
       | 已完成 | piece-done.bin  | 4     | 12   | 0       |
 
-  Scenario: 05-ui-pieces-03 下载中任务的 🟦 在传块与 🟦 优先
-    Given 下载中的任务 "<file>"（并发 <conns>，已完成 <done> 块、<active> 个块在传）被选中
+  Scenario: 05-ui-pieces-03 下载中任务的 🟦 在传段与 🟦 优先（v1.65/D99⑤：网格 = 动态段）
+    Given 下载中的任务 "<file>"（并发 <conns>，已完成 <done> 段、<active> 个段在传）被选中
     When 按 P 观察分块网格
-    Then 在传块（已分配并发下载的块）显示 🟦 且块内零头多少不影响（分配即算）
-    And 已完成块显示 🟩、未分配未落盘块显示 ⬜
-    And 同一块既有已落盘零头又在传时只显示 🟦（🟦 优先于 🟨）
+    Then 在传段（已认领在写的动态段）显示 🟦 且段内零头多少不影响（认领即算）
+    And 已落盘段显示 🟩、未认领未落盘段显示 ⬜
+    And 同一段既有已落盘零头又在传时只显示 🟦（🟦 优先于 🟨）
     When 按空格暂停该任务后再按 P 观察网格
-    Then 网格内不再出现 🟦（原在传块按落盘零头转 🟨 或无零头转 ⬜）
+    Then 网格内不再出现 🟦（原在传段按落盘零头转 🟨 或无零头转 ⬜）
 
     Examples:
       | file          | conns | done | active |
